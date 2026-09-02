@@ -489,3 +489,113 @@ fn the_pushed_thumbnail_is_not_the_jxl_on_disk() {
     );
     assert_ne!(blob.bytes, disk);
 }
+
+/// **The `F1` contract at the import boundary.** A derivative that cannot be produced must never
+/// cost the original: the asset still lands signed, encrypted and `verify_asset`-accepting, and
+/// the run reports `DecodeFailed` rather than failing.
+///
+/// Exercised through a *decodable* still whose derivative directory is then made unwritable, so
+/// the failure happens after a successful decode — the exact shape that used to propagate as
+/// `LifecycleError::Io` and lose the import.
+#[test]
+fn a_derivative_that_cannot_be_persisted_never_costs_the_original() {
+    use crate::crypto::verify_asset::VerifyOutcome;
+
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (_album, asset_id) = library_with_a_thumbnailed_asset(&lib, &src);
+
+    // The asset committed, derivatives or not.
+    let ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
+    assert_eq!(ws.verify(&asset_id).unwrap(), VerifyOutcome::Accept);
+
+    // And the original's own bytes are on disk and re-derive to their signed address, which is
+    // the property that makes this a backup rather than a thumbnail service.
+    let bundle = ws.upload_bundle(&asset_id).unwrap();
+    assert!(!bundle.ciphertext.is_empty());
+    assert_eq!(hash::hash_bytes(&bundle.ciphertext), bundle.ciphertext_hash);
+}
+
+/// A persisted derivative survives a `Workspace` reopen and still reaches `UploadBundle`: the
+/// bundle is rebuilt from the library directory alone, so the manifest, the on-disk plaintext
+/// and the re-derived ciphertext all have to agree across processes.
+#[test]
+fn a_derivative_survives_a_reopen_and_still_reaches_the_bundle() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (_album, asset_id) = library_with_a_thumbnailed_asset(&lib, &src);
+
+    // A second `Workspace::open` — the S-A10 shape: nothing shared but the directory.
+    let ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
+    let bundle = ws.upload_bundle(&asset_id).unwrap();
+    assert_eq!(bundle.derivatives.len(), 1, "the derivative survives a reopen");
+    let blob = &bundle.derivatives[0];
+    assert_eq!(
+        hash::hash_bytes(&blob.bytes),
+        blob.ciphertext_hash,
+        "and its ciphertext still content-addresses to the signed manifest"
+    );
+}
+
+/// Two formats persisted for one role are told apart by **(role, format)**, not by whichever
+/// filename sorts first.
+///
+/// `#437` lands AVIF beside JXL, at which point a role-prefix match would read one file and
+/// content-address it against the other manifest — skipping both. Asserted before that lands,
+/// because the failure mode is a silent skip rather than an error.
+#[test]
+fn two_formats_for_one_role_are_addressed_by_format_not_by_filename_order() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (_album, asset_id) = library_with_a_thumbnailed_asset(&lib, &src);
+    let ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
+
+    let asset = ws.asset(&asset_id).expect("held");
+    let dir = media_dir(lib.path(), asset.capture_utc).join("derivatives");
+    let stem = asset_id.simple().to_string();
+    let jxl = fs::read(dir.join(format!("{stem}.thumbnail.jxl"))).unwrap();
+
+    // A decoy AVIF for the same role, sorting *before* `.jxl`, with different bytes.
+    let avif = b"not a real avif, and deliberately different".to_vec();
+    fs::write(dir.join(format!("{stem}.thumbnail.avif")), &avif).unwrap();
+
+    // Both manifests, each addressing its own ciphertext.
+    let album_keys = ws.album(&asset.album_id).unwrap();
+    let address = |bytes: &[u8]| {
+        let key = ws.file_key(album_keys, 1, &asset_id, &[7, 6, 5, 4, 3, 2, 1]);
+        let (_, ct) = stream::encrypt_asset_vec_with_prefix(&key, [7, 6, 5, 4, 3, 2, 1], bytes);
+        hash::hash_bytes(&ct)
+    };
+    rewrite_bundle(
+        &lib,
+        &ws,
+        asset_id,
+        &[
+            signed_derivative(
+                asset_id,
+                DerivativeRole::Thumbnail,
+                "image/jxl",
+                address(&jxl),
+            ),
+            signed_derivative(
+                asset_id,
+                DerivativeRole::Thumbnail,
+                "image/avif",
+                address(&avif),
+            ),
+        ],
+    );
+
+    let bundle = ws.upload_bundle(&asset_id).unwrap();
+    assert_eq!(
+        bundle.derivatives.len(),
+        2,
+        "both formats of the role are shipped; neither is mistaken for the other"
+    );
+    let formats: Vec<&str> = bundle
+        .derivatives
+        .iter()
+        .map(|d| d.format.as_str())
+        .collect();
+    assert_eq!(formats, vec!["image/jxl", "image/avif"]);
+}

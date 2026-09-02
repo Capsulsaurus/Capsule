@@ -13,9 +13,9 @@ pub enum ImportOutcome {
     Imported {
         derivatives: DerivativeStatus,
         /// How many `(tier, format)` pairs the tier table commits to and this build cannot
-        /// encode. Orthogonal to `derivatives`: a `Decoded` asset with a renderable WebP
-        /// thumbnail still reports the JXL master and the AVIF delivery variant as deferred, and
-        /// that count is how the gap shrinks visibly as codecs land rather than silently.
+        /// encode. Orthogonal to `derivatives`: a `Decoded` asset with a renderable JXL
+        /// thumbnail still reports the AVIF delivery variant and WebP as deferred, and that
+        /// count is how the gap shrinks visibly as codecs land rather than silently.
         deferred_formats: u32,
     },
     DuplicateSkipped {

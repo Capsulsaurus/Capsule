@@ -704,7 +704,7 @@ workspace at all**, so every still import is a `DeferredNoCodec` until Rawshift 
   because core linked no codec, and it no longer needs to. What ships:
   - `media::{detect,decode,resize,derivative,error}` as private submodules behind one barrel —
     the closed `StillFormat` set with a Capsule-owned magic-byte table, the `Decoder` seam with
-    a pre-decode 256 Mpx budget and an unwind boundary, a deterministic integer area-average
+    a pre-decode 128 Mpx budget and an unwind boundary, a deterministic integer area-average
     downscale (the crate has no resize, and a derivative's bytes are signed), the closed
     `DerivativeFormat` set with the `original` sentinel, and `MediaError`.
   - the **thumbnail tier** at 256 px as **JXL** — the table's committed *master* format — signed
@@ -1006,7 +1006,12 @@ workspace at all**, so every still import is a `DeferredNoCodec` until Rawshift 
     one generated thumbnail and two deferred formats — the number that falls to zero as #437
     lands, rather than a gap only a doc mentions.
   - **No panic can reach an import.** Untrusted bytes go through a pre-decode pixel budget
-    (`MAX_DECODE_PIXELS`, 256 Mpx — the bomb is inside the decoder, which works in RGB `u16`) and
+    (`MAX_DECODE_PIXELS`, **128 Mpx** — the bomb is inside the decoder, which works in RGB `u16`,
+    and the honest peak at that ceiling is ~2.5 GB across the decoder's samples, the
+    alpha-dropping realloc, the RGBA8 copy and the widening back for the encode. `native` implies
+    `media`, so that peak lands on a phone as an OOM kill rather than an error, which is why the
+    ceiling sits ~25% above a 102 Mpx medium-format frame rather than as high as an allocation
+    bomb would require) and
     a `catch_unwind` boundary that maps a third-party decoder's panic to `DecodeFailed`. Both are
     tested, the panic case through an injected `Decoder`.
 - **Originals always import**, unchanged: codec coverage gates *derivatives*, never *admission*.

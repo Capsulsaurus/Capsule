@@ -253,15 +253,19 @@ pub fn decode_guarded(
 
 /// Run any fallible step of the still pipeline behind the same unwind boundary.
 ///
-/// Exported because `decode` is not the only third-party code the import path runs over pixels:
+/// `pub(crate)` rather than `pub`: `lifecycle` is the only caller and no client of this crate has
+/// pixels of its own to run through it, so exporting it would widen the frozen surface for
+/// nothing.
+///
+/// Not just for `decode` — that is not the only third-party code the import path runs over pixels:
 /// the placeholder goes through `chromahash` (also pre-1.0) and the derivative through
-/// `libwebp`, and the module's promise is that *none* of them can abort an import — not that the
+/// `zune-jpegxl`, and the module's promise is that *none* of them can abort an import — not that the
 /// decoder specifically cannot. `stage` names the step in the warning so a caught panic is
 /// attributable.
 ///
 /// `AssertUnwindSafe` is sound for the callers here: each closure borrows shared slices and
 /// stateless values, so a caught unwind cannot leave a Capsule-owned invariant torn.
-pub fn guarded<T>(
+pub(crate) fn guarded<T>(
     stage: &'static str,
     step: impl FnOnce() -> Result<T, MediaError>,
 ) -> Result<T, MediaError> {

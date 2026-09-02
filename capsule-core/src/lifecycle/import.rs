@@ -427,6 +427,7 @@ impl Workspace {
             },
             asset_id,
             album_id,
+            capture_utc,
             &amk,
             &enc,
         )?;

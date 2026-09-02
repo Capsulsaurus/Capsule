@@ -17,6 +17,8 @@
 //!    decode there and nothing to fake: the assertion is that they are *recognised* and refused
 //!    with a typed error.
 
+use std::collections::HashMap;
+
 use rawshift_image::core::metadata::{ImageInfo, ImageMetadata, URational};
 use rawshift_image::core::{BitDepth, MetadataEmbedOptions};
 use rawshift_image::formats::encode_rgb_image_to_vec;
@@ -28,8 +30,8 @@ use uuid::Uuid;
 
 use super::decode::{Decoder, RawshiftDecoder, decode_guarded};
 use super::derivative::{
-    DerivativeContext, DerivativeFormat, DerivativeSealer, DerivativeTier, SealedDerivative,
-    StillDerivatives, generate_still_derivatives, verify_still_format,
+    DerivativeContext, DerivativeSealer, DerivativeTier, SealedDerivative, StillDerivatives,
+    generate_still_derivatives,
 };
 use super::detect::{MAX_DECODE_PIXELS, SUPPORTED_STILL_FORMATS, StillFormat};
 use super::error::{FormatOp, MediaError};
@@ -40,6 +42,7 @@ use crate::crypto::keys::{Amk, AmkVersion, HybridSigningKey};
 use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
 use crate::crypto::provenance::manifest::{DERIVATIVE_MANIFEST_VERSION, DerivativeCore};
 use crate::crypto::provenance::{DerivativeManifest, DerivativeRole};
+use crate::derivative_format::{DerivativeFormat, verify_still_format};
 use crate::lqip::{Gamut, Lqip, RgbaImage};
 
 // ── Procedural fixtures ──────────────────────────────────────────────────────
@@ -928,10 +931,16 @@ const ORIGINAL_SEAL: SealedDerivative = SealedDerivative {
     nonce_prefix: [1, 2, 3, 4, 5, 6, 7],
 };
 
+/// No prior chain: every test that does not say otherwise generates for a fresh asset.
+fn no_prior_heads() -> HashMap<DerivativeRole, crate::crypto::hash::Hash32> {
+    HashMap::new()
+}
+
 fn context<'a>(
     device: &'a HybridSigningKey,
     write_tier: &'a HybridSigningKey,
     sealer: &'a dyn DerivativeSealer,
+    prior_heads: &'a HashMap<DerivativeRole, crate::crypto::hash::Hash32>,
     asset_id: Uuid,
 ) -> DerivativeContext<'a> {
     DerivativeContext {
@@ -945,6 +954,7 @@ fn context<'a>(
         device_signer: device,
         write_tier_signer: write_tier,
         sealer,
+        prior_heads,
         original: ORIGINAL_SEAL,
     }
 }
@@ -952,7 +962,8 @@ fn context<'a>(
 fn generate(frame: &RgbaImage, original: &[u8]) -> StillDerivatives {
     let (device, write_tier) = signers();
     let seal = sealer(Uuid::from_u128(0xB1));
-    let ctx = context(&device, &write_tier, &seal, Uuid::from_u128(0xB1));
+    let heads = no_prior_heads();
+    let ctx = context(&device, &write_tier, &seal, &heads, Uuid::from_u128(0xB1));
     let decoded = RawshiftDecoder
         .decode(original, "png")
         .expect("the fixture decodes");
@@ -1122,7 +1133,8 @@ fn a_source_within_the_cap_signs_the_original_sentinel() {
 fn manifests_of_one_role_form_an_append_only_chain() {
     let (device, write_tier) = signers();
     let seal = sealer(Uuid::from_u128(0xB2));
-    let ctx = context(&device, &write_tier, &seal, Uuid::from_u128(0xB2));
+    let heads = no_prior_heads();
+    let ctx = context(&device, &write_tier, &seal, &heads, Uuid::from_u128(0xB2));
     let mut prior = None;
 
     let first = super::derivative::sign_derivative(
@@ -1189,7 +1201,13 @@ fn each_tier_starts_its_own_role_chain() {
     let both = generate_still_derivatives(
         &decoded,
         &[DerivativeTier::Thumbnail, DerivativeTier::Preview],
-        &context(&device, &write_tier, &seal, Uuid::from_u128(0xB5)),
+        &context(
+            &device,
+            &write_tier,
+            &seal,
+            &no_prior_heads(),
+            Uuid::from_u128(0xB5),
+        ),
     )
     .expect("both tiers");
 
@@ -1232,7 +1250,8 @@ fn two_derivatives_of_one_asset_never_share_a_nonce_prefix() {
     let (device, write_tier) = signers();
     let asset_id = Uuid::from_u128(0xB6);
     let seal = sealer(asset_id);
-    let ctx = context(&device, &write_tier, &seal, asset_id);
+    let heads = no_prior_heads();
+    let ctx = context(&device, &write_tier, &seal, &heads, asset_id);
     let identical = b"byte-identical derivative plaintext".to_vec();
 
     let mut prior = None;
@@ -1308,7 +1327,13 @@ fn a_thumbnail_carries_no_exif_and_no_gps() {
     let result = generate_still_derivatives(
         &decoded,
         &DerivativeTier::GENERATED,
-        &context(&device, &write_tier, &seal, Uuid::from_u128(0xB3)),
+        &context(
+            &device,
+            &write_tier,
+            &seal,
+            &no_prior_heads(),
+            Uuid::from_u128(0xB3),
+        ),
     )
     .expect("generation");
     let thumb = &result.generated[0].bytes;
@@ -1464,17 +1489,46 @@ fn a_decoded_frame_encodes_an_lqip_at_the_committed_width() {
     );
 }
 
-/// The two integer widths the downscale depends on, exercised at the shapes that would overflow
-/// a narrower one.
+/// The per-channel accumulator genuinely crosses `u32::MAX`, and the boundary arithmetic is
+/// documented for what it is.
 ///
-/// A 1 x 300000 frame reduced to a 256 px long edge makes `(y + 1) * src_h` reach 7.7e10, past a
-/// 32-bit `usize` — and `armv7-linux-androideabi` and `i686-linux-android` are both CI-gated
-/// targets. Reducing a frame to a **cap of 1** makes the per-channel accumulator reach
-/// `w * h * 255`, past `u32::MAX` for a frame of any size; `downscale_rgba8` is a `pub` entry
-/// point, so that cap is reachable even though the tier table only ever passes 256.
+/// **The accumulator overflow is real and reachable.** Reducing a frame to a cap of 1 sums every
+/// sample into one destination pixel, so the running total is `pixels * 255`. At 4200x4200 that
+/// is 4.5e9 — past `u32::MAX` (4.29e9) — and a `u32` accumulator would panic in debug and wrap
+/// into wrong pixels in release. `downscale_rgba8` is a `pub` entry point, so a cap of 1 is
+/// reachable even though the tier table only ever passes 256.
+///
+/// **The boundary product is defensive, not demonstrated.** `(y + 1) * src_h` reaches
+/// `dst_edge * src_edge`, which for the shapes this build actually produces (a 256 px cap) stays
+/// far inside 32 bits. It is computed in `u64` anyway because the function is public and its
+/// inputs are not bounded by the tier table — but the earlier claim that a 1x300000 frame
+/// crossed `u32::MAX` was simply wrong arithmetic (7.7e7, not 7.7e10), and a test asserting a
+/// false reason is worse than no test.
 #[test]
-fn the_downscale_survives_the_shapes_that_overflow_narrow_arithmetic() {
-    // A tall, one-pixel-wide frame: every destination row averages a large run of source rows.
+fn the_downscale_accumulator_survives_crossing_u32_max() {
+    // 4200 * 4200 * 255 = 4_501_980_000 > u32::MAX.
+    let edge = 4200u32;
+    let pixels = u64::from(edge) * u64::from(edge);
+    assert!(
+        pixels * 255 > u64::from(u32::MAX),
+        "the fixture must actually cross the boundary it exists to test"
+    );
+
+    let flat = RgbaImage {
+        width: edge,
+        height: edge,
+        rgba: vec![255, 255, 255, 255].repeat((edge * edge) as usize),
+    };
+    let single = downscale_rgba8(&flat, 1);
+    assert_eq!((single.width, single.height), (1, 1));
+    assert_eq!(
+        single.rgba,
+        vec![255, 255, 255, 255],
+        "every sample sums into one pixel, and the mean is still 255"
+    );
+
+    // The tall-frame shape, kept because it is the one the tier path can actually meet: a
+    // lopsided source reduced to a 256 px long edge.
     let tall = RgbaImage {
         width: 1,
         height: 300_000,
@@ -1482,7 +1536,6 @@ fn the_downscale_survives_the_shapes_that_overflow_narrow_arithmetic() {
     };
     let reduced = downscale_rgba8(&tall, 256);
     assert_eq!((reduced.width, reduced.height), (1, 256));
-    assert_eq!(reduced.rgba.len(), 256 * 4);
     assert!(
         reduced
             .rgba
@@ -1490,18 +1543,153 @@ fn the_downscale_survives_the_shapes_that_overflow_narrow_arithmetic() {
             .all(|px| px == [200, 100, 50, 255]),
         "a flat frame survives a 1172x row reduction exactly"
     );
+}
 
-    // A cap of 1: one destination pixel accumulates the entire frame.
-    let wide = RgbaImage {
-        width: 600,
-        height: 400,
-        rgba: vec![255, 255, 255, 255].repeat(600 * 400),
-    };
-    let single = downscale_rgba8(&wide, 1);
-    assert_eq!((single.width, single.height), (1, 1));
+/// A sealer that refuses is a **workspace** fault and must be distinguishable at the type level
+/// from a codec that refuses, because the import path propagates one and degrades on the other.
+///
+/// This is the `F1` contract: `MediaError::Sign` is its own variant precisely so
+/// `prepare_still` can tell "this asset has no thumbnail" from "this workspace cannot author a
+/// signed record", instead of string-matching both into one `LifecycleError::Io`.
+#[test]
+fn a_signing_fault_is_its_own_variant_not_an_encode_failure() {
+    struct RefusingSealer;
+    impl DerivativeSealer for RefusingSealer {
+        fn seal(&self, _plaintext: &[u8]) -> Result<SealedDerivative, MediaError> {
+            Err(MediaError::Sign {
+                detail: "the hardware signer refused".into(),
+            })
+        }
+    }
+
+    let frame = gradient(512, 384);
+    let original = png_bytes(&frame);
+    let (device, write_tier) = signers();
+    let decoded = RawshiftDecoder.decode(&original, "png").expect("decode");
+
+    let error = generate_still_derivatives(
+        &decoded,
+        &DerivativeTier::GENERATED,
+        &context(
+            &device,
+            &write_tier,
+            &RefusingSealer,
+            &no_prior_heads(),
+            Uuid::from_u128(0xB8),
+        ),
+    )
+    .expect_err("a refusing sealer fails generation");
+    assert!(
+        matches!(error, MediaError::Sign { .. }),
+        "a signing/sealing refusal keeps its own identity all the way out: {error:?}"
+    );
+}
+
+/// **A role's chain continues across generations.** A second run over an asset that already has
+/// a thumbnail extends that role's chain rather than starting a parallel one.
+///
+/// This is what makes derivative provenance append-only *in time* rather than merely within one
+/// call, and it is the property a `#437` backfill depends on: adding the AVIF variant to an
+/// asset that already has JXL must not fork the record. A forked chain is not something a later
+/// run can repair, so it is asserted before the backfill exists.
+#[test]
+fn a_roles_chain_continues_across_generation_runs() {
+    let frame = gradient(512, 384);
+    let original = png_bytes(&frame);
+    let (device, write_tier) = signers();
+    let asset_id = Uuid::from_u128(0xB7);
+    let seal = sealer(asset_id);
+    let decoded = RawshiftDecoder.decode(&original, "png").expect("decode");
+
+    // First generation: the role's chain starts.
+    let first = generate_still_derivatives(
+        &decoded,
+        &DerivativeTier::GENERATED,
+        &context(&device, &write_tier, &seal, &no_prior_heads(), asset_id),
+    )
+    .expect("first run");
+    let head = &first.generated[0].manifest;
+    assert!(
+        head.core.prior_provenance_hash.is_none(),
+        "the first manifest of a role starts that role's chain"
+    );
+
+    // What a reader would compute from the persisted bundle.
+    let link = crate::crypto::hash::hash_bytes(
+        &crate::cbor::to_canonical_vec(head).expect("canonical CBOR"),
+    );
+    let mut heads = HashMap::new();
+    heads.insert(DerivativeRole::Thumbnail, link);
+
+    // Second generation, handed that head.
+    let second = generate_still_derivatives(
+        &decoded,
+        &DerivativeTier::GENERATED,
+        &context(&device, &write_tier, &seal, &heads, asset_id),
+    )
+    .expect("second run");
     assert_eq!(
-        single.rgba,
-        vec![255, 255, 255, 255],
-        "240000 samples at 255 each sum past u32::MAX and must still average to 255"
+        second.generated[0].manifest.core.prior_provenance_hash,
+        Some(link),
+        "the second run extends the chain instead of forking it"
+    );
+
+    // A role with no recorded head still starts cleanly — the map is a lookup, not a gate.
+    let preview = generate_still_derivatives(
+        &decoded,
+        &[DerivativeTier::Preview],
+        &context(&device, &write_tier, &seal, &heads, asset_id),
+    )
+    .expect("preview run");
+    assert!(
+        preview.generated[0]
+            .manifest
+            .core
+            .prior_provenance_hash
+            .is_none(),
+        "a role the map does not mention starts its own chain"
+    );
+}
+
+/// A **panicking sealer/encoder** is caught at the same boundary a panicking decoder is, so one
+/// bad frame cannot abort a 20,000-photo import part way through.
+///
+/// The decode guard was never the whole story: `chromahash` and the JXL encoder are both pre-1.0
+/// too, and they run *after* the decoder on the same untrusted pixels. This mirrors
+/// [`HostileDecoder`] on the encode side.
+#[test]
+fn a_panicking_encoder_is_caught_like_a_panicking_decoder() {
+    struct PanickingSealer;
+    impl DerivativeSealer for PanickingSealer {
+        fn seal(&self, _plaintext: &[u8]) -> Result<SealedDerivative, MediaError> {
+            panic!("a pre-1.0 codec panicking on a frame the decoder accepted");
+        }
+    }
+
+    let frame = gradient(512, 384);
+    let original = png_bytes(&frame);
+    let (device, write_tier) = signers();
+    let decoded = RawshiftDecoder.decode(&original, "png").expect("decode");
+
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let caught = super::guarded("derivatives", || {
+        generate_still_derivatives(
+            &decoded,
+            &DerivativeTier::GENERATED,
+            &context(
+                &device,
+                &write_tier,
+                &PanickingSealer,
+                &no_prior_heads(),
+                Uuid::from_u128(0xB9),
+            ),
+        )
+    });
+    std::panic::set_hook(previous);
+
+    assert!(
+        matches!(caught, Err(MediaError::DecoderPanic)),
+        "an unwind from anywhere in generation becomes a reported error, never an abort"
     );
 }

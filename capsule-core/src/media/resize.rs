@@ -19,10 +19,10 @@
 //! function accepts.
 //!
 //! Determinism here is **necessary, not sufficient**, and the distinction matters: the bytes a
-//! manifest actually signs come out of libwebp, and a libwebp version bump can change them for
-//! the same input. That is fine — each generation signs the bytes it produced and manifests of a
-//! role chain in order — but it means "the resample is deterministic" buys reproducibility of
-//! *this* step, not a stable content address across toolchains.
+//! manifest actually signs come out of `zune-jpegxl`, and an encoder version bump can change
+//! them for the same input. That is fine — each generation signs the bytes it produced, and
+//! manifests of a role chain in order — but it means "the resample is deterministic" buys
+//! reproducibility of *this* step, not a stable content address across toolchains.
 //!
 //! Upscaling is not a thing this performs: a tier only ever caps a long edge, and a source
 //! already inside the cap takes the `format = "original"` sentinel path instead

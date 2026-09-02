@@ -39,6 +39,7 @@
 //! [`DerivativeManifest`]: crate::crypto::provenance::DerivativeManifest
 //! [`DerivativeCore::sign`]: crate::crypto::provenance::manifest::DerivativeCore::sign
 
+use std::collections::HashMap;
 use std::fmt;
 
 use rawshift_image::core::image::RgbImage;
@@ -58,92 +59,8 @@ use crate::crypto::hash::{self, Hash32};
 use crate::crypto::keys::{AmkVersion, Signer};
 use crate::crypto::provenance::manifest::{DERIVATIVE_MANIFEST_VERSION, DerivativeCore};
 use crate::crypto::provenance::{DerivativeManifest, DerivativeRole};
+use crate::derivative_format::DerivativeFormat;
 use crate::lqip::RgbaImage;
-
-/// The closed set of committed still-derivative formats — the tier table's format column.
-///
-/// The wire value is [`mime`](Self::mime), carried in `DerivativeManifest.format`. A value
-/// outside this set is a structural rejection, never a "future format to ignore".
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum DerivativeFormat {
-    /// **JPEG XL** — the committed primary/master still codec, and the one format this build
-    /// encodes. Losslessly: the pure-Rust backend is `zune-jpegxl`'s `JxlSimpleEncoder`.
-    Jxl,
-    /// **AVIF** — the universal delivery format for clients without a JXL decoder. Not
-    /// encodable in this build.
-    Avif,
-    /// **WebP** — the last-resort delivery fallback. Not encodable in this build: the crate's
-    /// WebP codec does not compile for aarch64 (see [`super::StillFormat::WebP`]).
-    WebP,
-    /// The recognised `format = "original"` sentinel: the tier **references** the original asset
-    /// rather than generating a redundant derivative, because the source is not larger than the
-    /// tier's cap. **Distinct from an absent derivative** — this is an explicit, signed marker,
-    /// where absence means "rebuildable from the original".
-    ///
-    /// A sentinel derivative carries **no bytes of its own** ([`GeneratedDerivative::bytes`] is
-    /// empty). "References" is the operative word in the contract: the signed manifest's
-    /// `ciphertext_hash` content-addresses the original, which the holder already has, so
-    /// copying the bytes under a thumbnail's name would duplicate a file sitting two directories
-    /// up *and* re-expose the original's EXIF — GPS included — as a derivative blob, where a
-    /// re-encoded thumbnail is metadata-free by construction.
-    Original,
-}
-
-impl DerivativeFormat {
-    /// The committed still formats per tier, in delivery-preference order: the JXL master, then
-    /// the AVIF -> WebP delivery variants.
-    pub const STILL_DELIVERY_ORDER: [Self; 3] = [Self::Jxl, Self::Avif, Self::WebP];
-
-    /// The exact wire string for `DerivativeManifest.format`.
-    pub const fn mime(self) -> &'static str {
-        match self {
-            Self::Jxl => "image/jxl",
-            Self::Avif => "image/avif",
-            Self::WebP => "image/webp",
-            Self::Original => "original",
-        }
-    }
-
-    /// The on-disk file extension for a persisted derivative of this format. `Original` has
-    /// none of its own — it reuses the source asset's.
-    pub const fn extension(self) -> Option<&'static str> {
-        match self {
-            Self::Jxl => Some("jxl"),
-            Self::Avif => Some("avif"),
-            Self::WebP => Some("webp"),
-            Self::Original => None,
-        }
-    }
-
-    /// Parse a `DerivativeManifest.format` value against the closed set. `None` **is** the
-    /// structural rejection.
-    pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "image/jxl" => Some(Self::Jxl),
-            "image/avif" => Some(Self::Avif),
-            "image/webp" => Some(Self::WebP),
-            "original" => Some(Self::Original),
-            _ => None,
-        }
-    }
-
-    /// Whether a `format` string names a currently-recognised still-derivative format — the
-    /// exact check a receiver runs.
-    pub fn is_recognized(s: &str) -> bool {
-        Self::parse(s).is_some()
-    }
-
-    /// Whether this build can produce bytes in this format.
-    pub const fn is_encodable(self) -> bool {
-        matches!(self, Self::Jxl | Self::Original)
-    }
-}
-
-impl fmt::Display for DerivativeFormat {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.mime())
-    }
-}
 
 /// A derivative tier from the tier table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -263,6 +180,19 @@ pub struct DerivativeContext<'a> {
     pub write_tier_signer: &'a dyn Signer,
     /// Encrypts each generated derivative so its manifest can commit to the ciphertext.
     pub sealer: &'a dyn DerivativeSealer,
+    /// The current head of each role's derivative chain, when this asset already has one.
+    ///
+    /// A `HashMap` rather than a `BTreeMap` because [`DerivativeRole`] derives `Hash + Eq` and
+    /// not `Ord`, and adding `Ord` to a signed wire type to key a lookup would be the tail
+    /// wagging the dog. Iteration order never escapes this map — it is only ever queried by
+    /// key — so the non-determinism a `HashMap` would otherwise introduce cannot reach the
+    /// signed bytes.
+    ///
+    /// A role's manifests are append-only **across time**, not merely within one call: a
+    /// backfill that adds the AVIF variant to an asset that already has a JXL thumbnail extends
+    /// that role's chain rather than starting a second one. Empty on a create, which is why the
+    /// import path passes an empty map; a regeneration reads it off the persisted bundle.
+    pub prior_heads: &'a HashMap<DerivativeRole, Hash32>,
     /// What the **original**'s own manifest committed to. The `original` sentinel generates no
     /// bytes and encrypts nothing: it is a reference to the original blob, so it signs the
     /// original's ciphertext address and the original's nonce prefix, and a receiver resolves it
@@ -340,8 +270,9 @@ pub fn generate_still_derivatives(
     let source_long_edge = decoded.width().max(decoded.height());
 
     for &tier in tiers {
-        // Each tier records a distinct role, so its manifests form their own chain.
-        let mut prior: Option<Hash32> = None;
+        // Each tier records a distinct role, so its manifests form their own chain — continued
+        // from wherever that role left off, not restarted.
+        let mut prior: Option<Hash32> = ctx.prior_heads.get(&tier.role()).copied();
 
         if let Some(cap) = tier.max_long_edge()
             && source_long_edge <= cap
@@ -384,7 +315,11 @@ pub fn generate_still_derivatives(
                 out.deferred.push((tier, format));
                 continue;
             }
-            let bytes = encode(&work, format, tier)?;
+            // Guarded: `libwebp`'s successor here is `zune-jpegxl`, also pre-1.0, and a panic
+            // inside it must not abort an import that may hold the only copy of a file. The
+            // stage name makes a caught unwind attributable to the encoder rather than to the
+            // decoder that ran before it.
+            let bytes = super::decode::guarded("encode", || encode(&work, format, tier))?;
             // Encrypt before signing: the manifest's content address is the ciphertext's, so
             // the ciphertext has to exist first. A fresh prefix per derivative, so two
             // derivatives of one asset never share a key even for identical plaintext.
@@ -402,32 +337,6 @@ pub fn generate_still_derivatives(
         "media: still derivatives generated"
     );
     Ok(out)
-}
-
-/// The closed-set check a receiver runs on a still-role derivative manifest.
-///
-/// Returns the parsed format for a `thumbnail` or `preview` manifest whose `format` is in the
-/// closed set. An embedding-role manifest is **not** rejected: its `format` is
-/// `embedding/{model_id}`, which this set deliberately does not model, so it is reported as
-/// [`None`] rather than as a violation.
-///
-/// # Errors
-/// [`MediaError::UnsupportedFormat`] — carrying the still format Capsule *would* have needed —
-/// is not what an unrecognised value produces, because there is no [`super::StillFormat`] to
-/// name. An unrecognised still-role format is `Err(format.to_string())`.
-pub fn verify_still_format(
-    manifest: &DerivativeManifest,
-) -> Result<Option<DerivativeFormat>, String> {
-    let core = &manifest.core;
-    match core.role {
-        DerivativeRole::Thumbnail | DerivativeRole::Preview => {
-            DerivativeFormat::parse(&core.format)
-                .map(Some)
-                .ok_or_else(|| core.format.clone())
-        }
-        // Not a still. The embedding-role format grammar belongs to `crate::ml`.
-        DerivativeRole::Embedding => Ok(None),
-    }
 }
 
 /// Encode a tier-sized RGBA8 frame to `format`.
@@ -540,15 +449,13 @@ pub(super) fn sign_derivative(
     };
     let manifest = core
         .sign(ctx.device_signer, ctx.write_tier_signer)
-        .map_err(|e: CryptoError| MediaError::Encode {
-            format,
+        .map_err(|e: CryptoError| MediaError::Sign {
             detail: format!("signing the derivative manifest: {e}"),
         })?;
     // The next manifest of this role chains to this one: SHA-256 over its canonical CBOR,
     // signatures included — the same content-hash link the asset provenance chain uses.
     *prior = Some(hash::hash_bytes(
-        &cbor::to_canonical_vec(&manifest).map_err(|e| MediaError::Encode {
-            format,
+        &cbor::to_canonical_vec(&manifest).map_err(|e| MediaError::Sign {
             detail: format!("serialising the derivative manifest: {e}"),
         })?,
     ));

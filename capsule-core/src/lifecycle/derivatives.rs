@@ -19,17 +19,20 @@
 //! that mean the *workspace* is broken — a missing album, a signer that refused — not the ones
 //! that mean the pixels were unreadable.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
 use uuid::Uuid;
 
-use super::{AssetState, DerivativeStatus, Result, Workspace, media_dir};
+use super::{AssetState, DerivativeStatus, LifecycleError, Result, Workspace, media_dir};
 use crate::cbor;
 use crate::crypto::encryption::encrypt_asset_rekey;
 use crate::crypto::encryption::stream::AssetEncryption;
+use crate::crypto::hash::{self, Hash32};
 use crate::crypto::keys::{Amk, AmkVersion};
 use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
+use crate::crypto::provenance::{DerivativeManifest, DerivativeRole};
 use crate::exif::extract::ExifExtract;
 use crate::lqip::Lqip;
 use crate::media::{
@@ -174,6 +177,45 @@ fn lqip_from(decoded: &DecodedImage, src: &Path) -> Option<SidecarLqip> {
     }
 }
 
+/// The current head of each derivative role's chain for `asset_id`, read off the persisted
+/// bundle.
+///
+/// Empty when the asset has no bundle yet, which is every import: a create starts each role's
+/// chain. It is a **regeneration** — the `#437` backfill that adds a second format to an asset
+/// that already has one — that needs this, and it needs it to be right the first time, because a
+/// forked chain is not something a later run can repair.
+///
+/// The link is SHA-256 over the manifest's canonical CBOR, signatures included: the same
+/// content-hash link the asset provenance chain uses.
+pub(super) fn chain_heads(dir: &Path, asset_id: Uuid) -> HashMap<DerivativeRole, Hash32> {
+    let path = dir.join(format!("{}.derivatives.cbor", asset_id.simple()));
+    let Ok(bytes) = fs::read(&path) else {
+        return HashMap::new();
+    };
+    let Ok(manifests) = cbor::from_slice::<Vec<DerivativeManifest>>(&bytes) else {
+        tracing::warn!(
+            path = %path.display(),
+            "derivatives: undecodable bundle; treating every role's chain as unstarted"
+        );
+        return HashMap::new();
+    };
+    // Generation order is the chain order, so the last manifest of a role is that role's head.
+    let mut heads = HashMap::new();
+    for manifest in &manifests {
+        match cbor::to_canonical_vec(manifest) {
+            Ok(canonical) => {
+                heads.insert(manifest.core.role, hash::hash_bytes(&canonical));
+            }
+            Err(error) => tracing::warn!(
+                %error,
+                "derivatives: a persisted manifest did not re-serialise; its role's chain \
+                 restarts rather than linking to something unverifiable"
+            ),
+        }
+    }
+    heads
+}
+
 /// The album-key half of derivative generation: `media` produces the bytes, this encrypts them.
 ///
 /// One `encrypt_asset_rekey` per derivative under the **source asset's** `file_id` and the
@@ -191,8 +233,7 @@ impl DerivativeSealer for AlbumSealer<'_> {
     fn seal(&self, plaintext: &[u8]) -> std::result::Result<SealedDerivative, MediaError> {
         let (enc, _ciphertext, _file_key) =
             encrypt_asset_rekey(self.amk, &self.asset_id, plaintext, None).map_err(|e| {
-                MediaError::Encode {
-                    format: crate::media::DerivativeFormat::Original,
+                MediaError::Sign {
                     detail: format!("sealing the derivative: {e}"),
                 }
             })?;
@@ -222,6 +263,7 @@ impl Workspace {
         source: &StillSource<'_>,
         asset_id: Uuid,
         album_id: Uuid,
+        capture_utc: i64,
         amk: &Amk,
         original: &AssetEncryption,
     ) -> Result<PreparedStill> {
@@ -282,6 +324,11 @@ impl Workspace {
             device_signer: self.device_signer.as_ref(),
             write_tier_signer: album.write_tier_signer()?,
             sealer: &AlbumSealer { amk, asset_id },
+            // Empty on a create; a regeneration continues each role's chain from here.
+            prior_heads: &chain_heads(
+                &media_dir(&self.root, capture_utc).join("derivatives"),
+                asset_id,
+            ),
             // The `original` sentinel references the original blob rather than encrypting
             // anything, so it signs what the original's own manifest signs.
             original: SealedDerivative {
@@ -300,6 +347,26 @@ impl Workspace {
         });
         let derivatives = match generated {
             Ok(derivatives) => derivatives,
+            // **A signing fault is the workspace's, not this asset's.** A hardware signer that
+            // refuses, or a missing epoch write-tier key, is the same fault that would stop the
+            // asset's own manifest being authored — degrading it to "no thumbnail" would hide a
+            // broken workspace behind a cosmetic gap. It propagates.
+            Err(error @ MediaError::Sign { .. }) => {
+                tracing::error!(
+                    asset_id = %asset_id,
+                    path = %src.display(),
+                    %error,
+                    "derivatives: the workspace could not author a signed derivative record"
+                );
+                return Err(LifecycleError::Io(format!("derivative signing: {error}")));
+            }
+            // Everything else is about *pixels*: a codec refused a frame, a resize was rejected,
+            // a third-party encoder panicked. The signed original, its dimensions and its
+            // placeholder are all still right, and failing the import would trade a missing
+            // thumbnail for a missing backup — which is the whole of `S-B13`'s reasoning and
+            // this module's stated contract. Reported as `DecodeFailed`, the "a supported path
+            // produced no derivative and somebody should look at it" bucket, so the run summary
+            // counts it instead of staying silent.
             Err(error) => {
                 tracing::warn!(
                     asset_id = %asset_id,

@@ -92,7 +92,12 @@ kamadak-exif = "0.5"
 # (`rawshift-image`'s own docs say so), and the format set is a licence, build-host and
 # *portability* decision:
 #
-# - `jpeg` / `png`  — pure-Rust zune decode **and** encode; the two formats every library holds.
+# - `jpeg-decode` / `png-decode` — pure-Rust zune decode for the two formats every library holds.
+#                     **Decode only in the shipping graph.** Their encoders exist and only the
+#                     test fixtures use them, so they ride `[dev-dependencies]` below: shipping
+#                     `jpeg-encode` would put `jpeg-encoder` — and its conjunctive IJG licence
+#                     arm, which cannot be elected away — into every release binary to satisfy
+#                     nothing a user does.
 # - `jxl`           — jxl-oxide decode plus the `zune-jpegxl` encoder that produces the thumbnail
 #                     tier. Pure Rust, and `image/jxl` is the tier table's committed *master*
 #                     format. The backend is `JxlSimpleEncoder`, which is lossless — a thumbnail
@@ -114,8 +119,8 @@ kamadak-exif = "0.5"
 # `media::MediaError::UnsupportedFormat` today rather than a silent gap. MPL-2.0, already
 # allow-listed in `deny.toml`; see the Media row in design/dependencies.md.
 rawshift-image = { version = "0.1.1", default-features = false, features = [
-    "jpeg",
-    "png",
+    "jpeg-decode",
+    "png-decode",
     "jxl",
     "tiff-decode",
     "gif-decode",
@@ -231,6 +236,16 @@ getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] 
 uuid = { workspace = true, features = ["rng-getrandom"] }
 
 [dev-dependencies]
+# The encoders the fixtures need and the shipping graph does not. Cargo unifies features per
+# build, so a `cargo build` links decode only while `cargo test` gets the encoders — which keeps
+# `jpeg-encoder`'s IJG arm out of every release binary while leaving it in the graph
+# `cargo deny --all-features` inspects, so its `deny.toml` exception and NOTICE section stay
+# matched rather than becoming stale. The `media` feature is named explicitly because a
+# dev-dependency does not inherit the optional dependency's gate.
+rawshift-image = { version = "0.1.1", default-features = false, features = [
+    "jpeg",
+    "png",
+] }
 tempfile = "3"
 # Integration tests (e.g. the S-D14 placement audit) build UUIDs to exercise the `library::paths`
 # surface; `uuid` is a normal dependency, so the test crate needs its own dev-dependency on it.

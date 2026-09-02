@@ -437,7 +437,13 @@ mod tests {
 
         let src = TempDir::new().unwrap();
         let lib_dir = TempDir::new().unwrap();
-        fs::write(src.path().join("iphone.heic"), b"fake heic bytes").unwrap();
+        // A real ISO-BMFF `ftyp heic` header, so the classification rests on the **bytes** —
+        // which is what the doc above claims. `b"fake heic bytes"` carried no `ftyp` and
+        // silently exercised the extension fallback instead.
+        let mut heic = vec![0, 0, 0, 0x20];
+        heic.extend_from_slice(b"ftypheic");
+        heic.extend_from_slice(&[0; 16]);
+        fs::write(src.path().join("iphone.heic"), &heic).unwrap();
         fs::write(src.path().join("snap.jpg"), b"not really a jpeg").unwrap();
 
         let mut ws = signed_workspace(lib_dir.path());

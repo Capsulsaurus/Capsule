@@ -56,16 +56,19 @@ mod detect;
 mod error;
 mod resize;
 
-pub use self::decode::{
-    DecodedImage, Decoder, MediaMetadata, RawshiftDecoder, decode_guarded, guarded,
-};
+pub(crate) use self::decode::guarded;
+pub use self::decode::{DecodedImage, Decoder, MediaMetadata, RawshiftDecoder, decode_guarded};
 pub use self::derivative::{
-    DerivativeContext, DerivativeFormat, DerivativeSealer, DerivativeTier, GeneratedDerivative,
-    SealedDerivative, StillDerivatives, generate_still_derivatives, verify_still_format,
+    DerivativeContext, DerivativeSealer, DerivativeTier, GeneratedDerivative, SealedDerivative,
+    StillDerivatives, generate_still_derivatives,
 };
 pub use self::detect::{MAX_DECODE_PIXELS, SUPPORTED_STILL_FORMATS, StillFormat};
 pub use self::error::{FormatOp, MediaError};
 pub use self::resize::{capped_dimensions, downscale_rgba8};
+// Re-exported so `media::DerivativeFormat` keeps resolving, but *owned* by the unconditional
+// module: the closed set has to be linkable by the crates that receive a manifest, and they
+// build without this feature. See [`crate::derivative_format`].
+pub use crate::derivative_format::{DerivativeFormat, verify_still_format};
 
 #[cfg(test)]
 mod tests;

@@ -8,8 +8,8 @@
 
 use thiserror::Error;
 
-use super::derivative::DerivativeFormat;
 use super::detect::StillFormat;
+use crate::derivative_format::DerivativeFormat;
 
 /// Which direction of a codec a format was needed for. A build can decode a format it cannot
 /// encode (every format here except WebP) and the message has to say which half is missing.
@@ -112,6 +112,20 @@ pub enum MediaError {
         expected: u128,
         /// The sample count the decoder actually returned.
         actual: u128,
+    },
+    /// Signing or sealing a derivative manifest failed — a hardware device signer refused, or
+    /// the album's write-tier key for this epoch is missing.
+    ///
+    /// **The one derivative failure that is not about pixels**, and the reason it has its own
+    /// variant rather than being folded into [`Encode`](Self::Encode): every other error here
+    /// says "this asset has no thumbnail", which an import survives, while this one says the
+    /// *workspace* cannot author a signed record — the same fault that would stop the asset's
+    /// own manifest. The import path propagates this and degrades on everything else, and it can
+    /// only tell them apart if the type does.
+    #[error("signing the derivative manifest failed: {detail}")]
+    Sign {
+        /// The underlying crypto error's message.
+        detail: String,
     },
     /// A third-party decoder panicked and the unwind was caught at the pipeline boundary.
     ///

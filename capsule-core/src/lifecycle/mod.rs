@@ -298,8 +298,8 @@ pub struct SignedImportOptions {
 pub enum DerivativeStatus {
     /// The still decoded: `dimensions` and `lqip` came from real pixels, and the derivatives
     /// this build can encode were generated and signed. **Independent of how many *formats*
-    /// deferred** — a decoded still whose JXL and AVIF variants have no encoder here is still
-    /// `Decoded`, because it has a renderable thumbnail. The per-format gap is counted
+    /// deferred** — a decoded still whose AVIF and WebP variants have no encoder here is still
+    /// `Decoded`, because it has a renderable JXL thumbnail. The per-format gap is counted
     /// separately by
     /// [`ImportExecutionSummary::deferred_format_count`](crate::import::ImportExecutionSummary::deferred_format_count).
     Decoded,

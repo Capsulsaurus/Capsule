@@ -34,7 +34,8 @@
 //! is the one surface here that is not about crypto:
 //!
 //! 6. [`decode_lqip`] (`decodeLqip`) — render a sidecar `lqip` record to packed RGBA the viewer
-//!    can hand straight to `CanvasRenderingContext2D.putImageData`. The placeholder lives inside
+//!    can hand straight to `CanvasRenderingContext2D.putImageData`. Infallible: a placeholder is
+//!    cosmetic, so a malformed record paints a fallback fill rather than failing a gallery. The placeholder lives inside
 //!    the *encrypted* metadata blob, so the browser only ever holds it after opening a share
 //!    link — which is why this belongs in the same crate as the open path rather than beside a
 //!    server route. It is the same [`capsule_core::lqip`] implementation the import pipeline
@@ -431,12 +432,15 @@ impl WasmLqipImage {
 ///   rather than to a fixed size is the point of `decode_capped`: a grid cell never scales down
 ///   a larger decode.
 ///
-/// **Infallible by design, except on a malformed `dominant_color`.** An unrecognised
-/// `format_version` or a payload the parser rejects yields the 1x1 solid fallback fill rather
-/// than a throw, because a reader must never misrender a payload it does not understand and a
-/// missing placeholder is not an error worth failing a gallery over. Only a `dominant_color`
-/// that is not three bytes throws `malformed` — there is no colour to fall back *to*, so
-/// guessing one would invent pixels.
+/// **Infallible.** An unrecognised `format_version`, a payload the parser rejects, *and* a
+/// `dominant_color` that is not three bytes all yield a solid fallback fill rather than a throw.
+///
+/// A placeholder is cosmetic: it never damages a library and its absence never loses data, so
+/// failing a viewer over one trades a blurry square for a broken gallery. The earlier version
+/// threw on a malformed `dominant_color` while the native FFI painted black for the same input —
+/// one record, two behaviours, decided by which client opened it. That is exactly the
+/// client-dependent divergence `capsule-core::lqip` exists to prevent, so both surfaces now
+/// paint [`FALLBACK_FILL`] and say so.
 #[wasm_bindgen(js_name = decodeLqip)]
 pub fn decode_lqip(
     format_version: u16,
@@ -444,40 +448,40 @@ pub fn decode_lqip(
     dominant_color: &[u8],
     max_width: u32,
     max_height: u32,
-) -> Result<WasmLqipImage, JsError> {
-    render_lqip_record(
-        format_version,
-        chromahash,
-        dominant_color,
-        max_width,
-        max_height,
-    )
-    .map(|image| WasmLqipImage { image })
-    .ok_or_else(|| JsError::new(err::MALFORMED))
+) -> WasmLqipImage {
+    WasmLqipImage {
+        image: render_lqip_record(
+            format_version,
+            chromahash,
+            dominant_color,
+            max_width,
+            max_height,
+        ),
+    }
 }
+
+/// The colour a malformed record paints when it carries no usable `dominant_color`.
+///
+/// Black, the conventional empty-cell fill, and identical to what `capsule-core-ffi`'s
+/// `render_lqip` paints for the same input — the two surfaces are asserted to agree.
+const FALLBACK_FILL: [u8; 3] = [0, 0, 0];
 
 /// [`decode_lqip`] without the JS boundary — the whole of its logic, so the host unit tests can
 /// exercise it.
 ///
 /// The split is not ceremony: `JsError` cannot be *constructed* off-wasm (its host shim aborts),
-/// so a test that reached the error arm through the exported function would abort the test
-/// binary rather than fail an assertion. Keeping the boundary to a `map`/`ok_or_else` is also
-/// the thin-glue discipline the module docs ask for.
+/// so a test reaching an error arm through the exported function would abort the test binary
+/// rather than fail an assertion. It survives the move to an infallible signature because the
+/// `#[wasm_bindgen]` wrapper is still unusable from a host test.
 fn render_lqip_record(
     format_version: u16,
     chromahash: &[u8],
     dominant_color: &[u8],
     max_width: u32,
     max_height: u32,
-) -> Option<RgbaImage> {
-    let fill: [u8; 3] = dominant_color.try_into().ok()?;
-    Some(lqip_render(
-        format_version,
-        chromahash,
-        fill,
-        max_width,
-        max_height,
-    ))
+) -> RgbaImage {
+    let fill: [u8; 3] = dominant_color.try_into().unwrap_or(FALLBACK_FILL);
+    lqip_render(format_version, chromahash, fill, max_width, max_height)
 }
 
 #[cfg(test)]
@@ -622,8 +626,7 @@ mod tests {
         let payload = lqip.as_bytes();
         assert_eq!(payload.len(), 32, "the committed tier is 32 bytes");
 
-        let decoded = render_lqip_record(LQIP_FORMAT_V1, payload, &lqip.dominant_color(), 64, 64)
-            .expect("a well-formed record decodes");
+        let decoded = render_lqip_record(LQIP_FORMAT_V1, payload, &lqip.dominant_color(), 64, 64);
         assert_eq!(
             decoded,
             lqip.decode_capped(64, 64),
@@ -653,24 +656,31 @@ mod tests {
             (LQIP_FORMAT_V1, vec![0xDE, 0xAD, 0xBE, 0xEF]),
             (LQIP_FORMAT_V1, Vec::new()),
         ] {
-            let decoded = render_lqip_record(version, &payload, &fill, 32, 32)
-                .expect("the fallback never fails");
+            let decoded = render_lqip_record(version, &payload, &fill, 32, 32);
             assert_eq!((decoded.width, decoded.height), (1, 1));
             assert_eq!(decoded.rgba, vec![12, 34, 56, 255]);
         }
     }
 
-    /// The one throwing case: there is no colour to fall back *to*, so guessing one would invent
-    /// pixels.
+    /// A malformed `dominant_color` paints [`FALLBACK_FILL`] rather than throwing — the same
+    /// answer `capsule-core-ffi`'s `render_lqip` gives, so a viewer's behaviour does not depend
+    /// on which client opened the record.
     #[test]
-    fn decode_lqip_rejects_a_malformed_dominant_colour() {
+    fn decode_lqip_paints_the_fallback_fill_for_a_malformed_dominant_colour() {
         use capsule_core::lqip::LQIP_FORMAT_V1;
 
         for fill in [&[][..], &[1][..], &[1, 2][..], &[1, 2, 3, 4][..]] {
-            assert!(
-                render_lqip_record(LQIP_FORMAT_V1, &[0; 32], fill, 16, 16).is_none(),
-                "a {}-byte dominant_color is malformed",
+            let decoded = render_lqip_record(LQIP_FORMAT_V1, &[0; 32], fill, 16, 16);
+            assert_eq!(
+                (decoded.width, decoded.height),
+                (1, 1),
+                "a {}-byte dominant_color paints the fill, not an error",
                 fill.len()
+            );
+            assert_eq!(
+                decoded.rgba,
+                vec![FALLBACK_FILL[0], FALLBACK_FILL[1], FALLBACK_FILL[2], 255],
+                "and it is black — identical to the native surface"
             );
         }
     }

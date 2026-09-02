@@ -267,8 +267,8 @@ impl Workspace {
             }
 
             let core = manifest.core;
-            let prefix = format!("{stem}.{role_name}.");
-            let Some(plaintext) = read_derivative_bytes(&dir, &prefix) else {
+            let Some(plaintext) = read_derivative_bytes(&dir, &stem, role_name, &core.format)
+            else {
                 tracing::warn!(
                     asset_id = %asset.asset_id,
                     role = role_name,
@@ -315,18 +315,24 @@ fn derivative_role_name(role: DerivativeRole) -> &'static str {
     }
 }
 
-/// The first file in `dir` whose name starts with `prefix` — the derivative's bytes, whose
-/// extension varies with the encoder's chosen format.
-fn read_derivative_bytes(dir: &std::path::Path, prefix: &str) -> Option<Vec<u8>> {
-    let entries = fs::read_dir(dir).ok()?;
-    let mut names: Vec<_> = entries
-        .filter_map(std::result::Result::ok)
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|name| name.starts_with(prefix))
-        .collect();
-    names.sort();
-    fs::read(dir.join(names.first()?)).ok()
+/// The persisted bytes of one derivative, addressed by **(role, format)** rather than by role
+/// alone.
+///
+/// Role alone was ambiguous the moment a tier could carry more than one format: with a JXL and
+/// an AVIF thumbnail side by side, a prefix match would take whichever sorted first and then
+/// content-address it against the *other* manifest, so both would be skipped as mismatched.
+/// `#437` lands exactly that pair, so this is a latent break rather than a hypothetical one.
+///
+/// A format outside the closed set has no extension to look for and returns `None`; the caller
+/// has already rejected that manifest, so this is belt and braces. A stale file left by a
+/// retired format is simply never read — nothing enumerates the directory any more, so an
+/// orphan is inert rather than a candidate, and it is regenerable by design.
+fn read_derivative_bytes(
+    dir: &std::path::Path,
+    stem: &str,
+    role_name: &str,
+    format: &str,
+) -> Option<Vec<u8>> {
+    let extension = DerivativeFormat::parse(format)?.extension()?;
+    fs::read(dir.join(format!("{stem}.{role_name}.{extension}"))).ok()
 }
-
-#[cfg(test)]
-mod tests;
