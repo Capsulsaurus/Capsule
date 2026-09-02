@@ -556,6 +556,82 @@ fn an_operator_command_without_memory_is_told_that_and_not_about_valkey() {
     }
 }
 
+/// The settings `capsule-server/.env.example` ships **uncommented**, as an env-file reader sees
+/// them.
+///
+/// Parsed rather than duplicated, so the assertions below are about the file an operator
+/// actually copies. Comments and blank lines are dropped and the rest is split on the first `=`
+/// — which is all `podman --env-file`, compose's `env_file:` and systemd's `EnvironmentFile=`
+/// do. None of them expands anything.
+fn shipped_template() -> Vec<(String, String)> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".env.example");
+    let text = std::fs::read_to_string(&path).expect("the template ships with the crate");
+    let settings: Vec<(String, String)> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter_map(|line| line.split_once('='))
+        .map(|(key, value)| (key.trim().to_owned(), value.trim().to_owned()))
+        .collect();
+    assert!(
+        !settings.is_empty(),
+        "the template has no uncommented settings at all, so the parse below proves nothing"
+    );
+    settings
+}
+
+#[test]
+fn the_template_ships_no_value_a_literal_env_file_reader_would_store_verbatim() {
+    // The defect this guards, in its general form. A placeholder shaped like a shell expression
+    // — `$(CHANGE_ME)`, `${FOO}`, a backtick — is replaced by nothing when the file is read by
+    // anything that is not a shell: the *literal characters* become the value. Sourced by bash it
+    // is worse than useless in the other direction, because it executes.
+    //
+    // Every secret in the template is therefore commented out, and every uncommented value is
+    // plain text.
+    for (key, value) in shipped_template() {
+        assert!(
+            !value.contains('$') && !value.contains('`'),
+            "{key} ships uncommented with a shell expression as its value ({value}): an env-file \
+             reader stores it verbatim, and bash executes it"
+        );
+    }
+}
+
+#[test]
+fn a_maintenance_command_runs_on_the_template_as_shipped() {
+    // `Demands::Maintenance` promises `gc`/`purge`/`scrub` need no key material. That promise is
+    // only worth anything if the file an operator copies does not hand them a broken one: an
+    // uncommented `ATTESTATION_KEY_SEED` placeholder is *present but malformed*, which is a
+    // `ConfigFault::Invalid` rather than an absence, and no `Demands` arm can excuse it.
+    let template = shipped_template();
+    assert!(
+        !template
+            .iter()
+            .any(|(key, _)| key == "ATTESTATION_KEY_SEED" || key == "JWT_ED25519_DER"),
+        "both secrets must ship commented out: {template:?}"
+    );
+
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let mut command = server(&[
+        "scrub",
+        "--memory",
+        // The one thing not taken from the template: a test must not write into the tree the
+        // template's own `BLOB_ROOT` points at. The flag outranks the environment either way.
+        "--blob-root",
+        &root.path().display().to_string(),
+    ]);
+    for (key, value) in template {
+        command.env(key, value);
+    }
+    let (code, stdout, stderr) = run(&mut command);
+    assert_eq!(code, Some(0), "stdout: {stdout}\nstderr: {stderr}");
+    assert!(
+        !stderr.contains("ATTESTATION_KEY_SEED"),
+        "a maintenance command must not be stopped by key material: {stderr}"
+    );
+}
+
 #[test]
 fn an_operator_command_without_a_blob_root_refuses_by_name() {
     let (code, _, stderr) = run(&mut server(&["scrub", "--memory"]));

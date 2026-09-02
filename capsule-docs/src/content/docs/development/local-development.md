@@ -103,10 +103,20 @@ JWT_ED25519_DER="$(openssl genpkey -algorithm ed25519 -outform DER | base64 | tr
 ### A configured server
 
 ```bash
-cp capsule-server/.env.example capsule-server/.env   # then edit it: two keys are commented out
+cp capsule-server/.env.example capsule-server/.env   # then edit it
 mise run serve-deps                                  # Postgres 18 + Valkey 9, on loopback
 mise run serve
 ```
+
+The template ships with **both secrets commented out** — `JWT_ED25519_DER` and
+`ATTESTATION_KEY_SEED` — so a copy you have not finished editing produces a server that refuses
+and names what it wants, rather than one that starts under a published key. Uncomment each and
+put your own value in. Every other setting is either a working default or optional.
+
+Nothing in the template is a shell expression, deliberately: the file is read by more than a
+shell — `podman --env-file`, compose's `env_file:`, systemd's `EnvironmentFile=` — and those take
+a line literally, so a placeholder shaped like `$(...)` would be stored as the value rather than
+replaced.
 
 `serve-deps` and `serve` are separate tasks on purpose: a task that silently starts containers is
 a task that leaks them. Bring them down with
