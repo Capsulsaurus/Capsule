@@ -13,16 +13,17 @@
 //!
 //! Selection is a two-arm `match` on [`Backends`] and not a trait. The `Arc<dyn Port>` fields in
 //! [`Modules`] already **are** the abstraction; a second one over the top would abstract the
-//! composition root from itself. When the Postgres (#402) and Valkey (#403) adapters land they
-//! fill the [`Backends::Durable`] arm, and nothing else here moves.
+//! composition root from itself. The Postgres (#402) and Valkey (#403) adapters fill the
+//! [`Backends::Durable`] arm, and nothing else here moves.
 //!
-//! Today that arm refuses. `store/mod.rs` has said since `S-C29` that *"Valkey is required; the
-//! server refuses to boot without `VALKEY_URL`"* and that the in-memory adapters are a test
-//! double rather than a deployment profile — and nothing enforced either sentence, because there
-//! was no boot path to enforce it in. Now there is: no `VALKEY_URL` and no `--memory` is a
-//! configuration fault naming `VALKEY_URL` ([`Config::load`]), and `VALKEY_URL` set is
-//! [`BootError::AdapterUnavailable`] naming the issue that will honour it. Neither ever silently
-//! becomes an in-memory server.
+//! The Valkey half is filled: [`valkey`] connects to `VALKEY_URL` and proves it answers `PING`
+//! before anything else is assembled, and a server that cannot be reached is
+//! [`BootError::Valkey`] — the refusal `store/mod.rs` has said since `S-C29` a required service
+//! earns: *"Valkey is required; the server refuses to boot without `VALKEY_URL`"*. The Postgres
+//! half is not, so [`durable`] then refuses as [`BootError::AdapterUnavailable`] naming
+//! `DATABASE_URL` and #402 rather than assembling a profile that mixes durable adapters with
+//! in-memory doubles. No `VALKEY_URL` and no `--memory` is a configuration fault naming the
+//! variable ([`Config::load`]). Nothing here ever silently becomes an in-memory server.
 //!
 //! # What the memory profile is, precisely
 //!
@@ -71,6 +72,7 @@ use crate::store::memory::{
     InMemoryAuthState, InMemoryChallenges, InMemoryChannels, InMemoryCohorts, InMemoryEnrollments,
     InMemoryUploadSessions,
 };
+use crate::store::valkey::ValkeyStores;
 use crate::sync::{CursorCodec, SyncContext};
 use crate::upload::{UploadContext, UploadPolicy};
 use crate::verify::VerifyContext;
@@ -131,9 +133,19 @@ pub enum BootError {
         /// Where the work is tracked.
         issue: &'static str,
     },
+    /// The Valkey at `VALKEY_URL` could not be reached, or did not answer `PING`.
+    ///
+    /// Required means required: a server that came up without its session store would answer
+    /// nothing an authenticated client sent, and saying so at boot beats discovering it per
+    /// request. `detail` never carries the URL, which carries the password.
+    #[error("the Valkey at VALKEY_URL could not be reached: {detail}")]
+    Valkey {
+        /// The adapter's own description of the failure.
+        detail: String,
+    },
     /// An operator command was run without `--memory` and there is no durable index to read.
     ///
-    /// Deliberately not [`Self::AdapterUnavailable`]: that one names `VALKEY_URL`, which an
+    /// Deliberately not [`Self::AdapterUnavailable`]: that one names `DATABASE_URL`, which an
     /// operator running `capsule-server scrub` has typically never set, and pointing them at a
     /// variable that would not have helped is worse than saying nothing.
     #[error(
@@ -209,7 +221,10 @@ pub async fn assemble(config: &Config) -> Result<Assembled, BootError> {
     let stores = stores(config).await?;
     match config.backends {
         Backends::Memory => memory(config, stores),
-        Backends::Durable => Err(durable()),
+        Backends::Durable => {
+            let valkey = valkey(config).await?;
+            durable(config, stores, valkey)
+        }
     }
 }
 
@@ -243,16 +258,44 @@ pub async fn assemble_maintenance(config: &Config) -> Result<Maintenance, BootEr
     }
 }
 
-/// The refusal `store/mod.rs` documents.
+/// Connect to `VALKEY_URL` and prove it answers, before anything else is assembled.
 ///
-/// `Config::load` already turned "no `VALKEY_URL` and no `--memory`" into a configuration fault
-/// naming the variable, so reaching here means the operator *did* set it — and the honest answer
-/// is that nothing reads it yet.
-fn durable() -> BootError {
-    BootError::AdapterUnavailable {
-        key: "VALKEY_URL",
-        issue: "#403 (Valkey) and #402 (Postgres)",
-    }
+/// First, deliberately: the blob root is the only other side effect on this path, and a Valkey
+/// that cannot be reached is the fault an operator most needs named before a socket is bound.
+/// Every Valkey store — sessions, upload sessions, the three ceremonies, the cohort map, and
+/// the counters — comes back on one connection and the real clock.
+async fn valkey(config: &Config) -> Result<ValkeyStores, BootError> {
+    let url = config
+        .valkey_url
+        .as_deref()
+        .ok_or(BootError::Missing { key: "VALKEY_URL" })?;
+    let stores = ValkeyStores::connect(url, Arc::new(SystemClock))
+        .await
+        .map_err(|error| BootError::Valkey {
+            detail: error.to_string(),
+        })?;
+    tracing::info!("VALKEY_URL answers; the volatile state ports are on Valkey");
+    Ok(stores)
+}
+
+/// The durable profile — its Postgres half is not written yet (#402).
+///
+/// Refused rather than assembled over in-memory doubles for the index, the accounts and the rest:
+/// `store/mod.rs` is explicit that the doubles are a test double, never a deployment mode, and a
+/// server whose sessions survived a restart while its asset index did not would be the worst of
+/// the two. `Config::load` already required `VALKEY_URL`, and [`valkey`] has reached it, so the
+/// honest answer names the half that is missing. #402 replaces this body with the assembly over
+/// `valkey` and its Postgres stores; nothing else here moves.
+fn durable(
+    _config: &Config,
+    _stores: Stores,
+    valkey: ValkeyStores,
+) -> Result<Assembled, BootError> {
+    drop(valkey);
+    Err(BootError::AdapterUnavailable {
+        key: "DATABASE_URL",
+        issue: "#402 (Postgres)",
+    })
 }
 
 /// The stores every subcommand shares, and the only one of them that is durable.
@@ -602,15 +645,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_durable_backend_refuses_by_name_rather_than_falling_back() {
+    async fn a_durable_backend_whose_valkey_is_unreachable_refuses_rather_than_falling_back() {
         // The half of `store/mod.rs`'s claim that `Config::load` cannot make: the operator did
-        // set `VALKEY_URL`, and nothing reads it yet. Falling back to the in-memory adapters
-        // here is the one thing that must never happen.
+        // set `VALKEY_URL`, and the server behind it does not answer. Falling back to the
+        // in-memory adapters here is the one thing that must never happen. Port 1 on loopback:
+        // nothing listens there, so the refusal is immediate and the retry budget bounds the
+        // wait. The reachable case — Valkey answers, and the Postgres half is then named — needs
+        // a live server and lives in `tests/valkey.rs`.
         let root = tempfile::tempdir().expect("a scratch directory");
         let environment: BTreeMap<String, String> = [
             ("BLOB_ROOT".to_owned(), root.path().display().to_string()),
             ("JWT_ED25519_DER".to_owned(), EXAMPLE_DER.to_owned()),
-            ("VALKEY_URL".to_owned(), "redis://127.0.0.1:6379".to_owned()),
+            ("VALKEY_URL".to_owned(), "redis://127.0.0.1:1".to_owned()),
             // A durable deployment supplies its own attestation identity rather than having one
             // derived from the token signer; `config` refuses without it.
             (
@@ -626,17 +672,10 @@ mod tests {
         let config = Config::load(&environment, &Overrides::default(), Demands::Serve)
             .expect("it is well-formed");
         let error = assemble(&config).await.expect_err("it refuses");
-        assert!(
-            matches!(
-                error,
-                BootError::AdapterUnavailable {
-                    key: "VALKEY_URL",
-                    ..
-                }
-            ),
-            "{error:?}"
-        );
-        assert!(format!("{error}").contains("#403"), "{error}");
+        assert!(matches!(error, BootError::Valkey { .. }), "{error:?}");
+        let message = format!("{error}");
+        assert!(message.contains("VALKEY_URL"), "{message}");
+        assert!(!message.contains("127.0.0.1:1"), "never the URL: {message}");
     }
 
     #[tokio::test]
