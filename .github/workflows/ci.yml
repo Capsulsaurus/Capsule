@@ -107,11 +107,15 @@ jobs:
               - '**/*.mdx'
               - 'LICENSE'
               - 'NOTICE'
-              # The `roadmap` check resolves ROADMAP.md's rows against the
-              # manifests that declare what exists, so a pull request that adds
-              # or removes a package without touching Markdown must still run
-              # it — otherwise the gate is advisory for exactly the change it
-              # exists to catch.
+              # For the `roadmap` check, which arrives with `#422` together with
+              # the ROADMAP.md it reads — neither is in the tree at this commit.
+              # It will resolve that file's rows against the manifests below,
+              # which declare what actually exists, so a pull request that adds
+              # or removes a package without touching Markdown must still run the
+              # job — otherwise the gate would be advisory for exactly the change
+              # it exists to catch. Listed ahead of the check so the filter is
+              # correct the moment `#422` lands; until then these globs only
+              # widen when `docs-truth` runs, which is harmless.
               - 'Cargo.toml'
               - 'settings.gradle.kts'
               - 'capsule-swift/Project.swift'
