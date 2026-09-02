@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
     checkRoadmap,
+    citedSlices,
     declaredPackages,
     definedStates,
     miseTasks,
@@ -136,6 +137,24 @@ describe('declaredPackages', () => {
         expect(declaredPackages(r).get('capsule-android')).toBe('gradle');
     });
 
+    it('reads every path in a variadic gradle include, and tolerates a space', () => {
+        // Kotlin's `include` is variadic and the DSL allows `include (…)`. Matching only
+        // `include(":x")` read the file this repository happens to have.
+        const r = repo({
+            'settings.gradle.kts':
+                'include(":android", ":core")\n' +
+                'project(":android").projectDir = file("capsule-android")\n' +
+                'project(":core").projectDir = file("capsule-core-kotlin")\n' +
+                'include (":desktop")\n' +
+                'project(":desktop").projectDir = file("capsule-desktop")\n',
+        });
+        expect([...declaredPackages(r).keys()]).toEqual([
+            'capsule-android',
+            'capsule-core-kotlin',
+            'capsule-desktop',
+        ]);
+    });
+
     it('does not see a commented-out gradle include', () => {
         // `settings.gradle.kts` keeps `:cli`/`:desktop` commented out; a row for
         // either would then be an orphan, which is the finding to avoid.
@@ -167,6 +186,35 @@ describe('declaredPackages', () => {
                 'let t = ffiEnabled\n    ? module(\n        "CapsuleCatalogFFI"\n    )\n    : []\n',
         });
         expect(declaredPackages(r).get('CapsuleCatalogFFI')).toBe('tuist');
+    });
+
+    it('finds a package root one level down, named repo-relative', () => {
+        const r = repo({
+            'apps/viewer/package.json': '{}\n',
+            'tools/lint/pyproject.toml': '[project]\n',
+        });
+        const declared = declaredPackages(r);
+        expect(declared.get('apps/viewer')).toBe('bun');
+        expect(declared.get('tools/lint')).toBe('python');
+    });
+
+    it('does not treat a sub-manifest inside a package root as a second package', () => {
+        // A bun package legitimately carries nested `package.json` files; only the root
+        // one is the package.
+        const r = repo({
+            'capsule-web/package.json': '{}\n',
+            'capsule-web/vendor/package.json': '{}\n',
+        });
+        expect([...declaredPackages(r).keys()]).toEqual(['capsule-web']);
+    });
+
+    it('never descends into a pruned or hidden directory', () => {
+        const r = repo({
+            'node_modules/left-pad/package.json': '{}\n',
+            'target/debug/package.json': '{}\n',
+            '.cache/x/package.json': '{}\n',
+        });
+        expect(declaredPackages(r).size).toBe(0);
     });
 
     it('classifies a package root by the manifest it carries', () => {
@@ -204,12 +252,41 @@ describe('miseTasks and sliceIds', () => {
         ]);
     });
 
+    it('reads a quoted task header and a task in a file-task subdirectory', () => {
+        // Both are mise spellings this repository does not use yet. Missing either would
+        // fail a correct row, which is the worse of the two ways for a gate to be wrong.
+        const r = repo({
+            'mise.toml': '[tasks."docs:build"]\nrun = "true"\n',
+            'mise-tasks/docs/publish': '#!/usr/bin/env bash\n',
+        });
+        expect([...miseTasks(r)].sort()).toEqual([
+            'docs:build',
+            'docs:publish',
+        ]);
+    });
+
     it('reads slice ids from detail headings only', () => {
         const r = repo({
             'SLICES.md':
                 '| S-Z9 | an index row | | | | | |\n\n### S-A1 — a slice\n\n#### S-A2 — not a detail block\n',
         });
         expect([...sliceIds(r)]).toEqual(['S-A1']);
+    });
+});
+
+describe('citedSlices', () => {
+    it('reports every backticked id with its line, wherever it sits', () => {
+        expect(
+            citedSlices('prose `S-A1`\n| a | `S-B2`, `S-B3` |\nno ids here\n'),
+        ).toEqual([
+            { id: 'S-A1', line: 1 },
+            { id: 'S-B2', line: 2 },
+            { id: 'S-B3', line: 2 },
+        ]);
+    });
+
+    it('ignores an unbackticked mention, which is prose and not a citation', () => {
+        expect(citedSlices('see S-A1 for this\n')).toEqual([]);
     });
 });
 
@@ -268,6 +345,41 @@ describe('checkRoadmap', () => {
         const r = repo({
             ...BASE,
             'ROADMAP.md': roadmap([row('alpha', { open: '`S-A1`, `S-Z9`' })]),
+        });
+        expect(checkRoadmap(r).findings).toEqual([
+            'ROADMAP.md:17  `S-Z9` has no detail block in SLICES.md',
+        ]);
+    });
+
+    it('fails on a stale citation in Notes, not only in Open slices', () => {
+        // Restricting resolution to one column is what let four stale citations through.
+        const r = repo({
+            ...BASE,
+            'ROADMAP.md': roadmap([
+                row('alpha', { notes: 'blocked behind `S-Z9`' }),
+            ]),
+        });
+        expect(checkRoadmap(r).findings).toEqual([
+            'ROADMAP.md:17  `S-Z9` has no detail block in SLICES.md',
+        ]);
+    });
+
+    it('fails on a stale citation in the deferred register below the table', () => {
+        const register =
+            '| Item | Owner docs | State | Notes |\n| --- | --- | --- |\n| a thing | [d](d.md) | deferred | `S-Z9` |';
+        const r = repo({
+            ...BASE,
+            'ROADMAP.md': `${roadmap([row('alpha')])}\n${register}\n`,
+        });
+        expect(checkRoadmap(r).findings).toEqual([
+            'ROADMAP.md:21  `S-Z9` has no detail block in SLICES.md',
+        ]);
+    });
+
+    it('reports a stale id once, not once per check', () => {
+        const r = repo({
+            ...BASE,
+            'ROADMAP.md': roadmap([row('alpha', { open: '`S-Z9`' })]),
         });
         expect(checkRoadmap(r).findings).toEqual([
             'ROADMAP.md:17  `S-Z9` has no detail block in SLICES.md',

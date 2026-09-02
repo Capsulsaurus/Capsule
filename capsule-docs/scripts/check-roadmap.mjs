@@ -29,6 +29,12 @@
  * oracles, and a conditional target earns a row whose `State` says `excluded`.
  * `CapsuleCatalogFFI` still matches `module("` and so is required to have a row;
  * the commented-out Gradle modules match nothing and so must not have one.
+ *
+ * **Package-root discovery recurses exactly one level, and that is a bound rather than an
+ * oversight.** A `Package.swift` two directories deep would be missed; the alternative is
+ * an unbounded walk that reads `node_modules`, `target` and `.build` on every docs-only
+ * pull request. One level covers every shape the tree uses today, and the pruned-directory
+ * set below is what keeps the walk cheap.
  */
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
@@ -156,12 +162,26 @@ function cargoPackages(root) {
     return quoted(block[1], /"([^"]+)"/g);
 }
 
-/** Unconditional `include(":x")`, resolved to the directory `project()` names. */
+/**
+ * Unconditional `include(…)`, resolved to the directory `project()` names.
+ *
+ * Kotlin's `include` is variadic — `include(":a", ":b")` is one call declaring two modules —
+ * and the DSL tolerates a space before the parenthesis. Matching only `include(":x")` read
+ * the file this repository happens to have rather than the file the DSL allows, so a
+ * multi-argument call would have added modules the gate could not see.
+ */
 function gradlePackages(root) {
     const settings = join(root, 'settings.gradle.kts');
     if (!existsSync(settings)) return [];
     const body = readFileSync(settings, 'utf8');
-    const included = quoted(body, /^include\("([^"]+)"\)/g);
+    const included = [];
+    for (const line of body.split('\n')) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('//')) continue;
+        const call = /^include\s*\(([^)]*)\)/.exec(trimmed);
+        if (!call) continue;
+        for (const arg of call[1].matchAll(/"([^"]+)"/g)) included.push(arg[1]);
+    }
     const dirs = new Map();
     for (const line of body.split('\n')) {
         const trimmed = line.trim();
@@ -191,17 +211,39 @@ function tuistPackages(root) {
     return names;
 }
 
-/** Root-level directories carrying `manifest`, e.g. `package.json`. */
-function manifestDirs(root, manifest) {
-    return readdirSync(root, { withFileTypes: true })
+/** Directories worth descending into: not hidden, not pruned. */
+function searchable(root, prefix) {
+    return readdirSync(join(root, prefix), { withFileTypes: true })
         .filter(
             (entry) =>
                 entry.isDirectory() &&
                 !entry.name.startsWith('.') &&
-                !SKIP_ROOT_DIRS.has(entry.name) &&
-                existsSync(join(root, entry.name, manifest)),
+                !SKIP_ROOT_DIRS.has(entry.name),
         )
-        .map((entry) => entry.name);
+        .map((entry) => (prefix ? `${prefix}/${entry.name}` : entry.name));
+}
+
+/**
+ * Directories carrying `manifest`, at the repository root or one level under it.
+ *
+ * The returned name is repo-relative, so a nested root is `sub/nested` and that is what its
+ * `Package` cell must say — the same convention `Cargo.toml` members already use for
+ * `capsule-cli/entity`.
+ */
+function manifestDirs(root, manifest) {
+    const found = [];
+    for (const dir of searchable(root, '')) {
+        if (existsSync(join(root, dir, manifest))) {
+            found.push(dir);
+            // A package root is not searched for nested roots: a Cargo or bun package
+            // legitimately contains sub-manifests that are not separate packages.
+            continue;
+        }
+        for (const nested of searchable(root, dir)) {
+            if (existsSync(join(root, nested, manifest))) found.push(nested);
+        }
+    }
+    return found;
 }
 
 /** `path = x` in `.gitmodules`. */
@@ -245,7 +287,16 @@ export function declaredPackages(root) {
     return declared;
 }
 
-/** Every `mise run <task>` name the repository actually has. */
+/**
+ * Every `mise run <task>` name the repository actually has.
+ *
+ * Two spellings beyond the obvious one, both of which mise supports and neither of which
+ * this repository uses yet. A quoted header — `[tasks."docs:build"]` — is how a task name
+ * carrying a colon is written, and a file task may sit in a subdirectory, where
+ * `mise-tasks/docs/build` is the task `docs:build`. Missing either would fail loudly rather
+ * than silently, but it would fail on a correct row, which is the worse of the two ways for
+ * a gate to be wrong.
+ */
 export function miseTasks(root) {
     const tasks = new Set();
 
@@ -253,20 +304,42 @@ export function miseTasks(root) {
         const path = join(root, manifest);
         if (!existsSync(path)) continue;
         for (const match of readFileSync(path, 'utf8').matchAll(
-            /^\[tasks\.([A-Za-z0-9_-]+)\]/gm,
+            /^\[tasks\.(?:"([^"]+)"|([A-Za-z0-9_:-]+))\]/gm,
         )) {
-            tasks.add(match[1]);
+            tasks.add(match[1] ?? match[2]);
         }
     }
 
-    const fileTasks = join(root, 'mise-tasks');
-    if (existsSync(fileTasks)) {
-        for (const entry of readdirSync(fileTasks, { withFileTypes: true })) {
-            if (entry.isFile()) tasks.add(entry.name);
+    const walk = (dir, prefix) => {
+        if (!existsSync(dir)) return;
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+            if (entry.name.startsWith('.')) continue;
+            if (entry.isFile()) tasks.add(prefix + entry.name);
+            else if (entry.isDirectory())
+                walk(join(dir, entry.name), `${prefix + entry.name}:`);
         }
-    }
+    };
+    walk(join(root, 'mise-tasks'), '');
 
     return tasks;
+}
+
+/**
+ * Every backticked `S-…` id in `ROADMAP.md`, with the 1-based line it sits on.
+ *
+ * Deliberately not restricted to the `Open slices` column. The column is where a reader
+ * looks for a slice, and it is not the only place this file names one: `Next milestone`
+ * and `Notes` cite slices constantly, and so does the deferred register below the package
+ * table. Four stale citations in this file were found in exactly those unchecked cells.
+ */
+export function citedSlices(source) {
+    const cited = [];
+    source.split('\n').forEach((line, index) => {
+        for (const match of line.matchAll(/`(S-[A-Za-z0-9]+)`/g)) {
+            cited.push({ id: match[1], line: index + 1 });
+        }
+    });
+    return cited;
 }
 
 /** Every slice id `SLICES.md` gives a detail block. */
@@ -284,7 +357,8 @@ export function sliceIds(root) {
  * Resolve every `ROADMAP.md` row against the tree.
  *
  * @param {string} root Repository root.
- * @returns {{ findings: string[], checked: number }}
+ * @returns {{ findings: string[], checked: number, unused: string[] }} `unused` names the
+ *   states the vocabulary defines and no row uses; it is reported, never failed.
  */
 export function checkRoadmap(root) {
     const findings = [];
@@ -389,16 +463,24 @@ export function checkRoadmap(root) {
             }
         }
 
+        // Shape only. Whether an id *resolves* is settled below, over the whole
+        // document, so a stale citation in `Notes` is caught the same way as one here.
         if (open !== NONE) {
             for (const id of open.split(',').map((entry) => entry.trim())) {
                 if (!/^S-[A-Z]+\d+$/.test(id)) {
                     findings.push(`${at}  \`${id}\` is not a slice id`);
-                } else if (!slices.has(id)) {
-                    findings.push(
-                        `${at}  \`${id}\` has no detail block in ${SLICES}`,
-                    );
                 }
             }
+        }
+    }
+
+    for (const { id, line } of citedSlices(source)) {
+        if (!/^S-[A-Z]+\d+$/.test(id)) {
+            findings.push(`${ROADMAP}:${line}  \`${id}\` is not a slice id`);
+        } else if (!slices.has(id)) {
+            findings.push(
+                `${ROADMAP}:${line}  \`${id}\` has no detail block in ${SLICES}`,
+            );
         }
     }
 

@@ -32,8 +32,8 @@ anticipated. Three facts in the tree say so:
 - **Nothing links it.** `capsule-server/Cargo.toml` declares `capsule-wire` as a path
   dependency, and the only occurrence of `capsule_wire` anywhere in the workspace outside
   the crate itself is one prose reference in `capsule-server/src/lib.rs`'s module comment.
-  Meanwhile `capsule-wire/src/salvo_adapter.rs` — a third of the crate — generates impls
-  for a framework `S-C59` removed from the workspace.
+  Meanwhile `capsule-wire/src/salvo_adapter.rs` — 267 of the crate's 528 lines, over half of
+  it — generates impls for a framework `S-C59` removed from the workspace.
 
 ## Decision
 
