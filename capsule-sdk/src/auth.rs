@@ -671,6 +671,23 @@ impl Session {
         Ok(())
     }
 
+    /// Refresh because the server **rejected** `stale`, and return the token that replaced
+    /// it (single-flight).
+    ///
+    /// The reactive counterpart to [`bearer`](Session::bearer)'s pre-flight refresh, and the
+    /// primitive [`crate::client::AuthenticatedClient`]'s `401` layer drives. Passing the
+    /// exact token the server refused is the whole point: `ensure_refreshed`'s `Rejected`
+    /// arm compares it against the store, so a caller whose stale token has *already* been
+    /// rotated by a concurrent refresh gets the fresh token back with no second network
+    /// call. [`refresh`](Session::refresh) cannot serve this — it re-reads the *current*
+    /// token and would therefore refresh again on top of that rotation, spending a
+    /// single-use refresh token the server has already closed.
+    #[instrument(skip_all)]
+    pub(crate) async fn refresh_rejected(&self, stale: &str) -> Result<SecretString, AuthError> {
+        self.ensure_refreshed(RefreshTrigger::Rejected(stale.to_owned()))
+            .await
+    }
+
     /// Revoke the session server-side and clear the local store. Idempotent: a
     /// server that no longer honors the token (or an already-empty store) still
     /// resolves to a cleared, logged-out session.
@@ -702,11 +719,11 @@ impl Session {
     }
 
     /// A currently-valid **bearer access token** for injecting into a request the
-    /// SDK does not build with [`Session::execute`] — notably the sync feed's gRPC
-    /// call metadata, where the token rides `authorization` metadata rather than a
-    /// `reqwest` header. Pre-flight-refreshes exactly like [`Session::execute`];
-    /// callers that get an `Unauthenticated`/`401` back re-[`refresh`](Session::refresh)
-    /// and read a fresh token once.
+    /// SDK does not build with [`Session::execute`] — notably the generated REST client's
+    /// token-provider seam ([`crate::client::AuthenticatedClient`]), where the token is
+    /// attached by the client rather than by this module. Pre-flight-refreshes exactly like
+    /// [`Session::execute`]; the reactive half — a `401` the pre-flight check could not
+    /// foresee — is [`refresh_rejected`](Session::refresh_rejected)'s.
     #[instrument(skip_all)]
     pub async fn bearer(&self) -> Result<SecretString, AuthError> {
         self.valid_access_token().await

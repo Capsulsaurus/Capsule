@@ -393,3 +393,70 @@ async fn the_sdk_stores_and_fetches_an_escrow_over_a_socket() {
          happens to answer"
     );
 }
+
+/// **`S-D17`'s Done-when, against the server that decides.** A token the client still believes
+/// in and the server has stopped honouring is refreshed once and the call replayed once.
+///
+/// The unit tests cover the layer against a mock; this covers the one thing a mock cannot rule
+/// out — that the two ends disagree about when an access token dies. The server validates `exp`
+/// against its **injected** clock (`capsule_server::auth::tokens`, deliberately, so a test can
+/// walk over an expiry), so advancing the fixture's clock past `ACCESS_TOKEN_TTL` revokes the
+/// access token for real while the session and its refresh token remain live.
+///
+/// The client is then handed the same token pair with a far-future expiry, which is exactly the
+/// state a client is in whenever it trusted a server-supplied deadline and the server changed
+/// its mind first — a revocation, a clock skew, a rotated signing key. Because the client sees
+/// no reason to refresh, the pre-flight half cannot fire, so a call that succeeds here succeeded
+/// through the reactive layer and nothing else.
+#[tokio::test]
+async fn a_token_the_server_stopped_honouring_is_refreshed_and_the_call_replayed() {
+    use capsule_sdk::auth::PersistedSession;
+    use capsule_sdk::client::AuthenticatedClient;
+    use secrecy::ExposeSecret as _;
+
+    let fixture = Fixture::working();
+    let base_url = serve(&fixture).await;
+    let signed_in = session(&base_url).await;
+    let pair = signed_in.export().await.expect("a live session exports");
+    let stale_access = pair.access_token.expose_secret().to_owned();
+
+    // Past the access token's life, well inside the session's. The refresh token still works;
+    // the access token does not.
+    fixture.clock.advance(
+        capsule_server::auth::ACCESS_TOKEN_TTL
+            .checked_add(jiff::SignedDuration::from_secs(60))
+            .expect("a representable instant"),
+    );
+
+    // The same pair, with a deadline the client has no reason to doubt.
+    let session = AuthClient::new(&format!("{base_url}/v1/auth"))
+        .expect("a base url")
+        .resume(PersistedSession {
+            access_token: stale_access.clone().into(),
+            refresh_token: pair.refresh_token,
+            access_expires_at_unix: Timestamp::now().as_second() + 3600,
+        })
+        .expect("a session resumes from any pair");
+    let client = AuthenticatedClient::new(&base_url, session).expect("an API root parses");
+
+    // A generated operation, called straight through the Deref — nothing about this call site
+    // knows a retry layer exists, which is the point of putting it at the transport seam.
+    let quota = client
+        .get_quota()
+        .await
+        .expect("the 401 is recovered and the call replayed")
+        .into_inner();
+    assert_eq!(quota.state.as_str(), "ok");
+
+    let after = client
+        .session()
+        .export()
+        .await
+        .expect("the session is still live");
+    assert_ne!(
+        after.access_token.expose_secret(),
+        stale_access.as_str(),
+        "the replay must have ridden a rotated token; an unchanged one would mean the server \
+         accepted a token it had already stopped honouring"
+    );
+}
