@@ -25,6 +25,7 @@ mod catalog;
 mod format;
 mod generated;
 mod negotiate;
+pub mod plural;
 
 pub use catalog::{Bundle, supported_locales};
 pub use format::{Value, format_message};
