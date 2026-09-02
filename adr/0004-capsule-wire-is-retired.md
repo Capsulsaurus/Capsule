@@ -1,9 +1,10 @@
 # ADR-0004 — `capsule-wire` is retired once no member depends on it
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-09-01
 - **Supersedes:** —
 - **Superseded by:** —
+- **Contract:** [API Surfaces](../capsule-docs/src/content/docs/design/api-surfaces.md)
 - **Slices:** S-C27, S-C59
 
 ## Context

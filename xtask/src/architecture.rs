@@ -21,6 +21,7 @@ const RETIRED_DEPENDENCIES: &[&str] = &[
     "async-graphql",
     "async-graphql-salvo",
     "capsule-media",
+    "capsule-wire",
     "graphql-client",
     "object_store",
     "progenitor",
