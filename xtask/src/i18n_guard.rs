@@ -1254,8 +1254,71 @@ mod tests {
         assert_eq!(texts, Vec::<String>::new());
     }
 
+    /// The watched positions, one per alternative of the shared list.
+    fn swift_text_positions() -> Vec<&'static str> {
+        SWIFT_TEXT_POSITIONS.split('|').collect()
+    }
+
+    #[test]
+    fn every_watched_api_position_is_a_bare_identifier() {
+        // The shared list is spliced into two regexes, so a stray space, an empty
+        // alternative or a regex metacharacter in it would silently widen or break both.
+        let positions = swift_text_positions();
+        assert!(positions.len() >= 15, "{positions:?}");
+        for position in &positions {
+            assert!(
+                !position.is_empty()
+                    && position
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_'),
+                "`{position}` is not a bare identifier"
+            );
+        }
+        let mut unique = positions.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), positions.len(), "a position is listed twice");
+    }
+
+    #[test]
+    fn every_watched_api_position_is_caught_in_both_regexes() {
+        // The fixture is *derived* from the shared list rather than written out, so a
+        // position cannot be added without a case: `confirmationDialog` sat in the
+        // interpolation regex and not the literal one for two slices (#394) precisely
+        // because the two lists were maintained by hand. `searchable` and `tabItem` had
+        // no fixture at all until this test, so a broken alternative would have been
+        // silent.
+        for position in swift_text_positions() {
+            let literal = format!("Watched {position} text");
+            let interpolated = format!("Watched {position} \\(count)");
+            let src = format!(
+                "view\n    {position}(\"{literal}\")\n    {position}(\"{interpolated}\")\n"
+            );
+            let findings = swift_findings(&src);
+            let found = texts(&findings);
+            assert!(
+                found.contains(&literal.as_str()),
+                "{position}: the plain literal was not caught, got {found:?}"
+            );
+            assert!(
+                found.contains(&interpolated.as_str()),
+                "{position}: the interpolated literal was not caught, got {found:?}"
+            );
+            // And the word boundary still holds, for both regexes: a helper that merely
+            // ends in a watched name is not a watched position.
+            let helper = format!("view\n    my{position}(\"{literal}\")\n");
+            assert_eq!(
+                swift_findings(&helper),
+                Vec::new(),
+                "{position}: the word boundary was lost"
+            );
+        }
+    }
+
     #[test]
     fn swift_watches_every_api_position_in_both_regexes() {
+        // The derived fixture above proves each alternative matches; this one proves the
+        // real call shapes do, with the arguments SwiftUI actually puts after the string.
         // `confirmationDialog` was in the interpolation regex and not the literal one;
         // `help`, `accessibilityValue`, `ContentUnavailableView` and `tabItem` were in
         // neither. One shared list now, so the two cannot disagree again.
