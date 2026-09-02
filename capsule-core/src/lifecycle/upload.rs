@@ -336,3 +336,6 @@ fn read_derivative_bytes(
     let extension = DerivativeFormat::parse(format)?.extension()?;
     fs::read(dir.join(format!("{stem}.{role_name}.{extension}"))).ok()
 }
+
+#[cfg(test)]
+mod tests;
