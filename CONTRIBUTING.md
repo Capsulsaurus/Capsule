@@ -24,15 +24,16 @@ hk install          # wires up the git hooks
 Run tasks with `mise run <task>` — `mise tasks` lists them all (plain name = auto-fix,
 `-check` suffix = verify-only). The pre-commit hook auto-formats and **stages** your
 changes; `convco` validates every commit message as a
-[Conventional Commit](https://www.conventionalcommits.org); and pre-push runs the
-format/lint checks, the test suites, and the cheap boundary gates — `i18n-check`,
-`i18n-guard`, `architecture-check` and `license-check`.
+[Conventional Commit](https://www.conventionalcommits.org); and pre-push runs every
+toolchain's format/lint checks, the Rust and web test suites, and the cheap boundary
+gates — `i18n-check`, `i18n-guard`, `architecture-check` and `license-check`.
 
-Pre-push is a fast subset of CI, not the whole of it. The gates that cost minutes of
-fresh compilation — `openapi-check-kynos`, `translate-readme-check`, the `build-*`
-steps, `gen-bindings` and `verify-examples` — run only in CI. To run exactly what CI
-runs before you open a pull request, use the per-toolchain entrypoints:
-`mise run check-rust`, `check-web`, `check-docs`, `check-kotlin`, `check-swift`.
+Pre-push is a fast subset of CI, not the whole of it. What it leaves to CI: the Kotlin,
+Swift and docs test suites, and the gates that cost minutes of fresh compilation —
+`openapi-check-kynos`, `translate-readme-check`, the `build-*` steps, `gen-bindings` and
+`verify-examples`. To run exactly what CI runs before you open a pull request, use the
+per-toolchain entrypoints: `mise run check-rust`, `check-web`, `check-docs`,
+`check-kotlin`, `check-swift`.
 
 > **Coming from the old `just` + `lefthook` setup?** Re-run `mise install && hk install`
 > (hk overwrites the stale `.git/hooks` that called lefthook). The `justfile` is gone —
