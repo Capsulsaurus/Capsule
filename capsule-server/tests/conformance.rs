@@ -3575,7 +3575,7 @@ async fn upgrade_block(
     bearer: &str,
     refresh_token: &str,
     album: &str,
-    account_ik: &capsule_core::crypto::keys::hybrid_sig::HybridSigningKey,
+    account_ik: &capsule_core::crypto::keys::HybridSigningKey,
 ) {
     let path = format!("/v1/albums/{album}/upgrade");
     // The account's *own* anchor, not a fresh key: `S-C42` pins a directory to the first identity

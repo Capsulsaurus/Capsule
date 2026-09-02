@@ -38,7 +38,7 @@
 
 use std::collections::HashSet;
 
-use capsule_core::import::upload::{UploadPolicy, UploadTier};
+use capsule_core::import::{UploadPolicy, UploadTier};
 use tracing::instrument;
 
 use crate::net::ConnectionClass;

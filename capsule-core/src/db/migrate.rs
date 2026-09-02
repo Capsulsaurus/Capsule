@@ -68,7 +68,7 @@ use crate::db::schema::{DDL, SCHEMA_VERSION};
 /// Also the version an *unstamped* catalog (one that already has tables but reports
 /// `user_version = 0`) is adopted at — v1 predates nothing, so there is no older shape to
 /// mistake it for.
-pub const BASELINE_VERSION: u32 = 1;
+pub(crate) const BASELINE_VERSION: u32 = 1;
 
 /// A single DDL statement (or batch) in a migration step, plus the condition under which it
 /// runs.
@@ -77,7 +77,7 @@ pub const BASELINE_VERSION: u32 = 1;
 /// visible in its data, and therefore fingerprintable — see the immutability rule in the
 /// module docs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Ddl {
+pub(crate) enum Ddl {
     /// Run unconditionally. Must be idempotent (`IF NOT EXISTS` / `DROP … IF EXISTS`).
     Always(&'static str),
     /// Run only when `table` **has** `column` — used for renames of a column that an
@@ -114,7 +114,7 @@ impl Ddl {
 /// a catalog four versions behind is brought forward by four separate, separately committed
 /// steps rather than one jump.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Step {
+pub(crate) struct Step {
     pub from: u32,
     pub to: u32,
     /// Stable identifier used in logs and in the immutability fingerprint.
@@ -193,7 +193,7 @@ const STEP_1_TO_2: Step = Step {
 ///
 /// The `vec0` partition tables are *not* created here: their vector dimension is declared by
 /// the model registry, so they are created at runtime by their writer (see
-/// [`crate::db::vector::VectorTableSpec`]).
+/// [`crate::db::VectorTableSpec`]).
 ///
 /// The first two statements re-assert the v2 shape. That is not redundancy: two branches
 /// stamped 2 for different additions, so a v2-stamped catalog is missing one of the two tables
@@ -275,7 +275,7 @@ const STEP_3_TO_4: Step = Step {
 };
 
 /// Every shipped step, in ascending order. Append only.
-pub const STEPS: &[Step] = &[STEP_1_TO_2, STEP_2_TO_3, STEP_3_TO_4];
+pub(crate) const STEPS: &[Step] = &[STEP_1_TO_2, STEP_2_TO_3, STEP_3_TO_4];
 
 /// SHA-256 (hex) of each shipped step's canonical rendering, parallel to [`STEPS`].
 ///
@@ -294,7 +294,7 @@ const STEP_FINGERPRINTS: &[&str] = &[
 
 // ── Errors ──────────────────────────────────────────────────────────────────
 
-/// Why a catalog could not be brought to [`SCHEMA_VERSION`].
+/// Why a catalog could not be brought to `SCHEMA_VERSION`.
 #[derive(Debug, thiserror::Error)]
 pub enum MigrationError {
     /// The catalog was written by a newer build than this one.
@@ -354,7 +354,7 @@ impl From<MigrationError> for rusqlite::Error {
 
 // ── Outcome ─────────────────────────────────────────────────────────────────
 
-/// One applied step, as reported by [`migrate`].
+/// One applied step, as reported by `migrate`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Applied {
     pub from: u32,
@@ -362,13 +362,13 @@ pub struct Applied {
     pub name: &'static str,
 }
 
-/// What [`migrate`] did. Recorded so the CLI, the FFI host, and a support bundle can all say
+/// What `migrate` did. Recorded so the CLI, the FFI host, and a support bundle can all say
 /// exactly what ran against a user's library.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Outcome {
     /// The version the catalog reported on open (`0` for a catalog this call created).
     pub from: u32,
-    /// The version it is stamped at now — always [`SCHEMA_VERSION`] on success.
+    /// The version it is stamped at now — always `SCHEMA_VERSION` on success.
     pub to: u32,
     /// True when the catalog was empty and the current schema was created outright.
     pub created: bool,
@@ -385,7 +385,7 @@ pub struct Outcome {
 /// transaction. Catalog already current → nothing runs. Catalog newer than this build →
 /// [`MigrationError::CatalogTooNew`], with nothing written.
 #[tracing::instrument(level = "debug", skip_all, fields(target_version = SCHEMA_VERSION))]
-pub fn migrate(conn: &Connection) -> Result<Outcome, MigrationError> {
+pub(crate) fn migrate(conn: &Connection) -> Result<Outcome, MigrationError> {
     let stamped = read_user_version(conn)?;
 
     if stamped > SCHEMA_VERSION {

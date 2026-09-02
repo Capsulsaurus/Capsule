@@ -7,30 +7,30 @@
 //!
 //! [Cryptography — Keys]: https://docs/design/cryptography/keys/
 
-pub mod album;
+pub(crate) mod album;
 // The sealed, durable album-key store (slice `S-A10`) is filesystem-backed — it writes through
 // `utils::paths::tmp_path` for atomic replace — so it is gated with the rest of the native
 // surface. Leaving it ungated broke the `wasm32-unknown-unknown` sealing build (`S-A6`), which
 // no gate builds: `check-rust` compiles the host triple only.
 #[cfg(feature = "native")]
-pub mod albumstore;
-pub mod directory;
-pub mod hardware;
-pub mod hybrid_sig;
-pub mod kem;
-pub mod kem_p256;
-pub mod keystore;
-pub mod master;
-pub mod p256;
-pub mod signer;
-pub mod software;
+pub(crate) mod albumstore;
+pub(crate) mod directory;
+pub(crate) mod hardware;
+pub(crate) mod hybrid_sig;
+pub(crate) mod kem;
+pub(crate) mod kem_p256;
+pub(crate) mod keystore;
+pub(crate) mod master;
+pub(crate) mod p256;
+pub(crate) mod signer;
+pub(crate) mod software;
 // The Windows TPM 2.0 `HardwareSigner` over TBS (slice `S-F4`). The pure wire codec compiles on
 // any host under `cfg(test)` (host-runnable mock tests); the TBS transport + signer are Windows
 // only. Unlike `tpm` (the tss-esapi Linux reference), TBS needs no external crate — it links
 // `tbs.dll` via `windows-sys`.
-pub mod tbs;
+pub(crate) mod tbs;
 #[cfg(feature = "tpm")]
-pub mod tpm;
+pub(crate) mod tpm;
 
 pub use album::{Amk, AmkVersion};
 #[cfg(feature = "native")]

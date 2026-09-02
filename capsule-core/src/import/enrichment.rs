@@ -5,7 +5,7 @@
 //! extraction — embedded EXIF wins over the exporter's records, **except** for constructs the
 //! exporter is authoritative for (album membership, favorites/rating, user-typed descriptions).
 //! This module is the other half: it maps that folded record onto the fields the signed
-//! [`SidecarV1`](crate::sidecar::sidecar_v1::SidecarV1) actually has, and indexes it by source
+//! [`SidecarV1`](crate::sidecar::SidecarV1) actually has, and indexes it by source
 //! path so the [executor](crate::import::executor) can attach it to the member it is importing.
 //!
 //! The mapping, one row per [Takeout mapping-table] rule:
@@ -344,7 +344,7 @@ mod archive_tests {
 
     use super::*;
     use crate::crypto::primitives::Argon2Params;
-    use crate::import::executor::execute_with_source_metadata;
+    use crate::import::execute_with_source_metadata;
     use crate::import::executor_cancellation::CancellationToken;
     use crate::import::importers::SourceAdapter;
     use crate::import::importers::takeout::TakeoutAdapter;

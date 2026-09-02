@@ -260,7 +260,9 @@ impl Workspace {
     /// under (`amk_version`), never assuming the album's current epoch — so an asset imported
     /// before a rotation still derives the key it was encrypted with. Because the fresh
     /// `nonce_prefix` is folded into the salt, this is the read/regenerate path; a *fresh*
-    /// write goes through [`encrypt_asset_rekey`], which draws the nonce and derives together.
+    /// write goes through
+    /// [`encrypt_asset_rekey`](crate::crypto::encryption::encrypt_asset_rekey), which draws the
+    /// nonce and derives together.
     pub(super) fn file_key(
         &self,
         album: &AlbumKeys,

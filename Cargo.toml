@@ -21,6 +21,7 @@ default-members = [
     "capsule-core",
     "capsule-core-ffi",
     "capsule-i18n",
+    "capsule-sdk",
     "capsule-server",
     "capsule-wire",
 ]

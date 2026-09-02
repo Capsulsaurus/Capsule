@@ -176,7 +176,7 @@ async fn duplicate_blob_resolves_as_merge_not_error() {
 
     let client = server.client(&bundle.protocol_version);
     let scheduler = StagedScheduler::new(
-        capsule_core::import::upload::UploadPolicy::Full,
+        capsule_core::import::UploadPolicy::Full,
         ConnectionClass::Unmetered,
     );
     let report = push_bundle(&client, &scheduler, &bundle, &HashSet::new(), false)
@@ -222,7 +222,7 @@ async fn a_fully_held_bundle_pushes_nothing() {
         .collect();
     let client = server.client(&bundle.protocol_version);
     let scheduler = StagedScheduler::new(
-        capsule_core::import::upload::UploadPolicy::Full,
+        capsule_core::import::UploadPolicy::Full,
         ConnectionClass::Unmetered,
     );
 
@@ -246,7 +246,7 @@ fn a_staged_policy_defers_the_original_on_a_metered_link() {
     let (_dir, bundle) = real_bundle();
     let asset = staged_asset(&bundle);
     let metered = StagedScheduler::new(
-        capsule_core::import::upload::UploadPolicy::Staged,
+        capsule_core::import::UploadPolicy::Staged,
         ConnectionClass::Metered,
     );
     assert_eq!(
@@ -260,7 +260,7 @@ fn a_staged_policy_defers_the_original_on_a_metered_link() {
     );
 
     let unmetered = StagedScheduler::new(
-        capsule_core::import::upload::UploadPolicy::Staged,
+        capsule_core::import::UploadPolicy::Staged,
         ConnectionClass::Unmetered,
     );
     assert_eq!(

@@ -16,7 +16,7 @@ use crate::crypto::verify_asset::{
     MetadataBinding, VerifyOutcome, verify_asset, verify_metadata_binding,
 };
 use crate::metadata::crdt::AddId;
-use crate::sidecar::sidecar_v1::SidecarV1;
+use crate::sidecar::SidecarV1;
 
 impl Workspace {
     /// Build a signed lifecycle manifest for `asset`, sharing the create manifest's content

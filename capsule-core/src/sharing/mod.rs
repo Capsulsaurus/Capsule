@@ -7,7 +7,7 @@
 //! wraps it a second time via the password-based KDF, unwrapped **client-side** (the
 //! server stores and returns only the wrapped material). The serving endpoints live in
 //! the server's share module; this module owns link generation, the encapsulation
-//! crypto, and the recipient-side [`open_scope`] path.
+//! crypto, and the recipient-side [`open_scope`](crate::sharing::open_scope) path.
 //!
 //! ## Cryptographic shape
 //!
@@ -15,19 +15,21 @@
 //! decryption keys around the secret stored in the link ... the password-based KDF adds a
 //! second encapsulation layer on top of the link secret."* Concretely, per link:
 //!
-//! 1. A fresh random **link secret** (`fragment_secret`, [`LINK_SECRET_LEN`] bytes) is
-//!    drawn from the CSPRNG. It is the URL fragment `#{secret}` and never reaches the
-//!    server.
-//! 2. The scope's [`ScopeMaterial`] (a single file key, or an album's AMK ledger) is
-//!    serialized to canonical CBOR and sealed under `HKDF(link_secret, salt=opaque_id)`
-//!    — the *link-secret encapsulation*. The sealed bytes are opaque to the server.
+//! 1. A fresh random **link secret** (`fragment_secret`,
+//!    [`LINK_SECRET_LEN`](crate::sharing::LINK_SECRET_LEN) bytes) is drawn from the CSPRNG. It
+//!    is the URL fragment `#{secret}` and never reaches the server.
+//! 2. The scope's [`ScopeMaterial`](crate::sharing::ScopeMaterial) (a single file key, or an
+//!    album's AMK ledger) is serialized to canonical CBOR and sealed under
+//!    `HKDF(link_secret, salt=opaque_id)` — the *link-secret encapsulation*. The sealed bytes
+//!    are opaque to the server.
 //! 3. **If** a passphrase is supplied, that sealed blob is wrapped a **second** time under
 //!    an [Argon2id][pw] key ([`crate::crypto::pwkdf`]) — the passphrase never leaves the
 //!    client, and the server stores only this wrapped form (served from
-//!    `/s/{opaque-id}/wrapped-secret`). See [`WrappedScope`].
+//!    `/s/{opaque-id}/wrapped-secret`). See [`WrappedScope`](crate::sharing::WrappedScope).
 //!
-//! The recipient reverses the layers with [`open_scope`]: Argon2id-unwrap (client-side,
-//! iff passphrase-protected), then link-secret-unwrap with the fragment secret.
+//! The recipient reverses the layers with [`open_scope`](crate::sharing::open_scope):
+//! Argon2id-unwrap (client-side, iff passphrase-protected), then link-secret-unwrap with the
+//! fragment secret.
 //!
 //! [Share Links]: https://docs/design/share-links/
 //! [Cryptography — Keys § Non-registered accounts]: https://docs/design/cryptography/keys/#non-registered-accounts

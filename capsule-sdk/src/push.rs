@@ -22,7 +22,7 @@
 
 use std::collections::HashSet;
 
-use capsule_core::import::upload::UploadTier;
+use capsule_core::import::UploadTier;
 use capsule_core::lifecycle::UploadBundle;
 use serde::Serialize;
 use tracing::instrument;

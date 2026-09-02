@@ -6,7 +6,7 @@
 //! confirmation, so the planner stays deterministic. The recommendation predicate below
 //! is pure and is the contract the executor's streaming drive mode keys off. The
 //! `total_size` accounting and the plan-level `streaming_recommended` attachment live on
-//! [`ImportActionPlan`](crate::import::planner::ImportActionPlan); this module owns the
+//! [`ImportActionPlan`](crate::import::ImportActionPlan); this module owns the
 //! probe and the two pure verdicts (`streaming_recommended`, `largest_asset_fits`) they
 //! feed.
 

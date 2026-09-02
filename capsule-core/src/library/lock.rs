@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::library::error::LibraryError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LockRecord {
+pub(crate) struct LockRecord {
     pub pid: u32,
     pub hostname: String,
     pub locked_at: i64,
@@ -17,7 +17,7 @@ pub struct LockRecord {
 /// On AlreadyExists: reads the existing lock; if the holding process is no
 /// longer alive (same host, dead PID), the stale lock is removed and
 /// acquisition retried. Otherwise returns `LibraryError::Locked`.
-pub fn try_acquire(root: &Path) -> Result<(), LibraryError> {
+pub(crate) fn try_acquire(root: &Path) -> Result<(), LibraryError> {
     let lock_path = root.join(".library/lock");
 
     let record = LockRecord {
@@ -67,7 +67,7 @@ pub fn try_acquire(root: &Path) -> Result<(), LibraryError> {
 }
 
 /// Release the lock by deleting `.library/lock`.
-pub fn release(root: &Path) -> Result<(), LibraryError> {
+pub(crate) fn release(root: &Path) -> Result<(), LibraryError> {
     let lock_path = root.join(".library/lock");
     if lock_path.exists() {
         fs::remove_file(&lock_path)?;

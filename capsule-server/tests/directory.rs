@@ -9,8 +9,7 @@ mod support;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use capsule_core::crypto::keys::hybrid_sig::HybridSigningKey;
-use capsule_core::crypto::keys::{DeviceDirectory, DirectoryCore};
+use capsule_core::crypto::keys::{DeviceDirectory, DirectoryCore, HybridSigningKey};
 use kynos::http::StatusCode;
 use serde_json::Value;
 use support::{Fixture, user};

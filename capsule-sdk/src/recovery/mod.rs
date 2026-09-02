@@ -675,7 +675,7 @@ mod tests {
     ///   surfaced as data.
     #[tokio::test]
     async fn guided_rewrap_keeps_master_key_and_blob_hashes() {
-        use capsule_core::utils::hash::hash_bytes;
+        use capsule_core::crypto::hash::hash_bytes;
 
         let store = EscrowStore::default();
         let base = start_mock(escrow_handler(store)).await;
@@ -693,8 +693,8 @@ mod tests {
         // Fixture "asset" ciphertext blobs — re-wrap must not touch these.
         let asset_a = b"encrypted-asset-ciphertext-A".to_vec();
         let asset_b = b"encrypted-asset-ciphertext-B".to_vec();
-        let hash_a_before = hash_bytes(&asset_a);
-        let hash_b_before = hash_bytes(&asset_b);
+        let hash_a_before = hash_bytes(&asset_a).to_hex();
+        let hash_b_before = hash_bytes(&asset_b).to_hex();
 
         // Run the guided re-wrap (fast params, Shamir enrolled).
         let rewrap = client
@@ -713,8 +713,8 @@ mod tests {
         assert!(recover_master_key(refetched.blob(), old_secret).is_err());
 
         // Re-wrap touched only the wrap: asset blob hashes are byte-identical.
-        assert_eq!(hash_bytes(&asset_a), hash_a_before);
-        assert_eq!(hash_bytes(&asset_b), hash_b_before);
+        assert_eq!(hash_bytes(&asset_a).to_hex(), hash_a_before);
+        assert_eq!(hash_bytes(&asset_b).to_hex(), hash_b_before);
 
         // Shamir re-issued, old shares invalidated; the new shares reconstruct the new
         // seed (2 of 3).

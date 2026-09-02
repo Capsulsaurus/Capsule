@@ -673,7 +673,7 @@ impl BlobSource for HttpBlobSource {
 }
 
 /// SHA-256 of the ciphertext as bare lowercase hex — byte-identical to the
-/// server's content address (`capsule_core::utils::hash::hash_bytes`).
+/// server's content address (`capsule_core::crypto::hash::hash_bytes`).
 fn hash_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);

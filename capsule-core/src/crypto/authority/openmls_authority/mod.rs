@@ -1,8 +1,8 @@
 //! The live [`AlbumAuthority`] backed by a real OpenMLS group (RFC 9420), pinned to the
 //! X-Wing PQ ciphersuite `MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519` (`0x004D`) via the
 //! formally-verified libcrux provider. This is the design-target authority the offline
-//! [`ReferenceAuthority`](super::ReferenceAuthority) stands in for — it drops in behind the
-//! same `&dyn AlbumAuthority` seam without touching [`verify_asset`](crate::crypto::verify_asset).
+//! [`ReferenceAuthority`](super::ReferenceAuthority) stands in for — it drops in behind the same
+//! `&dyn AlbumAuthority` seam without touching [`verify_asset`](fn@crate::crypto::verify_asset).
 //!
 //! **Slice S-X1** landed the backend/authority layer: single-member (self) group creation, the
 //! epoch-ledger semantics `verify_asset` consumes (monotonic ceiling, per-epoch write-tier key,
@@ -36,9 +36,8 @@
 //!   vehicle for a future move off the `0x004D` X-Wing suite), `intent_id`-keyed and resumable;
 //! - the **group re-keying ceremony** ([resilience]): a compromise/scheduled response that mints a
 //!   fresh AMK + write-tier key for every member as one `intent_id`-keyed, resumable operation;
-//! - **reconciliation** ([`ReconcileOutcome`](resilience::ReconcileOutcome)): the single
-//!   "bring-me-current" entry point over the server-authoritative commit chain, plus the
-//!   lost-commit retry primitive.
+//! - **reconciliation** ([`ReconcileOutcome`]): the single "bring-me-current" entry point over
+//!   the server-authoritative commit chain, plus the lost-commit retry primitive.
 //!
 //! SSoT: [Cryptography — MLS](https://docs/design/cryptography/mls/),
 //! [Keys — Write Authority](https://docs/design/cryptography/keys/#write-authorization),
@@ -90,7 +89,7 @@ use crate::crypto::keys::{AmkVersion, DeviceDirectory, HybridSigningKey, HybridV
 pub(crate) const PINNED_CIPHERSUITE: Ciphersuite =
     Ciphersuite::MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519;
 
-/// The wire codepoint of [`PINNED_CIPHERSUITE`]. Asserted in tests so an upstream re-pin can
+/// The wire codepoint of `PINNED_CIPHERSUITE`. Asserted in tests so an upstream re-pin can
 /// never silently change the suite Capsule negotiates.
 pub const PINNED_CIPHERSUITE_ID: u16 = 0x004D;
 
@@ -163,7 +162,7 @@ pub enum OpenMlsAuthorityError {
     /// upgraded and all activity has moved to the fork. Reads are unaffected — only writes refuse.
     #[error("album is tombstoned under upgrade intent {0}")]
     Tombstoned(Uuid),
-    /// A step of the [tombstone-plus-fork upgrade ceremony](upgrade) failed (intent signature,
+    /// A step of the tombstone-plus-fork upgrade ceremony failed (intent signature,
     /// quiescence conflict, or fork construction).
     #[error("album upgrade ceremony: {0}")]
     Upgrade(String),
@@ -172,7 +171,7 @@ pub enum OpenMlsAuthorityError {
     /// normal operation (each member independently).
     #[error("frozen-state hash mismatch: at least one member's album view diverges")]
     FrozenStateMismatch,
-    /// A [resilience](resilience) operation (reconciliation / re-keying) failed.
+    /// A resilience operation (reconciliation / re-keying) failed.
     #[error("mls resilience: {0}")]
     Resilience(String),
     /// [`block_user`](OpenMlsAuthority::block_user) was asked to block the **local** user. A device
@@ -213,8 +212,8 @@ struct EpochState {
     amk: [u8; AMK_LEN],
 }
 
-/// How an epoch's write-tier key material arrives at [`ingest_current_epoch`]
-/// (`OpenMlsAuthority::ingest_current_epoch`).
+/// How an epoch's write-tier key material arrives at
+/// [`OpenMlsAuthority::ingest_current_epoch`].
 enum WriteTierIngest {
     /// This member is the committer: it minted the keypair (holds both halves).
     Minted(HybridSigningKey),
@@ -312,7 +311,7 @@ impl BlockOutcome {
     }
 }
 
-/// An [`AlbumAuthority`] backed by a live OpenMLS group pinned to [`PINNED_CIPHERSUITE`].
+/// An [`AlbumAuthority`] backed by a live OpenMLS group pinned to `PINNED_CIPHERSUITE`.
 ///
 /// One instance owns one album's group **as seen by one device**. Its epoch ledger is produced by
 /// real MLS commits (self-update, add, remove) and Welcome processing; every `verify_asset` answer
@@ -1189,7 +1188,7 @@ impl OpenMlsAuthority {
     /// **Roles seam:** core has no roles model yet, so every member is a writer and this returns
     /// all leaves — which is what makes the group-encrypted application channel a faithful
     /// "writers-only" delivery today. When the roles model lands, this filter narrows to the
-    /// role-holding leaves and [`build_write_tier_distribution`](Self::build_write_tier_distribution)'s
+    /// role-holding leaves and `build_write_tier_distribution`'s
     /// send-path switches to per-writer delivery (the group channel is readable by every member,
     /// so a proper subset cannot ride it).
     pub fn writers(&self) -> Vec<LeafNodeIndex> {
@@ -1430,9 +1429,10 @@ fn describe_content(content: &ProcessedMessageContent) -> &'static str {
     }
 }
 
-/// Turn an incoming MLS message into a [`ProtocolMessage`] (a commit or application message) or a
-/// typed error. Uses OpenMLS's public `try_into_protocol_message` (the `into_protocol_message`
-/// convenience is `test-utils`-gated upstream).
+/// Turn an incoming MLS message into a [`ProtocolMessage`](openmls::prelude::ProtocolMessage) (a
+/// commit or application message) or a typed error. Uses OpenMLS's public
+/// `try_into_protocol_message` (the `into_protocol_message` convenience is `test-utils`-gated
+/// upstream).
 fn protocol_message(message: MlsMessageIn) -> Result<openmls::prelude::ProtocolMessage> {
     message.try_into_protocol_message().map_err(|e| {
         OpenMlsAuthorityError::UnexpectedMessage(format!("not a protocol message: {e:?}"))

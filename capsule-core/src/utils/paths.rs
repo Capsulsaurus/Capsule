@@ -1,7 +1,7 @@
 //! Path helpers with no knowledge of the library layout.
 //!
-//! [`tmp_path`] lives here rather than in [`crate::library::paths`] because it encodes no
-//! layout at all — it appends `.tmp` to whatever it is given. Keeping it here lets
+//! [`tmp_path`] lives here rather than beside the library's own path helpers because it encodes
+//! no layout at all — it appends `.tmp` to whatever it is given. Keeping it here lets
 //! [`crate::sidecar`] do atomic writes without importing `library`, which was the one real
 //! `sidecar -> library` edge (the rest of that pair is rustdoc links).
 
