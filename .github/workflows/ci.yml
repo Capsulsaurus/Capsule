@@ -56,7 +56,28 @@ jobs:
               - 'capsule-cli/**'
               - 'capsule-core/**'
               - 'capsule-sdk/**'
+              - 'capsule-core-ffi/**'
+              - 'capsule-wasm/**'
               - 'xtask/**'
+              # `check-rust` reads the catalogs directly: `i18n-check` and
+              # `i18n-guard` are `cargo run -p xtask -- i18n …` over `locales/`,
+              # so a catalog-only change must still pay the Rust gate. The
+              # `swift` filter already lists it for the same reason.
+              #
+              # `i18n-check` compares `locales/` against its *generated* outputs,
+              # and drift is drift whichever side moved — a hand-edit to a
+              # generated catalog is the case it exists to catch. `check-rust` is
+              # the only task that runs it and the `rust` job is the only job that
+              # runs `check-rust`, so these four globs are what makes the CI gate
+              # at least as wide as the local one — hk.pkl's `i18n-check` step
+              # lists the same generated targets (the two remaining entries of
+              # that glob, `capsule-i18n/src/**` and `xtask/src/i18n.rs`, are
+              # already covered here by `capsule-i18n/**` and `xtask/**`). Keep
+              # the two in step.
+              - 'locales/**'
+              - 'capsule-web/src/i18n/messages/**'
+              - 'capsule-swift/Generated/**'
+              - 'capsule-android/src/androidMain/res/values*/strings.xml'
               - '.github/workflows/ci.yml'
             web:
               - 'capsule-web/**'
@@ -86,6 +107,23 @@ jobs:
               - '**/*.mdx'
               - 'LICENSE'
               - 'NOTICE'
+              # For the `roadmap` check, which arrives with `#422` together with
+              # the ROADMAP.md it reads — neither is in the tree at this commit.
+              # It will resolve that file's rows against the manifests below,
+              # which declare what actually exists, so a pull request that adds
+              # or removes a package without touching Markdown must still run the
+              # job — otherwise the gate would be advisory for exactly the change
+              # it exists to catch. Listed ahead of the check so the filter is
+              # correct the moment `#422` lands; until then these globs only
+              # widen when `docs-truth` runs, which is harmless.
+              - 'Cargo.toml'
+              - 'settings.gradle.kts'
+              - 'capsule-swift/Project.swift'
+              - '**/Package.swift'
+              - '**/package.json'
+              - '**/pyproject.toml'
+              - '.gitmodules'
+              - 'legacy-review/**'
               - 'mise.toml'
               - '.github/workflows/ci.yml'
             vision:
@@ -240,13 +278,6 @@ jobs:
             tier2: true
     steps:
       - uses: actions/checkout@v4
-      # capsule-sdk's build script compiles the capsule.sync.v1 proto with
-      # prost-build, which shells out to protoc. The hosted images do not carry
-      # it, so every leg of this matrix fails in the SDK build script without it.
-      - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Install Rust toolchain
         run: |
           rustup toolchain install
@@ -470,7 +501,11 @@ jobs:
 
   # Single aggregated status check. Mark THIS ("CI / required") as the required
   # check in branch protection — path-filtered jobs report "skipped", which this
-  # treats as a pass. rust-test is non-blocking and intentionally excluded.
+  # treats as a pass. Every job in `needs` is verified below: the loop covers the
+  # eleven gates (`rust-test` included — it became blocking with `S-C59`, see the
+  # note on that job), and `changes` is checked ahead of it under a stricter rule,
+  # because "skipped" is only trustworthy when the filter that skipped it ran.
+  # A job in `needs` but absent from both checks is a gate that cannot fail.
   required:
     name: required
     if: always()
@@ -479,7 +514,21 @@ jobs:
     steps:
       - name: Verify required jobs succeeded
         run: |
-          for r in "${{ needs.commit-lint.result }}" "${{ needs.rust.result }}" "${{ needs.rust-cross.result }}" \
+          # `changes` must have SUCCEEDED, not merely "not failed". Every filtered
+          # job's `if:` reads needs.changes.outputs.*; if that job dies (a checkout
+          # hiccup, a paths-filter error) those outputs are empty, so every gate
+          # evaluates false and reports "skipped" — and `if: always()` still runs
+          # this one. Treating those skips as passes would green-light a merge with
+          # zero toolchain gates executed, which is the failure mode this whole job
+          # exists to prevent. It is the one `needs` entry that cannot be skipped:
+          # unlike `commit-lint` (push events) or the filtered gates, it has no `if:`.
+          if [ "${{ needs.changes.result }}" != "success" ]; then
+            echo "The path-filter job did not succeed (result: ${{ needs.changes.result }})."
+            echo "Every filtered gate would report skipped, so this aggregate proves nothing."
+            exit 1
+          fi
+          for r in "${{ needs.commit-lint.result }}" "${{ needs.rust.result }}" \
+                   "${{ needs.rust-test.result }}" "${{ needs.rust-cross.result }}" \
                    "${{ needs.web.result }}" \
                    "${{ needs.docs.result }}" "${{ needs.docs-truth.result }}" "${{ needs.vision.result }}" \
                    "${{ needs.markdown.result }}" "${{ needs.kotlin.result }}" "${{ needs.swift.result }}"; do

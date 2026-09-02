@@ -42,6 +42,19 @@ hooks {
       ["lint-check-rust"]     { glob = "**/*.rs"; check = "mise run lint-check-rust"; depends = "format-check-rust" }
       ["test-rust"]           { glob = "**/*.rs"; check = "mise run test-rust"; depends = "lint-check-rust" }
 
+      // The boundary gates out of `check-rust` that cost seconds, not minutes. They are
+      // deliberately a subset: `openapi-check-kynos` codegen-links capsule-server and the
+      // whole Kynos tree, and `build-*`/`gen-bindings`/`verify-examples` are fresh builds,
+      // so those stay in CI (CONTRIBUTING.md says so rather than claiming parity). No
+      // `depends`: none of these globs matches the Rust steps' `**/*.rs`, and this repo only
+      // chains steps whose globs are identical (see the pre-commit note) — cargo's own
+      // target-dir lock serialises whatever does overlap. Each glob is the set of files the
+      // task actually reads, so an unrelated push pays nothing.
+      ["i18n-check"]          { glob = List("locales/**", "capsule-i18n/src/**", "capsule-web/src/i18n/messages/**", "capsule-swift/Generated/**", "capsule-android/src/androidMain/res/values*/strings.xml", "xtask/src/i18n.rs"); check = "mise run i18n-check" }
+      ["i18n-guard"]          { glob = List("locales/**", "capsule-web/src/{routes,components}/**/*.tsx", "capsule-swift/{App,Modules}/**/*.swift", "capsule-android/src/**/*.kt", "capsule-cli/src/**/*.rs", "xtask/src/i18n_guard.rs"); check = "mise run i18n-guard" }
+      ["architecture-check"]  { glob = List("**/*.{js,json,md,rs,toml,ts,tsx,yaml,yml}"); check = "mise run architecture-check" }
+      ["license-check"]       { glob = List("**/Cargo.toml", "Cargo.lock", "deny.toml"); check = "mise run license-check" }
+
       ["format-check-web"]    { glob = "capsule-web/**/*.{ts,tsx,js,jsx,json,jsonc,css}"; check = "mise run format-check-web" }
       ["lint-check-web"]      { glob = "capsule-web/**/*.{ts,tsx,js,jsx,json,jsonc,css}"; check = "mise run lint-check-web" }
       ["test-web"]            { glob = "capsule-web/**/*.{ts,tsx,js,jsx}"; check = "mise run test-web" }
@@ -63,8 +76,11 @@ hooks {
 
       // Verify-only (no fixer), so pre-push rather than pre-commit. Mirrors the
       // `docs-truth` paths filter in ci.yml — astro.config.mjs is in it because
-      // that is where the published origin comes from.
-      ["check-docs-truth"]    { glob = List("**/*.md", "**/*.mdx", "LICENSE", "NOTICE", "capsule-docs/scripts/**", "capsule-docs/astro.config.mjs", "capsule-docs/endpoint-census-allowlist.txt", "capsule-docs/planned-modules.txt", "capsule-server/openapi.json", "capsule-*/src/**"); check = "mise run check-docs-truth" }
+      // that is where the published origin comes from, and the eight manifest
+      // entries after it are for the `roadmap` check arriving with `#422`, which
+      // resolves ROADMAP.md's rows against the files that declare what exists.
+      // The claim to mirror ci.yml is load-bearing: keep the two lists in step.
+      ["check-docs-truth"]    { glob = List("**/*.md", "**/*.mdx", "LICENSE", "NOTICE", "capsule-docs/scripts/**", "capsule-docs/astro.config.mjs", "capsule-docs/endpoint-census-allowlist.txt", "capsule-docs/planned-modules.txt", "capsule-server/openapi.json", "capsule-*/src/**", "Cargo.toml", "settings.gradle.kts", "capsule-swift/Project.swift", "**/Package.swift", "**/package.json", "**/pyproject.toml", ".gitmodules", "legacy-review/**"); check = "mise run check-docs-truth" }
     }
   }
 
