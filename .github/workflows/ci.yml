@@ -470,7 +470,9 @@ jobs:
 
   # Single aggregated status check. Mark THIS ("CI / required") as the required
   # check in branch protection — path-filtered jobs report "skipped", which this
-  # treats as a pass. rust-test is non-blocking and intentionally excluded.
+  # treats as a pass. Every job in `needs` is verified below, `rust-test`
+  # included: it became blocking with `S-C59` (see the note on that job), and a
+  # job listed in `needs` but absent from the loop is a gate that cannot fail.
   required:
     name: required
     if: always()
@@ -479,7 +481,8 @@ jobs:
     steps:
       - name: Verify required jobs succeeded
         run: |
-          for r in "${{ needs.commit-lint.result }}" "${{ needs.rust.result }}" "${{ needs.rust-cross.result }}" \
+          for r in "${{ needs.commit-lint.result }}" "${{ needs.rust.result }}" \
+                   "${{ needs.rust-test.result }}" "${{ needs.rust-cross.result }}" \
                    "${{ needs.web.result }}" \
                    "${{ needs.docs.result }}" "${{ needs.docs-truth.result }}" "${{ needs.vision.result }}" \
                    "${{ needs.markdown.result }}" "${{ needs.kotlin.result }}" "${{ needs.swift.result }}"; do
