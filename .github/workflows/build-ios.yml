@@ -53,13 +53,6 @@ jobs:
           working_directory: capsule-swift
           install_args: tuist xcbeautify
 
-      # capsule-sdk's build script compiles the capsule.sync.v1 proto with
-      # prost-build, which shells out to protoc; the macOS image does not carry it.
-      - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Build Rust FFI xcframework
         run: bash capsule-swift/Scripts/build-rust-ffi.sh
 
@@ -122,13 +115,6 @@ jobs:
         with:
           working_directory: capsule-swift
           install_args: tuist xcbeautify
-
-      # capsule-sdk's build script compiles the capsule.sync.v1 proto with
-      # prost-build, which shells out to protoc; the macOS image does not carry it.
-      - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build Rust FFI xcframework
         run: bash capsule-swift/Scripts/build-rust-ffi.sh

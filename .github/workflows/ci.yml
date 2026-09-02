@@ -247,13 +247,6 @@ jobs:
             tier2: true
     steps:
       - uses: actions/checkout@v4
-      # capsule-sdk's build script compiles the capsule.sync.v1 proto with
-      # prost-build, which shells out to protoc. The hosted images do not carry
-      # it, so every leg of this matrix fails in the SDK build script without it.
-      - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Install Rust toolchain
         run: |
           rustup toolchain install
