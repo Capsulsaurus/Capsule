@@ -77,7 +77,7 @@
 //! (zero findings on the migrated tree; an injected literal is caught) run without
 //! disk I/O.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -306,6 +306,40 @@ fn normalize_ws(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// The SwiftUI call and modifier positions whose string argument reaches the screen.
+///
+/// One list, shared by the plain-literal and the interpolated detectors, because a
+/// position watched by one and not the other is a hole nobody notices: `confirmationDialog`
+/// was in the interpolation regex and not the literal one for two slices (#394). The
+/// leading word boundary at each use keeps a helper that merely *ends* in one of these
+/// (`barButton("sf.symbol.name")`) out.
+const SWIFT_TEXT_POSITIONS: &str = "Text|Label|Button|Section|Toggle|navigationTitle\
+|accessibilityLabel|accessibilityHint|accessibilityValue|alert|confirmationDialog|help\
+|searchable|ContentUnavailableView|tabItem";
+
+/// The property and function name stems that mark a `String` member as display text.
+///
+/// `value` is deliberately absent: `var rawValue: String` appears two dozen times in
+/// `capsule-swift/Modules/CapsuleDomain/Sources/` returning identifiers, none of which is
+/// display text.
+const SWIFT_DISPLAY_STEMS: &str = "title|message|label|name|description|subtitle\
+|heading|text|summary|prompt";
+
+/// A display-text literal: a capital followed by a **lowercase letter**.
+///
+/// This is the rule #394 was filed about. It used to be "a capital, then a space
+/// somewhere", which excluded every single-word string — including `case .places:
+/// "Places"`, the example the detector's own doc comment gave as the shape it catches.
+/// Requiring a lowercase letter in position two keeps out exactly what the space was
+/// there to keep out (`"HEIC"`, `"HDR10"`, `"HLG"`, an SF Symbol name like `"key.fill"`),
+/// and lets a single capitalized word through.
+///
+/// The trade: prose whose second character is neither lowercase nor a space
+/// (`"E-mail sent"`, `"AI Insights"`) is no longer caught. Measured across
+/// `capsule-swift/{App,Modules}` at the time of the change, in every position this
+/// detector scans: **zero** strings are lost and one is gained.
+const SWIFT_DISPLAY_LITERAL: &str = r#"[A-Z][a-z][^"\\]*"#;
+
 /// Detect hardcoded user-facing strings in a SwiftUI source: plain literals in a watched
 /// API position, *interpolated* literals in the same positions, and the key argument of
 /// `String(localized:)`.
@@ -320,19 +354,17 @@ pub(crate) fn swift_findings(content: &str) -> Vec<Finding> {
 /// Detect string-literal arguments to user-facing SwiftUI APIs.
 fn swift_literal_findings(content: &str) -> Vec<Finding> {
     static RE: OnceLock<Regex> = OnceLock::new();
-    // `Text("…")`, `.navigationTitle("…")`, `Label("…", …)`, `Button("…", …)`,
-    // `Section("…")`, `.accessibilityLabel("…")`, `Toggle("…", …)`, `.alert("…", …)`.
-    // The leading `(?:^|[^A-Za-z0-9_])` is a word boundary so helper names that
-    // merely END in one of these (`barButton("sf.symbol.name")`) don't match; a
-    // leading `.` (method syntax) is still allowed. The `"` must immediately follow
-    // `(` so `Text(verbatim: "…")` and `Text(dynamicVar)` are not matched.
-    // `[^"\\]*` keeps it to simple literals — interpolations contain `\(` and are
-    // skipped (documented blind spot; ICU-argument catalog support for Swift is a
-    // follow-up).
+    // `Text("…")`, `.navigationTitle("…")`, `Label("…", …)` and the rest of
+    // [`SWIFT_TEXT_POSITIONS`]. The leading `(?:^|[^A-Za-z0-9_])` is a word boundary so
+    // helper names that merely END in one of these (`barButton("sf.symbol.name")`) don't
+    // match; a leading `.` (method syntax) is still allowed. The `"` must immediately
+    // follow `(` so `Text(verbatim: "…")` and `Text(dynamicVar)` are not matched.
+    // `[^"\\]*` keeps it to simple literals — an interpolation contains `\(` and is
+    // caught by [`swift_interpolation_findings`] instead.
     let re = RE.get_or_init(|| {
-        Regex::new(
-            r#"(?:^|[^A-Za-z0-9_])(?:Text|Label|Button|Section|Toggle|navigationTitle|accessibilityLabel|accessibilityHint|alert)\(\s*"([^"\\]*[A-Za-z][^"\\]*)""#,
-        )
+        Regex::new(&format!(
+            r#"(?:^|[^A-Za-z0-9_])(?:{SWIFT_TEXT_POSITIONS})\(\s*"([^"\\]*[A-Za-z][^"\\]*)""#
+        ))
         .expect("static regex is valid")
     });
     let mut findings = matched_findings(content, re, "swift-literal");
@@ -368,10 +400,10 @@ fn swift_key_parameter_findings(content: &str) -> Vec<Finding> {
     matched_findings(content, re, "swift-key-param")
 }
 
-/// Detect display text returned from a `String`-typed computed property.
+/// Detect display text returned from a `String`-typed computed property or function.
 ///
 /// The blind spot that hid twenty-two English strings from this gate. A view
-/// that writes `Text("Places")` is caught by ``swift_findings``; a view that
+/// that writes `Text("Places")` is caught by [`swift_literal_findings`]; a view that
 /// writes `Text(category.title)` is not, and neither is the property behind it:
 ///
 /// ```swift
@@ -386,46 +418,80 @@ fn swift_key_parameter_findings(content: &str) -> Vec<Finding> {
 /// it and no argument label ends in `Key`. Non-English users read those in
 /// English, and the gate reported zero findings the whole time.
 ///
-/// Scoped to `case .foo: "Bar"` inside a property named like display text
-/// (`title`, `message`, `label`, `name`, `description`, `subtitle`) — the shape
-/// that actually produced the bug. A `String` property returning a symbol name
-/// or a raw value is not display text and must not be flagged, which is why the
-/// literal must also start with a capital and contain a space *or* be a known
-/// display-ish word: `case .heic: "HEIC"` is a file format, not a sentence.
+/// # What is scanned
+///
+/// A member whose name ends in one of [`SWIFT_DISPLAY_STEMS`] and whose type is
+/// `String` — a `var`, or (since #394) a `func` such as `hdrName(_:) -> String`. Inside
+/// its body, four literal positions, because a property returns display text in more
+/// shapes than a `switch`: a `case` arm, an explicit `return`, a bare literal on its own
+/// line (an implicit return, or an `if` branch), and a dictionary value. Hits are keyed by
+/// absolute offset, so a literal two positions both match is reported once.
+///
+/// A `String` member is not automatically display text — a symbol name or a raw value is
+/// not — which is what [`SWIFT_DISPLAY_LITERAL`] filters on. Its history is #394: the rule
+/// used to require a space, which excluded the single-word example this doc comment gives.
 fn swift_computed_property_findings(content: &str) -> Vec<Finding> {
-    static PROPERTY: OnceLock<Regex> = OnceLock::new();
-    static CASE: OnceLock<Regex> = OnceLock::new();
-    let property = PROPERTY.get_or_init(|| {
-        Regex::new(
-            r"var\s+[A-Za-z]*(?i:title|message|label|name|description|subtitle)\s*:\s*String\s*\{",
-        )
-        .expect("static regex is valid")
+    static MEMBERS: OnceLock<Vec<Regex>> = OnceLock::new();
+    static LITERALS: OnceLock<Vec<Regex>> = OnceLock::new();
+    let members = MEMBERS.get_or_init(|| {
+        [
+            // `var displayName: String {` — the stem ends the name.
+            format!(r"var\s+[A-Za-z]*(?i:{SWIFT_DISPLAY_STEMS})\s*:\s*String\s*\{{"),
+            // `static func hdrName(_ format: HDRFormat) -> String {` — the stem may sit
+            // anywhere in the name, since a function reads `label(for:)` as often as
+            // `formattedLabel()`.
+            format!(
+                r"func\s+[A-Za-z]*(?i:{SWIFT_DISPLAY_STEMS})[A-Za-z]*\s*\([^)]*\)\s*->\s*String\s*\{{"
+            ),
+        ]
+        .iter()
+        .map(|pattern| Regex::new(pattern).expect("static regex is valid"))
+        .collect()
     });
-    // `case .foo: "Some words"` — a capital, then a space, so an acronym or an
-    // identifier-like token does not match.
-    let case = CASE.get_or_init(|| {
-        Regex::new(r#"case\s+\.[A-Za-z0-9_]+:\s*"([A-Z][^"\\]*\s[^"\\]*)""#)
-            .expect("static regex is valid")
+    let literals = LITERALS.get_or_init(|| {
+        [
+            // `case .places: "Places"`
+            format!(r#"case\s+\.[A-Za-z0-9_]+:\s*"({SWIFT_DISPLAY_LITERAL})""#),
+            // `return "Places"`
+            format!(r#"return\s+"({SWIFT_DISPLAY_LITERAL})""#),
+            // A bare literal statement: an implicit return, or an `if`/`else` branch.
+            format!(r#"(?m)^\s*"({SWIFT_DISPLAY_LITERAL})"\s*$"#),
+            // A dictionary or array value: `[.places: "Places"]`.
+            format!(r#":\s*"({SWIFT_DISPLAY_LITERAL})"\s*[,\]]"#),
+        ]
+        .iter()
+        .map(|pattern| Regex::new(pattern).expect("static regex is valid"))
+        .collect()
     });
 
-    let mut findings = Vec::new();
-    for property_match in property.find_iter(content) {
-        let open = property_match.end() - 1;
-        let Some(body) = brace_body(content, open) else {
-            continue;
-        };
-        for capture in case.captures_iter(body) {
-            let group = capture.get(1).expect("group 1 exists");
-            findings.push(Finding {
-                // Offsets are into `body`, which starts one byte past the
-                // brace — so the absolute position is that plus the local one.
-                line: line_of(content, open + 1 + group.start()),
-                text: group.as_str().to_string(),
-                kind: "swift-computed-property",
-            });
+    // Keyed by absolute offset: the dictionary and `case` patterns overlap, and a member
+    // nested inside another member's body is scanned twice. Either way the literal is one
+    // finding, and `BTreeMap` also puts them back in source order.
+    let mut hits: BTreeMap<usize, String> = BTreeMap::new();
+    for member in members {
+        for member_match in member.find_iter(content) {
+            let open = member_match.end() - 1;
+            let Some(body) = brace_body(content, open) else {
+                continue;
+            };
+            for literal in literals {
+                for capture in literal.captures_iter(body) {
+                    let group = capture.get(1).expect("group 1 exists");
+                    // Offsets are into `body`, which starts one byte past the
+                    // brace — so the absolute position is that plus the local one.
+                    hits.entry(open + 1 + group.start())
+                        .or_insert_with(|| group.as_str().to_string());
+                }
+            }
         }
     }
-    findings
+    hits.into_iter()
+        .map(|(offset, text)| Finding {
+            line: line_of(content, offset),
+            text,
+            kind: "swift-computed-property",
+        })
+        .collect()
 }
 
 /// The text between the brace at `open` and its match, or `None` if unbalanced.
@@ -459,9 +525,9 @@ fn brace_body(content: &str, open: usize) -> Option<&str> {
 fn swift_interpolation_findings(content: &str) -> Vec<Finding> {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| {
-        Regex::new(
-            r#"(?:^|[^A-Za-z0-9_])(?:Text|Label|Button|Section|Toggle|navigationTitle|accessibilityLabel|accessibilityHint|alert|confirmationDialog)\(\s*"([^"]*\\\([^"]*)""#,
-        )
+        Regex::new(&format!(
+            r#"(?:^|[^A-Za-z0-9_])(?:{SWIFT_TEXT_POSITIONS})\(\s*"([^"]*\\\([^"]*)""#
+        ))
         .expect("static regex is valid")
     });
     matched_findings(content, re, "swift-interpolation")
@@ -1053,14 +1119,18 @@ mod tests {
 
     #[test]
     fn swift_computed_properties_ignore_identifier_like_values() {
-        // A `String` property is not automatically display text. Symbol names,
-        // raw values and file formats are single tokens; requiring a space is
-        // what separates a sentence from an identifier.
+        // A `String` property is not automatically display text. Symbol names, raw values
+        // and file formats do not spell a lowercase letter in position two; a `String`
+        // property that is not named like display text is not scanned at all.
         let src = r#"
             var title: String {
                 switch self {
                 case .heic: "HEIC"
                 case .dng: "DNG"
+                case .hdr10: "HDR10"
+                case .hlg: "HLG"
+                case .photo: "app.media.photo"
+                case .masterKey: "key.fill"
                 }
             }
             var systemImage: String {
@@ -1069,7 +1139,115 @@ mod tests {
                 }
             }
         "#;
-        assert!(swift_findings(src).is_empty());
+        assert_eq!(swift_findings(src), Vec::new());
+    }
+
+    #[test]
+    fn swift_computed_properties_catch_a_single_word_string() {
+        // Issue #394: the detector's own documented example. The literal rule used to
+        // require a space, so `case .places: "Places"` — the exact shape the doc comment
+        // advertises as the motivating bug — could not be caught.
+        let src = r#"
+            var title: String {
+                switch self {
+                case .places: "Places"
+                case .people: "People"
+                }
+            }
+        "#;
+        let texts: Vec<String> = swift_findings(src).into_iter().map(|f| f.text).collect();
+        assert_eq!(texts, vec!["Places".to_string(), "People".to_string()]);
+    }
+
+    #[test]
+    fn swift_display_functions_are_scanned() {
+        // `var` was required, so a `func` returning display text was invisible — the
+        // blind spot that hid "Dolby Vision" in `AssetInfoFormatting.hdrName(_:)`.
+        let src = r#"
+            static func hdrName(_ format: HDRFormat) -> String {
+                switch format {
+                case .hdr10: "HDR10"
+                case .dolbyVision: "Dolby Vision"
+                case .hlg: "HLG"
+                }
+            }
+        "#;
+        let texts: Vec<String> = swift_findings(src).into_iter().map(|f| f.text).collect();
+        assert_eq!(texts, vec!["Dolby Vision".to_string()]);
+    }
+
+    #[test]
+    fn swift_display_members_are_scanned_beyond_the_switch() {
+        // A property returns display text in more shapes than a `switch`: an explicit
+        // `return`, an implicit one, and a dictionary value. Only `case` was scanned.
+        // `heading`, `summary` and `text` are also new stems — `var heading` was not
+        // matched at all before.
+        let src = r#"
+            var heading: String {
+                if isEmpty { return "Nothing here yet" }
+                "Your library"
+            }
+            var summary: String {
+                let names: [Kind: String] = [.places: "Places and trips"]
+                return names[kind] ?? ""
+            }
+            var promptText: String {
+                "Choose an album"
+            }
+        "#;
+        let texts: Vec<String> = swift_findings(src).into_iter().map(|f| f.text).collect();
+        assert_eq!(
+            texts,
+            vec![
+                "Nothing here yet".to_string(),
+                "Your library".to_string(),
+                "Places and trips".to_string(),
+                "Choose an album".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn swift_display_members_do_not_report_a_literal_twice() {
+        // A `func` nested in a `var` body is scanned by both members, and the dictionary
+        // and `case` patterns overlap. Findings are keyed by absolute offset, so the
+        // literal is one violation, not two.
+        let src = r#"
+            var title: String {
+                func headingFor(_ k: Kind) -> String {
+                    return "Places and trips"
+                }
+                return headingFor(kind)
+            }
+        "#;
+        let findings = swift_findings(src);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].text, "Places and trips");
+    }
+
+    #[test]
+    fn swift_watches_every_api_position_in_both_regexes() {
+        // `confirmationDialog` was in the interpolation regex and not the literal one;
+        // `help`, `accessibilityValue`, `ContentUnavailableView` and `tabItem` were in
+        // neither. One shared list now, so the two cannot disagree again.
+        let src = r#"
+            .help("Show the import log")
+            ContentUnavailableView("No photos yet", systemImage: "photo")
+            .accessibilityValue("Three of ten")
+            .confirmationDialog("Delete this?", isPresented: $flag) {}
+            .help("Imported \(count) files")
+        "#;
+        let f = swift_findings(src);
+        let t = texts(&f);
+        for expected in [
+            "Show the import log",
+            "No photos yet",
+            "Three of ten",
+            "Delete this?",
+        ] {
+            assert!(t.contains(&expected), "{expected} missing from {t:?}");
+        }
+        assert!(t.contains(&r"Imported \(count) files"), "{t:?}");
     }
 
     #[test]
