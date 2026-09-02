@@ -69,6 +69,7 @@ pub mod index;
 pub mod limits;
 pub mod moderation;
 mod openapi;
+pub mod postgres;
 pub mod problem;
 pub mod quota;
 pub mod routes;

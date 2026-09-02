@@ -52,14 +52,6 @@ const PLANNED_WORKSPACE_DEPENDENCIES: &[(&str, &str)] = &[
         "redis",
         "the `redis-rs` Valkey adapters AGENTS.md requires for AuthStateStore/UploadSessionStore",
     ),
-    (
-        "testcontainers",
-        "the smoke tier the design docs specify; no test starts a container yet",
-    ),
-    (
-        "testcontainers-modules",
-        "the smoke tier the design docs specify; no test starts a container yet",
-    ),
 ];
 
 const RETIRED_COMPONENT_NAMES: &[&str] = &[
@@ -78,6 +70,7 @@ pub(crate) fn run(root: &Path) -> Result<()> {
     check_dependencies(root, &mut violations)?;
     check_workspace_dependencies(root, &mut violations)?;
     check_legacy_manifests(root, &mut violations)?;
+    check_chrono_isolation(root, &mut violations)?;
     check_retired_references(root, &mut violations)?;
 
     if violations.is_empty() {
@@ -293,6 +286,66 @@ fn member_dependency_names(root: &Path) -> Result<BTreeSet<String>> {
         }
     }
     Ok(names)
+}
+
+/// `capsule-server` must not be on the `chrono` path.
+///
+/// design/dependencies.md makes `cargo tree -i chrono -e no-dev` a review-blocking gate: chrono
+/// exists in this workspace only as the sea-orm column type inside `capsule-cli/entity`, and the
+/// server's own datetime crate is `jiff`. #402 puts sea-orm into `capsule-server` for the
+/// Postgres adapters, which makes that gate worth *enforcing* rather than reading.
+///
+/// The check is deliberately **per package** rather than a grep of the workspace-wide tree.
+/// `capsule-cli` inherits sea-orm with its default features, `with-chrono` among them, and
+/// cargo unifies features across the packages a workspace build selects — so the workspace-wide
+/// `cargo tree` output lists `capsule-server` under sea-orm and always will, whatever this crate
+/// declares. What is actually decidable, and what the rule is about, is whether *this package's
+/// own manifest* asks for chrono: `cargo tree -p capsule-server -i chrono -e no-dev` must print
+/// nothing. That is what `default-features = false` on the server's sea-orm entry buys, and this
+/// is what stops somebody restoring the defaults without noticing.
+fn check_chrono_isolation(root: &Path, violations: &mut Vec<String>) -> Result<()> {
+    const PACKAGES: &[&str] = &["capsule-server", "capsule-server-migration"];
+    // The migration crate is exempt from the *conclusion* but not from the check: it is a
+    // dev-dependency of the server precisely because `sea-orm-migration` drags sea-orm's
+    // defaults in, so it is expected to be on the path and is listed here only so a reader sees
+    // that the exemption is deliberate rather than an omission.
+    const EXPECTED_ON_THE_PATH: &[&str] = &["capsule-server-migration"];
+
+    for package in PACKAGES {
+        let output = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
+            .args([
+                "tree",
+                "--offline",
+                "-p",
+                package,
+                "-i",
+                "chrono",
+                "-e",
+                "no-dev",
+            ])
+            .current_dir(root)
+            .output()
+            .with_context(|| format!("running cargo tree for {package}"))?;
+        // A package that does not depend on chrono makes `cargo tree -i` exit non-zero with
+        // "nothing to print" or "did not match any packages"; both are the passing shape.
+        let reaches_chrono =
+            output.status.success() && String::from_utf8_lossy(&output.stdout).contains("chrono v");
+        let expected = EXPECTED_ON_THE_PATH.contains(package);
+        if reaches_chrono && !expected {
+            violations.push(format!(
+                "`{package}` reaches `chrono` through its own manifest; design/dependencies.md \
+                 permits chrono only as the sea-orm column type in `capsule-cli/entity`. Check \
+                 that sea-orm is declared with `default-features = false`"
+            ));
+        }
+        if !reaches_chrono && expected {
+            violations.push(format!(
+                "`{package}` no longer reaches `chrono`; remove it from EXPECTED_ON_THE_PATH so \
+                 the exemption stops describing something that is not true"
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn check_legacy_manifests(root: &Path, violations: &mut Vec<String>) -> Result<()> {
