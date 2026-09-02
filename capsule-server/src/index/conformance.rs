@@ -1474,6 +1474,110 @@ pub async fn holding_an_unknown_asset_is_not_found(index: &dyn AssetIndex) {
     );
 }
 
+// ---------------------------------------------------------------------------------------
+// The scrub's walk
+// ---------------------------------------------------------------------------------------
+
+/// Every row is walked, whatever its state, and the walk resumes where it stopped.
+///
+/// The scrub's input, and it was uncovered until the Postgres adapter arrived — which is
+/// exactly the shape of gap a shared suite exists to close. Two properties, and both are the
+/// port's own words:
+///
+/// - *"Every row, whatever its state. A scrub that skipped pending or tombstoned rows would
+///   skip exactly the rows a half-finished write leaves behind."*
+/// - *"an interrupted pass resumes where it stopped rather than starting over — which for a
+///   store worth scrubbing is the difference between a check that finishes and one that never
+///   does."*
+pub async fn the_row_walk_covers_every_state_and_resumes(index: &dyn AssetIndex) {
+    // One row in each state, so a filter on state would drop one of them.
+    let pending_only = pending("walk", 1);
+    let unseen = pending_only.asset_id.clone();
+    ok(index.reserve(pending_only).await, "reserve a pending row");
+    let (visible, _) = publish(index, "walk", 2).await;
+    let (deleted, _) = publish(index, "walk", 3).await;
+    ok(
+        index.tombstone(&deleted, Timestamp::UNIX_EPOCH).await,
+        "tombstone a row",
+    );
+
+    for page_size in [1_usize, 2, 50] {
+        let mut cursor: Option<AssetId> = None;
+        let mut seen: Vec<AssetId> = Vec::new();
+        loop {
+            let page = ok(
+                index.rows(cursor.as_ref(), page_size).await,
+                "walk the asset rows",
+            );
+            if page.is_empty() {
+                break;
+            }
+            assert!(
+                page.len() <= page_size,
+                "a page of {} exceeded the requested {page_size}",
+                page.len()
+            );
+            for row in &page {
+                if let Some(previous) = seen.last() {
+                    assert!(
+                        &row.asset_id > previous,
+                        "the walk went backwards: {} came after {previous}",
+                        row.asset_id
+                    );
+                }
+                seen.push(row.asset_id.clone());
+            }
+            cursor = page.last().map(|row| row.asset_id.clone());
+        }
+
+        for expected in [&unseen, &visible, &deleted] {
+            assert!(
+                seen.contains(expected),
+                "the walk at page size {page_size} missed {expected}; a scrub that skips a \
+                 pending or tombstoned row skips exactly the rows a half-finished write leaves \
+                 behind"
+            );
+        }
+        let mut unique = seen.clone();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            seen.len(),
+            "the walk at page size {page_size} returned a row twice"
+        );
+    }
+}
+
+/// The walk's order is the identifier's own byte order, not a locale's.
+///
+/// Asset ids are the manifest's client-chosen `file_id`, so they are full of punctuation and are
+/// not a shape the suite gets to pick. A backend ordering them under a locale collation — which
+/// is what `en_US.utf8` does, ignoring `-` at the primary level — walks them in a different
+/// order from the deterministic double, and a cursor handed between the two skips rows. The
+/// three ids below are the smallest set where byte order and a punctuation-ignoring collation
+/// disagree.
+pub async fn the_row_walk_orders_by_the_identifiers_own_bytes(index: &dyn AssetIndex) {
+    let ids = ["walkord-a-b", "walkord-ab", "walkord-a-c"];
+    for id in ids {
+        let mut row = pending("walkord", 0);
+        row.asset_id = AssetId::new(id);
+        ok(index.reserve(row).await, "reserve a row");
+    }
+
+    let walked: Vec<String> = ok(index.rows(None, 100).await, "walk the asset rows")
+        .into_iter()
+        .filter(|row| row.asset_id.as_str().starts_with("walkord-"))
+        .map(|row| row.asset_id.as_str().to_owned())
+        .collect();
+    let mut expected: Vec<String> = ids.iter().map(|id| (*id).to_owned()).collect();
+    expected.sort();
+    assert_eq!(
+        walked, expected,
+        "the walk must order asset ids by their bytes, so a cursor means the same thing to \
+         every adapter"
+    );
+}
+
 pub async fn run_all(index: &dyn AssetIndex) {
     reserving_twice_joins_the_same_row(index).await;
     a_disagreeing_reservation_is_refused_without_disclosure(index).await;
@@ -1507,6 +1611,8 @@ pub async fn run_all(index: &dyn AssetIndex) {
     a_restore_clears_the_retention_floor(index).await;
     a_serving_hold_is_placed_reported_and_lifted(index).await;
     holding_an_unknown_asset_is_not_found(index).await;
+    the_row_walk_covers_every_state_and_resumes(index).await;
+    the_row_walk_orders_by_the_identifiers_own_bytes(index).await;
 }
 
 #[cfg(test)]
