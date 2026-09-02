@@ -27,12 +27,18 @@
 //!
 //! # What is still refused
 //!
-//! `select`, `selectordinal`, `plural` with `offset:`, and any other `{name, kind, …}`
-//! block are **refused**: a `debug_assert!` fires where a developer will see it, and the
-//! release build copies the construct through verbatim rather than gaining a new crash on
-//! a catalog it could previously render badly. Emitting ICU source to a user is the exact
-//! failure Android shipped before slice `S-I6`; the refusal exists so the next construct
-//! this runtime cannot express is a test failure instead.
+//! `select`, `selectordinal`, `plural` with `offset:`, a `plural` whose arms do not parse,
+//! and any other `{name, kind, …}` block are **refused**: a `debug_assert!` fires where a
+//! developer will see it, and the release build copies the construct through verbatim
+//! rather than gaining a new crash on a catalog it could previously render badly. Emitting
+//! ICU source to a user is the exact failure Android shipped before slice `S-I6`; the
+//! refusal exists so the next construct this runtime cannot express is a test failure
+//! instead.
+//!
+//! One malformed shape is **not** passed through verbatim: a `plural` whose arms parse but
+//! carry no `other`. It asserts, and then renders its first arm in CLDR order. `xtask
+//! i18n` refuses to generate such a message, so the case is unreachable from the catalogs;
+//! for a hand-written template that slipped past it, some text beats message source.
 
 use std::collections::BTreeMap;
 use std::fmt::{self, Write as _};
@@ -99,6 +105,13 @@ fn render(
     depth: usize,
     out: &mut String,
 ) {
+    // Every `{` is paired in one pass up front, rather than by scanning forward from each
+    // one. Scanning per brace is quadratic on the unmatched path — an unmatched `{` has to
+    // read the whole remainder to learn there is no partner, and then the next one reads
+    // it again: measured at n(n+1)/2 bytes, 1.6 s for a template of 80 000 braces. This is
+    // a `pub` entry point, so that is the same threat model `MAX_DEPTH` is capped for.
+    let pairs = brace_pairs(template);
+    let mut next_pair = 0;
     let mut i = 0;
     while let Some(c) = template[i..].chars().next() {
         match c {
@@ -110,7 +123,12 @@ fn render(
                 i += 1;
             }
             '{' => {
-                let Some(close) = matching_brace(template, i) else {
+                // `pairs` lists the braces in source order and `i` only moves forward, so
+                // this brace is the entry the cursor is on.
+                debug_assert_eq!(pairs.get(next_pair).map(|pair| pair.open), Some(i));
+                let close = pairs.get(next_pair).and_then(|pair| pair.close);
+                next_pair += 1;
+                let Some(close) = close else {
                     // An unterminated `{` is copied through as an ordinary character, with
                     // no assertion: the brace may well be literal text in a message that
                     // never meant to open a placeholder, and nothing distinguishes the two
@@ -122,6 +140,10 @@ fn render(
                 };
                 render_placeholder(locale, &template[i + 1..close], args, depth, out);
                 i = close + 1;
+                // The braces inside the body were handled by the recursive render.
+                while pairs.get(next_pair).is_some_and(|pair| pair.open < i) {
+                    next_pair += 1;
+                }
             }
             _ => {
                 out.push(c);
@@ -129,6 +151,49 @@ fn render(
             }
         }
     }
+}
+
+/// One `{` and the `}` that closes it, if any.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BracePair {
+    /// Byte index of the `{`.
+    open: usize,
+    /// Byte index of the matching `}`, or `None` when the brace is unterminated.
+    close: Option<usize>,
+}
+
+/// Pair up every `{` in `text` in a single pass, in source order.
+///
+/// A stack of open braces, so the answer for *all* of them costs one scan of the text
+/// rather than one scan per brace. Equivalent to calling [`matching_brace`] at each `{` —
+/// pinned by a test — and the reason [`render`] no longer does.
+///
+/// A `}` with nothing open is ignored, exactly as [`matching_brace`]'s depth counter
+/// ignores it: it cannot close a brace that is not there, and ICU has no escape for one.
+fn brace_pairs(text: &str) -> Vec<BracePair> {
+    #[cfg(test)]
+    tests::record_brace_scan(text.len());
+    let mut pairs: Vec<BracePair> = Vec::new();
+    // Indices into `pairs`, innermost last.
+    let mut open = Vec::new();
+    for (index, byte) in text.as_bytes().iter().enumerate() {
+        match byte {
+            b'{' => {
+                open.push(pairs.len());
+                pairs.push(BracePair {
+                    open: index,
+                    close: None,
+                });
+            }
+            b'}' => {
+                if let Some(slot) = open.pop() {
+                    pairs[slot].close = Some(index);
+                }
+            }
+            _ => {}
+        }
+    }
+    pairs
 }
 
 /// Render one `{…}` placeholder body (the text between the braces) into `out`.
@@ -158,10 +223,10 @@ fn render_placeholder(
     debug_assert!(
         rendered.is_some(),
         "capsule-i18n cannot render the ICU construct `{{{body}}}` — it would be printed \
-         to the user verbatim. A well-formed `plural` is evaluated here; `select`, \
-         `selectordinal`, `offset:`, a malformed plural and nesting past {MAX_DEPTH} \
-         levels are not, because the per-platform renderers compile those ahead of time \
-         (`xtask i18n`) and this runtime has no equivalent."
+         to the user verbatim. A `plural` whose arms parse is evaluated here; `select`, \
+         `selectordinal`, `offset:`, a `plural` whose arms do not, and nesting past \
+         {MAX_DEPTH} levels are not, because the per-platform renderers compile those \
+         ahead of time (`xtask i18n`) and this runtime has no equivalent."
     );
     if let Some(text) = rendered {
         out.push_str(&text);
@@ -294,7 +359,13 @@ impl<'a> Arms<'a> {
 /// Brace *matching*, not the first `}`: every ICU plural nests braces, and a scan that
 /// stops at the first one cannot see past the opening arm — the same defect that let
 /// Android's renderer ship raw ICU (slice `S-I6`).
+///
+/// Used by [`Arms::parse`], where the arms are disjoint so the scans add up to one pass
+/// over the body. [`render`] uses [`brace_pairs`] instead, because there the same brace
+/// can be asked about repeatedly.
 fn matching_brace(text: &str, open: usize) -> Option<usize> {
+    #[cfg(test)]
+    tests::record_brace_scan(text.len() - open);
     debug_assert_eq!(text.as_bytes().get(open), Some(&b'{'));
     let mut depth = 0usize;
     for (offset, byte) in text.as_bytes()[open..].iter().enumerate() {
@@ -319,7 +390,31 @@ fn is_identifier(s: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Value, format_message, format_message_in};
+    use std::cell::Cell;
+
+    use super::{BracePair, Value, brace_pairs, format_message, format_message_in, matching_brace};
+
+    thread_local! {
+        /// Bytes the brace scanners have read on this thread.
+        ///
+        /// The cost of pairing braces is the whole point of [`brace_pairs`], and a wall
+        /// clock cannot pin it: this host runs several builds at once, so a timing budget
+        /// would be either flaky or so loose it proves nothing. Counting the bytes the
+        /// scanners actually read is deterministic, and it fails if anyone reintroduces a
+        /// per-brace rescan. Thread-local because `cargo test` runs tests concurrently on
+        /// threads (nextest gives each its own process, which is stricter still).
+        static BRACE_SCAN_BYTES: Cell<usize> = const { Cell::new(0) };
+    }
+
+    /// Called by both brace scanners in a test build. Not compiled otherwise.
+    pub(super) fn record_brace_scan(bytes: usize) {
+        BRACE_SCAN_BYTES.with(|counter| counter.set(counter.get() + bytes));
+    }
+
+    /// Bytes scanned since the last call, resetting the counter.
+    fn take_brace_scan_bytes() -> usize {
+        BRACE_SCAN_BYTES.with(Cell::take)
+    }
 
     /// The shape every plural in `locales/` has today.
     const ITEMS: &str = "{count, plural, one {# item} other {# items}}";
@@ -629,6 +724,84 @@ mod tests {
         let template = deeply_nested_plural(5_000);
         let rendered = format_message(&template, &[("count", Value::Int(2))]);
         assert!(rendered.ends_with("}}"), "the refusal is a pass-through");
+    }
+
+    #[test]
+    fn brace_pairs_agrees_with_matching_brace_at_every_open_brace() {
+        // The refactor's correctness condition: pairing every brace in one pass must give
+        // the same answer as asking about each brace on its own. The awkward shapes are
+        // the point — an unmatched outer brace with a matched one inside (`{ {a} `) is
+        // where a naive "if one fails they all fail" shortcut would be wrong.
+        for template in [
+            "",
+            "no braces at all",
+            "{a}",
+            "{{a}}",
+            "{",
+            "}",
+            "}{a}",
+            "{a}}",
+            "{ {a} ",
+            "{a} } {b}",
+            "{a, plural, one {# item} other {# items}}",
+            "{a, plural, one {{name} has #} other {{name} has {b, plural, other {#}}}}",
+            "50% off {sale",
+            "A { stray brace, then {name}",
+        ] {
+            let pairs = brace_pairs(template);
+            let opens: Vec<usize> = template
+                .bytes()
+                .enumerate()
+                .filter(|(_, byte)| *byte == b'{')
+                .map(|(index, _)| index)
+                .collect();
+            let expected: Vec<BracePair> = opens
+                .iter()
+                .map(|open| BracePair {
+                    open: *open,
+                    close: matching_brace(template, *open),
+                })
+                .collect();
+            assert_eq!(pairs, expected, "disagreement on `{template}`");
+        }
+    }
+
+    #[test]
+    fn an_unmatched_brace_costs_one_pass_not_one_per_brace() {
+        // The defect: `render` asked `matching_brace` at every `{`, and an unmatched one
+        // reads the whole remainder to learn it has no partner — n(n+1)/2 bytes over the
+        // template, measured at 1.6 s for 80 000 braces in release. `format_message` is
+        // public, so the input need not be a catalog message.
+        let template = "{".repeat(100_000);
+        take_brace_scan_bytes();
+        let rendered = format_message(&template, &[]);
+        let scanned = take_brace_scan_bytes();
+        assert_eq!(rendered, template, "every unmatched brace is still emitted");
+        assert!(
+            scanned <= 4 * template.len(),
+            "scanned {scanned} bytes for a {}-byte template: the per-brace rescan is back",
+            template.len()
+        );
+    }
+
+    #[test]
+    fn many_placeholders_cost_one_pass_too() {
+        // The matched path, and the arm parser behind it: the scans must still add up to a
+        // constant number of passes over the template, not one per placeholder.
+        let template = "{name} ".repeat(10_000) + &"{n, plural, one {#} other {#}} ".repeat(1_000);
+        take_brace_scan_bytes();
+        let rendered = format_message(
+            &template,
+            &[("name", Value::Str("Sam")), ("n", Value::Int(2))],
+        );
+        let scanned = take_brace_scan_bytes();
+        assert!(rendered.starts_with("Sam Sam "), "{rendered:.32}");
+        assert!(rendered.ends_with("2 "), "{rendered:.32}");
+        assert!(
+            scanned <= 8 * template.len(),
+            "scanned {scanned} bytes for a {}-byte template",
+            template.len()
+        );
     }
 
     #[test]
