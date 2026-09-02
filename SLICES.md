@@ -3440,7 +3440,7 @@ had gone when it had not — `legacy-review/core-import-media/` was still in the
 recorded and never carried out.
 [#423](https://github.com/Capsulsaurus/Capsule/issues/423) deleted the directory, reworded the
 two `import/pipeline.md` citations, and dropped the `ROADMAP.md` row, in commit
-`PENDING-SHA`.
+`b51639b1`.
 
 **`capsule_core::media` does go, and it takes the decoder with it.** It was the former standalone
 media crate, gated behind a non-default feature whose only consumer was the equally-gated
