@@ -2,7 +2,8 @@
 //!
 //! SSoT: [Thumbnails and Previews](https://docs/design/thumbnails/) — the tier table's format
 //! column *is* this enum, and "every receiver (and every federated peer) compares
-//! `DerivativeManifest.format` against this list" is [`verify_still_format`].
+//! `DerivativeManifest.format` against this list" is
+//! [`verify_still_format`](crate::derivative_format::verify_still_format).
 //!
 //! # Why this is at the crate root and not in `capsule_core::media`
 //!
@@ -36,15 +37,16 @@ pub enum DerivativeFormat {
     /// encodable in this build.
     Avif,
     /// **WebP** — the last-resort delivery fallback. Not encodable in this build: the crate's
-    /// WebP codec does not compile for aarch64 (see [`super::StillFormat::WebP`]).
+    /// WebP codec does not compile for aarch64 — see `media::StillFormat::WebP`, which cannot be
+    /// linked from here because `media` is feature-gated and this module is not.
     WebP,
     /// The recognised `format = "original"` sentinel: the tier **references** the original asset
     /// rather than generating a redundant derivative, because the source is not larger than the
     /// tier's cap. **Distinct from an absent derivative** — this is an explicit, signed marker,
     /// where absence means "rebuildable from the original".
     ///
-    /// A sentinel derivative carries **no bytes of its own** ([`GeneratedDerivative::bytes`] is
-    /// empty). "References" is the operative word in the contract: the signed manifest's
+    /// A sentinel derivative carries **no bytes of its own** (`media::GeneratedDerivative::bytes`
+    /// is empty). "References" is the operative word in the contract: the signed manifest's
     /// `ciphertext_hash` content-addresses the original, which the holder already has, so
     /// copying the bytes under a thumbnail's name would duplicate a file sitting two directories
     /// up *and* re-expose the original's EXIF — GPS included — as a derivative blob, where a
@@ -116,9 +118,10 @@ impl fmt::Display for DerivativeFormat {
 /// [`None`] rather than as a violation.
 ///
 /// # Errors
-/// [`MediaError::UnsupportedFormat`] — carrying the still format Capsule *would* have needed —
-/// is not what an unrecognised value produces, because there is no [`super::StillFormat`] to
-/// name. An unrecognised still-role format is `Err(format.to_string())`.
+/// `media::MediaError::UnsupportedFormat` — which carries the still format Capsule *would* have
+/// needed — is not what an unrecognised value produces, because there is no still format to name
+/// (and this module cannot reference `media` in any case: it is unconditional and `media` is
+/// not). An unrecognised still-role format is `Err(format.to_string())`.
 pub fn verify_still_format(
     manifest: &DerivativeManifest,
 ) -> Result<Option<DerivativeFormat>, String> {
