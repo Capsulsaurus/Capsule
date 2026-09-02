@@ -19,14 +19,14 @@ It also absorbs the **post-teardown verdict**: the previous Salvo server, the Pr
 SDK and the standalone media crate are review material, and the replacement server is one
 **Kynos** REST/OpenAPI application. That verdict is accepted and final.
 
-**`S-C59` executed it**, and narrowed it on evidence. Four `legacy-review/` buckets sit in the
-tree: `server-salvo`, `sdk-progenitor`, `media-pipeline`, and `core-import-media`. The fourth is
-a stale twin rather than a quarantine — it holds a snapshot of `capsule-core::exif` and the
-import executor's cancellation and progress halves, all three of which this branch has since
+**`S-C59` executed it**, and narrowed it on evidence. Three `legacy-review/` buckets sit in the
+tree: `server-salvo`, `sdk-progenitor`, and `media-pipeline`. A fourth, `core-import-media`, was
+a stale twin rather than a quarantine — it held a snapshot of `capsule-core::exif` and the
+import executor's cancellation and progress halves, all three of which this branch had already
 rebuilt, live and tested, so those stay in `capsule-core`. Quarantining a stale twin of a working
-module is the opposite of what quarantine is for. **`S-C59` recorded that bucket as deleted and
-did not delete it**: the directory is still there, and its removal is owed to
-[#423](https://github.com/Capsulsaurus/Capsule/issues/423). See
+module is the opposite of what quarantine is for. **`S-C59` recorded that bucket as deleted
+before it actually was**: the directory outlived that record until
+[#423](https://github.com/Capsulsaurus/Capsule/issues/423) deleted it. See
 [`S-C59`](#s-c59--the-salvo-tree-leaves-the-workspace).
 
 Because a slice can now be honest in one tree and dishonest in the other, every row carries
@@ -54,7 +54,7 @@ an **Area**. Read `Status` through `Area`, never on its own.
 | Area | Meaning |
 | --- | --- |
 | `ACTIVE` | The whole surface survives the teardown (`capsule-core` minus its `media` tree, `capsule-core-ffi`/`-swift`/`-kotlin`, the apps, `capsule-cli` local paths, `capsule-web` local paths, `locales/`, `xtask`, the docs site). Implementable against the live workspace today and unaffected by the Kynos rebuild. |
-| `RETIRED` | The target sits in a `legacy-review/` bucket — `server-salvo` (the whole Salvo tree), `sdk-progenitor`, or `media-pipeline` (`capsule_core::media` and its lifecycle adapter). The deliverable must be re-landed on the replacement: Kynos for the server, the Rawshift-backed pipeline for media, the spargen SDK for the client. **`capsule_core::exif` and `import/{executor_cancellation, progress}.rs` are not on this list**, against the original teardown: this branch rebuilt them and they are live, and the `core-import-media` bucket beside them is a stale twin awaiting deletion ([#423](https://github.com/Capsulsaurus/Capsule/issues/423)), not a quarantine (`S-C59`). |
+| `RETIRED` | The target sits in a `legacy-review/` bucket — `server-salvo` (the whole Salvo tree), `sdk-progenitor`, or `media-pipeline` (`capsule_core::media` and its lifecycle adapter). The deliverable must be re-landed on the replacement: Kynos for the server, the Rawshift-backed pipeline for media, the spargen SDK for the client. **`capsule_core::exif` and `import/{executor_cancellation, progress}.rs` are not on this list**, against the original teardown: this branch rebuilt them and they are live, and the `core-import-media` bucket that sat beside them as a stale twin was deleted rather than quarantined ([#423](https://github.com/Capsulsaurus/Capsule/issues/423), `S-C59`). |
 | `MIXED` | Both: a surviving `capsule-core`/client/app half that ships and stays, and a server, SDK-wire, or media half that must be re-landed. |
 
 **Status — read through Area.**
@@ -745,7 +745,8 @@ workspace at all**, so every still import is a `DeferredNoCodec` until Rawshift 
 - **Contract:** [Import — Pipeline](capsule-docs/src/content/docs/design/import/pipeline.md).
 - **Deliverable:** a new executor over Rawshift results and the signed
   `lifecycle::Workspace` path (signed `SidecarV1` + manifest + provenance + derivatives),
-  informed by but not restoring `legacy-review/core-import-media/`.
+  informed by but not restoring the plaintext `core-import-media` review twin deleted in
+  [#423](https://github.com/Capsulsaurus/Capsule/issues/423).
 - **Depends on:** S-B1 (derivative generation is the missing input).
 - **Done when:** an executor import produces `verify_asset`-accepting assets with
   derivatives; planner determinism suite unchanged.
@@ -3444,17 +3445,18 @@ than a transcription:
 Thirty-seven documented operations became **fifty-nine**, and the six that were never
 documented are accounted for.
 
-**The `core-import-media` bucket is to be deleted rather than refreshed — and was not.** It
-quarantined `capsule_core::exif` and the import executor's cancellation and progress halves. All
-three are live, tested and *newer* on this branch than the snapshot that quarantined them — which
-is exactly the charter's exit condition, met in the other direction. Keeping a stale twin of a
-working module beside it is the opposite of what quarantine is for, so the modules stay and the
-bucket goes. This is a **deliberate narrowing of the teardown's file list**, recorded here because
-the plan named those files for the move. **Correction 2026-09-01:** this note said the bucket had
-gone. `legacy-review/core-import-media/` is still in the tree — the decision was recorded and
-never carried out — and the deletion, together with the two `import/pipeline.md` citations and the
-`ROADMAP.md` row that go with it, is
-[#423](https://github.com/Capsulsaurus/Capsule/issues/423).
+**The `core-import-media` bucket was deleted rather than refreshed.** It had quarantined
+`capsule_core::exif` and the import executor's cancellation and progress halves. All three were
+live, tested and *newer* on this branch than the snapshot that quarantined them — which is exactly
+the charter's exit condition, met in the other direction. Keeping a stale twin of a working module
+beside it is the opposite of what quarantine is for, so the modules stayed and the bucket went.
+This is a **deliberate narrowing of the teardown's file list**, recorded here because the plan
+named those files for the move. **Correction 2026-09-01:** this note originally said the bucket
+had gone when it had not — `legacy-review/core-import-media/` was still in the tree, the decision
+recorded and never carried out.
+[#423](https://github.com/Capsulsaurus/Capsule/issues/423) deleted the directory, reworded the
+two `import/pipeline.md` citations, and dropped the `ROADMAP.md` row, in commit
+`b51639b1`.
 
 **`capsule_core::media` does go, and it takes the decoder with it.** It was the former standalone
 media crate, gated behind a non-default feature whose only consumer was the equally-gated
