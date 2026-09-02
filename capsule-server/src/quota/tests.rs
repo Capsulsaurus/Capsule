@@ -23,15 +23,6 @@ fn day(days: i64) -> Timestamp {
     Timestamp::UNIX_EPOCH + SignedDuration::from_hours(days * 24)
 }
 
-fn user() -> UserId {
-    UserId::new("01937b7c-0000-7000-8000-000000000001")
-}
-
-fn address(seed: u8) -> ContentAddress {
-    ContentAddress::parse(&capsule_core::crypto::hash::hash_bytes(&[seed; 8]).to_hex())
-        .expect("a content address")
-}
-
 #[test]
 fn the_states_follow_the_thresholds() {
     let now = day(0);

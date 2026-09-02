@@ -84,12 +84,34 @@ const USERNS_MODE: &str = "CAPSULE_TEST_CONTAINER_USERNS";
 pub(crate) struct TestDatabase {
     _container: ContainerAsync<Postgres>,
     connection: DatabaseConnection,
+    url: String,
 }
 
 impl TestDatabase {
     /// The pool the adapter under test is built over.
     pub(crate) fn connection(&self) -> &DatabaseConnection {
         &self.connection
+    }
+
+    /// The connection string, for a case that has to drive a boot path rather than an adapter.
+    pub(crate) fn url(&self) -> &str {
+        &self.url
+    }
+
+    /// Undo every migration, leaving a reachable database with no schema.
+    ///
+    /// What `boot`'s unmigrated case needs: a database that answers and has nothing in it is the
+    /// state a deployment is in between `docker compose up` and the migration command, and it is
+    /// exactly the state `assert_schema_current` exists to refuse.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the rollback fails; a harness that cannot reach the state the case is about has
+    /// nothing useful to report.
+    pub(crate) async fn roll_back(&self) {
+        server_migration::Migrator::down(&self.connection, None)
+            .await
+            .unwrap_or_else(|error| panic!("the schema could not be rolled back: {error}"));
     }
 }
 
@@ -148,5 +170,6 @@ pub(crate) async fn start(case: &str) -> Option<TestDatabase> {
     Some(TestDatabase {
         _container: container,
         connection,
+        url,
     })
 }
