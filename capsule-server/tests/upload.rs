@@ -1079,3 +1079,195 @@ async fn an_authority_that_cannot_answer_refuses_rather_than_assuming() {
         "error.upload.unavailable"
     );
 }
+
+// ===========================================================================================
+// The crash boundary
+// ===========================================================================================
+
+/// **E2E case 11.** A crash between the blob rename and the index commit leaves no dangling
+/// reference, and the retry recovers.
+///
+/// The order finalization runs in is the contract, and it is the way round it is *because* of
+/// this case (`upload/finalize.rs`): the blob is committed onto its content address — a rename
+/// and an fsync, irreversible — and only then is it recorded against its asset. A crash in that
+/// window leaves a blob nothing references, which is the **safe** half of the trade: an orphan
+/// is what refcount GC exists to collect, while an asset row naming a blob the store does not
+/// hold is a dangling reference the feed would serve and the scrub would report as an integrity
+/// error that is never auto-repaired.
+///
+/// What is asserted, in the order a recovering operator would look at it:
+///
+/// 1. the session is terminal and **failed**, not left claimed forever;
+/// 2. the bytes are at their content address — custody was taken, and telling the client
+///    otherwise would be a lie about something the server holds;
+/// 3. the asset row is still `Pending` and holds no sequence number, so nothing was published
+///    and there is no zombie visible row;
+/// 4. **nothing references the blob** — `find_reference` is `None` and `reference_count` is 0 —
+///    which is the property the whole ordering exists to guarantee;
+/// 5. the collector marks it, so the orphan is reclaimable rather than permanent;
+/// 6. and the retry publishes, because `BlobStore::commit` is idempotent on identical ciphertext.
+///
+/// The crash is injected through the `AssetIndex` port itself (`support::fault`), so no
+/// production code carries a test hook. A *process*-level restart — a real kill and a second
+/// process over the same blob root and database — belongs to the binary-smoke tier and is filed
+/// with the remaining durable adapters.
+#[tokio::test]
+async fn finalization_crash_between_rename_and_commit_leaves_no_dangling_reference() {
+    use capsule_server::blob::ContentAddress;
+    use capsule_server::gc::{CollectionContext, Mode, collect};
+    use capsule_server::index::{AssetIndex, AssetState};
+    use capsule_server::store::{AssetId, OwnerId};
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, second, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+    let address = ContentAddress::parse(&checksum(&whole)).expect("the digest is an address");
+    // The asset the suite's manifests name; the session reserved its row when it opened.
+    let asset = AssetId::new("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e61");
+
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    // The last chunk completes the declared size, so this request is the one that finalizes.
+    fixture.index_fault.arm();
+    let crashed = fixture.chunk(&id, 4096, &second, &bearer).send().await;
+    crashed.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        fixture.index_fault.fired(),
+        1,
+        "the fault never fired, so everything below is describing an ordinary upload"
+    );
+
+    // 1. Terminal and failed. A claimed session that is never driven anywhere is the state the
+    //    finalization state machine exists to make unreachable.
+    let record = fixture
+        .uploads
+        .read_for_test(&id)
+        .await
+        .expect("the session survives as a receipt");
+    assert_eq!(record.status.as_str(), "failed_processing");
+
+    // 2. Custody was taken: the rename happened before the index call that was lost.
+    assert_eq!(
+        fixture.blobs.blob_for_test(&checksum(&whole)).await,
+        Some(whole.clone()),
+        "the bytes committed before the crash window are the bytes the server holds"
+    );
+
+    // 3. No zombie row: the asset is exactly where it was before the transfer.
+    let row = fixture
+        .index
+        .read(&asset)
+        .await
+        .expect("the index answers")
+        .expect("the session reserved a row when it opened");
+    assert_eq!(row.state, AssetState::Pending);
+    assert_eq!(row.sync_seq, None, "a lost transaction published nothing");
+    assert!(row.blobs.is_empty(), "and recorded no blob");
+
+    // 4. The property the ordering exists for. A dangling reference is the failure mode the
+    //    other order would produce, and it is the one nothing can repair automatically.
+    assert_eq!(
+        fixture
+            .index
+            .find_reference(&address)
+            .await
+            .expect("the index answers"),
+        None,
+        "a blob nothing references must not be reachable through the serving path"
+    );
+    assert_eq!(
+        fixture
+            .index
+            .reference_count(&address)
+            .await
+            .expect("the index answers"),
+        0,
+    );
+    assert!(
+        fixture
+            .index
+            .feed_page(&OwnerId::new(owner().as_str()), 0, 10)
+            .await
+            .expect("the index answers")
+            .is_empty(),
+        "nothing was published, so nothing reaches a client's feed"
+    );
+
+    // 5. The orphan is reclaimable. The collector marks a zero-reference blob on one pass and
+    //    sweeps it on a later one once the grace window has passed, so a mark is the whole of
+    //    what a first pass should do — and it is what makes "an orphan GC collects" true rather
+    //    than a hope.
+    let collection = CollectionContext::new(
+        fixture.index.clone(),
+        fixture.blobs.clone(),
+        fixture.marks.clone(),
+        fixture.quotas.clone(),
+        fixture.clock.clone(),
+        capsule_server::gc::DEFAULT_GRACE_WINDOW,
+    );
+    let report = collect(&collection, Mode::Apply)
+        .await
+        .expect("a collection pass runs");
+    assert!(
+        report.marked.contains(&address),
+        "the crashed upload's blob must be collectable, got {report:?}"
+    );
+    assert!(
+        report.dangling.is_empty(),
+        "a crash in this window must never produce a dangling reference: {report:?}"
+    );
+
+    // 6. And the client retries. `BlobStore::commit` is idempotent on identical ciphertext, so
+    //    the second transfer lands on the occupied address and the asset finally publishes.
+    let retry = fixture.open_session(&whole, "original", &bearer).await;
+    fixture
+        .chunk(&retry, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    fixture
+        .chunk(&retry, 4096, &second, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(
+        fixture
+            .uploads
+            .read_for_test(&retry)
+            .await
+            .expect("the retry's session survives")
+            .status
+            .as_str(),
+        "completed",
+    );
+    let recovered = fixture
+        .index
+        .read(&asset)
+        .await
+        .expect("the index answers")
+        .expect("the row is still there");
+    assert_eq!(
+        recovered.address_for(capsule_server::store::BlobRole::Original),
+        Some(&address),
+        "the retry recorded the blob the crash lost",
+    );
+    assert_eq!(
+        fixture
+            .index
+            .reference_count(&address)
+            .await
+            .expect("the index answers"),
+        1,
+        "and the orphan is an orphan no longer",
+    );
+    assert_eq!(
+        fixture.blobs.blob_for_test(&checksum(&whole)).await,
+        Some(whole),
+        "the bytes are unchanged: an identical ciphertext is one object",
+    );
+}

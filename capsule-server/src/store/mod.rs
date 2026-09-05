@@ -36,12 +36,23 @@
 //!
 //! # Adapters, and what they are for
 //!
-//! Three adapters are planned per port — Postgres, Valkey, and a deterministic in-memory one —
-//! and **three adapters are not three deployment modes**. Valkey is required; the server
-//! refuses to boot without `VALKEY_URL` (design/filesystem/server.md, "Required Services").
-//! The in-memory adapter in [`memory`] is a **test double**, never a deployment profile. The
-//! rejected alternative was a Postgres fallback removing Valkey, which would mean emulating
-//! TTL and expiry in SQL — the generic TTL abstraction this slice exists to delete.
+//! **Two** adapters per port, and which two is a property of the port rather than a menu.
+//! The five volatile stores — [`AuthStateStore`], [`UploadSessionStore`] and the three ceremony
+//! stores — get Valkey and the deterministic in-memory double, and nothing else: Valkey is
+//! required, the server refuses to boot without `VALKEY_URL`
+//! (design/filesystem/server.md, "Required Services"), and the rejected alternative was a
+//! Postgres fallback removing Valkey, which would mean emulating TTL and expiry in SQL — the
+//! generic TTL abstraction this slice exists to delete. [`CohortStore`] is the exception and
+//! gets **Postgres** and the double, because it is the one record here that deliberately
+//! outlives the sessions that carried it (see [`auth`]); its adapter is
+//! [`cohorts_postgres::PostgresCohorts`].
+//!
+//! An earlier version of this paragraph said three adapters were planned per port. That was
+//! never true of any port in this module and was the one line in the tree pointing at a
+//! Postgres session table.
+//!
+//! Whichever two a port has, the in-memory adapter in [`memory`] is a **test double**, never a
+//! deployment profile.
 //!
 //! Whichever adapter is in play, it must pass the one shared suite in [`conformance`]. That
 //! suite is what makes "the in-memory adapter behaves like Valkey" an assertion rather than an
@@ -57,6 +68,7 @@
 
 pub mod auth;
 pub mod ceremony;
+pub mod cohorts_postgres;
 pub mod conformance;
 pub mod ids;
 pub mod memory;
@@ -74,6 +86,7 @@ pub use self::ceremony::{
     EnrollmentStore, PendingEnrollment, RELAY_CHANNEL_TTL, RelayChannel, RelayOutcome,
     RelayPayload, RevokeAllChallenge,
 };
+pub use self::cohorts_postgres::PostgresCohorts;
 pub use self::ids::{
     AlbumId, AssetId, ChallengeToken, ChannelId, EnrollmentCode, OwnerId, SessionId, UploadId,
     UserId,

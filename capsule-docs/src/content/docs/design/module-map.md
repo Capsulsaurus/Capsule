@@ -108,8 +108,8 @@ the named acceptance gaps are verified with contract fixtures or a minimal spike
 | Rawshift | Media detection, decoding/encoding, metadata normalization, derivatives, previews, and video processing | Required format/codec matrix; bounded memory and concurrency; cancellation/progress; malformed-input isolation; deterministic orientation/color/HDR behavior; normalized metadata provenance; mobile/desktop targets; no Chromahash API |
 | Chromahash **0.7.1** | LQIP encode/decode only, imported directly by Capsule | Deterministic output; wide-gamut/HDR fixtures; decoder fallback behavior; supported FFI targets. The pin and the retired ThumbHash decision are [Dependencies](/design/dependencies/#rust) |
 | OpenMLS | MLS protocol and cryptographic state transitions | Required cipher suites and credential model; deterministic persistence/restore; external signer integration; epoch/exporter behavior; cross-platform size/performance; Capsule-owned album policy and provenance stay outside it |
-| PostgreSQL driver/ORM | Durable server index and default implementations of the two typed state ports | Transactions needed for finalization, row locking, migration strategy, cancellation, typed error mapping, tracing, and adapter conformance. Select the narrowest mature stack after Kynos integration is proven |
-| `redis-rs` | Required Valkey adapters for `AuthStateStore` and `UploadSessionStore` | Atomic compare/update and expiry primitives required by each port; cluster behavior; cancellation/timeouts; tracing; behavioural parity with the PostgreSQL and in-memory adapters under one conformance suite — parity is what lets the in-memory double be trusted in tests, not a claim that Valkey is [substitutable](/design/filesystem/server/#required-services) |
+| PostgreSQL driver/ORM (`sea-orm`/`sqlx-postgres`) | The durable server records: the asset index, the account cluster, the device-cohort map, the quota ledger and the library's remaining rows. **Not** the two typed state ports — a Postgres-resident session table is [rejected](/design/filesystem/server/#required-services) as a second implementation of one contract | Transactions needed for finalization, row locking, migration strategy, cancellation, typed error mapping, tracing, and adapter conformance — all discharged for the first four adapters, whose suites run against the deterministic double and against a container under `CAPSULE_TEST_POSTGRES=1`. Migrations are applied by a separate binary and `serve` refuses to boot against a schema it was not built for |
+| `redis-rs` | Required Valkey adapters for `AuthStateStore`, `UploadSessionStore` and the ceremony stores — the volatile half, and the only production adapter any of them gets | Atomic compare/update and expiry primitives required by each port; cluster behavior; cancellation/timeouts; tracing; behavioural parity with the in-memory double under one conformance suite — parity is what lets that double be trusted in tests, not a claim that Valkey is [substitutable](/design/filesystem/server/#required-services). Parity with the PostgreSQL adapters is not a goal, because no port has both |
 | RustCrypto, `ciborium`, `rusqlite`, `sqlite-vec`, UniFFI, `wasm-bindgen` | Existing crypto primitives, canonical serialization, local catalog and vector index, native bindings, and the browser boundary | Continue vectors, canonical-byte tests, migration tests, and binding smoke tests; these libraries do not own Capsule protocols or schemas |
 
 Explicit non-dependencies: no generic CAS crate, `object_store`, resumable-transfer library, generic
@@ -149,8 +149,18 @@ covers (`rg "E2E case N"`), and slices in the repo-root `SLICES.md` reference th
     results afterwards. Entirely within `capsule-core::ml` and the `capsule-core::db` vector index,
     so it is unaffected by the server rebuild.
 11. **Server crash mid-finalization.** Inject a crash between the blob rename and the Postgres
-    transaction commit; restart; assert the session moves to `FailedProcessing` cleanly, with no
-    orphaned blob and no zombie pending row.
+    transaction commit; assert the session moves to `FailedProcessing` cleanly, the asset row is
+    still `Pending` with no sequence number, and **nothing references the blob** — no dangling
+    reference, which is the one outcome the finalization order exists to forbid
+    ([Filesystem — Server](/design/filesystem/server/)). An **orphaned blob is permitted** and is
+    the safe half of that trade: the bytes are at their content address with a reference count of
+    zero, the collector marks them, and the client's retry re-references them because
+    `BlobStore::commit` is idempotent on identical ciphertext. This row previously asked for "no
+    orphaned blob", which contradicted the design it cites and the test that asserts it.
+    The crash is injected through the `AssetIndex` port, so no production code carries a test
+    hook; the **process-restart** variant — a real kill, and a second process over the same blob
+    root and database — is owed to the remaining durable adapters and belongs to the binary-smoke
+    tier.
 12. **Cross-device enrollment.** Device A authorizes new device B over a verified channel
     (enrollment code plus safety-code check) → B generates hardware keys → A cross-signs B into the
     device directory → B joins each album's MLS group → B's library matches A's. Includes one

@@ -21,8 +21,10 @@
 //!
 //! One application composed from cohesive internal modules — not separate public transports or
 //! microservices (design/module-map.md, "Planned Server Modules"). Authentication state and
-//! upload-session state stay behind separate Capsule-owned ports with Postgres, Valkey and
-//! deterministic in-memory adapters; no generic CAS, transfer or TTL abstraction is planned.
+//! upload-session state stay behind separate Capsule-owned ports whose adapters are Valkey and a
+//! deterministic in-memory double — **not** Postgres, which design/filesystem/server.md rejects
+//! for a session table — while the durable records go to Postgres. No generic CAS, transfer or
+//! TTL abstraction is planned.
 //!
 //! Each module owns one port and, where it has one, the surface over it. [`routes`] is the only
 //! module that knows about HTTP: everything under it — [`album`], [`directory`], [`discovery`],
@@ -40,14 +42,22 @@
 //! tests here and by the binary identically, so "the server can be built at all" is an
 //! assertion rather than something discovered on a deployment.
 //!
-//! # Every adapter is in-memory
+//! # Every port has a double, and four of them have Postgres besides
 //!
 //! Every port in this crate has a deterministic in-memory adapter and a conformance suite, and
-//! **no Postgres, Valkey or filesystem adapter is written** except the blob store's. That is a
-//! deliberate ordering rather than an omission: the contract and its suite are what a real
-//! adapter is written *against*, and a port with two implementations before it has one suite is
-//! a port whose two implementations will disagree. It is also why this crate's whole test suite
-//! runs without a container.
+//! that ordering was deliberate rather than an omission: the contract and its suite are what a
+//! real adapter is written *against*, and a port with two implementations before it has one
+//! suite is a port whose two implementations will disagree.
+//!
+//! Four ports now have the second implementation (#402) — [`index`]'s asset index, [`auth`]'s
+//! account cluster, [`store`]'s device-cohort map and [`quota`]'s ledger — each passing the same
+//! case list as its double. The remaining durable ports are #446's and the volatile ones are
+//! Valkey's (#403).
+//!
+//! **The suite still runs without a container.** Every Postgres case is gated on
+//! `CAPSULE_TEST_POSTGRES=1` and prints one line naming itself when it is skipped, so
+//! `cargo nextest run` on a machine with no container runtime is green and says what it did not
+//! prove — which is the acceptance gap design/module-map.md sets for the framework.
 
 pub mod album;
 pub mod app;
@@ -69,6 +79,7 @@ pub mod index;
 pub mod limits;
 pub mod moderation;
 mod openapi;
+pub mod postgres;
 pub mod problem;
 pub mod quota;
 pub mod routes;

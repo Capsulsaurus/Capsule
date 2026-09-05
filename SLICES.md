@@ -229,7 +229,7 @@ row's remainder now lives.
 | S-B16 | Every import stamped by import time, not capture time | media/import | — | S | ACTIVE | done | found by the CLI round-trip test |
 | S-B17 | Repair capture timestamps written before `S-B16` | media/import | S-B16 | M | ACTIVE | ready | the wrong value is in *signed* bytes |
 | S-C1 | Upload-server hardening (envelope gate + invariants) | server | — | L | RETIRED | done\* | discard worker, asset index and quota not ported |
-| S-C2 | Key-free sync feed | server | S-C1 | L | RETIRED | done\* | ported to Kynos REST; Postgres adapter + cursor-key loading owed |
+| S-C2 | Key-free sync feed | server | S-C1 | L | RETIRED | done\* | ported to Kynos REST over `S-C37`'s index, now Postgres-backed; cursor-key loading owed |
 | S-C3 | Storage-verification endpoint | server | S-C35, S-C37 | M | RETIRED | done\* | structural verdict only; the `deep` re-hash → `S-C41`; GC state → `S-C11` |
 | S-C4 | Share-link serving endpoints | server | S-A5 | M | RETIRED | done\* | the serve-path privacy strip is unimplementable on a key-free server → `S-C50`; limiters → `S-C32` |
 | S-C5 | Drop store, inbox, atomic adoption | server | S-A6, S-C1, S-C6 | L | RETIRED | done\* | adoption is a two-phase claim, not a transaction; limiters → `S-C32` |
@@ -264,7 +264,7 @@ row's remainder now lives.
 | S-C34 | Nothing gates the Kynos OpenAPI document | server | — | S | RETIRED | done | two documents gated separately until parity |
 | S-C35 | The blob store port, sharded | server | S-C27 | L | RETIRED | done | wired by `S-C1`, which also found a missing operation |
 | S-C36 | Kynos's framework rejections carry no `error.*` code | server | S-C33 | M | RETIRED | done | a Capsule interceptor fills the member in; the upstream seam is still the better fix |
-| S-C37 | The asset index port, one sequence instead of two | server | S-C27, S-C29 | L | RETIRED | done\* | Postgres adapter owed; absorbs `S-C21` and unblocks `S-C22` |
+| S-C37 | The asset index port, one sequence instead of two | server | S-C27, S-C29 | L | RETIRED | done | Postgres adapter landed under the row lock the design rests on; absorbs `S-C21`, unblocks `S-C22` |
 | S-C38 | Problem extensions are absent from the OpenAPI document | server | S-C34 | M | RETIRED | done\* | `code` is universal and derived; the sixteen other members ride a small table |
 | S-C39 | Blob fetch has no read authority, so its `403` is unwritable | server | S-C10 | M | RETIRED | part | the authority lands and owner-scopes the path; the `403` needs a membership fact → `S-C51` |
 | S-C40 | `awaiting-original` is not observable on the blob path | server | S-C10, S-C37 | M | RETIRED | done | the promise is the open upload session, so it needed no lifetime of its own |
@@ -1146,9 +1146,14 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
   entry rather than a forbidden one. The owner is therefore MAC **input**, not a field beside
   the MAC, and `another_owners_cursor_is_refused_even_under_the_right_key` is the case that
   says so. The retired implementation never had the property its own design doc claimed.
-- **Owed:** the Postgres adapter behind `S-C37`, and key loading — nothing reads
-  `SYNC_CURSOR_MAC_KEY` or `JWT_ED25519_DER` yet, so the codec is constructed from a literal at
-  every call site including the tests.
+- **The Postgres adapter behind it landed 2026-09-02 (#402).** The feed reads through
+  `AssetIndex`, so the whole of what the sync surface needed from Postgres is
+  `index/postgres.rs`: a page is `WHERE owner_id = $1 AND sync_seq > $2 ORDER BY sync_seq`, and
+  the `ChangeKind` rule that makes a `Created` for one reader an `Updated` for another is the
+  same shared `entry_for` both adapters render an entry with. The suite's paging and
+  monotonicity cases run against Postgres unchanged, which is the point of their being in `src/`.
+- **Owed:** key loading — nothing reads `SYNC_CURSOR_MAC_KEY` or `JWT_ED25519_DER` yet, so the
+  codec is constructed from a literal at every call site including the tests.
 
 ### S-C3 — Storage-verification endpoint
 
@@ -2330,9 +2335,18 @@ working on a surface written after it.
   serializable payload, that TTL is a property of the store rather than an argument, and that a
   session record and its per-user index entry cannot be addressed separately — which is what made
   the `revoke_all_for_user` over-count unrepresentable rather than fixed twice.
-- **Owed:** the Valkey and Postgres adapters. Every port has an in-memory adapter and one shared
-  conformance suite, so "the double behaves like Valkey" is an assertion rather than an
-  assumption. Counters were deliberately excluded and became `S-C32`.
+- **The cohort map's durable adapter landed 2026-09-02 (#402).** `CohortStore` is the one port
+  here that is not Valkey's, and the module's own docs say why: a session store forgets a cohort
+  exactly when "have I seen this device before?" becomes worth asking, so the map has to outlive
+  the sessions that carried it. The suite's `Harness` was split for it — `CohortHarness` carries
+  the cohort map and the time seam, `Harness` extends it with the five volatile stores — because
+  a Postgres-backed harness would otherwise have to implement five adapters it will never have.
+  The same change corrected `store/mod.rs`'s claim that three adapters were planned per port,
+  which was never true of any port here and was the one line in the tree pointing at the Postgres
+  session table the module's own rejection paragraph refuses.
+- **Owed:** the Valkey adapters for the five volatile stores (#403). Every port has an in-memory
+  adapter and one shared conformance suite, so "the double behaves like Valkey" is an assertion
+  rather than an assumption. Counters were deliberately excluded and became `S-C32`.
 - **Done when:** ✅ the conformance suite passes against the in-memory adapter, case by case and
   in one pass. **Tier:** Unit.
 
@@ -2545,12 +2559,26 @@ carry a schema, and `S-C48` wants a `503` an `Authenticator` can render. One sea
 - **Done when:** every adapter passes one conformance suite; an upload becomes visible on the
   feed of the account that made it and on no other; and no sequence number the index mints is
   unreachable through paging. **Tier:** Unit + conformance.
-- **Landed to the in-memory tier — 2026-08-30 (`done\*`).** `capsule-server/src/index/`, 17
-  conformance cases, wired into both the upload path (reserve at create, record at finalize) and
-  the feed, so "upload it, then read it back" is a test of the server rather than of two
-  disconnected doubles. **Owed:** the Postgres adapter, which is where the row lock this design
-  depends on actually lives — the in-memory adapter's mutex stands in for it and proves nothing
-  about it.
+- **Landed to the in-memory tier — 2026-08-30.** `capsule-server/src/index/`, conformance cases
+  wired into both the upload path (reserve at create, record at finalize) and the feed, so
+  "upload it, then read it back" is a test of the server rather than of two disconnected doubles.
+- **Landed to Postgres — 2026-09-02 (#402), which closes the row it was owed.**
+  `index/postgres.rs` puts the sequence mint inside the transaction that makes the row readable:
+  `SELECT … FOR UPDATE` on the asset row, then an upsert on `owner_sequences`, then the state
+  flip, then `COMMIT`. Never a `SEQUENCE` or a `bigserial` — `nextval` is non-transactional and
+  hands 5 and 6 to two concurrent finalizations without rolling back, which is the skip window
+  `S-C21` is about. The in-memory adapter's mutex stood in for that lock and proved nothing about
+  it; the lock now exists, and both adapters pass one case list.
+- **What the shared suite found while the adapter was written.** `AssetIndex::rows` — the
+  scrub's walk — had no conformance case at all, so two cases were added: that it covers pending,
+  visible and tombstoned rows and resumes at any page size, and that it orders by the
+  identifier's own bytes. The second is why the adapter pins `COLLATE "C"`: asset ids are the
+  manifest's client-chosen `file_id` and are full of punctuation, a glibc PostgreSQL ignores `-`
+  at the primary collation level, and a cursor handed between two adapters that disagree about
+  that skips rows.
+- **`S-C11`'s remainder is not this row's.** The collector reads this index and writes its marks
+  to `CollectionStore`, which has no durable adapter yet (#446), so `gc`/`purge`/`scrub` still
+  require `--memory`.
 
 ### S-C38 — problem extensions are absent from the OpenAPI document
 

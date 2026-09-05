@@ -21,17 +21,35 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 [profile.ci.junit]
 path = "junit.xml"
 
-# The container group is **empty as of `S-C59`**, and the declaration stays.
+# The container group, occupied since #402.
 #
 # It existed for the retired Salvo auth crate, whose integration tests spun up shared Postgres
 # and Valkey containers and shared a tracing `Once` — running them concurrently was the main
-# flakiness source, so the group was pinned to one thread with retries as the backstop. The
-# rebuilt server has no container test at all: every port has a deterministic in-memory adapter
-# and Kynos's `TestClient` drives a built service in-process, which is why `mise run test-rust`
-# now needs no podman for anything above the storage ports.
+# flakiness source, so the group was pinned to one thread with retries as the backstop. It was
+# then empty for the length of the Kynos rebuild, kept rather than deleted because the first
+# real adapter would need exactly it and rediscovering the one-thread rule by watching CI flake
+# is the expensive way to learn it.
 #
-# The group is kept rather than deleted because the first Postgres or Valkey *adapter* will need
-# exactly it, and rediscovering the one-thread rule by watching CI flake is the expensive way to
-# learn it. An empty test group costs nothing.
+# The Postgres adapters are that first adapter. Every container-backed case lives under a test
+# module named `postgres_conformance`, so the filterset below is mechanical rather than a list
+# somebody has to remember to extend — a new port's suite joins the group by being named like
+# the others. Each of those cases starts its **own** container (nextest runs a process per test,
+# so a shared one would buy nothing), which is why one thread matters: five Postgres instances
+# racing to bind ports and warm up is the flakiness the group exists to prevent.
+#
+# **These tests skip themselves without `CAPSULE_TEST_POSTGRES=1`**, printing one line each that
+# says so — see `capsule_server::postgres::testing`. The default `cargo nextest run` is green on
+# a machine with no container runtime, which is the acceptance gap design/module-map.md sets.
 [test-groups.containers]
 max-threads = 1
+
+[[profile.default.overrides]]
+filter = 'test(postgres_conformance)'
+test-group = 'containers'
+
+[[profile.ci.overrides]]
+filter = 'test(postgres_conformance)'
+test-group = 'containers'
+# A container that loses a port race or is still warming up is the transient failure the `ci`
+# profile's retries exist for; nextest reports flaky separately from failed, so a retry that
+# succeeds is still visible.

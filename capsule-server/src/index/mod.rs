@@ -59,6 +59,7 @@
 
 pub mod conformance;
 pub mod memory;
+pub mod postgres;
 
 use capsule_core::crypto::hash::Hash32;
 use jiff::Timestamp;
@@ -711,6 +712,55 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
     /// What lets a page report whether the client is caught up without asking for another page
     /// that would come back empty.
     fn head_seq<'a>(&'a self, owner: &'a OwnerId) -> IndexFuture<'a, u64>;
+}
+
+/// The roles an asset may hold exactly one of.
+///
+/// The manifest, the metadata blob and the original are each named by the signed manifest, so a
+/// second address under one of these roles is a contradiction rather than an addition.
+/// Derivatives and backups are plural by nature — an asset has a thumbnail *and* a preview.
+///
+/// Free function beside [`entry_for`] rather than a method on an adapter, and for the same
+/// reason: two adapters that disagreed about which roles are singular would disagree about when
+/// [`BlobOutcome::Conflict`] is the answer, which is a security property (`record_blob` refuses
+/// to re-point a role a signature names) and not a formatting detail.
+pub(crate) fn is_singular(role: BlobRole) -> bool {
+    matches!(
+        role,
+        BlobRole::Original | BlobRole::Metadata | BlobRole::Provenance
+    )
+}
+
+/// Point `role` at `address`, replacing whatever it held.
+///
+/// The one place a singular role legitimately moves. [`AssetIndex::record_blob`] refuses to
+/// re-point one because an upload doing so would swap bytes under a signature that still
+/// verifies against the old ones; a lifecycle op is the *authorized* form of the same change,
+/// and it arrives with a manifest chaining onto the one it supersedes.
+///
+/// Shared by every adapter for the reason [`entry_for`] is: the `S-C52` retention rule below —
+/// a superseded *manifest* is kept referenced rather than dropped — is exactly the kind of thing
+/// two implementations drift on, and the drift reclaims the server's own rebuttal evidence.
+pub(crate) fn set_singular(row: &mut AssetRow, role: BlobRole, address: &ContentAddress) {
+    // `S-C52`: only the provenance role. The other singular roles are ciphertext, and the old
+    // bytes of a replaced original are exactly what the collector is for.
+    if role == BlobRole::Provenance
+        && let Some(previous) = row.address_for(BlobRole::Provenance).cloned()
+        && &previous != address
+        && !row.superseded.contains(&previous)
+    {
+        row.superseded.push(previous);
+    }
+    row.blobs.retain(|blob| blob.role != role);
+    row.blobs.push(BlobRef {
+        role,
+        address: address.clone(),
+        // Size is not a fact this path learns: the bytes were stored by whoever put them in the
+        // blob store, and re-`stat`ing here would make the index depend on the store.
+        size: 0,
+    });
+    row.blobs
+        .sort_by(|a, b| (a.role, a.address.as_str()).cmp(&(b.role, b.address.as_str())));
 }
 
 /// Build the feed entry a row presents to a reader sitting at `after`.

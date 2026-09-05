@@ -19,7 +19,7 @@ use jiff::Timestamp;
 use super::{
     AssetIndex, AssetRow, AssetState, BlobOutcome, BlobRecord, BlobRef, FeedEntry, HoldOutcome,
     IndexFuture, LifecycleOp, OpAction, OpOutcome, PendingAsset, Reservation, ServingHold,
-    entry_for,
+    entry_for, is_singular, set_singular,
 };
 use crate::blob::ContentAddress;
 use crate::store::{AlbumId, AssetId, BlobRole, OwnerId};
@@ -28,47 +28,6 @@ use crate::store::{AlbumId, AssetId, BlobRole, OwnerId};
 /// [`crate::store::memory`], which does the same for the same reason.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-/// The roles an asset may hold exactly one of.
-///
-/// The manifest, the metadata blob and the original are each named by the signed manifest, so
-/// a second address under one of these roles is a contradiction rather than an addition.
-/// Derivatives and backups are plural by nature — an asset has a thumbnail *and* a preview.
-fn is_singular(role: BlobRole) -> bool {
-    matches!(
-        role,
-        BlobRole::Original | BlobRole::Metadata | BlobRole::Provenance
-    )
-}
-
-/// Point `role` at `address`, replacing whatever it held.
-///
-/// The one place a singular role legitimately moves. [`AssetIndex::record_blob`] refuses to
-/// re-point one because an upload doing so would swap bytes under a signature that still
-/// verifies against the old ones; a lifecycle op is the *authorized* form of the same change,
-/// and it arrives with a manifest chaining onto the one it supersedes.
-fn set_singular(row: &mut AssetRow, role: BlobRole, address: &ContentAddress) {
-    // `S-C52`: a superseded *manifest* is kept referenced rather than dropped. Only the
-    // provenance role — the other singular roles are ciphertext, and the old bytes of a replaced
-    // original are exactly what the collector is for.
-    if role == BlobRole::Provenance
-        && let Some(previous) = row.address_for(BlobRole::Provenance).cloned()
-        && &previous != address
-        && !row.superseded.contains(&previous)
-    {
-        row.superseded.push(previous);
-    }
-    row.blobs.retain(|blob| blob.role != role);
-    row.blobs.push(BlobRef {
-        role,
-        address: address.clone(),
-        // Size is not a fact this path learns: the bytes were stored by whoever put them in the
-        // blob store, and re-`stat`ing here would make the index depend on the store.
-        size: 0,
-    });
-    row.blobs
-        .sort_by(|a, b| (a.role, a.address.as_str()).cmp(&(b.role, b.address.as_str())));
 }
 
 /// Everything the double holds, behind one lock.
