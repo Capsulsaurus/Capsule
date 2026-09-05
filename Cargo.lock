@@ -752,6 +752,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "capsule-e2e"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "capsule-cli",
+ "capsule-cli-migration",
+ "capsule-core",
+ "capsule-sdk",
+ "capsule-server",
+ "jiff",
+ "kynos",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "capsule-i18n"
 version = "0.1.0"
 dependencies = [

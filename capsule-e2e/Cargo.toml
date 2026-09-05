@@ -1,0 +1,42 @@
+# The bounded E2E surface (design/module-map.md, "E2E Test Surface"): the real `capsule-sdk`
+# and the real `capsule-core` library driven over TCP against the real `capsule-server`
+# composition root. A test crate rather than a `tests/` directory of one of those crates because
+# the cases need all of them at once — case 1 alone needs the CLI's sync orchestration, its
+# migrations and sea-orm, none of which belong in the server's or the SDK's dev graph.
+#
+# Every dependency below is already in `Cargo.lock`; this crate adds no external crate.
+[package]
+name = "capsule-e2e"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "End-to-end cases over the real SDK, library and server composition root"
+
+[lib]
+name = "capsule_e2e"
+path = "src/lib.rs"
+doctest = false
+
+[dependencies]
+capsule-core = { path = "../capsule-core" }
+capsule-sdk = { path = "../capsule-sdk" }
+# The lib target only: `boot::assemble` is the composition root `serve --memory` runs.
+capsule-server = { path = "../capsule-server" }
+# `server` binds the assembled service to an ephemeral port; the workspace pin carries only the
+# OpenAPI feature, and the server crate itself has `server` as a dev-dependency feature.
+kynos = { workspace = true, features = ["server"] }
+base64 = { workspace = true }
+jiff = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = "3"
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v7"] }
+
+[dev-dependencies]
+# Case 1's client leg is the CLI's own `remote::sync` / `remote::list` over its SQLite store.
+capsule-cli = { path = "../capsule-cli" }
+capsule-cli-migration = { path = "../capsule-cli/migration" }
+sea-orm = { workspace = true, features = ["sqlx-sqlite", "runtime-tokio-rustls"] }
