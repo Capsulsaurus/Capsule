@@ -124,6 +124,12 @@ subtle = { workspace = true }
 # parameter set rather than the escrow KDF's tiered one — see `auth::credential` for why those
 # are unrelated numbers. The Postgres adapter (#402) uses the same helper.
 argon2 = { workspace = true }
+# The OIDC relying party's egress (slice `S-N1`): the discovery document, the JWK Set and the
+# form-encoded token exchange, against the configured identity provider and nothing else. The
+# one outbound HTTP client in this crate. Already in the lock file through `capsule-sdk`, so this
+# promotes an edge rather than adding a crate; the HTTP-client row in design/dependencies.md
+# carries the scope. rustls-tls only, like everywhere else Capsule holds a TLS stack.
+reqwest = { workspace = true }
 # The `capsule-server` binary: subcommand parsing, and the error report a startup failure prints.
 # `clap` and `color-eyre` were already here for the `gen_openapi` binary this replaces; the
 # binary is now one `capsule-server` with `serve | gc | purge | scrub | gen-openapi`
@@ -158,9 +164,10 @@ capsule-sdk = { path = "../capsule-sdk" }
 # to look at them. Test-only, and the only place this crate touches the type.
 secrecy = { workspace = true }
 # `macros` and `rt-multi-thread` on top of what the blob store's adapter already needs: the
-# `#[tokio::test]` attribute and a runtime to drive it. Test-only, so the served binary carries
-# neither.
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# `#[tokio::test]` attribute and a runtime to drive it. `net` for the in-process mock identity
+# provider `tests/support/idp.rs` binds on loopback, so the OIDC relying party is exercised
+# over a real socket. Test-only, so the served binary carries none of the three.
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread"] }
 # The feed's manifest bytes arrive base64-encoded, and a test that asserts byte equality has to
 # decode them. A normal dependency of the crate since `S-C2`; listed here because the suite
 # uses it directly.

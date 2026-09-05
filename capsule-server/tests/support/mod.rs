@@ -35,6 +35,10 @@ use capsule_server::album::{
 };
 use capsule_server::app::Modules;
 use capsule_server::attestation::{AttestationContext, InMemoryReceipts, LocalAttestationKey};
+use capsule_server::auth::oidc::{
+    AuthorizationRequest, FederatedAccounts, FederatedLink, IdentityProvider, OidcCollaborators,
+    OidcContext, ProviderError, ProviderFuture, Redemption, VerifiedIdentity,
+};
 use capsule_server::auth::{
     AccountDirectory, AccountProfiles, ActivateOutcome, AuthCollaborators, AuthContext,
     Authentication, BeginOutcome, ConsumeOutcome, DirectoryError, DirectoryFuture, EnrollmentState,
@@ -75,16 +79,18 @@ use capsule_server::serve::ServeContext;
 use capsule_server::share::{InMemoryShares, ShareContext, ShareRecord, ShareStore};
 use capsule_server::store::memory::{
     InMemoryAuthState, InMemoryChallenges, InMemoryChannels, InMemoryCohorts, InMemoryEnrollments,
-    InMemoryUploadSessions, ManualClock,
+    InMemoryOidcAuthorizations, InMemoryUploadSessions, ManualClock,
 };
 use capsule_server::store::{
     AcceptedChunk, AlbumId, AssetId, AuthStateStore, ChallengeStore, ChallengeToken, ChannelId,
     ChannelStore, Clock, CohortRecord, CohortStore, Direction, DrainOutcome, ENROLLMENT_CODE_TTL,
-    EnrollmentCode, EnrollmentStore, FinalizeClaim, OwnerId, PendingEnrollment, RELAY_CHANNEL_TTL,
-    RelayChannel, RelayOutcome, RelayPayload, RevokeAllChallenge, SessionId, SessionRecord,
-    StoreError, StoreFuture, UploadId, UploadSessionRecord, UploadSessionStatus,
-    UploadSessionStore, UserId,
+    EnrollmentCode, EnrollmentStore, FinalizeClaim, OidcAuthorizationStore, OidcState, OwnerId,
+    PendingAuthorization, PendingEnrollment, RELAY_CHANNEL_TTL, RelayChannel, RelayOutcome,
+    RelayPayload, RevokeAllChallenge, SessionId, SessionRecord, StoreError, StoreFuture, UploadId,
+    UploadSessionRecord, UploadSessionStatus, UploadSessionStore, UserId,
 };
+
+pub(crate) mod idp;
 use capsule_server::sync::{CURSOR_KEY_LEN, CursorCodec, SyncContext};
 use capsule_server::upload::authority::{
     AlbumWriteAccess, AuthorityError, AuthorityFuture, WriteAuthority,
@@ -207,6 +213,214 @@ const REFUSAL: &str = "the double refuses on purpose";
 pub(crate) const CURSOR_KEY: [u8; CURSOR_KEY_LEN] = [0x5C; CURSOR_KEY_LEN];
 
 // ===========================================================================================
+// Identity provider double (`S-N1`)
+// ===========================================================================================
+
+/// The authorization code the double redeems; every other code is `invalid_grant`.
+pub(crate) const GOOD_CODE: &str = "good-code";
+
+/// An identity provider that answers whatever the test told it to.
+///
+/// The routes are tested against this; the real [`HttpIdentityProvider`] is tested against the
+/// in-process mock provider in [`idp`], which speaks the real wire. Every refusal the port can
+/// make is a switch here, so the conformance walk can produce each declared response.
+#[derive(Debug)]
+pub(crate) struct SwitchableIdentityProvider {
+    configured: AtomicBool,
+    unavailable: AtomicBool,
+    identity: Mutex<VerifiedIdentity>,
+    token_rejected: AtomicBool,
+    /// Every authorization request the server built, for a case that reads the ceremony back.
+    requests: Mutex<Vec<RecordedAuthorization>>,
+}
+
+/// One authorization request as the double saw it.
+#[derive(Debug, Clone)]
+pub(crate) struct RecordedAuthorization {
+    pub(crate) redirect_uri: String,
+    pub(crate) state: String,
+    pub(crate) nonce: String,
+    pub(crate) code_challenge: String,
+}
+
+impl SwitchableIdentityProvider {
+    pub(crate) fn new() -> Self {
+        Self {
+            configured: AtomicBool::new(true),
+            unavailable: AtomicBool::new(false),
+            identity: Mutex::new(VerifiedIdentity {
+                issuer: "https://idp.test".to_owned(),
+                subject: "subject-1".to_owned(),
+                email: Some("federated@example.test".to_owned()),
+                email_verified: true,
+            }),
+            token_rejected: AtomicBool::new(false),
+            requests: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Whether the deployment has a provider at all.
+    pub(crate) fn set_configured(&self, configured: bool) {
+        self.configured.store(configured, Ordering::SeqCst);
+    }
+
+    /// Make every operation fail as an unreachable provider, or stop.
+    pub(crate) fn set_unavailable(&self, unavailable: bool) {
+        self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    /// Make the next redemptions fail as a refused ID token, or stop.
+    pub(crate) fn set_token_rejected(&self, rejected: bool) {
+        self.token_rejected.store(rejected, Ordering::SeqCst);
+    }
+
+    /// The identity every successful redemption yields.
+    pub(crate) fn set_identity(&self, identity: VerifiedIdentity) {
+        *self.identity.lock().unwrap_or_else(PoisonError::into_inner) = identity;
+    }
+
+    /// The authorization requests the server has built so far.
+    pub(crate) fn requests(&self) -> Vec<RecordedAuthorization> {
+        self.requests
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl IdentityProvider for SwitchableIdentityProvider {
+    fn authorization_url<'a>(
+        &'a self,
+        request: &'a AuthorizationRequest<'a>,
+    ) -> ProviderFuture<'a, String> {
+        Box::pin(async move {
+            if !self.configured.load(Ordering::SeqCst) {
+                return Err(ProviderError::NotConfigured);
+            }
+            // The real policy, so a refused redirect is the same decision the adapter makes.
+            if !capsule_server::auth::oidc::RedirectPolicy::new(
+                Some("https://app.test/oidc/callback".to_owned()),
+                true,
+            )
+            .admits(request.redirect_uri)
+            {
+                return Err(ProviderError::RedirectRefused {
+                    redirect_uri: request.redirect_uri.to_owned(),
+                });
+            }
+            if self.unavailable.load(Ordering::SeqCst) {
+                return Err(ProviderError::Unavailable {
+                    detail: REFUSAL.to_owned(),
+                });
+            }
+            self.requests
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(RecordedAuthorization {
+                    redirect_uri: request.redirect_uri.to_owned(),
+                    state: request.state.as_str().to_owned(),
+                    nonce: request.nonce.as_str().to_owned(),
+                    code_challenge: request.code_challenge.to_owned(),
+                });
+            Ok(format!(
+                "https://idp.test/authorize?state={}&nonce={}&code_challenge={}",
+                request.state.as_str(),
+                request.nonce.as_str(),
+                request.code_challenge
+            ))
+        })
+    }
+
+    fn redeem<'a>(
+        &'a self,
+        redemption: &'a Redemption<'a>,
+    ) -> ProviderFuture<'a, VerifiedIdentity> {
+        Box::pin(async move {
+            if !self.configured.load(Ordering::SeqCst) {
+                return Err(ProviderError::NotConfigured);
+            }
+            if self.unavailable.load(Ordering::SeqCst) {
+                return Err(ProviderError::Unavailable {
+                    detail: REFUSAL.to_owned(),
+                });
+            }
+            if redemption.code.as_str() != GOOD_CODE {
+                return Err(ProviderError::ExchangeRefused {
+                    detail: "invalid_grant".to_owned(),
+                });
+            }
+            if self.token_rejected.load(Ordering::SeqCst) {
+                return Err(ProviderError::TokenRejected(
+                    capsule_server::auth::oidc::ClaimRejection::Nonce,
+                ));
+            }
+            Ok(self
+                .identity
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone())
+        })
+    }
+}
+
+/// The OIDC ceremony store, with a switch.
+#[derive(Debug)]
+pub(crate) struct SwitchableOidcAuthorizations {
+    inner: InMemoryOidcAuthorizations,
+    unavailable: AtomicBool,
+}
+
+impl SwitchableOidcAuthorizations {
+    pub(crate) fn new(clock: Arc<ManualClock>) -> Self {
+        Self {
+            inner: InMemoryOidcAuthorizations::with_default_ttl(clock),
+            unavailable: AtomicBool::new(false),
+        }
+    }
+
+    pub(crate) fn set_unavailable(&self, unavailable: bool) {
+        self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    fn refuse(&self) -> Result<(), StoreError> {
+        if self.unavailable.load(Ordering::SeqCst) {
+            return Err(StoreError::Unavailable {
+                store: "oidc authorizations",
+                detail: REFUSAL.to_owned(),
+            });
+        }
+        Ok(())
+    }
+}
+
+impl OidcAuthorizationStore for SwitchableOidcAuthorizations {
+    fn ttl(&self) -> SignedDuration {
+        self.inner.ttl()
+    }
+
+    fn begin<'a>(
+        &'a self,
+        state: &'a OidcState,
+        record: PendingAuthorization,
+    ) -> StoreFuture<'a, ()> {
+        Box::pin(async move {
+            self.refuse()?;
+            self.inner.begin(state, record).await
+        })
+    }
+
+    fn consume<'a>(
+        &'a self,
+        state: &'a OidcState,
+    ) -> StoreFuture<'a, Option<PendingAuthorization>> {
+        Box::pin(async move {
+            self.refuse()?;
+            self.inner.consume(state).await
+        })
+    }
+}
+
+// ===========================================================================================
 // Account directory double
 // ===========================================================================================
 
@@ -219,6 +433,8 @@ pub(crate) const CURSOR_KEY: [u8; CURSOR_KEY_LEN] = [0x5C; CURSOR_KEY_LEN];
 #[derive(Debug, Default)]
 pub(crate) struct InMemoryAccounts {
     accounts: Mutex<BTreeMap<String, Account>>,
+    /// `(issuer, subject)` → the account a federated sign-in resolved to (`S-N1`).
+    federated: Mutex<BTreeMap<(String, String), UserId>>,
     unavailable: AtomicBool,
     forget_after_authentication: AtomicBool,
 }
@@ -299,6 +515,41 @@ impl InMemoryAccounts {
 
     fn accounts(&self) -> MutexGuard<'_, BTreeMap<String, Account>> {
         self.accounts.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl FederatedAccounts for InMemoryAccounts {
+    /// Shares the password directory's rows, as the Postgres adapter will: an asserted address a
+    /// password account holds is `AddressTaken`, and a created federated account is one nothing
+    /// can sign into with a password, because no password row exists for it.
+    fn resolve_or_create<'a>(
+        &'a self,
+        identity: &'a VerifiedIdentity,
+        user: &'a UserId,
+        _at: Timestamp,
+    ) -> DirectoryFuture<'a, FederatedLink> {
+        Box::pin(async move {
+            if self.unavailable.load(Ordering::SeqCst) {
+                return Err(DirectoryError::Unavailable {
+                    detail: REFUSAL.to_owned(),
+                });
+            }
+            let mut federated = self
+                .federated
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let key = (identity.issuer.clone(), identity.subject.clone());
+            if let Some(existing) = federated.get(&key) {
+                return Ok(FederatedLink::Linked(existing.clone()));
+            }
+            if let Some(email) = &identity.email
+                && self.accounts().contains_key(email)
+            {
+                return Ok(FederatedLink::AddressTaken);
+            }
+            federated.insert(key, user.clone());
+            Ok(FederatedLink::Created(user.clone()))
+        })
     }
 }
 
@@ -2386,6 +2637,10 @@ pub(crate) struct Fixture {
     /// The code generator the server verifies with — the *same* one, so a case can compute the
     /// code an authenticator app would be showing rather than guessing at one.
     pub(crate) codes: Arc<TotpCodes>,
+    /// The identity provider double (`S-N1`), when the fixture was built with one.
+    pub(crate) idp: Arc<SwitchableIdentityProvider>,
+    /// The pending OIDC ceremonies.
+    pub(crate) oidc_authorizations: Arc<SwitchableOidcAuthorizations>,
 }
 
 impl Fixture {
@@ -2399,6 +2654,16 @@ impl Fixture {
 
     /// The same server, with a deployment's quota thresholds.
     pub(crate) fn with_quota(quota_limits: QuotaLimits) -> Self {
+        Self::build(quota_limits, None)
+    }
+
+    /// The working server over a **real** identity provider adapter, for the cases that drive
+    /// the wire against the mock provider in [`idp`]. `fixture.idp` is present but unused.
+    pub(crate) fn with_identity_provider(provider: Arc<dyn IdentityProvider>) -> Self {
+        Self::build(QuotaLimits::unlimited(), Some(provider))
+    }
+
+    fn build(quota_limits: QuotaLimits, provider: Option<Arc<dyn IdentityProvider>>) -> Self {
         let clock = Arc::new(ManualClock::default());
         let sessions = Arc::new(SwitchableSessions::new(clock.clone()));
         let accounts = Arc::new(InMemoryAccounts::new());
@@ -2441,6 +2706,9 @@ impl Fixture {
         let counters = Arc::new(InMemoryCounters::new());
         let totp = Arc::new(InMemoryTotp::new());
         let codes = Arc::new(TotpCodes::new("Capsule"));
+        let idp = Arc::new(SwitchableIdentityProvider::new());
+        let oidc_authorizations = Arc::new(SwitchableOidcAuthorizations::new(clock.clone()));
+        let provider: Arc<dyn IdentityProvider> = provider.unwrap_or_else(|| idp.clone());
 
         // One index behind both modules, which is what makes "upload it, then read it back off
         // the feed" a test of the server rather than of two disconnected doubles.
@@ -2498,6 +2766,12 @@ impl Fixture {
             ),
             counters: CounterContext::new(counters.clone(), clock.clone()),
             totp: TotpContext::new(totp.clone(), codes.clone()),
+            oidc: OidcContext::new(OidcCollaborators {
+                provider,
+                authorizations: oidc_authorizations.clone(),
+                accounts: accounts.clone(),
+                clock: clock.clone(),
+            }),
         });
 
         Self {
@@ -2532,6 +2806,8 @@ impl Fixture {
             counters,
             totp,
             codes,
+            idp,
+            oidc_authorizations,
         }
     }
 
@@ -2646,6 +2922,7 @@ impl Fixture {
                 Arc::new(InMemoryTotp::new()),
                 Arc::new(TotpCodes::new("Capsule")),
             ),
+            oidc: OidcContext::disabled(clock.clone()),
         });
         (app, clock)
     }

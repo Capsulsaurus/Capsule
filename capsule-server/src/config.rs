@@ -40,6 +40,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD as BASE64, STANDARD_NO_PAD as BASE64_NO_PAD};
 use jiff::SignedDuration;
 
+use crate::auth::oidc::{ClientSecret, RedirectPolicy};
 use crate::sync::CURSOR_KEY_LEN;
 
 /// The bind address a deployment gets without saying anything.
@@ -272,6 +273,23 @@ pub struct Overrides {
     pub grace_window_hours: Option<u64>,
 }
 
+/// The OpenID Connect relying party, when a deployment has one (slice `S-N1`).
+///
+/// Present only when `OIDC_ISSUER` is set. A half-configured relying party — an issuer with no
+/// client id, or the reverse — is a configuration fault rather than a feature that is quietly
+/// off, because an operator who set one of the two meant to set both.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OidcConfig {
+    /// The issuer, exactly as the provider's ID tokens will carry it.
+    pub issuer: String,
+    /// This deployment's `client_id` at the provider.
+    pub client_id: String,
+    /// The client secret, when the deployment is a confidential client. Absent means PKCE-only.
+    pub client_secret: Option<ClientSecret>,
+    /// Which redirect URIs a client may name.
+    pub redirects: RedirectPolicy,
+}
+
 /// Everything an operator gets to decide.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -303,6 +321,8 @@ pub struct Config {
     pub lockout_window: SignedDuration,
     /// How many consecutive failures inside that window lock it.
     pub lockout_attempts: u32,
+    /// The OIDC relying party, if `OIDC_ISSUER` is set.
+    pub oidc: Option<OidcConfig>,
     /// How long a shutdown may take to drain.
     pub shutdown_timeout: std::time::Duration,
     /// The accepted-connection ceiling.
@@ -436,6 +456,9 @@ impl Config {
             ),
             Backends::Durable => None,
         });
+
+        // ── The OIDC relying party ──────────────────────────────────────────────────────
+        let oidc = read_oidc(env, &mut faults);
 
         // ── Protocol window ─────────────────────────────────────────────────────────────
         let protocol_max = env
@@ -571,6 +594,7 @@ impl Config {
                 grace_window,
                 lockout_window,
                 lockout_attempts,
+                oidc,
                 shutdown_timeout,
                 max_connections,
                 log_format,
@@ -580,6 +604,107 @@ impl Config {
             Err(ConfigError { faults })
         }
     }
+}
+
+/// Read the `OIDC_*` settings, or `None` when none of them is set.
+///
+/// `OIDC_ISSUER` must be an absolute `http(s)` URL with no query or fragment (OpenID Connect
+/// Discovery 1.0 §3), and `https` unless it is a loopback address — the development carve-out
+/// `auth::oidc::discovery` applies to the provider's endpoints too. `OIDC_ALLOW_LOOPBACK_REDIRECT`
+/// defaults to **on**, because the CLI's and a desktop client's redirect is an ephemeral
+/// loopback port (RFC 8252 §7.3) and a deployment that wants only its configured web redirect
+/// has to say so.
+fn read_oidc(env: &dyn Environment, faults: &mut Vec<ConfigFault>) -> Option<OidcConfig> {
+    let issuer = env.var("OIDC_ISSUER");
+    let client_id = env.var("OIDC_CLIENT_ID");
+    let client_secret = env.var("OIDC_CLIENT_SECRET");
+    let redirect_url = env.var("OIDC_REDIRECT_URL");
+    let allow_loopback = env.var("OIDC_ALLOW_LOOPBACK_REDIRECT");
+
+    if issuer.is_none()
+        && client_id.is_none()
+        && client_secret.is_none()
+        && redirect_url.is_none()
+        && allow_loopback.is_none()
+    {
+        return None;
+    }
+
+    // Half a relying party is refused, both ways round.
+    require(issuer.is_some(), "OIDC_ISSUER", faults);
+    require(client_id.is_some(), "OIDC_CLIENT_ID", faults);
+
+    if let Some(issuer) = &issuer {
+        match reqwest::Url::parse(issuer) {
+            Ok(url) if url.query().is_some() || url.fragment().is_some() => {
+                faults.push(ConfigFault::Invalid {
+                    key: "OIDC_ISSUER",
+                    detail: "an issuer carries no query or fragment".to_owned(),
+                });
+            }
+            Ok(url) if url.scheme() == "https" => {}
+            Ok(url)
+                if url.scheme() == "http"
+                    && crate::auth::oidc::discovery::is_loopback_issuer(issuer) => {}
+            Ok(url) => {
+                faults.push(ConfigFault::Invalid {
+                    key: "OIDC_ISSUER",
+                    detail: format!(
+                        "`{}://` is not accepted; an issuer is https, or http on a loopback                          address for development",
+                        url.scheme()
+                    ),
+                });
+            }
+            Err(error) => {
+                faults.push(ConfigFault::Invalid {
+                    key: "OIDC_ISSUER",
+                    // The issuer is a public URL, not a secret; quoting it is what a typo needs.
+                    detail: format!("`{issuer}` is not an absolute URL ({error})"),
+                });
+            }
+        }
+    }
+
+    if let Some(redirect) = &redirect_url
+        && let Err(error) = reqwest::Url::parse(redirect)
+    {
+        faults.push(ConfigFault::Invalid {
+            key: "OIDC_REDIRECT_URL",
+            detail: format!("`{redirect}` is not an absolute URL ({error})"),
+        });
+    }
+
+    let allow_loopback = match allow_loopback.as_deref().map(str::trim) {
+        None => true,
+        Some(raw)
+            if ["true", "1", "yes", "on"]
+                .iter()
+                .any(|v| raw.eq_ignore_ascii_case(v)) =>
+        {
+            true
+        }
+        Some(raw)
+            if ["false", "0", "no", "off"]
+                .iter()
+                .any(|v| raw.eq_ignore_ascii_case(v)) =>
+        {
+            false
+        }
+        Some(raw) => {
+            faults.push(ConfigFault::Invalid {
+                key: "OIDC_ALLOW_LOOPBACK_REDIRECT",
+                detail: format!("`{raw}` is neither `true` nor `false`"),
+            });
+            true
+        }
+    };
+
+    Some(OidcConfig {
+        issuer: issuer?,
+        client_id: client_id?,
+        client_secret: client_secret.map(ClientSecret::new),
+        redirects: RedirectPolicy::new(redirect_url, allow_loopback),
+    })
 }
 
 /// Record a missing required setting.
@@ -1072,6 +1197,116 @@ mod tests {
         };
         let config = Config::load(&environment, &overrides, Demands::Serve).expect("it loads");
         assert_eq!(config.grace_window, jiff::SignedDuration::from_hours(1));
+    }
+
+    #[test]
+    fn oidc_is_off_unless_an_issuer_is_named() {
+        let config = Config::load(&serveable(), &memory(), Demands::Serve).expect("it loads");
+        assert!(config.oidc.is_none());
+    }
+
+    #[test]
+    fn an_oidc_relying_party_is_read_whole() {
+        let mut environment = serveable();
+        environment.insert(
+            "OIDC_ISSUER".to_owned(),
+            "https://idp.example.test/realm".to_owned(),
+        );
+        environment.insert("OIDC_CLIENT_ID".to_owned(), "capsule".to_owned());
+        environment.insert("OIDC_CLIENT_SECRET".to_owned(), "hunter2".to_owned());
+        environment.insert(
+            "OIDC_REDIRECT_URL".to_owned(),
+            "https://app.example.test/oidc/callback".to_owned(),
+        );
+        environment.insert(
+            "OIDC_ALLOW_LOOPBACK_REDIRECT".to_owned(),
+            "false".to_owned(),
+        );
+        let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+        let oidc = config.oidc.clone().expect("configured");
+        assert_eq!(oidc.issuer, "https://idp.example.test/realm");
+        assert_eq!(oidc.client_id, "capsule");
+        assert!(oidc.client_secret.is_some());
+        assert!(
+            oidc.redirects
+                .admits("https://app.example.test/oidc/callback")
+        );
+        assert!(!oidc.redirects.admits("http://127.0.0.1:4242/cb"));
+        assert!(
+            !format!("{config:?}").contains("hunter2"),
+            "the client secret is redacted"
+        );
+    }
+
+    #[test]
+    fn loopback_redirects_are_admitted_by_default_and_a_secret_is_optional() {
+        // RFC 8252 §8.5: a native client cannot keep a secret; PKCE is what makes it sound.
+        let mut environment = serveable();
+        environment.insert(
+            "OIDC_ISSUER".to_owned(),
+            "https://idp.example.test".to_owned(),
+        );
+        environment.insert("OIDC_CLIENT_ID".to_owned(), "capsule".to_owned());
+        let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+        let oidc = config.oidc.expect("configured");
+        assert!(oidc.client_secret.is_none());
+        assert!(oidc.redirects.admits("http://127.0.0.1:4242/cb"));
+    }
+
+    #[test]
+    fn half_a_relying_party_is_refused_both_ways_round() {
+        let mut environment = serveable();
+        environment.insert(
+            "OIDC_ISSUER".to_owned(),
+            "https://idp.example.test".to_owned(),
+        );
+        let error = Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
+        assert!(error.names("OIDC_CLIENT_ID"), "{error}");
+
+        let mut environment = serveable();
+        environment.insert("OIDC_CLIENT_ID".to_owned(), "capsule".to_owned());
+        let error = Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
+        assert!(error.names("OIDC_ISSUER"), "{error}");
+    }
+
+    #[test]
+    fn an_issuer_is_https_or_loopback_http_with_no_query() {
+        for (issuer, ok) in [
+            ("https://idp.example.test", true),
+            ("http://127.0.0.1:5556/dex", true),
+            ("http://idp.example.test", false),
+            ("https://idp.example.test/?x=1", false),
+            ("https://idp.example.test/#frag", false),
+            ("idp.example.test", false),
+            ("ftp://idp.example.test", false),
+        ] {
+            let mut environment = serveable();
+            environment.insert("OIDC_ISSUER".to_owned(), issuer.to_owned());
+            environment.insert("OIDC_CLIENT_ID".to_owned(), "capsule".to_owned());
+            let result = Config::load(&environment, &memory(), Demands::Serve);
+            assert_eq!(result.is_ok(), ok, "{issuer}: {result:?}");
+            if let Err(error) = result {
+                assert!(error.names("OIDC_ISSUER"), "{error}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_malformed_redirect_url_or_loopback_flag_is_refused_by_name() {
+        let mut environment = serveable();
+        environment.insert(
+            "OIDC_ISSUER".to_owned(),
+            "https://idp.example.test".to_owned(),
+        );
+        environment.insert("OIDC_CLIENT_ID".to_owned(), "capsule".to_owned());
+        environment.insert("OIDC_REDIRECT_URL".to_owned(), "not a url".to_owned());
+        environment.insert(
+            "OIDC_ALLOW_LOOPBACK_REDIRECT".to_owned(),
+            "maybe".to_owned(),
+        );
+        let error = Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
+        assert!(error.names("OIDC_REDIRECT_URL"), "{error}");
+        assert!(error.names("OIDC_ALLOW_LOOPBACK_REDIRECT"), "{error}");
     }
 
     #[test]
