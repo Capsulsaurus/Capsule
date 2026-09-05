@@ -20,6 +20,7 @@ pub mod ops;
 pub mod profile;
 pub mod quota;
 pub mod receipts;
+pub mod roster;
 pub mod sessions;
 pub mod share;
 pub mod storage;

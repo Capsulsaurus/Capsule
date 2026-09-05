@@ -67,7 +67,10 @@ use capsule_server::index::{
     AssetIndex, AssetRow, BlobOutcome, BlobRecord, FeedEntry, HoldOutcome, IndexFuture,
     LifecycleOp, OpOutcome, PendingAsset, Reservation, ServingHold,
 };
-use capsule_server::membership::{InMemoryMembership, MembershipContext};
+use capsule_server::membership::{
+    InMemoryMembership, MemberRole, Membership, MembershipContext, MembershipStore, RosterOutcome,
+    RosterRecord,
+};
 use capsule_server::moderation::{
     InMemoryModeration, ModerationContext, ModerationEvent, ModerationStore, Standing,
 };
@@ -1924,6 +1927,67 @@ impl QuotaStore for SwitchableQuota {
     }
 }
 
+/// A membership store that can be made to fail on demand.
+#[derive(Debug, Default)]
+pub(crate) struct SwitchableMembership {
+    inner: InMemoryMembership,
+    unavailable: AtomicBool,
+}
+
+impl SwitchableMembership {
+    /// A working store.
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Make every subsequent operation fail, or stop.
+    pub(crate) fn set_unavailable(&self, unavailable: bool) {
+        self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    fn refuse<T>() -> Result<T, StoreError> {
+        Err(StoreError::Unavailable {
+            store: "membership",
+            detail: REFUSAL.to_owned(),
+        })
+    }
+
+    fn is_down(&self) -> bool {
+        self.unavailable.load(Ordering::SeqCst)
+    }
+}
+
+impl MembershipStore for SwitchableMembership {
+    fn apply_roster(
+        &self,
+        roster: RosterRecord,
+        members: Vec<(UserId, MemberRole)>,
+    ) -> StoreFuture<'_, RosterOutcome> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.apply_roster(roster, members)
+    }
+
+    fn membership<'a>(
+        &'a self,
+        album: &'a AlbumId,
+        user: &'a UserId,
+    ) -> StoreFuture<'a, Membership> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.membership(album, user)
+    }
+
+    fn current_roster<'a>(&'a self, album: &'a AlbumId) -> StoreFuture<'a, Option<RosterRecord>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.current_roster(album)
+    }
+}
+
 /// An album store that can be made to fail on demand.
 #[derive(Debug, Default)]
 pub(crate) struct SwitchableAlbums {
@@ -2361,6 +2425,8 @@ pub(crate) struct Fixture {
     pub(crate) directories: Arc<SwitchableDirectories>,
     /// The albums the server has provisioned.
     pub(crate) albums: Arc<SwitchableAlbums>,
+    /// The album rosters the server holds, and who they make a member (`S-C51`).
+    pub(crate) members: Arc<SwitchableMembership>,
     /// The quota ledger the server charges against.
     pub(crate) quotas: Arc<SwitchableQuota>,
     /// The collector's marks, which is where `retrievable` diverges from `stored`.
@@ -2429,7 +2495,7 @@ impl Fixture {
         let cursors = Arc::new(CursorCodec::new(&CURSOR_KEY));
         let directories = Arc::new(SwitchableDirectories::new());
         let albums = Arc::new(SwitchableAlbums::new());
-        let members = Arc::new(InMemoryMembership::new());
+        let members = Arc::new(SwitchableMembership::new());
         let quotas = Arc::new(SwitchableQuota::new());
         let marks = Arc::new(InMemoryCollection::new());
         let receipts = Arc::new(InMemoryReceipts::new());
@@ -2537,6 +2603,7 @@ impl Fixture {
             cursors,
             directories,
             albums,
+            members,
             quotas,
             marks,
             receipts,
@@ -2973,6 +3040,44 @@ pub(crate) fn signed_directory_with_device(
     }
     .sign(ik);
     capsule_core::cbor::to_canonical_vec(&directory).expect("a directory serializes")
+}
+
+/// A signed album roster, base64-encoded as `PUT /v1/albums/{album_id}/roster` carries it
+/// (`S-C51`).
+///
+/// Attested by the seeded account through `capsule_core::crypto::membership` — the same types
+/// the server verifies with — so a fixture cannot pass while the two ends disagree about what
+/// was signed.
+pub(crate) fn signed_roster(
+    dsk: &HybridSigningKey,
+    device_id: Uuid,
+    album: &AlbumId,
+    roster_version: u64,
+    amk_epoch: u32,
+    members: &[(&str, MemberRole)],
+) -> String {
+    use capsule_core::crypto::keys::AmkVersion;
+    use capsule_core::crypto::membership::{AlbumRoster, RosterMember, SignedAlbumRoster};
+
+    let roster = AlbumRoster {
+        album_id: Uuid::parse_str(album.as_str()).expect("an album id is a uuid"),
+        roster_version,
+        amk_epoch: AmkVersion(amk_epoch),
+        attested_by_user: Uuid::parse_str(user().as_str())
+            .expect("the seeded account id is a uuid"),
+        attested_by_device: device_id,
+        attested_at: "2026-09-02T00:00:00Z".to_owned(),
+        members: members
+            .iter()
+            .map(|(user_id, role)| RosterMember {
+                user_id: Uuid::parse_str(user_id).expect("a member id is a uuid"),
+                role: *role,
+            })
+            .collect(),
+    };
+    let signed = SignedAlbumRoster::sign(roster, dsk).expect("a roster signs");
+    base64::engine::general_purpose::STANDARD
+        .encode(capsule_core::cbor::to_canonical_vec(&signed).expect("a signed roster serializes"))
 }
 
 /// A signed upgrade intent, as the proposing admin device's client would produce it (`S-C24`).

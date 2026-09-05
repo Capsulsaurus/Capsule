@@ -161,6 +161,17 @@ const EXTRAS: &[Extra] = &[
         ],
     },
     Extra {
+        component: "RosterStaleProblem",
+        operation: "publish_album_roster",
+        status: 409,
+        members: &[Member {
+            name: "current_version",
+            json_type: "integer",
+            description: "The roster version the server holds. A client re-syncs and republishes above it.",
+            nullable: false,
+        }],
+    },
+    Extra {
         component: "StaleRevivalProblem",
         operation: "album_lifecycle_op",
         status: 409,

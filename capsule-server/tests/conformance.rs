@@ -121,6 +121,7 @@ async fn every_declared_response_is_exercised() {
         ("POST", "/v1/albums/anything/upgrade"),
         ("GET", "/v1/albums/anything/upgrade"),
         ("DELETE", "/v1/albums/anything/upgrade"),
+        ("PUT", "/v1/albums/anything/roster"),
         ("GET", "/v1/quota"),
         ("GET", "/v1/upload/sessions"),
         ("GET", "/v1/assets/anything/receipts"),
@@ -1399,6 +1400,17 @@ async fn every_declared_response_is_exercised() {
     // one client, and the generator holding all of it overflowed the test thread's stack once
     // the surface passed forty operations.
     Box::pin(upgrade_block(
+        client,
+        &fixture,
+        &bearer,
+        &rotated.refresh_token,
+        DERIVED,
+        &account_ik,
+    ))
+    .await;
+
+    // ── PUT /v1/albums/{album_id}/roster (`S-C51`) ─────────────────────────────────────────
+    Box::pin(roster_block(
         client,
         &fixture,
         &bearer,
@@ -3943,6 +3955,152 @@ async fn drops_block(
         .send()
         .await
         .assert_status(StatusCode::NO_CONTENT);
+}
+
+/// Every answer the roster publish can give (`S-C51`).
+///
+/// Its own function for the reason the upgrade block is one: the walk's generator has to fit in
+/// the test thread's stack.
+async fn roster_block(
+    client: &support::Client,
+    fixture: &Fixture,
+    bearer: &str,
+    refresh_token: &str,
+    album: &str,
+    account_ik: &capsule_core::crypto::keys::HybridSigningKey,
+) {
+    use capsule_server::membership::MemberRole;
+
+    let path = format!("/v1/albums/{album}/roster");
+    let album_id = capsule_server::store::AlbumId::new(album);
+    let dsk = support::identity_key();
+    let member = "01937b7c-0000-7000-8000-0000000000b0";
+    let roster = |version: u64| {
+        json!({
+            "roster_cbor": support::signed_roster(
+                &dsk, support::device(), &album_id, version, 1, &[(member, MemberRole::Writer)],
+            )
+        })
+    };
+
+    // 401 and 403 are the scheme's.
+    client
+        .put(&path)
+        .json(&roster(1))
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .put(&path)
+        .header("authorization", &format!("Bearer {refresh_token}"))
+        .json(&roster(1))
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    // 415 and 422 are the `Json` extractor's; 400 is the surface's own floor.
+    client
+        .put(&path)
+        .header("authorization", bearer)
+        .body("text/plain", "{}")
+        .send()
+        .await
+        .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    client
+        .put(&path)
+        .header("authorization", bearer)
+        .json(&json!({ "roster_cbor": 42 }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+    client
+        .put(&path)
+        .header("authorization", bearer)
+        .json(&json!({ "roster_cbor": "not base64!" }))
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    // 404: an album nobody provisioned, answered before any attester question.
+    let unprovisioned = "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5eff";
+    client
+        .put(&format!("/v1/albums/{unprovisioned}/roster"))
+        .header("authorization", bearer)
+        .json(&json!({
+            "roster_cbor": support::signed_roster(
+                &dsk,
+                support::device(),
+                &capsule_server::store::AlbumId::new(unprovisioned),
+                1,
+                1,
+                &[],
+            )
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+
+    // 403: the directory the upgrade block published holds another key for this device, so a
+    // roster signed by *this* one does not verify — the forged-attester case.
+    client
+        .put(&path)
+        .header("authorization", bearer)
+        .json(&roster(1))
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    // Re-anchor the device on this block's key, one version above the upgrade block's `9`:
+    // invariant 23 makes the version strictly monotonic, so this block is coupled to that one
+    // and a bump there is a `409` here.
+    client
+        .post("/v1/auth/devices/directory")
+        .header("authorization", bearer)
+        .header(
+            "x-capsule-identity-key",
+            &support::identity_header(account_ik),
+        )
+        .body(
+            "application/cbor",
+            support::signed_directory_with_device(
+                account_ik,
+                10,
+                support::device(),
+                &dsk,
+                "1970-01-01T00:00:00Z",
+            ),
+        )
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+
+    // 500 from the membership store.
+    fixture.members.set_unavailable(true);
+    client
+        .put(&path)
+        .header("authorization", bearer)
+        .json(&roster(1))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.members.set_unavailable(false);
+
+    // 200, then the 409 a roster that does not supersede it gets.
+    client
+        .put(&path)
+        .header("authorization", bearer)
+        .header("accept", "application/json")
+        .json(&roster(1))
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    client
+        .put(&path)
+        .header("authorization", bearer)
+        .json(&roster(0))
+        .send()
+        .await
+        .assert_status(StatusCode::CONFLICT);
 }
 
 /// Every answer the three upgrade-ceremony operations can give (`S-C24`).

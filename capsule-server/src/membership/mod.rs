@@ -140,6 +140,9 @@ pub enum RosterOutcome {
     /// A newer version that carried a lower AMK epoch than the held one. An epoch never goes
     /// backwards, so this is a client that lost state, not a legitimate roster.
     EpochRegressed {
+        /// The version the server holds — the same re-sync hint `Stale` carries, so a route
+        /// need not read the roster a second time to name it.
+        current_version: u64,
         /// The epoch the server holds.
         stored: u64,
     },
@@ -225,6 +228,7 @@ pub(crate) fn precheck(
     }
     if incoming.amk_epoch < held.amk_epoch {
         return Some(RosterOutcome::EpochRegressed {
+            current_version: held.roster_version,
             stored: held.amk_epoch,
         });
     }
@@ -280,7 +284,10 @@ mod tests {
         let held = record(1, 3, b"a");
         assert_eq!(
             precheck(Some(&held), &record(2, 2, b"b")),
-            Some(RosterOutcome::EpochRegressed { stored: 3 })
+            Some(RosterOutcome::EpochRegressed {
+                current_version: 1,
+                stored: 3
+            })
         );
         // Equal is fine: a roster may change without a key rotation.
         assert_eq!(precheck(Some(&held), &record(2, 3, b"b")), None);

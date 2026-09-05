@@ -233,7 +233,10 @@ pub async fn an_epoch_regression_is_refused_and_changes_nothing(h: &dyn Harness)
     .await;
     assert_eq!(
         apply(h, roster(case, 2, 0, ""), vec![]).await,
-        RosterOutcome::EpochRegressed { stored: 1 }
+        RosterOutcome::EpochRegressed {
+            current_version: 1,
+            stored: 1
+        }
     );
     assert_eq!(
         membership(h, case, &bob).await,

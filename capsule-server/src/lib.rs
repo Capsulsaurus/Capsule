@@ -187,6 +187,7 @@ pub fn router() -> ServerRouter {
                     routes::upgrade::begin_album_upgrade,
                     routes::upgrade::album_upgrade_phase,
                     routes::upgrade::abort_album_upgrade,
+                    routes::roster::publish_album_roster,
                     routes::quota::get_quota,
                     routes::moderation::moderation_record,
                 ])
