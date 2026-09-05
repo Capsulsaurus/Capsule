@@ -721,9 +721,59 @@ pub const DIAL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// (which would double server load): there is no per-request fan-out anywhere in
 /// the SDK; a request rides exactly one dialed connection.
 pub fn dial_client() -> reqwest::Result<reqwest::Client> {
-    reqwest::Client::builder()
-        .connect_timeout(DIAL_CONNECT_TIMEOUT)
-        .build()
+    http_builder().connect_timeout(DIAL_CONNECT_TIMEOUT).build()
+}
+
+// ─── The one HTTP client ─────────────────────────────────────────────────────
+
+/// The request half of the protocol handshake, as default headers for a `reqwest` client.
+///
+/// Every route the server gates requires `X-Capsule-Protocol` and refuses without it
+/// (`capsule-server/src/negotiation.rs`, issue #404), and `X-Capsule-Crypto-Suite` names the
+/// suite this build seals under. Both are constants of the build, so they belong on the
+/// transport once rather than on every call: a `reqwest` default header rides every request
+/// the client sends, the spargen-generated operations included. A header set explicitly on a
+/// request still wins, which is how the hand-written upload path keeps pinning a per-transport
+/// protocol date.
+///
+/// `X-Capsule-Sidecar-Schema` is deliberately absent: the design scopes it to metadata updates,
+/// and a schema number is a property of one write rather than of the transport.
+#[must_use]
+pub fn protocol_headers() -> reqwest::header::HeaderMap {
+    use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+
+    let mut headers = HeaderMap::with_capacity(2);
+    headers.insert(
+        HeaderName::from_static("x-capsule-protocol"),
+        HeaderValue::from_static(capsule_core::crypto::primitives::PROTOCOL_VERSION),
+    );
+    headers.insert(
+        HeaderName::from_static("x-capsule-crypto-suite"),
+        HeaderValue::from(capsule_core::crypto::primitives::CRYPTO_SUITE_ID),
+    );
+    headers
+}
+
+/// The builder every SDK transport starts from: rustls only (the SDK's `reqwest` has no
+/// default features and only `rustls-tls`) and the protocol handshake as default headers.
+///
+/// One builder rather than one client because [`dial_client`] adds a connect timeout on top
+/// and the auth, sync and typed clients do not; what they share is the handshake, and this is
+/// the one place it is installed. A transport built any other way sends no handshake and is
+/// refused by every gated route, which is why nothing in this crate calls
+/// `reqwest::Client::builder()` directly outside tests.
+pub fn http_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder().default_headers(protocol_headers())
+}
+
+/// The plain SDK client: [`http_builder`], built.
+///
+/// # Errors
+///
+/// Whatever `reqwest` refuses to build with — in practice nothing, since the builder carries
+/// no configuration a platform can lack.
+pub fn http_client() -> reqwest::Result<reqwest::Client> {
+    http_builder().build()
 }
 
 #[cfg(test)]
@@ -1068,5 +1118,33 @@ mod tests {
     #[test]
     fn dial_client_builds() {
         assert!(dial_client().is_ok());
+    }
+
+    /// Every SDK transport carries the two build constants the server's gate reads.
+    #[test]
+    fn the_handshake_headers_are_the_build_constants() {
+        let headers = protocol_headers();
+        assert_eq!(
+            headers
+                .get("x-capsule-protocol")
+                .and_then(|v| v.to_str().ok()),
+            Some(capsule_core::crypto::primitives::PROTOCOL_VERSION)
+        );
+        assert_eq!(
+            headers
+                .get("x-capsule-crypto-suite")
+                .and_then(|v| v.to_str().ok()),
+            Some(
+                capsule_core::crypto::primitives::CRYPTO_SUITE_ID
+                    .to_string()
+                    .as_str()
+            )
+        );
+        assert_eq!(
+            headers.len(),
+            2,
+            "the sidecar schema is a property of one write"
+        );
+        assert!(http_client().is_ok());
     }
 }

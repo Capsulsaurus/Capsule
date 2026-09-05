@@ -46,7 +46,10 @@ pub enum ClientError {
 /// Cheap to build; holds one [`rest::Client`](crate::rest::Client) whose bearer credential is
 /// an async provider backed by the session. Because the provider is consulted per request,
 /// token rotation (refresh) is picked up with no rebuild. Deref-transparent: call any
-/// generated operation directly, e.g. `client.get_quota().await`.
+/// generated operation directly, e.g. `client.get_quota(PROTOCOL_VERSION, None).await` — every
+/// gated operation takes the protocol date as its first argument, because the document
+/// declares `X-Capsule-Protocol` required there (issue #404); the transport sends the same value
+/// as a default header regardless.
 pub struct AuthenticatedClient {
     base_url: String,
     session: Session,
@@ -126,12 +129,11 @@ fn build_client(base_url: &str, session: Session) -> Result<Client, ClientError>
     Ok(client)
 }
 
-/// The generated client's transport: rustls only (the SDK's `reqwest` has no default features
-/// and only `rustls-tls`), matching the rest of the SDK's network stack.
+/// The generated client's transport: the SDK's one HTTP client
+/// ([`crate::net::http_client`]) — rustls only, carrying the protocol handshake on every request
+/// it sends, the generated operations included.
 fn reqwest_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .build()
-        .expect("a default rustls reqwest client is always constructible")
+    crate::net::http_client().expect("a default rustls reqwest client is always constructible")
 }
 
 #[cfg(test)]
@@ -154,6 +156,8 @@ mod tests {
     struct Recorded {
         path: String,
         authorization: Option<String>,
+        protocol: Option<String>,
+        crypto_suite: Option<String>,
     }
 
     struct MockResponse {
@@ -248,6 +252,8 @@ mod tests {
         requests.lock().unwrap().push(Recorded {
             path: path.clone(),
             authorization: headers.get("authorization").cloned(),
+            protocol: headers.get("x-capsule-protocol").cloned(),
+            crypto_suite: headers.get("x-capsule-crypto-suite").cloned(),
         });
 
         let response = handler(path).await;
@@ -320,6 +326,46 @@ mod tests {
         assert_eq!(version.version.as_str(), "9.9.9");
     }
 
+    /// Every request the typed client sends carries the protocol handshake (issue #404) —
+    /// proving the transport-level default reaches the wire through the generated operation
+    /// with no argument at the call site, on an operation the server does not even gate.
+    #[tokio::test]
+    async fn every_request_carries_the_protocol_handshake() {
+        let handler: Handler = Arc::new(|_| {
+            Box::pin(async move {
+                MockResponse {
+                    status: 200,
+                    body: r#"{"name":"capsule-api","version":"9.9.9"}"#.to_string(),
+                }
+            })
+        });
+        let server = start_mock(handler).await;
+        let session = session_with(&server.base_url, "access-1", "refresh-1", far_future());
+        let client = AuthenticatedClient::new(&server.base_url, session).unwrap();
+
+        client.get_version().await.unwrap();
+
+        let requests = server.requests.lock().unwrap();
+        let version = requests
+            .iter()
+            .find(|r| r.path == "/v1/version")
+            .expect("version endpoint was hit");
+        assert_eq!(
+            version.protocol.as_deref(),
+            Some(capsule_core::crypto::primitives::PROTOCOL_VERSION),
+            "the protocol date this build speaks must ride every request"
+        );
+        assert_eq!(
+            version.crypto_suite.as_deref(),
+            Some(
+                capsule_core::crypto::primitives::CRYPTO_SUITE_ID
+                    .to_string()
+                    .as_str()
+            ),
+            "and so must the suite it seals under"
+        );
+    }
+
     /// An authenticated operation carries the session's access token as a bearer header —
     /// proving the token-provider seam attaches the credential the schema's `security`
     /// requirement names.
@@ -343,7 +389,11 @@ mod tests {
         let session = session_with(&server.base_url, "access-1", "refresh-1", far_future());
         let client = AuthenticatedClient::new(&server.base_url, session).unwrap();
 
-        let quota = client.get_quota().await.unwrap().into_inner();
+        let quota = client
+            .get_quota(capsule_core::crypto::primitives::PROTOCOL_VERSION, None)
+            .await
+            .unwrap()
+            .into_inner();
         assert_eq!(quota.used, 0);
 
         let requests = server.requests.lock().unwrap();
@@ -398,7 +448,11 @@ mod tests {
         );
         let client = AuthenticatedClient::new(&server.base_url, session).unwrap();
 
-        let quota = client.get_quota().await.unwrap().into_inner();
+        let quota = client
+            .get_quota(capsule_core::crypto::primitives::PROTOCOL_VERSION, None)
+            .await
+            .unwrap()
+            .into_inner();
         assert_eq!(quota.used, 7);
 
         assert_eq!(

@@ -391,9 +391,10 @@ pub struct AuthClient {
 impl AuthClient {
     /// Build a client against the auth base URL (e.g. `https://api.example.com/auth`).
     pub fn new(base_url: &str) -> Result<Self, AuthError> {
-        let http = reqwest::Client::builder()
-            .build()
-            .map_err(AuthError::Transport)?;
+        // The SDK's one HTTP client: every request this client sends — and every request a
+        // `Session` built from it executes on behalf of the upload, album and verify paths —
+        // carries the protocol handshake the server's gate requires.
+        let http = crate::net::http_client().map_err(AuthError::Transport)?;
         Self::from_parts(
             base_url,
             Arc::new(SystemClock),
