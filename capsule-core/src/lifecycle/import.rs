@@ -223,19 +223,34 @@ pub(super) struct CreateRequest<'a> {
 }
 
 impl Workspace {
+    /// Write an asset's plaintext and its signed artifacts.
+    ///
+    /// The plaintext is written only when the bytes already at the media path do **not** hash
+    /// to the sidecar's `hash` — so no path (a create over bytes signed in place, a
+    /// `soft_delete`, any later edit through `append_lifecycle`) ever rewrites an original
+    /// that is already correct, which would only open a crash window in which the one copy is
+    /// truncated. Streaming the existing file through SHA-256 is cheaper than rewriting it.
     pub(super) fn write_asset_files(&self, asset: &AssetState, plaintext: &[u8]) -> Result<()> {
         let dir = media_dir(&self.root, asset.capture_utc);
         fs::create_dir_all(&dir).map_err(|e| LifecycleError::Io(e.to_string()))?;
-        fs::write(self.media_path(asset), plaintext)
-            .map_err(|e| LifecycleError::Io(e.to_string()))?;
+        let media_path = self.media_path(asset);
+        let already_correct = fs::File::open(&media_path)
+            .and_then(hash::hash_reader)
+            .is_ok_and(|on_disk| on_disk == asset.sidecar.hash);
+        if already_correct {
+            tracing::debug!(
+                asset_id = %asset.asset_id,
+                "original already on disk with the signed hash; not rewriting it"
+            );
+        } else {
+            fs::write(&media_path, plaintext).map_err(|e| LifecycleError::Io(e.to_string()))?;
+        }
         self.write_signed_artifacts(asset)
     }
 
     /// The signed half of [`write_asset_files`](Self::write_asset_files): the sidecar, the
-    /// provenance chain, and the sealed metadata blob — everything but the plaintext. Used on
-    /// its own when the plaintext is already in place (the unsigned-sidecar migration signs
-    /// bytes that never move).
-    pub(super) fn write_signed_artifacts(&self, asset: &AssetState) -> Result<()> {
+    /// provenance chain, and the sealed metadata blob — everything but the plaintext.
+    fn write_signed_artifacts(&self, asset: &AssetState) -> Result<()> {
         let dir = media_dir(&self.root, asset.capture_utc);
         fs::create_dir_all(&dir).map_err(|e| LifecycleError::Io(e.to_string()))?;
         fs::write(self.sidecar_path(asset), asset.sidecar.to_canonical_vec())
@@ -614,15 +629,11 @@ impl Workspace {
             // reaches `AssetState::stack` by any other route.
             stack: opts.stack.as_ref().map(StackPlacement::from_membership),
         };
-        // Bytes already at their own media path (the migration) are signed where they lie: a
-        // same-bytes rewrite of an original would only add a crash window in which the one
-        // copy is truncated.
+        // Bytes already at their own media path (the migration) are signed where they lie:
+        // `write_asset_files` sees the signed hash already on disk and leaves the original
+        // alone, and the Move-mode release below must not delete what is now the asset.
         let in_place = is_same_file(src, &self.media_path(&asset));
-        if in_place {
-            self.write_signed_artifacts(&asset)?;
-        } else {
-            self.write_asset_files(&asset, &plaintext)?;
-        }
+        self.write_asset_files(&asset, &plaintext)?;
         // After the asset's own files, and deliberately: a derivative is regenerable, so a
         // failure to write one must never fail an import whose signed original is already
         // durable. `persist_derivatives` logs and continues rather than returning.

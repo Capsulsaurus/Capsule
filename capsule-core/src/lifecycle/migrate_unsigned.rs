@@ -1275,10 +1275,11 @@ mod tests {
 
     /// A legacy `is_deleted: true` becomes a signed `delete` record with a retention window:
     /// the chain is Create then Delete, the asset is in Recently Deleted and out of the
-    /// timeline.
+    /// timeline. The `delete` write, like the create, leaves the original untouched (its mtime
+    /// proves it): no path rewrites an original whose bytes already carry the signed hash.
     #[test]
     fn a_deleted_legacy_asset_lands_in_trash() {
-        use crate::crypto::provenance::action::Action;
+        use std::time::{Duration, SystemTime};
 
         let lib = TempDir::new().unwrap();
         let mut ws = fast_workspace(lib.path());
@@ -1295,9 +1296,29 @@ mod tests {
             ],
         );
         write_legacy(lib.path(), kept, b"\xFF\xD8\xFF kept legacy asset", vec![]);
+        let gone_original = lib
+            .path()
+            .join("media/1970/1970-01")
+            .join(format!("{}.jpg", gone.simple()));
+        let long_ago = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        fs::File::options()
+            .write(true)
+            .open(&gone_original)
+            .unwrap()
+            .set_modified(long_ago)
+            .unwrap();
 
         let report = ws.migrate_unsigned_sidecars(&opts(album)).unwrap();
         assert_eq!(report.trashed, vec![gone]);
+        assert_eq!(
+            fs::metadata(&gone_original).unwrap().modified().unwrap(),
+            long_ago,
+            "neither the create nor the delete rewrote the original"
+        );
+        assert_eq!(
+            fs::read(&gone_original).unwrap(),
+            b"\xFF\xD8\xFF trashed legacy asset"
+        );
 
         let actions: Vec<Action> = ws
             .asset(&gone)
