@@ -62,6 +62,27 @@ pub mod error_codes {
     /// `error.auth.invalid_credentials`
     pub const AUTH_INVALID_CREDENTIALS: &str = "error.auth.invalid_credentials";
 
+    /// `error.auth.oidc_address_taken`
+    pub const AUTH_OIDC_ADDRESS_TAKEN: &str = "error.auth.oidc_address_taken";
+
+    /// `error.auth.oidc_exchange_failed`
+    pub const AUTH_OIDC_EXCHANGE_FAILED: &str = "error.auth.oidc_exchange_failed";
+
+    /// `error.auth.oidc_not_configured`
+    pub const AUTH_OIDC_NOT_CONFIGURED: &str = "error.auth.oidc_not_configured";
+
+    /// `error.auth.oidc_redirect_invalid`
+    pub const AUTH_OIDC_REDIRECT_INVALID: &str = "error.auth.oidc_redirect_invalid";
+
+    /// `error.auth.oidc_state_invalid`
+    pub const AUTH_OIDC_STATE_INVALID: &str = "error.auth.oidc_state_invalid";
+
+    /// `error.auth.oidc_token_invalid`
+    pub const AUTH_OIDC_TOKEN_INVALID: &str = "error.auth.oidc_token_invalid";
+
+    /// `error.auth.oidc_unavailable`
+    pub const AUTH_OIDC_UNAVAILABLE: &str = "error.auth.oidc_unavailable";
+
     /// `error.auth.password_invalid`
     pub const AUTH_PASSWORD_INVALID: &str = "error.auth.password_invalid";
 

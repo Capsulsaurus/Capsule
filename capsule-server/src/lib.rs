@@ -151,7 +151,8 @@ pub fn router() -> ServerRouter {
                     routes::directory::publish_device_directory,
                     routes::escrow::store_escrow,
                 ])
-                // What an account changes about itself, and its second factor.
+                // What an account changes about itself, its second factor, and the other way
+                // a session is opened: through an external identity provider (`S-N1`).
                 .mount(kynos::routes![
                     routes::profile::update_profile,
                     routes::profile::change_password,
@@ -159,6 +160,8 @@ pub fn router() -> ServerRouter {
                     routes::totp::totp_verify_enrollment,
                     routes::totp::totp_disable,
                     routes::totp::totp_verify_login,
+                    routes::oidc::begin_oidc_login,
+                    routes::oidc::complete_oidc_login,
                 ])
                 // The cross-device add: one code, one channel, and the writes into it.
                 .mount(kynos::routes![

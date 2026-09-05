@@ -1827,6 +1827,13 @@
     <string name="error_auth_account_locked">This account is locked after too many failed sign-in attempts.</string>
     <string name="error_auth_current_password_invalid">That is not your current password.</string>
     <string name="error_auth_invalid_credentials">Invalid email or password.</string>
+    <string name="error_auth_oidc_address_taken">An account with that email address already exists here. Sign in with its password instead.</string>
+    <string name="error_auth_oidc_exchange_failed">Your identity provider didn\'t accept that sign-in. Try again.</string>
+    <string name="error_auth_oidc_not_configured">Single sign-on isn\'t set up on this server.</string>
+    <string name="error_auth_oidc_redirect_invalid">That sign-in can\'t return to this app.</string>
+    <string name="error_auth_oidc_state_invalid">That sign-in has expired. Start again.</string>
+    <string name="error_auth_oidc_token_invalid">Your identity provider\'s answer couldn\'t be verified.</string>
+    <string name="error_auth_oidc_unavailable">Capsule couldn\'t reach your identity provider just now. Please try again.</string>
     <string name="error_auth_password_invalid">That password cannot be used.</string>
     <string name="error_auth_profile_invalid">That display name cannot be used.</string>
     <string name="error_auth_profile_not_found">That account no longer exists.</string>

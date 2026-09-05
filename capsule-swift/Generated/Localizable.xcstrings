@@ -37119,6 +37119,76 @@
         }
       }
     },
+    "error.auth.oidc_address_taken": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An account with that email address already exists here. Sign in with its password instead."
+          }
+        }
+      }
+    },
+    "error.auth.oidc_exchange_failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your identity provider didn't accept that sign-in. Try again."
+          }
+        }
+      }
+    },
+    "error.auth.oidc_not_configured": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Single sign-on isn't set up on this server."
+          }
+        }
+      }
+    },
+    "error.auth.oidc_redirect_invalid": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That sign-in can't return to this app."
+          }
+        }
+      }
+    },
+    "error.auth.oidc_state_invalid": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That sign-in has expired. Start again."
+          }
+        }
+      }
+    },
+    "error.auth.oidc_token_invalid": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your identity provider's answer couldn't be verified."
+          }
+        }
+      }
+    },
+    "error.auth.oidc_unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule couldn't reach your identity provider just now. Please try again."
+          }
+        }
+      }
+    },
     "error.auth.password_invalid": {
       "localizations": {
         "ar": {

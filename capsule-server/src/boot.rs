@@ -417,7 +417,7 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
         capsule_core::crypto::keys::HybridSigningKey::from_seed64(&seed),
     ));
 
-    let server_info = Arc::new(ServerInfo::new(
+    let mut server_info = ServerInfo::new(
         config.server_domain.clone(),
         config.api_base_url.clone(),
         ProtocolWindow {
@@ -425,7 +425,12 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
             max: config.protocol_max.clone(),
         },
         tokens.public_key().to_vec(),
-    ));
+    );
+    if config.oidc.is_some() {
+        // Endpoints only; the issuer and client id stay the server's.
+        server_info = server_info.with_oidc();
+    }
+    let server_info = Arc::new(server_info);
 
     // The relying party, or the null object. Discovery is lazy: nothing here reaches the
     // provider, so an identity provider that is down does not stop a server from serving local

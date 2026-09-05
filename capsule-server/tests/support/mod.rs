@@ -3169,6 +3169,9 @@ pub(crate) fn server_info(tokens: &SessionTokens) -> ServerInfo {
         },
         tokens.public_key().to_vec(),
     )
+    // The fixture's provider double is configured, so the record says so — and a case can post
+    // to the *published* OIDC endpoints as it does to the published login.
+    .with_oidc()
 }
 
 pub(crate) fn signer(clock: Arc<ManualClock>) -> SessionTokens {
