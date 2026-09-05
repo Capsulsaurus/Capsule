@@ -27,33 +27,55 @@
 //! response the chain beneath it produces, a short-circuit included. So the window belongs on an
 //! interceptor mounted outside everything that can refuse, not on each refusal.
 //!
-//! # Two interceptors, deliberately
+//! # Three interceptors, deliberately
 //!
 //! - [`Negotiation`] **advertises**. `Reads = ()`, `Short = Infallible`, `Adds` the three
 //!   response headers. Mounted on the router, outside the body-size limit, so a `413`, a
 //!   `401`, a `426` and a `200` all leave with the window on them. It cannot refuse anything.
 //!   What it cannot reach is a response the router produced *before* choosing an operation —
 //!   an unrouted `404` or `405` — because Kynos runs interceptors per operation, after routing.
-//! - [`ProtocolGate`] **refuses**. `Reads` the three request headers, `Adds = ()`, `Short` is
-//!   [`NegotiationRejection`]. Mounted on a `Group`, which is how an exemption is spelled:
-//!   an operation outside the group is not gated and still carries the response headers.
+//! - [`ProtocolGate`] **refuses a write**. `Reads` the three request headers, `Adds = ()`,
+//!   `Short` is [`NegotiationRejection`]: `426` outside the window, `400` malformed.
+//! - [`ProtocolReadGate`] **checks a read**. The same `Reads`, `Short` is
+//!   [`MalformedHandshake`]: `400` malformed, and a grammatical date outside the window is
+//!   *admitted* — "reads of any past version succeed" (threat-model/validation.md, Fail-Closed
+//!   Rules), and the `426` there is scoped to a write.
 //!
-//! One interceptor doing both would make the exemption impossible to express — the response
-//! headers are wanted everywhere and the gate is not — and Kynos's conflict check would refuse
-//! a second copy of either at a narrower scope.
+//! The two gates are two `Group`s in `lib.rs::router`, one holding the non-safe operations and
+//! one the `GET`/`HEAD` ones, which is how a per-method rule is spelled in a declaration that
+//! is an interceptor's *type*: a read operation then declares the `400` and not the `426` it
+//! can never render. A gate that read the method at run time would declare both on everything.
+//! One interceptor doing all three jobs would also make the exemption impossible to express —
+//! the response headers are wanted everywhere and the gates are not — and Kynos's conflict
+//! check would refuse a second copy of either at a narrower scope.
 //!
-//! # What the gate reads, and how strictly
+//! # What the gates read, and how strictly
 //!
-//! `X-Capsule-Protocol` is required: absent is a `400`, not a date is a `400`, outside the
-//! window is a `426`. The other two are validated **when present** — a suite the inventory does
-//! not implement and a sidecar schema above [`MAX_KNOWN_SIDECAR_SCHEMA`] are each a `400` — and
-//! their absence is not refused. The design scopes `X-Capsule-Crypto-Suite` to writes and
+//! `X-Capsule-Protocol` is required on every gated operation: absent is a `400`, not a date is
+//! a `400`. A date outside the window is a `426` on a write and admitted on a read; a *future*
+//! date on a read is admitted too, because the design is silent on it and a read invariant
+//! that is stable across past versions has nothing to refuse in a version it does not know.
+//! The other two are validated **when present** — a suite the inventory does not implement and
+//! a sidecar schema above [`MAX_KNOWN_SIDECAR_SCHEMA`] are each a `400` — and their absence is
+//! not refused. The design scopes `X-Capsule-Crypto-Suite` to writes and
 //! `X-Capsule-Sidecar-Schema` to metadata updates, every write already carries its suite in a
 //! body the envelope gate checks, and a gate that demanded a header on a read that has no use
 //! for it would refuse every client for a value nobody reads.
 //!
+//! They are nonetheless *declared* on every gated operation, reads included, as optional
+//! parameters: an interceptor's `Reads` type is its declaration, and one type is mounted on
+//! both groups. Declaring them on the write operations alone would need a second request type
+//! that reads two headers instead of three and a third gate to carry it, for a document that
+//! said "optional" either way.
+//!
 //! All three are read as strings and parsed here rather than typed by the framework, so a
 //! malformed value is *this* module's coded `400` and not the framework's uncoded one.
+//!
+//! # The single home of the six names
+//!
+//! The header names are the constants at the top of this module and nowhere else in the
+//! server. `capsule-wire` once carried a `headers` module for them; it is retired by #430, and
+//! this crate adds no new use of it — once #430 lands, this module is the sole home.
 //!
 //! # `X-Capsule-Min-Client-Build` is advisory
 //!
@@ -193,7 +215,36 @@ fn read(headers: &HeaderMap, name: &str) -> Result<Option<String>, HeaderRejecti
         .transpose()
 }
 
-/// Why the handshake refused a request.
+/// A malformed handshake, which every gated operation refuses the same way.
+///
+/// Its own type rather than a variant shared with the `426`, because a Kynos rejection type
+/// declares its statuses on every operation that returns it: [`ProtocolReadGate`] answers with
+/// this alone, so a read declares the `400` and not a `426` it never renders.
+#[derive(Debug, PartialEq, Eq, thiserror::Error, ApiError)]
+pub enum MalformedHandshake {
+    /// A handshake header is missing, unreadable, or names something this server does not
+    /// implement. The `detail` says which.
+    #[error("{detail}")]
+    #[problem(status = 400, title = "Malformed handshake")]
+    Malformed {
+        /// What was wrong, in English. Reaches the client as the problem's `detail`.
+        detail: String,
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+}
+
+impl MalformedHandshake {
+    fn new(detail: impl Into<String>) -> Self {
+        Self::Malformed {
+            detail: detail.into(),
+            code: error_codes::REQUEST_MALFORMED,
+        }
+    }
+}
+
+/// Why the write gate refused a request.
 ///
 /// The `426` carries the window in its `detail` for a human and **on the response headers**
 /// for a client — [`Negotiation`] sits outside this gate, so the refusal leaves with
@@ -227,69 +278,67 @@ pub enum NegotiationRejection {
     },
 }
 
-impl NegotiationRejection {
-    fn malformed(detail: impl Into<String>) -> Self {
-        Self::Malformed {
-            detail: detail.into(),
-            code: error_codes::REQUEST_MALFORMED,
+impl From<MalformedHandshake> for NegotiationRejection {
+    fn from(rejection: MalformedHandshake) -> Self {
+        match rejection {
+            MalformedHandshake::Malformed { detail, code } => Self::Malformed { detail, code },
         }
     }
+}
+
+/// What a well-formed handshake said about the protocol version.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Verdict {
+    /// Inside `[min, max]`.
+    InWindow,
+    /// A grammatical date outside `[min, max]` — a `426` on a write, admitted on a read.
+    OutOfWindow,
 }
 
 /// The one-shot handshake: a client either speaks a version this server accepts, or it is
 /// refused before any state is read or written. There is no negotiation and no degrade.
 ///
-/// Pure, so the three outcomes are unit-tested without a router.
+/// Pure, so every outcome is unit-tested without a router. Returns the window verdict rather
+/// than deciding what it means, because that depends on the method: [`ProtocolGate`] turns
+/// [`Verdict::OutOfWindow`] into a `426` and [`ProtocolReadGate`] admits it.
 ///
 /// # Errors
 ///
-/// `426` for a protocol outside the window; `400` for a missing or non-date protocol, a suite
-/// the inventory does not name, or a sidecar schema above [`MAX_KNOWN_SIDECAR_SCHEMA`].
+/// `400` for a missing or non-date protocol, a suite the inventory does not name, or a sidecar
+/// schema above [`MAX_KNOWN_SIDECAR_SCHEMA`].
 pub fn negotiate(
     policy: &UploadPolicy,
     headers: &ProtocolRequestHeaders,
-) -> Result<(), NegotiationRejection> {
+) -> Result<Verdict, MalformedHandshake> {
     let Some(protocol) = headers.protocol.as_deref() else {
-        return Err(NegotiationRejection::malformed(format!(
+        return Err(MalformedHandshake::new(format!(
             "{PROTOCOL} is required on this operation"
         )));
     };
-    match protocol_gate(protocol, policy.protocol_min(), policy.protocol_max()) {
-        Ok(()) => {}
-        Err(HandshakeReject::ProtocolOutOfRange) => {
-            tracing::info!(
-                presented = protocol,
-                min = policy.protocol_min(),
-                max = policy.protocol_max(),
-                "a request was refused: protocol version outside the accepted window"
-            );
-            return Err(NegotiationRejection::ProtocolUnsupported {
-                protocol_min: policy.protocol_min().to_owned(),
-                protocol_max: policy.protocol_max().to_owned(),
-                code: error_codes::PROTOCOL_VERSION_UNSUPPORTED,
-            });
-        }
+    let verdict = match protocol_gate(protocol, policy.protocol_min(), policy.protocol_max()) {
+        Ok(()) => Verdict::InWindow,
+        Err(HandshakeReject::ProtocolOutOfRange) => Verdict::OutOfWindow,
         Err(_) => {
             tracing::debug!(
                 presented = protocol,
                 "a request was refused: protocol is not a date"
             );
-            return Err(NegotiationRejection::malformed(format!(
+            return Err(MalformedHandshake::new(format!(
                 "{PROTOCOL} is not a YYYY-MM-DD date"
             )));
         }
-    }
+    };
 
     if let Some(suite) = headers.crypto_suite.as_deref() {
         let id = suite.trim().parse::<u16>().map_err(|_| {
-            NegotiationRejection::malformed(format!("{CRYPTO_SUITE} is not a u16 suite id"))
+            MalformedHandshake::new(format!("{CRYPTO_SUITE} is not a u16 suite id"))
         })?;
         if check_suite(id).is_err() {
             tracing::debug!(
                 suite = id,
                 "a request was refused: crypto suite not implemented"
             );
-            return Err(NegotiationRejection::malformed(format!(
+            return Err(MalformedHandshake::new(format!(
                 "{CRYPTO_SUITE} {id} is not in this server's inventory"
             )));
         }
@@ -297,7 +346,7 @@ pub fn negotiate(
 
     if let Some(schema) = headers.sidecar_schema.as_deref() {
         let version = schema.trim().parse::<u16>().map_err(|_| {
-            NegotiationRejection::malformed(format!("{SIDECAR_SCHEMA} is not a u16 schema version"))
+            MalformedHandshake::new(format!("{SIDECAR_SCHEMA} is not a u16 schema version"))
         })?;
         if check_sidecar_schema(version, MAX_KNOWN_SIDECAR_SCHEMA).is_err() {
             tracing::debug!(
@@ -305,13 +354,60 @@ pub fn negotiate(
                 max_known = MAX_KNOWN_SIDECAR_SCHEMA,
                 "a request was refused: sidecar schema newer than this server indexes"
             );
-            return Err(NegotiationRejection::malformed(format!(
+            return Err(MalformedHandshake::new(format!(
                 "{SIDECAR_SCHEMA} {version} is newer than this server indexes \
                  ({MAX_KNOWN_SIDECAR_SCHEMA})"
             )));
         }
     }
 
+    Ok(verdict)
+}
+
+/// The write rule: a grammatical date outside the window is a `426`.
+///
+/// # Errors
+///
+/// Everything [`negotiate`] refuses, plus `426` for [`Verdict::OutOfWindow`].
+pub fn negotiate_write(
+    policy: &UploadPolicy,
+    headers: &ProtocolRequestHeaders,
+) -> Result<(), NegotiationRejection> {
+    match negotiate(policy, headers)? {
+        Verdict::InWindow => Ok(()),
+        Verdict::OutOfWindow => {
+            tracing::info!(
+                presented = headers.protocol.as_deref().unwrap_or_default(),
+                min = policy.protocol_min(),
+                max = policy.protocol_max(),
+                "a write was refused: protocol version outside the accepted window"
+            );
+            Err(NegotiationRejection::ProtocolUnsupported {
+                protocol_min: policy.protocol_min().to_owned(),
+                protocol_max: policy.protocol_max().to_owned(),
+                code: error_codes::PROTOCOL_VERSION_UNSUPPORTED,
+            })
+        }
+    }
+}
+
+/// The read rule: a grammatical date outside the window is admitted.
+///
+/// # Errors
+///
+/// Everything [`negotiate`] refuses.
+pub fn negotiate_read(
+    policy: &UploadPolicy,
+    headers: &ProtocolRequestHeaders,
+) -> Result<(), MalformedHandshake> {
+    if negotiate(policy, headers)? == Verdict::OutOfWindow {
+        tracing::debug!(
+            presented = headers.protocol.as_deref().unwrap_or_default(),
+            min = policy.protocol_min(),
+            max = policy.protocol_max(),
+            "a read outside the protocol window was admitted"
+        );
+    }
     Ok(())
 }
 
@@ -413,16 +509,19 @@ impl EncodeHeaders for NegotiationResponseHeaders {
             ("x-capsule-min-client-build", self.min_client_build.as_str()),
         ]
         .into_iter()
-        .filter_map(|(name, value)| match HeaderValue::from_str(value) {
-            Ok(value) => Some((HeaderName::from_static(name), value)),
-            Err(error) => {
-                // A policy value that is not a header value is a deployment fault, not a request
-                // fault; the response goes out without it rather than not at all, and the log
-                // says why. Config checks only that the window is ordered, not that its ends
-                // are header values, so this branch is reachable from a misconfiguration.
-                tracing::error!(%error, name, value, "a protocol window value is not a header value");
-                None
-            }
+        .map(|(name, value)| {
+            // Total by construction: `config.rs` parses both window ends as `jiff::civil::Date`
+            // and the client-build cutoff as three dot-separated integers before a policy is
+            // built from them, and the crate defaults are literals of the same shapes. A value
+            // that reaches here and is not a header value is a policy built past the
+            // configuration boundary, which is a programming error and is reported as one.
+            let value = HeaderValue::from_str(value).unwrap_or_else(|error| {
+                panic!(
+                    "{name} carries `{value}`, which config validation should have refused: \
+                     {error}"
+                )
+            });
+            (HeaderName::from_static(name), value)
         })
         .collect()
     }
@@ -470,11 +569,13 @@ where
     }
 }
 
-/// Refuses a request whose handshake this server cannot honour, before the handler runs.
+/// Refuses a **write** whose handshake this server cannot honour, before the handler runs.
 ///
-/// Mounted on a `Group` rather than the router, because the exemptions the design names — the
-/// reachability probe, public discovery, share reads, guest deposits — are expressed by mounting
-/// those operations outside the group. See `lib.rs::router` for the list and the reasons.
+/// Mounted on the `Group` holding the non-safe operations, rather than the router, because the
+/// exemptions the design names — the reachability probe, public discovery, share reads, guest
+/// deposits — are expressed by mounting those operations outside it, and because a read is held
+/// to a different rule by [`ProtocolReadGate`]. See `lib.rs::router` for the lists and the
+/// reasons.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ProtocolGate;
 
@@ -502,7 +603,45 @@ where
         next: Next<'_, C>,
     ) -> Result<Continued<()>, NegotiationRejection> {
         let upload: UploadContext = context.provide();
-        negotiate(upload.policy(), &reads)?;
+        negotiate_write(upload.policy(), &reads)?;
+        Ok(next.run(request).await)
+    }
+}
+
+/// Checks a **read**'s handshake for shape, and admits any grammatical protocol date.
+///
+/// Mounted on the `Group` holding the `GET` and `HEAD` operations. "Reads of any past version
+/// succeed" (threat-model/validation.md): a client pinned to a version this server no longer
+/// accepts for writes can still read what it wrote, and learns the window from the response
+/// headers rather than from a refusal.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ProtocolReadGate;
+
+impl ProtocolReadGate {
+    /// The interceptor.
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl<C> Interceptor<C> for ProtocolReadGate
+where
+    C: Provides<UploadContext> + Sync + 'static,
+{
+    type Reads = ProtocolRequestHeaders;
+    type Adds = ();
+    type Short = MalformedHandshake;
+
+    async fn intercept(
+        &self,
+        request: Request,
+        reads: ProtocolRequestHeaders,
+        context: &C,
+        next: Next<'_, C>,
+    ) -> Result<Continued<()>, MalformedHandshake> {
+        let upload: UploadContext = context.provide();
+        negotiate_read(upload.policy(), &reads)?;
         Ok(next.run(request).await)
     }
 }
@@ -569,18 +708,23 @@ mod tests {
     }
 
     #[test]
-    fn a_protocol_inside_the_window_passes() {
-        assert!(negotiate(&policy(), &headers(Some("2026-05-31"), None, None)).is_ok());
+    fn a_protocol_inside_the_window_passes_both_gates() {
         // Both ends are inclusive.
-        assert!(negotiate(&policy(), &headers(Some("2026-01-01"), None, None)).is_ok());
-        assert!(negotiate(&policy(), &headers(Some("2026-12-31"), None, None)).is_ok());
+        for presented in ["2026-05-31", "2026-01-01", "2026-12-31"] {
+            let read = headers(Some(presented), None, None);
+            assert_eq!(negotiate(&policy(), &read), Ok(Verdict::InWindow));
+            assert!(negotiate_write(&policy(), &read).is_ok());
+            assert!(negotiate_read(&policy(), &read).is_ok());
+        }
     }
 
     #[test]
-    fn a_protocol_outside_the_window_is_426_with_the_window() {
-        for presented in ["2025-12-31", "2027-01-01"] {
-            let refused = negotiate(&policy(), &headers(Some(presented), None, None))
-                .expect_err("outside the window");
+    fn a_protocol_outside_the_window_is_426_on_a_write_and_admitted_on_a_read() {
+        // Past and future alike: the write rule is the window, the read rule is the grammar.
+        for presented in ["2025-12-31", "2027-01-01", "1999-01-01", "2099-12-31"] {
+            let read = headers(Some(presented), None, None);
+            assert_eq!(negotiate(&policy(), &read), Ok(Verdict::OutOfWindow));
+            let refused = negotiate_write(&policy(), &read).expect_err("a write is refused");
             assert!(
                 matches!(
                     &refused,
@@ -590,19 +734,26 @@ mod tests {
                 "{presented}: {refused:?}"
             );
             assert_eq!(code(&refused), error_codes::PROTOCOL_VERSION_UNSUPPORTED);
+            assert!(
+                negotiate_read(&policy(), &read).is_ok(),
+                "{presented}: reads of any version succeed"
+            );
         }
     }
 
     #[test]
-    fn a_missing_or_non_date_protocol_is_400_not_426() {
+    fn a_missing_or_non_date_protocol_is_400_on_every_gate() {
         for presented in [None, Some("yesterday"), Some("2026/05/31"), Some("")] {
-            let refused =
-                negotiate(&policy(), &headers(presented, None, None)).expect_err("malformed");
+            let read = headers(presented, None, None);
+            let MalformedHandshake::Malformed { code, .. } =
+                negotiate_read(&policy(), &read).expect_err("malformed");
+            assert_eq!(code, error_codes::REQUEST_MALFORMED, "{presented:?}");
+            let refused = negotiate_write(&policy(), &read).expect_err("malformed");
             assert!(
                 matches!(refused, NegotiationRejection::Malformed { .. }),
                 "{presented:?}: {refused:?}"
             );
-            assert_eq!(code(&refused), error_codes::REQUEST_MALFORMED);
+            assert_eq!(self::code(&refused), error_codes::REQUEST_MALFORMED);
         }
     }
 
@@ -619,20 +770,26 @@ mod tests {
             (None, Some("2")),
             (None, Some("v1")),
         ] {
-            let refused = negotiate(&policy(), &headers(ok, suite, schema)).expect_err("refused");
-            assert!(
-                matches!(refused, NegotiationRejection::Malformed { .. }),
-                "suite {suite:?}, schema {schema:?}: {refused:?}"
+            let MalformedHandshake::Malformed { code, .. } =
+                negotiate(&policy(), &headers(ok, suite, schema)).expect_err("refused");
+            assert_eq!(
+                code,
+                error_codes::REQUEST_MALFORMED,
+                "suite {suite:?}, schema {schema:?}"
             );
-            assert_eq!(code(&refused), error_codes::REQUEST_MALFORMED);
         }
     }
 
     #[test]
-    fn the_rejection_declares_exactly_the_two_statuses_it_renders() {
+    fn each_gate_declares_exactly_the_statuses_it_renders() {
         let mut statuses = NegotiationRejection::STATUSES.to_vec();
         statuses.sort_unstable();
-        assert_eq!(statuses, [400, 426]);
+        assert_eq!(statuses, [400, 426], "a write gate refuses two ways");
+        assert_eq!(
+            MalformedHandshake::STATUSES,
+            [400],
+            "a read gate refuses one way"
+        );
     }
 
     #[test]
@@ -675,14 +832,17 @@ mod tests {
         assert_eq!(documented, NegotiationResponseHeaders::NAMES);
     }
 
+    /// A policy built past the configuration boundary with a non-header value is a programming
+    /// error, and is reported as one rather than silently sending a shorter response.
     #[test]
-    fn a_window_value_that_is_not_a_header_value_is_dropped_not_panicked() {
+    #[should_panic(expected = "config validation should have refused")]
+    fn a_window_value_that_is_not_a_header_value_is_a_programming_error() {
         let window = NegotiationResponseHeaders {
             protocol_min: "2026-01-01".to_owned(),
             protocol_max: "bad\nvalue".to_owned(),
             min_client_build: "0.0.0".to_owned(),
         };
-        assert_eq!(window.encode().len(), 2);
+        let _ = window.encode();
     }
 
     #[test]

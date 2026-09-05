@@ -135,12 +135,17 @@ is the point: `Negotiation` is mounted on the whole router, outside everything t
 so the three response headers ride a `413`, a `401` and a `426` exactly as they ride a `200`
 (an unrouted `404`/`405` is the router's own and carries none — Kynos runs interceptors per
 operation, after routing);
-`ProtocolGate` is mounted on a `Group`, so an operation is gated by being mounted inside it
-and exempt by being mounted outside. Both read one protocol window — the upload policy's,
-built from `PROTOCOL_MIN`/`PROTOCOL_MAX` at boot — so the window a client is told and the
-window it is held to cannot be two numbers. A `426` carries the window on the headers and
-the stable `error.protocol.version_unsupported` code in the body; nothing restates the window
-as a body member.
+the gate is two `Group`s — `ProtocolGate` holding every non-safe operation and
+`ProtocolReadGate` every gated `GET`/`HEAD` — so an operation is gated by being mounted inside
+one and exempt by being mounted outside both. The two gates are the two halves of the
+fail-closed rules: a **write** with a grammatical `X-Capsule-Protocol` outside `[Min, Max]` is
+`426`; a **read** with the same header is admitted ("reads of any past version succeed" — and a
+future date on a read is admitted too, since the rule is the grammar and nothing else), and a
+missing or malformed header is `400 error.request.malformed` on every gated operation. All
+three read one protocol window — the upload policy's, built from `PROTOCOL_MIN`/`PROTOCOL_MAX`
+at boot — so the window a client is told and the window it is held to cannot be two numbers. A
+`426` carries the window on the headers and the stable `error.protocol.version_unsupported` code
+in the body; nothing restates the window as a body member.
 
 **Exempt from the request gate** (and still carrying the response headers), ten operations:
 

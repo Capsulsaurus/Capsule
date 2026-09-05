@@ -598,13 +598,12 @@ fn map_error(error: rest::Error<rest::SyncFeedError>) -> SyncError {
     match error {
         rest::Error::Api(response) => {
             let (code, message) = match response.into_inner() {
-                // 400 and 426 include the protocol gate's answers (issue #404); the code the
-                // body carries is the one a caller switches on, `error.protocol.version_unsupported`
-                // being the one that means "update the client".
+                // The 400 includes the protocol gate's malformed-handshake answer (issue #404).
+                // There is no 426 to map: the feed is a read, and a read is admitted at any
+                // grammatical protocol date — the window rides the response headers instead.
                 rest::SyncFeedError::Status400(problem)
                 | rest::SyncFeedError::Status401(problem)
                 | rest::SyncFeedError::Status403(problem)
-                | rest::SyncFeedError::Status426(problem)
                 | rest::SyncFeedError::Status500(problem) => (
                     Some(problem.code.clone()),
                     problem.detail.clone().unwrap_or_default(),

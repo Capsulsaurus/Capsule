@@ -740,8 +740,9 @@ mod tests {
             Some(crate::upload::policy::DEFAULT_MIN_CLIENT_BUILD)
         );
 
-        // And the gate holds a client to the same window: a version one day below the
-        // configured minimum is refused before authentication is even looked at.
+        // And the gate holds a write to the same window: a version one day below the
+        // configured minimum is refused before authentication is even looked at. (A read would
+        // be admitted at any date — threat-model/validation.md — which is why this is a `DELETE`.)
         let below = format!(
             "{}",
             config
@@ -752,7 +753,7 @@ mod tests {
                 .expect("there is a day before it")
         );
         let refused = client
-            .head("/v1/upload/anything")
+            .delete("/v1/upload/anything")
             .header("x-capsule-protocol", &below)
             .send()
             .await;

@@ -32,7 +32,7 @@
 //! | chunk `409 finalize_in_progress` | **deleted.** Losing the finalize claim is a normal race and the chunk that triggered it was still accepted, so it answers `204`. Telling a client its accepted chunk failed was the Salvo behaviour and it was wrong |
 //! | chunk `500` | kept — storage inconsistency (the stage disagreeing with the counter) and collaborator failure |
 //! | head `200` | kept — [`HeadReply::Progress`], carrying offset, declared length and state on headers, with `Cache-Control: no-store`. A `Reply` rather than a `NoContent`, because `200 with headers` and `204` are different answers |
-//! | head `400` / `401` / `403` / `404` / `426` / `500` | kept; the `403` now covers the owner as well as the uploader, both of whom may look. The `400` and `426` are the handshake's, declared by the gate rather than by this surface |
+//! | head `400` / `401` / `403` / `404` / `500` | kept; the `403` now covers the owner as well as the uploader, both of whom may look. The `400` is the handshake's, declared by the read gate rather than by this surface; the `426` is gone from `HEAD`, because a read is admitted at any protocol date (issue #404) |
 //! | head `409` | **deleted as unreachable.** `HEAD` reports a state, it does not require one. It would have been declared for free by sharing a rejection type with `DELETE`, which is why they are two types |
 //! | delete `204` | kept |
 //! | delete `409` | kept — finalization is not interruptible, and a terminal session has nothing left to cancel |
