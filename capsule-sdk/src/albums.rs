@@ -146,6 +146,23 @@ struct ProvisionAlbumResponseWire {
     created: bool,
 }
 
+/// The `PUT /v1/albums/{album_id}/roster` request body: the signed roster as standard base64 of
+/// its canonical CBOR. One field, so the bytes the owner's device signed reach the server
+/// verbatim inside a JSON operation the generated client can describe.
+#[derive(Debug, Clone, Serialize)]
+struct RosterRequestWire {
+    roster_cbor: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RosterResponseWire {
+    album_id: String,
+    roster_version: u64,
+    amk_epoch: u64,
+    member_count: u64,
+    replayed: bool,
+}
+
 #[derive(Deserialize)]
 struct ApiErrorWire {
     #[serde(default)]
@@ -160,6 +177,24 @@ pub struct ProvisionedAlbum {
     pub album_id: Uuid,
     /// `true` when this call created the binding, `false` when it already existed.
     pub created: bool,
+}
+
+/// What the server holds for an album after a roster publish (`S-C51`).
+///
+/// `replayed` is informational: the same bytes again are a success that wrote nothing, exactly
+/// as re-provisioning is, so a client that lost an acknowledgement re-PUTs without branching.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublishedRoster {
+    /// The album, echoed.
+    pub album_id: Uuid,
+    /// The roster version the server holds after this call.
+    pub roster_version: u64,
+    /// The AMK epoch that roster reflects.
+    pub amk_epoch: u64,
+    /// How many members it names, the owner excluded.
+    pub member_count: u64,
+    /// Whether this call replayed the roster already held.
+    pub replayed: bool,
 }
 
 // ─── Client ───────────────────────────────────────────────────────────────────
@@ -225,6 +260,81 @@ impl AlbumClient {
         Ok(ProvisionedAlbum {
             album_id: echoed,
             created: wire.created,
+        })
+    }
+
+    /// Publish `signed` as the roster of the album it names (`S-C51`).
+    ///
+    /// Orchestration only: the roster is signed in `capsule_core::crypto::membership` by the
+    /// owner's device and sent verbatim, base64-encoded, on the generated operation's JSON
+    /// shape. Idempotent under `(album_id, roster_version)`: the same bytes again succeed with
+    /// `replayed`. A `409` (`error.album.roster_stale`) means the server holds a roster this one
+    /// does not supersede; the caller re-syncs and republishes above it.
+    ///
+    /// # Errors
+    ///
+    /// [`AlbumError::Transport`] when the request did not complete, [`AlbumError::Status`] with
+    /// the server's `error.*` code when it was refused, [`AlbumError::Malformed`] when the roster
+    /// could not be encoded or the response could not be read.
+    #[instrument(skip(self, signed), fields(album_id = %signed.roster.album_id, roster_version = signed.roster.roster_version))]
+    pub async fn publish_roster(
+        &self,
+        signed: &capsule_core::crypto::membership::SignedAlbumRoster,
+    ) -> Result<PublishedRoster, AlbumError> {
+        use base64::Engine as _;
+
+        let album_id = signed.roster.album_id;
+        let bytes = capsule_core::cbor::to_canonical_vec(signed)
+            .map_err(|e| AlbumError::Malformed(format!("roster encoding: {e}")))?;
+        let body = RosterRequestWire {
+            roster_cbor: base64::engine::general_purpose::STANDARD.encode(bytes),
+        };
+        let url = format!(
+            "{}/{}/roster",
+            self.transport.base_url,
+            album_id.hyphenated()
+        );
+        let response = self
+            .transport
+            .send(|http| http.put(&url).json(&body))
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let code = response
+                .json::<ApiErrorWire>()
+                .await
+                .ok()
+                .and_then(|e| e.code);
+            tracing::warn!(status = status.as_u16(), ?code, "roster publish refused");
+            return Err(AlbumError::Status {
+                status: status.as_u16(),
+                code,
+            });
+        }
+
+        let wire: RosterResponseWire = response
+            .json()
+            .await
+            .map_err(|e| AlbumError::Malformed(e.to_string()))?;
+        let echoed = Uuid::parse_str(&wire.album_id)
+            .map_err(|e| AlbumError::Malformed(format!("response album_id: {e}")))?;
+        if echoed != album_id {
+            return Err(AlbumError::Malformed(format!(
+                "server echoed album {echoed}, not the requested {album_id}"
+            )));
+        }
+        tracing::info!(
+            roster_version = wire.roster_version,
+            replayed = wire.replayed,
+            "album roster published"
+        );
+        Ok(PublishedRoster {
+            album_id: echoed,
+            roster_version: wire.roster_version,
+            amk_epoch: wire.amk_epoch,
+            member_count: wire.member_count,
+            replayed: wire.replayed,
         })
     }
 }

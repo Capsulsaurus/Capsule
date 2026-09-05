@@ -19,6 +19,10 @@
 //! | `a_malformed_id_carries_the_invalid_id_code` | the 400 path |
 //! | `an_echoed_mismatch_is_malformed` | the server cannot silently rebind another album |
 //! | `the_request_is_authorized` | the bearer rides every call |
+//! | `publish_roster_sends_the_signed_bytes_verbatim` | the roster on the wire is the one the device signed (`S-C51`) |
+//! | `a_published_roster_reports_what_the_server_holds` | the success mapping, replay included |
+//! | `a_stale_roster_carries_the_distinct_code` | the `409` is switchable by code |
+//! | `a_roster_echo_mismatch_is_malformed` | the server cannot silently answer for another album |
 
 use std::sync::{Arc, Mutex};
 
@@ -235,4 +239,129 @@ async fn the_request_is_authorized() {
         Some("Bearer test-token"),
         "every provisioning call rides the caller's bearer"
     );
+}
+
+// ─── Roster publish (`S-C51`) ─────────────────────────────────────────────────
+
+/// A roster for [`album`] at `version`, signed by a fresh device key.
+fn signed_roster(version: u64) -> capsule_core::crypto::membership::SignedAlbumRoster {
+    use capsule_core::crypto::keys::{AmkVersion, HybridSigningKey};
+    use capsule_core::crypto::membership::{AlbumRoster, MemberRole, RosterMember};
+
+    let roster = AlbumRoster {
+        album_id: album(),
+        roster_version: version,
+        amk_epoch: AmkVersion(2),
+        attested_by_user: Uuid::from_u128(0xA11CE),
+        attested_by_device: Uuid::from_u128(0xD1),
+        attested_at: "2026-09-02T00:00:00Z".to_owned(),
+        members: vec![RosterMember {
+            user_id: Uuid::from_u128(0xB0B),
+            role: MemberRole::Writer,
+        }],
+    };
+    capsule_core::crypto::membership::SignedAlbumRoster::sign(
+        roster,
+        &HybridSigningKey::from_seed_bytes(&[7; 32], &[8; 32]),
+    )
+    .expect("a roster signs")
+}
+
+/// The canonical success body the server sends for a roster publish.
+fn held(id: Uuid, version: u64, replayed: bool) -> MockResponse {
+    MockResponse::new(200, "OK").json_body(format!(
+        r#"{{"album_id":"{id}","roster_version":{version},"amk_epoch":2,"member_count":1,"replayed":{replayed}}}"#
+    ))
+}
+
+/// **The bytes on the wire are the bytes the device signed.** The client base64-encodes the
+/// canonical CBOR and changes nothing: a re-serialization would be a roster whose signature no
+/// longer verifies, and the server decides a replay on these exact bytes.
+#[tokio::test]
+async fn publish_roster_sends_the_signed_bytes_verbatim() {
+    use base64::Engine as _;
+
+    let id = album();
+    let signed = signed_roster(3);
+    let (server, seen) = recording(move |_| held(id, 3, false)).await;
+    // At the production layout — `{origin}/v1/albums` — so the path is the server's own.
+    let client = AlbumClient::new(AlbumTransport::with_static_token(
+        reqwest::Client::new(),
+        format!("{}/v1/albums", server.base_url().trim_end_matches('/')),
+        StaticToken("test-token".into()),
+    ));
+    client.publish_roster(&signed).await.expect("publish");
+
+    let requests = seen.lock().expect("recorded requests");
+    assert_eq!(requests[0].method, "PUT");
+    assert_eq!(
+        requests[0].path,
+        format!("/v1/albums/{}/roster", id.hyphenated())
+    );
+    let body: serde_json::Value = serde_json::from_slice(&requests[0].body).expect("JSON");
+    let object = body.as_object().expect("a JSON object");
+    assert_eq!(object.keys().collect::<Vec<_>>(), vec!["roster_cbor"]);
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(body["roster_cbor"].as_str().expect("a string"))
+        .expect("standard base64");
+    assert_eq!(
+        bytes,
+        capsule_core::cbor::to_canonical_vec(&signed).expect("encodes"),
+        "the wire carries the canonical encoding of exactly what was signed"
+    );
+    assert!(
+        requests[0].header("authorization").is_some(),
+        "the bearer rides the roster publish too"
+    );
+}
+
+#[tokio::test]
+async fn a_published_roster_reports_what_the_server_holds() {
+    let id = album();
+    let (server, _) = recording(move |_| held(id, 3, true)).await;
+    let result = client_for(&server)
+        .publish_roster(&signed_roster(3))
+        .await
+        .expect("publish");
+    assert_eq!(
+        result,
+        PublishedRoster {
+            album_id: id,
+            roster_version: 3,
+            amk_epoch: 2,
+            member_count: 1,
+            replayed: true,
+        }
+    );
+}
+
+/// The `409` is the one refusal a client acts on differently — re-sync and republish above the
+/// version the server names — so its code must come through.
+#[tokio::test]
+async fn a_stale_roster_carries_the_distinct_code() {
+    let (server, _) = recording(|_| {
+        MockResponse::new(409, "Conflict").json_body(
+            r#"{"type":"about:blank","title":"Roster stale","status":409,"detail":"the server holds roster version 4, which this does not supersede","code":"error.album.roster_stale","current_version":4}"#.to_owned(),
+        )
+    })
+    .await;
+    let error = client_for(&server)
+        .publish_roster(&signed_roster(3))
+        .await
+        .expect_err("a stale roster is refused");
+    assert_eq!(error.error_code(), Some(error_codes::ALBUM_ROSTER_STALE));
+    assert!(matches!(error, AlbumError::Status { status: 409, .. }));
+}
+
+/// A server answering for a different album than the one asked about is a malformed answer,
+/// not a success with the wrong id in it.
+#[tokio::test]
+async fn a_roster_echo_mismatch_is_malformed() {
+    let other = Uuid::parse_str("0198f3c2-9c4a-7b3d-8f21-4d7c9a1b2eff").expect("a uuid");
+    let (server, _) = recording(move |_| held(other, 3, false)).await;
+    let error = client_for(&server)
+        .publish_roster(&signed_roster(3))
+        .await
+        .expect_err("a mismatched echo is refused");
+    assert!(matches!(error, AlbumError::Malformed(_)), "{error:?}");
 }
