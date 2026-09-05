@@ -95,7 +95,7 @@ use capsule_server::sync::{CURSOR_KEY_LEN, CursorCodec, SyncContext};
 use capsule_server::upload::authority::{
     AlbumWriteAccess, AuthorityError, AuthorityFuture, WriteAuthority,
 };
-use capsule_server::upload::{UploadContext, UploadPolicy};
+use capsule_server::upload::{UploadContext, UploadPolicy, WriteRole};
 use capsule_server::verify::VerifyContext;
 use jiff::{SignedDuration, Timestamp};
 use kynos::test::{TestClient, TestRequest};
@@ -1722,7 +1722,10 @@ impl BlobStore for SwallowingBlobs {
 /// would, rather than by flipping a flag the port does not have.
 #[derive(Debug, Default)]
 pub(crate) struct TestAuthority {
-    albums: Mutex<BTreeMap<(String, String), String>>,
+    /// Each album's owner and protocol pin.
+    albums: Mutex<BTreeMap<String, (String, String)>>,
+    /// Each `(album, member)`'s role on the roster (`S-C51`).
+    shares: Mutex<BTreeMap<(String, String), MemberRole>>,
     upgrades: Mutex<BTreeMap<(String, String), Uuid>>,
     devices: Mutex<BTreeMap<(String, Uuid), Timestamp>>,
     unavailable: AtomicBool,
@@ -1737,12 +1740,25 @@ impl TestAuthority {
     /// Record `album` as writable by `owner`, pinned to `protocol_pin`.
     pub(crate) fn allow_album(&self, owner: &OwnerId, album: &AlbumId, protocol_pin: &str) {
         self.albums().insert(
-            (owner.as_str().to_owned(), album.as_str().to_owned()),
-            protocol_pin.to_owned(),
+            album.as_str().to_owned(),
+            (owner.as_str().to_owned(), protocol_pin.to_owned()),
         );
     }
 
-    /// Forget an album, as a closed or unshared one would be.
+    /// Put `member` on `album`'s roster with `role` (`S-C51`).
+    pub(crate) fn share(&self, album: &AlbumId, member: &UserId, role: MemberRole) {
+        self.shares().insert(
+            (album.as_str().to_owned(), member.as_str().to_owned()),
+            role,
+        );
+    }
+
+    /// Take `member` off `album`'s roster.
+    pub(crate) fn unshare(&self, album: &AlbumId, member: &UserId) {
+        self.shares()
+            .remove(&(album.as_str().to_owned(), member.as_str().to_owned()));
+    }
+
     /// Put an album into upgrade quiescence under `intent` (`S-C24`).
     ///
     /// The double carries the fact the production authority reads off the album record, so a
@@ -1767,9 +1783,21 @@ impl TestAuthority {
             .copied()
     }
 
+    /// Forget an album, as a closed one would be.
+    ///
+    /// `owner` is asserted rather than looked up: the map is album-keyed, and a case that closes
+    /// the wrong owner's album would otherwise pass vacuously.
     pub(crate) fn close_album(&self, owner: &OwnerId, album: &AlbumId) {
-        self.albums()
-            .remove(&(owner.as_str().to_owned(), album.as_str().to_owned()));
+        let mut albums = self.albums();
+        assert!(
+            albums
+                .get(album.as_str())
+                .is_some_and(|(held, _)| held == owner.as_str()),
+            "close_album: {album} is not {owner}'s"
+        );
+        {
+            albums.remove(album.as_str());
+        }
     }
 
     /// Record `device` as entering `user`'s directory at `added_at`.
@@ -1788,8 +1816,12 @@ impl TestAuthority {
         self.unavailable.store(unavailable, Ordering::SeqCst);
     }
 
-    fn albums(&self) -> MutexGuard<'_, BTreeMap<(String, String), String>> {
+    fn albums(&self) -> MutexGuard<'_, BTreeMap<String, (String, String)>> {
         self.albums.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn shares(&self) -> MutexGuard<'_, BTreeMap<(String, String), MemberRole>> {
+        self.shares.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn devices(&self) -> MutexGuard<'_, BTreeMap<(String, Uuid), Timestamp>> {
@@ -1804,20 +1836,34 @@ impl TestAuthority {
 impl WriteAuthority for TestAuthority {
     fn album_write_access<'a>(
         &'a self,
-        owner: &'a OwnerId,
+        caller: &'a UserId,
         album: &'a AlbumId,
     ) -> AuthorityFuture<'a, AlbumWriteAccess> {
         Box::pin(async move {
             if self.is_down() {
                 return Err(AuthorityError::unavailable(REFUSAL));
             }
-            Ok(self
-                .albums()
-                .get(&(owner.as_str().to_owned(), album.as_str().to_owned()))
-                .map_or(AlbumWriteAccess::Denied, |pin| AlbumWriteAccess::Writable {
-                    protocol_pin: pin.clone(),
-                    quiescing_under: self.quiescing_under(owner, album),
-                }))
+            let Some((owner, pin)) = self.albums().get(album.as_str()).cloned() else {
+                return Ok(AlbumWriteAccess::Denied);
+            };
+            let role = if owner == caller.as_str() {
+                WriteRole::Owner
+            } else {
+                match self
+                    .shares()
+                    .get(&(album.as_str().to_owned(), caller.as_str().to_owned()))
+                {
+                    Some(MemberRole::Writer) => WriteRole::Member,
+                    _ => return Ok(AlbumWriteAccess::Denied),
+                }
+            };
+            let owner_id = OwnerId::new(owner);
+            Ok(AlbumWriteAccess::Writable {
+                protocol_pin: pin,
+                quiescing_under: self.quiescing_under(&owner_id, album),
+                owner_id,
+                role,
+            })
         })
     }
 

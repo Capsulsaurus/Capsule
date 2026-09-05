@@ -6,7 +6,7 @@ use super::authority::ProvisionedAuthority;
 use super::*;
 use crate::directory::{DeviceDirectoryStore, InMemoryDeviceDirectory, PublishedDirectory};
 use crate::store::UserId;
-use crate::upload::{AlbumWriteAccess, WriteAuthority};
+use crate::upload::{AlbumWriteAccess, WriteAuthority, WriteRole};
 
 /// The account every case provisions under.
 fn owner() -> OwnerId {
@@ -14,6 +14,11 @@ fn owner() -> OwnerId {
 }
 
 /// A derived album id.
+/// The owner, as the account that calls.
+fn caller() -> UserId {
+    UserId::new(owner().as_str())
+}
+
 fn album() -> AlbumId {
     AlbumId::new("0198f3c2-9c4a-7b3d-8f21-4d7c9a1b2e35")
 }
@@ -124,6 +129,7 @@ fn authority(
     ProvisionedAuthority::new(
         albums,
         directories,
+        Arc::new(crate::membership::InMemoryMembership::new()),
         std::sync::Arc::new(crate::store::SystemClock),
     )
 }
@@ -136,10 +142,12 @@ async fn an_album_is_writable_by_the_account_it_was_provisioned_to() {
 
     assert_eq!(
         authority
-            .album_write_access(&owner(), &album())
+            .album_write_access(&caller(), &album())
             .await
             .expect("the authority answers"),
         AlbumWriteAccess::Writable {
+            owner_id: owner(),
+            role: WriteRole::Owner,
             quiescing_under: None,
             protocol_pin: "2026-01-01".to_owned()
         },
@@ -147,7 +155,7 @@ async fn an_album_is_writable_by_the_account_it_was_provisioned_to() {
     );
     assert_eq!(
         authority
-            .album_write_access(&OwnerId::new("somebody-else"), &album())
+            .album_write_access(&UserId::new("somebody-else"), &album())
             .await
             .expect("the authority answers"),
         AlbumWriteAccess::Denied,
@@ -155,7 +163,7 @@ async fn an_album_is_writable_by_the_account_it_was_provisioned_to() {
     assert_eq!(
         authority
             .album_write_access(
-                &owner(),
+                &caller(),
                 &AlbumId::new("0198f3c2-0000-7b3d-8f21-4d7c9a1b2e35")
             )
             .await
@@ -258,4 +266,84 @@ async fn an_account_with_no_published_directory_has_no_floor() {
         "the retired fallback to account-creation time made invariant 7 vacuous for exactly \
          the accounts most likely to be wrong about their devices"
     );
+}
+
+/// A writer on the roster writes under the owner's namespace; everyone else is one `Denied`.
+///
+/// The widening `S-C25` deferred, answered from the membership port (`S-C51`). A reader, a former
+/// member and a stranger get the same answer an unprovisioned album gets, so the refusal says
+/// nothing about the roster.
+#[tokio::test]
+async fn a_writer_member_writes_under_the_owner_and_nobody_else_writes_at_all() {
+    use crate::membership::{InMemoryMembership, MemberRole, MembershipStore as _, RosterRecord};
+
+    let albums = Arc::new(InMemoryAlbums::new());
+    albums.provision(record(&owner())).await.expect("provision");
+    let members = Arc::new(InMemoryMembership::new());
+    let writer = UserId::new("member-writer");
+    let reader = UserId::new("member-reader");
+    let former = UserId::new("member-former");
+    let roster = |version: u64, epoch: u64| RosterRecord {
+        album_id: album(),
+        roster_version: version,
+        amk_epoch: epoch,
+        attested_by_device: uuid::Uuid::from_u128(0xD1),
+        received_at: jiff::Timestamp::UNIX_EPOCH,
+        document: format!("v{version}").into_bytes(),
+    };
+    members
+        .apply_roster(
+            roster(1, 1),
+            vec![
+                (writer.clone(), MemberRole::Writer),
+                (reader.clone(), MemberRole::Reader),
+                (former.clone(), MemberRole::Writer),
+            ],
+        )
+        .await
+        .expect("applied");
+    members
+        .apply_roster(
+            roster(2, 2),
+            vec![
+                (writer.clone(), MemberRole::Writer),
+                (reader.clone(), MemberRole::Reader),
+            ],
+        )
+        .await
+        .expect("applied");
+    let authority = ProvisionedAuthority::new(
+        albums,
+        Arc::new(InMemoryDeviceDirectory::new()),
+        members,
+        std::sync::Arc::new(crate::store::SystemClock),
+    );
+
+    assert_eq!(
+        authority
+            .album_write_access(&writer, &album())
+            .await
+            .expect("the authority answers"),
+        AlbumWriteAccess::Writable {
+            owner_id: owner(),
+            role: WriteRole::Member,
+            quiescing_under: None,
+            protocol_pin: "2026-01-01".to_owned()
+        },
+        "a writer member is filed under the owner, with the album's own pin"
+    );
+    for (who, why) in [
+        (reader, "a reader may read and not write"),
+        (former, "a former member is a stranger to the write path"),
+        (UserId::new("stranger"), "an account never on the roster"),
+    ] {
+        assert_eq!(
+            authority
+                .album_write_access(&who, &album())
+                .await
+                .expect("the authority answers"),
+            AlbumWriteAccess::Denied,
+            "{why}"
+        );
+    }
 }

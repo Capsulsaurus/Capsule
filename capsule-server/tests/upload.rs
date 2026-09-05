@@ -895,6 +895,40 @@ async fn a_closed_album_stops_a_transfer_that_was_already_in_flight() {
 }
 
 #[tokio::test]
+async fn unsharing_a_member_stops_a_transfer_that_was_already_in_flight() {
+    // Finalization re-asks the authority for the *uploader*, so a writer removed from the roster
+    // between the first chunk and the last is refused where a closed album is refused.
+    use capsule_server::membership::MemberRole;
+
+    let (fixture, bearer) = with_bob(Some(MemberRole::Writer)).await;
+    let (first, second, whole) = blob();
+    let id = fixture
+        .open_session_with(&bobs_request(&fixture, &whole), &bearer)
+        .await;
+
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    fixture
+        .authority
+        .unshare(&album(), &capsule_server::store::UserId::new(BOB));
+
+    let response = fixture.chunk(&id, 4096, &second, &bearer).send().await;
+    response.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(
+        code(&response.json::<serde_json::Value>()),
+        "error.upload.envelope_rejected"
+    );
+    assert_eq!(
+        fixture.blobs.blob_count_for_test().await,
+        0,
+        "a write refused at finalization commits nothing"
+    );
+}
+
+#[tokio::test]
 async fn losing_the_finalize_claim_is_a_race_rather_than_a_failure() {
     let fixture = Fixture::working();
     let bearer = fixture.bearer().await;
@@ -1289,4 +1323,190 @@ async fn finalization_crash_between_rename_and_commit_leaves_no_dangling_referen
         Some(whole),
         "the bytes are unchanged: an identical ciphertext is one object",
     );
+}
+
+// ===========================================================================================
+// Member writes (`S-C51`)
+// ===========================================================================================
+
+/// A second account, on the seeded album's roster in whatever role a case puts it.
+const BOB: &str = "01937b7c-0000-7000-8000-0000000000b0";
+
+/// Bob's own device, in Bob's own directory: invariant 7 is answered from the *uploader's*
+/// directory, whoever the album belongs to.
+fn bobs_device() -> uuid::Uuid {
+    uuid::Uuid::parse_str("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5eb0").expect("a uuid")
+}
+
+/// A create request for `bytes`, as Bob's device would sign it.
+fn bobs_request(fixture: &Fixture, bytes: &[u8]) -> serde_json::Value {
+    let mut body = create_request(&fixture.clock, bytes, "original");
+    body["manifest_envelope"]["created_by_user"] = BOB.into();
+    body["manifest_envelope"]["created_by_device"] = bobs_device().to_string().into();
+    body
+}
+
+/// A fixture where Bob has a device and, when `role` is given, a seat on the seeded album.
+async fn with_bob(role: Option<capsule_server::membership::MemberRole>) -> (Fixture, String) {
+    let fixture = Fixture::working();
+    let bob = capsule_server::store::UserId::new(BOB);
+    fixture.authority.add_device(
+        &bob,
+        bobs_device(),
+        capsule_server::store::Clock::now(&*fixture.clock),
+    );
+    if let Some(role) = role {
+        fixture.authority.share(&album(), &bob, role);
+    }
+    let bearer = fixture.other_bearer(BOB).await;
+    (fixture, bearer)
+}
+
+#[tokio::test]
+async fn a_writer_member_uploads_into_the_owners_album_and_pays_for_it() {
+    use capsule_server::membership::MemberRole;
+    use capsule_server::quota::QuotaStore as _;
+
+    let (fixture, bearer) = with_bob(Some(MemberRole::Writer)).await;
+    let bytes = payload(b'm', 8192);
+
+    // No declared owner: the session is filed under the album's owner, because that is whose
+    // feed every member's devices read — and it is billed to the uploader, who spent the bytes.
+    let body: serde_json::Value = fixture
+        .client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .json(&bobs_request(&fixture, &bytes))
+        .send()
+        .await
+        .assert_status(StatusCode::CREATED)
+        .json();
+    let record = fixture
+        .uploads
+        .read_for_test(body["id"].as_str().expect("a session id"))
+        .await
+        .expect("the session is in the store");
+    assert_eq!(record.owner_id, owner(), "filed under the album owner");
+    assert_eq!(
+        record.upload_user_id,
+        capsule_server::store::UserId::new(BOB),
+        "uploaded by the member"
+    );
+    assert_eq!(
+        fixture
+            .quotas
+            .usage(&capsule_server::store::UserId::new(BOB))
+            .await
+            .expect("the ledger answers")
+            .used,
+        bytes.len() as u64,
+        "the uploader pays"
+    );
+    assert_eq!(
+        fixture
+            .quotas
+            .usage(&support::user())
+            .await
+            .expect("the ledger answers")
+            .used,
+        0,
+        "and the owner does not"
+    );
+
+    // Declaring the album owner explicitly agrees with the authority and is accepted.
+    let mut agreeing = bobs_request(&fixture, &payload(b'n', 8192));
+    agreeing["owner_id"] = owner().as_str().into();
+    fixture
+        .client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .json(&agreeing)
+        .send()
+        .await
+        .assert_status(StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn a_member_may_not_declare_anyone_but_the_album_owner_as_owner() {
+    use capsule_server::membership::MemberRole;
+
+    let (fixture, bearer) = with_bob(Some(MemberRole::Writer)).await;
+    let bytes = payload(b'o', 8192);
+    // Themselves included: a member's asset under the member's own namespace would be one the
+    // album owner's feed never carries.
+    for declared in [BOB, "01937b7c-0000-7000-8000-0000000000c0"] {
+        let mut body = bobs_request(&fixture, &bytes);
+        body["owner_id"] = declared.into();
+        let problem: serde_json::Value = fixture
+            .client
+            .post("/v1/upload")
+            .header("authorization", &bearer)
+            .json(&body)
+            .send()
+            .await
+            .assert_status(StatusCode::FORBIDDEN)
+            .json();
+        assert_eq!(problem["code"], "error.upload.owner_not_permitted");
+    }
+}
+
+/// Bob's create, refused with the album's one `403`.
+async fn refused(fixture: &Fixture, bearer: &str) -> serde_json::Value {
+    fixture
+        .client
+        .post("/v1/upload")
+        .header("authorization", bearer)
+        .json(&bobs_request(fixture, &payload(b'r', 8192)))
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN)
+        .json()
+}
+
+#[tokio::test]
+async fn a_reader_a_former_member_and_a_stranger_get_the_one_album_refusal() {
+    use capsule_server::membership::MemberRole;
+
+    // A reader: may fetch, may not add.
+    let (fixture, bearer) = with_bob(Some(MemberRole::Reader)).await;
+    let reader = refused(&fixture, &bearer).await;
+    assert_eq!(reader["code"], "error.upload.album_access_denied");
+
+    // A former writer: once on the roster, since removed. Same answer.
+    let (fixture, bearer) = with_bob(Some(MemberRole::Writer)).await;
+    fixture
+        .authority
+        .unshare(&album(), &capsule_server::store::UserId::new(BOB));
+    let former = refused(&fixture, &bearer).await;
+
+    // A stranger whose envelope is the same well-formed one the writer case above is admitted
+    // with: the authority refuses before the device or the battery is consulted, so a good
+    // envelope from a non-member buys nothing.
+    let (fixture, bearer) = with_bob(None).await;
+    let stranger = refused(&fixture, &bearer).await;
+
+    assert_eq!(reader, former, "one body for every refusal");
+    assert_eq!(former, stranger, "one body for every refusal");
+}
+
+#[tokio::test]
+async fn a_members_upload_is_still_checked_against_the_members_own_directory() {
+    use capsule_server::membership::MemberRole;
+
+    // Invariant 7 does not move with the namespace: Bob writes under the owner's album, but the
+    // device on the envelope has to be in *Bob's* directory — naming the owner's device is a
+    // device Bob has not published.
+    let (fixture, bearer) = with_bob(Some(MemberRole::Writer)).await;
+    let mut body = bobs_request(&fixture, &payload(b'd', 8192));
+    body["manifest_envelope"]["created_by_device"] = device().to_string().into();
+    let problem: serde_json::Value = fixture
+        .client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .json(&body)
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN)
+        .json();
+    assert_eq!(problem["code"], "error.upload.device_not_authorized");
 }

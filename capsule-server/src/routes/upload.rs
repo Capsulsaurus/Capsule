@@ -17,7 +17,7 @@
 //! | create `200` (active session for the tuple) | **kept and now documented.** Salvo declared it `undocumented()`; it is [`CreateReply::Existing`], carrying `X-Capsule-Offset` so a resuming client needs no second round trip |
 //! | create `400` "Bad request" (untyped) | **deleted.** Never constructed with a code; the 400 a malformed body actually produces is the `Json` extractor's, which Kynos declares |
 //! | create `401` | kept, and now the framework's — `Auth<AccessToken>` declares it and fills the `WWW-Authenticate` challenge |
-//! | create `403` | kept — album access, device authorization, on-behalf refusal |
+//! | create `403` | kept — album access, device authorization, a declared owner that is not the album's |
 //! | create `409 duplicate_blob` | **restored, with `S-C22`'s structured `existing_asset`.** It was deleted while this crate had no asset index, because it must name the existing asset and answering from blob presence alone would tell one account what another holds. `S-C37` answers it honestly and owner-scoped |
 //! | create `413` | kept — the declared size past the deployment ceiling |
 //! | create `426` | kept — the manifest envelope's `protocol_version` pin, refused by the envelope gate. The *header* handshake is no longer this surface's: [`crate::negotiation::ProtocolGate`] answers it before the handler runs, and the accepted window rides `X-Capsule-Protocol-Min`/`-Max` on every response |
@@ -187,10 +187,12 @@ pub struct CreateUploadRequest {
     /// for the album-upgrade ceremony; **required by this server**, which has no way to check
     /// invariant 6 without one and refuses rather than skipping it.
     pub album_id: Option<String>,
-    /// The owner the asset is filed under, when it is not the uploader.
+    /// The owner the asset is filed under, when the client wants to say so.
     ///
-    /// Refused when it is anyone but the uploader: an on-behalf upload needs a verified
-    /// relationship, and the port that would answer for one does not exist here.
+    /// Advisory, never decisive: the asset is filed under the **album's** owner, which the write
+    /// authority answers from the album record — the uploader when it is their album, the owner
+    /// when the uploader is a writer on its roster (`S-C51`). A declared owner that is anyone
+    /// else, the uploading member included, is refused `error.upload.owner_not_permitted`.
     pub owner_id: Option<String>,
     /// The album-upgrade intent this write belongs to, when it belongs to one.
     ///
@@ -742,28 +744,31 @@ pub async fn create_upload(
         });
     }
 
-    let owner = resolve_owner(&uploader, request.owner_id.as_deref())?;
-
     // Invariant 6, first half: this surface has no way to check an album it was not given.
     let Some(album) = request.album_id.as_deref().map(AlbumId::new) else {
         return Err(CreateRejection::album_access_denied());
     };
 
     let AlbumWriteAccess::Writable {
+        owner_id: owner,
+        role,
         protocol_pin,
         quiescing_under,
     } = upload
         .authority()
-        .album_write_access(&owner, &album)
+        .album_write_access(&uploader, &album)
         .await
         .map_err(|error| {
             tracing::error!(%error, "the write authority could not answer for an album");
             CreateRejection::unavailable()
         })?
     else {
-        tracing::info!(%owner, %album, "an upload was refused: no write capability");
+        tracing::info!(%uploader, %album, "an upload was refused: no write capability");
         return Err(CreateRejection::album_access_denied());
     };
+    tracing::debug!(%uploader, %owner, ?role, %album, "the album admits this upload");
+    // The namespace is the authority's answer; a declared owner may only agree with it.
+    resolve_owner(&uploader, &owner, request.owner_id.as_deref())?;
 
     // Upgrade quiescence (`S-C24`, versioning.md step 2). An album whose members have stopped
     // writing and are draining accepts **only** the ceremony's own writes, so a stale client that
@@ -906,7 +911,7 @@ pub async fn create_upload(
         })? {
         // A new bundle, or a sibling session of one already open. Both are the normal case.
         crate::index::Reservation::Created(_) | crate::index::Reservation::Joined(_) => {}
-        // The id names a row this caller does not own, or one filed under a different album or
+        // The id names a row filed under another album's owner, or under a different album or
         // pin. Answered as a plain refusal carrying nothing: the id is client-chosen, so a
         // guess costs the caller nothing and must buy them nothing.
         crate::index::Reservation::Conflict => {
@@ -1213,17 +1218,24 @@ async fn session_for(
     Ok(record)
 }
 
-/// The owner an upload is filed under.
+/// Check a declared `owner_id` against the namespace the authority filed the write under.
 ///
-/// An on-behalf upload needs a verified relationship between two accounts, and the port that
-/// would answer for one is not part of this slice. So it is refused rather than assumed: a
-/// server that cannot check a permission must not act as though it passed.
-fn resolve_owner(uploader: &UserId, declared: Option<&str>) -> Result<OwnerId, CreateRejection> {
+/// The owner is **not** taken from the request: it is the album's own, answered by the write
+/// authority from the album record, and an uploader who is a writer member of somebody else's
+/// album is filed under that owner whether or not they said so (`S-C51`). What the request may
+/// do is *agree* — name the album owner, or, when the uploader is the owner, themselves. Naming
+/// anyone else is refused: a member declaring their own account as owner would be asking for an
+/// asset the owner's feed never carries, and a stranger's declaration is not a permission.
+fn resolve_owner(
+    uploader: &UserId,
+    owner: &OwnerId,
+    declared: Option<&str>,
+) -> Result<(), CreateRejection> {
     match declared {
-        None => Ok(OwnerId::new(uploader.as_str())),
-        Some(owner) if owner == uploader.as_str() => Ok(OwnerId::new(owner)),
+        None => Ok(()),
+        Some(named) if named == owner.as_str() => Ok(()),
         Some(_) => {
-            tracing::info!(%uploader, "an on-behalf upload was refused: no relationship port");
+            tracing::info!(%uploader, %owner, "an upload was refused: the declared owner is not the album's");
             Err(CreateRejection::owner_not_permitted())
         }
     }
@@ -1384,7 +1396,7 @@ impl CreateRejection {
 
     fn owner_not_permitted() -> Self {
         Self::Forbidden {
-            detail: "uploading on behalf of another owner is not permitted".to_owned(),
+            detail: "the declared owner is not the album's owner".to_owned(),
             code: error_codes::UPLOAD_OWNER_NOT_PERMITTED,
         }
     }

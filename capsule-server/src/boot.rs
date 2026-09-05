@@ -453,6 +453,7 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
     let authority = Arc::new(ProvisionedAuthority::new(
         albums.clone(),
         directories.clone(),
+        members.clone(),
         clock.clone(),
     ));
     let receipts = Arc::new(InMemoryReceipts::new());

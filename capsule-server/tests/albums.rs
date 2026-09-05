@@ -11,10 +11,10 @@ mod support;
 use capsule_server::album::authority::ProvisionedAuthority;
 use capsule_server::album::{AlbumStore, ProvisionOutcome};
 use capsule_server::store::AlbumId;
-use capsule_server::upload::{AlbumWriteAccess, WriteAuthority};
+use capsule_server::upload::{AlbumWriteAccess, WriteAuthority, WriteRole};
 use kynos::http::StatusCode;
 use serde_json::{Value, json};
-use support::{Fixture, PROTOCOL_VERSION, owner};
+use support::{Fixture, PROTOCOL_VERSION, owner, user};
 
 /// A canonical derived album id.
 const DERIVED: &str = "0198f3c2-9c4a-7b3d-8f21-4d7c9a1b2e35";
@@ -88,12 +88,13 @@ async fn provisioning_makes_an_album_writable() {
     let authority = ProvisionedAuthority::new(
         fixture.albums.clone(),
         fixture.directories.clone(),
+        fixture.members.clone(),
         fixture.clock.clone(),
     );
 
     assert_eq!(
         authority
-            .album_write_access(&owner(), &album)
+            .album_write_access(&user(), &album)
             .await
             .expect("the authority answers"),
         AlbumWriteAccess::Denied,
@@ -110,10 +111,12 @@ async fn provisioning_makes_an_album_writable() {
 
     assert_eq!(
         authority
-            .album_write_access(&owner(), &album)
+            .album_write_access(&user(), &album)
             .await
             .expect("the authority answers"),
         AlbumWriteAccess::Writable {
+            owner_id: owner(),
+            role: WriteRole::Owner,
             quiescing_under: None,
             protocol_pin: PROTOCOL_VERSION.to_owned()
         },

@@ -252,7 +252,7 @@ row's remainder now lives.
 | S-C22 | Structured `duplicate_blob` ref + adopt in OpenAPI | server | S-C37 | S | RETIRED | done\* | server half; adopt endpoint → `S-C5`; undescribed extension → `S-C38` |
 | S-C23 | `revoke_all_sessions` with master-key proof | server | S-C42 | M | RETIRED | done | `S-C48` closed the access-token window it left open |
 | S-C24 | Album-upgrade server halves (quiescence/drain/lineage) | server | S-C42 | M-L | RETIRED | done\* | the ceremony's wire vocabulary was `mls`-gated and therefore unreachable; the projection deliberately gets no lineage |
-| S-C25 | Album provisioning + UUID album ids (unblocks push) | server | S-C29 | M | RETIRED | done\* | also lands the first real `WriteAuthority`; sharing widens it → `S-C4`/`S-C5` |
+| S-C25 | Album provisioning + UUID album ids (unblocks push) | server | S-C29 | M | RETIRED | done\* | also lands the first real `WriteAuthority`; sharing widened it in `S-C51`; the `AlbumStore` Postgres adapter is still owed |
 | S-C26 | Retire the plaintext album name/description columns | server | S-C25 | S | RETIRED | done | the Kynos schema never declared them; a document tripwire keeps it that way |
 | S-C27 | Wire-contract types on plain serde behind an adapter | server | — | M | RETIRED | part 1 done | DTO move → Kynos rebuild; status gaps → `S-C28` |
 | S-C28 | Publish the statuses the server actually returns | server | S-C27 | S | RETIRED | done\* | auth surface closed; folds into each remaining port |
@@ -2190,9 +2190,10 @@ working on a surface written after it.
 - **The name refusal is a `422`, not a silent drop.** The body is strict, so a `name` or
   `description` is refused — a client is told the server will not hold album titles rather than
   left to assume it did. `S-C26` retires the columns themselves.
-- **Owed:** sharing widens "writable" from *owner* to *member*, which is `S-C4`/`S-C5`; until
-  then an album is writable only by the account it was provisioned to, which is the safe
-  direction. The Postgres adapter is owed with the rest.
+- **Owed:** sharing widens "writable" from *owner* to *member* — landed with `S-C51`, not with
+  `S-C4`/`S-C5` (a share link is not a member): `album_write_access` is keyed on the caller and
+  answers a writer on the album's roster with the owner's namespace. The Postgres adapter for
+  `AlbumStore` is still owed with the rest.
 
 [`WriteAuthority`]: #s-c20--ground-invariant-7s-floor-in-the-device-directory
 
