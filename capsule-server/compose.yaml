@@ -71,6 +71,64 @@ services:
     volumes:
       - valkey_data:/data:Z,U
 
+  # A development identity provider for the OIDC relying party (slice `S-N1`, issue #407). Not a
+  # dependency of the server — a deployment without `OIDC_ISSUER` never talks to it — so it is a
+  # separate profile: `podman compose -f capsule-server/compose.yaml --profile oidc up -d dex`.
+  #
+  # Point the server at it with
+  #
+  #   OIDC_ISSUER=http://127.0.0.1:5556/dex
+  #   OIDC_CLIENT_ID=capsule
+  #
+  # and no client secret: `capsule` is a **public** client, which is what a CLI or desktop app
+  # is (RFC 8252 §8.5), and dex admits `http://127.0.0.1:*` and `http://localhost:*` redirects
+  # for public clients without listing them — so the CLI's ephemeral loopback listener works
+  # unconfigured, and `OIDC_ALLOW_LOOPBACK_REDIRECT` (on by default) admits the same on Capsule's
+  # side. The issuer is plain `http` on loopback, the one carve-out `auth::oidc::discovery`
+  # makes; a real deployment's issuer is `https`.
+  #
+  # Sign in as `admin@example.com` / `password` (the bcrypt below is dex's own documented hash
+  # for that word). Development credentials in a checked-in file, like Postgres's above; the
+  # port is loopback-only for the same reason.
+  #
+  # The dex configuration is inline (`configs.*.content`) rather than a file beside this one,
+  # so the stack stays one file. docker compose ≥ 2.23.1 and podman-compose ≥ 1.2.0 read it.
+  dex:
+    image: ghcr.io/dexidp/dex:v2.44.0
+    profiles: ["oidc"]
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    ports:
+      - "127.0.0.1:5556:5556"
+    configs:
+      - source: dex_config
+        target: /etc/dex/config.yaml
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:5556/dex/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+configs:
+  dex_config:
+    content: |
+      issuer: http://127.0.0.1:5556/dex
+      storage:
+        type: memory
+      web:
+        http: 0.0.0.0:5556
+      oauth2:
+        skipApprovalScreen: true
+      staticClients:
+        - id: capsule
+          name: Capsule (development)
+          public: true
+      enablePasswordDB: true
+      staticPasswords:
+        - email: admin@example.com
+          hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+          username: admin
+          userID: 08a8684b-db88-4b73-90a9-3cd1661f5466
+
 volumes:
   postgres_data:
   valkey_data:
