@@ -19,6 +19,9 @@
 //! Rust ↔ Swift contract:
 //!
 //! - [`Catalog`] — a thread-safe handle over the SQLite catalog.
+//! - [`render_lqip`] / [`LqipPlaceholder`] — the sidecar `lqip` record rendered to packed RGBA8
+//!   through `capsule_core::lqip`, the same implementation the import pipeline encodes with and
+//!   `capsule-wasm` decodes with (slice `S-B14`).
 //! - [`AssetRecord`], [`AssetStackRecord`], [`StackMemberRecord`],
 //!   [`AlbumRecord`] — catalog row mirrors.
 //! - [`AssetSidecarRecord`] / [`serialize_sidecar`] / [`deserialize_sidecar`] —
@@ -43,7 +46,7 @@ mod gate;
 mod records;
 mod sidecar;
 
-pub use catalog::Catalog;
+pub use catalog::{Catalog, LqipPlaceholder, render_lqip};
 pub use error::CatalogError;
 pub use gate::{GatedView, LocalAuthError, LocalAuthGate};
 pub use records::{AlbumRecord, AssetRecord, AssetStackRecord, StackMemberRecord};

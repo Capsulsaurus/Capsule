@@ -21,7 +21,7 @@ fn main() {
     build_rest_client();
 }
 
-/// Generate the typed REST client from the committed OpenAPI 3.1 schema (slice `S-D8`).
+/// Generate the typed REST client from the committed OpenAPI 3.2 schema (slice `S-D8`).
 fn build_rest_client() {
     let manifest_dir = PathBuf::from(
         std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by cargo"),
@@ -73,8 +73,11 @@ fn build_rest_client() {
     // spec* — and the alternative is worse in a way worth naming: re-labelling them
     // `application/octet-stream` to satisfy a generator would tell every client that a document
     // with a schema it knows is opaque bytes, which is the thing the media type exists to deny.
-    // `capsule_sdk::directory` already hand-writes two of them for the old reason; the other two
-    // have no client yet.
+    // All four are hand-written now, and each one says in its own module doc that spargen is
+    // the only reason: `capsule_sdk::directory` covers the two device-directory operations,
+    // `capsule_sdk::upgrade` the proposal, and `capsule_sdk::verify`'s
+    // `StorageVerifyClient::fetch_receipt` the receipt. Teaching spargen the media type retires
+    // all four narrowings and all four clients — see the tracking issue on the generator.
     let omitted = [
         spargen::OmitRule::operation(spargen::OmitMethod::Post, "/v1/auth/devices/directory"),
         spargen::OmitRule::operation(

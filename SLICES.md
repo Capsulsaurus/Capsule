@@ -210,11 +210,11 @@ row's remainder now lives.
 | S-A9 | Add-id counter reseed at `Workspace` open | core-crypto | — | S | ACTIVE | done | |
 | S-A10 | Durable album-key persistence + library open plumbing | core-crypto | — | L | ACTIVE | done | |
 | S-A11 | Publish the DEK in the device directory | core-crypto | — | M | ACTIVE | done | |
-| S-B1 | Thumbnail/LQIP generation | media/import | — | L | RETIRED | ready | |
+| S-B1 | Thumbnail/LQIP generation | media/import | — | L | ACTIVE | done\* | lossy JXL/AVIF encode, preview tier, HEIC/RAW decode → #437; WebP → #444 |
 | S-B2 | Signed-path import-executor rewrite | media/import | S-B1 | L | MIXED | done\* | durable album keys → `S-A10` |
 | S-B3 | Streaming import (probe, `total_size`, drive mode) | media/import | S-D1, S-D4 | L | MIXED | done | |
 | S-B4 | Staged uploads (low-data tier ladder) | media/import | S-C1, S-C2, S-D1 | M | MIXED | done | |
-| S-B5 | Video derivatives (first-frame still + H.264 preview) | media/import | S-B1 | M | RETIRED | ready | |
+| S-B5 | Video derivatives (first-frame still + H.264 preview) | media/import | S-B1 | M | ACTIVE | ready | `rawshift-video` unpublished → #438 |
 | S-B6 | Google Takeout importer | media/import | S-B2 | M | MIXED | done\* | sidecar-enrichment write → `S-B10` |
 | S-B7 | iCloud export importer | media/import | S-B6 | M | MIXED | post-v1 | |
 | S-B8 | Immich importer | media/import | S-B6 | M | MIXED | post-v1 | |
@@ -223,8 +223,8 @@ row's remainder now lives.
 | S-B11 | CLI `import --provider takeout` + real-archive run | media/import | S-B10 | S | ACTIVE | done\* | synthesized archive only; real export owed |
 | S-B18 | No CLI surface shows what the importer actually wrote | media/import | S-B10 | S | ACTIVE | ready | users cannot verify enrichment |
 | S-B12 | Base default-album resolution (`resolve_default_album`) | media/import | — | M | ACTIVE | done | scope-override + source-kind rows → post-v1 |
-| S-B13 | Codec stubs → typed `UnsupportedFormat` (no panics) | media/import | — | M | RETIRED | ready | |
-| S-B14 | LQIP on Chromahash 0.7.1 in `capsule-core::lqip` | media/import | — | M | ACTIVE | done | wasm entry point owed to the browser-`lqip` slice |
+| S-B13 | Codec stubs → typed `UnsupportedFormat` (no panics) | media/import | — | M | ACTIVE | done | |
+| S-B14 | LQIP on Chromahash 0.7.1 in `capsule-core::lqip` | media/import | — | M | ACTIVE | done | |
 | S-B15 | Importer-formed stacks exist only in the index | media/import | S-D21 | M | ACTIVE | done | rebuild guard kept as pre-`S-B15` compatibility |
 | S-B16 | Every import stamped by import time, not capture time | media/import | — | S | ACTIVE | done | found by the CLI round-trip test |
 | S-B17 | Repair capture timestamps written before `S-B16` | media/import | S-B16 | M | ACTIVE | ready | the wrong value is in *signed* bytes |
@@ -302,12 +302,12 @@ row's remainder now lives.
 | S-D9 | capsule-sdk uniffi FFI bindings | sdk/clients | S-F1, S-D7 | M | RETIRED | ready | Swift harness → `S-P8`; Kotlin harness → owed-CI |
 | S-D10 | Adverse-network hardening | sdk/clients | S-D1, S-D2 | M | RETIRED | ready | |
 | S-D11 | Client cohort emission + devices grouping UI | sdk/clients | S-C13, S-D7 | M | MIXED | done\* | iOS reader → `S-P6`; devices screen → post-v1; device_id → `S-N3` |
-| S-D12 | Recovery verification cadence + guided re-wrap | sdk/clients | S-C12 | M | MIXED | done | |
+| S-D12 | Recovery verification cadence + guided re-wrap | sdk/clients | S-C12 | M | MIXED | done | `store_escrow` discards `stored_at`/`replaced` → issue #442 |
 | S-D13 | Culling workflow client UX | sdk/clients | — | M | ACTIVE | done | |
 | S-D14 | Local-gallery security gates | sdk/clients | — | S | ACTIVE | done | |
 | S-D15 | Exact client build identification | sdk/clients | — | S | MIXED | done | |
 | S-D16 | Standalone `capsule cull` command | sdk/clients | S-A10 | S | ACTIVE | done | |
-| S-D17 | Typed REST client reactive 401-retry-once | sdk/clients | — | S | RETIRED | ready | |
+| S-D17 | Typed REST client reactive 401-retry-once | sdk/clients | — | S | MIXED | done | |
 | S-D18 | `capsule push` — drive `capsule_sdk::upload` from CLI | sdk/clients | S-A10 | M | MIXED | done | |
 | S-D19 | Hidden-view DB projection + gate wiring | sdk/clients | — | S | ACTIVE | done | rebuild un-hides → `S-D21` |
 | S-D21 | Index rebuild loses gated state (two sidecar shapes) | sdk/clients | S-D19 | M | ACTIVE | done | importer stacks → `S-B15`; unsigned migration → `S-D24`; no hidden writer → `S-D25` |
@@ -695,10 +695,43 @@ workspace at all**, so every still import is a `DeferredNoCodec` until Rawshift 
 - **Tier:** Unit + Smoke. **Blocks:** S-B2, S-B5.
 - **Landed in retired code, and retired 2026-09-01 by `S-C59`:** generation shipped over injected
   per-platform encoder seams and was green in this workspace, but it lived in
-  `capsule_core::media` — review material. It is now in `legacy-review/media-pipeline/`, together
-  with `lifecycle/derivatives.rs`, its only caller. **Re-scoped:** re-land on the Rawshift-backed
-  pipeline. The signed `DerivativeManifest` chain and the sidecar `lqip` field are `ACTIVE` and
-  stay — the field stays here, its producer moves to `S-B14`.
+  `capsule_core::media` — review material. It went to `legacy-review/media-pipeline/`, together
+  with `lifecycle/derivatives.rs`, its only caller.
+- **Re-landed 2026-09-02 on the Rawshift-backed pipeline (issue #410).** `capsule-core::media`
+  exists again, over **`rawshift-image` 0.1.1 from crates.io** (a registry dependency, not the
+  pinned submodule) behind a `media` feature that `native` implies and the wasm32 sealing build
+  excludes. The injected `StillEncoder` seam is **gone**: the per-platform encoder was there
+  because core linked no codec, and it no longer needs to. What ships:
+  - `media::{detect,decode,resize,derivative,error}` as private submodules behind one barrel —
+    the closed `StillFormat` set with a Capsule-owned magic-byte table, the `Decoder` seam with
+    a pre-decode 128 Mpx budget and an unwind boundary, a deterministic integer area-average
+    downscale (the crate has no resize, and a derivative's bytes are signed), the closed
+    `DerivativeFormat` set with the `original` sentinel, and `MediaError`.
+  - the **thumbnail tier** at 256 px as **JXL** — the table's committed *master* format — signed
+    and hash-chained through the same two-signature `DerivativeCore::sign` path assets use, and
+    persisted at the layout the upload bundle reader already reads. The declared q=50 is advisory:
+    the pure-Rust `zune-jpegxl` backend is lossless, which a test asserts rather than hides.
+  - **WebP was the first choice and CI refuted it.** `image/webp` is in the format table and
+    `libwebp` has exactly the q=50 knob, but `rawshift-image`'s WebP module passes `*const i8`
+    where `libwebp-sys` 0.14.4 declares `*const c_char` — `u8` on aarch64 — so the feature is an
+    E0308 on every mobile target, in both directions (the module compiles under
+    `any(webp-decode, webp-encode)`). WebP is therefore a recognised-but-undecodable format here;
+    the upstream fix is filed as #444.
+  - **Detection is Capsule's, not the crate's.** `rawshift-image`'s own `detect_standard_format`
+    gates its HEIC arm on `heic-decode`, so delegating would make the typed refusal for a format
+    depend on whether it can be decoded — a HEIC would arrive as "not a still" instead of "a
+    still whose derivatives are backfillable". A test pins agreement between the two tables for
+    every format both define unconditionally.
+  - **Every encode passes `MetadataEmbedOptions::none()`.** `rawshift-core`'s default is `all()`,
+    so a default-configured encode copies the source's EXIF — GPS included — into the thumbnail.
+    A test demonstrates the leak with the crate's own default and then asserts Capsule's
+    derivative carries no `EXIF`/`XMP`/`ICCP` chunk and none of the source's GPS rationals.
+- **Owed → #437 and #444.** A *lossy* JXL master, the AVIF delivery variant, the preview tier and
+  HEIC/RAW decode (#437); WebP in both directions (#444). None is blocked on a design question: a
+  lossy JXL needs C libjxl, AVIF encode needs `nasm` on every x86_64 build host, HEIC/AVIF decode
+  need system libheif/libdav1d, and WebP needs one upstream cast widened. All are visible today as
+  typed `MediaError::UnsupportedFormat` or as per-`(tier, format)` deferrals counted by
+  `ImportExecutionSummary::deferred_format_count()`, never as silent absence.
 
 ### S-B2 — Signed-path import-executor rewrite
 
@@ -761,8 +794,22 @@ workspace at all**, so every still import is a `DeferredNoCodec` until Rawshift 
 - **Done when:** a fixture video yields both tiers with signed manifests; the
   closed-format rejection covers the video rows of the tier table.
 - **Tier:** Unit + Smoke.
-- **Landed in retired code:** ships today behind the injected encoder seam; the transcode
-  half is `capsule-core::media` and re-scopes onto the Rawshift-backed pipeline.
+- **Landed in retired code, and re-scoped 2026-09-02 (issue #410 → #438).** It shipped behind
+  the injected encoder seam; that seam is gone with `S-B1`'s re-land, so this slice now sits on
+  the live `capsule-core::media` pipeline and is `ACTIVE` — and still unimplemented.
+- **Why it is not just another format.** `rawshift-video` is **not published on crates.io** (the
+  `rawshift` facade's `video` feature points at an unreleased crate) and the transcode toolchain
+  — demux, video decode, H.264/AAC encode — touches nothing the still path does. That is the
+  split from `S-B1`, restated: a distinct dependency decision with its own licence surface, which
+  `design/licensing.md` already names as the most likely route by which copyleft enters Capsule.
+- **What happens today:** a video's bytes sniff to no `media::StillFormat`, so every video import
+  reports `DerivativeStatus::NotAKnownStill` and carries no thumbnail, preview or LQIP. The
+  original is still imported signed, encrypted and `verify_asset`-accepting, so this is a
+  cosmetic gap, not data loss. `content_type` stays extension-derived for video, because
+  detection has no video half yet.
+- **`capsule-core::media::video` is the one remaining `planned-modules.txt` row** for this lane
+  (`#410` narrowed the `capsule-core::media` row to it), which is what keeps `check-docs-truth`
+  honest about `capsule-core::media::video::derivative` in `design/licensing.md`.
 
 ### S-B6 — Google Takeout importer
 
@@ -937,10 +984,37 @@ workspace at all**, so every still import is a `DeferredNoCodec` until Rawshift 
   pins that HEIC and RAW-only originals import and self-verify **without** derivatives, and a
   planner test guards that undecodable stills are never skipped at plan time;
   `mise run check-rust` green. **Tier:** Unit.
-- **Landed in retired code:** shipped and green on this branch, but the whole surface is
-  `capsule-core::media`. **Re-scoped:** the uninhabited-stub discipline and the
-  `is_decodable`/`from_extension` coverage table are the contract the Rawshift-backed
-  rebuild inherits; `DerivativeStatus` on `ImportOutcome` is `ACTIVE` and stays.
+- **Landed in retired code:** shipped and green on this branch, but the whole surface was
+  `capsule-core::media`. The uninhabited-stub discipline and the `is_decodable`/`from_extension`
+  coverage table were the contract the Rawshift-backed rebuild had to inherit.
+- **Re-landed 2026-09-02 (issue #410), and the shape it inherited changed for the better.**
+  There are no stubs at all now — uninhabited or otherwise — because there is nothing to stub:
+  `rawshift-image` either has a codec or it does not, and the coverage table
+  (`StillFormat::is_decodable` over `SUPPORTED_STILL_FORMATS`) is a *gate checked before any
+  decoder runs* rather than a property of a type nobody can construct. `rg 'unimplemented!\(|todo!\('
+  capsule-core/src/media` is empty by construction.
+  - `MediaError::UnsupportedFormat { format, op }` carries the `FormatOp` — a build can decode a
+    format it cannot encode, and the message has to say which half is missing.
+  - **The two-reason distinction is observable again**, and now rests on the bytes rather than the
+    extension: a HEIC is `DeferredNoCodec` (recognised, no codec here, backfillable) while a
+    `.jpg` that is not a JPEG is `DecodeFailed` (a format we do decode, failing on these bytes).
+    `S-C59` had collapsed both into deferrals and the executor test said so; it asserts the
+    distinction again.
+  - **A third reason joined them, per format rather than per asset.**
+    `StillDerivatives::deferred` records each `(tier, format)` pair with no encoder, and
+    `ImportExecutionSummary::deferred_format_count()` sums them. A decoded JPEG is `Decoded` with
+    one generated thumbnail and two deferred formats — the number that falls to zero as #437
+    lands, rather than a gap only a doc mentions.
+  - **No panic can reach an import.** Untrusted bytes go through a pre-decode pixel budget
+    (`MAX_DECODE_PIXELS`, **128 Mpx** — the bomb is inside the decoder, which works in RGB `u16`,
+    and the honest peak at that ceiling is ~2.5 GB across the decoder's samples, the
+    alpha-dropping realloc, the RGBA8 copy and the widening back for the encode. `native` implies
+    `media`, so that peak lands on a phone as an OOM kill rather than an error, which is why the
+    ceiling sits ~25% above a 102 Mpx medium-format frame rather than as high as an allocation
+    bomb would require) and
+    a `catch_unwind` boundary that maps a third-party decoder's panic to `DecodeFailed`. Both are
+    tested, the panic case through an injected `Decoder`.
+- **Originals always import**, unchanged: codec coverage gates *derivatives*, never *admission*.
 
 ### S-B14 — LQIP on Chromahash 0.7.1, in its own module
 
@@ -1001,8 +1075,25 @@ workspace at all**, so every still import is a `DeferredNoCodec` until Rawshift 
   21 bytes — `COMPACT_TIER`'s length — which is the concrete proof that byte length cannot
   discriminate a stale payload. Both are rejected by `from_bytes` and render as the solid
   dominant-colour fill, never noise.
-- **Owed:** no `wasm_bindgen` export exists. wasm links and compiles the identical encoder, but the
-  browser has no decrypted `lqip` to decode yet, so the entry point belongs to that slice.
+- **The producer and the exports landed 2026-09-02 (issue #410), and the module has callers on
+  all three surfaces.** `lqip` had been fully tested and entirely unreachable: nothing decoded, so
+  nothing encoded a placeholder.
+  - **Producer:** `Workspace::prepare_still` encodes from the **full-resolution,
+    orientation-applied** frame — not from the thumbnail, because chromahash band-limits on the
+    read side via `decode_capped` and pre-resizing would silently cap fidelity the format can
+    carry. The signed sidecar now carries a real 32-byte payload at `format_version` 1.
+  - **Browser:** `capsule-wasm`'s `decodeLqip` (`WasmLqipImage`) returns packed RGBA the viewer
+    hands to `putImageData`. The JS boundary is a `map`/`ok_or_else` over a pure helper, because
+    `JsError` cannot be constructed off-wasm and a host test reaching the error arm would abort
+    the test binary rather than fail an assertion.
+  - **Native:** `capsule-core-ffi`'s `render_lqip` → `LqipPlaceholder`. A free function rather
+    than a `Catalog` method: the `assets` table's `chromahash`/`dominant_color` columns are NULL
+    and must stay so until `library::rebuild` projects them identically, or a rebuilt index would
+    disagree with a freshly written one — so it takes the record the caller already holds from the
+    decrypted sidecar rather than pretending the index has it.
+  - The cross-surface criterion is asserted rather than assumed: both exports are checked
+    byte-identical to `Lqip::decode_capped` for a real payload, and both paint the
+    `dominant_color` fill for an unknown version or a payload `from_bytes` rejects.
 
 ### S-B15 — Importer-formed stacks exist only in the index
 
@@ -4129,6 +4220,24 @@ Kynos server, which cannot be written until `S-C53` gives the server a way to cr
 - **Tier:** Unit + Smoke.
 - **Landed:** the cadence scheduler, the verifier, and the re-wrap are `ACTIVE` core; only
   the escrow store/replace calls re-scope.
+- **Gap** (found 2026-09-01, issue #408): **the networked half never worked against a real
+  server.** `capsule-sdk/src/recovery/mod.rs` built `{api_root}/backup/escrow` from a `const`
+  — the Salvo document's path — and sent it with hand-written `reqwest` calls, while the Kynos
+  contract serves `GET`/`PUT /v1/auth/escrow`. So enroll, the stale-cache refresh and the
+  guided re-wrap's escrow replace all failed on a live server while this row read `done`. It
+  survived `S-D28`'s re-source because a route in a string constant is checked by no gate and
+  the module's own mock answered whichever path it was handed.
+- **Closed:** the two operations are `application/octet-stream` in each direction, which
+  `spargen` lowers, so both were already generated and neither was narrowed in `build.rs`.
+  `RecoveryClient` now holds an `AuthenticatedClient` and orchestrates
+  `fetch_escrow`/`store_escrow`, so the path is a function of the committed document and
+  cannot drift again. Both in-repo mocks route on `/v1/auth/escrow` and answer `501` off it,
+  and `capsule-server/tests/sdk_client.rs` asserts the route against the real router from both
+  ends — what the SDK stored is read back at `/v1/auth/escrow`, and a rotation seeded there is
+  what the SDK fetches next.
+- **Owed:** `store_escrow` logs `stored_at`/`replaced` instead of returning them, so the
+  stale-cache rule still refreshes on a failed compare rather than on a known-stale timestamp
+  and `guided_rewrap` cannot tell a first enrollment from a rotation → issue #442.
 
 ### S-D13 — Culling workflow client UX
 
@@ -4196,8 +4305,31 @@ Kynos server, which cannot be written until `S-C53` gives the server a way to cr
 - **Done when:** a mocked-clock race test passes (expired-at-server, valid-at-client →
   one refresh, one retry, no loop). **Tier:** Unit.
 - **Note:** the layer sits above the generated client, so write it once and it survives
-  the schema re-source; it is `RETIRED` only because the client under it is regenerated
-  from Kynos.
+  the schema re-source. That is why the row is `MIXED` rather than `RETIRED`: the client
+  underneath is regenerated from Kynos, but the layer itself is live code in this workspace
+  and nothing about it re-scopes.
+- **Landed** (2026-09-01, issue #408): `capsule_sdk::client::RefreshOn401`, an
+  `rest::HttpBackend` wrapping `ReqwestBackend`, installed by `AuthenticatedClient` through
+  `Client::with_backend`. On a `401` it refreshes once through a new `pub(crate)
+  Session::refresh_rejected` — `ensure_refreshed(Rejected(stale))`, so the existing
+  single-flight gate coalesces on the exact token the server refused — and replays the request
+  once. No generated code is touched and every generated operation is covered at once.
+  - **Not spargen's `Middleware`:** `Next::run` takes `self` by value and `Next` is neither
+    `Clone` nor constructible outside the generated runtime, so a middleware cannot send twice.
+    `RetryBackend` is the precedent followed instead, including its rule that a request whose
+    `try_clone()` is `None` (a one-shot streaming body) is executed once and never replayed.
+  - **Exactly once by construction**, not by a loop counter. A refresh that itself fails
+    surfaces the *server's* `401` rather than a synthesized transport error, so the typed
+    `Status401` mapping still fires and the caller reads the `error.*` code — which matters
+    because an unreadable revocation ledger is also rendered as `401`.
+  - **Proven** by four unit cases in `capsule-sdk/src/client.rs` and, over a socket against
+    the real router, by `a_token_the_server_stopped_honouring_is_refreshed_and_the_call_replayed`
+    in `capsule-server/tests/sdk_client.rs`: the server validates `exp` against its injected
+    clock, so advancing the fixture past `ACCESS_TOKEN_TTL` revokes the access token for real
+    while the refresh token lives.
+  - **`capsule_sdk::sync` keeps its own per-call `401` loop**, deliberately: it builds its own
+    `rest::Client`, supports a static-token mode with no session to refresh, and interleaves
+    the `401` path with the shared retry engine's transient class.
 
 ### S-D18 — `capsule push`
 

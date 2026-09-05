@@ -4,10 +4,11 @@
 //! [`Workspace::import_asset_with`](crate::lifecycle::Workspace::import_asset_with): every member
 //! becomes a signed [`SidecarV1`](crate::sidecar::SidecarV1) + signed manifest +
 //! append-only provenance, self-verified through
-//! [`verify_asset`](crate::crypto::verify_asset::verify_asset), and — when a still encoder is
-//! attached to the workspace — with signed thumbnail/preview derivatives + an LQIP in the
-//! sidecar. No still encoder exists in this build: the media stack is retired to
-//! `legacy-review/` and restoring it is `S-B1`.
+//! [`verify_asset`](crate::crypto::verify_asset::verify_asset), and — when the still decodes —
+//! with a chromahash `lqip` in the sidecar and signed thumbnail derivatives on disk
+//! ([`capsule_core::media`](crate::media), slices `S-B1`/`S-B13`/`S-B14`). A format with no
+//! codec in this build still imports, as a signed original with the gap recorded rather than
+//! hidden.
 //!
 //! This retired the legacy unsigned `AssetSidecar` write path from the executor; the production
 //! write path itself is now gone (`S-G4`) — no code writes unsigned sidecars anymore. Only the
@@ -246,6 +247,7 @@ fn execute_candidate(
                     path.clone(),
                     ImportOutcome::Imported {
                         derivatives: receipt.derivatives,
+                        deferred_formats: receipt.deferred_formats,
                     },
                 ));
             }
@@ -419,22 +421,28 @@ mod tests {
 
     /// **The S-B13 contract (slice `S-B13`).** An original whose format has no codec in this
     /// build is imported as a signed, encrypted, verifiable asset — it simply arrives without a
-    /// thumbnail/preview, and the run summary says so.
+    /// thumbnail, and the run summary says so.
     ///
-    /// **`S-C59` narrowed what this can assert.** It used to pin the distinction the logs must
-    /// preserve: `iphone.heic` an *expected* deferral, `snap.jpg` a *genuine* decode failure of a
-    /// format we do support. With `capsule_core::media` retired there is no decoder for any
-    /// format, so both are deferrals and the distinction is unobservable — it comes back with
-    /// Rawshift. What survives is the half that matters most and would be the worst to lose
-    /// silently: **an undecodable original is still a signed, encrypted, self-verifying backup**,
-    /// and both files land.
+    /// **The distinction is observable again.** `S-C59` retired the decoder and collapsed both
+    /// files below into deferrals, which made the logs' most useful property untestable. With
+    /// `capsule_core::media` on `rawshift-image` the two are apart once more, and they are apart
+    /// for the reason that matters rather than by extension: `iphone.heic` is a format Capsule
+    /// *recognises and cannot decode* (an expected, backfillable gap), while `snap.jpg` is a
+    /// format it can decode whose bytes are not a JPEG (a real problem). Both still land as
+    /// signed, encrypted, self-verifying backups, which is the half that would be worst to lose.
     #[test]
     fn originals_with_no_codec_are_still_imported_and_signed() {
         use crate::lifecycle::DerivativeStatus;
 
         let src = TempDir::new().unwrap();
         let lib_dir = TempDir::new().unwrap();
-        fs::write(src.path().join("iphone.heic"), b"fake heic bytes").unwrap();
+        // A real ISO-BMFF `ftyp heic` header, so the classification rests on the **bytes** —
+        // which is what the doc above claims. `b"fake heic bytes"` carried no `ftyp` and
+        // silently exercised the extension fallback instead.
+        let mut heic = vec![0, 0, 0, 0x20];
+        heic.extend_from_slice(b"ftypheic");
+        heic.extend_from_slice(&[0; 16]);
+        fs::write(src.path().join("iphone.heic"), &heic).unwrap();
         fs::write(src.path().join("snap.jpg"), b"not really a jpeg").unwrap();
 
         let mut ws = signed_workspace(lib_dir.path());
@@ -452,28 +460,32 @@ mod tests {
         assert_eq!(summary.imported_count(), 2, "both originals are backed up");
         assert_eq!(
             summary.deferred_derivative_count(),
-            2,
-            "with no decoder in the build, every still is a codec deferral"
+            1,
+            "the HEIC is an expected codec deferral"
         );
         assert_eq!(
             summary.decode_failed_count(),
+            1,
+            "the .jpg is a format we do decode, failing on these bytes — a real problem"
+        );
+        assert_eq!(
+            summary.deferred_format_count(),
             0,
-            "nothing is *attempted*, so nothing can fail to decode — the distinction returns \
-             with Rawshift"
+            "nothing decoded, so no per-format variant was even attempted"
         );
 
-        // Reported per file rather than only in aggregate, so the shape a caller reads is
-        // pinned even while there is one reason rather than two.
+        // Reported per file rather than only in aggregate, so a caller reads the reason for the
+        // file in front of it.
         for (path, outcome) in &summary.outcomes {
-            let ImportOutcome::Imported { derivatives } = outcome else {
+            let ImportOutcome::Imported { derivatives, .. } = outcome else {
                 panic!("{} should have imported, got {outcome:?}", path.display());
             };
-            assert_eq!(
-                *derivatives,
-                DerivativeStatus::DeferredNoCodec,
-                "for {}",
-                path.display()
-            );
+            let expected = if path.extension().is_some_and(|e| e == "heic") {
+                DerivativeStatus::DeferredNoCodec
+            } else {
+                DerivativeStatus::DecodeFailed
+            };
+            assert_eq!(*derivatives, expected, "for {}", path.display());
         }
 
         // Both land on the signed path and self-verify — a missing thumbnail is not a missing
@@ -488,6 +500,11 @@ mod tests {
     /// A RAW-only candidate — no same-stem JPEG to fall back on — still lands as a signed,
     /// self-verifying original. RAW has no decoder in this build, which is exactly why this
     /// needs pinning: the archive is the whole point, the derivative is a bonus (slice `S-B13`).
+    ///
+    /// A Sony ARW is a TIFF container, so its *header* says TIFF and only the extension names
+    /// the family. This fixture is not a real ARW, so the classification here rests on the
+    /// extension fallback — which is the path a real one would also take for the family, and
+    /// either way the outcome is the same expected deferral.
     #[test]
     fn raw_only_candidate_lands_as_a_signed_original() {
         use crate::lifecycle::DerivativeStatus;
@@ -512,7 +529,8 @@ mod tests {
         assert!(matches!(
             summary.outcomes[0].1,
             ImportOutcome::Imported {
-                derivatives: DerivativeStatus::DeferredNoCodec
+                derivatives: DerivativeStatus::DeferredNoCodec,
+                deferred_formats: 0,
             }
         ));
 
