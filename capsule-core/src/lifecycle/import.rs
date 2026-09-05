@@ -952,6 +952,53 @@ mod tests {
         assert_ne!(ws.verify(&id).unwrap(), VerifyOutcome::Accept);
     }
 
+    /// A lifecycle write — caption, tag, soft-delete, restore — touches the signed artifacts
+    /// and nothing else: the original is neither read nor rewritten. The original is made
+    /// unreadable for the duration (so any read would fail the edit), and its mtime and bytes
+    /// are unchanged afterwards.
+    #[test]
+    fn metadata_edits_neither_read_nor_rewrite_the_original() {
+        use std::time::{Duration, SystemTime};
+
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let img = src.path().join("photo.jpg");
+        let bytes = b"\xFF\xD8\xFF never touched by an edit".to_vec();
+        fs::write(&img, &bytes).unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Trip").unwrap();
+        let id = ws.import_asset(album, &img).unwrap();
+        let media = ws.media_path(ws.asset(&id).unwrap());
+
+        let long_ago = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        fs::File::options()
+            .write(true)
+            .open(&media)
+            .unwrap()
+            .set_modified(long_ago)
+            .unwrap();
+        #[cfg(unix)]
+        let readable = {
+            use std::os::unix::fs::PermissionsExt;
+            let readable = fs::metadata(&media).unwrap().permissions();
+            fs::set_permissions(&media, fs::Permissions::from_mode(0o000)).unwrap();
+            readable
+        };
+
+        ws.set_caption(&id, "edited without touching the bytes")
+            .unwrap();
+        ws.tag_add(&id, "untouched").unwrap();
+        ws.soft_delete(&id, 30).unwrap();
+        ws.restore(&id).unwrap();
+
+        #[cfg(unix)]
+        fs::set_permissions(&media, readable).unwrap();
+        assert_eq!(fs::metadata(&media).unwrap().modified().unwrap(), long_ago);
+        assert_eq!(fs::read(&media).unwrap(), bytes);
+        assert_eq!(ws.asset(&id).unwrap().chain.records().len(), 5);
+        assert_eq!(ws.verify(&id).unwrap(), VerifyOutcome::Accept);
+    }
+
     // ── Importer-formed stacks (S-B15) ──────────────────────────────────────────
 
     /// Write `n` distinct fixture files into `dir` and return their paths.
