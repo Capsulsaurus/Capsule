@@ -3,9 +3,9 @@
 # Bring them up with `mise run serve-deps` and the server up with `mise run serve`. The two are
 # deliberately separate tasks: a task that silently starts containers is a task that leaks them.
 #
-# **Nothing reads these yet.** The Postgres adapter is issue #402 and the Valkey adapter is #403;
-# until they land, `capsule-server serve` refuses to boot with `VALKEY_URL` set and the way to
-# run a server is `mise run serve-memory`. This file exists now because the compose stack went
+# **Valkey is read (#403); Postgres is not yet (#402).** `capsule-server serve` connects to
+# `VALKEY_URL` and then refuses naming `DATABASE_URL` until the Postgres adapters land, so the
+# way to run a server is still `mise run serve-memory`. This file exists now because the compose stack went
 # with the Salvo tree in `S-C59` and re-deriving it later is re-doing work — and because
 # dependabot needs a live file to track the images against.
 #

@@ -285,7 +285,7 @@ pub struct Config {
     pub blob_root: Option<PathBuf>,
     /// The Postgres URL, once an adapter reads it (#402).
     pub database_url: Option<String>,
-    /// The Valkey URL, once an adapter reads it (#403).
+    /// The Valkey URL the state ports' adapters connect to (`store::valkey`, #403).
     pub valkey_url: Option<String>,
     /// The PKCS#8 Ed25519 private key access and refresh tokens are signed with.
     pub signing_key_der: Option<SecretBytes>,

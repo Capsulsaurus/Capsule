@@ -248,15 +248,16 @@ run = "cargo run -q -p capsule-server -- gen-openapi --check"
 [tasks.serve-deps]
 description = "Start Postgres 18 + Valkey 9 for the server (podman compose)"
 # `podman compose` shells out to the compose provider; `docker compose -f …` accepts the same
-# file. Nothing reads these services yet — the adapters are issues #402 and #403 — so this is
-# for the adapters' own development and for dependabot to have a live file to track.
+# file. The Valkey adapters (#403) read the Valkey service; the Postgres adapters (#402) are not
+# written yet, so this is for their development and for dependabot to have a live file to track.
 run = "podman compose -f capsule-server/compose.yaml up -d"
 
 [tasks.serve]
 description = "Run the Kynos server (needs the capsule-server/.env.example environment)"
 # No environment is supplied on purpose. `serve` without `VALKEY_URL` and without `--memory`
 # refuses to boot and names the variable — the refusal `capsule-server/src/store/mod.rs` has
-# documented since `S-C29` — and with `VALKEY_URL` set it refuses and names #403. Copy
+# documented since `S-C29` — and with `VALKEY_URL` set it connects to Valkey and then refuses
+# naming `DATABASE_URL` and #402 until the Postgres adapters land. Copy
 # `capsule-server/.env.example` and export it, or use `serve-memory` below.
 run = "cargo run -p capsule-server -- serve"
 
