@@ -35,9 +35,10 @@ A `capsule` invocation reads at most two pieces of durable state, and it helps t
 
 Five commands unseal a library, and all five take its passphrase: `capsule import`,
 `capsule push`, `capsule cull`, `capsule show`, and `capsule repair capture-time`. Each
-accepts `--passphrase-stdin` as well as prompting, so each runs unattended. The `capsule library` subcommands are not among them — `info` and
-`rebuild` read the version file, the sidecars, and the index, none of which is sealed, so
-they need no passphrase and offer no flag for one.
+accepts `--passphrase-stdin` as well as prompting, so each runs unattended. The
+`capsule library` subcommands are not among them — `info` and `rebuild` read the version
+file, the sidecars, and the index, none of which is sealed, so they need no passphrase and
+offer no flag for one.
 
 ## Where the contract lives
 
