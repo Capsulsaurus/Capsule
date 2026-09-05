@@ -220,14 +220,14 @@ row's remainder now lives.
 | S-B8 | Immich importer | media/import | S-B6 | M | MIXED | post-v1 | |
 | S-B9 | Tethered camera import (PTP/IP) | media/import | S-B2 | L | MIXED | post-v1 | `ptpip-rs` gate |
 | S-B10 | Takeout metadata → signed sidecar enrichment | media/import | S-A10 | M | ACTIVE | done | four doc rows owed; streaming path → `S-B3`/`S-B11` |
-| S-B11 | CLI `import --provider takeout` + real-archive run | media/import | S-B10 | S | ACTIVE | done\* | synthesized archive only; real export owed |
-| S-B18 | No CLI surface shows what the importer actually wrote | media/import | S-B10 | S | ACTIVE | ready | users cannot verify enrichment |
+| S-B11 | CLI `import --provider takeout` + real-archive run | media/import | S-B10 | S | ACTIVE | done\* | synthesized archive only; real export → #452 |
+| S-B18 | No CLI surface shows what the importer actually wrote | media/import | S-B10 | S | ACTIVE | done | `capsule show`; the guide's sampling step is executable |
 | S-B12 | Base default-album resolution (`resolve_default_album`) | media/import | — | M | ACTIVE | done | scope-override + source-kind rows → post-v1 |
 | S-B13 | Codec stubs → typed `UnsupportedFormat` (no panics) | media/import | — | M | RETIRED | ready | |
 | S-B14 | LQIP on Chromahash 0.7.1 in `capsule-core::lqip` | media/import | — | M | ACTIVE | done | wasm entry point owed to the browser-`lqip` slice |
 | S-B15 | Importer-formed stacks exist only in the index | media/import | S-D21 | M | ACTIVE | done | rebuild guard kept as pre-`S-B15` compatibility |
 | S-B16 | Every import stamped by import time, not capture time | media/import | — | S | ACTIVE | done | found by the CLI round-trip test |
-| S-B17 | Repair capture timestamps written before `S-B16` | media/import | S-B16 | M | ACTIVE | ready | the wrong value is in *signed* bytes |
+| S-B17 | Repair capture timestamps written before `S-B16` | media/import | S-B16 | M | ACTIVE | done | `capsule repair capture-time`; dry run by default |
 | S-C1 | Upload-server hardening (envelope gate + invariants) | server | — | L | RETIRED | done\* | discard worker, asset index and quota not ported |
 | S-C2 | Key-free sync feed | server | S-C1 | L | RETIRED | done\* | ported to Kynos REST; Postgres adapter + cursor-key loading owed |
 | S-C3 | Storage-verification endpoint | server | S-C35, S-C37 | M | RETIRED | done\* | structural verdict only; the `deep` re-hash → `S-C41`; GC state → `S-C11` |
@@ -348,7 +348,7 @@ row's remainder now lives.
 | S-I5 | The CLI import arm has no `cli.import.*` catalog namespace | i18n | — | M | ACTIVE | ready | `i18n-guard` never scanned the CLI |
 | S-I6 | Android ships raw ICU to users; the guard never fires | i18n | — | M | ACTIVE | done | `aapt2` unverified — owed-CI |
 | S-I7 | The Rust runtime formatter cannot do ICU plurals | i18n | — | M | ACTIVE | done\* | refuses now; evaluating plurals still owed |
-| S-I8 | clap `--help` text is unreachable from the catalogs | i18n | — | S | ACTIVE | ready | found widening `i18n-guard` |
+| S-I8 | clap `--help` text is unreachable from the catalogs | i18n | — | S | ACTIVE | done | help is localized via `cli.help.*`; `ValueEnum` variant help stays English |
 | S-N1 | OIDC relying party (server) | auth | — | L | RETIRED | ready | |
 | S-N2 | SDK/CLI OIDC login flows | auth | S-N1 | M | MIXED | blocked | |
 | S-N3 | `device_id` on session listing + ceremony cohorts | auth | — | S | RETIRED | done | the wire half lands with `S-C13`; the TOTP ceremony with `S-C55`; passkeys retire on `S-C56` |
@@ -869,6 +869,10 @@ workspace at all**, so every still import is a `DeferredNoCodec` until Rawshift 
   check against Google's own item count, real camera EXIF across the device long tail, real
   HEIC/MP4/Live Photo payloads, or how Google actually encodes non-ASCII filenames. There is no real
   Takeout archive on this machine and no claim is made about one.
+- **The remainder is filed as #452** (2026-09-02, while landing `S-B18`/`S-B17`): the real-archive
+  run — magnitude against Google's item count, real camera EXIF across the device long tail, real
+  HEIC/MP4/Live Photo payloads, Google's actual filename encoding, scale — plus the guide's sampling
+  step, which `S-B18` made executable. The row stays `done*` until that issue closes.
 
 ### S-B18 — no CLI surface shows what the importer actually wrote
 
@@ -884,6 +888,19 @@ workspace at all**, so every still import is a `DeferredNoCodec` until Rawshift 
   prints an asset's sidecar projection. Strings must come from `locales/`, which for the import arm
   do not exist yet (`S-I5`).
 - **Done when:** the guide's metadata-sampling step is executable as written. **Tier:** Smoke.
+
+- **Landed 2026-09-02** as a new verb, `capsule show <ASSET> --library <PATH>`, not an extension of
+  `capsule match` — `match` reads a *source file* and opens no library, so it was the wrong seam.
+  The positional takes an asset id **or a hex prefix (≥ 8 characters) of the content hash**, because
+  nothing `capsule import` prints is an asset id while the guide's spot-hash step already leaves the
+  user holding source SHA-256s, and Capsule imports bytes unchanged; an ambiguous prefix is refused
+  with the match count. It prints the signed sidecar's projection — album, content type, hash,
+  dimensions, capture/import instants, caption, rating, user and AI tags, the fix **with its datum**
+  and source (a GCJ-02 coordinate stored verbatim must not read as WGS-84), cull flag, hidden, stack
+  placement, LQIP presence, and the provenance record count — every absent value spelled out as
+  `(unset)`, every line a `cli.show.*` key. The guide's sampling step is rewritten as an executable
+  `capsule show` loop and asserted as written in `tests/takeout_import.rs`. No `--json`: a machine
+  shape would need its own compatibility contract, and the guide needs the human one.
 
 ### S-B12 — Base default-album resolution
 
@@ -1078,6 +1095,31 @@ workspace at all**, so every still import is a `DeferredNoCodec` until Rawshift 
 - **Done when:** a library imported under the old parser, containing originals with EXIF capture
   dates, reports correct capture timestamps after the pass, and the pass is a no-op on a library
   imported after `S-B16`. **Tier:** Unit + Smoke.
+
+- **Landed 2026-09-02** as `capsule repair capture-time --library <PATH> [--apply] [--limit N]`
+  over a new `Workspace::set_capture_timestamp(asset_id, jiff::Timestamp)` — one signed
+  `metadata-update` per asset through `append_lifecycle`, the bundle left in its import-time month
+  directory, `Workspace::open`'s existing reconciliation keeping the paths resolving. **Dry run is
+  the default**, unlike `push`/`sync`: those write to a re-drivable server, this appends an
+  irreversible signed record. **Detection is the importer's own rule**, `resolve_timezone` over
+  `extract_exif`: a resolvable instant that disagrees with the sidecar is affected; a floating
+  `DateTimeOriginal` (no `OffsetTimeOriginal`, no fix) resolves to nothing and is skipped rather
+  than guessed as UTC, exactly as the importer skips it — which is what makes the pass a no-op on a
+  post-`S-B16` library by construction, and leaves Takeout-folded captures alone. An unreadable
+  original is reported as such, never as "no EXIF". Each correction is an independent write, so an
+  interrupted `--apply` leaves completed assets correct and a re-run skips them.
+- **Precondition fixed while here:** the live write path indexed `capture_timestamp` from the
+  in-memory `capture_utc` shard while `rebuild_index` projects it from the sidecar; equal at import,
+  they part ways at exactly this correction, so a correct repair would have been invisible to the
+  timeline until a rebuild. `asset_row_from_state` now projects from the sidecar too, and the test
+  asserts the live row and a rebuilt one name the same corrected instant.
+- **Expected side effect:** a corrected asset's sidecar no longer names its month directory, so
+  every `Workspace::open` logs the reconciliation warning for it. That is the documented drift, not a
+  fault; the opportunistic rename bundle maintenance describes is not built.
+- **Not covered:** an asset whose capture time a user deliberately set to something other than its
+  EXIF. No such edit surface exists — `set_capture_timestamp` is the first — so the question does
+  not arise; once one does, the pass must skip assets whose chain carries a capture correction that
+  was not itself this repair.
 
 ## Lane C — server (key-free surfaces)
 
@@ -4870,6 +4912,21 @@ lands on Kynos rather than on Salvo.
   English — and if so, resolve keys at parser-construction time. If not, say so in `i18n.md` so the
   contract stops overstating itself.
 - **Done when:** the design doc states the decision either way. **Tier:** docs or Unit.
+
+- **Landed 2026-09-02 — help is localized.** `capsule_cli::cli::help::localize` walks the built
+  `clap::Command` tree and replaces every `about`/`long_about`/`help`/`long_help` from keys derived
+  from the tree — `cli.help.<path>.about`, `cli.help.<path>.arg.<id>`, `…long_about`/`…long_help`
+  when the derive gives a distinct long form — through `Bundle::message`, so a missing key leaves
+  the derive text in place and a partial translation renders a mix, never a raw key. `run()`
+  applies it under the negotiated bundle; `command_tree()` (`S-Z8`) applies it under an explicitly
+  pinned `en` bundle, so `cli-surface.json` is locale-proof and byte-unchanged. The gate this
+  surface needed, since `i18n-guard` cannot see help text: a unit test that every `en` entry equals
+  the derive text it replaces and that localizing under `en` leaves every rendered page
+  byte-identical — a doc comment edited without its key fails `cargo test -p capsule-cli`. The
+  design doc records the decision and the residual: a `ValueEnum` variant's help (`--filter pick`)
+  stays English, because clap 4 re-words a possible value only by discarding the typed parser.
+  The twelve non-source locales carry no `cli.help.*` entries yet; translators fill them through
+  the documented `locales/` flow.
 
 ### S-N1 — OIDC relying party (server)
 

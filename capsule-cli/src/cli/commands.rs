@@ -127,10 +127,29 @@ pub(crate) enum Commands {
         #[arg(long, value_name = "DAYS", default_value_t = crate::cull::DEFAULT_RETAIN_DAYS)]
         retain_days: i64,
     },
+    /// Show what an imported asset's signed sidecar records: caption, rating, tags, GPS, timestamps
+    Show {
+        /// The asset to show: its id, or a prefix of at least 8 hex characters of its SHA-256
+        /// content hash — the same digest `shasum -a 256` prints for the source file
+        #[arg(value_name = "ASSET")]
+        asset: String,
+        /// Path to the Capsule library
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// Read the library passphrase from stdin instead of prompting, so the command
+        /// works in scripts and CI where there is no terminal.
+        #[arg(long)]
+        passphrase_stdin: bool,
+    },
     /// Manage the local library
     Library {
         #[command(subcommand)]
         command: LibraryCommands,
+    },
+    /// Repair a local library in place, one signed correction per affected asset
+    Repair {
+        #[command(subcommand)]
+        command: RepairCommands,
     },
     /// Run the offline end-to-end data-plane showcase (real cryptography, no network)
     Demo {
@@ -200,6 +219,29 @@ pub(crate) enum LibraryCommands {
     Rebuild {
         /// Path to the library
         path: PathBuf,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum RepairCommands {
+    /// Re-read each original's EXIF capture time and report every asset whose signed capture
+    /// timestamp disagrees with it; with --apply, correct each one as a signed metadata update
+    CaptureTime {
+        /// Path to the Capsule library
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// Read the library passphrase from stdin instead of prompting, so the command
+        /// works in scripts and CI where there is no terminal.
+        #[arg(long)]
+        passphrase_stdin: bool,
+        /// Write the corrections. Without this flag the pass only reports what it would
+        /// change; each correction is an irreversible signed record on the asset's chain.
+        #[arg(long)]
+        apply: bool,
+        /// Correct at most this many affected assets in one --apply run (the report still
+        /// covers the whole library); only meaningful with --apply
+        #[arg(long, value_name = "COUNT", value_parser = clap::value_parser!(u64).range(1..))]
+        limit: Option<u64>,
     },
 }
 

@@ -21,7 +21,7 @@ use capsule_core::library::{Library, LibraryError, init_library, open_library, r
 use capsule_core::lifecycle::Workspace;
 use capsule_core::metadata::FileMetadata;
 use capsule_sdk::net::ConnectionClass;
-use cli::{AuthCommands, Cli, Commands, ImportProviderArg, LibraryCommands};
+use cli::{AuthCommands, Cli, Commands, ImportProviderArg, LibraryCommands, RepairCommands};
 use colored::*;
 use dialoguer::{Confirm, Input, Password};
 use eyre::{Result, eyre};
@@ -37,7 +37,9 @@ pub mod db;
 pub mod demo;
 pub mod i18n;
 pub mod remote;
+pub mod repair;
 pub mod session;
+pub mod show;
 pub mod status;
 pub mod syncstore;
 pub mod utils;
@@ -166,8 +168,24 @@ fn read_import_source(
 }
 
 /// Parse the CLI arguments and dispatch the matching command.
+///
+/// The parser is built from the derive and then localized (`S-I8`): every `--help` string is
+/// resolved through the bundle negotiated from the process locale before a single argument is
+/// read, so usage errors and help pages speak the user's language. A locale with no catalog
+/// entry for a string falls back to the derive's English rather than printing a key.
 pub async fn run() -> Result<()> {
-    let cli = <Cli as clap::Parser>::parse();
+    let command = cli::help::localize(
+        <Cli as clap::CommandFactory>::command(),
+        &i18n::cli_bundle(),
+    );
+    // Kept for error formatting: a derive/matches mismatch is reported the way clap itself
+    // reports one — with the (localized) command's usage — rather than as a bare message.
+    let mut for_errors = command.clone();
+    let mut matches = command.get_matches();
+    let cli = match <Cli as clap::FromArgMatches>::from_arg_matches_mut(&mut matches) {
+        Ok(cli) => cli,
+        Err(error) => error.format(&mut for_errors).exit(),
+    };
     tracing::trace!("Parsed CLI arguments: {:#?}", cli);
     dispatch(cli).await
 }
@@ -493,6 +511,63 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 }
             }
         }
+
+        // ── Show ──────────────────────────────────────────────────────────
+        Commands::Show {
+            asset,
+            library,
+            passphrase_stdin,
+        } => {
+            let bundle = i18n::cli_bundle();
+            let ws = open_workspace(&library, passphrase_stdin)?;
+            let view = show::resolve(&ws, &asset).and_then(|id| {
+                show::collect(&ws, &id).ok_or_else(|| show::ShowError::UnknownAsset(id.to_string()))
+            });
+            match view {
+                Ok(view) => print!("{}", show::render(&bundle, &view)),
+                Err(error) => {
+                    let reason = show::describe_error(&bundle, &error);
+                    return Err(eyre!(
+                        "{}",
+                        bundle.format(keys::SHOW_FAILED, &[("reason", Value::Str(&reason))])
+                    ));
+                }
+            }
+        }
+
+        // ── Repair ────────────────────────────────────────────────────────
+        Commands::Repair { command } => match command {
+            RepairCommands::CaptureTime {
+                library,
+                passphrase_stdin,
+                apply,
+                limit,
+            } => {
+                let bundle = i18n::cli_bundle();
+                // `--limit` bounds what `--apply` writes; alone it would silently do nothing.
+                if limit.is_some() && !apply {
+                    return Err(eyre!(
+                        "{}",
+                        bundle.format(keys::REPAIR_CAPTURE_TIME_LIMIT_REQUIRES_APPLY, &[])
+                    ));
+                }
+                let request = repair::RepairRequest {
+                    apply,
+                    limit: limit.map(|n| usize::try_from(n).unwrap_or(usize::MAX)),
+                };
+                let mut ws = open_workspace(&library, passphrase_stdin)?;
+                match repair::run(&mut ws, request) {
+                    Ok(summary) => print!("{}", repair::render(&bundle, request, &summary)),
+                    Err(error) => {
+                        let reason = repair::describe_error(&bundle, &error);
+                        return Err(eyre!(
+                            "{}",
+                            bundle.format(keys::REPAIR_FAILED, &[("reason", Value::Str(&reason))])
+                        ));
+                    }
+                }
+            }
+        },
 
         // ── Demo ──────────────────────────────────────────────────────────
         Commands::Demo { workdir, image } => {

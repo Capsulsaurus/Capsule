@@ -30101,6 +30101,696 @@
         }
       }
     },
+    "cli.help.auth.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Authentication commands"
+          }
+        }
+      }
+    },
+    "cli.help.auth.login.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Login to Capsule"
+          }
+        }
+      }
+    },
+    "cli.help.auth.login.arg.email": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account email (prompted when omitted)"
+          }
+        }
+      }
+    },
+    "cli.help.auth.login.arg.password_stdin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read the password from stdin instead of prompting, so the command works in scripts and CI where there is no terminal"
+          }
+        }
+      }
+    },
+    "cli.help.auth.logout.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Logout from Capsule"
+          }
+        }
+      }
+    },
+    "cli.help.auth.register.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Create a Capsule account and sign in"
+          }
+        }
+      }
+    },
+    "cli.help.auth.register.arg.email": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account email (prompted when omitted)"
+          }
+        }
+      }
+    },
+    "cli.help.auth.register.arg.password_stdin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read the password from stdin instead of prompting, so the command works in scripts and CI where there is no terminal"
+          }
+        }
+      }
+    },
+    "cli.help.auth.status.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show authentication status"
+          }
+        }
+      }
+    },
+    "cli.help.cull.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review a local library: flag assets, filter by flag, sweep rejects to trash"
+          }
+        }
+      }
+    },
+    "cli.help.cull.arg.filter": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "List the assets carrying one flag instead of only counting them"
+          }
+        }
+      }
+    },
+    "cli.help.cull.arg.library": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Path to the Capsule library"
+          }
+        }
+      }
+    },
+    "cli.help.cull.arg.neutral": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clear an asset's flag back to the never-flagged default (repeatable)"
+          }
+        }
+      }
+    },
+    "cli.help.cull.arg.passphrase_stdin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read the library passphrase from stdin instead of prompting, so culling works in scripts and CI where there is no terminal"
+          }
+        }
+      }
+    },
+    "cli.help.cull.arg.pick": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Flag an asset as a keeper (repeatable)"
+          }
+        }
+      }
+    },
+    "cli.help.cull.arg.reject": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Flag an asset for rejection (repeatable)"
+          }
+        }
+      }
+    },
+    "cli.help.cull.arg.retain_days": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Retention window, in days, the sweep's soft delete stamps"
+          }
+        }
+      }
+    },
+    "cli.help.cull.arg.sweep": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move every rejected asset to trash. The only destructive step, and soft per retention — swept assets stay restorable until the window elapses"
+          }
+        }
+      }
+    },
+    "cli.help.demo.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Run the offline end-to-end data-plane showcase (real cryptography, no network)"
+          }
+        }
+      }
+    },
+    "cli.help.demo.arg.image": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A real image/file to import (a small synthetic file is used if omitted)"
+          }
+        }
+      }
+    },
+    "cli.help.demo.arg.workdir": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Working directory for the demo libraries (a temp dir is used if omitted)"
+          }
+        }
+      }
+    },
+    "cli.help.import.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import files into a local Capsule library"
+          }
+        }
+      }
+    },
+    "cli.help.import.arg.force": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Re-import files even if they already exist (duplicate override)"
+          }
+        }
+      }
+    },
+    "cli.help.import.arg.library": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Path to the Capsule library"
+          }
+        }
+      }
+    },
+    "cli.help.import.arg.move": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move files instead of copying them"
+          }
+        }
+      }
+    },
+    "cli.help.import.arg.passphrase_stdin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read the library passphrase from stdin instead of prompting, so imports work in scripts and CI where there is no terminal"
+          }
+        }
+      }
+    },
+    "cli.help.import.arg.paths": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Source file or directory to import. Repeatable: a split Takeout export extracted into several folders is imported by naming every part in one run, so a media file and a sidecar that landed in different parts are still paired"
+          }
+        }
+      }
+    },
+    "cli.help.import.arg.provider": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read the source as an export from this service instead of as a plain directory tree, so its out-of-band metadata (capture time, GPS, captions, favorites, album membership) is folded into the imported assets"
+          }
+        }
+      }
+    },
+    "cli.help.import.arg.push": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Push the library to the server after importing — sugar for a `capsule push` run over the same library. The import itself stays offline"
+          }
+        }
+      }
+    },
+    "cli.help.import.arg.staged": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stage the follow-on push (`--push`) in tier order, gating the preview and original tiers on the connection class"
+          }
+        }
+      }
+    },
+    "cli.help.library.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Manage the local library"
+          }
+        }
+      }
+    },
+    "cli.help.library.info.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show library information"
+          }
+        }
+      }
+    },
+    "cli.help.library.info.arg.path": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Path to the library"
+          }
+        }
+      }
+    },
+    "cli.help.library.init.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Create a new Capsule library"
+          }
+        }
+      }
+    },
+    "cli.help.library.init.arg.name": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Human-readable library name"
+          }
+        }
+      }
+    },
+    "cli.help.library.init.arg.path": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Directory for the new library"
+          }
+        }
+      }
+    },
+    "cli.help.library.rebuild.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rebuild the SQLite index from sidecar files"
+          }
+        }
+      }
+    },
+    "cli.help.library.rebuild.arg.path": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Path to the library"
+          }
+        }
+      }
+    },
+    "cli.help.list.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "List the assets the sync feed has delivered"
+          }
+        }
+      }
+    },
+    "cli.help.list.arg.include_deleted": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Include assets the server has tombstoned (deleted) as well as live ones"
+          }
+        }
+      }
+    },
+    "cli.help.match.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Match metadata for current file"
+          }
+        }
+      }
+    },
+    "cli.help.match.arg.path": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Path to the file to match metadata for"
+          }
+        }
+      }
+    },
+    "cli.help.push.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Upload a local Capsule library to the server"
+          }
+        }
+      }
+    },
+    "cli.help.push.arg.dry_run": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Report what would be uploaded without opening a single upload session"
+          }
+        }
+      }
+    },
+    "cli.help.push.arg.force": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Re-drive every blob regardless of what the server already holds"
+          }
+        }
+      }
+    },
+    "cli.help.push.arg.library": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Path to the Capsule library to push"
+          }
+        }
+      }
+    },
+    "cli.help.push.arg.passphrase_stdin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read the library passphrase from stdin instead of prompting, so pushes work in scripts and CI where there is no terminal"
+          }
+        }
+      }
+    },
+    "cli.help.push.arg.staged": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open the tier sessions in ladder order (index → preview → original), gating the above-index tiers on the connection class, instead of opening all eagerly"
+          }
+        }
+      }
+    },
+    "cli.help.repair.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Repair a local library in place, one signed correction per affected asset"
+          }
+        }
+      }
+    },
+    "cli.help.repair.capture-time.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Re-read each original's EXIF capture time and report every asset whose signed capture timestamp disagrees with it; with --apply, correct each one as a signed metadata update"
+          }
+        }
+      }
+    },
+    "cli.help.repair.capture-time.arg.apply": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Write the corrections. Without this flag the pass only reports what it would change; each correction is an irreversible signed record on the asset's chain"
+          }
+        }
+      }
+    },
+    "cli.help.repair.capture-time.arg.library": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Path to the Capsule library"
+          }
+        }
+      }
+    },
+    "cli.help.repair.capture-time.arg.limit": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Correct at most this many affected assets in one --apply run (the report still covers the whole library); only meaningful with --apply"
+          }
+        }
+      }
+    },
+    "cli.help.repair.capture-time.arg.passphrase_stdin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal"
+          }
+        }
+      }
+    },
+    "cli.help.reset.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reset all local CLI data"
+          }
+        }
+      }
+    },
+    "cli.help.reset.arg.all": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reset all data"
+          }
+        }
+      }
+    },
+    "cli.help.reset.arg.cache": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reset cache directory"
+          }
+        }
+      }
+    },
+    "cli.help.reset.arg.config": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reset configuration"
+          }
+        }
+      }
+    },
+    "cli.help.reset.arg.data": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reset data directory"
+          }
+        }
+      }
+    },
+    "cli.help.root.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A command line interface for Capsule - the photo management platform"
+          }
+        }
+      }
+    },
+    "cli.help.root.long_about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule CLI provides tools for managing your photos and albums:\n\n- Authentication management\n- Sync local and remote data\n- Check status and list files\n- Manage albums and collections"
+          }
+        }
+      }
+    },
+    "cli.help.show.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show what an imported asset's signed sidecar records: caption, rating, tags, GPS, timestamps"
+          }
+        }
+      }
+    },
+    "cli.help.show.arg.asset": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The asset to show: its id, or a prefix of at least 8 hex characters of its SHA-256 content hash — the same digest `shasum -a 256` prints for the source file"
+          }
+        }
+      }
+    },
+    "cli.help.show.arg.library": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Path to the Capsule library"
+          }
+        }
+      }
+    },
+    "cli.help.show.arg.passphrase_stdin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal"
+          }
+        }
+      }
+    },
+    "cli.help.status.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show current status"
+          }
+        }
+      }
+    },
+    "cli.help.sync.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sync local and remote data"
+          }
+        }
+      }
+    },
+    "cli.help.sync.arg.dry_run": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Perform a dry run without making changes"
+          }
+        }
+      }
+    },
+    "cli.help.sync.arg.force": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Discard the saved cursor and re-drain the feed from the start. The per-album anti-rewind floor still applies, so this cannot resurrect stale entries"
+          }
+        }
+      }
+    },
     "cli.import.candidates_found": {
       "localizations": {
         "en": {
@@ -30819,6 +31509,536 @@
           "stringUnit": {
             "state": "translated",
             "value": "Everything in this library is already on the server."
+          }
+        }
+      }
+    },
+    "cli.repair.capture_time.checked": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checked %@ asset(s) against the EXIF capture time of their originals."
+          }
+        }
+      }
+    },
+    "cli.repair.capture_time.corrected": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  %@: corrected"
+          }
+        }
+      }
+    },
+    "cli.repair.capture_time.drift_notice": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Corrected assets stay in the month directory they were imported into; that drift between directory and capture date is expected after a correction and is not a fault."
+          }
+        }
+      }
+    },
+    "cli.repair.capture_time.dry_run_notice": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dry run: nothing was written. Re-run with --apply to correct the affected sidecars."
+          }
+        }
+      }
+    },
+    "cli.repair.capture_time.failed_asset": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Correcting %1$@ failed: %2$@. Assets corrected before it stay corrected; nothing after it was touched."
+          }
+        }
+      }
+    },
+    "cli.repair.capture_time.limit_notice": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stopped after %@ correction(s) because of --limit; re-run to continue."
+          }
+        }
+      }
+    },
+    "cli.repair.capture_time.limit_requires_apply": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "--limit only bounds what --apply writes; give --apply as well, or drop --limit."
+          }
+        }
+      }
+    },
+    "cli.repair.capture_time.nothing": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Every capture timestamp agrees with its original's EXIF; nothing to repair."
+          }
+        }
+      }
+    },
+    "cli.repair.capture_time.row": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  %1$@: recorded %2$@, EXIF says %3$@ (off by %4$@ s)"
+          }
+        }
+      }
+    },
+    "cli.repair.capture_time.row_unparseable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  %1$@: recorded %2$@ (not a timestamp), EXIF says %3$@"
+          }
+        }
+      }
+    },
+    "cli.repair.capture_time.summary": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capture-time repair: %1$@ affected, %2$@ corrected, %3$@ already correct, %4$@ without a recoverable EXIF instant, %5$@ unreadable, %6$@ in trash."
+          }
+        }
+      }
+    },
+    "cli.repair.capture_time.trashed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  Skipped %@ asset(s) in trash; restore an asset first if it should be repaired."
+          }
+        }
+      }
+    },
+    "cli.repair.capture_time.unreadable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  %1$@: original could not be read (%2$@); skipped"
+          }
+        }
+      }
+    },
+    "cli.repair.failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Repair failed: %@"
+          }
+        }
+      }
+    },
+    "cli.show.album": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  Album:           %@"
+          }
+        }
+      }
+    },
+    "cli.show.ambiguous": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ matches %2$@ assets; give more of the hash, or the full asset id."
+          }
+        }
+      }
+    },
+    "cli.show.caption": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  Caption:         %@"
+          }
+        }
+      }
+    },
+    "cli.show.captured": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  Captured:        %@"
+          }
+        }
+      }
+    },
+    "cli.show.content_type": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  Content type:    %@"
+          }
+        }
+      }
+    },
+    "cli.show.cull": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  Cull flag:       %@"
+          }
+        }
+      }
+    },
+    "cli.show.dimensions": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  Dimensions:      %@"
+          }
+        }
+      }
+    },
+    "cli.show.failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show failed: %@"
+          }
+        }
+      }
+    },
+    "cli.show.gps": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  GPS:             %@"
+          }
+        }
+      }
+    },
+    "cli.show.gps_datum.gcj02": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "GCJ-02"
+          }
+        }
+      }
+    },
+    "cli.show.gps_datum.wgs84": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "WGS-84"
+          }
+        }
+      }
+    },
+    "cli.show.gps_source.derived": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "derived"
+          }
+        }
+      }
+    },
+    "cli.show.gps_source.exif": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "EXIF"
+          }
+        }
+      }
+    },
+    "cli.show.gps_source.manual": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "manual"
+          }
+        }
+      }
+    },
+    "cli.show.hash": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  SHA-256:         %@"
+          }
+        }
+      }
+    },
+    "cli.show.header": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Asset %@"
+          }
+        }
+      }
+    },
+    "cli.show.hidden": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  Hidden:          %@"
+          }
+        }
+      }
+    },
+    "cli.show.imported": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  Imported:        %@"
+          }
+        }
+      }
+    },
+    "cli.show.in_trash": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  In trash:        %@"
+          }
+        }
+      }
+    },
+    "cli.show.invalid_selector": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ is neither an asset id nor a hex prefix of at least %2$@ characters of a content hash."
+          }
+        }
+      }
+    },
+    "cli.show.lqip": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  Placeholder:     %@"
+          }
+        }
+      }
+    },
+    "cli.show.provenance_records": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  Provenance:      %@ signed record(s)"
+          }
+        }
+      }
+    },
+    "cli.show.rating": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  Rating:          %@"
+          }
+        }
+      }
+    },
+    "cli.show.stack": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  Stack:           %@"
+          }
+        }
+      }
+    },
+    "cli.show.stack_role.member": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "member"
+          }
+        }
+      }
+    },
+    "cli.show.stack_role.primary": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "primary"
+          }
+        }
+      }
+    },
+    "cli.show.stack_role.proxy": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "proxy"
+          }
+        }
+      }
+    },
+    "cli.show.tags_ai": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  AI tags:         %@"
+          }
+        }
+      }
+    },
+    "cli.show.tags_user": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  User tags:       %@"
+          }
+        }
+      }
+    },
+    "cli.show.unknown_asset": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No asset in this library matches %@."
+          }
+        }
+      }
+    },
+    "cli.show.value.dimensions": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@×%2$@"
+          }
+        }
+      }
+    },
+    "cli.show.value.gps": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@, %2$@ (%3$@, %4$@)"
+          }
+        }
+      }
+    },
+    "cli.show.value.list_separator": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": ", "
+          }
+        }
+      }
+    },
+    "cli.show.value.no": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "no"
+          }
+        }
+      }
+    },
+    "cli.show.value.present": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "present"
+          }
+        }
+      }
+    },
+    "cli.show.value.rating": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@/5"
+          }
+        }
+      }
+    },
+    "cli.show.value.stack": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ (%2$@)"
+          }
+        }
+      }
+    },
+    "cli.show.value.unset": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(unset)"
+          }
+        }
+      }
+    },
+    "cli.show.value.yes": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "yes"
           }
         }
       }
