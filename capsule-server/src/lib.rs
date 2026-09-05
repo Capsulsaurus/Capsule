@@ -28,7 +28,8 @@
 //!
 //! Each module owns one port and, where it has one, the surface over it. [`routes`] is the only
 //! module that knows about HTTP: everything under it — [`album`], [`directory`], [`discovery`],
-//! [`enrollment`], [`escrow`], [`gc`], [`index`], [`moderation`], [`quota`], [`scrub`], [`serve`],
+//! [`enrollment`], [`escrow`], [`gc`], [`index`], [`membership`], [`moderation`], [`quota`],
+//! [`scrub`], [`serve`],
 //! [`share`], [`store`],
 //! [`sync`], [`upload`],
 //! [`verify`] — is framework-free and testable without a router, which is why the operator
@@ -77,6 +78,7 @@ pub mod escrow;
 pub mod gc;
 pub mod index;
 pub mod limits;
+pub mod membership;
 pub mod moderation;
 mod openapi;
 pub mod postgres;

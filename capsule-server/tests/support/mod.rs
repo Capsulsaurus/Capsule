@@ -67,6 +67,7 @@ use capsule_server::index::{
     AssetIndex, AssetRow, BlobOutcome, BlobRecord, FeedEntry, HoldOutcome, IndexFuture,
     LifecycleOp, OpOutcome, PendingAsset, Reservation, ServingHold,
 };
+use capsule_server::membership::{InMemoryMembership, MembershipContext};
 use capsule_server::moderation::{
     InMemoryModeration, ModerationContext, ModerationEvent, ModerationStore, Standing,
 };
@@ -2358,6 +2359,7 @@ impl Fixture {
         let cursors = Arc::new(CursorCodec::new(&CURSOR_KEY));
         let directories = Arc::new(SwitchableDirectories::new());
         let albums = Arc::new(SwitchableAlbums::new());
+        let members = Arc::new(InMemoryMembership::new());
         let quotas = Arc::new(SwitchableQuota::new());
         let marks = Arc::new(InMemoryCollection::new());
         let receipts = Arc::new(InMemoryReceipts::new());
@@ -2422,6 +2424,7 @@ impl Fixture {
             ),
             directories: DeviceDirectoryContext::new(directories.clone(), clock.clone()),
             albums: AlbumContext::new(albums.clone(), clock.clone()),
+            membership: MembershipContext::new(members.clone(), clock.clone()),
             quota: QuotaContext::new(quotas.clone(), clock.clone(), quota_limits),
             attestation: AttestationContext::new(
                 receipts.clone(),
@@ -2554,6 +2557,7 @@ impl Fixture {
                 clock.clone(),
             ),
             albums: AlbumContext::new(Arc::new(SwitchableAlbums::new()), clock.clone()),
+            membership: MembershipContext::new(Arc::new(InMemoryMembership::new()), clock.clone()),
             quota: QuotaContext::new(
                 Arc::new(SwitchableQuota::new()),
                 clock.clone(),
