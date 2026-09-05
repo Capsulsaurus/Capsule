@@ -124,6 +124,41 @@ secret_id! {
     EnrollmentCode
 }
 
+secret_id! {
+    /// The `state` an OIDC authorization request carries (slice `S-N1`).
+    ///
+    /// The key to one pending authorization: whoever presents it at the callback redeems the
+    /// nonce and PKCE verifier it names, so it is a bearer credential for the length of the
+    /// ceremony and is burned on the first presentation, successful or not.
+    OidcState
+}
+
+secret_id! {
+    /// The `nonce` an OIDC authorization request carries and the ID token must echo.
+    ///
+    /// Not a bearer secret in the strict sense — it travels in the authorization URL — but a
+    /// predictable one would let a captured ID token be replayed against a fresh ceremony, so
+    /// it is generated with the same entropy as the state and kept out of logs with it.
+    OidcNonce
+}
+
+secret_id! {
+    /// The PKCE `code_verifier` (RFC 7636) held server-side between the two legs of an OIDC
+    /// authorization-code ceremony.
+    ///
+    /// The one value that turns an intercepted authorization code into nothing: the token
+    /// endpoint refuses a code presented without the verifier its challenge was derived from.
+    PkceVerifier
+}
+
+secret_id! {
+    /// The authorization code an identity provider hands back through the client's redirect.
+    ///
+    /// Single-use at the provider, and worthless without the [`PkceVerifier`] — but a code in a
+    /// log line is still half of a credential, so it redacts itself like the rest.
+    AuthorizationCode
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
