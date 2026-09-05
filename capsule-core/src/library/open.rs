@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::db::DatabaseDriver;
+use crate::db::{DatabaseDriver, MigrationError};
 use crate::library::error::LibraryError;
 use crate::library::library::Library;
 use crate::library::lock;
@@ -28,11 +28,17 @@ pub fn open_library(root: &Path) -> Result<Library, LibraryError> {
     // 2. Acquire lock.
     lock::try_acquire(root)?;
 
-    // 3. Open DB (release lock on failure).
+    // 3. Open DB (release lock on failure). A catalog stamped newer than this build is the
+    //    one open failure with its own recovery (update the app), so it keeps its type.
     let db_path = root.join("index/library.sqlite");
-    let db = DatabaseDriver::open(&db_path).map_err(|e| {
+    let db = DatabaseDriver::open_typed(&db_path).map_err(|e| {
         let _ = lock::release(root);
-        LibraryError::Db(e)
+        match e {
+            MigrationError::CatalogTooNew { found, supported } => {
+                LibraryError::CatalogTooNew { found, supported }
+            }
+            other => LibraryError::Db(other.into()),
+        }
     })?;
 
     // 4. Read config (release lock on failure).
@@ -132,5 +138,52 @@ mod tests {
             let _lib2 = open_library(&root).unwrap();
         }
         assert!(!root.join(".library/lock").exists());
+    }
+
+    /// **S-D23, the owed half.** A catalog stamped by a newer build is refused with a typed
+    /// error naming both versions — never downgraded, never opened, and never flattened into
+    /// the generic `Db` arm a client can only print. The file is left byte-for-byte untouched
+    /// and the lock is released, so the user's *current* build can still open it after an
+    /// update.
+    #[test]
+    fn test_open_refuses_a_catalog_newer_than_this_build_untouched() {
+        use crate::db::schema::SCHEMA_VERSION;
+
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("lib");
+        init_library(&root, "T").unwrap().close().unwrap();
+
+        let db_path = root.join("index/library.sqlite");
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute_batch(&format!("PRAGMA user_version = {};", SCHEMA_VERSION + 1))
+                .unwrap();
+        }
+        let before = std::fs::read(&db_path).unwrap();
+
+        match open_library(&root) {
+            Err(LibraryError::CatalogTooNew { found, supported }) => {
+                assert_eq!(found, SCHEMA_VERSION + 1);
+                assert_eq!(supported, SCHEMA_VERSION);
+            }
+            Err(other) => panic!("expected CatalogTooNew, got {other:?}"),
+            Ok(_) => panic!("a too-new catalog must not open"),
+        }
+        assert_eq!(
+            std::fs::read(&db_path).unwrap(),
+            before,
+            "a refused catalog must not be written to"
+        );
+        assert!(
+            !root.join(".library/lock").exists(),
+            "the lock is released on a refused open"
+        );
+        // And the same library opens fine once the stamp is back within range.
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))
+                .unwrap();
+        }
+        assert!(open_library(&root).is_ok());
     }
 }

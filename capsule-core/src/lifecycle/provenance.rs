@@ -190,14 +190,15 @@ impl Workspace {
             }
         }
 
-        // Re-borrow immutably to write the updated artifacts to disk.
+        // Re-borrow immutably to write the updated artifacts to disk. Only the signed
+        // artifacts: a lifecycle write never changes the original, so it neither reads nor
+        // rewrites it — a caption edit on a multi-gigabyte video touches the sidecar, the
+        // chain, and the blob, and nothing else.
         let asset = self
             .assets
             .get(asset_id)
             .expect("asset_id was validated above");
-        let plaintext =
-            fs::read(self.media_path(asset)).map_err(|e| LifecycleError::Io(e.to_string()))?;
-        self.write_asset_files(asset, &plaintext)?;
+        self.write_signed_artifacts(asset)?;
         self.index_asset_row(asset)
     }
 }

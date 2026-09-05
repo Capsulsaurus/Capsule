@@ -3,10 +3,11 @@ import Foundation
 /// Encodes and decodes the sidecar that is written beside every managed media
 /// file.
 ///
-/// The *canonical* format is CBOR and is owned by the Rust core, so the real
-/// implementation (`FFISidecarCoder` in `CapsuleCatalogFFI`) is a thin façade
-/// over the uniffi `serialize_sidecar` / `deserialize_sidecar` functions. This
-/// is a protocol rather than an `enum` of statics so the coder is injectable:
+/// The *canonical* sidecar is the signed CBOR `SidecarV1`, authored only by
+/// the Rust core; a build that links the core has no sidecar codec of its own
+/// (the unsigned CBOR codec was retired with `S-D24`). `JSONSidecarCoder` is
+/// the codec of the mock lane. This is a protocol rather than an `enum` of
+/// statics so the coder is injectable:
 /// the mock lane builds and tests without linking the Rust core, and a failure
 /// mode (a sidecar the core rejects) can be simulated deterministically.
 ///

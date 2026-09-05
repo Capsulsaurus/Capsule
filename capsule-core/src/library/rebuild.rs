@@ -1,31 +1,31 @@
 //! Recovery-first rebuild of the SQLite index from the artifacts on disk.
 //!
-//! Two sidecar shapes can be found under `media/`, and this module reads both:
+//! One sidecar shape is read here: the signed [`SidecarV1`] every write path emits
+//! (`write_asset_files`, behind [`import_asset`](crate::lifecycle::Workspace::import_asset)
+//! and every later metadata write). It carries the CRDT registers (`hidden`, `cull`,
+//! `stack_membership`, rating, tags), and it is the write path's own output, so a rebuild
+//! reconstructs exactly what the write path indexed.
 //!
-//! * [`SidecarV1`] — the **signed** record every current write path emits (`write_asset_files`,
-//!   behind [`import_asset`](crate::lifecycle::Workspace::import_asset) and every later
-//!   metadata write). It carries the CRDT registers (`hidden`, `cull`, `stack_membership`,
-//!   rating, tags), so it is the shape a rebuild must prefer: it is the write path's own
-//!   output.
-//! * [`AssetSidecar`] — the unsigned pre-signed-path shape. Its *write* path was retired by
-//!   `S-B2`/`S-G4`; the **read** stays as the compatibility case for libraries written before
-//!   the signed path existed. It has no register fields at all.
+//! The unsigned pre-signed-path shape is **not** read any more (slice `S-D24`). Its write path
+//! was retired by `S-B2`/`S-G4`, and its read path — the compatibility branch `S-D21` kept so a
+//! pre-signed-path library still rebuilt — was retired once
+//! [`Workspace::migrate_unsigned_sidecars`](crate::lifecycle::Workspace::migrate_unsigned_sidecars)
+//! existed to bring such a library forward. A rebuild holds no key material and cannot sign a
+//! sidecar, a manifest, or seal a blob, so it could never have *upgraded* one; what it does now
+//! is [probe](crate::sidecar::shape) an unsigned file, count it, and name the verb in a `warn`,
+//! rather than index an asset the workspace cannot verify, export, or upload.
 //!
-//! Reading only the unsigned shape (the pre-`S-D21` behaviour) meant a rebuilt library came
-//! back with every asset visible and un-trashed — a gate bypass, because rebuild is the
-//! recovery path and the state it cannot carry is state the user cannot re-assert.
+//! What the signed shape restores:
 //!
-//! What each shape can restore:
+//! | state | source |
+//! |---|---|
+//! | `hidden` (gated Hidden view) | the `hidden` LWW register |
+//! | trash (`is_deleted`/`deleted_at`) | the provenance chain's lifecycle actions |
+//! | `album_id` | the provenance chain head manifest |
+//! | stacks | the `stack_membership` LWW register |
+//! | `cull` | *not an index projection* — see below |
 //!
-//! | state | signed `SidecarV1` | unsigned `AssetSidecar` |
-//! |---|---|---|
-//! | `hidden` (gated Hidden view) | the `hidden` LWW register | absent — no such field |
-//! | trash (`is_deleted`/`deleted_at`) | the provenance chain's lifecycle actions | the `is_deleted`/`deleted_at` fields |
-//! | `album_id` | the provenance chain head manifest | the `album_id` field |
-//! | stacks | the `stack_membership` LWW register | the `stack_hint` field |
-//! | `cull` | *not an index projection* — see below | absent — no such field |
-//!
-//! An **importer-formed** stack used to be the one thing neither shape carried: pre-`S-B15`,
+//! An **importer-formed** stack used to be the one thing the sidecar did not carry: pre-`S-B15`,
 //! `import_asset_with` recorded it as `assets.stack_id` / `is_stack_hidden` and wrote no
 //! `stack_membership` register, so it lived only in the index and a lost index lost it.
 //! `S-B15` closed that: the importer now writes the register, so an importer-formed stack is
@@ -55,16 +55,11 @@ use crate::cbor;
 use crate::crypto::provenance::ProvenanceRecord;
 use crate::crypto::provenance::action::Action;
 use crate::db::rows::{AssetRow, AssetStackRow, StackMemberRow};
-use crate::domain::{CaptureTzSource, DetectionMethod, MemberRole, StackType};
+use crate::domain::StackType;
 use crate::library::error::LibraryError;
 use crate::library::library::Library;
-use crate::metadata::AssetType;
-use crate::sidecar::AssetSidecar;
-use crate::sidecar::io::read_sidecar;
+use crate::sidecar::shape::{self, SidecarShape};
 use crate::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1, StackMembership, StackRole};
-
-type StackGroupKey = (String, String);
-type StackGroupMembers = Vec<(String, String, StackType)>;
 
 /// A signed sidecar together with the directory it was found in (its provenance chain,
 /// which carries the album and the trash state, is that directory's sibling file).
@@ -88,13 +83,14 @@ struct ChainFacts {
 
 /// Rebuild the SQLite index from the sidecars on disk.
 ///
-/// Every `{uuid}.cbor` under `media/` is decoded — preferring the signed [`SidecarV1`] shape
-/// and falling back to the unsigned [`AssetSidecar`] compatibility shape — and upserted as an
-/// `assets` row. Stacks are then reconstructed: from the `stack_membership` register for
-/// signed sidecars, from `stack_hint` for unsigned ones.
+/// Every `{uuid}.cbor` under `media/` is decoded as the signed [`SidecarV1`] shape and upserted
+/// as an `assets` row; stacks are then reconstructed from the `stack_membership` registers.
 ///
-/// A sidecar that decodes as neither shape is warned about and skipped: one unreadable file
-/// must not cost the whole library its index.
+/// An unsigned pre-signed-path sidecar is **not** indexed (slice `S-D24`): a rebuild holds no
+/// keys and cannot admit it, so it is counted and reported with a `warn` naming
+/// [`Workspace::migrate_unsigned_sidecars`](crate::lifecycle::Workspace::migrate_unsigned_sidecars).
+/// A sidecar that is neither shape is warned about and skipped: one unreadable file must not
+/// cost the whole library its index.
 #[tracing::instrument(skip_all, fields(root = %library.root.display()))]
 pub fn rebuild_index(library: &Library) -> Result<(), LibraryError> {
     let media_dir = library.root.join("media");
@@ -104,7 +100,7 @@ pub fn rebuild_index(library: &Library) -> Result<(), LibraryError> {
     }
 
     let mut signed: Vec<SignedOnDisk> = Vec::new();
-    let mut legacy: Vec<AssetSidecar> = Vec::new();
+    let mut unsigned_pending = 0usize;
     let mut skipped = 0usize;
 
     for entry in WalkDir::new(&media_dir).into_iter().filter_map(Result::ok) {
@@ -136,8 +132,8 @@ pub fn rebuild_index(library: &Library) -> Result<(), LibraryError> {
             }
         };
 
-        // Signed shape first: it is what every current write path emits, and it is the only
-        // shape that carries the `hidden` register the default projections gate on.
+        // The signed shape is the only one read: it is what every write path emits, and it is
+        // the only shape that carries the `hidden` register the default projections gate on.
         match SidecarV1::from_canonical_slice(&bytes, SIDECAR_SCHEMA_V1) {
             Ok(sidecar) => {
                 let dir = path.parent().unwrap_or(&media_dir).to_path_buf();
@@ -149,27 +145,25 @@ pub fn rebuild_index(library: &Library) -> Result<(), LibraryError> {
                 );
                 signed.push(SignedOnDisk { dir, sidecar });
             }
-            Err(signed_err) => match read_sidecar(path) {
-                // Compatibility case (`S-B2`/`S-G4`): a library written before the signed
-                // path existed. Nothing writes this shape any more, so nothing here can
-                // restore a register it never had.
-                Ok(sidecar) => {
-                    tracing::debug!(
+            Err(signed_err) => match shape::probe(&bytes) {
+                // A pre-signed-path library (`S-D24`). Nothing here holds the keys to admit it,
+                // and indexing it would show an asset the workspace cannot verify, export, or
+                // upload — so it is counted and named, not indexed.
+                SidecarShape::LegacyUnsigned => {
+                    unsigned_pending += 1;
+                    tracing::warn!(
                         sidecar = %path.display(),
-                        asset_id = %sidecar.uuid,
-                        shape = "asset-sidecar-unsigned",
-                        "rebuild_index: decoded pre-signed-path sidecar"
+                        "rebuild_index: unsigned pre-signed-path sidecar; not indexed. Run \
+                         `Workspace::migrate_unsigned_sidecars` to admit it as a signed asset"
                     );
-                    legacy.push(sidecar);
                 }
-                Err(legacy_err) => {
+                other => {
                     skipped += 1;
                     tracing::warn!(
                         sidecar = %path.display(),
-                        signed_error = %signed_err,
-                        unsigned_error = %legacy_err,
-                        "rebuild_index: sidecar decodes as neither the signed nor the \
-                         pre-signed-path shape; skipping"
+                        shape = ?other,
+                        error = %signed_err,
+                        "rebuild_index: sidecar does not decode as the signed shape; skipping"
                     );
                 }
             },
@@ -203,29 +197,15 @@ pub fn rebuild_index(library: &Library) -> Result<(), LibraryError> {
         library.db.upsert_asset(&row)?;
     }
 
-    for sidecar in &legacy {
-        let row = legacy_asset_row(sidecar);
-        trashed += usize::from(row.is_deleted);
-        tracing::trace!(
-            asset_id = %row.uuid,
-            album_id = ?row.album_id,
-            is_deleted = row.is_deleted,
-            "rebuild_index: upserting row rebuilt from a pre-signed-path sidecar"
-        );
-        library.db.upsert_asset(&row)?;
-    }
-
     let signed_stacks = rebuild_signed_stacks(library, &signed);
-    let legacy_stacks = rebuild_legacy_stacks(library, &legacy);
 
     tracing::info!(
         signed = signed.len(),
-        unsigned = legacy.len(),
+        unsigned_pending,
         skipped,
         hidden,
         trashed,
         signed_stacks,
-        unsigned_stacks = legacy_stacks,
         "rebuild_index: index rebuilt from on-disk sidecars"
     );
     Ok(())
@@ -444,109 +424,6 @@ fn rebuild_signed_stacks(library: &Library, signed: &[SignedOnDisk]) -> usize {
     groups.len()
 }
 
-// ── the pre-signed-path compatibility shape ─────────────────────────────────
-
-/// Project an unsigned pre-signed-path sidecar onto an `assets` row.
-///
-/// This shape predates every CRDT register, so `is_hidden` is necessarily `false` here: the
-/// file carries no `hidden` field to read. That is a property of the old on-disk format, not
-/// a projection choice — a library that was ever written by the signed path has a
-/// [`SidecarV1`] instead, and takes the branch above.
-fn legacy_asset_row(s: &AssetSidecar) -> AssetRow {
-    AssetRow {
-        uuid: s.uuid.clone(),
-        asset_type: asset_type_str(s.asset_type).to_string(),
-        capture_timestamp: s.capture_timestamp.unwrap_or(s.import_timestamp),
-        capture_utc: s.capture_utc,
-        capture_tz_source: s.capture_tz_source.map(|c| tz_source_str(c).to_string()),
-        import_timestamp: s.import_timestamp,
-        hash_sha256: s.hash_sha256.clone(),
-        width: s.width.map(i64::from),
-        height: s.height.map(i64::from),
-        duration_ms: s.duration_ms.map(|d| d as i64),
-        stack_id: None,
-        is_stack_hidden: false,
-        chromahash: None,
-        dominant_color: None,
-        album_id: s.album_id.clone(),
-        rating: i64::from(s.rating),
-        is_deleted: s.is_deleted,
-        deleted_at: s.deleted_at,
-        is_hidden: false,
-    }
-}
-
-/// Reconstruct stacks from the unsigned shape's `stack_hint` fields, grouping by
-/// `(detection_key, detection_method)`. Returns the number of stacks written.
-fn rebuild_legacy_stacks(library: &Library, legacy: &[AssetSidecar]) -> usize {
-    let mut groups: HashMap<StackGroupKey, StackGroupMembers> = HashMap::new();
-
-    for sidecar in legacy {
-        if let Some(hint) = &sidecar.stack_hint {
-            let method_str = detection_method_str(hint.detection_method);
-            groups
-                .entry((hint.detection_key.clone(), method_str.to_string()))
-                .or_default()
-                .push((
-                    sidecar.uuid.clone(),
-                    member_role_str(hint.member_role).to_string(),
-                    hint.stack_type,
-                ));
-        }
-    }
-
-    let now = now_secs();
-    for ((detection_key, detection_method), members) in &groups {
-        let stack_id = format!("{detection_method}:{detection_key}");
-        let Some(primary_uuid) = members
-            .iter()
-            .find(|(_, role, _)| role == "primary")
-            .or_else(|| members.first())
-            .map(|(uuid, _, _)| uuid.clone())
-        else {
-            continue;
-        };
-
-        let stack_type_str = members
-            .first()
-            .map_or("custom", |(_, _, st)| stack_type_str(*st));
-
-        let stack_row = AssetStackRow {
-            id: stack_id.clone(),
-            stack_type: stack_type_str.to_string(),
-            primary_asset_id: primary_uuid.clone(),
-            cover_asset_id: Some(primary_uuid.clone()),
-            is_collapsed: true,
-            is_auto_generated: true,
-            created_at: now,
-            modified_at: now,
-        };
-        // Ignore error if stack already exists (idempotent on rebuild).
-        let _ = library.db.insert_stack(&stack_row);
-
-        for (i, (uuid, role, _)) in members.iter().enumerate() {
-            let member_row = StackMemberRow {
-                id: format!("{stack_id}#{i}"),
-                stack_id: stack_id.clone(),
-                asset_id: uuid.clone(),
-                sequence_order: i as i64,
-                member_role: role.clone(),
-                created_at: now,
-            };
-            let _ = library.db.insert_stack_member(&member_row);
-
-            let is_primary = uuid == &primary_uuid;
-            let _ = library.db.update_stack_hidden(uuid, !is_primary);
-        }
-        tracing::debug!(
-            stack_id = %stack_id,
-            members = members.len(),
-            "rebuild_index: stack reconstructed from pre-signed-path stack hints"
-        );
-    }
-    groups.len()
-}
-
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 fn rfc3339_to_secs(s: &str) -> Option<i64> {
@@ -555,49 +432,7 @@ fn rfc3339_to_secs(s: &str) -> Option<i64> {
         .map(|t: jiff::Timestamp| t.as_second())
 }
 
-fn asset_type_str(t: AssetType) -> &'static str {
-    match t {
-        AssetType::Photo => "photo",
-        AssetType::Video => "video",
-        AssetType::Sidecar => "sidecar",
-    }
-}
-
-fn tz_source_str(s: CaptureTzSource) -> &'static str {
-    match s {
-        CaptureTzSource::OffsetExif => "offset_exif",
-        CaptureTzSource::GpsLookup => "gps_lookup",
-        CaptureTzSource::Floating => "floating",
-    }
-}
-
-fn detection_method_str(m: DetectionMethod) -> &'static str {
-    match m {
-        DetectionMethod::FilenameStem => "filename_stem",
-        DetectionMethod::ContentIdentifier => "content_identifier",
-        DetectionMethod::Timecode => "timecode",
-        DetectionMethod::Manual => "manual",
-    }
-}
-
-fn member_role_str(r: MemberRole) -> &'static str {
-    match r {
-        MemberRole::Primary => "primary",
-        MemberRole::Raw => "raw",
-        MemberRole::Video => "video",
-        MemberRole::Audio => "audio",
-        MemberRole::DepthMap => "depth_map",
-        MemberRole::Processed => "processed",
-        MemberRole::Source => "source",
-        MemberRole::Alternate => "alternate",
-        MemberRole::Sidecar => "sidecar",
-        MemberRole::Proxy => "proxy",
-        MemberRole::Master => "master",
-    }
-}
-
-/// The `stack_members.member_role` string for a signed membership's role. Shares the
-/// vocabulary of [`member_role_str`] where the two enums overlap.
+/// The `stack_members.member_role` string for a signed membership's role.
 fn stack_role_str(r: StackRole) -> &'static str {
     match r {
         StackRole::Primary => "primary",
@@ -644,9 +479,9 @@ fn now_secs() -> i64 {
 //   7. the `{uuid}.provenance.cbor` / `{uuid}.receipts.cbor` siblings are not sidecars
 //   8. `cull` needs no rebuild support — it is not an index projection (audit finding)
 //
-// unsigned shape (`AssetSidecar` — the pre-signed-path compatibility read)
-//   9-11. the pre-existing standalone / stacked / idempotent cases still pass
-//   12. a library holding both shapes rebuilds both
+// the retired unsigned shape (`S-D24`)
+//   9. the two shapes are disjoint on the wire, so the probe cannot mis-route a file
+//   10. an unsigned sidecar is reported and not indexed; the signed asset beside it is
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -657,15 +492,11 @@ mod tests {
     use super::*;
     use crate::crypto::hash::Hash32;
     use crate::crypto::primitives::{Argon2Params, CRYPTO_SUITE_ID};
-    use crate::domain::{DetectionMethod, ImportMode, MemberRole, StackType};
     use crate::library::init::init_library;
     use crate::library::open::open_library;
     use crate::lifecycle::Workspace;
-    use crate::metadata::AssetType;
     use crate::metadata::crdt::{Lww, OrSet};
-    use crate::sidecar::io::write_sidecar;
     use crate::sidecar::sidecar_v1::{CullFlag, Dimensions};
-    use crate::sidecar::{AssetSidecar, StackHint};
 
     /// The media directory every fixture in this module writes into (`capture_timestamp`
     /// below resolves here).
@@ -676,43 +507,6 @@ mod tests {
             mem_kib: 64,
             t_cost: 1,
             p_cost: 1,
-        }
-    }
-
-    // ── the unsigned, pre-signed-path shape ─────────────────────────────────
-
-    fn make_sidecar(uuid: &str, hash: &str, hint: Option<StackHint>) -> AssetSidecar {
-        AssetSidecar {
-            version: 1,
-            uuid: uuid.to_string(),
-            asset_type: AssetType::Photo,
-            original_filename: format!("{uuid}.jpg"),
-            import_timestamp: 1720000000,
-            modified_timestamp: 1720000000,
-            hash_sha256: hash.to_string(),
-            file_size: 1024,
-            is_deleted: false,
-            rating: 0,
-            tags: vec![],
-            import_mode: ImportMode::Copy,
-            importer_version: "0.1.0".to_string(),
-            rawshift_version: "0.1.0".to_string(),
-            capture_timestamp: None,
-            capture_utc: None,
-            capture_tz: None,
-            capture_tz_source: None,
-            tz_db_version: None,
-            width: None,
-            height: None,
-            duration_ms: None,
-            stack_hint: hint,
-            album_id: None,
-            deleted_at: None,
-            camera_make: None,
-            camera_model: None,
-            gps_lat: None,
-            gps_lon: None,
-            unknown_fields: BTreeMap::new(),
         }
     }
 
@@ -761,42 +555,84 @@ mod tests {
         .unwrap();
     }
 
-    /// The two shapes are disjoint on the wire, so probing signed-then-unsigned cannot
-    /// mis-route a file: a signed sidecar has integer field 0 and no `version` key, an
-    /// unsigned one has `version` and no field 0. This is also *why* the pre-`S-D21` rebuild
-    /// lost the register state silently — it did not mis-read signed sidecars, it skipped
-    /// every one of them, so a signed library rebuilt to nothing at all.
-    #[test]
-    fn the_two_sidecar_shapes_do_not_decode_as_each_other() {
-        let tmp = TempDir::new().unwrap();
-        let dir = tmp.path();
-
-        let signed_path = dir.join("signed.cbor");
-        fs::write(
-            &signed_path,
-            signed_sidecar(Uuid::from_u128(0xD15), 0x66).to_canonical_vec(),
-        )
-        .unwrap();
-        assert!(
-            read_sidecar(&signed_path).is_err(),
-            "the pre-signed-path reader must reject a signed sidecar"
-        );
-
-        let legacy_path = dir.join("legacy.cbor");
-        write_sidecar(
-            &legacy_path,
-            &make_sidecar(
-                "eeee0000-0000-0000-0000-000000000005",
-                &"e".repeat(64),
-                None,
+    /// A legacy unsigned sidecar exactly as the retired serializer wrote it: text keys and
+    /// `version: 1`, no integer key `0`.
+    fn legacy_sidecar_bytes(uuid: &str, hash_hex: &str) -> Vec<u8> {
+        use ciborium::value::Value;
+        let text = |s: &str| Value::Text(s.to_string());
+        let map = Value::Map(vec![
+            (text("version"), Value::Integer(1.into())),
+            (text("uuid"), text(uuid)),
+            (text("asset_type"), text("photo")),
+            (text("hash_sha256"), text(hash_hex)),
+            (
+                text("import_timestamp"),
+                Value::Integer(1_720_000_000.into()),
             ),
-        )
-        .unwrap();
-        let bytes = fs::read(&legacy_path).unwrap();
+        ]);
+        let mut out = Vec::new();
+        ciborium::ser::into_writer(&map, &mut out).unwrap();
+        out
+    }
+
+    /// The two shapes are disjoint on the wire, so the probe cannot mis-route a file: a
+    /// signed sidecar has integer field 0 and no `version` key, an unsigned one has `version`
+    /// and no field 0. This is also *why* the pre-`S-D21` rebuild lost the register state
+    /// silently — it did not mis-read signed sidecars, it skipped every one of them, so a
+    /// signed library rebuilt to nothing at all.
+    #[test]
+    fn the_two_sidecar_shapes_probe_disjointly() {
+        let signed = signed_sidecar(Uuid::from_u128(0xD15), 0x66).to_canonical_vec();
+        assert_eq!(shape::probe(&signed), SidecarShape::Signed { schema: 1 });
+        assert!(SidecarV1::from_canonical_slice(&signed, SIDECAR_SCHEMA_V1).is_ok());
+
+        let legacy = legacy_sidecar_bytes("eeee0000-0000-0000-0000-000000000005", &"e".repeat(64));
+        assert_eq!(shape::probe(&legacy), SidecarShape::LegacyUnsigned);
         assert!(
-            SidecarV1::from_canonical_slice(&bytes, SIDECAR_SCHEMA_V1).is_err(),
+            SidecarV1::from_canonical_slice(&legacy, SIDECAR_SCHEMA_V1).is_err(),
             "the signed reader must reject a pre-signed-path sidecar"
         );
+    }
+
+    /// **`S-D24`.** An unsigned pre-signed-path sidecar is reported and *not* indexed: a
+    /// rebuild holds no keys and cannot admit it, and indexing it would show an asset the
+    /// workspace cannot verify, export, or upload. The signed asset beside it rebuilds as
+    /// before, and the run still succeeds — one legacy file must not cost the library its
+    /// index.
+    #[test]
+    fn an_unsigned_sidecar_is_reported_not_indexed() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("lib");
+        let lib = init_library(&root, "T").unwrap();
+        let media_dir = root.join(FIXTURE_MEDIA);
+        fs::create_dir_all(&media_dir).unwrap();
+
+        fs::write(
+            media_dir.join("dddd000000000000000000000000004.cbor"),
+            legacy_sidecar_bytes("dddd0000-0000-0000-0000-000000000004", &"d".repeat(64)),
+        )
+        .unwrap();
+        let signed_id = Uuid::from_u128(0x11D);
+        let mut signed = signed_sidecar(signed_id, 0x44);
+        signed
+            .hidden
+            .set(true, "2026-08-01T00:00:00Z", Uuid::from_u128(0xD1));
+        write_signed(&media_dir, &signed);
+
+        rebuild_index(&lib).unwrap();
+
+        assert!(
+            lib.db.find_by_hash(&"d".repeat(64)).unwrap().is_none(),
+            "the unsigned sidecar is not indexed"
+        );
+        let signed_row = lib
+            .db
+            .find_by_uuid(&signed_id.to_string())
+            .unwrap()
+            .unwrap();
+        assert!(signed_row.is_hidden);
+        assert!(lib.db.query_timeline(0, 100).unwrap().is_empty());
+        assert_eq!(lib.db.query_hidden(0, 100).unwrap().len(), 1);
     }
 
     /// **The `S-D21` acceptance case.** A hidden asset survives a rebuild still hidden — and
@@ -1285,163 +1121,5 @@ mod tests {
             "the cull register is read from the sidecar, not the index"
         );
         assert_eq!(ws.assets_by_cull(CullFlag::Reject), vec![id]);
-    }
-
-    // ── the pre-signed-path compatibility read ──────────────────────────────
-
-    #[test]
-    fn test_rebuild_standalone_asset() {
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path().join("lib");
-        let lib = init_library(&root, "T").unwrap();
-
-        // Manually write a sidecar
-        let media_dir = root.join(FIXTURE_MEDIA);
-        std::fs::create_dir_all(&media_dir).unwrap();
-        let sidecar = make_sidecar(
-            "aabbccdd-0000-0000-0000-000000000001",
-            &"a".repeat(64),
-            None,
-        );
-        write_sidecar(
-            &media_dir.join("aabbccdd00000000000000000000001.cbor"),
-            &sidecar,
-        )
-        .unwrap();
-
-        rebuild_index(&lib).unwrap();
-
-        let found = lib.db.find_by_hash(&"a".repeat(64)).unwrap();
-        assert!(found.is_some(), "asset should be in DB after rebuild");
-    }
-
-    #[test]
-    fn test_rebuild_stacked_assets() {
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path().join("lib");
-        let lib = init_library(&root, "T").unwrap();
-
-        let media_dir = root.join(FIXTURE_MEDIA);
-        std::fs::create_dir_all(&media_dir).unwrap();
-
-        let primary_hint = StackHint {
-            detection_key: "img_0042".to_string(),
-            detection_method: DetectionMethod::FilenameStem,
-            member_role: MemberRole::Primary,
-            stack_type: StackType::RawJpeg,
-        };
-        let raw_hint = StackHint {
-            detection_key: "img_0042".to_string(),
-            detection_method: DetectionMethod::FilenameStem,
-            member_role: MemberRole::Raw,
-            stack_type: StackType::RawJpeg,
-        };
-
-        let primary = make_sidecar(
-            "aaaa0000-0000-0000-0000-000000000001",
-            &"a".repeat(64),
-            Some(primary_hint),
-        );
-        let raw = make_sidecar(
-            "bbbb0000-0000-0000-0000-000000000002",
-            &"b".repeat(64),
-            Some(raw_hint),
-        );
-
-        write_sidecar(
-            &media_dir.join("aaaa000000000000000000000000001.cbor"),
-            &primary,
-        )
-        .unwrap();
-        write_sidecar(
-            &media_dir.join("bbbb000000000000000000000000002.cbor"),
-            &raw,
-        )
-        .unwrap();
-
-        rebuild_index(&lib).unwrap();
-
-        // Both assets should be in the DB
-        assert!(lib.db.find_by_hash(&"a".repeat(64)).unwrap().is_some());
-        assert!(lib.db.find_by_hash(&"b".repeat(64)).unwrap().is_some());
-
-        // Primary should be visible, raw hidden
-        let timeline = lib.db.query_timeline(0, 100).unwrap();
-        assert_eq!(
-            timeline.len(),
-            1,
-            "only primary should be visible in timeline"
-        );
-    }
-
-    #[test]
-    fn test_rebuild_is_idempotent() {
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path().join("lib");
-        let lib = init_library(&root, "T").unwrap();
-
-        let media_dir = root.join(FIXTURE_MEDIA);
-        std::fs::create_dir_all(&media_dir).unwrap();
-        let sidecar = make_sidecar(
-            "cccc0000-0000-0000-0000-000000000003",
-            &"c".repeat(64),
-            None,
-        );
-        write_sidecar(
-            &media_dir.join("cccc000000000000000000000000003.cbor"),
-            &sidecar,
-        )
-        .unwrap();
-
-        rebuild_index(&lib).unwrap();
-        rebuild_index(&lib).unwrap(); // second call should not fail
-
-        let found = lib.db.find_by_hash(&"c".repeat(64)).unwrap();
-        assert!(found.is_some());
-    }
-
-    /// The two shapes coexist: a library part-written before the signed path must rebuild
-    /// both, with the signed asset keeping its register state and the unsigned one keeping
-    /// what its shape can carry.
-    #[test]
-    fn mixed_library_rebuilds_both_sidecar_shapes() {
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path().join("lib");
-        let lib = init_library(&root, "T").unwrap();
-        let media_dir = root.join(FIXTURE_MEDIA);
-        std::fs::create_dir_all(&media_dir).unwrap();
-
-        let legacy = make_sidecar(
-            "dddd0000-0000-0000-0000-000000000004",
-            &"d".repeat(64),
-            None,
-        );
-        write_sidecar(
-            &media_dir.join("dddd000000000000000000000000004.cbor"),
-            &legacy,
-        )
-        .unwrap();
-
-        let signed_id = Uuid::from_u128(0x11D);
-        let mut signed = signed_sidecar(signed_id, 0x44);
-        signed
-            .hidden
-            .set(true, "2026-08-01T00:00:00Z", Uuid::from_u128(0xD1));
-        write_signed(&media_dir, &signed);
-
-        rebuild_index(&lib).unwrap();
-
-        assert!(
-            lib.db.find_by_hash(&"d".repeat(64)).unwrap().is_some(),
-            "the pre-signed-path sidecar still rebuilds"
-        );
-        let signed_row = lib
-            .db
-            .find_by_uuid(&signed_id.to_string())
-            .unwrap()
-            .unwrap();
-        assert!(signed_row.is_hidden);
-        let timeline = lib.db.query_timeline(0, 100).unwrap();
-        assert_eq!(timeline.len(), 1, "only the unsigned, visible asset shows");
     }
 }

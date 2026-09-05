@@ -2,8 +2,10 @@ import Foundation
 
 // MARK: - CatalogSidecar
 
-/// The CBOR sidecar paired with every managed media file — a Swift-native,
-/// `Sendable` mirror of the Rust `AssetSidecarRecord`.
+/// The sidecar record of the **mock lane** — a Swift-native, `Sendable` value.
+/// The Rust `AssetSidecarRecord` it once mirrored (the unsigned CBOR shape) was
+/// retired with the unsigned-sidecar migration (`S-D24`); the signed `SidecarV1`
+/// is authored only by the Rust core.
 ///
 /// The sidecar is the portable, self-describing record of an asset that lives
 /// next to the file on disk; the SQLite catalog is a rebuildable index over
