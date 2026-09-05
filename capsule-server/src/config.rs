@@ -121,6 +121,26 @@ impl Environment for BTreeMap<String, String> {
     }
 }
 
+/// Whether `value` is a `YYYY-MM-DD` calendar date, spelled exactly that way.
+///
+/// `jiff::civil::Date` parses the strict ISO form and refuses `2026-6-1` and February 30th
+/// alike; the round trip back to text refuses a value the parser tolerated but the gate's
+/// bytewise comparison would misorder.
+fn is_protocol_date(value: &str) -> bool {
+    value
+        .parse::<jiff::civil::Date>()
+        .is_ok_and(|date| date.to_string() == value)
+}
+
+/// Whether `value` is `MAJOR.MINOR.PATCH` with three non-negative integers.
+fn is_semver(value: &str) -> bool {
+    let parts: Vec<&str> = value.split('.').collect();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
 /// Bytes that must not be printed.
 #[derive(Clone, PartialEq, Eq)]
 pub struct SecretBytes(Vec<u8>);
@@ -311,10 +331,12 @@ pub struct Config {
     pub sync_cursor_mac_key: Option<[u8; CURSOR_KEY_LEN]>,
     /// The seed the attestation signing key is built from.
     pub attestation_key_seed: Option<[u8; ATTESTATION_SEED_LEN]>,
-    /// The oldest `protocol_version` accepted for writes.
+    /// The oldest `protocol_version` accepted for writes (`YYYY-MM-DD`, validated).
     pub protocol_min: String,
-    /// The newest `protocol_version` this server speaks.
+    /// The newest `protocol_version` this server speaks (`YYYY-MM-DD`, validated).
     pub protocol_max: String,
+    /// The advisory semver client-build cutoff advertised on every response.
+    pub min_client_build: String,
     /// How long a blob sits at zero references before the collector may sweep it.
     pub grace_window: SignedDuration,
     /// How long an account stays locked after too many failed credential presentations.
@@ -461,16 +483,48 @@ impl Config {
         let oidc = read_oidc(env, &mut faults);
 
         // ── Protocol window ─────────────────────────────────────────────────────────────
+        //
+        // Both ends default to the policy's year window rather than to the single day
+        // `capsule-core` speaks: a default that collapsed the window to one date refused every
+        // client one build behind on its first write, which nobody chose. Both are parsed as
+        // dates, because every reader downstream — the gate's lexicographic comparison, the
+        // response header, the discovery record — assumes the `YYYY-MM-DD` grammar, and
+        // `2026-6-1` sorts before `2026-12-31` for the wrong reason. `min == max` is a
+        // legitimate explicit choice and is not refused.
         let protocol_max = env
             .var("PROTOCOL_MAX")
-            .unwrap_or_else(|| capsule_core::crypto::PROTOCOL_VERSION.to_owned());
+            .unwrap_or_else(|| crate::upload::policy::DEFAULT_PROTOCOL_MAX.to_owned());
         let protocol_min = env
             .var("PROTOCOL_MIN")
-            .unwrap_or_else(|| capsule_core::crypto::PROTOCOL_VERSION.to_owned());
+            .unwrap_or_else(|| crate::upload::policy::DEFAULT_PROTOCOL_MIN.to_owned());
+        for (key, value) in [
+            ("PROTOCOL_MIN", &protocol_min),
+            ("PROTOCOL_MAX", &protocol_max),
+        ] {
+            if !is_protocol_date(value) {
+                faults.push(ConfigFault::Invalid {
+                    key,
+                    detail: "is not a YYYY-MM-DD date".to_owned(),
+                });
+            }
+        }
         if protocol_min > protocol_max {
             faults.push(ConfigFault::Invalid {
                 key: "PROTOCOL_MIN",
                 detail: format!("`{protocol_min}` is newer than PROTOCOL_MAX `{protocol_max}`"),
+            });
+        }
+
+        // The advisory client-build cutoff, `X-Capsule-Min-Client-Build` on every response.
+        // Validated as three dot-separated integers because it is sent as a header value and
+        // compared as semver by clients; `0.0.0` — the default — is "no cutoff announced".
+        let min_client_build = env
+            .var("MIN_CLIENT_BUILD")
+            .unwrap_or_else(|| crate::upload::policy::DEFAULT_MIN_CLIENT_BUILD.to_owned());
+        if !is_semver(&min_client_build) {
+            faults.push(ConfigFault::Invalid {
+                key: "MIN_CLIENT_BUILD",
+                detail: "is not a MAJOR.MINOR.PATCH semver build".to_owned(),
             });
         }
 
@@ -591,6 +645,7 @@ impl Config {
                 attestation_key_seed,
                 protocol_min,
                 protocol_max,
+                min_client_build,
                 grace_window,
                 lockout_window,
                 lockout_attempts,
@@ -876,7 +931,66 @@ mod tests {
         assert_eq!(config.server_domain, "localhost");
         assert_eq!(config.api_base_url, "http://localhost:3000/v1");
         assert_eq!(config.backends, Backends::Memory);
+        // The policy's year window, not the single day core speaks: a build one day behind
+        // still writes, and the day core speaks sits strictly inside it.
+        assert_eq!(
+            config.protocol_min,
+            crate::upload::policy::DEFAULT_PROTOCOL_MIN
+        );
+        assert_eq!(
+            config.protocol_max,
+            crate::upload::policy::DEFAULT_PROTOCOL_MAX
+        );
+        let spoken = capsule_core::crypto::PROTOCOL_VERSION;
+        assert!(config.protocol_min.as_str() < spoken && spoken < config.protocol_max.as_str());
+        assert_eq!(
+            config.min_client_build,
+            crate::upload::policy::DEFAULT_MIN_CLIENT_BUILD
+        );
+    }
+
+    #[test]
+    fn a_protocol_bound_that_is_not_a_strict_date_is_refused() {
+        for (key, value) in [
+            ("PROTOCOL_MIN", "2026-6-1"),
+            ("PROTOCOL_MAX", "2026-02-30"),
+            ("PROTOCOL_MAX", "yesterday"),
+            ("PROTOCOL_MIN", "2026-05-31T00:00:00Z"),
+        ] {
+            let mut environment = serveable();
+            environment.insert(key.to_owned(), value.to_owned());
+            let error =
+                Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
+            assert!(error.names(key), "{key}={value}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_window_of_one_day_is_a_legitimate_operator_choice() {
+        let mut environment = serveable();
+        environment.insert("PROTOCOL_MIN".to_owned(), "2026-05-31".to_owned());
+        environment.insert("PROTOCOL_MAX".to_owned(), "2026-05-31".to_owned());
+        let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
         assert_eq!(config.protocol_min, config.protocol_max);
+    }
+
+    #[test]
+    fn the_client_build_cutoff_is_semver_or_refused() {
+        let mut environment = serveable();
+        environment.insert("MIN_CLIENT_BUILD".to_owned(), "1.4.0".to_owned());
+        let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+        assert_eq!(config.min_client_build, "1.4.0");
+
+        for bad in ["1.4", "v1.4.0", "1.4.0-beta", "one.two.three", ""] {
+            let mut environment = serveable();
+            environment.insert("MIN_CLIENT_BUILD".to_owned(), bad.to_owned());
+            match Config::load(&environment, &memory(), Demands::Serve) {
+                // Empty is unset, which is the default and loads.
+                Ok(config) if bad.is_empty() => assert_eq!(config.min_client_build, "0.0.0"),
+                Ok(_) => panic!("MIN_CLIENT_BUILD={bad} loaded"),
+                Err(error) => assert!(error.names("MIN_CLIENT_BUILD"), "{bad}: {error}"),
+            }
+        }
     }
 
     #[test]
