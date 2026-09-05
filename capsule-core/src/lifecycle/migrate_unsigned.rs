@@ -759,7 +759,10 @@ impl Workspace {
     }
 
     /// Copy the legacy bytes to `.library/quarantine/{uuid}.cbor` and write the sibling
-    /// `.reason.json`, before any signed write. A resumed candidate's copy is already there.
+    /// `.reason.json`, before any signed write. The copy and its directory are `fsync`ed
+    /// first, so the legacy record is durable on disk before the signed sidecar can replace
+    /// it (the replacement itself is a single-file atomic rename). A resumed candidate's copy
+    /// is already there.
     fn quarantine_legacy(&self, candidate: &Candidate) -> Result<()> {
         let twin = self.quarantine_sidecar_path(&candidate.asset_id);
         let dir = twin
@@ -770,6 +773,13 @@ impl Workspace {
             fs::copy(&candidate.path, &twin).map_err(|e| {
                 LifecycleError::Io(format!("quarantine {}: {e}", candidate.path.display()))
             })?;
+            let sync = |path: &Path| -> Result<()> {
+                fs::File::open(path)
+                    .and_then(|f| f.sync_all())
+                    .map_err(|e| LifecycleError::Io(format!("fsync {}: {e}", path.display())))
+            };
+            sync(&twin)?;
+            sync(dir)?;
         }
         let reason = serde_json::json!({
             "reason": QUARANTINE_REASON,
@@ -1699,6 +1709,47 @@ mod tests {
             vec![(garbage_path.clone(), MigrationSkip::UnknownShape)]
         );
         assert_eq!(fs::read(&garbage_path).unwrap(), b"\xFF\x00 not cbor");
+    }
+
+    /// The signed sidecar replaces the legacy one by a single-file atomic rename: a failure
+    /// between the `.tmp` write and the rename leaves the legacy sidecar byte-for-byte intact
+    /// (and its quarantine copy in place), and the next run completes the migration.
+    #[test]
+    fn a_failure_before_the_sidecar_rename_leaves_the_legacy_sidecar_intact() {
+        use super::super::import::with_sidecar_rename_fault;
+
+        let lib = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Imports").unwrap();
+        let id = Uuid::from_u128(0x1A7);
+        let (sidecar_path, legacy_bytes) =
+            write_legacy(lib.path(), id, b"\xFF\xD8\xFF renamed into place", vec![]);
+
+        let failed = with_sidecar_rename_fault(|| ws.migrate_unsigned_sidecars(&opts(album)));
+        assert!(
+            matches!(failed, Err(LifecycleError::Io(ref m)) if m.contains("injected fault")),
+            "{failed:?}"
+        );
+        assert_eq!(
+            fs::read(&sidecar_path).unwrap(),
+            legacy_bytes,
+            "the legacy sidecar is untouched: only a `.tmp` was written"
+        );
+        assert!(ws.asset(&id).is_none(), "nothing was admitted");
+        assert_eq!(
+            fs::read(ws.quarantine_sidecar_path(&id)).unwrap(),
+            legacy_bytes,
+            "the quarantine copy landed before the signed write started"
+        );
+
+        // The rerun finds a legacy sidecar whose quarantine twin matches, and completes.
+        let report = ws.migrate_unsigned_sidecars(&opts(album)).unwrap();
+        assert_eq!(report.migrated, vec![id]);
+        assert_eq!(ws.verify(&id).unwrap(), VerifyOutcome::Accept);
+        assert!(
+            !sidecar_path.with_extension("cbor.tmp").exists(),
+            "the rename consumed the staged file"
+        );
     }
 
     /// A crash between the create and the `delete` record leaves an admitted asset whose fold

@@ -32,6 +32,26 @@ use crate::metadata::crdt::{Lww, OrSet};
 use crate::sidecar::sidecar_v1::{
     Gps, GpsSource, SIDECAR_SCHEMA_V1, SidecarV1, StackMembership, StackRole,
 };
+use crate::utils::paths::tmp_path;
+
+/// A fault injected between the signed sidecar's `.tmp` write and its rename into place — the
+/// crash the single-file atomic rename exists to survive (maintenance doc, Atomic Writes).
+/// `#[cfg(test)]` and thread-local for the same reasons as
+/// [`SealerFault`](super::derivatives::SealerFault): absent from a release build, and a test
+/// seam that stays out of a production signature.
+#[cfg(test)]
+thread_local! {
+    static SIDECAR_RENAME_FAULT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `body` with the sidecar rename failing after the `.tmp` write, restoring after.
+#[cfg(test)]
+pub(super) fn with_sidecar_rename_fault<T>(body: impl FnOnce() -> T) -> T {
+    SIDECAR_RENAME_FAULT.with(|slot| slot.set(true));
+    let out = body();
+    SIDECAR_RENAME_FAULT.with(|slot| slot.set(false));
+    out
+}
 
 /// Render a Unix-second capture time as the sidecar's RFC 3339 `capture_timestamp`.
 fn capture_rfc3339(secs: i64) -> String {
@@ -250,11 +270,26 @@ impl Workspace {
 
     /// The signed half of [`write_asset_files`](Self::write_asset_files): the sidecar, the
     /// provenance chain, and the sealed metadata blob — everything but the plaintext.
+    ///
+    /// The sidecar is staged to `{uuid}.cbor.tmp` and renamed into place (the single-file
+    /// atomic write of the maintenance doc), so a crash mid-write leaves the previous sidecar
+    /// intact rather than a torn one — for the migration, that previous sidecar is the legacy
+    /// record itself. The stale `.tmp` is the startup scrub's to remove. The per-asset
+    /// *bundle* (sidecar, chain, blob renamed together) remains its own slice.
     fn write_signed_artifacts(&self, asset: &AssetState) -> Result<()> {
         let dir = media_dir(&self.root, asset.capture_utc);
         fs::create_dir_all(&dir).map_err(|e| LifecycleError::Io(e.to_string()))?;
-        fs::write(self.sidecar_path(asset), asset.sidecar.to_canonical_vec())
+        let sidecar_path = self.sidecar_path(asset);
+        let staged = tmp_path(&sidecar_path);
+        fs::write(&staged, asset.sidecar.to_canonical_vec())
             .map_err(|e| LifecycleError::Io(e.to_string()))?;
+        #[cfg(test)]
+        if SIDECAR_RENAME_FAULT.with(std::cell::Cell::get) {
+            return Err(LifecycleError::Io(
+                "injected fault: crashed before renaming the sidecar into place".into(),
+            ));
+        }
+        fs::rename(&staged, &sidecar_path).map_err(|e| LifecycleError::Io(e.to_string()))?;
         let prov = cbor::to_canonical_vec(&asset.chain.records().to_vec())
             .map_err(|e| LifecycleError::Cbor(e.to_string()))?;
         fs::write(self.provenance_path(asset), prov)
