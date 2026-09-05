@@ -164,17 +164,21 @@ fn asset_row_from_state(asset: &AssetState) -> AssetRow {
     // sidecar and leaves the `media/{YYYY}/{YYYY-MM}` shard — and therefore `capture_utc`,
     // which names it — where the files already are. Reading the shard here would keep the
     // timeline on the wrong date until the next rebuild while the rebuild read the right one.
-    let capture_utc = match asset.sidecar.capture_timestamp.parse::<Timestamp>() {
-        Ok(t) => t.as_second(),
-        Err(_) => {
-            tracing::warn!(
-                asset_id = %asset.asset_id,
-                capture_timestamp = %asset.sidecar.capture_timestamp,
-                "index: unparseable capture timestamp; indexing it as the epoch"
-            );
-            0
-        }
-    };
+    let capture_utc = asset
+        .sidecar
+        .capture_timestamp
+        .parse::<Timestamp>()
+        .map_or_else(
+            |_| {
+                tracing::warn!(
+                    asset_id = %asset.asset_id,
+                    capture_timestamp = %asset.sidecar.capture_timestamp,
+                    "index: unparseable capture timestamp; indexing it as the epoch"
+                );
+                0
+            },
+            Timestamp::as_second,
+        );
     AssetRow {
         uuid: asset.asset_id.to_string(),
         asset_type: asset_type_for(&asset.sidecar.content_type),
