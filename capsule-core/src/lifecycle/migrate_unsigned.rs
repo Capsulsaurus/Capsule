@@ -41,6 +41,7 @@ use crate::sidecar::shape::{self, SidecarShape};
 use crate::sidecar::sidecar_v1::{
     Gps, GpsSource, SIDECAR_SCHEMA_V1, SidecarV1, StackMembership, StackRole,
 };
+use crate::utils::paths::sync_dir;
 
 /// The `_unknown` key under which a migrated asset's signed sidecar carries its whole legacy
 /// record. Hyphenated on purpose: no snake_case schema field can ever collide with it.
@@ -836,10 +837,10 @@ impl Workspace {
     }
 
     /// Copy the legacy bytes to `.library/quarantine/{uuid}.cbor` and write the sibling
-    /// `.reason.json`, before any signed write. The copy and its directory are `fsync`ed
-    /// first, so the legacy record is durable on disk before the signed sidecar can replace
-    /// it (the replacement itself is a single-file atomic rename). A resumed candidate's copy
-    /// is already there.
+    /// `.reason.json`, before any signed write. The copy is `fsync`ed and its directory entry
+    /// made durable ([`sync_dir`], a no-op where the platform has no directory fsync), so the
+    /// legacy record is on disk before the signed sidecar can replace it (the replacement
+    /// itself is a single-file atomic rename). A resumed candidate's copy is already there.
     fn quarantine_legacy(&self, candidate: &Candidate) -> Result<()> {
         let twin = self.quarantine_sidecar_path(&candidate.asset_id);
         let dir = twin
@@ -850,13 +851,14 @@ impl Workspace {
             fs::copy(&candidate.path, &twin).map_err(|e| {
                 LifecycleError::Io(format!("quarantine {}: {e}", candidate.path.display()))
             })?;
-            let sync = |path: &Path| -> Result<()> {
-                fs::File::open(path)
-                    .and_then(|f| f.sync_all())
-                    .map_err(|e| LifecycleError::Io(format!("fsync {}: {e}", path.display())))
-            };
-            sync(&twin)?;
-            sync(dir)?;
+            // A write handle: flushing a file's buffers needs one on every platform.
+            fs::File::options()
+                .write(true)
+                .open(&twin)
+                .and_then(|f| f.sync_all())
+                .map_err(|e| LifecycleError::Io(format!("fsync {}: {e}", twin.display())))?;
+            sync_dir(dir)
+                .map_err(|e| LifecycleError::Io(format!("fsync {}: {e}", dir.display())))?;
         }
         let reason = serde_json::json!({
             "reason": QUARANTINE_REASON,
