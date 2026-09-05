@@ -130,23 +130,28 @@ pub fn router() -> ServerRouter {
         // is declared on every operation it covers because Kynos derives the declaration from
         // the interceptor's own type. See [`limits`].
         .intercept(limits::body_size())
-        // The protocol gate is a `Group`, not a router interceptor, because the design exempts
-        // ten operations from it and a group is how Kynos spells "these and not those": an
-        // operation mounted inside is gated and declares the handshake parameters and the `426`;
-        // one mounted on the router below is not, and still carries the response headers.
-        // `tests/conformance.rs` pins the exempt set against the emitted document and walks
-        // every operation on the wire, so a route cannot join or leave the gate by accident.
+        // The protocol gate is two `Group`s, not a router interceptor, for two reasons the type
+        // system makes concrete. First, the design exempts ten operations, and a group is how
+        // Kynos spells "these and not those": an operation mounted inside declares the handshake
+        // parameters and the gate's statuses, one mounted on the router below does not and still
+        // carries the response headers. Second, the design holds a **write** to the window (a
+        // grammatical date outside it is `426`) and a **read** to the grammar only ("reads of any
+        // past version succeed", threat-model/validation.md) — and since an interceptor's
+        // declaration is its type, a read operation must sit behind a gate whose `Short` has no
+        // `426` in it, or the document would promise a status the read never renders. So the
+        // non-safe operations sit behind `ProtocolGate` and the `GET`/`HEAD` ones behind
+        // `ProtocolReadGate`. `tests/conformance.rs` pins both sets and the exempt ten against
+        // the emitted document and walks every operation on the wire, so a route cannot change
+        // gate by accident.
         //
-        // Seven `mount` calls, not one. Kynos's `EndpointSet` is implemented for tuples up to
-        // sixteen and the seventeenth operation is a compile error, so a split is forced — but
-        // grouping by surface rather than cutting at the arbitrary boundary is what makes the
-        // next addition obvious rather than a puzzle. Each group is well under the cap, so a
-        // new operation joins the surface it belongs to instead of wherever there is room.
+        // Several `mount` calls per group, not one. Kynos's `EndpointSet` is implemented for
+        // tuples up to sixteen and the seventeenth operation is a compile error, so a split is
+        // forced — but grouping by surface rather than cutting at the arbitrary boundary is what
+        // makes the next addition obvious rather than a puzzle.
         .group(
             Group::<App>::new("/")
                 .intercept(negotiation::ProtocolGate::new())
-                // The account: who you are, what devices you have, and how you get your key
-                // back.
+                // The account: opening, refreshing and closing sessions, revoking them all.
                 .mount(kynos::routes![
                     routes::auth::register_user,
                     routes::auth::login_user,
@@ -154,18 +159,13 @@ pub fn router() -> ServerRouter {
                     routes::auth::logout,
                     routes::auth::revoke_all_challenge,
                     routes::auth::revoke_all,
-                    routes::devices::list_devices,
+                    routes::auth::reauthenticate,
                     routes::devices::revoke_session,
                     routes::directory::publish_device_directory,
-                    routes::directory::fetch_device_directory,
                     routes::escrow::store_escrow,
-                    routes::escrow::fetch_escrow,
-                    routes::auth::reauthenticate,
                 ])
-                // What an account knows about itself, and the credentials it opens sessions
-                // with.
+                // What an account changes about itself, and its second factor.
                 .mount(kynos::routes![
-                    routes::profile::get_profile,
                     routes::profile::update_profile,
                     routes::profile::change_password,
                     routes::totp::totp_enroll,
@@ -173,48 +173,56 @@ pub fn router() -> ServerRouter {
                     routes::totp::totp_disable,
                     routes::totp::totp_verify_login,
                 ])
-                // The cross-device add: one code, one channel, and the two devices' mailboxes.
+                // The cross-device add: one code, one channel, and the writes into it.
                 .mount(kynos::routes![
                     routes::enroll::issue_enrollment_code,
                     routes::enroll::redeem_enrollment_code,
                     routes::enroll::relay_enrollment_payload,
-                    routes::enroll::drain_enrollment_channel,
                     routes::enroll::close_enrollment_channel,
                 ])
-                // The library's own surfaces.
+                // The library's own writes: albums, upgrades, uploads, operations, verification.
                 .mount(kynos::routes![
                     routes::albums::provision_album,
                     routes::upgrade::begin_album_upgrade,
-                    routes::upgrade::album_upgrade_phase,
                     routes::upgrade::abort_album_upgrade,
                     routes::roster::publish_album_roster,
-                    routes::quota::get_quota,
-                    routes::moderation::moderation_record,
-                ])
-                // The asset surfaces: getting bytes in, changing what they mean, and reading
-                // them back.
-                .mount(kynos::routes![
                     routes::upload::create_upload,
                     routes::upload::append_chunk,
-                    routes::sessions::list_upload_sessions,
-                    routes::upload::head_upload,
                     routes::upload::cancel_upload,
-                    routes::receipts::get_upload_receipt,
                     routes::ops::apply_op,
-                    routes::sync::sync_feed,
-                    routes::blob::get_blob,
                     routes::storage::verify_storage,
-                    routes::assets::get_asset_receipts,
                 ])
-                // Share links and guest drops: the owner's side of both.
+                // Share links and guest drops: the owner's writes on both.
                 .mount(kynos::routes![
                     routes::share::issue_share,
                     routes::share::revoke_share,
                     routes::drop::provision_link,
                     routes::drop::revoke_link,
-                    routes::drop::list_inbox,
                     routes::drop::adopt_drop,
                     routes::drop::discard_drop,
+                ]),
+        )
+        // The reads: every gated `GET` and `HEAD`. Held to the handshake's grammar, admitted at
+        // any protocol date, and declaring the `400` alone.
+        .group(
+            Group::<App>::new("/")
+                .intercept(negotiation::ProtocolReadGate::new())
+                .mount(kynos::routes![
+                    routes::devices::list_devices,
+                    routes::directory::fetch_device_directory,
+                    routes::escrow::fetch_escrow,
+                    routes::profile::get_profile,
+                    routes::enroll::drain_enrollment_channel,
+                    routes::upgrade::album_upgrade_phase,
+                    routes::quota::get_quota,
+                    routes::moderation::moderation_record,
+                    routes::upload::head_upload,
+                    routes::sessions::list_upload_sessions,
+                    routes::receipts::get_upload_receipt,
+                    routes::sync::sync_feed,
+                    routes::blob::get_blob,
+                    routes::assets::get_asset_receipts,
+                    routes::drop::list_inbox,
                 ]),
         )
         // **The ten operations the design exempts from the gate**, mounted on the router so

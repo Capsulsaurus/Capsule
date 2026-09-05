@@ -171,18 +171,31 @@ async fn every_declared_response_is_exercised() {
             "DELETE" => client.delete(path),
             _ => client.post(path),
         };
-        request
+        let refused = request
             .header("content-length", &oversized().to_string())
             .body("application/json", "{}")
             .send()
-            .await
-            .assert_status(StatusCode::PAYLOAD_TOO_LARGE);
+            .await;
+        refused.assert_status(StatusCode::PAYLOAD_TOO_LARGE);
+        // The body-size limit sits inside the advertising interceptor, so even the refusal
+        // that reads no byte of the request leaves with the window on it.
+        for name in [
+            "x-capsule-protocol-min",
+            "x-capsule-protocol-max",
+            "x-capsule-min-client-build",
+        ] {
+            assert!(
+                refused.header(name).is_some(),
+                "{method} {path}: a 413 left without {name}"
+            );
+        }
     }
 
-    // 426 and 400 are declared on every gated operation, because the protocol gate is mounted
-    // on the group that holds them and a Kynos interceptor's declaration is its type. So every
-    // gated operation produces both here, the way the gate answers before anything else is
-    // read: an ancient protocol date, and one that is not a date at all.
+    // 400 is declared on every gated operation and 426 on every gated write, because the two
+    // protocol gates are mounted on the groups that hold them and a Kynos interceptor's
+    // declaration is its type. So every gated operation produces what its gate answers here,
+    // before anything else is read: a write an ancient protocol date, and every operation one
+    // that is not a date at all.
     let document = capsule_server::openapi().expect("router describes itself");
     let document = serde_json::to_value(&document).expect("a document serializes");
     for (method, template, operation) in operations(&document) {
@@ -190,18 +203,36 @@ async fn every_declared_response_is_exercised() {
             continue;
         }
         let verb = kynos::http::Method::from_bytes(method.as_bytes()).expect("a method");
-        client
-            .method(verb.clone(), &concrete(&template))
-            .header("x-capsule-protocol", "2000-01-01")
-            .send()
-            .await
-            .assert_status(StatusCode::UPGRADE_REQUIRED);
+        if !is_read(&method) {
+            client
+                .method(verb.clone(), &concrete(&template))
+                .header("x-capsule-protocol", "2000-01-01")
+                .send()
+                .await
+                .assert_status(StatusCode::UPGRADE_REQUIRED);
+        }
         client
             .method(verb, &concrete(&template))
             .header("x-capsule-protocol", "yesterday")
             .send()
             .await
             .assert_status(StatusCode::BAD_REQUEST);
+    }
+
+    // A valid handshake and no credential: the bearer scheme's 401, carrying the window like
+    // every other refusal — the gate admitted the request and authentication refused it, in
+    // that order.
+    let unauthenticated = client.get("/v1/quota").send().await;
+    unauthenticated.assert_status(StatusCode::UNAUTHORIZED);
+    for name in [
+        "x-capsule-protocol-min",
+        "x-capsule-protocol-max",
+        "x-capsule-min-client-build",
+    ] {
+        assert!(
+            unauthenticated.header(name).is_some(),
+            "a 401 left without {name}"
+        );
     }
 
     // ── POST /v1/auth/register ─────────────────────────────────────────────────────────────
@@ -497,7 +528,7 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::FORBIDDEN);
 
-    // HEAD 200 / 400 / 401 / 403 / 404 / 426.
+    // HEAD 200 / 400 / 401 / 403 / 404.
     client
         .head(&session)
         .header("authorization", &bearer)
@@ -535,13 +566,15 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::NOT_FOUND);
+    // A read is admitted at any protocol date (threat-model/validation.md): the client pinned
+    // to a version this server no longer accepts for writes can still ask where it got to.
     client
         .head(&session)
         .header("authorization", &bearer)
         .header("x-capsule-protocol", "2020-01-01")
         .send()
         .await
-        .assert_status(StatusCode::UPGRADE_REQUIRED);
+        .assert_status(StatusCode::OK);
 
     // PATCH 400 / 401 / 403 / 404 / 409 / 415 / 426.
     client
@@ -2656,6 +2689,15 @@ fn every_response_of_every_operation_declares_the_protocol_window() {
     assert!(responses > 100, "only {responses} responses were walked");
 }
 
+/// Whether `method` is one the design holds to the handshake's grammar only.
+///
+/// "Reads of any past version succeed" (threat-model/validation.md, Fail-Closed Rules): a
+/// `GET` or `HEAD` with a grammatical `X-Capsule-Protocol` outside the window is admitted, and
+/// only a write is refused with `426`.
+fn is_read(method: &str) -> bool {
+    method == "GET" || method == "HEAD"
+}
+
 /// Whether `(method, template)` is one the design exempts from the gate.
 fn is_exempt(method: &str, template: &str) -> bool {
     EXEMPT
@@ -2687,10 +2729,20 @@ fn the_handshake_is_declared_on_every_operation_but_the_exempt_ten() {
             protocol["required"], true,
             "{method} {path} declares X-Capsule-Protocol as optional and refuses without it"
         );
-        for status in ["400", "426"] {
+        assert!(
+            operation["responses"]["400"].is_object(),
+            "{method} {path} is gated and does not declare the gate's 400"
+        );
+        if is_read(&method) {
             assert!(
-                operation["responses"][status].is_object(),
-                "{method} {path} is gated and does not declare the gate's {status}"
+                !operation["responses"]["426"].is_object(),
+                "{method} {path} is a read, admitted at any protocol date, and declares a 426 \
+                 it never renders"
+            );
+        } else {
+            assert!(
+                operation["responses"]["426"].is_object(),
+                "{method} {path} is a write and does not declare the gate's 426"
             );
         }
         gated.push((method, path));
@@ -2769,23 +2821,26 @@ async fn the_protocol_window_rides_every_response_on_the_wire() {
             );
         }
 
-        if !gated {
+        if !gated || is_read(&method) {
+            // Not gated, or a read: an ancient protocol date is never a 426 here. What the
+            // operation answers instead is its own business (a 401 with no credential, most
+            // often), and it carries the window either way.
             assert_ne!(
                 ancient.status(),
                 StatusCode::UPGRADE_REQUIRED,
-                "{method} {template} is not gated and refused on the protocol"
+                "{method} {template} refused a read on the protocol; reads of any version succeed"
             );
-            walked += 1;
-            continue;
-        }
-
-        ancient.assert_status(StatusCode::UPGRADE_REQUIRED);
-        if method != "HEAD" {
+        } else {
+            ancient.assert_status(StatusCode::UPGRADE_REQUIRED);
             let body: serde_json::Value = ancient.json();
             assert_eq!(
                 body["code"], "error.protocol.version_unsupported",
                 "{method} {template}: {body}"
             );
+        }
+        if !gated {
+            walked += 1;
+            continue;
         }
 
         // Each malformed spelling is the gate's coded 400, and each leaves with the window.
@@ -2823,14 +2878,17 @@ async fn the_protocol_window_rides_every_response_on_the_wire() {
     assert_eq!(walked, operations(&json).len());
 }
 
-/// One gated route per module, refused before anything else is read (issue #404).
+/// One gated route per module, held to the handshake before anything else is read (issue #404).
 ///
 /// The wire census above walks every operation; this is the same fact at reading size, in the
 /// shape `api-surfaces.md` asks for — "drive every fail-closed handshake rule through
 /// representative routes in each module and assert the same headers, status, and `error.*`
-/// code". No credential, no body, no real path variable: the gate answers first.
+/// code". No credential, no body, no real path variable: the gate answers first. A write with an
+/// ancient protocol date is `426`; a read with the same date is admitted and answers whatever it
+/// answers — a `401` here, since nothing is signed in — with the window on it; every gated
+/// operation without the header is the gate's `400`.
 #[tokio::test]
-async fn a_representative_route_per_module_refuses_the_handshake_before_anything_else() {
+async fn a_representative_route_per_module_holds_the_handshake_before_anything_else() {
     use capsule_server::upload::policy::{DEFAULT_PROTOCOL_MAX, DEFAULT_PROTOCOL_MIN};
 
     let fixture = Fixture::working();
@@ -2859,22 +2917,26 @@ async fn a_representative_route_per_module_refuses_the_handshake_before_anything
     ] {
         let verb = kynos::http::Method::from_bytes(method.as_bytes()).expect("a method");
 
-        // Outside the window: 426, the code, the window on the headers.
-        let refused = fixture
+        // Outside the window.
+        let ancient = fixture
             .client
             .method(verb.clone(), path)
             .header("x-capsule-protocol", "2000-01-01")
             .send()
             .await;
-        refused.assert_status(StatusCode::UPGRADE_REQUIRED);
-        refused.assert_header("x-capsule-protocol-min", DEFAULT_PROTOCOL_MIN);
-        refused.assert_header("x-capsule-protocol-max", DEFAULT_PROTOCOL_MAX);
-        refused.assert_header("x-capsule-min-client-build", "0.0.0");
-        let body: serde_json::Value = refused.json();
-        assert_eq!(
-            body["code"], "error.protocol.version_unsupported",
-            "{method} {path}: {body}"
-        );
+        ancient.assert_header("x-capsule-protocol-min", DEFAULT_PROTOCOL_MIN);
+        ancient.assert_header("x-capsule-protocol-max", DEFAULT_PROTOCOL_MAX);
+        ancient.assert_header("x-capsule-min-client-build", "0.0.0");
+        if is_read(method) {
+            ancient.assert_status(StatusCode::UNAUTHORIZED);
+        } else {
+            ancient.assert_status(StatusCode::UPGRADE_REQUIRED);
+            let body: serde_json::Value = ancient.json();
+            assert_eq!(
+                body["code"], "error.protocol.version_unsupported",
+                "{method} {path}: {body}"
+            );
+        }
 
         // Absent: the gate's 400, still carrying the window.
         let missing = fixture.client.raw().method(verb, path).send().await;
