@@ -122,6 +122,9 @@ pub mod error_codes {
     /// `error.auth.user_already_exists`
     pub const AUTH_USER_ALREADY_EXISTS: &str = "error.auth.user_already_exists";
 
+    /// `error.blob.access_revoked`
+    pub const BLOB_ACCESS_REVOKED: &str = "error.blob.access_revoked";
+
     /// `error.blob.gone`
     pub const BLOB_GONE: &str = "error.blob.gone";
 

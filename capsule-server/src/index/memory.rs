@@ -268,6 +268,7 @@ impl AssetIndex for InMemoryAssetIndex {
             let holds = |row: &&AssetRow| row.blobs.iter().any(|blob| &blob.address == address);
             let reference = |row: &AssetRow| super::BlobReference {
                 asset_id: row.asset_id.clone(),
+                album_id: row.album_id.clone(),
                 owner_id: row.owner_id.clone(),
                 role: row
                     .blobs

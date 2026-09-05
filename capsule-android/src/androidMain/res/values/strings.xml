@@ -1847,6 +1847,7 @@
     <string name="error_auth_totp_not_pending">There is no two-factor setup waiting to be confirmed.</string>
     <string name="error_auth_unavailable">Capsule couldn\'t reach your account just now. Please try again.</string>
     <string name="error_auth_user_already_exists">An account with these details already exists.</string>
+    <string name="error_blob_access_revoked">You no longer have access to this album.</string>
     <string name="error_blob_gone">That photo file is no longer available.</string>
     <string name="error_blob_not_found">That photo file isn\'t on the server.</string>
     <string name="error_blob_pending_upload">The original photo hasn\'t been uploaded from its device yet.</string>

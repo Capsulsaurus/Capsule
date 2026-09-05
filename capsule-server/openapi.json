@@ -16760,7 +16760,7 @@
     "/v1/blob/{hash}": {
       "get": {
         "summary": "Fetch a ciphertext blob by its content address, ranged.",
-        "description": "Opaque octets: the server holds no key and this route never learns what it is serving. Any\nauthenticated account may fetch any live address — see [`crate::serve`] for why that is a\ncapability model rather than a hole, and for the `403` the contract describes and nothing\nimplements.\n\nThe one answer that *is* account-scoped is the transient `409`: it reports the caller's own\nin-flight upload and nobody else's (`S-C40`).",
+        "description": "Opaque octets: the server holds no key and this route never learns what it is serving. An\naccount fetches the blobs of its own assets and of the albums it is currently a member of; a\nformer member is told `403`, and everyone else is told what an unknown address is told —\nsee [`crate::serve`] for the boundary and its reasons.\n\nThe one answer that *is* account-scoped is the transient `409`: it reports the caller's own\nin-flight upload and nobody else's (`S-C40`).",
         "operationId": "get_blob",
         "parameters": [
           {

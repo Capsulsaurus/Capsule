@@ -2596,7 +2596,7 @@ impl Fixture {
                 blobs.clone(),
                 marks.clone(),
                 uploads.clone(),
-                capsule_server::serve::owned_assets(),
+                capsule_server::serve::membership_reads(members.clone()),
             ),
             verify: VerifyContext::new(
                 index_fault.clone(),
@@ -2696,6 +2696,7 @@ impl Fixture {
 
         let blobs = Arc::new(SwallowingBlobs::new());
         let index = Arc::new(SwitchableIndex::new());
+        let members = Arc::new(InMemoryMembership::new());
         let tokens = Arc::new(signer(clock.clone()));
         let app = App::new(Modules {
             auth: AuthContext::new(AuthCollaborators {
@@ -2727,7 +2728,7 @@ impl Fixture {
                 blobs.clone(),
                 Arc::new(InMemoryCollection::new()),
                 Arc::new(SwitchableUploads::new(clock.clone())),
-                capsule_server::serve::owned_assets(),
+                capsule_server::serve::membership_reads(members.clone()),
             ),
             verify: VerifyContext::new(
                 index,
@@ -2740,7 +2741,7 @@ impl Fixture {
                 clock.clone(),
             ),
             albums: AlbumContext::new(Arc::new(SwitchableAlbums::new()), clock.clone()),
-            membership: MembershipContext::new(Arc::new(InMemoryMembership::new()), clock.clone()),
+            membership: MembershipContext::new(members, clock.clone()),
             quota: QuotaContext::new(
                 Arc::new(SwitchableQuota::new()),
                 clock.clone(),

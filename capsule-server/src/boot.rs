@@ -521,7 +521,7 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
             blobs.clone(),
             marks.clone(),
             uploads.clone(),
-            crate::serve::owned_assets(),
+            crate::serve::membership_reads(members.clone()),
         ),
         verify: VerifyContext::new(index.clone(), blobs.clone(), marks.clone(), clock.clone()),
         directories: DeviceDirectoryContext::new(directories.clone(), clock.clone()),

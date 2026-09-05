@@ -775,6 +775,7 @@ impl AssetIndex for PostgresAssetIndex {
                 load_collections(&snapshot, &mut row).await?;
                 let reference = BlobReference {
                     asset_id: row.asset_id.clone(),
+                    album_id: row.album_id.clone(),
                     owner_id: row.owner_id.clone(),
                     role: row
                         .blobs

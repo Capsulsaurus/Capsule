@@ -38039,6 +38039,16 @@
         }
       }
     },
+    "error.blob.access_revoked": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You no longer have access to this album."
+          }
+        }
+      }
+    },
     "error.blob.gone": {
       "localizations": {
         "ar": {

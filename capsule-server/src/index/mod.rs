@@ -389,6 +389,11 @@ impl ChangeKind {
 pub struct BlobReference {
     /// The asset the reference belongs to.
     pub asset_id: AssetId,
+    /// The album that asset belongs to (`S-C51`).
+    ///
+    /// What the read authority asks the membership store about, from the same read that found
+    /// the reference, for the reason [`Self::owner_id`] rides here.
+    pub album_id: AlbumId,
     /// The account that asset is filed under (`S-C39`).
     ///
     /// The fact the read authority decides on. Carried on the reference for the same reason

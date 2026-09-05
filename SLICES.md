@@ -266,7 +266,7 @@ row's remainder now lives.
 | S-C36 | Kynos's framework rejections carry no `error.*` code | server | S-C33 | M | RETIRED | done | a Capsule interceptor fills the member in; the upstream seam is still the better fix |
 | S-C37 | The asset index port, one sequence instead of two | server | S-C27, S-C29 | L | RETIRED | done | Postgres adapter landed under the row lock the design rests on; absorbs `S-C21`, unblocks `S-C22` |
 | S-C38 | Problem extensions are absent from the OpenAPI document | server | S-C34 | M | RETIRED | done\* | `code` is universal and derived; the sixteen other members ride a small table |
-| S-C39 | Blob fetch has no read authority, so its `403` is unwritable | server | S-C10 | M | RETIRED | part | the authority lands and owner-scopes the path; the `403` needs a membership fact → `S-C51` |
+| S-C39 | Blob fetch has no read authority, so its `403` is unwritable | server | S-C10 | M | RETIRED | done | the authority landed owner-scoped; the `403` landed with `S-C51`'s membership fact |
 | S-C40 | `awaiting-original` is not observable on the blob path | server | S-C10, S-C37 | M | RETIRED | done | the promise is the open upload session, so it needed no lifetime of its own |
 | S-C41 | The `deep` re-hash, with the limiter that makes it safe | server | S-C3, S-C32 | M | RETIRED | done\* | coalescing is deliberately absent, and the reason is in the note |
 | S-C42 | Nothing verifies the device directory's own signature | server | S-C9 | M | RETIRED | done | trust-on-first-publish anchor; unblocks `S-C23` |
@@ -2687,8 +2687,13 @@ design/moderation.md states the per-surface rule as *"takedown of known content 
 re-reading a landed, tested contract on an inference is not this slice's to do. Recorded here for
 whoever owns that question.
 
-- **Done when:** the account unshared from an album receives `403` — **not met**, and blocked on
-  `S-C51`. ✅ what did land: `another_accounts_live_blob_is_unknown_rather_than_served`,
+- **Done when:** the account unshared from an album receives `403` — **met with `S-C51`**
+  (2026-09-03): `MembershipAuthority` replaces `OwnedAssetAuthority`, `BlobReadAccess::Revoked`
+  renders `403 error.blob.access_revoked` for an account the membership store holds a revoked
+  row for, and the authority is still asked first. ✅ `a_former_member_is_told_access_was_revoked`,
+  `a_former_member_gets_the_403_before_any_policy_refusal`,
+  `a_never_member_is_indistinguishable_from_an_unknown_address_body_and_headers`, plus what
+  landed with the `part`: `another_accounts_live_blob_is_unknown_rather_than_served`,
   `a_strangers_refusal_is_indistinguishable_from_an_unknown_address`,
   `a_stranger_cannot_tell_a_takedown_from_an_unknown_address`, and the authority's own unit cases.
   **Tier:** Unit + Integration.

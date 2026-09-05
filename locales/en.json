@@ -7427,6 +7427,10 @@
     "message": "An account with these details already exists.",
     "context": "High-level error for HTTP 409 on registration. Server sends code `error.auth.user_already_exists`; clients localize this message."
   },
+  "error.blob.access_revoked": {
+    "message": "You no longer have access to this album.",
+    "context": "HTTP 403 on GET /v1/blob/{hash} (slice S-C51): the caller was once a member of the album that holds these bytes and has since been removed from its roster. Only a former member ever sees this; everyone else gets the same 404 as an unknown address. The client re-syncs the album list and degrades."
+  },
   "error.blob.gone": {
     "message": "That photo file is no longer available.",
     "context": "HTTP 410 on GET /v1/blob/{hash} (slice S-C10): the address is referenced but not retrievable per policy — the asset was deleted, or the reference is dangling. Permanent: the client degrades to a representation it already holds rather than retrying. Distinct from the transient error.blob.pending_upload."

@@ -904,6 +904,39 @@ async fn every_declared_response_is_exercised() {
             .expect("the index records");
     }
 
+    // 403: a former member of the album (`S-C51`). The stranger account above was on the
+    // roster at version 1 and is not at version 2, so the server holds a revoked row for it —
+    // the one fact the `403` may be rendered from. Applied through the store: the roster route
+    // and its verification are `tests/roster.rs`'s, and this walk is about which statuses exist.
+    {
+        use capsule_server::membership::{MemberRole, MembershipStore as _, RosterRecord};
+        let roster = |version: u64| RosterRecord {
+            album_id: support::album(),
+            roster_version: version,
+            amk_epoch: version,
+            attested_by_device: support::device(),
+            received_at: jiff::Timestamp::UNIX_EPOCH,
+            document: format!("walk-v{version}").into_bytes(),
+        };
+        let former = capsule_server::store::UserId::new("01937b7c-0000-7000-8000-0000000000ff");
+        fixture
+            .members
+            .apply_roster(roster(1), vec![(former, MemberRole::Reader)])
+            .await
+            .expect("the store applies");
+        fixture
+            .members
+            .apply_roster(roster(2), vec![])
+            .await
+            .expect("the store applies");
+    }
+    client
+        .get(&format!("/v1/blob/{address}"))
+        .header("authorization", &stranger)
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
     // 404: a well-formed address nothing references.
     client
         .get(&format!("/v1/blob/{}", checksum(b"nothing holds these")))
