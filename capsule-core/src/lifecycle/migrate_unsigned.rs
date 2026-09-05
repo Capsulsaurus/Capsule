@@ -33,7 +33,7 @@ use walkdir::WalkDir;
 
 use super::import::CreateRequest;
 use super::open::{month_dir_timestamp, original_extension};
-use super::{LifecycleError, Result, SidecarEnrichment, SignedImportOptions, Workspace};
+use super::{LifecycleError, Result, SidecarEnrichment, SignedImportOptions, Workspace, media_dir};
 use crate::crypto::hash;
 use crate::crypto::provenance::action::Action;
 use crate::domain::{GpsDatum, StackType};
@@ -129,6 +129,26 @@ pub enum MigrationSkip {
     /// the run cannot tell which is the legacy record.
     #[error("asset {0}: quarantine already holds different bytes for this sidecar")]
     QuarantineConflict(Uuid),
+    /// The sidecar does not sit in a `media/{YYYY}/{YYYY-MM}` bucket, so its files cannot be
+    /// addressed by the lifecycle's bucket-derived paths without moving them — and the
+    /// migration never moves a file.
+    #[error("asset {asset_id}: {dir} is not a media/{{YYYY}}/{{YYYY-MM}} bucket")]
+    OutsideMonthBucket {
+        /// The asset whose sidecar sits outside a bucket.
+        asset_id: Uuid,
+        /// The directory it was found in.
+        dir: PathBuf,
+    },
+    /// The original's extension is not a lowercase single segment (`jpg`, `dng`, `mp4`), the
+    /// form every lifecycle path derives; a `JPG` or `tar.gz` original would resolve to a
+    /// different path than the file that exists.
+    #[error("asset {asset_id}: original extension {ext:?} is not lowercase single-segment")]
+    UnusualExtension {
+        /// The asset whose original has the extension.
+        asset_id: Uuid,
+        /// The extension as found on disk.
+        ext: String,
+    },
     /// A signed sidecar with no provenance chain that is not an interrupted migration
     /// create: it carries a later write (`provenance_chain_hash` set), it carries no legacy
     /// fold, or there is no quarantine copy to resume from. Nothing this verb can rebuild
@@ -605,6 +625,12 @@ impl Workspace {
             .path
             .parent()
             .map_or_else(|| self.root.clone(), Path::to_path_buf);
+        // Every later path for this asset is derived from its bucket, so the bucket must round
+        // trip: parse the directory's month, and require that the lifecycle maps it back to
+        // exactly this directory. Nothing is ever moved to make it fit.
+        if media_dir(&self.root, month_dir_timestamp(&dir)) != dir {
+            return Err(MigrationSkip::OutsideMonthBucket { asset_id, dir });
+        }
 
         let (bytes, resumed) = match found.shape {
             UnmigratedShape::LegacyUnsigned => (
@@ -656,6 +682,13 @@ impl Workspace {
         }
         let ext =
             original_extension(&dir, &asset_id).ok_or(MigrationSkip::OriginalMissing(asset_id))?;
+        if ext.is_empty()
+            || !ext
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        {
+            return Err(MigrationSkip::UnusualExtension { asset_id, ext });
+        }
         let original = dir.join(format!("{}.{ext}", asset_id.simple()));
         let actual = fs::File::open(&original)
             .and_then(hash::hash_reader)
@@ -923,9 +956,22 @@ mod tests {
         original: &[u8],
         extra: Vec<(&str, Value)>,
     ) -> (PathBuf, Vec<u8>) {
-        let dir = root.join("media/1970/1970-01");
+        write_legacy_in(root, "media/1970/1970-01", "jpg", asset_id, original, extra)
+    }
+
+    /// As [`write_legacy`], into `rel_dir` under `root`, with the original named
+    /// `{uuid}.{ext}`.
+    fn write_legacy_in(
+        root: &Path,
+        rel_dir: &str,
+        ext: &str,
+        asset_id: Uuid,
+        original: &[u8],
+        extra: Vec<(&str, Value)>,
+    ) -> (PathBuf, Vec<u8>) {
+        let dir = root.join(rel_dir);
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join(format!("{}.jpg", asset_id.simple())), original).unwrap();
+        fs::write(dir.join(format!("{}.{ext}", asset_id.simple())), original).unwrap();
         let mut bytes = Vec::new();
         ciborium::ser::into_writer(&legacy_map(asset_id, original, extra), &mut bytes).unwrap();
         let path = dir.join(format!("{}.cbor", asset_id.simple()));
@@ -1172,6 +1218,129 @@ mod tests {
             legacy_bytes,
             "a reopen leaves it alone"
         );
+    }
+
+    /// **Bucket pinning.** A legacy asset in a later month bucket stays exactly where it is:
+    /// its `AssetState::capture_utc` is that bucket's first instant, every derived path
+    /// resolves to the files already there, and the original is neither moved nor rewritten.
+    #[test]
+    fn a_legacy_asset_in_a_later_bucket_stays_in_it() {
+        use std::time::{Duration, SystemTime};
+
+        let lib = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Imports").unwrap();
+        let id = Uuid::from_u128(0xB7);
+        let (sidecar_path, _) = write_legacy_in(
+            lib.path(),
+            "media/2024/2024-07",
+            "jpg",
+            id,
+            b"\xFF\xD8\xFF july 2024",
+            vec![("capture_utc", int(1_720_000_000))],
+        );
+        let original = lib
+            .path()
+            .join("media/2024/2024-07")
+            .join(format!("{}.jpg", id.simple()));
+        let long_ago = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        fs::File::options()
+            .write(true)
+            .open(&original)
+            .unwrap()
+            .set_modified(long_ago)
+            .unwrap();
+
+        let report = ws.migrate_unsigned_sidecars(&opts(album)).unwrap();
+        assert_eq!(report.migrated, vec![id]);
+        let asset = ws.asset(&id).unwrap();
+        assert_eq!(
+            asset.capture_utc, 1_719_792_000,
+            "2024-07-01T00:00:00Z, the bucket"
+        );
+        assert_eq!(
+            ws.media_path(asset),
+            original,
+            "the lifecycle addresses the file in place"
+        );
+        assert_eq!(ws.sidecar_path(asset), sidecar_path);
+        assert!(
+            ws.provenance_path(asset)
+                .starts_with(lib.path().join("media/2024/2024-07"))
+        );
+        assert_eq!(
+            fs::metadata(&original).unwrap().modified().unwrap(),
+            long_ago
+        );
+        assert_eq!(ws.verify(&id).unwrap(), VerifyOutcome::Accept);
+        assert_eq!(
+            read_signed(&ws, &id).capture_timestamp,
+            "2024-07-03T09:46:40Z"
+        );
+        assert!(
+            !lib.path().join("media/1970").exists(),
+            "nothing was relocated"
+        );
+    }
+
+    /// A sidecar outside a `media/{YYYY}/{YYYY-MM}` bucket, or an original whose extension is
+    /// not lowercase single-segment, cannot be addressed by the lifecycle's derived paths
+    /// without moving or renaming it — so it is refused, reported, and left exactly as found.
+    #[test]
+    fn a_sidecar_outside_a_month_bucket_or_with_an_odd_extension_is_refused() {
+        let lib = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Imports").unwrap();
+
+        let loose = Uuid::from_u128(0xB8);
+        let (loose_path, loose_bytes) = write_legacy_in(
+            lib.path(),
+            "media/loose",
+            "jpg",
+            loose,
+            b"\xFF\xD8\xFF loose",
+            vec![],
+        );
+        let shouty = Uuid::from_u128(0xB9);
+        let (shouty_path, shouty_bytes) =
+            write_legacy(lib.path(), shouty, b"\xFF\xD8\xFF SHOUTY", vec![]);
+        let shouty_dir = lib.path().join("media/1970/1970-01");
+        fs::rename(
+            shouty_dir.join(format!("{}.jpg", shouty.simple())),
+            shouty_dir.join(format!("{}.JPG", shouty.simple())),
+        )
+        .unwrap();
+
+        let report = ws.migrate_unsigned_sidecars(&opts(album)).unwrap();
+        assert!(report.migrated.is_empty());
+        let mut skips = report.skipped.clone();
+        skips.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            skips,
+            vec![
+                (
+                    shouty_path.clone(),
+                    MigrationSkip::UnusualExtension {
+                        asset_id: shouty,
+                        ext: "JPG".to_string(),
+                    },
+                ),
+                (
+                    loose_path.clone(),
+                    MigrationSkip::OutsideMonthBucket {
+                        asset_id: loose,
+                        dir: lib.path().join("media/loose"),
+                    },
+                ),
+            ]
+        );
+        assert_eq!(fs::read(&loose_path).unwrap(), loose_bytes);
+        assert_eq!(fs::read(&shouty_path).unwrap(), shouty_bytes);
+        assert!(
+            !lib.path().join(".library/quarantine").exists(),
+            "nothing was written"
+        );
+        assert!(ws.asset(&loose).is_none() && ws.asset(&shouty).is_none());
     }
 
     // ── T4: idempotent ──────────────────────────────────────────────────────
