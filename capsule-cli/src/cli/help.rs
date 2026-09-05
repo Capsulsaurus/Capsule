@@ -181,6 +181,37 @@ mod tests {
         commands(&Cli::command(), ROOT_PATH, &mut all);
         assert!(all.len() > 16, "the whole tree is walked");
 
+        // The converse: every `cli.help.*` key in the canonical catalog is one the walk
+        // produces, so a key left behind by a renamed command or argument fails here too.
+        let catalog: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../locales/en.json"),
+            )
+            .expect("the canonical catalog is readable"),
+        )
+        .expect("the canonical catalog is JSON");
+        let mut produced = std::collections::BTreeSet::new();
+        for (path, command) in &all {
+            produced.insert(about_key(path));
+            produced.insert(long_about_key(path));
+            for arg in command.get_arguments() {
+                let id = arg.get_id().as_str();
+                produced.insert(arg_key(path, id));
+                produced.insert(arg_long_help_key(path, id));
+            }
+        }
+        let dead: Vec<&String> = catalog
+            .as_object()
+            .expect("the catalog is an object")
+            .keys()
+            .filter(|key| key.starts_with(&format!("{HELP_NAMESPACE}.")))
+            .filter(|key| !produced.contains(key.as_str()))
+            .collect();
+        assert!(
+            dead.is_empty(),
+            "catalog keys no command produces: {dead:?}"
+        );
+
         for (path, command) in &all {
             let about = command.get_about().map(ToString::to_string);
             assert_eq!(

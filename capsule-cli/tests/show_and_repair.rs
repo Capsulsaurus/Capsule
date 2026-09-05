@@ -32,6 +32,9 @@
 //! - `repair_reports_by_default_and_corrects_under_apply` — detects the reproduced bug,
 //!   writes nothing without `--apply`, corrects with it, keeps the bundle in its original
 //!   month directory, survives `capsule library rebuild`, and finds nothing on a second run.
+//! - `repair_limit_is_a_positive_count_that_needs_apply` — `--limit 0` is rejected by the
+//!   parser; `--limit` without `--apply` is refused naming both flags.
+//! - `show_reports_a_swept_asset_as_in_trash` — the trash row over a real reject sweep.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -522,4 +525,62 @@ fn repair_reports_by_default_and_corrects_under_apply() {
     assert!(again.contains("nothing to repair"), "{again}");
     let ws = fx.reopen();
     assert_eq!(ws.asset(&broken).expect("asset").chain.records().len(), 3);
+}
+
+/// `--limit` is a positive count and only means something with `--apply`: `0` is a parser
+/// error, and `--limit` alone is refused with a line naming both flags, before the library
+/// is even opened.
+#[test]
+fn repair_limit_is_a_positive_count_that_needs_apply() {
+    let fx = fixture(1);
+    let library = path(&fx.library);
+    let zero = fx.run_fails(&[
+        "repair",
+        "capture-time",
+        "--library",
+        library,
+        "--passphrase-stdin",
+        "--apply",
+        "--limit",
+        "0",
+    ]);
+    assert!(zero.contains("--limit"), "{zero}");
+    let alone = fx.run_fails(&[
+        "repair",
+        "capture-time",
+        "--library",
+        library,
+        "--passphrase-stdin",
+        "--limit",
+        "1",
+    ]);
+    assert!(
+        alone.contains("--limit") && alone.contains("--apply"),
+        "{alone}"
+    );
+    assert!(
+        !alone.contains("Checked"),
+        "refused before any detection ran:\n{alone}"
+    );
+}
+
+/// A reject sweep through the real binary, then `show`: the trash row reads `yes`.
+#[test]
+fn show_reports_a_swept_asset_as_in_trash() {
+    let fx = fixture(1);
+    let id = fx.asset_for(&fx.reopen(), &fx.images[0]).to_string();
+    let before = fx.show(&id);
+    assert!(before.contains("In trash:        no"), "{before}");
+    let out = fx.run(&[
+        "cull",
+        "--library",
+        path(&fx.library),
+        "--passphrase-stdin",
+        "--reject",
+        &id,
+        "--sweep",
+    ]);
+    assert!(out.contains("Swept 1"), "{out}");
+    let after = fx.show(&id);
+    assert!(after.contains("In trash:        yes"), "{after}");
 }

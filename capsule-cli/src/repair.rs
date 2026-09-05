@@ -23,6 +23,9 @@
 //!   capture timestamp only — never against import time — so an asset genuinely imported the
 //!   second it was taken is not reported as broken.
 //! - **An original that cannot be read** is reported as unreadable, never as "no EXIF".
+//! - **An asset in trash** is skipped and counted as its own category before its original is
+//!   read: appending an irreversible signed record to an asset the user has decided to
+//!   discard is not a repair, and a restored asset is picked up by the next run.
 //!
 //! By construction the pass is a no-op on a library imported after `S-B16`: that importer
 //! already wrote the resolved instant wherever one existed, and where none existed this pass
@@ -121,6 +124,8 @@ pub struct Detection {
     pub no_instant: usize,
     /// Assets whose original could not be read, with the reason.
     pub unreadable: Vec<(Uuid, String)>,
+    /// Assets in trash, skipped without reading their originals.
+    pub trashed: Vec<Uuid>,
 }
 
 /// What one invocation did.
@@ -204,6 +209,11 @@ pub fn detect(ws: &Workspace) -> Detection {
             continue;
         };
         detection.scanned += 1;
+        if ws.is_trashed(&id) {
+            tracing::debug!(asset_id = %id, "repair: asset in trash; skipped");
+            detection.trashed.push(id);
+            continue;
+        }
         let recorded_text = asset.sidecar.capture_timestamp.clone();
         match detect_one(&recorded_text, &original) {
             Verdict::Affected {
@@ -226,6 +236,7 @@ pub fn detect(ws: &Workspace) -> Detection {
         agrees = detection.agrees,
         no_instant = detection.no_instant,
         unreadable = detection.unreadable.len(),
+        trashed = detection.trashed.len(),
         "repair: capture-time detection complete"
     );
     detection
@@ -367,6 +378,18 @@ pub fn render(bundle: &Bundle, request: RepairRequest, summary: &RepairSummary) 
         );
     }
 
+    if !detection.trashed.is_empty() {
+        line(
+            bundle
+                .format(
+                    keys::REPAIR_CAPTURE_TIME_TRASHED,
+                    &[("count", Value::Int(detection.trashed.len() as i64))],
+                )
+                .yellow()
+                .to_string(),
+        );
+    }
+
     if detection.affected.is_empty() && detection.unreadable.is_empty() {
         line(
             bundle
@@ -383,6 +406,7 @@ pub fn render(bundle: &Bundle, request: RepairRequest, summary: &RepairSummary) 
                 ("agrees", Value::Int(detection.agrees as i64)),
                 ("no_instant", Value::Int(detection.no_instant as i64)),
                 ("unreadable", Value::Int(detection.unreadable.len() as i64)),
+                ("trashed", Value::Int(detection.trashed.len() as i64)),
             ],
         ));
     }
@@ -695,6 +719,87 @@ mod tests {
         assert!(detect(&ws).affected.is_empty());
     }
 
+    /// A trashed asset is neither corrected nor counted as affected, whatever its sidecar
+    /// says; it is its own category, and a restore brings it back into the next run.
+    #[test]
+    fn a_trashed_asset_is_skipped_and_counted_not_corrected() {
+        let scratch = Scratch::new();
+        let mut ws = scratch.workspace();
+        let album = ws.default_album_id();
+        let trashed = ws
+            .import_asset(album, &scratch.file("t.jpg", &exif_jpeg(true, b"trashed")))
+            .expect("import");
+        ws.set_capture_timestamp(&trashed, Timestamp::now())
+            .expect("stamp");
+        ws.soft_delete(&trashed, 30).expect("trash");
+        let records = ws.asset(&trashed).expect("asset").chain.records().len();
+
+        let summary = run(
+            &mut ws,
+            RepairRequest {
+                apply: true,
+                limit: None,
+            },
+        )
+        .expect("apply");
+        assert!(summary.detection.affected.is_empty(), "{summary:?}");
+        assert_eq!(summary.detection.trashed, vec![trashed]);
+        assert_eq!(summary.detection.scanned, 1);
+        assert!(summary.corrected.is_empty());
+        assert_eq!(
+            ws.asset(&trashed).expect("asset").chain.records().len(),
+            records,
+            "nothing was appended to a trashed asset's chain"
+        );
+
+        ws.restore(&trashed).expect("restore");
+        let detection = detect(&ws);
+        assert_eq!(
+            detection.affected.len(),
+            1,
+            "restored, it is affected again"
+        );
+        assert!(detection.trashed.is_empty());
+    }
+
+    /// The tripwire: `apply` writes exactly `Affected::recovered` and nothing else. A
+    /// hand-built `Affected` naming an arbitrary instant lands as that instant, so any change
+    /// that made `apply` read a different field would fail here, and the fixture's EXIF
+    /// equality in the tests above shows the instant `detect` supplies is the EXIF one.
+    #[test]
+    fn apply_writes_exactly_the_recovered_instant() {
+        let scratch = Scratch::new();
+        let mut ws = scratch.workspace();
+        let album = ws.default_album_id();
+        let id = ws
+            .import_asset(album, &scratch.file("a.jpg", &exif_jpeg(true, b"a")))
+            .expect("import");
+        let arbitrary = ts(1_234_567_890);
+        let corrected = apply(
+            &mut ws,
+            &[Affected {
+                asset_id: id,
+                recorded_text: "irrelevant".into(),
+                recorded: None,
+                recovered: arbitrary,
+            }],
+            None,
+        )
+        .expect("apply");
+        assert_eq!(corrected, vec![id]);
+        assert_eq!(
+            ws.asset(&id).expect("asset").sidecar.capture_timestamp,
+            arbitrary.to_string()
+        );
+        // And the detect → apply path lands the EXIF instant itself, not merely "a change".
+        let affected = detect(&ws).affected;
+        apply(&mut ws, &affected, None).expect("apply");
+        assert_eq!(
+            ws.asset(&id).expect("asset").sidecar.capture_timestamp,
+            ts(EXIF_SECS).to_string()
+        );
+    }
+
     // ── render ───────────────────────────────────────────────────────────────
 
     fn sample_summary(apply: bool, corrected: bool) -> RepairSummary {
@@ -711,6 +816,7 @@ mod tests {
                 agrees: 2,
                 no_instant: 1,
                 unreadable: vec![],
+                trashed: vec![],
             },
             applied: apply,
             corrected: if corrected { vec![asset_id] } else { vec![] },

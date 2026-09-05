@@ -45,12 +45,15 @@ pub const MIN_HASH_PREFIX: usize = 8;
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ShowError {
     /// Neither an asset id nor a hash prefix matched anything in the library.
-    #[error("no asset matches {0}")]
+    ///
+    /// The `Display` strings on this enum are developer-facing (the selector and the count,
+    /// nothing else); the user sees [`describe_error`], which goes through the catalog.
+    #[error("unknown: {0}")]
     UnknownAsset(String),
     /// A hash prefix matched more than one asset. Refused rather than guessed: printing the
     /// wrong asset's metadata under a selector the user believes is unique would defeat the
     /// verification this command exists for.
-    #[error("{selector} matches {count} assets")]
+    #[error("ambiguous: {selector} ({count})")]
     Ambiguous {
         /// The prefix as given.
         selector: String,
@@ -58,7 +61,7 @@ pub enum ShowError {
         count: usize,
     },
     /// The selector is neither a UUID nor a long-enough hex prefix.
-    #[error("{0} is neither an asset id nor a hash prefix")]
+    #[error("invalid: {0}")]
     InvalidSelector(String),
 }
 
@@ -109,6 +112,9 @@ pub struct AssetView {
     pub cull: CullFlag,
     /// Whether the asset is hidden from default views.
     pub hidden: bool,
+    /// Whether the asset is currently in trash — [`Workspace::is_trashed`], the chain replay
+    /// the workspace itself applies.
+    pub in_trash: bool,
     /// Stack placement, when the asset is a stack member: `(stack_id, role)`.
     pub stack: Option<(Uuid, StackRole)>,
     /// Whether a display placeholder (LQIP) is stored.
@@ -179,9 +185,10 @@ pub fn resolve_among(
 }
 
 /// Project a managed asset's in-memory state onto the view. Reads the signed sidecar and the
-/// provenance chain only.
+/// provenance chain only; `None` for an id the workspace does not manage.
 #[must_use]
-pub fn collect(asset: &AssetState) -> AssetView {
+pub fn collect(ws: &Workspace, asset_id: &Uuid) -> Option<AssetView> {
+    let asset: &AssetState = ws.asset(asset_id)?;
     let sidecar = &asset.sidecar;
     let mut tags_user: Vec<String> = sidecar.tags_user.value().into_iter().collect();
     tags_user.sort();
@@ -194,7 +201,7 @@ pub fn collect(asset: &AssetState) -> AssetView {
     tags_ai.sort();
     tags_ai.dedup();
 
-    AssetView {
+    Some(AssetView {
         asset_id: asset.asset_id,
         album_id: asset.album_id,
         content_type: sidecar.content_type.clone(),
@@ -214,6 +221,7 @@ pub fn collect(asset: &AssetState) -> AssetView {
         }),
         cull: sidecar.cull.get().copied().unwrap_or_default(),
         hidden: sidecar.hidden.get().copied().unwrap_or(false),
+        in_trash: ws.is_trashed(asset_id),
         stack: sidecar
             .stack_membership
             .get()
@@ -221,7 +229,7 @@ pub fn collect(asset: &AssetState) -> AssetView {
             .map(|m| (m.stack_id, m.role)),
         lqip: sidecar.lqip.is_some(),
         provenance_records: asset.chain.records().len(),
-    }
+    })
 }
 
 /// Localize a [`ShowError`] for the failure line.
@@ -353,7 +361,7 @@ pub fn render(bundle: &Bundle, view: &AssetView) -> String {
         keys::SHOW_HEADER,
         &[("asset_id", Value::Str(&view.asset_id.to_string()))],
     );
-    let rows: [(&str, String); 16] = [
+    let rows: [(&str, String); 17] = [
         (keys::SHOW_ALBUM, view.album_id.to_string()),
         (keys::SHOW_CONTENT_TYPE, view.content_type.clone()),
         (keys::SHOW_HASH, view.hash.clone()),
@@ -367,6 +375,7 @@ pub fn render(bundle: &Bundle, view: &AssetView) -> String {
         (keys::SHOW_GPS, gps),
         (keys::SHOW_CULL, cull),
         (keys::SHOW_HIDDEN, yes_no(view.hidden)),
+        (keys::SHOW_IN_TRASH, yes_no(view.in_trash)),
         (keys::SHOW_STACK, stack),
         (keys::SHOW_LQIP, lqip),
         (
@@ -538,7 +547,7 @@ mod tests {
         let fx = Fixture::with_assets(1);
         let id = fx.ids[0];
         let asset = fx.ws.asset(&id).expect("asset");
-        let view = collect(asset);
+        let view = collect(&fx.ws, &id).expect("managed");
         assert_eq!(view.asset_id, id);
         assert_eq!(view.album_id, fx.ws.default_album_id());
         assert_eq!(view.content_type, asset.sidecar.content_type);
@@ -549,7 +558,13 @@ mod tests {
         assert!(view.tags_user.is_empty());
         assert_eq!(view.cull, CullFlag::Neutral);
         assert!(!view.hidden);
+        assert!(!view.in_trash);
         assert_eq!(view.stack, None);
+        assert_eq!(
+            collect(&fx.ws, &Uuid::now_v7()),
+            None,
+            "an unknown id has no view"
+        );
         assert!(!view.lqip);
         assert_eq!(view.provenance_records, asset.chain.records().len());
     }
@@ -558,11 +573,11 @@ mod tests {
     fn collect_reflects_metadata_edits() {
         let mut fx = Fixture::with_assets(1);
         let id = fx.ids[0];
-        let before = collect(fx.ws.asset(&id).expect("asset")).provenance_records;
+        let before = collect(&fx.ws, &id).expect("managed").provenance_records;
         fx.ws.set_caption(&id, "On the beach").expect("caption");
         fx.ws.tag_add(&id, "Vacation 2021").expect("tag");
         fx.ws.set_cull(&id, CullFlag::Pick).expect("cull");
-        let view = collect(fx.ws.asset(&id).expect("asset"));
+        let view = collect(&fx.ws, &id).expect("managed");
         assert_eq!(view.caption.as_deref(), Some("On the beach"));
         assert_eq!(view.tags_user, vec!["Vacation 2021".to_string()]);
         assert_eq!(view.cull, CullFlag::Pick);
@@ -594,6 +609,7 @@ mod tests {
             }),
             cull: CullFlag::Neutral,
             hidden: false,
+            in_trash: false,
             stack: None,
             lqip: false,
             provenance_records: 1,
@@ -626,8 +642,8 @@ mod tests {
         assert_eq!(page.matches(&unset).count(), 3, "{page}");
         assert_eq!(
             page.lines().count(),
-            17,
-            "a header plus sixteen rows:\n{page}"
+            18,
+            "a header plus seventeen rows:\n{page}"
         );
         assert!(!page.contains("cli.show."), "no raw key leaks:\n{page}");
     }
@@ -645,6 +661,7 @@ mod tests {
             }),
             stack: Some((stack_id, StackRole::Primary)),
             hidden: true,
+            in_trash: true,
             lqip: true,
             dimensions: None,
             caption: None,
@@ -657,7 +674,11 @@ mod tests {
         );
         assert!(page.contains(&format!("{stack_id} (primary)")), "{page}");
         let yes = bundle.format(keys::SHOW_VALUE_YES, &[]);
-        assert_eq!(page.matches(&yes).count(), 1, "hidden:\n{page}");
+        assert_eq!(
+            page.matches(&yes).count(),
+            2,
+            "hidden and in trash:\n{page}"
+        );
         let present = bundle.format(keys::SHOW_VALUE_PRESENT, &[]);
         assert!(page.contains(&present), "{page}");
     }
@@ -686,5 +707,28 @@ mod tests {
         for text in [&ambiguous, &invalid, &unknown] {
             assert!(!text.contains("cli.show."), "raw key leaked: {text}");
         }
+    }
+
+    /// A swept asset prints the row the catalog already described: the trash fact comes from
+    /// `Workspace::is_trashed`, the one place the chain is replayed.
+    #[test]
+    fn a_swept_asset_shows_in_trash() {
+        let mut fx = Fixture::with_assets(1);
+        let id = fx.ids[0];
+        fx.ws.set_cull(&id, CullFlag::Reject).expect("cull");
+        let swept = fx.ws.reject_sweep(30).expect("sweep");
+        assert_eq!(swept, vec![id]);
+        let view = collect(&fx.ws, &id).expect("a trashed asset is still managed");
+        assert!(view.in_trash);
+        let bundle = bundle();
+        let page = render(&bundle, &view);
+        let row = bundle.format(
+            keys::SHOW_IN_TRASH,
+            &[(
+                "value",
+                Value::Str(&bundle.format(keys::SHOW_VALUE_YES, &[])),
+            )],
+        );
+        assert!(page.contains(&row), "{page}");
     }
 }

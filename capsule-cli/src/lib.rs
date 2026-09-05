@@ -178,10 +178,13 @@ pub async fn run() -> Result<()> {
         <Cli as clap::CommandFactory>::command(),
         &i18n::cli_bundle(),
     );
+    // Kept for error formatting: a derive/matches mismatch is reported the way clap itself
+    // reports one — with the (localized) command's usage — rather than as a bare message.
+    let mut for_errors = command.clone();
     let mut matches = command.get_matches();
     let cli = match <Cli as clap::FromArgMatches>::from_arg_matches_mut(&mut matches) {
         Ok(cli) => cli,
-        Err(error) => error.exit(),
+        Err(error) => error.format(&mut for_errors).exit(),
     };
     tracing::trace!("Parsed CLI arguments: {:#?}", cli);
     dispatch(cli).await
@@ -517,12 +520,11 @@ async fn dispatch(cli: Cli) -> Result<()> {
         } => {
             let bundle = i18n::cli_bundle();
             let ws = open_workspace(&library, passphrase_stdin)?;
-            let state = show::resolve(&ws, &asset).and_then(|id| {
-                ws.asset(&id)
-                    .ok_or_else(|| show::ShowError::UnknownAsset(id.to_string()))
+            let view = show::resolve(&ws, &asset).and_then(|id| {
+                show::collect(&ws, &id).ok_or_else(|| show::ShowError::UnknownAsset(id.to_string()))
             });
-            match state {
-                Ok(state) => print!("{}", show::render(&bundle, &show::collect(state))),
+            match view {
+                Ok(view) => print!("{}", show::render(&bundle, &view)),
                 Err(error) => {
                     let reason = show::describe_error(&bundle, &error);
                     return Err(eyre!(
@@ -542,7 +544,17 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 limit,
             } => {
                 let bundle = i18n::cli_bundle();
-                let request = repair::RepairRequest { apply, limit };
+                // `--limit` bounds what `--apply` writes; alone it would silently do nothing.
+                if limit.is_some() && !apply {
+                    return Err(eyre!(
+                        "{}",
+                        bundle.format(keys::REPAIR_CAPTURE_TIME_LIMIT_REQUIRES_APPLY, &[])
+                    ));
+                }
+                let request = repair::RepairRequest {
+                    apply,
+                    limit: limit.map(|n| usize::try_from(n).unwrap_or(usize::MAX)),
+                };
                 let mut ws = open_workspace(&library, passphrase_stdin)?;
                 match repair::run(&mut ws, request) {
                     Ok(summary) => print!("{}", repair::render(&bundle, request, &summary)),

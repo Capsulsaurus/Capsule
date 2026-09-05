@@ -1772,7 +1772,7 @@
     <string name="cli_help_repair_capture_time_about">Re-read each original\'s EXIF capture time and report every asset whose signed capture timestamp disagrees with it; with --apply, correct each one as a signed metadata update</string>
     <string name="cli_help_repair_capture_time_arg_apply">Write the corrections. Without this flag the pass only reports what it would change; each correction is an irreversible signed record on the asset\'s chain</string>
     <string name="cli_help_repair_capture_time_arg_library">Path to the Capsule library</string>
-    <string name="cli_help_repair_capture_time_arg_limit">Correct at most this many affected assets in one --apply run (the report still covers the whole library)</string>
+    <string name="cli_help_repair_capture_time_arg_limit">Correct at most this many affected assets in one --apply run (the report still covers the whole library); only meaningful with --apply</string>
     <string name="cli_help_repair_capture_time_arg_passphrase_stdin">Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal</string>
     <string name="cli_help_reset_about">Reset all local CLI data</string>
     <string name="cli_help_reset_arg_all">Reset all data</string>
@@ -1824,10 +1824,12 @@
     <string name="cli_repair_capture_time_dry_run_notice">Dry run: nothing was written. Re-run with --apply to correct the affected sidecars.</string>
     <string name="cli_repair_capture_time_failed_asset">Correcting %1$s failed: %2$s. Assets corrected before it stay corrected; nothing after it was touched.</string>
     <string name="cli_repair_capture_time_limit_notice">Stopped after %s correction(s) because of --limit; re-run to continue.</string>
+    <string name="cli_repair_capture_time_limit_requires_apply">--limit only bounds what --apply writes; give --apply as well, or drop --limit.</string>
     <string name="cli_repair_capture_time_nothing">Every capture timestamp agrees with its original\'s EXIF; nothing to repair.</string>
     <string name="cli_repair_capture_time_row">  %1$s: recorded %2$s, EXIF says %3$s (off by %4$s s)</string>
     <string name="cli_repair_capture_time_row_unparseable">  %1$s: recorded %2$s (not a timestamp), EXIF says %3$s</string>
-    <string name="cli_repair_capture_time_summary">Capture-time repair: %1$s affected, %2$s corrected, %3$s already correct, %4$s without a recoverable EXIF instant, %5$s unreadable.</string>
+    <string name="cli_repair_capture_time_summary">Capture-time repair: %1$s affected, %2$s corrected, %3$s already correct, %4$s without a recoverable EXIF instant, %5$s unreadable, %6$s in trash.</string>
+    <string name="cli_repair_capture_time_trashed">  Skipped %s asset(s) in trash; restore an asset first if it should be repaired.</string>
     <string name="cli_repair_capture_time_unreadable">  %1$s: original could not be read (%2$s); skipped</string>
     <string name="cli_repair_failed">Repair failed: %s</string>
     <string name="cli_show_album">  Album:           %s</string>
@@ -1848,6 +1850,7 @@
     <string name="cli_show_header">Asset %s</string>
     <string name="cli_show_hidden">  Hidden:          %s</string>
     <string name="cli_show_imported">  Imported:        %s</string>
+    <string name="cli_show_in_trash">  In trash:        %s</string>
     <string name="cli_show_invalid_selector">%1$s is neither an asset id nor a hex prefix of at least %2$s characters of a content hash.</string>
     <string name="cli_show_lqip">  Placeholder:     %s</string>
     <string name="cli_show_provenance_records">  Provenance:      %s signed record(s)</string>

@@ -503,7 +503,7 @@
               "takes_value": false
             },
             {
-              "help": "Correct at most this many affected assets in one --apply run (the report still covers the whole library)",
+              "help": "Correct at most this many affected assets in one --apply run (the report still covers the whole library); only meaningful with --apply",
               "id": "limit",
               "long": "limit",
               "positional": false,

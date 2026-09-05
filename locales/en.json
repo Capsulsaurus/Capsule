@@ -7120,7 +7120,7 @@
     "context": "clap --help: help for the `--library` option of `capsule repair capture-time`."
   },
   "cli.help.repair.capture-time.arg.limit": {
-    "message": "Correct at most this many affected assets in one --apply run (the report still covers the whole library)",
+    "message": "Correct at most this many affected assets in one --apply run (the report still covers the whole library); only meaningful with --apply",
     "context": "clap --help: help for the `--limit` option of `capsule repair capture-time`."
   },
   "cli.help.repair.capture-time.arg.passphrase_stdin": {
@@ -7327,6 +7327,10 @@
     "message": "Stopped after {corrected} correction(s) because of --limit; re-run to continue.",
     "context": "CLI notice from `capsule repair capture-time --apply --limit N` when affected assets remain after N corrections. `--limit` is a command-line flag, shown verbatim."
   },
+  "cli.repair.capture_time.limit_requires_apply": {
+    "message": "--limit only bounds what --apply writes; give --apply as well, or drop --limit.",
+    "context": "CLI failure line when `capsule repair capture-time --limit` is given without `--apply`. Both are command-line flags, shown verbatim."
+  },
   "cli.repair.capture_time.nothing": {
     "message": "Every capture timestamp agrees with its original's EXIF; nothing to repair.",
     "context": "CLI line from `capsule repair capture-time` when no asset is affected and every original was readable."
@@ -7340,8 +7344,12 @@
     "context": "CLI one-line report of one affected asset in `capsule repair capture-time` whose recorded capture timestamp does not parse, so no difference can be computed."
   },
   "cli.repair.capture_time.summary": {
-    "message": "Capture-time repair: {affected} affected, {corrected} corrected, {agrees} already correct, {no_instant} without a recoverable EXIF instant, {unreadable} unreadable.",
-    "context": "CLI summary line of `capsule repair capture-time`. All placeholders are asset counts."
+    "message": "Capture-time repair: {affected} affected, {corrected} corrected, {agrees} already correct, {no_instant} without a recoverable EXIF instant, {unreadable} unreadable, {trashed} in trash.",
+    "context": "CLI summary line of `capsule repair capture-time`. All placeholders are asset counts; {trashed} counts assets skipped because they are in trash."
+  },
+  "cli.repair.capture_time.trashed": {
+    "message": "  Skipped {count} asset(s) in trash; restore an asset first if it should be repaired.",
+    "context": "CLI notice from `capsule repair capture-time` counting the trashed assets it left alone. {count} is an asset count."
   },
   "cli.repair.capture_time.unreadable": {
     "message": "  {asset_id}: original could not be read ({reason}); skipped",
@@ -7422,6 +7430,10 @@
   "cli.show.imported": {
     "message": "  Imported:        {value}",
     "context": "CLI field row of `capsule show`: the signed import timestamp (RFC 3339, UTC)."
+  },
+  "cli.show.in_trash": {
+    "message": "  In trash:        {value}",
+    "context": "CLI field row of `capsule show`: whether the asset is currently in trash (a localized yes/no)."
   },
   "cli.show.invalid_selector": {
     "message": "{selector} is neither an asset id nor a hex prefix of at least {min} characters of a content hash.",

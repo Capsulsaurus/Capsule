@@ -121,6 +121,7 @@ pub mod keys {
     pub const SHOW_GPS: &str = "cli.show.gps";
     pub const SHOW_CULL: &str = "cli.show.cull";
     pub const SHOW_HIDDEN: &str = "cli.show.hidden";
+    pub const SHOW_IN_TRASH: &str = "cli.show.in_trash";
     pub const SHOW_STACK: &str = "cli.show.stack";
     pub const SHOW_LQIP: &str = "cli.show.lqip";
     pub const SHOW_PROVENANCE_RECORDS: &str = "cli.show.provenance_records";
@@ -157,5 +158,8 @@ pub mod keys {
     pub const REPAIR_CAPTURE_TIME_NOTHING: &str = "cli.repair.capture_time.nothing";
     pub const REPAIR_CAPTURE_TIME_DRIFT_NOTICE: &str = "cli.repair.capture_time.drift_notice";
     pub const REPAIR_CAPTURE_TIME_FAILED_ASSET: &str = "cli.repair.capture_time.failed_asset";
+    pub const REPAIR_CAPTURE_TIME_TRASHED: &str = "cli.repair.capture_time.trashed";
+    pub const REPAIR_CAPTURE_TIME_LIMIT_REQUIRES_APPLY: &str =
+        "cli.repair.capture_time.limit_requires_apply";
     pub const REPAIR_FAILED: &str = "cli.repair.failed";
 }

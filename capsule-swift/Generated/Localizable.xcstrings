@@ -30626,7 +30626,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Correct at most this many affected assets in one --apply run (the report still covers the whole library)"
+            "value": "Correct at most this many affected assets in one --apply run (the report still covers the whole library); only meaningful with --apply"
           }
         }
       }
@@ -31573,6 +31573,16 @@
         }
       }
     },
+    "cli.repair.capture_time.limit_requires_apply": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "--limit only bounds what --apply writes; give --apply as well, or drop --limit."
+          }
+        }
+      }
+    },
     "cli.repair.capture_time.nothing": {
       "localizations": {
         "en": {
@@ -31608,7 +31618,17 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Capture-time repair: %1$@ affected, %2$@ corrected, %3$@ already correct, %4$@ without a recoverable EXIF instant, %5$@ unreadable."
+            "value": "Capture-time repair: %1$@ affected, %2$@ corrected, %3$@ already correct, %4$@ without a recoverable EXIF instant, %5$@ unreadable, %6$@ in trash."
+          }
+        }
+      }
+    },
+    "cli.repair.capture_time.trashed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  Skipped %@ asset(s) in trash; restore an asset first if it should be repaired."
           }
         }
       }
@@ -31809,6 +31829,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "  Imported:        %@"
+          }
+        }
+      }
+    },
+    "cli.show.in_trash": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  In trash:        %@"
           }
         }
       }

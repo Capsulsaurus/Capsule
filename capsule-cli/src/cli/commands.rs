@@ -239,9 +239,9 @@ pub(crate) enum RepairCommands {
         #[arg(long)]
         apply: bool,
         /// Correct at most this many affected assets in one --apply run (the report still
-        /// covers the whole library)
-        #[arg(long, value_name = "COUNT")]
-        limit: Option<usize>,
+        /// covers the whole library); only meaningful with --apply
+        #[arg(long, value_name = "COUNT", value_parser = clap::value_parser!(u64).range(1..))]
+        limit: Option<u64>,
     },
 }
 
