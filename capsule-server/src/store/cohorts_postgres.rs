@@ -86,7 +86,8 @@ impl CohortStore for PostgresCohorts {
                      VALUES ($1, $2, $3, $3) \
                      ON CONFLICT (user_id, cohort_hash) \
                      DO UPDATE SET last_seen = EXCLUDED.last_seen \
-                     RETURNING user_id, cohort_hash, first_seen, last_seen",
+                     RETURNING user_id, cohort_hash, first_seen, last_seen, \
+                               (xmax = 0) AS inserted",
                     [
                         Value::from(user.as_str().to_owned()),
                         Value::from(cohort_hash.to_owned()),
@@ -100,7 +101,15 @@ impl CohortStore for PostgresCohorts {
                     detail: "the cohort upsert returned no row".to_owned(),
                 })?;
             let record = record_from(&observed)?;
-            if record.first_seen == record.last_seen {
+            // `xmax = 0` is how an upsert says which half it took: PostgreSQL leaves the
+            // deleting-transaction id at zero on a freshly inserted tuple and sets it on one the
+            // `DO UPDATE` rewrote. Derived rather than inferred from `first_seen == last_seen`,
+            // which is the same thing being said by a coincidence — a device observed twice at
+            // one instant, which a test clock does routinely, would log a new cohort twice.
+            let inserted: bool = observed
+                .try_get("", "inserted")
+                .map_err(PORT.failing("reading whether a cohort row was new"))?;
+            if inserted {
                 tracing::info!(%user, "an account was seen under a new device cohort");
             }
             Ok(record)

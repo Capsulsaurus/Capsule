@@ -149,8 +149,18 @@ covers (`rg "E2E case N"`), and slices in the repo-root `SLICES.md` reference th
     results afterwards. Entirely within `capsule-core::ml` and the `capsule-core::db` vector index,
     so it is unaffected by the server rebuild.
 11. **Server crash mid-finalization.** Inject a crash between the blob rename and the Postgres
-    transaction commit; restart; assert the session moves to `FailedProcessing` cleanly, with no
-    orphaned blob and no zombie pending row.
+    transaction commit; assert the session moves to `FailedProcessing` cleanly, the asset row is
+    still `Pending` with no sequence number, and **nothing references the blob** — no dangling
+    reference, which is the one outcome the finalization order exists to forbid
+    ([Filesystem — Server](/design/filesystem/server/)). An **orphaned blob is permitted** and is
+    the safe half of that trade: the bytes are at their content address with a reference count of
+    zero, the collector marks them, and the client's retry re-references them because
+    `BlobStore::commit` is idempotent on identical ciphertext. This row previously asked for "no
+    orphaned blob", which contradicted the design it cites and the test that asserts it.
+    The crash is injected through the `AssetIndex` port, so no production code carries a test
+    hook; the **process-restart** variant — a real kill, and a second process over the same blob
+    root and database — is owed to the remaining durable adapters and belongs to the binary-smoke
+    tier.
 12. **Cross-device enrollment.** Device A authorizes new device B over a verified channel
     (enrollment code plus safety-code check) → B generates hardware keys → A cross-signs B into the
     device directory → B joins each album's MLS group → B's library matches A's. Includes one

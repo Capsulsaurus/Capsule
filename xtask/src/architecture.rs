@@ -311,7 +311,25 @@ fn check_chrono_isolation(root: &Path, violations: &mut Vec<String>) -> Result<(
     // that the exemption is deliberate rather than an omission.
     const EXPECTED_ON_THE_PATH: &[&str] = &["capsule-server-migration"];
 
+    // A positive control before any negative is trusted. `cargo tree -p <name>` exits **zero and
+    // prints nothing** when `<name>` is not a package it knows, so a rename or a typo in
+    // `PACKAGES` would make this whole guard pass silently for the rest of its life — the exact
+    // failure mode a boundary check exists to prevent.
+    let members = workspace_member_names(root)?;
     for package in PACKAGES {
+        if !members.contains(*package) {
+            violations.push(format!(
+                "the chrono guard names `{package}`, which is not a workspace member; \
+                 `cargo tree -p` would exit zero and print nothing, so the guard would pass \
+                 without checking anything"
+            ));
+        }
+    }
+
+    for package in PACKAGES {
+        if !members.contains(*package) {
+            continue;
+        }
         let output = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
             .args([
                 "tree",
@@ -326,16 +344,28 @@ fn check_chrono_isolation(root: &Path, violations: &mut Vec<String>) -> Result<(
             .current_dir(root)
             .output()
             .with_context(|| format!("running cargo tree for {package}"))?;
-        // A package that does not depend on chrono makes `cargo tree -i` exit non-zero with
-        // "nothing to print" or "did not match any packages"; both are the passing shape.
-        let reaches_chrono =
-            output.status.success() && String::from_utf8_lossy(&output.stdout).contains("chrono v");
+
+        let reaches_chrono = match classify_chrono_tree(
+            output.status.success(),
+            &String::from_utf8_lossy(&output.stdout),
+            &String::from_utf8_lossy(&output.stderr),
+        ) {
+            Ok(reaches) => reaches,
+            Err(detail) => {
+                violations.push(format!(
+                    "the chrono guard could not decide anything about `{package}`: {detail}"
+                ));
+                continue;
+            }
+        };
+
         let expected = EXPECTED_ON_THE_PATH.contains(package);
         if reaches_chrono && !expected {
             violations.push(format!(
                 "`{package}` reaches `chrono` through its own manifest; design/dependencies.md \
-                 permits chrono only as the sea-orm column type in `capsule-cli/entity`. Check \
-                 that sea-orm is declared with `default-features = false`"
+                 permits chrono only as the sea-orm column type in `capsule-cli/entity` and in \
+                 `capsule-server-migration`. Check that sea-orm is declared with \
+                 `default-features = false`"
             ));
         }
         if !reaches_chrono && expected {
@@ -346,6 +376,64 @@ fn check_chrono_isolation(root: &Path, violations: &mut Vec<String>) -> Result<(
         }
     }
     Ok(())
+}
+
+/// Decide what one `cargo tree -i chrono` invocation established, or that it established nothing.
+///
+/// Split out of [`check_chrono_isolation`] because it is the whole of the guard's judgement and
+/// the only part that can be tested without a cargo invocation — and because the shape it is
+/// written against is not obvious. `cargo tree -i` has **three** outcomes and the previous
+/// version of this guard collapsed them into two:
+///
+/// - exit zero, a tree on stdout — the crate is reachable;
+/// - exit zero, `warning: nothing to print.` on stderr — it is not;
+/// - exit non-zero, `did not match any packages` — `chrono` is not in the lock file at all,
+///   which is also "not reachable", and is the state this repository would be in if the CLI's
+///   entity crate ever dropped it.
+///
+/// Anything else non-zero is a **failed invocation** — a manifest error, a lock that needs
+/// updating under `--offline`, a cargo that is not there — and reading it as "chrono absent" is
+/// failing open: the guard would report clean precisely when it knows least. So it is an error,
+/// and the caller turns it into a violation.
+fn classify_chrono_tree(success: bool, stdout: &str, stderr: &str) -> Result<bool, String> {
+    if success {
+        return Ok(stdout.contains("chrono v"));
+    }
+    if stderr.contains("did not match any packages") {
+        return Ok(false);
+    }
+    Err(format!(
+        "`cargo tree` failed: {}",
+        stderr.trim().lines().next().unwrap_or("no diagnostic")
+    ))
+}
+
+/// Every workspace member's package name.
+fn workspace_member_names(root: &Path) -> Result<BTreeSet<String>> {
+    let metadata = cargo_metadata(root)?;
+    let member_ids: BTreeSet<&str> = metadata["workspace_members"]
+        .as_array()
+        .context("cargo metadata workspace_members missing")?
+        .iter()
+        .map(|id| id.as_str().context("workspace member id missing"))
+        .collect::<Result<_>>()?;
+
+    let mut names = BTreeSet::new();
+    for package in metadata["packages"]
+        .as_array()
+        .context("cargo metadata packages missing")?
+    {
+        let id = package["id"].as_str().context("package id missing")?;
+        if member_ids.contains(id) {
+            names.insert(
+                package["name"]
+                    .as_str()
+                    .context("package name missing")?
+                    .to_owned(),
+            );
+        }
+    }
+    Ok(names)
 }
 
 fn check_legacy_manifests(root: &Path, violations: &mut Vec<String>) -> Result<()> {
@@ -501,6 +589,44 @@ mod tests {
                 "`{name}` is exempted with no reason, which is the exemption this list exists to prevent"
             );
         }
+    }
+
+    #[test]
+    fn a_failed_cargo_tree_is_never_read_as_chrono_absent() {
+        // The fail-open this guard used to have. `cargo tree` exits non-zero for a *failure* as
+        // well as for "that crate is not in the lock", and treating every non-zero exit as the
+        // second one means the guard reports clean exactly when it knows least.
+        let failed = classify_chrono_tree(
+            false,
+            "",
+            "error: failed to parse manifest at `/x/Cargo.toml`\n",
+        );
+        assert!(
+            failed.is_err(),
+            "a broken invocation must not decide anything, got {failed:?}"
+        );
+
+        // The one non-zero exit that *is* an answer: chrono has left the lock file entirely.
+        assert_eq!(
+            classify_chrono_tree(
+                false,
+                "",
+                "error: package ID specification `chrono` did not match any packages",
+            ),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn a_successful_cargo_tree_is_read_from_its_output() {
+        assert_eq!(
+            classify_chrono_tree(true, "", "warning: nothing to print."),
+            Ok(false)
+        );
+        assert_eq!(
+            classify_chrono_tree(true, "chrono v0.4.45\n└── capsule-cli-entity v0.1.0\n", ""),
+            Ok(true)
+        );
     }
 
     #[test]
