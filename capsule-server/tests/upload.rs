@@ -379,11 +379,25 @@ async fn the_handshake_gates_every_upload_request() {
     // The gate runs before authentication: a client learns it must update without a token.
     fixture
         .client
-        .head(&format!("/v1/upload/{id}"))
+        .raw()
+        .post("/v1/upload")
         .header("x-capsule-protocol", "2020-01-01")
+        .json(&create_request(&fixture.clock, &whole, "original"))
         .send()
         .await
         .assert_status(StatusCode::UPGRADE_REQUIRED);
+
+    // And a read is admitted at any protocol date: the same client can still ask where its
+    // session got to, and learns the window from the headers rather than from a refusal.
+    let progress = fixture
+        .client
+        .head(&format!("/v1/upload/{id}"))
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", "2020-01-01")
+        .send()
+        .await;
+    progress.assert_status(StatusCode::OK);
+    progress.assert_header("x-capsule-protocol-min", "2026-01-01");
 }
 
 // ===========================================================================================

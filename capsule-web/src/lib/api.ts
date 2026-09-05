@@ -21,6 +21,17 @@ import {
 const API_BASE = import.meta.env.PUBLIC_API_URL ?? 'http://localhost:3000';
 const AUTH_BASE = `${API_BASE}/v1/auth`;
 
+/**
+ * The `YYYY-MM-DD` protocol version this client is written against, sent as `X-Capsule-Protocol`
+ * on every request. Every gated route refuses a request without it (`400`), and a write outside
+ * the server's `[X-Capsule-Protocol-Min, -Max]` window is `426`.
+ *
+ * Source of truth: `capsule_core::crypto::primitives::PROTOCOL_VERSION`. The browser holds no
+ * Rust and the wasm surface does not export the constant, so it is restated here and must move
+ * with it.
+ */
+export const PROTOCOL_VERSION = '2026-05-31';
+
 export class ApiError extends Error {
     constructor(
         public readonly status: number,
@@ -57,7 +68,10 @@ export async function refreshAccessToken(): Promise<boolean> {
     try {
         const res = await fetch(`${AUTH_BASE}/refresh`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Capsule-Protocol': PROTOCOL_VERSION,
+            },
             body: JSON.stringify({ refresh_token: refreshToken }),
         });
         if (!res.ok) {
@@ -94,6 +108,7 @@ export async function authFetch(
     if (!token) throw new ApiError(401, 'Session expired');
     const headers = new Headers(init.headers);
     headers.set('Authorization', `Bearer ${token}`);
+    headers.set('X-Capsule-Protocol', PROTOCOL_VERSION);
     headers.set(
         'Content-Type',
         headers.get('Content-Type') ?? 'application/json',
@@ -146,6 +161,7 @@ export async function login(
         headers: {
             'Content-Type': 'application/json',
             Accept: 'application/json',
+            'X-Capsule-Protocol': PROTOCOL_VERSION,
         },
         body: JSON.stringify(body),
     });
@@ -173,7 +189,10 @@ export interface RegisterRequest {
 export async function register(body: RegisterRequest): Promise<TokenPair> {
     const res = await fetch(`${AUTH_BASE}/register`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+            'Content-Type': 'application/json',
+            'X-Capsule-Protocol': PROTOCOL_VERSION,
+        },
         body: JSON.stringify(body),
     });
     if (!res.ok) throw await parseError(res);
@@ -206,6 +225,7 @@ export async function verifyTotpLogin(
         headers: {
             'Content-Type': 'application/json',
             Accept: 'application/json',
+            'X-Capsule-Protocol': PROTOCOL_VERSION,
         },
         body: JSON.stringify({ mfa_token: mfaToken, totp_code: totpCode }),
     });

@@ -405,6 +405,9 @@ impl AuthClient {
 
     /// Assemble a client from explicit parts (clock + HTTP client + skew). Used by
     /// [`AuthClient::new`] and by tests that inject a controllable clock.
+    ///
+    /// `http` **must** come from [`crate::net::http_builder`] or [`crate::net::http_client`]: a
+    /// client built any other way sends no protocol handshake, and every gated route refuses it.
     fn from_parts(
         base_url: &str,
         clock: Arc<dyn Clock>,
