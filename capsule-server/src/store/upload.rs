@@ -86,6 +86,17 @@ impl UploadSessionStatus {
         matches!(self, Self::Completed | Self::FailedProcessing)
     }
 
+    /// Whether pressure eviction may still pick the session — `Pending` or `Uploading`.
+    ///
+    /// Narrower than [`Self::is_active`], and the one predicate every adapter's
+    /// [`UploadSessionStore::least_recently_progressed`] applies: a `WaitingForProcessing`
+    /// session is in flight for every other purpose, but the finalize claim that moved it there
+    /// is the promise that it will not be evicted out from under the finalizer (upload-protocol
+    /// design doc, the finalization claim).
+    pub fn is_evictable(self) -> bool {
+        matches!(self, Self::Pending | Self::Uploading)
+    }
+
     /// The token the `X-Capsule-Upload-Status` response header carries.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -235,8 +246,10 @@ pub trait UploadSessionStore: std::fmt::Debug + Send + Sync {
 
     /// Move a live session to `status`, returning the updated record.
     ///
-    /// A terminal status also drops the session from [`Self::least_recently_progressed`], so
-    /// pressure eviction cannot pick a session whose bytes are already committed.
+    /// A status that is not [`UploadSessionStatus::is_evictable`] — a terminal one, or
+    /// `WaitingForProcessing` — also drops the session from [`Self::least_recently_progressed`],
+    /// so pressure eviction cannot pick a session whose bytes are already committed or being
+    /// committed.
     fn set_status<'a>(
         &'a self,
         upload: &'a UploadId,
@@ -291,12 +304,15 @@ pub trait UploadSessionStore: std::fmt::Debug + Send + Sync {
     /// mid-write at the cutover.
     fn in_flight_for_album<'a>(&'a self, album: &'a AlbumId) -> StoreFuture<'a, u64>;
 
-    /// Up to `limit` active sessions that have not progressed since `not_progressed_since`,
-    /// least recently progressed first.
+    /// Up to `limit` evictable sessions — `Pending` or `Uploading`, see
+    /// [`UploadSessionStatus::is_evictable`] — that have not progressed since
+    /// `not_progressed_since`, least recently progressed first.
     ///
     /// The eviction *policy* — the ≥1-hour survival floor, when pressure is high enough to
-    /// discard at all — belongs to the caller; the store only orders candidates. Terminal
-    /// sessions are never returned.
+    /// discard at all — belongs to the caller; the store only orders candidates. Neither a
+    /// terminal session nor a claimed one is ever returned: the first has nothing left to
+    /// evict, the second is being finalized and [`Self::claim_finalize`] promised it would not
+    /// be evicted out from under that.
     fn least_recently_progressed(
         &self,
         not_progressed_since: Timestamp,
