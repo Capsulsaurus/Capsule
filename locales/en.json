@@ -7347,6 +7347,34 @@
     "message": "Invalid email or password.",
     "context": "High-level error for HTTP 401 on login. Server sends code `error.auth.invalid_credentials`."
   },
+  "error.auth.oidc_address_taken": {
+    "message": "An account with that email address already exists here. Sign in with its password instead.",
+    "context": "HTTP 409 on POST /v1/auth/oidc/callback (slice S-N1): the identity provider asserted an email address that already belongs to a local account, and this identity is not linked to it. Capsule never links accounts by an address the provider controls; the person signs in with the existing account's password."
+  },
+  "error.auth.oidc_exchange_failed": {
+    "message": "Your identity provider didn't accept that sign-in. Try again.",
+    "context": "HTTP 401 on POST /v1/auth/oidc/callback (slice S-N1): the identity provider refused to exchange the authorization code (an invalid, spent or mismatched code). The person starts the sign-in again."
+  },
+  "error.auth.oidc_not_configured": {
+    "message": "Single sign-on isn't set up on this server.",
+    "context": "HTTP 404 on POST /v1/auth/oidc/authorize (slice S-N1): this deployment has no OIDC identity provider configured, so there is nowhere to send the person. The server-info record publishes auth.oidc as null in this case; a client that shows the option anyway sees this."
+  },
+  "error.auth.oidc_redirect_invalid": {
+    "message": "That sign-in can't return to this app.",
+    "context": "HTTP 400 on POST /v1/auth/oidc/authorize (slice S-N1): the redirect URI the client asked for is neither the deployment's configured one nor a loopback address it admits, so the server will not send the person back there. A client bug or a misconfigured deployment, not something the person can fix."
+  },
+  "error.auth.oidc_state_invalid": {
+    "message": "That sign-in has expired. Start again.",
+    "context": "HTTP 401 on POST /v1/auth/oidc/callback (slice S-N1): the state is unknown, already redeemed, or past its ten-minute window. One answer for all three, so the callback is not an oracle; the person starts the sign-in again."
+  },
+  "error.auth.oidc_token_invalid": {
+    "message": "Your identity provider's answer couldn't be verified.",
+    "context": "HTTP 401 on POST /v1/auth/oidc/callback (slice S-N1): the identity provider's ID token failed a check (signature, issuer, audience, expiry or nonce). One answer for every check, deliberately; the specific reason reaches the server log, not the client."
+  },
+  "error.auth.oidc_unavailable": {
+    "message": "Capsule couldn't reach your identity provider just now. Please try again.",
+    "context": "HTTP 500 on the /v1/auth/oidc routes (slice S-N1): the identity provider could not be reached, or its published metadata or keys could not be used. Retryable, and distinct from error.auth.unavailable because 'the identity provider is down' and 'the session store is down' are different operator actions."
+  },
   "error.auth.password_invalid": {
     "message": "That password cannot be used.",
     "context": "HTTP 400 on POST /v1/auth/password (slice S-C54): the proposed new password is under the 12-character floor, or is the password already in use. The second case matters because a change that changes nothing leaves the caller believing a leaked credential has been rotated."

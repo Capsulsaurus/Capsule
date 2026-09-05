@@ -40,6 +40,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD as BASE64, STANDARD_NO_PAD as BASE64_NO_PAD};
 use jiff::SignedDuration;
 
+use crate::auth::oidc::{ClientSecret, RedirectPolicy};
 use crate::sync::CURSOR_KEY_LEN;
 
 /// The bind address a deployment gets without saying anything.
@@ -118,6 +119,26 @@ impl Environment for BTreeMap<String, String> {
     fn var(&self, key: &str) -> Option<String> {
         self.get(key).filter(|value| !value.is_empty()).cloned()
     }
+}
+
+/// Whether `value` is a `YYYY-MM-DD` calendar date, spelled exactly that way.
+///
+/// `jiff::civil::Date` parses the strict ISO form and refuses `2026-6-1` and February 30th
+/// alike; the round trip back to text refuses a value the parser tolerated but the gate's
+/// bytewise comparison would misorder.
+fn is_protocol_date(value: &str) -> bool {
+    value
+        .parse::<jiff::civil::Date>()
+        .is_ok_and(|date| date.to_string() == value)
+}
+
+/// Whether `value` is `MAJOR.MINOR.PATCH` with three non-negative integers.
+fn is_semver(value: &str) -> bool {
+    let parts: Vec<&str> = value.split('.').collect();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 /// Bytes that must not be printed.
@@ -272,6 +293,23 @@ pub struct Overrides {
     pub grace_window_hours: Option<u64>,
 }
 
+/// The OpenID Connect relying party, when a deployment has one (slice `S-N1`).
+///
+/// Present only when `OIDC_ISSUER` is set. A half-configured relying party — an issuer with no
+/// client id, or the reverse — is a configuration fault rather than a feature that is quietly
+/// off, because an operator who set one of the two meant to set both.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OidcConfig {
+    /// The issuer, exactly as the provider's ID tokens will carry it.
+    pub issuer: String,
+    /// This deployment's `client_id` at the provider.
+    pub client_id: String,
+    /// The client secret, when the deployment is a confidential client. Absent means PKCE-only.
+    pub client_secret: Option<ClientSecret>,
+    /// Which redirect URIs a client may name.
+    pub redirects: RedirectPolicy,
+}
+
 /// Everything an operator gets to decide.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -293,16 +331,20 @@ pub struct Config {
     pub sync_cursor_mac_key: Option<[u8; CURSOR_KEY_LEN]>,
     /// The seed the attestation signing key is built from.
     pub attestation_key_seed: Option<[u8; ATTESTATION_SEED_LEN]>,
-    /// The oldest `protocol_version` accepted for writes.
+    /// The oldest `protocol_version` accepted for writes (`YYYY-MM-DD`, validated).
     pub protocol_min: String,
-    /// The newest `protocol_version` this server speaks.
+    /// The newest `protocol_version` this server speaks (`YYYY-MM-DD`, validated).
     pub protocol_max: String,
+    /// The advisory semver client-build cutoff advertised on every response.
+    pub min_client_build: String,
     /// How long a blob sits at zero references before the collector may sweep it.
     pub grace_window: SignedDuration,
     /// How long an account stays locked after too many failed credential presentations.
     pub lockout_window: SignedDuration,
     /// How many consecutive failures inside that window lock it.
     pub lockout_attempts: u32,
+    /// The OIDC relying party, if `OIDC_ISSUER` is set.
+    pub oidc: Option<OidcConfig>,
     /// How long a shutdown may take to drain.
     pub shutdown_timeout: std::time::Duration,
     /// The accepted-connection ceiling.
@@ -437,17 +479,52 @@ impl Config {
             Backends::Durable => None,
         });
 
+        // ── The OIDC relying party ──────────────────────────────────────────────────────
+        let oidc = read_oidc(env, &mut faults);
+
         // ── Protocol window ─────────────────────────────────────────────────────────────
+        //
+        // Both ends default to the policy's year window rather than to the single day
+        // `capsule-core` speaks: a default that collapsed the window to one date refused every
+        // client one build behind on its first write, which nobody chose. Both are parsed as
+        // dates, because every reader downstream — the gate's lexicographic comparison, the
+        // response header, the discovery record — assumes the `YYYY-MM-DD` grammar, and
+        // `2026-6-1` sorts before `2026-12-31` for the wrong reason. `min == max` is a
+        // legitimate explicit choice and is not refused.
         let protocol_max = env
             .var("PROTOCOL_MAX")
-            .unwrap_or_else(|| capsule_core::crypto::PROTOCOL_VERSION.to_owned());
+            .unwrap_or_else(|| crate::upload::policy::DEFAULT_PROTOCOL_MAX.to_owned());
         let protocol_min = env
             .var("PROTOCOL_MIN")
-            .unwrap_or_else(|| capsule_core::crypto::PROTOCOL_VERSION.to_owned());
+            .unwrap_or_else(|| crate::upload::policy::DEFAULT_PROTOCOL_MIN.to_owned());
+        for (key, value) in [
+            ("PROTOCOL_MIN", &protocol_min),
+            ("PROTOCOL_MAX", &protocol_max),
+        ] {
+            if !is_protocol_date(value) {
+                faults.push(ConfigFault::Invalid {
+                    key,
+                    detail: "is not a YYYY-MM-DD date".to_owned(),
+                });
+            }
+        }
         if protocol_min > protocol_max {
             faults.push(ConfigFault::Invalid {
                 key: "PROTOCOL_MIN",
                 detail: format!("`{protocol_min}` is newer than PROTOCOL_MAX `{protocol_max}`"),
+            });
+        }
+
+        // The advisory client-build cutoff, `X-Capsule-Min-Client-Build` on every response.
+        // Validated as three dot-separated integers because it is sent as a header value and
+        // compared as semver by clients; `0.0.0` — the default — is "no cutoff announced".
+        let min_client_build = env
+            .var("MIN_CLIENT_BUILD")
+            .unwrap_or_else(|| crate::upload::policy::DEFAULT_MIN_CLIENT_BUILD.to_owned());
+        if !is_semver(&min_client_build) {
+            faults.push(ConfigFault::Invalid {
+                key: "MIN_CLIENT_BUILD",
+                detail: "is not a MAJOR.MINOR.PATCH semver build".to_owned(),
             });
         }
 
@@ -568,9 +645,11 @@ impl Config {
                 attestation_key_seed,
                 protocol_min,
                 protocol_max,
+                min_client_build,
                 grace_window,
                 lockout_window,
                 lockout_attempts,
+                oidc,
                 shutdown_timeout,
                 max_connections,
                 log_format,
@@ -580,6 +659,107 @@ impl Config {
             Err(ConfigError { faults })
         }
     }
+}
+
+/// Read the `OIDC_*` settings, or `None` when none of them is set.
+///
+/// `OIDC_ISSUER` must be an absolute `http(s)` URL with no query or fragment (OpenID Connect
+/// Discovery 1.0 §3), and `https` unless it is a loopback address — the development carve-out
+/// `auth::oidc::discovery` applies to the provider's endpoints too. `OIDC_ALLOW_LOOPBACK_REDIRECT`
+/// defaults to **on**, because the CLI's and a desktop client's redirect is an ephemeral
+/// loopback port (RFC 8252 §7.3) and a deployment that wants only its configured web redirect
+/// has to say so.
+fn read_oidc(env: &dyn Environment, faults: &mut Vec<ConfigFault>) -> Option<OidcConfig> {
+    let issuer = env.var("OIDC_ISSUER");
+    let client_id = env.var("OIDC_CLIENT_ID");
+    let client_secret = env.var("OIDC_CLIENT_SECRET");
+    let redirect_url = env.var("OIDC_REDIRECT_URL");
+    let allow_loopback = env.var("OIDC_ALLOW_LOOPBACK_REDIRECT");
+
+    if issuer.is_none()
+        && client_id.is_none()
+        && client_secret.is_none()
+        && redirect_url.is_none()
+        && allow_loopback.is_none()
+    {
+        return None;
+    }
+
+    // Half a relying party is refused, both ways round.
+    require(issuer.is_some(), "OIDC_ISSUER", faults);
+    require(client_id.is_some(), "OIDC_CLIENT_ID", faults);
+
+    if let Some(issuer) = &issuer {
+        match reqwest::Url::parse(issuer) {
+            Ok(url) if url.query().is_some() || url.fragment().is_some() => {
+                faults.push(ConfigFault::Invalid {
+                    key: "OIDC_ISSUER",
+                    detail: "an issuer carries no query or fragment".to_owned(),
+                });
+            }
+            Ok(url) if url.scheme() == "https" => {}
+            Ok(url)
+                if url.scheme() == "http"
+                    && crate::auth::oidc::discovery::is_loopback_issuer(issuer) => {}
+            Ok(url) => {
+                faults.push(ConfigFault::Invalid {
+                    key: "OIDC_ISSUER",
+                    detail: format!(
+                        "`{}://` is not accepted; an issuer is https, or http on a loopback                          address for development",
+                        url.scheme()
+                    ),
+                });
+            }
+            Err(error) => {
+                faults.push(ConfigFault::Invalid {
+                    key: "OIDC_ISSUER",
+                    // The issuer is a public URL, not a secret; quoting it is what a typo needs.
+                    detail: format!("`{issuer}` is not an absolute URL ({error})"),
+                });
+            }
+        }
+    }
+
+    if let Some(redirect) = &redirect_url
+        && let Err(error) = reqwest::Url::parse(redirect)
+    {
+        faults.push(ConfigFault::Invalid {
+            key: "OIDC_REDIRECT_URL",
+            detail: format!("`{redirect}` is not an absolute URL ({error})"),
+        });
+    }
+
+    let allow_loopback = match allow_loopback.as_deref().map(str::trim) {
+        None => true,
+        Some(raw)
+            if ["true", "1", "yes", "on"]
+                .iter()
+                .any(|v| raw.eq_ignore_ascii_case(v)) =>
+        {
+            true
+        }
+        Some(raw)
+            if ["false", "0", "no", "off"]
+                .iter()
+                .any(|v| raw.eq_ignore_ascii_case(v)) =>
+        {
+            false
+        }
+        Some(raw) => {
+            faults.push(ConfigFault::Invalid {
+                key: "OIDC_ALLOW_LOOPBACK_REDIRECT",
+                detail: format!("`{raw}` is neither `true` nor `false`"),
+            });
+            true
+        }
+    };
+
+    Some(OidcConfig {
+        issuer: issuer?,
+        client_id: client_id?,
+        client_secret: client_secret.map(ClientSecret::new),
+        redirects: RedirectPolicy::new(redirect_url, allow_loopback),
+    })
 }
 
 /// Record a missing required setting.
@@ -751,7 +931,66 @@ mod tests {
         assert_eq!(config.server_domain, "localhost");
         assert_eq!(config.api_base_url, "http://localhost:3000/v1");
         assert_eq!(config.backends, Backends::Memory);
+        // The policy's year window, not the single day core speaks: a build one day behind
+        // still writes, and the day core speaks sits strictly inside it.
+        assert_eq!(
+            config.protocol_min,
+            crate::upload::policy::DEFAULT_PROTOCOL_MIN
+        );
+        assert_eq!(
+            config.protocol_max,
+            crate::upload::policy::DEFAULT_PROTOCOL_MAX
+        );
+        let spoken = capsule_core::crypto::PROTOCOL_VERSION;
+        assert!(config.protocol_min.as_str() < spoken && spoken < config.protocol_max.as_str());
+        assert_eq!(
+            config.min_client_build,
+            crate::upload::policy::DEFAULT_MIN_CLIENT_BUILD
+        );
+    }
+
+    #[test]
+    fn a_protocol_bound_that_is_not_a_strict_date_is_refused() {
+        for (key, value) in [
+            ("PROTOCOL_MIN", "2026-6-1"),
+            ("PROTOCOL_MAX", "2026-02-30"),
+            ("PROTOCOL_MAX", "yesterday"),
+            ("PROTOCOL_MIN", "2026-05-31T00:00:00Z"),
+        ] {
+            let mut environment = serveable();
+            environment.insert(key.to_owned(), value.to_owned());
+            let error =
+                Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
+            assert!(error.names(key), "{key}={value}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_window_of_one_day_is_a_legitimate_operator_choice() {
+        let mut environment = serveable();
+        environment.insert("PROTOCOL_MIN".to_owned(), "2026-05-31".to_owned());
+        environment.insert("PROTOCOL_MAX".to_owned(), "2026-05-31".to_owned());
+        let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
         assert_eq!(config.protocol_min, config.protocol_max);
+    }
+
+    #[test]
+    fn the_client_build_cutoff_is_semver_or_refused() {
+        let mut environment = serveable();
+        environment.insert("MIN_CLIENT_BUILD".to_owned(), "1.4.0".to_owned());
+        let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+        assert_eq!(config.min_client_build, "1.4.0");
+
+        for bad in ["1.4", "v1.4.0", "1.4.0-beta", "one.two.three", ""] {
+            let mut environment = serveable();
+            environment.insert("MIN_CLIENT_BUILD".to_owned(), bad.to_owned());
+            match Config::load(&environment, &memory(), Demands::Serve) {
+                // Empty is unset, which is the default and loads.
+                Ok(config) if bad.is_empty() => assert_eq!(config.min_client_build, "0.0.0"),
+                Ok(_) => panic!("MIN_CLIENT_BUILD={bad} loaded"),
+                Err(error) => assert!(error.names("MIN_CLIENT_BUILD"), "{bad}: {error}"),
+            }
+        }
     }
 
     #[test]
@@ -1072,6 +1311,116 @@ mod tests {
         };
         let config = Config::load(&environment, &overrides, Demands::Serve).expect("it loads");
         assert_eq!(config.grace_window, jiff::SignedDuration::from_hours(1));
+    }
+
+    #[test]
+    fn oidc_is_off_unless_an_issuer_is_named() {
+        let config = Config::load(&serveable(), &memory(), Demands::Serve).expect("it loads");
+        assert!(config.oidc.is_none());
+    }
+
+    #[test]
+    fn an_oidc_relying_party_is_read_whole() {
+        let mut environment = serveable();
+        environment.insert(
+            "OIDC_ISSUER".to_owned(),
+            "https://idp.example.test/realm".to_owned(),
+        );
+        environment.insert("OIDC_CLIENT_ID".to_owned(), "capsule".to_owned());
+        environment.insert("OIDC_CLIENT_SECRET".to_owned(), "hunter2".to_owned());
+        environment.insert(
+            "OIDC_REDIRECT_URL".to_owned(),
+            "https://app.example.test/oidc/callback".to_owned(),
+        );
+        environment.insert(
+            "OIDC_ALLOW_LOOPBACK_REDIRECT".to_owned(),
+            "false".to_owned(),
+        );
+        let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+        let oidc = config.oidc.clone().expect("configured");
+        assert_eq!(oidc.issuer, "https://idp.example.test/realm");
+        assert_eq!(oidc.client_id, "capsule");
+        assert!(oidc.client_secret.is_some());
+        assert!(
+            oidc.redirects
+                .admits("https://app.example.test/oidc/callback")
+        );
+        assert!(!oidc.redirects.admits("http://127.0.0.1:4242/cb"));
+        assert!(
+            !format!("{config:?}").contains("hunter2"),
+            "the client secret is redacted"
+        );
+    }
+
+    #[test]
+    fn loopback_redirects_are_admitted_by_default_and_a_secret_is_optional() {
+        // RFC 8252 §8.5: a native client cannot keep a secret; PKCE is what makes it sound.
+        let mut environment = serveable();
+        environment.insert(
+            "OIDC_ISSUER".to_owned(),
+            "https://idp.example.test".to_owned(),
+        );
+        environment.insert("OIDC_CLIENT_ID".to_owned(), "capsule".to_owned());
+        let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+        let oidc = config.oidc.expect("configured");
+        assert!(oidc.client_secret.is_none());
+        assert!(oidc.redirects.admits("http://127.0.0.1:4242/cb"));
+    }
+
+    #[test]
+    fn half_a_relying_party_is_refused_both_ways_round() {
+        let mut environment = serveable();
+        environment.insert(
+            "OIDC_ISSUER".to_owned(),
+            "https://idp.example.test".to_owned(),
+        );
+        let error = Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
+        assert!(error.names("OIDC_CLIENT_ID"), "{error}");
+
+        let mut environment = serveable();
+        environment.insert("OIDC_CLIENT_ID".to_owned(), "capsule".to_owned());
+        let error = Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
+        assert!(error.names("OIDC_ISSUER"), "{error}");
+    }
+
+    #[test]
+    fn an_issuer_is_https_or_loopback_http_with_no_query() {
+        for (issuer, ok) in [
+            ("https://idp.example.test", true),
+            ("http://127.0.0.1:5556/dex", true),
+            ("http://idp.example.test", false),
+            ("https://idp.example.test/?x=1", false),
+            ("https://idp.example.test/#frag", false),
+            ("idp.example.test", false),
+            ("ftp://idp.example.test", false),
+        ] {
+            let mut environment = serveable();
+            environment.insert("OIDC_ISSUER".to_owned(), issuer.to_owned());
+            environment.insert("OIDC_CLIENT_ID".to_owned(), "capsule".to_owned());
+            let result = Config::load(&environment, &memory(), Demands::Serve);
+            assert_eq!(result.is_ok(), ok, "{issuer}: {result:?}");
+            if let Err(error) = result {
+                assert!(error.names("OIDC_ISSUER"), "{error}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_malformed_redirect_url_or_loopback_flag_is_refused_by_name() {
+        let mut environment = serveable();
+        environment.insert(
+            "OIDC_ISSUER".to_owned(),
+            "https://idp.example.test".to_owned(),
+        );
+        environment.insert("OIDC_CLIENT_ID".to_owned(), "capsule".to_owned());
+        environment.insert("OIDC_REDIRECT_URL".to_owned(), "not a url".to_owned());
+        environment.insert(
+            "OIDC_ALLOW_LOOPBACK_REDIRECT".to_owned(),
+            "maybe".to_owned(),
+        );
+        let error = Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
+        assert!(error.names("OIDC_REDIRECT_URL"), "{error}");
+        assert!(error.names("OIDC_ALLOW_LOOPBACK_REDIRECT"), "{error}");
     }
 
     #[test]

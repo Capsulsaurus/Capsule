@@ -349,8 +349,8 @@ row's remainder now lives.
 | S-I6 | Android ships raw ICU to users; the guard never fires | i18n | — | M | ACTIVE | done | `aapt2` unverified — owed-CI |
 | S-I7 | The Rust runtime formatter cannot do ICU plurals | i18n | — | M | ACTIVE | done\* | refuses now; evaluating plurals still owed |
 | S-I8 | clap `--help` text is unreachable from the catalogs | i18n | — | S | ACTIVE | ready | found widening `i18n-guard` |
-| S-N1 | OIDC relying party (server) | auth | — | L | RETIRED | ready | |
-| S-N2 | SDK/CLI OIDC login flows | auth | S-N1 | M | MIXED | blocked | |
+| S-N1 | OIDC relying party (server) | auth | — | L | RETIRED | done\* | in-process mock IdP stands in for the testcontainer one; durable adapters owed (#460) |
+| S-N2 | SDK/CLI OIDC login flows | auth | S-N1 | M | MIXED | part | SDK half landed with `S-N1`; CLI loopback listener + device grant are #461 |
 | S-N3 | `device_id` on session listing + ceremony cohorts | auth | — | S | RETIRED | done | the wire half lands with `S-C13`; the TOTP ceremony with `S-C55`; passkeys retire on `S-C56` |
 | S-P1 | `capsule_sdk` FFI workspace verbs | iOS path | S-A10 | L | MIXED | done | feed `manifest_cbor` shape → `S-C30` |
 | S-P2 | Swift auth service + Keychain + login screen | iOS path | S-P1 | L | MIXED | ready | |
@@ -4887,6 +4887,22 @@ lands on Kynos rather than on Salvo.
   green. **Tier:** Unit + Smoke. **Blocks:** S-N2.
 - **Rebuild note:** unstarted, so there is nothing to re-scope — write it against Kynos
   directly rather than adding routes to a server that is being replaced.
+- **Landed (issue #407):** `capsule-server::auth::oidc` — a pure ID-token validator
+  (`claims`), discovery with the issuer mix-up defence, a JWKS cache refetched on an
+  unknown `kid` and floored at one fetch a minute, the `IdentityProvider` port with its
+  HTTP adapter and a `Disabled` null object, `FederatedAccounts` keyed on
+  `(issuer, subject)` with no linking by address, and a typed `OidcAuthorizationStore`
+  ceremony port (single-use `state`, ten-minute TTL). `POST /v1/auth/oidc/authorize` and
+  `POST /v1/auth/oidc/callback` mount inside the protocol gate and mint sessions through
+  the password path's `open_session_for`, second factor included; `server-info` publishes
+  `auth.oidc` or `null`. **Two deviations, recorded:** the testcontainer IdP is an
+  in-process mock provider on loopback, because `test-rust` runs offline (dex in
+  `capsule-server/compose.yaml`, `--profile oidc`, is the manual run); and the Valkey
+  ceremony-store and Postgres federated-account adapters are owed (#460), so
+  `OIDC_ISSUER` under the durable backends is refused by name and the development
+  profile's federated accounts hold their own rows. Hand-written over `jsonwebtoken`
+  rather than `openidconnect` — see the OIDC row in
+  [Dependencies](capsule-docs/src/content/docs/design/dependencies.md).
 
 ### S-N2 — SDK/CLI OIDC login flows
 
@@ -4898,6 +4914,12 @@ lands on Kynos rather than on Salvo.
   `cohort_hash` rides the ceremony. **Depends on:** S-N1 (**live block**).
 - **Done when:** `capsule auth login --oidc` round-trips against the dev IdP;
   mocked-HTTP tests per flow. **Tier:** Unit + Smoke.
+- **Part landed (issue #407):** `capsule_sdk::auth::AuthClient::begin_oidc_login` /
+  `complete_oidc_login` — the two server legs, answering the same `LoginOutcome` a
+  password login does, with the cohort riding the completing request and the
+  `error.auth.oidc_*` refusals typed on `AuthError`. **Remainder (#461):** the CLI's
+  loopback listener and `--oidc` arm, the browser-open policy the docs do not carry, and
+  the device authorization grant (RFC 8628) with its own ceremony store.
 
 ### S-N3 — `device_id` on session listing + ceremony cohorts
 

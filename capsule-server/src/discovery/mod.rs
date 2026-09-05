@@ -80,16 +80,44 @@ pub struct AuthEndpoints {
     pub refresh: String,
     /// Where a session is ended.
     pub logout: String,
+    /// Where a sign-in through an external identity provider begins and ends (slice `S-N1`),
+    /// or `None` when this deployment has no provider.
+    ///
+    /// Endpoints only — never the issuer, never the client id, never anything user-scoped. The
+    /// presence of the record is how a login chooser decides whether to offer the path at all.
+    pub oidc: Option<OidcEndpoints>,
 }
 
 impl AuthEndpoints {
-    /// The ceremony's three URLs, under `api_base_url`.
+    /// The ceremony's three URLs, under `api_base_url`; no OIDC until
+    /// [`ServerInfo::with_oidc`] says so.
     fn under(api_base_url: &str) -> Self {
         let base = api_base_url.trim_end_matches('/');
         Self {
             login: format!("{base}/auth/login"),
             refresh: format!("{base}/auth/refresh"),
             logout: format!("{base}/auth/logout"),
+            oidc: None,
+        }
+    }
+}
+
+/// Where the OIDC ceremony's two legs are performed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OidcEndpoints {
+    /// Where a client asks for an authorization URL.
+    pub authorize: String,
+    /// Where a client presents the `state` and `code` the provider's redirect carried.
+    pub callback: String,
+}
+
+impl OidcEndpoints {
+    /// The two URLs, under `api_base_url`.
+    fn under(api_base_url: &str) -> Self {
+        let base = api_base_url.trim_end_matches('/');
+        Self {
+            authorize: format!("{base}/auth/oidc/authorize"),
+            callback: format!("{base}/auth/oidc/callback"),
         }
     }
 }
@@ -197,6 +225,19 @@ impl ServerInfo {
     #[must_use]
     pub fn with_federation(mut self, url: impl Into<String>) -> Self {
         self.federation_url = Some(url.into());
+        self
+    }
+
+    /// Declare that this deployment signs people in through an identity provider, and publish
+    /// where (slice `S-N1`).
+    ///
+    /// Absent by default, for the reason [`Self::with_federation`] is: publishing endpoints a
+    /// deployment does not serve sends clients to a `404`, and "there is no identity provider" is
+    /// the ordinary self-hosted case. Only the endpoints are published; which provider, and
+    /// under which client id, is the server's business alone.
+    #[must_use]
+    pub fn with_oidc(mut self) -> Self {
+        self.auth.oidc = Some(OidcEndpoints::under(&self.api_base_url));
         self
     }
 

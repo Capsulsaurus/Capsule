@@ -161,6 +161,8 @@ async fn every_declared_response_is_exercised() {
         ("GET", "/v1/drops"),
         ("POST", "/v1/drops/anything/adopt"),
         ("DELETE", "/v1/drops/anything"),
+        ("POST", "/v1/auth/oidc/authorize"),
+        ("POST", "/v1/auth/oidc/callback"),
     ] {
         let request = match method {
             "GET" => client.get(path),
@@ -170,12 +172,68 @@ async fn every_declared_response_is_exercised() {
             "DELETE" => client.delete(path),
             _ => client.post(path),
         };
-        request
+        let refused = request
             .header("content-length", &oversized().to_string())
             .body("application/json", "{}")
             .send()
+            .await;
+        refused.assert_status(StatusCode::PAYLOAD_TOO_LARGE);
+        // The body-size limit sits inside the advertising interceptor, so even the refusal
+        // that reads no byte of the request leaves with the window on it.
+        for name in [
+            "x-capsule-protocol-min",
+            "x-capsule-protocol-max",
+            "x-capsule-min-client-build",
+        ] {
+            assert!(
+                refused.header(name).is_some(),
+                "{method} {path}: a 413 left without {name}"
+            );
+        }
+    }
+
+    // 400 is declared on every gated operation and 426 on every gated write, because the two
+    // protocol gates are mounted on the groups that hold them and a Kynos interceptor's
+    // declaration is its type. So every gated operation produces what its gate answers here,
+    // before anything else is read: a write an ancient protocol date, and every operation one
+    // that is not a date at all.
+    let document = capsule_server::openapi().expect("router describes itself");
+    let document = serde_json::to_value(&document).expect("a document serializes");
+    for (method, template, operation) in operations(&document) {
+        if declares_header(&operation, "X-Capsule-Protocol").is_none() {
+            continue;
+        }
+        let verb = kynos::http::Method::from_bytes(method.as_bytes()).expect("a method");
+        if !is_read(&method) {
+            client
+                .method(verb.clone(), &concrete(&template))
+                .header("x-capsule-protocol", "2000-01-01")
+                .send()
+                .await
+                .assert_status(StatusCode::UPGRADE_REQUIRED);
+        }
+        client
+            .method(verb, &concrete(&template))
+            .header("x-capsule-protocol", "yesterday")
+            .send()
             .await
-            .assert_status(StatusCode::PAYLOAD_TOO_LARGE);
+            .assert_status(StatusCode::BAD_REQUEST);
+    }
+
+    // A valid handshake and no credential: the bearer scheme's 401, carrying the window like
+    // every other refusal — the gate admitted the request and authentication refused it, in
+    // that order.
+    let unauthenticated = client.get("/v1/quota").send().await;
+    unauthenticated.assert_status(StatusCode::UNAUTHORIZED);
+    for name in [
+        "x-capsule-protocol-min",
+        "x-capsule-protocol-max",
+        "x-capsule-min-client-build",
+    ] {
+        assert!(
+            unauthenticated.header(name).is_some(),
+            "a 401 left without {name}"
+        );
     }
 
     // ── POST /v1/auth/register ─────────────────────────────────────────────────────────────
@@ -417,8 +475,9 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::OK);
 
-    // POST 400 / 415 / 422 / 426 / 401 / 403 / 500.
+    // POST 400 / 415 / 422 / 426 / 401 / 403 / 500. The 400 is the gate's: no handshake at all.
     client
+        .raw()
         .post("/v1/upload")
         .header("authorization", &bearer)
         .json(&create_request(&fixture.clock, &whole, "original"))
@@ -470,7 +529,7 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::FORBIDDEN);
 
-    // HEAD 200 / 400 / 401 / 403 / 404 / 426.
+    // HEAD 200 / 400 / 401 / 403 / 404.
     client
         .head(&session)
         .header("authorization", &bearer)
@@ -479,6 +538,7 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::OK);
     client
+        .raw()
         .head(&session)
         .header("authorization", &bearer)
         .send()
@@ -507,13 +567,15 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::NOT_FOUND);
+    // A read is admitted at any protocol date (threat-model/validation.md): the client pinned
+    // to a version this server no longer accepts for writes can still ask where it got to.
     client
         .head(&session)
         .header("authorization", &bearer)
         .header("x-capsule-protocol", "2020-01-01")
         .send()
         .await
-        .assert_status(StatusCode::UPGRADE_REQUIRED);
+        .assert_status(StatusCode::OK);
 
     // PATCH 400 / 401 / 403 / 404 / 409 / 415 / 426.
     client
@@ -612,6 +674,7 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::UPGRADE_REQUIRED);
     client
+        .raw()
         .delete(&session)
         .header("authorization", &bearer)
         .send()
@@ -2288,6 +2351,9 @@ async fn every_declared_response_is_exercised() {
     // ── The second factor (`S-C55`) ────────────────────────────────────────────────────────
     totp_block(client, &fixture).await;
 
+    // ── Signing in through an identity provider (`S-N1`) ───────────────────────────────────
+    oidc_block(client, &fixture).await;
+
     // ── The resumption listing (`S-C57`) and the durable custody chain (`S-C58`) ───────────
     // Both are plain authenticated reads over stores this walk has already filled, so they sit
     // here rather than in a block of their own.
@@ -2496,6 +2562,387 @@ async fn every_declared_response_is_exercised() {
     client.assert_declared_responses_covered();
 }
 
+// ===========================================================================================
+// The protocol handshake census (issue #404)
+// ===========================================================================================
+
+/// The three response headers the design puts on **every** response.
+const WINDOW_HEADERS: [&str; 3] = [
+    "X-Capsule-Protocol-Min",
+    "X-Capsule-Protocol-Max",
+    "X-Capsule-Min-Client-Build",
+];
+
+/// The three request headers the gate reads.
+const HANDSHAKE_HEADERS: [&str; 3] = [
+    "X-Capsule-Protocol",
+    "X-Capsule-Crypto-Suite",
+    "X-Capsule-Sidecar-Schema",
+];
+
+/// The operations the design exempts from the gate; every other operation is gated.
+///
+/// **Pinned on purpose.** The gate is a Kynos `Group` in `lib.rs::router`, so an operation
+/// leaves it by a mount call moving — and a mount call moving must fail this test, because a
+/// route outside the group silently drops a fail-closed rule. Asserted **never** to declare the
+/// handshake: `/v1/version` is the reachability probe a
+/// client hits before it knows the window; the `/.well-known/capsule/*` records are public
+/// discovery; the `/s/{opaque_id}*` reads must answer an indistinguishable `404`
+/// (share-links.md), which a `426` would turn into a probing oracle; the `/d/{opaque_id}*`
+/// guest deposits have their protocol pinned at link issuance (web-upload.md).
+const EXEMPT: &[(&str, &str)] = &[
+    ("GET", "/v1/version"),
+    ("GET", "/.well-known/capsule/attestation-keys"),
+    ("GET", "/.well-known/capsule/server-info"),
+    ("GET", "/.well-known/capsule/deprecation"),
+    ("GET", "/.well-known/capsule/revoked-jti"),
+    ("GET", "/s/{opaque_id}"),
+    ("GET", "/s/{opaque_id}/wrapped-secret"),
+    ("GET", "/s/{opaque_id}/blob/{hash}"),
+    ("POST", "/d/{opaque_id}"),
+    ("PATCH", "/d/{opaque_id}/{upload_id}"),
+];
+
+/// The HTTP methods a path item may carry, as the document spells them.
+const METHODS: [&str; 9] = [
+    "get", "put", "post", "delete", "options", "head", "patch", "trace", "query",
+];
+
+/// Every `(METHOD, template, operation)` in the emitted document.
+fn operations(document: &serde_json::Value) -> Vec<(String, String, serde_json::Value)> {
+    let mut found = Vec::new();
+    for (path, item) in document["paths"].as_object().expect("paths") {
+        for (method, operation) in item.as_object().expect("a path item") {
+            if METHODS.contains(&method.as_str()) {
+                found.push((method.to_uppercase(), path.clone(), operation.clone()));
+            }
+        }
+    }
+    assert!(!found.is_empty(), "the document describes no operation");
+    found
+}
+
+/// A template with every `{variable}` replaced by a placeholder, so it can be requested.
+fn concrete(template: &str) -> String {
+    let mut path = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        path.push_str(&rest[..open]);
+        path.push_str("anything");
+        let close = rest[open..].find('}').expect("a balanced template") + open;
+        rest = &rest[close + 1..];
+    }
+    path.push_str(rest);
+    path
+}
+
+/// Whether `operation` declares a header parameter called `name`.
+fn declares_header(operation: &serde_json::Value, name: &str) -> Option<serde_json::Value> {
+    operation["parameters"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|parameter| {
+            parameter["in"] == "header"
+                && parameter["name"]
+                    .as_str()
+                    .is_some_and(|declared| declared.eq_ignore_ascii_case(name))
+        })
+        .cloned()
+}
+
+/// Every response of every operation declares the three window headers, required.
+///
+/// Over the emitted document rather than per route, because the property is the router's: the
+/// advertising interceptor is mounted once, and Kynos describes an interceptor's headers on
+/// success responses only, so the walk in `capsule_server::openapi` is what puts them on the
+/// `426` a client needs them on most. This is the test that fails if either half goes missing.
+#[test]
+fn every_response_of_every_operation_declares_the_protocol_window() {
+    let document = capsule_server::openapi().expect("router describes itself");
+    let json = serde_json::to_value(&document).expect("a document serializes");
+
+    let mut responses = 0_usize;
+    for (method, path, operation) in operations(&json) {
+        for (status, response) in operation["responses"].as_object().expect("responses") {
+            for name in WINDOW_HEADERS {
+                let header = &response["headers"][name];
+                assert!(
+                    header.is_object(),
+                    "{method} {path} -> {status} does not declare {name}"
+                );
+                assert_eq!(
+                    header["required"], true,
+                    "{method} {path} -> {status} declares {name} as optional"
+                );
+            }
+            responses += 1;
+        }
+    }
+    assert!(responses > 100, "only {responses} responses were walked");
+}
+
+/// Whether `method` is one the design holds to the handshake's grammar only.
+///
+/// "Reads of any past version succeed" (threat-model/validation.md, Fail-Closed Rules): a
+/// `GET` or `HEAD` with a grammatical `X-Capsule-Protocol` outside the window is admitted, and
+/// only a write is refused with `426`.
+fn is_read(method: &str) -> bool {
+    method == "GET" || method == "HEAD"
+}
+
+/// Whether `(method, template)` is one the design exempts from the gate.
+fn is_exempt(method: &str, template: &str) -> bool {
+    EXEMPT
+        .iter()
+        .any(|(exempt_method, exempt_path)| *exempt_method == method && *exempt_path == template)
+}
+
+/// The operations declaring the handshake are exactly the ones outside [`EXEMPT`].
+#[test]
+fn the_handshake_is_declared_on_every_operation_but_the_exempt_ten() {
+    let document = capsule_server::openapi().expect("router describes itself");
+    let json = serde_json::to_value(&document).expect("a document serializes");
+
+    let mut gated: Vec<(String, String)> = Vec::new();
+    for (method, path, operation) in operations(&json) {
+        let declared: Vec<&str> = HANDSHAKE_HEADERS
+            .into_iter()
+            .filter(|name| declares_header(&operation, name).is_some())
+            .collect();
+        if declared.is_empty() {
+            continue;
+        }
+        assert_eq!(
+            declared, HANDSHAKE_HEADERS,
+            "{method} {path} declares part of the handshake, which no interceptor does"
+        );
+        let protocol = declares_header(&operation, "X-Capsule-Protocol").expect("declared");
+        assert_eq!(
+            protocol["required"], true,
+            "{method} {path} declares X-Capsule-Protocol as optional and refuses without it"
+        );
+        assert!(
+            operation["responses"]["400"].is_object(),
+            "{method} {path} is gated and does not declare the gate's 400"
+        );
+        if is_read(&method) {
+            assert!(
+                !operation["responses"]["426"].is_object(),
+                "{method} {path} is a read, admitted at any protocol date, and declares a 426 \
+                 it never renders"
+            );
+        } else {
+            assert!(
+                operation["responses"]["426"].is_object(),
+                "{method} {path} is a write and does not declare the gate's 426"
+            );
+        }
+        gated.push((method, path));
+    }
+    gated.sort();
+
+    let all: Vec<(String, String)> = operations(&json)
+        .into_iter()
+        .map(|(method, path, _)| (method, path))
+        .collect();
+    let mut expected: Vec<(String, String)> = all
+        .iter()
+        .filter(|(method, path)| !is_exempt(method, path))
+        .cloned()
+        .collect();
+    expected.sort();
+    assert_eq!(
+        gated, expected,
+        "the gated set is not \"everything but EXEMPT\"; `lib.rs::router` and this pin change \
+         together"
+    );
+    assert_eq!(EXEMPT.len(), 10, "the design names ten exemptions");
+
+    for (method, path) in EXEMPT {
+        assert!(
+            all.contains(&((*method).to_owned(), (*path).to_owned())),
+            "{method} {path} is named exempt and is not in the document"
+        );
+        assert!(
+            !gated.contains(&((*method).to_owned(), (*path).to_owned())),
+            "{method} {path} is exempt by design and is gated"
+        );
+    }
+}
+
+/// On the wire: every operation answers with the window, and the gated ones refuse on it.
+///
+/// Driven by the document rather than a list, so an operation added tomorrow is walked
+/// tomorrow. Path variables are filled with a placeholder; the gate runs before the path,
+/// the credential or the body is looked at, so a `426` needs none of them to be right — and
+/// an exempt operation answering anything *but* `426` to an ancient protocol is the exemption
+/// observed rather than assumed.
+#[tokio::test]
+async fn the_protocol_window_rides_every_response_on_the_wire() {
+    use capsule_server::upload::policy::{
+        DEFAULT_MIN_CLIENT_BUILD, DEFAULT_PROTOCOL_MAX, DEFAULT_PROTOCOL_MIN,
+    };
+
+    let fixture = Fixture::working();
+    let document = capsule_server::openapi().expect("router describes itself");
+    let json = serde_json::to_value(&document).expect("a document serializes");
+
+    let mut walked = 0_usize;
+    for (method, template, operation) in operations(&json) {
+        let path = concrete(&template);
+        let gated = declares_header(&operation, "X-Capsule-Protocol").is_some();
+        let verb = kynos::http::Method::from_bytes(method.as_bytes()).expect("a method");
+
+        // Ancient, and therefore outside any window this server will ever accept.
+        let ancient = fixture
+            .client
+            .method(verb.clone(), &path)
+            .header("x-capsule-protocol", "2000-01-01")
+            .send()
+            .await;
+        for (name, expected) in [
+            ("x-capsule-protocol-min", DEFAULT_PROTOCOL_MIN),
+            ("x-capsule-protocol-max", DEFAULT_PROTOCOL_MAX),
+            ("x-capsule-min-client-build", DEFAULT_MIN_CLIENT_BUILD),
+        ] {
+            assert_eq!(
+                ancient.header(name),
+                Some(expected),
+                "{method} {template} answered {} without {name}",
+                ancient.status()
+            );
+        }
+
+        if !gated || is_read(&method) {
+            // Not gated, or a read: an ancient protocol date is never a 426 here. What the
+            // operation answers instead is its own business (a 401 with no credential, most
+            // often), and it carries the window either way.
+            assert_ne!(
+                ancient.status(),
+                StatusCode::UPGRADE_REQUIRED,
+                "{method} {template} refused a read on the protocol; reads of any version succeed"
+            );
+        } else {
+            ancient.assert_status(StatusCode::UPGRADE_REQUIRED);
+            let body: serde_json::Value = ancient.json();
+            assert_eq!(
+                body["code"], "error.protocol.version_unsupported",
+                "{method} {template}: {body}"
+            );
+        }
+        if !gated {
+            walked += 1;
+            continue;
+        }
+
+        // Each malformed spelling is the gate's coded 400, and each leaves with the window.
+        for (name, value) in [
+            ("x-capsule-protocol", "yesterday"),
+            ("x-capsule-crypto-suite", "9999"),
+            ("x-capsule-crypto-suite", "one"),
+            ("x-capsule-sidecar-schema", "9"),
+        ] {
+            let refused = fixture
+                .client
+                .method(verb.clone(), &path)
+                .header(name, value)
+                .send()
+                .await;
+            refused.assert_status(StatusCode::BAD_REQUEST);
+            refused.assert_header("x-capsule-protocol-min", DEFAULT_PROTOCOL_MIN);
+            if method != "HEAD" {
+                let body: serde_json::Value = refused.json();
+                assert_eq!(
+                    body["code"], "error.request.malformed",
+                    "{method} {template} with {name}: {value}: {body}"
+                );
+            }
+        }
+        fixture
+            .client
+            .raw()
+            .method(verb, &path)
+            .send()
+            .await
+            .assert_status(StatusCode::BAD_REQUEST);
+        walked += 1;
+    }
+    assert_eq!(walked, operations(&json).len());
+}
+
+/// One gated route per module, held to the handshake before anything else is read (issue #404).
+///
+/// The wire census above walks every operation; this is the same fact at reading size, in the
+/// shape `api-surfaces.md` asks for — "drive every fail-closed handshake rule through
+/// representative routes in each module and assert the same headers, status, and `error.*`
+/// code". No credential, no body, no real path variable: the gate answers first. A write with an
+/// ancient protocol date is `426`; a read with the same date is admitted and answers whatever it
+/// answers — a `401` here, since nothing is signed in — with the window on it; every gated
+/// operation without the header is the gate's `400`.
+#[tokio::test]
+async fn a_representative_route_per_module_holds_the_handshake_before_anything_else() {
+    use capsule_server::upload::policy::{DEFAULT_PROTOCOL_MAX, DEFAULT_PROTOCOL_MIN};
+
+    let fixture = Fixture::working();
+    for (method, path) in [
+        ("POST", "/v1/auth/login"),
+        ("GET", "/v1/auth/profile"),
+        ("POST", "/v1/auth/totp/enroll"),
+        ("GET", "/v1/auth/devices"),
+        ("POST", "/v1/auth/devices/directory"),
+        ("PUT", "/v1/auth/escrow"),
+        ("POST", "/v1/auth/devices/enroll"),
+        ("POST", "/v1/albums"),
+        ("POST", "/v1/albums/anything/upgrade"),
+        ("GET", "/v1/quota"),
+        ("GET", "/v1/moderation/record"),
+        ("POST", "/v1/upload"),
+        ("GET", "/v1/upload/sessions"),
+        ("GET", "/v1/upload/anything/receipt"),
+        ("POST", "/v1/albums/anything/ops"),
+        ("GET", "/v1/sync"),
+        ("GET", "/v1/blob/deadbeef"),
+        ("POST", "/v1/storage/verify"),
+        ("GET", "/v1/assets/anything/receipts"),
+        ("POST", "/v1/shares"),
+        ("POST", "/v1/drops/links"),
+    ] {
+        let verb = kynos::http::Method::from_bytes(method.as_bytes()).expect("a method");
+
+        // Outside the window.
+        let ancient = fixture
+            .client
+            .method(verb.clone(), path)
+            .header("x-capsule-protocol", "2000-01-01")
+            .send()
+            .await;
+        ancient.assert_header("x-capsule-protocol-min", DEFAULT_PROTOCOL_MIN);
+        ancient.assert_header("x-capsule-protocol-max", DEFAULT_PROTOCOL_MAX);
+        ancient.assert_header("x-capsule-min-client-build", "0.0.0");
+        if is_read(method) {
+            ancient.assert_status(StatusCode::UNAUTHORIZED);
+        } else {
+            ancient.assert_status(StatusCode::UPGRADE_REQUIRED);
+            let body: serde_json::Value = ancient.json();
+            assert_eq!(
+                body["code"], "error.protocol.version_unsupported",
+                "{method} {path}: {body}"
+            );
+        }
+
+        // Absent: the gate's 400, still carrying the window.
+        let missing = fixture.client.raw().method(verb, path).send().await;
+        missing.assert_status(StatusCode::BAD_REQUEST);
+        missing.assert_header("x-capsule-protocol-min", DEFAULT_PROTOCOL_MIN);
+        let body: serde_json::Value = missing.json();
+        assert_eq!(
+            body["code"], "error.request.malformed",
+            "{method} {path}: {body}"
+        );
+    }
+}
+
 /// The router builds and describes itself.
 ///
 /// `openapi()` is the only path from this code to a description — there is no document to
@@ -2587,7 +3034,7 @@ fn the_document_declares_openapi_32() {
 /// On an account of its own, for the reason [`profile_block`] uses one: switching a second
 /// factor on for the fixture's shared account would make every later `POST /v1/auth/login` in the
 /// walk answer `202`.
-async fn totp_block(client: &kynos::test::TestClient<capsule_server::App>, fixture: &Fixture) {
+async fn totp_block(client: &support::Client, fixture: &Fixture) {
     const OWN_EMAIL: &str = "totp-walk@example.test";
     const OWN_PASSWORD: &str = "correct horse battery staple";
 
@@ -2865,7 +3312,7 @@ async fn totp_block(client: &kynos::test::TestClient<capsule_server::App>, fixtu
 /// password change on this surface closes every other session of the account it acts on, so
 /// running it against the shared account would sign the rest of the walk out — and the walk
 /// would then be testing the bearer scheme instead of the operations it had reached.
-async fn profile_block(client: &kynos::test::TestClient<capsule_server::App>, fixture: &Fixture) {
+async fn profile_block(client: &support::Client, fixture: &Fixture) {
     const OWN_EMAIL: &str = "profile-walk@example.test";
     const OWN_PASSWORD: &str = "correct horse battery staple";
     const OWN_NEW_PASSWORD: &str = "a different correct horse";
@@ -3110,7 +3557,7 @@ async fn profile_block(client: &kynos::test::TestClient<capsule_server::App>, fi
 /// Extracted so [`every_declared_response_is_exercised`] does not build one generator larger
 /// than a thread stack. Same client, so the recorder still sees these.
 async fn drops_block(
-    client: &kynos::test::TestClient<capsule_server::App>,
+    client: &support::Client,
     fixture: &Fixture,
     bearer: &str,
     refresh_token: &str,
@@ -3570,7 +4017,7 @@ async fn drops_block(
 /// Its own function so the walk's generator stays inside the test thread's stack; see the drops
 /// block for the same note.
 async fn upgrade_block(
-    client: &kynos::test::TestClient<capsule_server::app::App>,
+    client: &support::Client,
     fixture: &Fixture,
     bearer: &str,
     refresh_token: &str,
@@ -3772,4 +4219,171 @@ async fn upgrade_block(
         .send()
         .await
         .assert_status(StatusCode::BAD_REQUEST);
+}
+
+/// Every declared response of `POST /v1/auth/oidc/authorize` and `POST /v1/auth/oidc/callback`
+/// (`S-N1`), driven through the fixture's provider double.
+///
+/// The 400 and 426 are the gate's and are produced by the document walk above; the 413 by the
+/// body-size loop. Everything else is this block's: the extractor's 415/422, the ceremony's own
+/// answers, and the two collaborators broken for one request each and repaired.
+async fn oidc_block(client: &support::Client, fixture: &Fixture) {
+    const REDIRECT: &str = "http://127.0.0.1:4242/callback";
+
+    // 415 and 422 are the `Json` extractor's, on both operations.
+    for path in ["/v1/auth/oidc/authorize", "/v1/auth/oidc/callback"] {
+        client
+            .post(path)
+            .body("text/plain", "{}")
+            .send()
+            .await
+            .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        client
+            .post(path)
+            .json(&json!({ "redirect_uri": 42, "state": 42, "code": 42 }))
+            .send()
+            .await
+            .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    // authorize: 200, then 404 (no provider), 500 (the provider), 500 (the ceremony store).
+    let begun: serde_json::Value = client
+        .post("/v1/auth/oidc/authorize")
+        .json(&json!({ "redirect_uri": REDIRECT }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    fixture.idp.set_configured(false);
+    client
+        .post("/v1/auth/oidc/authorize")
+        .json(&json!({ "redirect_uri": REDIRECT }))
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    fixture.idp.set_configured(true);
+    fixture.idp.set_unavailable(true);
+    client
+        .post("/v1/auth/oidc/authorize")
+        .json(&json!({ "redirect_uri": REDIRECT }))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.idp.set_unavailable(false);
+    fixture.oidc_authorizations.set_unavailable(true);
+    client
+        .post("/v1/auth/oidc/authorize")
+        .json(&json!({ "redirect_uri": REDIRECT }))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    client
+        .post("/v1/auth/oidc/callback")
+        .json(&json!({ "state": begun["state"], "code": support::GOOD_CODE }))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.oidc_authorizations.set_unavailable(false);
+
+    // callback: 401 (unknown state), 500 (the provider), 200, then 409 and 202.
+    client
+        .post("/v1/auth/oidc/callback")
+        .json(&json!({ "state": "never-issued", "code": support::GOOD_CODE }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    fixture.idp.set_unavailable(true);
+    client
+        .post("/v1/auth/oidc/callback")
+        .json(&json!({ "state": begun["state"], "code": support::GOOD_CODE }))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.idp.set_unavailable(false);
+
+    let begun: serde_json::Value = client
+        .post("/v1/auth/oidc/authorize")
+        .json(&json!({ "redirect_uri": REDIRECT }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    let signed: TokenResponse = client
+        .post("/v1/auth/oidc/callback")
+        .json(&json!({ "state": begun["state"], "code": support::GOOD_CODE }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+
+    // 409: a provider identity asserting the seeded password account's address. Never linked.
+    fixture
+        .idp
+        .set_identity(capsule_server::auth::oidc::VerifiedIdentity {
+            issuer: "https://idp.test".to_owned(),
+            subject: "impersonator".to_owned(),
+            email: Some(EMAIL.to_owned()),
+            email_verified: true,
+        });
+    let begun: serde_json::Value = client
+        .post("/v1/auth/oidc/authorize")
+        .json(&json!({ "redirect_uri": REDIRECT }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    client
+        .post("/v1/auth/oidc/callback")
+        .json(&json!({ "state": begun["state"], "code": support::GOOD_CODE }))
+        .send()
+        .await
+        .assert_status(StatusCode::CONFLICT);
+    fixture
+        .idp
+        .set_identity(capsule_server::auth::oidc::VerifiedIdentity {
+            issuer: "https://idp.test".to_owned(),
+            subject: "subject-1".to_owned(),
+            email: Some("federated@example.test".to_owned()),
+            email_verified: true,
+        });
+
+    // 202: enroll and confirm a factor on the federated account, then sign in again.
+    let user = fixture
+        .tokens
+        .verify(
+            &signed.access_token,
+            capsule_server::auth::TokenKind::Access,
+        )
+        .expect("the server's own signer reads it")
+        .user;
+    let bearer = format!("Bearer {}", signed.access_token);
+    client
+        .post("/v1/auth/totp/enroll")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    fixture.clock.advance(jiff::SignedDuration::from_secs(
+        i64::try_from(capsule_server::auth::totp::STEP_SECONDS).expect("in range"),
+    ));
+    client
+        .post("/v1/auth/totp/verify-enrollment")
+        .header("authorization", &bearer)
+        .json(&json!({ "totp_code": support::totp_code(fixture, &user) }))
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let begun: serde_json::Value = client
+        .post("/v1/auth/oidc/authorize")
+        .json(&json!({ "redirect_uri": REDIRECT }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    client
+        .post("/v1/auth/oidc/callback")
+        .json(&json!({ "state": begun["state"], "code": support::GOOD_CODE }))
+        .send()
+        .await
+        .assert_status(StatusCode::ACCEPTED);
 }

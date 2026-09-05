@@ -329,9 +329,11 @@ async fn the_handshake_gates_every_upload_request() {
     let (_, _, whole) = blob();
     let id = fixture.open_session(&whole, "original", &bearer).await;
 
-    // Missing: a coded 400, on every operation.
+    // Missing: a coded 400, on every operation — the gate's, not this surface's, which is why
+    // the code is the request-level one. `raw()` is the only way the fixture sends no handshake.
     let missing = fixture
         .client
+        .raw()
         .post("/v1/upload")
         .header("authorization", &bearer)
         .json(&create_request(&fixture.clock, &whole, "original"))
@@ -340,18 +342,21 @@ async fn the_handshake_gates_every_upload_request() {
     missing.assert_status(StatusCode::BAD_REQUEST);
     assert_eq!(
         code(&missing.json::<serde_json::Value>()),
-        "error.upload.malformed_request"
+        "error.request.malformed"
     );
 
     let head = fixture
         .client
+        .raw()
         .head(&format!("/v1/upload/{id}"))
         .header("authorization", &bearer)
         .send()
         .await;
     head.assert_status(StatusCode::BAD_REQUEST);
 
-    // Out of the window: `426`, carrying the window a client can act on.
+    // Out of the window: `426`, carrying the window a client can act on — **on the headers**,
+    // which is where `capsule-sdk/src/upload.rs` reads it (issue #404). The body carries the
+    // code and no second spelling of the window.
     let refused = fixture
         .client
         .post("/v1/upload")
@@ -361,10 +366,38 @@ async fn the_handshake_gates_every_upload_request() {
         .send()
         .await;
     refused.assert_status(StatusCode::UPGRADE_REQUIRED);
+    refused.assert_header("x-capsule-protocol-min", "2026-01-01");
+    refused.assert_header("x-capsule-protocol-max", "2026-12-31");
+    refused.assert_header("x-capsule-min-client-build", "0.0.0");
     let body: serde_json::Value = refused.json();
     assert_eq!(code(&body), "error.protocol.version_unsupported");
-    assert_eq!(body["protocol_min"], "2026-01-01");
-    assert_eq!(body["protocol_max"], "2026-12-31");
+    assert!(
+        body.get("protocol_min").is_none() && body.get("protocol_max").is_none(),
+        "the window has one spelling, the headers: {body}"
+    );
+
+    // The gate runs before authentication: a client learns it must update without a token.
+    fixture
+        .client
+        .raw()
+        .post("/v1/upload")
+        .header("x-capsule-protocol", "2020-01-01")
+        .json(&create_request(&fixture.clock, &whole, "original"))
+        .send()
+        .await
+        .assert_status(StatusCode::UPGRADE_REQUIRED);
+
+    // And a read is admitted at any protocol date: the same client can still ask where its
+    // session got to, and learns the window from the headers rather than from a refusal.
+    let progress = fixture
+        .client
+        .head(&format!("/v1/upload/{id}"))
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", "2020-01-01")
+        .send()
+        .await;
+    progress.assert_status(StatusCode::OK);
+    progress.assert_header("x-capsule-protocol-min", "2026-01-01");
 }
 
 // ===========================================================================================

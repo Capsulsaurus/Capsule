@@ -31,15 +31,18 @@
 //!
 //! # Single-use is also a property, not a convention
 //!
-//! Two of these three ceremonies are one-shot. The generic store made that the caller's job:
+//! Three of these four ceremonies are one-shot. The generic store made that the caller's job:
 //! `get_temp_data` then `delete_temp_data`, two calls, and a route that forgot the second left
-//! a replayable credential. Here the read *is* the removal — [`ChallengeStore::consume`] and
-//! [`EnrollmentStore::redeem`] have no non-destructive counterpart, so a replay window cannot be
-//! left open by omission.
+//! a replayable credential. Here the read *is* the removal — [`ChallengeStore::consume`],
+//! [`EnrollmentStore::redeem`] and [`OidcAuthorizationStore::consume`] have no non-destructive
+//! counterpart, so a replay window cannot be left open by omission.
 
 use jiff::{SignedDuration, Timestamp};
 
-use super::{ChallengeToken, ChannelId, EnrollmentCode, StoreFuture, UserId};
+use super::{
+    ChallengeToken, ChannelId, EnrollmentCode, OidcNonce, OidcState, PkceVerifier, StoreFuture,
+    UserId,
+};
 
 // -------------------------------------------------------------------------------------------
 // Revoke-all challenge
@@ -270,6 +273,68 @@ pub trait ChannelStore: std::fmt::Debug + Send + Sync {
     /// The queues have no lifetime of their own — they are the channel's, the same way a
     /// session's index entry is the session's.
     fn close<'a>(&'a self, channel: &'a ChannelId) -> StoreFuture<'a, bool>;
+}
+
+// -------------------------------------------------------------------------------------------
+// OIDC authorization (slice `S-N1`)
+// -------------------------------------------------------------------------------------------
+
+/// What the server holds between the two legs of an OIDC authorization-code ceremony.
+///
+/// Keyed by the [`OidcState`] the client carries to the identity provider and back. Everything
+/// here exists to be checked **once**, at the callback: the nonce against the ID token, the
+/// verifier against the token endpoint, and the redirect URI byte-for-byte against the one the
+/// authorization request named (RFC 6749 §4.1.3 requires the two to be identical).
+///
+/// No `expires_at` field, for the reason [`RevokeAllChallenge`] has none: expiry is the store's,
+/// and the route publishes `issued_at + ttl()`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingAuthorization {
+    /// The nonce the authorization request carried; the ID token must echo it.
+    pub nonce: OidcNonce,
+    /// The PKCE verifier whose S256 challenge the authorization request carried.
+    pub verifier: PkceVerifier,
+    /// The redirect URI the authorization request named, replayed verbatim to the token
+    /// endpoint. Client-supplied and allow-listed by the route before it is stored here.
+    pub redirect_uri: String,
+    /// When the ceremony began. The route renders `issued_at + ttl()` as the published expiry.
+    pub issued_at: Timestamp,
+}
+
+/// How long a begun OIDC authorization waits for its callback.
+///
+/// Ten minutes: long enough for a person to sign in at an identity provider that asks for a
+/// second factor of its own, short enough that a state captured from a URL bar is not worth
+/// keeping. The same figure as [`ENROLLMENT_CODE_TTL`], which bounds the same kind of thing —
+/// a human completing a ceremony on another surface.
+pub const OIDC_AUTHORIZATION_TTL: SignedDuration = SignedDuration::from_mins(10);
+
+/// Pending OIDC authorizations, keyed by `state`.
+///
+/// A ceremony store and not a field on [`AuthStateStore`](super::AuthStateStore), which owns
+/// durable session records and the record-plus-index atomicity its conformance suite is built
+/// around. A pending authorization is a single-use, short-window ceremony credential — exactly
+/// the shape this module exists for.
+pub trait OidcAuthorizationStore: std::fmt::Debug + Send + Sync {
+    /// How long a begun authorization waits for its callback. A property of the ceremony.
+    fn ttl(&self) -> SignedDuration;
+
+    /// Record a freshly begun authorization under its `state`.
+    fn begin<'a>(
+        &'a self,
+        state: &'a OidcState,
+        record: PendingAuthorization,
+    ) -> StoreFuture<'a, ()>;
+
+    /// Burn `state` and return what it holds, or `None` if it is unknown, already consumed, or
+    /// expired.
+    ///
+    /// Destructive on **every** attempt, like [`ChallengeStore::consume`]: that is what makes a
+    /// replayed `state` — and therefore a replayed authorization code arriving on a stolen
+    /// redirect — unrepeatable, and it is why the nonce can never be checked twice. Two callbacks
+    /// racing the same `state` resolve here: one gets the record, the other gets `None`.
+    fn consume<'a>(&'a self, state: &'a OidcState)
+    -> StoreFuture<'a, Option<PendingAuthorization>>;
 }
 
 // -------------------------------------------------------------------------------------------

@@ -45,6 +45,10 @@ use crate::album::authority::ProvisionedAuthority;
 use crate::album::{AlbumContext, InMemoryAlbums};
 use crate::app::{App, Modules};
 use crate::attestation::{AttestationContext, InMemoryReceipts, LocalAttestationKey};
+use crate::auth::oidc::{
+    HttpIdentityProvider, IdentityProvider, InMemoryFederatedAccounts, OidcCollaborators,
+    OidcContext, OidcSettings,
+};
 use crate::auth::{
     AuthCollaborators, AuthContext, Credentials, InMemoryAccounts, InMemoryTotp, SessionTokens,
     TotpCodes, TotpContext,
@@ -69,7 +73,7 @@ use crate::share::{InMemoryShares, ShareContext};
 use crate::store::SystemClock;
 use crate::store::memory::{
     InMemoryAuthState, InMemoryChallenges, InMemoryChannels, InMemoryCohorts, InMemoryEnrollments,
-    InMemoryUploadSessions,
+    InMemoryOidcAuthorizations, InMemoryUploadSessions,
 };
 use crate::sync::{CursorCodec, SyncContext};
 use crate::upload::{UploadContext, UploadPolicy};
@@ -118,6 +122,12 @@ pub enum BootError {
     #[error("the credential verifier could not be built: {detail}")]
     Credentials {
         /// The algorithm's own description.
+        detail: String,
+    },
+    /// The relying party's outbound HTTP client could not be built.
+    #[error("the OIDC relying party's HTTP client could not be built: {detail}")]
+    OidcClient {
+        /// `reqwest`'s own description.
         detail: String,
     },
     /// A durable backend was selected and its adapter is not written yet.
@@ -209,7 +219,20 @@ pub async fn assemble(config: &Config) -> Result<Assembled, BootError> {
     let stores = stores(config).await?;
     match config.backends {
         Backends::Memory => memory(config, stores),
-        Backends::Durable => Err(durable()),
+        Backends::Durable => {
+            // Checked before anything else the durable arm does, so it survives the adapters
+            // filling that arm: the OIDC ceremony store and the federated-account directory have
+            // in-memory adapters only (#460), and a durable profile must never run one of those
+            // beside a real Valkey — a pending authorization that lives in one replica's memory
+            // is a sign-in that fails whenever the callback lands on another.
+            if config.oidc.is_some() {
+                return Err(BootError::AdapterUnavailable {
+                    key: "OIDC_ISSUER",
+                    issue: "#460 (the OIDC ceremony and federated-account adapters)",
+                });
+            }
+            Err(durable())
+        }
     }
 }
 
@@ -394,7 +417,7 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
         capsule_core::crypto::keys::HybridSigningKey::from_seed64(&seed),
     ));
 
-    let server_info = Arc::new(ServerInfo::new(
+    let mut server_info = ServerInfo::new(
         config.server_domain.clone(),
         config.api_base_url.clone(),
         ProtocolWindow {
@@ -402,7 +425,44 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
             max: config.protocol_max.clone(),
         },
         tokens.public_key().to_vec(),
-    ));
+    );
+    if config.oidc.is_some() {
+        // Endpoints only; the issuer and client id stay the server's.
+        server_info = server_info.with_oidc();
+    }
+    let server_info = Arc::new(server_info);
+
+    // The relying party, or the null object. Discovery is lazy: nothing here reaches the
+    // provider, so an identity provider that is down does not stop a server from serving local
+    // auth.
+    let oidc = match &config.oidc {
+        Some(oidc) => {
+            let http =
+                HttpIdentityProvider::http_client().map_err(|error| BootError::OidcClient {
+                    detail: error.to_string(),
+                })?;
+            let provider: Arc<dyn IdentityProvider> = Arc::new(HttpIdentityProvider::new(
+                OidcSettings {
+                    issuer: oidc.issuer.clone(),
+                    client_id: oidc.client_id.clone(),
+                    client_secret: oidc.client_secret.clone(),
+                    redirects: oidc.redirects.clone(),
+                },
+                http,
+                clock.clone(),
+            ));
+            tracing::info!(issuer = %oidc.issuer, "the OIDC relying party is configured");
+            OidcContext::new(OidcCollaborators {
+                provider,
+                authorizations: Arc::new(InMemoryOidcAuthorizations::with_default_ttl(
+                    clock.clone(),
+                )),
+                accounts: Arc::new(InMemoryFederatedAccounts::new()),
+                clock: clock.clone(),
+            })
+        }
+        None => OidcContext::disabled(clock.clone()),
+    };
 
     let app = App::new(Modules {
         auth: AuthContext::new(AuthCollaborators {
@@ -422,13 +482,19 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
             // deployment's own name rather than a constant every deployment shares.
             Arc::new(TotpCodes::new(config.server_domain.clone())),
         ),
+        oidc,
         upload: UploadContext::new(
             uploads.clone(),
             blobs.clone(),
             index.clone(),
             authority.clone(),
             clock.clone(),
-            UploadPolicy::default(),
+            // The window the operator configured, not the crate default: this policy is what
+            // the handshake enforces and what every response advertises (`negotiation`), and the
+            // discovery record above publishes the same two values. One window, three readers.
+            UploadPolicy::default()
+                .with_protocol_window(config.protocol_min.clone(), config.protocol_max.clone())
+                .with_min_client_build(config.min_client_build.clone()),
         ),
         sync: SyncContext::new(
             index.clone(),
@@ -533,6 +599,10 @@ mod tests {
     async fn register(client: &kynos::test::TestClient<App>, password: &str) {
         client
             .post("/v1/auth/register")
+            .header(
+                "x-capsule-protocol",
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            )
             .header("accept", "application/json")
             .json(&serde_json::json!({ "email": "somebody@example.test", "password": password }))
             .send()
@@ -547,6 +617,10 @@ mod tests {
     ) -> kynos::http::StatusCode {
         client
             .post("/v1/auth/login")
+            .header(
+                "x-capsule-protocol",
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            )
             .header("accept", "application/json")
             .json(&serde_json::json!({ "email": "somebody@example.test", "password": password }))
             .send()
@@ -640,6 +714,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_durable_backend_with_oidc_configured_names_the_adapter_issue() {
+        // The in-memory ceremony and federated-account adapters are the only ones written; a
+        // durable profile must never run one of them beside a real Valkey.
+        let root = tempfile::tempdir().expect("a scratch directory");
+        let environment: BTreeMap<String, String> = [
+            ("BLOB_ROOT".to_owned(), root.path().display().to_string()),
+            ("JWT_ED25519_DER".to_owned(), EXAMPLE_DER.to_owned()),
+            ("VALKEY_URL".to_owned(), "redis://127.0.0.1:6379".to_owned()),
+            (
+                "ATTESTATION_KEY_SEED".to_owned(),
+                base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    [9_u8; 64].as_slice(),
+                ),
+            ),
+            (
+                "OIDC_ISSUER".to_owned(),
+                "https://idp.example.test".to_owned(),
+            ),
+            ("OIDC_CLIENT_ID".to_owned(), "capsule".to_owned()),
+        ]
+        .into_iter()
+        .collect();
+        let config = Config::load(&environment, &Overrides::default(), Demands::Serve)
+            .expect("it is well-formed");
+        let error = assemble(&config).await.expect_err("it refuses");
+        assert!(
+            matches!(
+                error,
+                BootError::AdapterUnavailable {
+                    key: "OIDC_ISSUER",
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
+        assert!(format!("{error}").contains("#460"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn the_memory_profile_assembles_with_a_relying_party_without_reaching_it() {
+        // Discovery is lazy: an issuer nothing answers at is still a server that boots.
+        let root = tempfile::tempdir().expect("a scratch directory");
+        let config = memory_config_with(
+            root.path(),
+            &[
+                ("OIDC_ISSUER", "http://127.0.0.1:9/nothing-listens-here"),
+                ("OIDC_CLIENT_ID", "capsule"),
+            ],
+        );
+        let assembled = assemble(&config).await.expect("it assembles");
+        assembled.service().expect("the router builds");
+    }
+
+    #[tokio::test]
     async fn the_published_signing_key_is_the_one_the_tokens_verify_under() {
         // Not a coincidence to be re-checked at every deployment: `ServerInfo` is built from
         // `tokens.public_key()`, so there is no second copy for an operator to paste wrongly.
@@ -696,6 +825,62 @@ mod tests {
         assert_eq!(body["api_base_url"], config.api_base_url);
     }
 
+    /// The window the handshake enforces and advertises is the configured one (issue #404).
+    ///
+    /// Before this the upload policy was `UploadPolicy::default()` regardless of `PROTOCOL_MIN`
+    /// and `PROTOCOL_MAX`, so a deployment that narrowed its window published one range on
+    /// `/.well-known/capsule/server-info` and enforced another on `POST /v1/upload`.
+    #[tokio::test]
+    async fn the_enforced_and_advertised_window_is_the_configured_one() {
+        let root = tempfile::tempdir().expect("a scratch directory");
+        let config = memory_config(root.path());
+        let assembled = assemble(&config).await.expect("it assembles");
+        let client = kynos::test::TestClient::new(assembled.service().expect("the router builds"));
+
+        // Every response advertises the window, an exempt read included.
+        let response = client
+            .get("/v1/version")
+            .header("accept", "application/json")
+            .send()
+            .await;
+        response.assert_status(kynos::http::StatusCode::OK);
+        assert_eq!(
+            response.header("x-capsule-protocol-min"),
+            Some(config.protocol_min.as_str())
+        );
+        assert_eq!(
+            response.header("x-capsule-protocol-max"),
+            Some(config.protocol_max.as_str())
+        );
+        assert_eq!(
+            response.header("x-capsule-min-client-build"),
+            Some(config.min_client_build.as_str())
+        );
+
+        // And the gate holds a write to the same window: a version one day below the
+        // configured minimum is refused before authentication is even looked at. (A read would
+        // be admitted at any date — threat-model/validation.md — which is why this is a `DELETE`.)
+        let below = format!(
+            "{}",
+            config
+                .protocol_min
+                .parse::<jiff::civil::Date>()
+                .expect("the configured minimum is a date")
+                .yesterday()
+                .expect("there is a day before it")
+        );
+        let refused = client
+            .delete("/v1/upload/anything")
+            .header("x-capsule-protocol", &below)
+            .send()
+            .await;
+        refused.assert_status(kynos::http::StatusCode::UPGRADE_REQUIRED);
+        assert_eq!(
+            refused.header("x-capsule-protocol-min"),
+            Some(config.protocol_min.as_str())
+        );
+    }
+
     #[tokio::test]
     async fn an_account_can_be_registered_and_signed_in_to() {
         // The whole point of the amended deliverable boundary: `mise run serve-memory` is a
@@ -708,6 +893,10 @@ mod tests {
 
         let registered: serde_json::Value = client
             .post("/v1/auth/register")
+            .header(
+                "x-capsule-protocol",
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            )
             .header("accept", "application/json")
             .json(&serde_json::json!({
                 "email": "somebody@example.test",
@@ -721,6 +910,10 @@ mod tests {
 
         let signed_in: serde_json::Value = client
             .post("/v1/auth/login")
+            .header(
+                "x-capsule-protocol",
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            )
             .header("accept", "application/json")
             .json(&serde_json::json!({
                 "email": "somebody@example.test",
@@ -811,6 +1004,10 @@ mod tests {
         let client = kynos::test::TestClient::new(assembled.service().expect("the router builds"));
         client
             .post("/v1/auth/register")
+            .header(
+                "x-capsule-protocol",
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            )
             .header("accept", "application/json")
             .json(&serde_json::json!({
                 "email": "somebody@example.test",
@@ -821,6 +1018,10 @@ mod tests {
             .assert_status(kynos::http::StatusCode::OK);
         client
             .post("/v1/auth/login")
+            .header(
+                "x-capsule-protocol",
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            )
             .header("accept", "application/json")
             .json(&serde_json::json!({
                 "email": "somebody@example.test",
