@@ -85,8 +85,9 @@ pub struct UnsignedMigrationOptions {
 pub struct UnsignedMigrationReport {
     /// Every asset admitted as a signed create this run, in the order it was written.
     pub migrated: Vec<Uuid>,
-    /// The subset of [`migrated`](Self::migrated) whose legacy record said `is_deleted`, now
-    /// carrying a signed `delete` record.
+    /// Every asset that received its signed `delete` record this run: the subset of
+    /// [`migrated`](Self::migrated) whose legacy record said `is_deleted`, plus any asset an
+    /// earlier run admitted whose `delete` never landed and was applied now.
     pub trashed: Vec<Uuid>,
     /// The stack ids derived from legacy `stack_hint` groups of two or more members.
     pub stacks: Vec<Uuid>,
@@ -148,6 +149,17 @@ pub enum MigrationSkip {
         asset_id: Uuid,
         /// The extension as found on disk.
         ext: String,
+    },
+    /// An asset an earlier run admitted still owes its `delete` record, but its album holds
+    /// no write capability now (recovered from a backup); the record cannot be authored.
+    #[error(
+        "asset {asset_id}: album {album_id} is read-only; its owed delete record was not written"
+    )]
+    AlbumReadOnly {
+        /// The asset that still owes a `delete`.
+        asset_id: Uuid,
+        /// The album without write capability.
+        album_id: Uuid,
     },
     /// A signed sidecar with no provenance chain that is not an interrupted migration
     /// create: it carries a later write (`provenance_chain_hash` set), it carries no legacy
@@ -481,9 +493,11 @@ impl Workspace {
         // The fallback album must exist and be writable before a single byte is written.
         self.album(&opts.fallback_album)?.write_tier_signer()?;
 
+        // Assets a previous run admitted but whose `delete` record never landed.
+        let (trashed, unwritable) = self.reconcile_legacy_trash(opts.trash_retain_days)?;
         let mut report = UnsignedMigrationReport {
-            // Assets a previous run admitted but whose `delete` record never landed.
-            trashed: self.reconcile_legacy_trash(opts.trash_retain_days)?,
+            trashed,
+            skipped: unwritable,
             ..UnsignedMigrationReport::default()
         };
         let mut candidates: Vec<Candidate> = Vec::new();
@@ -579,8 +593,13 @@ impl Workspace {
     /// Apply the `delete` record a previous run owed: an asset whose signed sidecar carries a
     /// legacy fold saying `is_deleted: true` but whose chain has **never** carried a `delete`.
     /// An asset the user has since trashed and restored has a `delete` in its chain and is
-    /// left exactly as they left it.
-    fn reconcile_legacy_trash(&mut self, retain_days: i64) -> Result<Vec<Uuid>> {
+    /// left exactly as they left it. An owed delete whose album is read-only now is reported
+    /// ([`MigrationSkip::AlbumReadOnly`]) rather than aborting the run.
+    #[allow(clippy::type_complexity)]
+    fn reconcile_legacy_trash(
+        &mut self,
+        retain_days: i64,
+    ) -> Result<(Vec<Uuid>, Vec<(PathBuf, MigrationSkip)>)> {
         let is_deleted_key = Value::Text("is_deleted".to_string());
         let mut owed: Vec<Uuid> = self
             .assets
@@ -602,14 +621,39 @@ impl Workspace {
             .map(|asset| asset.asset_id)
             .collect();
         owed.sort();
-        for id in &owed {
+        let mut trashed = Vec::new();
+        let mut unwritable = Vec::new();
+        for id in owed {
+            let asset = &self.assets[&id];
+            let album_id = asset.album_id;
+            let writable = self
+                .albums
+                .get(&album_id)
+                .is_some_and(|a| a.write_tier.is_some());
+            if !writable {
+                let path = self.sidecar_path(asset);
+                tracing::warn!(
+                    asset_id = %id,
+                    album_id = %album_id,
+                    "unsigned migration: an owed delete record cannot be written into a read-only album"
+                );
+                unwritable.push((
+                    path,
+                    MigrationSkip::AlbumReadOnly {
+                        asset_id: id,
+                        album_id,
+                    },
+                ));
+                continue;
+            }
             tracing::info!(
                 asset_id = %id,
                 "unsigned migration: applying the delete record an interrupted run owed"
             );
-            self.soft_delete(id, retain_days)?;
+            self.soft_delete(&id, retain_days)?;
+            trashed.push(id);
         }
-        Ok(owed)
+        Ok((trashed, unwritable))
     }
 
     /// Decode one unanchored sidecar and check everything that must hold before it is
@@ -1994,6 +2038,61 @@ mod tests {
         assert_eq!(
             ws.migrate_unsigned_sidecars(&opts(album)).unwrap(),
             UnsignedMigrationReport::default()
+        );
+    }
+
+    /// An owed delete whose album has since lost its write capability is reported, not
+    /// written, and does not abort the run: the other candidates still migrate.
+    #[test]
+    fn an_owed_delete_into_a_read_only_album_is_reported_not_fatal() {
+        let lib = TempDir::new().unwrap();
+        let owed = Uuid::from_u128(0x3A);
+        let fresh = Uuid::from_u128(0x3B);
+        let (album, fallback) = {
+            let mut ws = fast_workspace(lib.path());
+            let album = ws.create_album("Recovered").unwrap();
+            let fallback = ws.create_album("Imports").unwrap();
+            write_legacy(
+                lib.path(),
+                owed,
+                b"\xFF\xD8\xFF owed into read-only",
+                vec![("is_deleted", Value::Bool(true))],
+            );
+            assert_eq!(
+                ws.migrate_unsigned_sidecars(&opts(album)).unwrap().trashed,
+                vec![owed]
+            );
+            // The crash window: the chain holds the create only.
+            let asset = ws.asset(&owed).unwrap();
+            let create_only =
+                cbor::to_canonical_vec(&vec![asset.chain.records()[0].clone()]).unwrap();
+            fs::write(ws.provenance_path(asset), create_only).unwrap();
+            (album, fallback)
+        };
+        write_legacy(lib.path(), fresh, b"\xFF\xD8\xFF still migrates", vec![]);
+
+        let mut ws = Workspace::open(lib.path(), b"passphrase", fast_params()).unwrap();
+        // The album the owed asset lives in is read-only now (the backup-recovered shape).
+        ws.albums.get_mut(&album).unwrap().write_tier = None;
+        let owed_sidecar = ws.sidecar_path(ws.asset(&owed).unwrap());
+
+        let report = ws.migrate_unsigned_sidecars(&opts(fallback)).unwrap();
+        assert_eq!(report.migrated, vec![fresh], "the run went on");
+        assert!(report.trashed.is_empty());
+        assert_eq!(
+            report.skipped,
+            vec![(
+                owed_sidecar,
+                MigrationSkip::AlbumReadOnly {
+                    asset_id: owed,
+                    album_id: album,
+                },
+            )]
+        );
+        assert_eq!(
+            ws.asset(&owed).unwrap().chain.records().len(),
+            1,
+            "no delete was authored into the read-only album"
         );
     }
 
