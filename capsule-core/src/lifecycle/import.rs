@@ -34,11 +34,10 @@ use crate::sidecar::sidecar_v1::{
 };
 use crate::utils::paths::tmp_path;
 
-/// A fault injected between the signed sidecar's `.tmp` write and its rename into place — the
-/// crash the single-file atomic rename exists to survive (maintenance doc, Atomic Writes).
-/// `#[cfg(test)]` and thread-local for the same reasons as
-/// [`SealerFault`](super::derivatives::SealerFault): absent from a release build, and a test
-/// seam that stays out of a production signature.
+// A fault injected between the signed sidecar's `.tmp` write and its rename into place — the
+// crash the single-file atomic rename exists to survive (maintenance doc, Atomic Writes).
+// `#[cfg(test)]` and thread-local for the same reasons as `derivatives::SealerFault`: absent
+// from a release build, and a test seam that stays out of a production signature.
 #[cfg(test)]
 thread_local! {
     static SIDECAR_RENAME_FAULT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -245,18 +244,26 @@ pub(super) struct CreateRequest<'a> {
 impl Workspace {
     /// Write an asset's plaintext and its signed artifacts.
     ///
-    /// The plaintext is written only when the bytes already at the media path do **not** hash
-    /// to the sidecar's `hash` — so no path (a create over bytes signed in place, a
-    /// `soft_delete`, any later edit through `append_lifecycle`) ever rewrites an original
-    /// that is already correct, which would only open a crash window in which the one copy is
-    /// truncated. Streaming the existing file through SHA-256 is cheaper than rewriting it.
+    /// The plaintext is written only when the media path does not already hold it: an
+    /// original that is already correct is never rewritten over itself, which would only open
+    /// a crash window in which the one copy is truncated. The decision is made from the
+    /// buffer — a `stat` of the media path, a length comparison, and `hash_bytes(plaintext)`
+    /// against the sidecar's `hash` — with no second read of the disk, so a metadata edit
+    /// costs one read of the original and no write.
+    ///
+    /// **Caller rule.** `plaintext` must be either the bytes read from the media path
+    /// (`append_lifecycle`) or the file about to become it (`commit_signed_create`; for the
+    /// migration that is the media path itself). A caller whose buffer may legitimately differ
+    /// from a *same-length* file already at the media path is not covered by this guard and
+    /// must decide the overwrite itself; `import_backup` restores into a workspace where the
+    /// media path does not exist, so it never meets that case.
     pub(super) fn write_asset_files(&self, asset: &AssetState, plaintext: &[u8]) -> Result<()> {
         let dir = media_dir(&self.root, asset.capture_utc);
         fs::create_dir_all(&dir).map_err(|e| LifecycleError::Io(e.to_string()))?;
         let media_path = self.media_path(asset);
-        let already_correct = fs::File::open(&media_path)
-            .and_then(hash::hash_reader)
-            .is_ok_and(|on_disk| on_disk == asset.sidecar.hash);
+        let already_correct = fs::metadata(&media_path)
+            .is_ok_and(|m| m.is_file() && m.len() == plaintext.len() as u64)
+            && hash::hash_bytes(plaintext) == asset.sidecar.hash;
         if already_correct {
             tracing::debug!(
                 asset_id = %asset.asset_id,
@@ -269,14 +276,16 @@ impl Workspace {
     }
 
     /// The signed half of [`write_asset_files`](Self::write_asset_files): the sidecar, the
-    /// provenance chain, and the sealed metadata blob — everything but the plaintext.
+    /// provenance chain, and the sealed metadata blob — everything but the plaintext. The
+    /// right call for a writer whose plaintext is already on disk and unchanged (a metadata
+    /// edit), which then needs neither to read nor to write the original.
     ///
     /// The sidecar is staged to `{uuid}.cbor.tmp` and renamed into place (the single-file
     /// atomic write of the maintenance doc), so a crash mid-write leaves the previous sidecar
     /// intact rather than a torn one — for the migration, that previous sidecar is the legacy
     /// record itself. The stale `.tmp` is the startup scrub's to remove. The per-asset
     /// *bundle* (sidecar, chain, blob renamed together) remains its own slice.
-    fn write_signed_artifacts(&self, asset: &AssetState) -> Result<()> {
+    pub(super) fn write_signed_artifacts(&self, asset: &AssetState) -> Result<()> {
         let dir = media_dir(&self.root, asset.capture_utc);
         fs::create_dir_all(&dir).map_err(|e| LifecycleError::Io(e.to_string()))?;
         let sidecar_path = self.sidecar_path(asset);
@@ -859,6 +868,88 @@ mod tests {
             .unwrap();
         assert_eq!(ws.asset(&asset).unwrap().ext, "bin");
         assert_eq!(ws.verify(&asset).unwrap(), VerifyOutcome::Accept);
+    }
+
+    /// The rewrite guard, directly. A media path holding bytes of a *different length* than
+    /// the correct plaintext is overwritten; a media path already holding the correct bytes is
+    /// left alone, its mtime intact — the safety property the migration and every metadata
+    /// edit rely on.
+    #[test]
+    fn write_asset_files_overwrites_wrong_bytes_and_leaves_correct_bytes_alone() {
+        use std::time::{Duration, SystemTime};
+
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let img = src.path().join("photo.jpg");
+        let correct = b"\xFF\xD8\xFF the signed bytes".to_vec();
+        fs::write(&img, &correct).unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Trip").unwrap();
+        let id = ws.import_asset(album, &img).unwrap();
+        let media = ws.media_path(ws.asset(&id).unwrap());
+
+        // Wrong bytes at the media path (truncated, then longer): overwritten.
+        for wrong in [
+            &correct[..correct.len() / 2],
+            b"\xFF\xD8\xFF not the signed bytes at all",
+        ] {
+            fs::write(&media, wrong).unwrap();
+            ws.write_asset_files(ws.asset(&id).unwrap(), &correct)
+                .unwrap();
+            assert_eq!(
+                fs::read(&media).unwrap(),
+                correct,
+                "wrong bytes were rewritten"
+            );
+        }
+
+        // Correct bytes already there: not touched, which the mtime proves.
+        let long_ago = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        fs::File::options()
+            .write(true)
+            .open(&media)
+            .unwrap()
+            .set_modified(long_ago)
+            .unwrap();
+        ws.write_asset_files(ws.asset(&id).unwrap(), &correct)
+            .unwrap();
+        assert_eq!(fs::metadata(&media).unwrap().modified().unwrap(), long_ago);
+        assert_eq!(fs::read(&media).unwrap(), correct);
+        assert_eq!(ws.verify(&id).unwrap(), VerifyOutcome::Accept);
+    }
+
+    /// The guard's documented limit, pinned so it cannot change silently: the decision is
+    /// made from the buffer with no second read of the disk, so a *same-length* file whose
+    /// bytes differ from a correct buffer is not detected. No caller in the tree can produce
+    /// that case — `append_lifecycle` passes the bytes it just read from this very path, a
+    /// create's source either is this path or the path does not exist yet, and `import_backup`
+    /// restores into a workspace where the path does not exist — and a wrong original is
+    /// caught by `verify`, never silently accepted. A caller that could meet the case must
+    /// decide the overwrite itself (see the caller rule on `write_asset_files`).
+    #[test]
+    fn write_asset_files_trusts_a_same_length_buffer_over_the_disk() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let img = src.path().join("photo.jpg");
+        let correct = b"\xFF\xD8\xFF the signed bytes".to_vec();
+        fs::write(&img, &correct).unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Trip").unwrap();
+        let id = ws.import_asset(album, &img).unwrap();
+        let media = ws.media_path(ws.asset(&id).unwrap());
+
+        let same_length = b"\xFF\xD8\xFF THE SIGNED BYTES".to_vec();
+        assert_eq!(same_length.len(), correct.len());
+        fs::write(&media, &same_length).unwrap();
+        ws.write_asset_files(ws.asset(&id).unwrap(), &correct)
+            .unwrap();
+        assert_eq!(
+            fs::read(&media).unwrap(),
+            same_length,
+            "the buffer is trusted; no second read decides this"
+        );
+        // ...and the wrong original does not pass verification.
+        assert_ne!(ws.verify(&id).unwrap(), VerifyOutcome::Accept);
     }
 
     // ── Importer-formed stacks (S-B15) ──────────────────────────────────────────
