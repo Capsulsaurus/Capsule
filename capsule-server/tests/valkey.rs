@@ -38,7 +38,7 @@ use capsule_server::store::upload::{
 use capsule_server::store::valkey::ValkeyStores;
 use capsule_server::store::{
     AssetId, AuthStateStore, ChallengeStore, ChannelStore, Clock, CohortStore, EnrollmentStore,
-    OwnerId, StoreError, StoreFuture, UploadId, UserId,
+    OwnerId, SessionId, SessionRecord, StoreError, StoreFuture, UploadId, UserId,
 };
 use jiff::{SignedDuration, Timestamp};
 use testcontainers::runners::AsyncRunner;
@@ -170,6 +170,72 @@ async fn the_store_suite_passes_against_valkey() {
     };
     let harness = ValkeyHarness::connect(&server.url).await;
     conformance::run_all(&harness).await;
+}
+
+/// A record past its logical lifetime is reported dead and is **not** deleted by the reader.
+///
+/// The read gate only answers; `PEXPIRE` collects. A reader whose clock ran ahead would
+/// otherwise delete, for every replica, state that is still live by the store's own lifetime.
+#[tokio::test]
+async fn a_logically_expired_record_is_dead_but_left_for_the_collector() {
+    let Some(server) = server().await else {
+        return;
+    };
+    let harness = ValkeyHarness::connect(&server.url).await;
+    let session_id = SessionId::new("valkey-logical-expiry");
+    let created_at = Timestamp::UNIX_EPOCH;
+    harness
+        .auth
+        .open_session(SessionRecord {
+            session_id: session_id.clone(),
+            user_id: UserId::new("valkey-logical-expiry-user"),
+            created_at,
+            authenticated_at: created_at,
+            last_active_at: created_at,
+            user_agent: None,
+            ip_address: None,
+            cohort_hash: None,
+            device_id: None,
+        })
+        .await
+        .expect("the session opens");
+    harness.advance(harness.auth.ttl()).await.expect("advances");
+
+    assert_eq!(
+        harness
+            .auth
+            .read_session(&session_id)
+            .await
+            .expect("answers"),
+        None,
+        "past its logical lifetime the record is absent to a reader"
+    );
+
+    let client = redis::Client::open(server.url.as_str()).expect("the URL opens");
+    let mut connection = client
+        .get_multiplexed_async_connection()
+        .await
+        .expect("a second connection");
+    let exists: i64 = redis::cmd("EXISTS")
+        .arg(format!("capsule:session:{session_id}"))
+        .query_async(&mut connection)
+        .await
+        .expect("EXISTS answers");
+    assert_eq!(
+        exists, 1,
+        "and the key is still there for PEXPIRE to collect"
+    );
+    let ttl: i64 = redis::cmd("PTTL")
+        .arg(format!("capsule:session:{session_id}"))
+        .query_async(&mut connection)
+        .await
+        .expect("PTTL answers");
+    assert!(ttl > 0, "with a collector lifetime set: {ttl}");
+    harness
+        .auth
+        .close_session(&session_id)
+        .await
+        .expect("cleans up");
 }
 
 /// The whole counter suite, including the race, on one server.

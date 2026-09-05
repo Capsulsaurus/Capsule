@@ -22,15 +22,19 @@
 //!
 //! Every record hash carries an adapter-internal `expires_at` written from the injected
 //! [`Clock`] at the moment the record is opened, and every script that reads a record checks
-//! it before answering — deleting the record when it has passed. Valkey's own `PEXPIRE` is set
-//! on the same key with the same lifetime and does the collecting for keys nothing reads again.
+//! it before answering: a record past it is reported absent. Valkey's own `PEXPIRE` is set on
+//! the same key with the same lifetime and is what actually removes it.
 //!
-//! That is deliberately one fact with two enforcers, not two clocks. The port's `Clock` seam
-//! is what makes expiry *testable*: the [`conformance`](super::conformance) suite advances a
-//! manual clock to one nanosecond either side of a boundary and expects a different answer on
-//! each side, which no harness can arrange against a real clock by sleeping. Gating on the
-//! injected clock lets the same suite drive this adapter exactly as it drives the double, with
-//! no sleeps and no margins, and in production both enforcers read the wall clock.
+//! The check is **non-destructive**, deliberately. A replica whose clock runs ahead would
+//! otherwise delete, for every other replica, state that is still live by the store's own
+//! lifetime; reporting a record dead costs that replica one early miss and nobody else
+//! anything, and the derived indexes already heal on a miss. So one fact, one collector, and a
+//! read gate that only ever answers. The port's `Clock` seam is what makes expiry *testable*:
+//! the [`conformance`](super::conformance) suite advances a manual clock to one nanosecond
+//! either side of a boundary and expects a different answer on each side, which no harness can
+//! arrange against a real clock by sleeping. Gating on the injected clock lets the same suite
+//! drive this adapter exactly as it drives the double, with no sleeps and no margins, and in
+//! production the gate and the collector read the same wall clock.
 //!
 //! # Indexes are derived, and heal on read
 //!
@@ -55,7 +59,7 @@
 //! | `capsule:upload:uploader:{uid}` | set | refreshed on open |
 //! | `capsule:upload:album:{album}` | set | refreshed on open |
 //! | `capsule:upload:pending:{owner}:{hash}` | set | refreshed on open |
-//! | `capsule:upload:progress` | zset (score = `last_progress_at` µs) | none — heals on read |
+//! | `capsule:upload:progress` | zset (score = `last_progress_at` µs) | none — heals only when the pressure sweep (`least_recently_progressed`) runs |
 //! | `capsule:challenge:{token}` | hash | challenge TTL |
 //! | `capsule:enroll:code:{spelling}` | hash, written under both spellings | code TTL |
 //! | `capsule:enroll:channel:{id}` | hash | channel TTL |
@@ -72,8 +76,12 @@
 //! One hash field per record field; timestamps as RFC 3339 (`jiff` round-trips them
 //! nanosecond-exact); enums by their existing `as_str()`; `expires_at` and sorted-set scores as
 //! integer microseconds, because a Lua number is a double and microseconds stay exact in one
-//! until the year 2255 while nanoseconds do not. A field that will not parse is
-//! [`StoreError::Corrupt`], which is the variant that exists for exactly this.
+//! until the year 2255 while nanoseconds do not. That is a floor: a record expires at the
+//! microsecond its nanosecond deadline falls in, and two progress instants inside one
+//! microsecond order by upload id (the exact `<` against the record's own timestamp is applied
+//! in Rust where a horizon is compared). `PEXPIRE` takes whole milliseconds, rounded **up**, so
+//! the collector never removes a record before its logical lifetime has passed. A field that
+//! will not parse is [`StoreError::Corrupt`], which is the variant that exists for exactly this.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -236,6 +244,9 @@ impl Valkey {
 /// ceremony stores that value is the record, which carries the bearer secret the typed ids
 /// redact from every other log line.
 fn classify(store: &'static str, what: &'static str, error: RedisError) -> StoreError {
+    // `NOSCRIPT` belongs here too: the server declined to run a script it does not hold, and
+    // `redis::Script` normally answers it with a `SCRIPT LOAD` and a retry. Reaching this point
+    // means that retry failed as well, and nothing was executed either time.
     let never_sent = error.is_connection_refusal()
         || matches!(
             error.kind(),
@@ -244,6 +255,7 @@ fn classify(store: &'static str, what: &'static str, error: RedisError) -> Store
                     | ServerErrorKind::TryAgain
                     | ServerErrorKind::MasterDown
                     | ServerErrorKind::ClusterDown
+                    | ServerErrorKind::NoScript
             ) | ErrorKind::ClusterConnectionNotFound
         );
     if never_sent {
@@ -475,18 +487,6 @@ fn parse_status(text: &str) -> Option<UploadSessionStatus> {
     .find(|status| status.as_str() == text)
 }
 
-/// Whether a status keeps the session in the eviction view.
-///
-/// Narrower than [`UploadSessionStatus::is_active`] on purpose: the port says a finalize claim
-/// leaves the progress view "rather than being evicted out from under itself", so a
-/// `WaitingForProcessing` session is in flight for every other purpose and exempt from this one.
-fn is_evictable(status: UploadSessionStatus) -> bool {
-    matches!(
-        status,
-        UploadSessionStatus::Pending | UploadSessionStatus::Uploading
-    )
-}
-
 fn encode_upload(record: &UploadSessionRecord, expires_at: Timestamp) -> Vec<String> {
     let mut encoder = Encoder::default();
     encoder
@@ -615,7 +615,15 @@ fn album_key(album: &AlbumId) -> String {
     format!("capsule:upload:album:{album}")
 }
 
+/// The one key with two variable parts, which is why the port's ids must contain no `:` — a
+/// precondition the scripts that rebuild this key from a record (`SET_STATUS`, `DISCARD_UPLOAD`,
+/// `OPEN_UPLOAD`) cannot check for themselves. Owner ids are UUIDs and the hash is hex, so the
+/// assertion is a guard against a future id space, not a live case.
 fn pending_key(owner: &OwnerId, expected_hash: &str) -> String {
+    debug_assert!(
+        !owner.as_str().contains(':') && !expected_hash.contains(':'),
+        "an owner id or a content hash must contain no `:`; it is a key segment"
+    );
     format!("capsule:upload:pending:{owner}:{expected_hash}")
 }
 
@@ -668,8 +676,10 @@ impl Lua {
 /// Declare a script with the shared helpers prepended.
 ///
 /// `live(key, now, ...)` answers whether the record hash at `key` exists and has not passed its
-/// `expires_at` (microseconds) as of `now`; an expired one is deleted along with every extra key
-/// named, so the injected clock is the eviction authority and `PEXPIRE` only the collector.
+/// `expires_at` (microseconds) as of `now`. It never deletes: the injected clock decides what a
+/// reader is told, `PEXPIRE` decides what is removed (see the module doc). The trailing
+/// arguments name the record's dependent keys and are accepted so a call site reads as a
+/// statement of what expires together; the collector's TTLs are what act on them.
 /// `expired(flat, now)` asks the same of a record already read back with `HGETALL`.
 /// `extend(key, ttl)` raises a derived key's lifetime to `ttl` and never lowers it — an index
 /// set is shared by every member, so one member's remaining life must not shorten another's.
@@ -679,12 +689,7 @@ macro_rules! script {
             "local function live(key, now, ...)\n",
             "  local expires = redis.call('HGET', key, 'expires_at')\n",
             "  if not expires then return false end\n",
-            "  if tonumber(expires) <= tonumber(now) then\n",
-            "    redis.call('DEL', key)\n",
-            "    for _, extra in ipairs({...}) do redis.call('DEL', extra) end\n",
-            "    return false\n",
-            "  end\n",
-            "  return true\n",
+            "  return tonumber(expires) > tonumber(now)\n",
             "end\n",
             "local function expired(flat, now)\n",
             "  for i = 1, #flat, 2 do\n",
@@ -1316,7 +1321,11 @@ impl AuthStateStore for ValkeyAuthState {
 
 /// A lifetime as the millisecond string `PEXPIRE` takes, never below one.
 fn ttl_millis(ttl: SignedDuration) -> String {
-    ttl.as_millis().max(1).to_string()
+    // Rounded up: the collector must never remove a record before its logical lifetime — the
+    // microsecond `expires_at` the read gate compares — has passed.
+    let nanos = ttl.as_nanos().max(1);
+    let millis = (nanos + 999_999) / 1_000_000;
+    millis.max(1).to_string()
 }
 
 // ===========================================================================================
@@ -1397,7 +1406,7 @@ impl UploadSessionStore for ValkeyUploadSessions {
                 ttl_millis(self.ttl),
                 upload_id.to_string(),
                 flag(record.status.is_active()),
-                flag(is_evictable(record.status)),
+                flag(record.status.is_evictable()),
                 micros(record.last_progress_at).to_string(),
             ];
             args.extend(encode_upload(&record, expires_at));
@@ -1542,7 +1551,7 @@ impl UploadSessionStore for ValkeyUploadSessions {
                         status.as_str().to_owned(),
                         upload.to_string(),
                         flag(status.is_active()),
-                        flag(is_evictable(status)),
+                        flag(status.is_evictable()),
                     ],
                 )
                 .await?;
@@ -2412,19 +2421,77 @@ mod tests {
     }
 
     #[test]
-    fn only_pending_and_uploading_sessions_are_evictable() {
-        // Narrower than `is_active`: a claimed session has left the eviction view.
-        assert!(is_evictable(UploadSessionStatus::Pending));
-        assert!(is_evictable(UploadSessionStatus::Uploading));
-        assert!(!is_evictable(UploadSessionStatus::WaitingForProcessing));
-        assert!(UploadSessionStatus::WaitingForProcessing.is_active());
-        assert!(!is_evictable(UploadSessionStatus::Completed));
+    fn the_collector_never_runs_ahead_of_the_logical_lifetime() {
+        // Whole milliseconds, rounded up: a 1 ns lifetime collects after 1 ms, a 1.5 ms one
+        // after 2 ms — never before the microsecond `expires_at` the read gate compares.
+        assert_eq!(ttl_millis(SignedDuration::from_nanos(1)), "1");
+        assert_eq!(ttl_millis(SignedDuration::from_micros(1_500)), "2");
+        assert_eq!(ttl_millis(SignedDuration::from_millis(1)), "1");
+        assert_eq!(ttl_millis(SignedDuration::from_secs(2)), "2000");
+        assert_eq!(ttl_millis(SignedDuration::ZERO), "1");
     }
 
     #[test]
-    fn a_lifetime_is_never_zero_milliseconds() {
-        assert_eq!(ttl_millis(SignedDuration::from_nanos(1)), "1");
-        assert_eq!(ttl_millis(SignedDuration::from_secs(2)), "2000");
+    fn a_pending_key_has_exactly_two_variable_segments() {
+        assert_eq!(
+            pending_key(&OwnerId::new("o"), "h"),
+            "capsule:upload:pending:o:h"
+        );
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "must contain no `:`")]
+    fn a_key_segment_with_a_colon_is_refused_in_debug() {
+        let _ = pending_key(&OwnerId::new("not:an:id"), "h");
+    }
+
+    /// The classification the port's three variants promise, per driver error.
+    #[test]
+    fn driver_errors_are_classified_by_whether_the_command_could_have_run() {
+        let unavailable = [
+            ErrorKind::Server(ServerErrorKind::NoScript),
+            ErrorKind::Server(ServerErrorKind::BusyLoading),
+            ErrorKind::Server(ServerErrorKind::TryAgain),
+            ErrorKind::Server(ServerErrorKind::MasterDown),
+            ErrorKind::Server(ServerErrorKind::ClusterDown),
+            ErrorKind::ClusterConnectionNotFound,
+        ];
+        for kind in unavailable {
+            let error = classify(AUTH, "x", RedisError::from((kind, "declined")));
+            assert!(
+                matches!(error, StoreError::Unavailable { .. }),
+                "{kind:?}: {error:?}"
+            );
+        }
+        // The server may have run it: a plain error reply, a read-only replica, an aborted
+        // transaction — and, by the driver's own account, a timeout or a dropped connection.
+        for kind in [
+            ErrorKind::Server(ServerErrorKind::ResponseError),
+            ErrorKind::Server(ServerErrorKind::ReadOnly),
+            ErrorKind::Io,
+        ] {
+            let error = classify(AUTH, "x", RedisError::from((kind, "after the fact")));
+            assert!(
+                matches!(error, StoreError::Rejected { .. }),
+                "{kind:?}: {error:?}"
+            );
+        }
+        let error = classify(
+            CHALLENGES,
+            "RevokeAllChallenge",
+            RedisError::from((
+                ErrorKind::UnexpectedReturnType,
+                "Response was of incompatible type: the-secret",
+            )),
+        );
+        match error {
+            StoreError::Corrupt { detail, .. } => assert!(
+                !detail.contains("the-secret"),
+                "a corrupt reply's text never reaches the error: {detail}"
+            ),
+            other => panic!("expected Corrupt, got {other:?}"),
+        }
     }
 
     #[test]
