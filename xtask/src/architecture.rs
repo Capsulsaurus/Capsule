@@ -319,7 +319,9 @@ fn check_chrono_isolation(root: &Path, violations: &mut Vec<String>) -> Result<(
     for package in PACKAGES {
         if !members.contains(*package) {
             violations.push(format!(
-                "the chrono guard names `{package}`, which is not a workspace member;                  `cargo tree -p` would exit zero and print nothing, so the guard would pass                  without checking anything"
+                "the chrono guard names `{package}`, which is not a workspace member; \
+                 `cargo tree -p` would exit zero and print nothing, so the guard would pass \
+                 without checking anything"
             ));
         }
     }
@@ -360,12 +362,16 @@ fn check_chrono_isolation(root: &Path, violations: &mut Vec<String>) -> Result<(
         let expected = EXPECTED_ON_THE_PATH.contains(package);
         if reaches_chrono && !expected {
             violations.push(format!(
-                "`{package}` reaches `chrono` through its own manifest; design/dependencies.md                  permits chrono only as the sea-orm column type in `capsule-cli/entity` and in                  `capsule-server-migration`. Check that sea-orm is declared with                  `default-features = false`"
+                "`{package}` reaches `chrono` through its own manifest; design/dependencies.md \
+                 permits chrono only as the sea-orm column type in `capsule-cli/entity` and in \
+                 `capsule-server-migration`. Check that sea-orm is declared with \
+                 `default-features = false`"
             ));
         }
         if !reaches_chrono && expected {
             violations.push(format!(
-                "`{package}` no longer reaches `chrono`; remove it from EXPECTED_ON_THE_PATH so                  the exemption stops describing something that is not true"
+                "`{package}` no longer reaches `chrono`; remove it from EXPECTED_ON_THE_PATH so \
+                 the exemption stops describing something that is not true"
             ));
         }
     }
