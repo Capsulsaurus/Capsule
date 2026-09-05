@@ -36,12 +36,14 @@
 //!
 //! # Adapters, and what they are for
 //!
-//! Three adapters are planned per port — Postgres, Valkey, and a deterministic in-memory one —
-//! and **three adapters are not three deployment modes**. Valkey is required; the server
-//! refuses to boot without `VALKEY_URL` (design/filesystem/server.md, "Required Services").
-//! The in-memory adapter in [`memory`] is a **test double**, never a deployment profile. The
-//! rejected alternative was a Postgres fallback removing Valkey, which would mean emulating
-//! TTL and expiry in SQL — the generic TTL abstraction this slice exists to delete.
+//! Two adapters exist per port — the Valkey one in [`valkey`] and a deterministic in-memory
+//! one in [`memory`] — and **two adapters are not two deployment modes**. Valkey is required;
+//! the server refuses to boot without `VALKEY_URL` (design/filesystem/server.md, "Required
+//! Services"), and [`crate::boot`] connects to it before anything else is assembled. The
+//! in-memory adapter is a **test double**, never a deployment profile. The rejected alternative
+//! was a Postgres fallback removing Valkey, which would mean emulating TTL and expiry in SQL —
+//! the generic TTL abstraction this slice exists to delete. The one exception is the durable
+//! device-cohort map, whose Valkey home is interim until the Postgres adapter (#402) carries it.
 //!
 //! Whichever adapter is in play, it must pass the one shared suite in [`conformance`]. That
 //! suite is what makes "the in-memory adapter behaves like Valkey" an assertion rather than an
@@ -61,6 +63,7 @@ pub mod conformance;
 pub mod ids;
 pub mod memory;
 pub mod upload;
+pub mod valkey;
 
 use std::fmt;
 use std::future::Future;

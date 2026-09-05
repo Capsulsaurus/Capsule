@@ -100,6 +100,21 @@ impl CounterKey {
             Self::RegistrationSource(_) => "registration_source",
         }
     }
+
+    /// What the key is scoped to — the account, the link, the address — for the backend key
+    /// that carries it. Paired with [`Self::as_str`], which names the kind.
+    pub fn scope(&self) -> &str {
+        match self {
+            Self::LoginAttempts(user) | Self::DeepVerify(user) => user.as_str(),
+            Self::EnrollmentRedemption(scope)
+            | Self::ShareLink(scope)
+            | Self::ShareSource(scope)
+            | Self::DropLink(scope)
+            | Self::DropSource(scope)
+            | Self::SecondFactor(scope)
+            | Self::RegistrationSource(scope) => scope,
+        }
+    }
 }
 
 /// How many, and over how long.
@@ -150,8 +165,9 @@ pub trait CounterStore: std::fmt::Debug + Send + Sync {
     ///
     /// **The two together, never separately.** Read-then-increment lets every request in a burst
     /// read the same under-limit value, which is the burst the limiter exists to stop. Every
-    /// adapter owes this atomically; the in-memory one gets it from a mutex and Valkey from
-    /// `INCR` plus a first-hit `EXPIRE`.
+    /// adapter owes this atomically; the in-memory one gets it from a mutex and Valkey from one
+    /// Lua script that opens, charges or refuses the window in a single server-side step
+    /// ([`valkey::ValkeyCounters`]).
     fn hit<'a>(
         &'a self,
         key: &'a CounterKey,
@@ -348,6 +364,8 @@ impl CounterContext {
 }
 
 pub mod budgets;
+pub mod conformance;
+pub mod valkey;
 
 #[cfg(test)]
 mod tests;

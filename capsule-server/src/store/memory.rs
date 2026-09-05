@@ -625,7 +625,7 @@ impl UploadSessionStore for InMemoryUploadSessions {
                 .values()
                 .map(|entry| &entry.record)
                 .filter(|record| {
-                    record.status.is_active() && record.last_progress_at < not_progressed_since
+                    record.status.is_evictable() && record.last_progress_at < not_progressed_since
                 })
                 .collect();
             candidates.sort_by(|a, b| {
@@ -1185,6 +1185,7 @@ mod tests {
         recording_progress_advances_bytes_clock_and_replay_together,
         chunk_replay_is_offset_addressed,
         finalization_is_claimed_exactly_once,
+        a_claimed_session_leaves_the_eviction_view,
         reconciling_received_bytes_does_not_move_the_progress_clock,
         a_terminal_session_is_not_an_eviction_candidate,
         discarding_removes_the_record_its_chunks_and_its_listing,
