@@ -503,7 +503,11 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
             index.clone(),
             authority.clone(),
             clock.clone(),
-            UploadPolicy::default(),
+            // The window the operator configured, not the crate default: this policy is what
+            // the handshake enforces and what every response advertises (`negotiation`), and the
+            // discovery record above publishes the same two values. One window, three readers.
+            UploadPolicy::default()
+                .with_protocol_window(config.protocol_min.clone(), config.protocol_max.clone()),
         ),
         sync: SyncContext::new(
             index.clone(),
@@ -609,6 +613,10 @@ mod tests {
     async fn register(client: &kynos::test::TestClient<App>, password: &str) {
         client
             .post("/v1/auth/register")
+            .header(
+                "x-capsule-protocol",
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            )
             .header("accept", "application/json")
             .json(&serde_json::json!({ "email": "somebody@example.test", "password": password }))
             .send()
@@ -623,6 +631,10 @@ mod tests {
     ) -> kynos::http::StatusCode {
         client
             .post("/v1/auth/login")
+            .header(
+                "x-capsule-protocol",
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            )
             .header("accept", "application/json")
             .json(&serde_json::json!({ "email": "somebody@example.test", "password": password }))
             .send()
@@ -923,6 +935,61 @@ mod tests {
         assert_eq!(body["api_base_url"], config.api_base_url);
     }
 
+    /// The window the handshake enforces and advertises is the configured one (issue #404).
+    ///
+    /// Before this the upload policy was `UploadPolicy::default()` regardless of `PROTOCOL_MIN`
+    /// and `PROTOCOL_MAX`, so a deployment that narrowed its window published one range on
+    /// `/.well-known/capsule/server-info` and enforced another on `POST /v1/upload`.
+    #[tokio::test]
+    async fn the_enforced_and_advertised_window_is_the_configured_one() {
+        let root = tempfile::tempdir().expect("a scratch directory");
+        let config = memory_config(root.path());
+        let assembled = assemble(&config).await.expect("it assembles");
+        let client = kynos::test::TestClient::new(assembled.service().expect("the router builds"));
+
+        // Every response advertises the window, an exempt read included.
+        let response = client
+            .get("/v1/version")
+            .header("accept", "application/json")
+            .send()
+            .await;
+        response.assert_status(kynos::http::StatusCode::OK);
+        assert_eq!(
+            response.header("x-capsule-protocol-min"),
+            Some(config.protocol_min.as_str())
+        );
+        assert_eq!(
+            response.header("x-capsule-protocol-max"),
+            Some(config.protocol_max.as_str())
+        );
+        assert_eq!(
+            response.header("x-capsule-min-client-build"),
+            Some(crate::upload::policy::DEFAULT_MIN_CLIENT_BUILD)
+        );
+
+        // And the gate holds a client to the same window: a version one day below the
+        // configured minimum is refused before authentication is even looked at.
+        let below = format!(
+            "{}",
+            config
+                .protocol_min
+                .parse::<jiff::civil::Date>()
+                .expect("the configured minimum is a date")
+                .yesterday()
+                .expect("there is a day before it")
+        );
+        let refused = client
+            .head("/v1/upload/anything")
+            .header("x-capsule-protocol", &below)
+            .send()
+            .await;
+        refused.assert_status(kynos::http::StatusCode::UPGRADE_REQUIRED);
+        assert_eq!(
+            refused.header("x-capsule-protocol-min"),
+            Some(config.protocol_min.as_str())
+        );
+    }
+
     #[tokio::test]
     async fn an_account_can_be_registered_and_signed_in_to() {
         // The whole point of the amended deliverable boundary: `mise run serve-memory` is a
@@ -935,6 +1002,10 @@ mod tests {
 
         let registered: serde_json::Value = client
             .post("/v1/auth/register")
+            .header(
+                "x-capsule-protocol",
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            )
             .header("accept", "application/json")
             .json(&serde_json::json!({
                 "email": "somebody@example.test",
@@ -948,6 +1019,10 @@ mod tests {
 
         let signed_in: serde_json::Value = client
             .post("/v1/auth/login")
+            .header(
+                "x-capsule-protocol",
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            )
             .header("accept", "application/json")
             .json(&serde_json::json!({
                 "email": "somebody@example.test",
@@ -1038,6 +1113,10 @@ mod tests {
         let client = kynos::test::TestClient::new(assembled.service().expect("the router builds"));
         client
             .post("/v1/auth/register")
+            .header(
+                "x-capsule-protocol",
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            )
             .header("accept", "application/json")
             .json(&serde_json::json!({
                 "email": "somebody@example.test",
@@ -1048,6 +1127,10 @@ mod tests {
             .assert_status(kynos::http::StatusCode::OK);
         client
             .post("/v1/auth/login")
+            .header(
+                "x-capsule-protocol",
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            )
             .header("accept", "application/json")
             .json(&serde_json::json!({
                 "email": "somebody@example.test",
