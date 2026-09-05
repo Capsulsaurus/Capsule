@@ -27,9 +27,18 @@
 //!
 //! The check is **non-destructive**, deliberately. A replica whose clock runs ahead would
 //! otherwise delete, for every other replica, state that is still live by the store's own
-//! lifetime; reporting a record dead costs that replica one early miss and nobody else
-//! anything, and the derived indexes already heal on a miss. So one fact, one collector, and a
-//! read gate that only ever answers. The port's `Clock` seam is what makes expiry *testable*:
+//! lifetime. For the direct-read scripts (`READ_RECORD`, `READ_UPLOAD`, `CHUNK_AT`,
+//! `IS_LIVE`, `LOOKUP_CHANNEL` and the mutations guarded by `live`) a false "not live" verdict
+//! costs that replica one early miss and nobody else anything. The index-listing scripts
+//! (`SESSIONS_FOR_USER`, `UPLOADS_FOR_UPLOADER`, `PENDING_FOR_ADDRESS`, `IN_FLIGHT_FOR_ALBUM`,
+//! `LEAST_RECENTLY_PROGRESSED`) are the residual: they `SREM`/`ZREM` a member whose record they
+//! judge dead, and the index is **shared**, so a fast clock on one replica hides a still-live
+//! record from every replica's listings until a state change re-indexes it or the record
+//! expires for real. The record itself is untouched — a direct read on a well-clocked replica
+//! still finds it — and the exposure is bounded by the clock skew, which is why this is the
+//! accepted cost of not requiring synchronised clocks (the #403 decision record, decision 12)
+//! rather than a reason to let a reader delete. So one fact, one collector, and a read gate
+//! that only ever answers. The port's `Clock` seam is what makes expiry *testable*:
 //! the [`conformance`](super::conformance) suite advances a manual clock to one nanosecond
 //! either side of a boundary and expects a different answer on each side, which no harness can
 //! arrange against a real clock by sleeping. Gating on the injected clock lets the same suite
