@@ -161,6 +161,8 @@ async fn every_declared_response_is_exercised() {
         ("GET", "/v1/drops"),
         ("POST", "/v1/drops/anything/adopt"),
         ("DELETE", "/v1/drops/anything"),
+        ("POST", "/v1/auth/oidc/authorize"),
+        ("POST", "/v1/auth/oidc/callback"),
     ] {
         let request = match method {
             "GET" => client.get(path),
@@ -2349,6 +2351,9 @@ async fn every_declared_response_is_exercised() {
     // ── The second factor (`S-C55`) ────────────────────────────────────────────────────────
     totp_block(client, &fixture).await;
 
+    // ── Signing in through an identity provider (`S-N1`) ───────────────────────────────────
+    oidc_block(client, &fixture).await;
+
     // ── The resumption listing (`S-C57`) and the durable custody chain (`S-C58`) ───────────
     // Both are plain authenticated reads over stores this walk has already filled, so they sit
     // here rather than in a block of their own.
@@ -4214,4 +4219,171 @@ async fn upgrade_block(
         .send()
         .await
         .assert_status(StatusCode::BAD_REQUEST);
+}
+
+/// Every declared response of `POST /v1/auth/oidc/authorize` and `POST /v1/auth/oidc/callback`
+/// (`S-N1`), driven through the fixture's provider double.
+///
+/// The 400 and 426 are the gate's and are produced by the document walk above; the 413 by the
+/// body-size loop. Everything else is this block's: the extractor's 415/422, the ceremony's own
+/// answers, and the two collaborators broken for one request each and repaired.
+async fn oidc_block(client: &support::Client, fixture: &Fixture) {
+    const REDIRECT: &str = "http://127.0.0.1:4242/callback";
+
+    // 415 and 422 are the `Json` extractor's, on both operations.
+    for path in ["/v1/auth/oidc/authorize", "/v1/auth/oidc/callback"] {
+        client
+            .post(path)
+            .body("text/plain", "{}")
+            .send()
+            .await
+            .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        client
+            .post(path)
+            .json(&json!({ "redirect_uri": 42, "state": 42, "code": 42 }))
+            .send()
+            .await
+            .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    // authorize: 200, then 404 (no provider), 500 (the provider), 500 (the ceremony store).
+    let begun: serde_json::Value = client
+        .post("/v1/auth/oidc/authorize")
+        .json(&json!({ "redirect_uri": REDIRECT }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    fixture.idp.set_configured(false);
+    client
+        .post("/v1/auth/oidc/authorize")
+        .json(&json!({ "redirect_uri": REDIRECT }))
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    fixture.idp.set_configured(true);
+    fixture.idp.set_unavailable(true);
+    client
+        .post("/v1/auth/oidc/authorize")
+        .json(&json!({ "redirect_uri": REDIRECT }))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.idp.set_unavailable(false);
+    fixture.oidc_authorizations.set_unavailable(true);
+    client
+        .post("/v1/auth/oidc/authorize")
+        .json(&json!({ "redirect_uri": REDIRECT }))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    client
+        .post("/v1/auth/oidc/callback")
+        .json(&json!({ "state": begun["state"], "code": support::GOOD_CODE }))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.oidc_authorizations.set_unavailable(false);
+
+    // callback: 401 (unknown state), 500 (the provider), 200, then 409 and 202.
+    client
+        .post("/v1/auth/oidc/callback")
+        .json(&json!({ "state": "never-issued", "code": support::GOOD_CODE }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    fixture.idp.set_unavailable(true);
+    client
+        .post("/v1/auth/oidc/callback")
+        .json(&json!({ "state": begun["state"], "code": support::GOOD_CODE }))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.idp.set_unavailable(false);
+
+    let begun: serde_json::Value = client
+        .post("/v1/auth/oidc/authorize")
+        .json(&json!({ "redirect_uri": REDIRECT }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    let signed: TokenResponse = client
+        .post("/v1/auth/oidc/callback")
+        .json(&json!({ "state": begun["state"], "code": support::GOOD_CODE }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+
+    // 409: a provider identity asserting the seeded password account's address. Never linked.
+    fixture
+        .idp
+        .set_identity(capsule_server::auth::oidc::VerifiedIdentity {
+            issuer: "https://idp.test".to_owned(),
+            subject: "impersonator".to_owned(),
+            email: Some(EMAIL.to_owned()),
+            email_verified: true,
+        });
+    let begun: serde_json::Value = client
+        .post("/v1/auth/oidc/authorize")
+        .json(&json!({ "redirect_uri": REDIRECT }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    client
+        .post("/v1/auth/oidc/callback")
+        .json(&json!({ "state": begun["state"], "code": support::GOOD_CODE }))
+        .send()
+        .await
+        .assert_status(StatusCode::CONFLICT);
+    fixture
+        .idp
+        .set_identity(capsule_server::auth::oidc::VerifiedIdentity {
+            issuer: "https://idp.test".to_owned(),
+            subject: "subject-1".to_owned(),
+            email: Some("federated@example.test".to_owned()),
+            email_verified: true,
+        });
+
+    // 202: enroll and confirm a factor on the federated account, then sign in again.
+    let user = fixture
+        .tokens
+        .verify(
+            &signed.access_token,
+            capsule_server::auth::TokenKind::Access,
+        )
+        .expect("the server's own signer reads it")
+        .user;
+    let bearer = format!("Bearer {}", signed.access_token);
+    client
+        .post("/v1/auth/totp/enroll")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    fixture.clock.advance(jiff::SignedDuration::from_secs(
+        i64::try_from(capsule_server::auth::totp::STEP_SECONDS).expect("in range"),
+    ));
+    client
+        .post("/v1/auth/totp/verify-enrollment")
+        .header("authorization", &bearer)
+        .json(&json!({ "totp_code": support::totp_code(fixture, &user) }))
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let begun: serde_json::Value = client
+        .post("/v1/auth/oidc/authorize")
+        .json(&json!({ "redirect_uri": REDIRECT }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    client
+        .post("/v1/auth/oidc/callback")
+        .json(&json!({ "state": begun["state"], "code": support::GOOD_CODE }))
+        .send()
+        .await
+        .assert_status(StatusCode::ACCEPTED);
 }
