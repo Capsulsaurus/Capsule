@@ -203,7 +203,6 @@ pub enum SyncRejection {
 }
 
 impl SyncRejection {
-    /// The one cursor rejection.
     /// The album page is not the caller's to read.
     fn album_access_denied() -> Self {
         Self::AlbumAccessDenied {
@@ -211,6 +210,7 @@ impl SyncRejection {
         }
     }
 
+    /// The one cursor rejection.
     fn cursor_invalid() -> Self {
         Self::CursorInvalid {
             code: error_codes::SYNC_CURSOR_INVALID,
@@ -245,11 +245,17 @@ pub async fn sync_feed(
     // first, and one refusal covers unprovisioned, not-a-member and removed alike.
     let owner = OwnerId::new(credential.user.as_str());
     let album = query.album_id.as_deref().map(AlbumId::new);
-    if let Some(album) = &album {
-        album_read_access(&sync, &credential.user, album).await?;
-    }
+    // The album's owner, from the album record: the page is bound to the rows that account
+    // filed, which is also what the index is keyed on.
+    let album = match album {
+        Some(album) => {
+            let filed_by = album_read_access(&sync, &credential.user, &album).await?;
+            Some((album, filed_by))
+        }
+        None => None,
+    };
     let scope = match &album {
-        Some(album) => CursorScope::album(&owner, album),
+        Some((album, _)) => CursorScope::album(&owner, album),
         None => CursorScope::feed(&owner),
     };
 
@@ -274,7 +280,11 @@ pub async fn sync_feed(
             .map(|size| usize::try_from(size).unwrap_or(usize::MAX)),
     );
     let rows = match &album {
-        Some(album) => sync.index().album_feed_page(album, after, limit).await,
+        Some((album, filed_by)) => {
+            sync.index()
+                .album_feed_page(filed_by, album, after, limit)
+                .await
+        }
         None => sync.index().feed_page(&owner, after, limit).await,
     }
     .map_err(|error| {
@@ -283,7 +293,7 @@ pub async fn sync_feed(
     })?;
 
     let head = match &album {
-        Some(album) => sync.index().album_head_seq(album).await,
+        Some((album, filed_by)) => sync.index().album_head_seq(filed_by, album).await,
         None => sync.index().head_seq(&owner).await,
     }
     .map_err(|error| {
@@ -315,17 +325,20 @@ pub async fn sync_feed(
     }))
 }
 
-/// Whether `caller` may read `album`'s page: its owner, or an account on its current roster.
+/// Whether `caller` may read `album`'s page — its owner, or an account on its current roster —
+/// answering the album's owner, whose rows the page is.
 ///
 /// One `403` for every refusal — unprovisioned, never a member, removed — matching the write
 /// routes' uniform `album_access_denied`: the album id is client-derived and unguessable, and a
 /// distinct answer per reason would say whether it is taken and whether the caller was ever on
-/// it. A store that cannot answer is an outage, never a refusal.
+/// it. (An unprovisioned id costs one store read and the other two cost two; with a UUIDv7 id
+/// space that timing difference buys a guesser nothing, as it does not on the write path.) A
+/// store that cannot answer is an outage, never a refusal.
 async fn album_read_access(
     sync: &SyncContext,
     caller: &UserId,
     album: &AlbumId,
-) -> Result<(), SyncRejection> {
+) -> Result<OwnerId, SyncRejection> {
     let record = sync.albums().read(album).await.map_err(|error| {
         tracing::error!(%error, %album, "the album store could not answer a sync page");
         SyncRejection::unavailable()
@@ -335,7 +348,7 @@ async fn album_read_access(
         return Err(SyncRejection::album_access_denied());
     };
     if record.owner_id.as_str() == caller.as_str() {
-        return Ok(());
+        return Ok(record.owner_id);
     }
     match sync
         .members()
@@ -345,7 +358,7 @@ async fn album_read_access(
             tracing::error!(%error, %album, "the membership store could not answer a sync page");
             SyncRejection::unavailable()
         })? {
-        Membership::Member { .. } => Ok(()),
+        Membership::Member { .. } => Ok(record.owner_id),
         Membership::Revoked(_) | Membership::Never => {
             tracing::info!(%caller, %album, "an album page was refused: not a member");
             Err(SyncRejection::album_access_denied())

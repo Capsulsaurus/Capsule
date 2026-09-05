@@ -545,6 +545,7 @@ impl AssetIndex for InMemoryAssetIndex {
 
     fn album_feed_page<'a>(
         &'a self,
+        owner: &'a OwnerId,
         album: &'a AlbumId,
         after: u64,
         limit: usize,
@@ -554,7 +555,7 @@ impl AssetIndex for InMemoryAssetIndex {
             let mut page: Vec<FeedEntry> = inner
                 .rows
                 .values()
-                .filter(|row| &row.album_id == album)
+                .filter(|row| &row.owner_id == owner && &row.album_id == album)
                 .filter(|row| row.sync_seq.is_some_and(|seq| seq > after))
                 .filter_map(|row| entry_for(row, after))
                 .collect();
@@ -564,12 +565,16 @@ impl AssetIndex for InMemoryAssetIndex {
         })
     }
 
-    fn album_head_seq<'a>(&'a self, album: &'a AlbumId) -> IndexFuture<'a, u64> {
+    fn album_head_seq<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        album: &'a AlbumId,
+    ) -> IndexFuture<'a, u64> {
         Box::pin(async move {
             Ok(lock(&self.inner)
                 .rows
                 .values()
-                .filter(|row| &row.album_id == album)
+                .filter(|row| &row.owner_id == owner && &row.album_id == album)
                 .filter_map(|row| row.sync_seq)
                 .max()
                 .unwrap_or(0))

@@ -1196,22 +1196,25 @@ impl AssetIndex for PostgresAssetIndex {
 
     fn album_feed_page<'a>(
         &'a self,
+        owner: &'a OwnerId,
         album: &'a AlbumId,
         after: u64,
         limit: usize,
     ) -> IndexFuture<'a, Vec<FeedEntry>> {
         Box::pin(async move {
-            // One snapshot, as the owner's page: see `feed_page`.
+            // One snapshot, as the owner's page: see `feed_page`. Bound to the owner as well as
+            // the album so the `(owner_id, album_id)` index serves it.
             let snapshot = begin_read_snapshot(&self.connection).await?;
             let found = snapshot
                 .query_all(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     format!(
                         "SELECT {ASSET_COLUMNS} FROM assets \
-                         WHERE album_id = $1 AND sync_seq > $2 \
-                         ORDER BY sync_seq LIMIT $3"
+                         WHERE owner_id = $1 AND album_id = $2 AND sync_seq > $3 \
+                         ORDER BY sync_seq LIMIT $4"
                     ),
                     [
+                        Value::from(owner.as_str().to_owned()),
                         Value::from(album.as_str().to_owned()),
                         Value::from(after as i64),
                         Value::from(limit as i64),
@@ -1232,15 +1235,22 @@ impl AssetIndex for PostgresAssetIndex {
         })
     }
 
-    fn album_head_seq<'a>(&'a self, album: &'a AlbumId) -> IndexFuture<'a, u64> {
+    fn album_head_seq<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        album: &'a AlbumId,
+    ) -> IndexFuture<'a, u64> {
         Box::pin(async move {
             let found = self
                 .connection
                 .query_one(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "SELECT COALESCE(MAX(sync_seq), 0)::bigint AS head FROM assets \
-                     WHERE album_id = $1",
-                    [Value::from(album.as_str().to_owned())],
+                     WHERE owner_id = $1 AND album_id = $2",
+                    [
+                        Value::from(owner.as_str().to_owned()),
+                        Value::from(album.as_str().to_owned()),
+                    ],
                 ))
                 .await
                 .map_err(PORT.failing("reading an album's head sequence number"))?

@@ -2363,6 +2363,7 @@ impl AssetIndex for SwitchableIndex {
 
     fn album_feed_page<'a>(
         &'a self,
+        owner: &'a OwnerId,
         album: &'a AlbumId,
         after: u64,
         limit: usize,
@@ -2370,14 +2371,18 @@ impl AssetIndex for SwitchableIndex {
         if self.is_down() {
             return Box::pin(async { Self::refuse() });
         }
-        self.inner.album_feed_page(album, after, limit)
+        self.inner.album_feed_page(owner, album, after, limit)
     }
 
-    fn album_head_seq<'a>(&'a self, album: &'a AlbumId) -> IndexFuture<'a, u64> {
+    fn album_head_seq<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        album: &'a AlbumId,
+    ) -> IndexFuture<'a, u64> {
         if self.is_down() {
             return Box::pin(async { Self::refuse() });
         }
-        self.inner.album_head_seq(album)
+        self.inner.album_head_seq(owner, album)
     }
 }
 

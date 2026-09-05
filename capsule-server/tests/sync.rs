@@ -667,6 +667,8 @@ async fn a_member_reads_the_albums_page_over_the_owners_sequence() {
     let first = publish_into(&fixture, "shared-1", &album()).await;
     publish_into(&fixture, "private-1", &second_album()).await;
     let third = publish_into(&fixture, "shared-2", &album()).await;
+    // After the album's last entry, so the album head and the owner's allocator differ.
+    publish_into(&fixture, "private-2", &second_album()).await;
     roster(&fixture, 1, &[(BOB, MemberRole::Reader)]).await;
     let bob = fixture.other_bearer(BOB).await;
 
@@ -780,6 +782,14 @@ async fn a_non_member_a_former_member_and_an_unknown_album_get_one_refusal() {
     let stranger = page_raw(&fixture, &carol, &format!("album_id={}", album())).await;
     stranger.assert_status(StatusCode::FORBIDDEN);
     let stranger: Value = stranger.json();
+    // And re-admitted Bob reads again.
+    page(
+        &fixture,
+        &bob,
+        &format!("album_id={}", album()),
+        StatusCode::OK,
+    )
+    .await;
 
     assert_eq!(unknown, former, "one body for every refusal");
     assert_eq!(former, stranger, "one body for every refusal");
@@ -793,6 +803,9 @@ async fn the_owner_reads_an_album_page_too_and_it_pages() {
     let first = publish_into(&fixture, "shared-1", &album()).await;
     publish_into(&fixture, "private-1", &second_album()).await;
     let third = publish_into(&fixture, "shared-2", &album()).await;
+    // After the album's last entry: the owner's allocator is now past the album's head, which
+    // is what makes the final `has_more` a statement about the album and not the allocator.
+    publish_into(&fixture, "private-2", &second_album()).await;
 
     let one = page(
         &fixture,

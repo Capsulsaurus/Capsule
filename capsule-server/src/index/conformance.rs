@@ -1686,7 +1686,10 @@ pub async fn an_album_page_is_the_owners_sequence_filtered_to_one_album(index: &
         }
     }
 
-    let page = ok(index.album_feed_page(&shared, 0, 10).await, "page an album");
+    let page = ok(
+        index.album_feed_page(&owner, &shared, 0, 10).await,
+        "page an album",
+    );
     assert_eq!(
         page.iter().map(|entry| entry.sync_seq).collect::<Vec<_>>(),
         in_shared,
@@ -1694,41 +1697,93 @@ pub async fn an_album_page_is_the_owners_sequence_filtered_to_one_album(index: &
     );
     assert!(page.iter().all(|entry| entry.album_id == shared));
     assert_eq!(
-        ok(index.album_head_seq(&shared).await, "read an album head"),
+        ok(
+            index.album_head_seq(&owner, &shared).await,
+            "read an album head"
+        ),
         in_shared[1],
         "the head is the album's last entry, not the owner's allocator"
     );
     assert!(
-        ok(index.album_head_seq(&shared).await, "read an album head")
-            < ok(index.head_seq(&owner).await, "read the owner's head"),
+        ok(
+            index.album_head_seq(&owner, &shared).await,
+            "read an album head"
+        ) < ok(index.head_seq(&owner).await, "read the owner's head"),
         "the owner minted more in another album since"
     );
 
     // Resuming past the first shared entry yields exactly the second.
     let resumed = ok(
-        index.album_feed_page(&shared, in_shared[0], 10).await,
+        index
+            .album_feed_page(&owner, &shared, in_shared[0], 10)
+            .await,
         "resume an album page",
     );
     assert_eq!(resumed.len(), 1);
     assert_eq!(resumed[0].sync_seq, in_shared[1]);
     // And a bounded page is bounded.
     assert_eq!(
-        ok(index.album_feed_page(&shared, 0, 1).await, "page one").len(),
+        ok(
+            index.album_feed_page(&owner, &shared, 0, 1).await,
+            "page one"
+        )
+        .len(),
         1
+    );
+
+    // A row another account filed under the *same* album id is not this album's: the page is
+    // bound to the owner the album record names, which is what the index is keyed on.
+    let squatter = OwnerId::new("albumpage-squatter");
+    let row = PendingAsset {
+        asset_id: AssetId::new("albumpage-asset-squat"),
+        owner_id: squatter.clone(),
+        album_id: shared.clone(),
+        protocol_version: "2026-01-01".to_owned(),
+        crypto_suite_id: 1,
+        created_at: Timestamp::UNIX_EPOCH,
+    };
+    ok(index.reserve(row).await, "reserve a row");
+    record(
+        index,
+        &AssetId::new("albumpage-asset-squat"),
+        blob(BlobRole::Provenance, "albumpage-ps"),
+    )
+    .await;
+    record(
+        index,
+        &AssetId::new("albumpage-asset-squat"),
+        blob(BlobRole::Metadata, "albumpage-ms"),
+    )
+    .await;
+    assert_eq!(
+        ok(
+            index.album_feed_page(&owner, &shared, 0, 10).await,
+            "page an album"
+        )
+        .len(),
+        2,
+        "another owner's row under the same album id is not on this owner's album page"
+    );
+    assert_eq!(
+        ok(
+            index.album_head_seq(&owner, &shared).await,
+            "read an album head"
+        ),
+        in_shared[1]
     );
 
     // An album nothing was filed into: empty, head zero — not an error.
     let unknown = AlbumId::new("albumpage-unknown");
     assert!(
         ok(
-            index.album_feed_page(&unknown, 0, 10).await,
+            index.album_feed_page(&owner, &unknown, 0, 10).await,
             "page an unknown album"
         )
         .is_empty()
     );
     assert_eq!(
         ok(
-            index.album_head_seq(&unknown).await,
+            index.album_head_seq(&owner, &unknown).await,
             "head of an unknown album"
         ),
         0

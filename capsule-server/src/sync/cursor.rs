@@ -27,6 +27,18 @@
 //! identifier out of a token clients hand around, and still makes a foreign cursor fail
 //! verification rather than decode into a position.
 //!
+//! # Scope (`S-C51`)
+//!
+//! A cursor is issued for one of two shapes — the caller's own feed, or one album's page read
+//! by the caller as its owner or a member — and both carry the owner's sequence numbers, so a
+//! cursor that crossed between them would skip unseen entries exactly as a foreign one would.
+//! The shape is therefore MAC input too: the tag is taken over
+//! `payload || len(caller) as u32 BE || caller || 0x00`, or `… || 0x01 || album` for an album
+//! page. The caller is length-prefixed because a variable-length field follows it. The version
+//! byte was **not** bumped: the wire layout below is unchanged, and a cursor minted before the
+//! scope entered the MAC fails as `NotAuthentic` — a one-time full resync, the same event a key
+//! rotation is, and indistinguishable from it to a client.
+//!
 //! # Layout
 //!
 //! `version(1) || position(8, big-endian u64) || hmac_sha256(32)`, base64url without padding on
@@ -54,6 +66,9 @@ const CURSOR_LEN: usize = PAYLOAD_LEN + TAG_LEN;
 
 /// The server-only MAC key length.
 pub const CURSOR_KEY_LEN: usize = 32;
+
+/// A generous guess at the album half of a MAC input: a scope byte and a hyphenated UUID.
+const SCOPE_ESTIMATE: usize = 1 + 36;
 
 /// Why a cursor was not accepted.
 ///
@@ -138,7 +153,7 @@ impl CursorCodec {
     /// The scope byte keeps a feed cursor and an album cursor for one caller apart.
     fn signed_bytes(payload: &[u8], scope: &CursorScope<'_>) -> Vec<u8> {
         let caller = scope.caller.as_str().as_bytes();
-        let mut bytes = Vec::with_capacity(payload.len() + 4 + caller.len() + 1 + 40);
+        let mut bytes = Vec::with_capacity(payload.len() + 4 + caller.len() + SCOPE_ESTIMATE);
         bytes.extend_from_slice(payload);
         bytes.extend_from_slice(
             &u32::try_from(caller.len())
