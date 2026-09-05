@@ -12,7 +12,8 @@
 //!
 //! - `CAPSULE_TEST_VALKEY=1`: start a container through testcontainers (`DOCKER_HOST` pointing at
 //!   the podman socket). `CAPSULE_TEST_VALKEY_TAG` overrides the image tag, which defaults to the
-//!   one `capsule-server/compose.yaml` runs.
+//!   one `capsule-server/compose.yaml` runs; `CAPSULE_TEST_CONTAINER_USERNS` (for instance
+//!   `keep-id`) sets the container's user namespace mode, which a rootless podman may need.
 //! - `CAPSULE_TEST_VALKEY_URL=redis://…`: run against a server already up. Every key is written
 //!   under `capsule:`, and every case scopes and resets its own identifiers, so the suite can be
 //!   re-run against a server that still holds the previous run.
@@ -72,11 +73,14 @@ async fn server() -> Option<Server> {
         return None;
     }
     let tag = std::env::var("CAPSULE_TEST_VALKEY_TAG").unwrap_or_else(|_| DEFAULT_TAG.to_owned());
-    let container = Valkey::default()
-        .with_tag(tag)
-        .start()
-        .await
-        .expect("the Valkey container starts");
+    let mut request = Valkey::default().with_tag(tag);
+    if let Some(userns) = std::env::var("CAPSULE_TEST_CONTAINER_USERNS")
+        .ok()
+        .filter(|mode| !mode.is_empty())
+    {
+        request = request.with_userns_mode(&userns);
+    }
+    let container = request.start().await.expect("the Valkey container starts");
     let host = container
         .get_host()
         .await
