@@ -1,5 +1,5 @@
-//! UniFFI bindings exposing the `capsule-core` SQLite catalog and CBOR sidecar
-//! to Swift (and, in future, other UniFFI targets such as Android/Kotlin).
+//! UniFFI bindings exposing the `capsule-core` SQLite catalog to Swift (and, in
+//! future, other UniFFI targets such as Android/Kotlin).
 //!
 //! One of the uniffi surfaces in the workspace — `capsule-core`'s `ffi` feature
 //! exports the crypto `FfiWorkspace` + `HardwareSigner` foreign trait separately. The two
@@ -24,8 +24,9 @@
 //!   `capsule-wasm` decodes with (slice `S-B14`).
 //! - [`AssetRecord`], [`AssetStackRecord`], [`StackMemberRecord`],
 //!   [`AlbumRecord`] — catalog row mirrors.
-//! - [`AssetSidecarRecord`] / [`serialize_sidecar`] / [`deserialize_sidecar`] —
-//!   the canonical CBOR sidecar format, with unknown fields preserved verbatim.
+//! - No sidecar codec: the unsigned CBOR shape this crate once (de)serialised was retired
+//!   with the unsigned-sidecar migration (slice `S-D24`), and the signed `SidecarV1` is
+//!   authored only by `capsule-core`'s lifecycle, never re-encoded by a client.
 //! - [`GatedView`] / [`LocalAuthGate`] / [`LocalAuthError`] — the fresh-local-auth seam
 //!   the platform implements, and the views it unlocks ([Local Gallery — SR1]).
 //! - [`CatalogError`] — the single error type crossing the boundary.
@@ -44,13 +45,11 @@ mod catalog;
 mod error;
 mod gate;
 mod records;
-mod sidecar;
 
 pub use catalog::{Catalog, LqipPlaceholder, render_lqip};
 pub use error::CatalogError;
 pub use gate::{GatedView, LocalAuthError, LocalAuthGate};
 pub use records::{AlbumRecord, AssetRecord, AssetStackRecord, StackMemberRecord};
-pub use sidecar::{AssetSidecarRecord, StackHintRecord, deserialize_sidecar, serialize_sidecar};
 
 /// Initialise structured logging for the Rust core.
 ///
