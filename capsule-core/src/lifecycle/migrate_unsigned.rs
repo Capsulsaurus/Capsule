@@ -5,7 +5,8 @@
 //! blob, and no album key material. [`Workspace::open`] anchors on provenance chains, so such
 //! an asset is invisible to every signed operation — it cannot be verified, exported, or
 //! uploaded — and a keyless [`rebuild_index`](crate::library::rebuild_index) cannot admit it
-//! either: it holds no album write capability and cannot sign a sidecar or a manifest.
+//! either: it holds no album write capability and cannot sign a sidecar or a manifest, and
+//! the unsigned reader it once fell back to is gone.
 //!
 //! The migration is an **explicit verb**, never automatic: it authors signed records, which an
 //! open must not do unasked, and it needs the album write capability a keyless rebuild does
@@ -847,7 +848,7 @@ mod tests {
     use crate::cbor;
     use crate::crypto::primitives::Argon2Params;
     use crate::crypto::verify_asset::VerifyOutcome;
-    use crate::library::rebuild_index;
+    use crate::library::{open_library, rebuild_index};
     use crate::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1};
 
     fn fast_params() -> Argon2Params {
@@ -1497,8 +1498,16 @@ mod tests {
                 .join(format!("{}.cbor", corrupt.simple()))
                 .exists()
         );
-        // They are still reported as unmigrated.
+        // They are still reported as unmigrated, and the closing `rebuild_index` indexed
+        // neither: a refusal writes nothing, the index included.
         assert_eq!(ws.unmigrated_sidecars().len(), 2);
+        assert!(ws.db().find_by_uuid(&orphan.to_string()).unwrap().is_none());
+        assert!(
+            ws.db()
+                .find_by_uuid(&corrupt.to_string())
+                .unwrap()
+                .is_none()
+        );
     }
 
     /// A read-only fallback album (recovered from a backup: content keys, no write
@@ -1856,6 +1865,44 @@ mod tests {
             vec![(sidecar_path.clone(), MigrationSkip::Stranded(id))]
         );
         assert_eq!(fs::read(&sidecar_path).unwrap(), bytes);
+    }
+
+    // ── keyless rebuild on the un-migrated fixture ──────────────────────────
+
+    /// A keyless `rebuild_index` over an un-migrated library succeeds, indexes the signed
+    /// asset, and indexes nothing for the legacy files — the one user-visible regression the
+    /// deletion of the unsigned reader accepts, and the reason the verb exists.
+    #[test]
+    fn keyless_rebuild_reports_legacy_files_and_indexes_none_of_them() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let img = src.path().join("signed.jpg");
+        fs::write(&img, b"\xFF\xD8\xFF a signed asset").unwrap();
+        let signed = {
+            let mut ws = fast_workspace(lib.path());
+            let album = ws.create_album("Imports").unwrap();
+            ws.import_asset(album, &img).unwrap()
+        };
+        let (rich, future, plain) = three_legacy_assets(lib.path());
+
+        fs::remove_file(lib.path().join("index/library.sqlite")).unwrap();
+        let library = open_library(lib.path()).unwrap();
+        rebuild_index(&library).unwrap();
+
+        assert!(
+            library
+                .db
+                .find_by_uuid(&signed.to_string())
+                .unwrap()
+                .is_some()
+        );
+        for id in [rich, future, plain] {
+            assert!(
+                library.db.find_by_uuid(&id.to_string()).unwrap().is_none(),
+                "a keyless rebuild cannot sign, so it indexes no legacy asset"
+            );
+        }
+        assert_eq!(library.db.query_timeline(0, 100).unwrap().len(), 1);
     }
 
     // ── the private decoder ─────────────────────────────────────────────────
