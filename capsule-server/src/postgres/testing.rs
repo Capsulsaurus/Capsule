@@ -36,22 +36,20 @@ pub(crate) const GATE: &str = "CAPSULE_TEST_POSTGRES";
 
 /// The image tag every run pins.
 ///
-/// Pinned rather than left at the module's default (`11-alpine`) for two reasons: the server
-/// targets a currently-supported PostgreSQL, and a floating tag makes "it passed yesterday"
-/// unfalsifiable. Bump it deliberately.
+/// **`18`, and glibc rather than alpine**, which is a decision with two halves.
 ///
-/// **One case is weaker against this image than it is in production**, and it is worth saying
-/// so rather than discovering it later: alpine is musl, and musl collates `en_US.utf8`
-/// byte-for-byte, so `index/conformance.rs`'s
-/// `the_row_walk_orders_by_the_identifiers_own_bytes` cannot tell a query that pins
-/// `COLLATE "C"` from one that inherits the database's collation. On a glibc PostgreSQL it can:
-/// glibc orders `walkord-a-b, walkord-ab, walkord-a-c` where bytes order
-/// `walkord-a-b, walkord-a-c, walkord-ab`. The `COLLATE "C"` in `index/postgres.rs` is written
-/// against the glibc behaviour, which is what a Debian-based deployment runs. Moving this pin to
-/// a glibc image would make the case bite here too — `postgres:18.0` was tried and its
-/// entrypoint does not survive `--userns=keep-id`, which is the rootless-podman workaround
-/// below.
-const POSTGRES_TAG: &str = "17-alpine";
+/// The major is the one a deployment runs: `capsule-server/compose.yaml` and `.env.example` ship
+/// PostgreSQL 18, and design/filesystem/server.md records it. A harness that tested a different
+/// major would be proving the adapters work against something nobody deploys.
+///
+/// The libc is load-bearing for one case. musl collates `en_US.utf8` byte-for-byte, so on an
+/// alpine image `index/conformance.rs`'s `the_row_walk_orders_by_the_identifiers_own_bytes`
+/// cannot tell a query that pins `COLLATE "C"` from one that inherits the database's collation —
+/// it passes either way, which is worse than failing. glibc orders
+/// `walkord-a-b, walkord-ab, walkord-a-c` where bytes order
+/// `walkord-a-b, walkord-a-c, walkord-ab`, so on this image the case is an assertion. Bump the
+/// tag deliberately, and keep it glibc.
+const POSTGRES_TAG: &str = "18";
 
 /// Where the container keeps its cluster.
 ///

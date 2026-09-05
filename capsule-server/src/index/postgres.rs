@@ -35,8 +35,8 @@
 use capsule_core::crypto::hash::Hash32;
 use jiff::Timestamp;
 use sea_orm::{
-    ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbBackend, Statement,
-    TransactionTrait, Value,
+    AccessMode, ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbBackend,
+    IsolationLevel, Statement, TransactionTrait, Value,
 };
 
 use super::{
@@ -433,12 +433,69 @@ async fn persist(transaction: &DatabaseTransaction, row: &AssetRow) -> Result<()
     Ok(())
 }
 
+/// The sequence number `op`'s manifest was applied at, if it already has been.
+///
+/// The whole idempotency store: a replay needs the number the first application minted, and
+/// everything else in the response is derivable from the manifest itself. Called **twice** by
+/// [`AssetIndex::apply_op`] — once before the row lock and once after — and the second call is
+/// the one that is load-bearing; see the comment there.
+async fn applied_sequence(
+    transaction: &DatabaseTransaction,
+    op: &LifecycleOp,
+) -> Result<Option<u64>, StoreError> {
+    let found = transaction
+        .query_one(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "SELECT sync_seq FROM applied_manifests WHERE manifest_hash = $1",
+            [Value::from(op.manifest_hash.as_bytes().to_vec())],
+        ))
+        .await
+        .map_err(PORT.failing("checking whether a manifest was already applied"))?;
+    let Some(found) = found else { return Ok(None) };
+    let sync_seq: i64 = found
+        .try_get("", "sync_seq")
+        .map_err(PORT.failing("reading a replayed sequence number"))?;
+    tracing::info!(
+        asset = %op.asset_id,
+        action = op.action.as_str(),
+        "a lifecycle write was replayed; nothing was written"
+    );
+    Ok(Some(sequence_from(sync_seq)?))
+}
+
 /// Begin a transaction, or say why not.
 async fn begin(connection: &DatabaseConnection) -> Result<DatabaseTransaction, StoreError> {
     connection
         .begin()
         .await
         .map_err(PORT.failing("opening a transaction"))
+}
+
+/// Begin a read-only transaction whose statements all see **one** snapshot.
+///
+/// Every read here answers from more than one statement: an asset row, then its blobs, then the
+/// manifests its chain has moved past. Under PostgreSQL's default `READ COMMITTED` each of those
+/// takes a *fresh* snapshot, so a concurrent finalization landing between them yields a row
+/// nobody ever held — the clearest case being
+/// [`AssetIndex::find_reference`](super::AssetIndex::find_reference), where `state` and `hold`
+/// decide whether bytes are served and `role` and `original_held` come from the blob rows. A
+/// takedown applied between the two statements would produce a reference that says "no hold"
+/// about an asset that has one.
+///
+/// `REPEATABLE READ` is what actually fixes that; wrapping the statements in a default
+/// transaction would look like a fix and change nothing. `ReadOnly` is not decoration either —
+/// it makes "this path does not write" a property the database enforces rather than one the
+/// reader has to confirm by reading every statement.
+async fn begin_read_snapshot(
+    connection: &DatabaseConnection,
+) -> Result<DatabaseTransaction, StoreError> {
+    connection
+        .begin_with_config(
+            Some(IsolationLevel::RepeatableRead),
+            Some(AccessMode::ReadOnly),
+        )
+        .await
+        .map_err(PORT.failing("opening a read snapshot"))
 }
 
 /// Commit, or say why not.
@@ -455,14 +512,26 @@ impl AssetIndex for PostgresAssetIndex {
             // `ON CONFLICT DO NOTHING` rather than a read followed by a write: two sessions of
             // one bundle reserve unconditionally at creation, so this is the *normal* path and
             // a read-then-write would let both believe they created the row.
-            let inserted = self
-                .connection
-                .execute(Statement::from_sql_and_values(
+            //
+            // **`RETURNING`, and one transaction around the whole thing.** The row a
+            // `Reservation::Created` carries is the row the `INSERT` wrote, read out of the
+            // statement that wrote it — so it cannot be a *later* state of that asset that a
+            // concurrent finalization has already moved on. Reading it back separately would
+            // make `Created` mean "created, and here is whatever it looks like now", which is a
+            // different and weaker claim; the conformance suite asserts
+            // `created.state == Pending` and `created.sync_seq.is_none()`, and both of those are
+            // properties of the moment of creation rather than of the present.
+            let transaction = begin(&self.connection).await?;
+            let created = transaction
+                .query_one(Statement::from_sql_and_values(
                     DbBackend::Postgres,
-                    "INSERT INTO assets (asset_id, owner_id, album_id, protocol_version, \
-                     crypto_suite_id, state, amk_version, created_at, updated_at) \
-                     VALUES ($1, $2, $3, $4, $5, 'pending', 0, $6, $6) \
-                     ON CONFLICT (asset_id) DO NOTHING",
+                    format!(
+                        "INSERT INTO assets (asset_id, owner_id, album_id, protocol_version, \
+                         crypto_suite_id, state, amk_version, created_at, updated_at) \
+                         VALUES ($1, $2, $3, $4, $5, 'pending', 0, $6, $6) \
+                         ON CONFLICT (asset_id) DO NOTHING \
+                         RETURNING {ASSET_COLUMNS}"
+                    ),
                     [
                         Value::from(asset.asset_id.as_str().to_owned()),
                         Value::from(asset.owner_id.as_str().to_owned()),
@@ -475,18 +544,34 @@ impl AssetIndex for PostgresAssetIndex {
                 .await
                 .map_err(PORT.failing("reserving an asset row"))?;
 
-            let Some(existing) = hydrate(&self.connection, &asset.asset_id).await? else {
-                // Only reachable if the row was purged between the insert and the read back,
-                // which no path in this crate does; treated as a refusal rather than a panic.
+            if let Some(created) = created {
+                // A row that has just been inserted holds no blobs and no superseded manifests,
+                // by construction — so there is nothing to load, and querying for it would be a
+                // round trip to be told what the `INSERT` already fixed.
+                let row = asset_without_collections(&created)?;
+                commit(transaction).await?;
+                tracing::debug!(asset = %asset.asset_id, "reserved a pending asset row");
+                return Ok(Reservation::Created(Box::new(row)));
+            }
+
+            // The insert conflicted, so a row exists. Read it inside the same transaction, so
+            // the row this compares against is the row it returns.
+            let existing = hydrate(&transaction, &asset.asset_id).await?;
+            commit(transaction).await?;
+            let Some(existing) = existing else {
+                // Kept as a defensive refusal rather than deleted, and it is worth saying which:
+                // nothing in this crate removes an `assets` row — `purge` clears a row's blob
+                // references and keeps the tombstone deliberately — so an insert that conflicted
+                // against a row a `SELECT` in the same transaction cannot then see is a database
+                // this server does not understand. `Rejected` says whether state changed is
+                // unknown, which is exactly right, and it beats an `expect` in a path a client
+                // can reach.
                 return Err(StoreError::Rejected {
                     store: PORT.store,
-                    detail: "the reserved row disappeared before it could be read back".to_owned(),
+                    detail: "an asset id conflicted with a row that could not then be read"
+                        .to_owned(),
                 });
             };
-            if inserted.rows_affected() == 1 {
-                tracing::debug!(asset = %asset.asset_id, "reserved a pending asset row");
-                return Ok(Reservation::Created(Box::new(existing)));
-            }
 
             let agrees = existing.owner_id == asset.owner_id
                 && existing.album_id == asset.album_id
@@ -503,7 +588,14 @@ impl AssetIndex for PostgresAssetIndex {
     }
 
     fn read<'a>(&'a self, asset: &'a AssetId) -> IndexFuture<'a, Option<AssetRow>> {
-        Box::pin(async move { hydrate(&self.connection, asset).await })
+        Box::pin(async move {
+            // One snapshot: the row, its blobs and its superseded chain are one fact, and three
+            // statements at `READ COMMITTED` can return three different moments of it.
+            let snapshot = begin_read_snapshot(&self.connection).await?;
+            let row = hydrate(&snapshot, asset).await?;
+            commit(snapshot).await?;
+            Ok(row)
+        })
     }
 
     fn record_blob<'a>(
@@ -653,9 +745,15 @@ impl AssetIndex for PostgresAssetIndex {
             // tombstoned one, and a pending row is not a reference at all. Content addressing
             // means two assets share a thumbnail, so deleting one must not take the other's
             // bytes with it.
+            //
+            // All of it inside one snapshot. This is the read the serving path decides a
+            // takedown from, and `BlobReference`'s own docs say the decision has to come from
+            // the *same read* that found the reference — "one round trip, and no window in which
+            // a hold applied between the two reads is missed". At `READ COMMITTED` the row query
+            // and the blob query are two reads with exactly that window between them.
+            let snapshot = begin_read_snapshot(&self.connection).await?;
             for state in ["visible", "tombstoned"] {
-                let found = self
-                    .connection
+                let found = snapshot
                     .query_one(Statement::from_sql_and_values(
                         DbBackend::Postgres,
                         format!(
@@ -674,8 +772,8 @@ impl AssetIndex for PostgresAssetIndex {
                     .map_err(PORT.failing("looking an address up for the serving path"))?;
                 let Some(found) = found else { continue };
                 let mut row = asset_without_collections(&found)?;
-                load_collections(&self.connection, &mut row).await?;
-                return Ok(Some(BlobReference {
+                load_collections(&snapshot, &mut row).await?;
+                let reference = BlobReference {
                     asset_id: row.asset_id.clone(),
                     owner_id: row.owner_id.clone(),
                     role: row
@@ -686,8 +784,11 @@ impl AssetIndex for PostgresAssetIndex {
                     state: row.state,
                     original_held: row.original_held(),
                     hold: row.hold,
-                }));
+                };
+                commit(snapshot).await?;
+                return Ok(Some(reference));
             }
+            commit(snapshot).await?;
             Ok(None)
         })
     }
@@ -700,31 +801,32 @@ impl AssetIndex for PostgresAssetIndex {
             // already-applied op is not a stale chain, it is the same op arriving twice.
             // Checking 17 first would answer `409` to a client whose only fault was losing an
             // acknowledgement.
-            let replayed = transaction
-                .query_one(Statement::from_sql_and_values(
-                    DbBackend::Postgres,
-                    "SELECT sync_seq FROM applied_manifests WHERE manifest_hash = $1",
-                    [Value::from(op.manifest_hash.as_bytes().to_vec())],
-                ))
-                .await
-                .map_err(PORT.failing("checking whether a manifest was already applied"))?;
-            if let Some(replayed) = replayed {
-                let sync_seq: i64 = replayed
-                    .try_get("", "sync_seq")
-                    .map_err(PORT.failing("reading a replayed sequence number"))?;
-                tracing::info!(
-                    asset = %op.asset_id,
-                    action = op.action.as_str(),
-                    "a lifecycle write was replayed; nothing was written"
-                );
-                return Ok(OpOutcome::Replayed {
-                    sync_seq: sequence_from(sync_seq)?,
-                });
+            if let Some(sync_seq) = applied_sequence(&transaction, &op).await? {
+                return Ok(OpOutcome::Replayed { sync_seq });
             }
 
             let Some(row) = hydrate_locked(&transaction, &op.asset_id).await? else {
                 return Ok(OpOutcome::NotFound);
             };
+
+            // **And again, now that the asset row is locked.** The first look is an optimisation
+            // — it answers a leisurely retry without taking a lock — and on its own it is a
+            // read-then-decide with a window in it: two identical submissions racing both find
+            // nothing, and the loser then serializes on `FOR UPDATE` behind a winner that has
+            // meanwhile inserted the very row it looked for. Answering that loser from the state
+            // it read before the lock produces the wrong outcome twice over — it would fail
+            // invariant 17 against a chain head the winner has just advanced, and report
+            // `StaleChain` to a client whose manifest *was* applied, by the winner, moments ago.
+            //
+            // The retry inside the critical section is what makes `Replayed` the answer either
+            // way, which is what the port promises: a byte-identical resubmission has the same
+            // hash, so it is the same op however it arrived. The alternative — catching the
+            // unique-violation on the `applied_manifests` insert further down — means reaching
+            // into `sqlx::Error` to tell a constraint violation from any other execution
+            // failure, which `postgres/error.rs` refuses to do for reasons recorded there.
+            if let Some(sync_seq) = applied_sequence(&transaction, &op).await? {
+                return Ok(OpOutcome::Replayed { sync_seq });
+            }
             // Not this caller's asset, or not in the album the op was addressed to. Both are
             // the same answer, and neither is distinguishable from an asset that never existed.
             if row.owner_id != op.owner_id || row.album_id != op.album_id {
@@ -963,8 +1065,11 @@ impl AssetIndex for PostgresAssetIndex {
                     [Value::from(limit as i64)],
                 ),
             };
-            let found = self
-                .connection
+            // One snapshot across the page and every row's collections: a scrub comparing the
+            // index against the blob store must not be handed a row whose blob list came from a
+            // later moment than its state.
+            let snapshot = begin_read_snapshot(&self.connection).await?;
+            let found = snapshot
                 .query_all(statement)
                 .await
                 .map_err(PORT.failing("walking the asset rows"))?;
@@ -972,7 +1077,8 @@ impl AssetIndex for PostgresAssetIndex {
                 .iter()
                 .map(asset_without_collections)
                 .collect::<Result<Vec<_>, _>>()?;
-            load_all_collections(&self.connection, &mut rows).await?;
+            load_all_collections(&snapshot, &mut rows).await?;
+            commit(snapshot).await?;
             Ok(rows)
         })
     }
@@ -982,8 +1088,8 @@ impl AssetIndex for PostgresAssetIndex {
             // Oldest change first, so a bounded pass makes progress on the oldest deletions
             // rather than revisiting the same page. The asset id breaks ties so the order is
             // total and a resumed pass is deterministic.
-            let found = self
-                .connection
+            let snapshot = begin_read_snapshot(&self.connection).await?;
+            let found = snapshot
                 .query_all(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     format!(
@@ -998,7 +1104,8 @@ impl AssetIndex for PostgresAssetIndex {
                 .iter()
                 .map(asset_without_collections)
                 .collect::<Result<Vec<_>, _>>()?;
-            load_all_collections(&self.connection, &mut rows).await?;
+            load_all_collections(&snapshot, &mut rows).await?;
+            commit(snapshot).await?;
             Ok(rows)
         })
     }
@@ -1029,8 +1136,10 @@ impl AssetIndex for PostgresAssetIndex {
         limit: usize,
     ) -> IndexFuture<'a, Vec<FeedEntry>> {
         Box::pin(async move {
-            let found = self
-                .connection
+            // One snapshot: a page whose entries carried blob lists from different moments
+            // would hand a client a manifest address and a metadata address that never coexisted.
+            let snapshot = begin_read_snapshot(&self.connection).await?;
+            let found = snapshot
                 .query_all(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     format!(
@@ -1050,7 +1159,8 @@ impl AssetIndex for PostgresAssetIndex {
                 .iter()
                 .map(asset_without_collections)
                 .collect::<Result<Vec<_>, _>>()?;
-            load_all_collections(&self.connection, &mut rows).await?;
+            load_all_collections(&snapshot, &mut rows).await?;
+            commit(snapshot).await?;
             // `entry_for` is shared with the in-memory adapter so both render an entry
             // identically — the `ChangeKind` rule in particular is the kind of thing two
             // adapters drift on.

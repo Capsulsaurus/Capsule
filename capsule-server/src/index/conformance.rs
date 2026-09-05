@@ -916,6 +916,74 @@ pub async fn re_applying_a_manifest_is_a_replay(index: &dyn AssetIndex) {
     );
 }
 
+/// Two identical submissions racing produce one application and one replay.
+///
+/// The window this closes is not hypothetical: an adapter that checks its idempotency store,
+/// then takes the asset's lock, has read *before* the lock and decided *after* it. Two clients
+/// retrying the same manifest — or one client whose first attempt is still in flight when its
+/// retry timer fires — both find nothing, and the loser then serializes behind a winner that has
+/// meanwhile applied the very manifest it looked for.
+///
+/// Answering that loser from what it read before the lock is wrong twice over. It would fail
+/// invariant 17 against a chain head the winner has just advanced, and report `StaleChain` to a
+/// client whose manifest *was* applied — moments ago, by the winner — which is precisely the
+/// answer `re_applying_a_manifest_is_a_replay` exists to forbid in the sequential case.
+///
+/// A single-process suite cannot force a particular interleaving, so this asserts the property
+/// that holds under *every* interleaving: one `Applied`, one `Replayed`, the same sequence
+/// number in both, and exactly one number minted.
+pub async fn racing_identical_submissions_apply_once_and_replay_once(index: &dyn AssetIndex) {
+    let (asset, _) = publish(index, "op-race", 1).await;
+    let created = head_of(index, &asset).await;
+    // A seed of its own. `applied_manifests` is keyed on the hash **globally**, not per asset —
+    // which is the point of it — so a case that reused another case's manifest would be told
+    // `Replayed` for a submission it had never made, and would take that for its own answer.
+    let hash = manifest(41);
+    let owner = OwnerId::new("op-race-owner");
+    let before = ok(index.head_seq(&owner).await, "head");
+
+    let (first, second) = tokio::join!(
+        index.apply_op(op("op-race", 1, OpAction::Delete, created, hash)),
+        index.apply_op(op("op-race", 1, OpAction::Delete, created, hash)),
+    );
+    let outcomes = [ok(first, "apply"), ok(second, "apply")];
+
+    let applied: Vec<u64> = outcomes
+        .iter()
+        .filter_map(|outcome| match outcome {
+            OpOutcome::Applied { sync_seq, .. } => Some(*sync_seq),
+            _ => None,
+        })
+        .collect();
+    let replayed: Vec<u64> = outcomes
+        .iter()
+        .filter_map(|outcome| match outcome {
+            OpOutcome::Replayed { sync_seq } => Some(*sync_seq),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        applied.len(),
+        1,
+        "exactly one of two identical submissions applies, got {outcomes:?}"
+    );
+    assert_eq!(
+        replayed.len(),
+        1,
+        "the other is a replay and never a stale chain, got {outcomes:?}"
+    );
+    assert_eq!(
+        applied[0], replayed[0],
+        "a replay reports the number the application minted"
+    );
+
+    assert_eq!(
+        ok(index.head_seq(&owner).await, "head"),
+        before.saturating_add(1),
+        "two identical submissions cost one sequence number, not two"
+    );
+}
+
 /// A delete tombstones, a restore un-tombstones, and both reach the feed.
 pub async fn delete_and_restore_are_both_publishable_changes(index: &dyn AssetIndex) {
     let (asset, _) = publish(index, "op-cycle", 1).await;
@@ -1600,6 +1668,7 @@ pub async fn run_all(index: &dyn AssetIndex) {
     a_live_holder_outranks_a_deleted_one(index).await;
     a_lifecycle_write_extends_the_chain(index).await;
     re_applying_a_manifest_is_a_replay(index).await;
+    racing_identical_submissions_apply_once_and_replay_once(index).await;
     delete_and_restore_are_both_publishable_changes(index).await;
     an_epoch_that_regresses_the_album_is_refused(index).await;
     an_op_on_an_asset_that_is_not_the_callers_is_not_found(index).await;
