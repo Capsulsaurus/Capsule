@@ -279,7 +279,7 @@ pub fn verify_id_token(
     if claims.iss != expect.issuer {
         return Err(ClaimRejection::Issuer { found: claims.iss });
     }
-    if !claims.aud.iter().any(|aud| *aud == expect.client_id) {
+    if !claims.aud.contains(&expect.client_id) {
         return Err(ClaimRejection::Audience);
     }
     if claims
