@@ -405,29 +405,37 @@ fn mode(apply: bool) -> Mode {
 
 /// Sweep blobs nothing references any more.
 ///
-/// The partial report is printed **before** the error when a pass fails part-way. `collect`
-/// propagates the first store failure having applied whatever it did before it, which is safe
-/// in both directions by the module's own argument — a mark is reversible and a sweep only ever
-/// removed a blob confirmed unreferenced twice — but an operator still needs to know what
-/// happened before it stopped.
+/// # What an interrupted pass leaves, and what the operator is told
+///
+/// `gc::collect` returns `Result<CollectionReport, StoreError>`, so a pass that fails part-way
+/// returns **no report at all** — the work it did before the failure is not recoverable from
+/// here, and stdout stays empty. What the operator sees is the store error on stderr and a
+/// non-zero exit; what they have to do to find out how far it got is read the `INFO` lines the
+/// collector logs as it marks and sweeps.
+///
+/// That is a real gap and it is the library's to close: the report would have to come back
+/// alongside the error (`Result<(CollectionReport, Option<StoreError>), _>` or equivalent), and
+/// `gc/mod.rs` is not this change's to edit. The state left behind is safe either way, by the
+/// module's own argument — a mark is reversible, and a sweep only ever removed a blob confirmed
+/// unreferenced twice — so re-running the pass is the correct response to one that stopped.
 async fn collect(config: &Config, mode: Mode) -> Result<ExitCode> {
     let maintenance = maintenance(config).await?;
-    let report = crate::gc::collect(&maintenance.collection, mode).await;
-    if let Ok(report) = &report {
-        print!("{}", render_collection(report, mode));
-    }
-    report.map_err(|error| eyre!("the collection pass could not finish: {error}"))?;
+    let report = crate::gc::collect(&maintenance.collection, mode)
+        .await
+        .map_err(|error| eyre!("the collection pass could not finish: {error}"))?;
+    print!("{}", render_collection(&report, mode));
     Ok(ExitCode::SUCCESS)
 }
 
 /// Drop the blob references of tombstoned assets past their retention window.
+///
+/// An interrupted pass reports nothing, for the reason [`collect`] records.
 async fn purge(config: &Config, mode: Mode, limit: usize) -> Result<ExitCode> {
     let maintenance = maintenance(config).await?;
-    let report = crate::gc::purge_expired(&maintenance.collection, mode, limit).await;
-    if let Ok(report) = &report {
-        print!("{}", render_purge(report, mode));
-    }
-    report.map_err(|error| eyre!("the retention purge could not finish: {error}"))?;
+    let report = crate::gc::purge_expired(&maintenance.collection, mode, limit)
+        .await
+        .map_err(|error| eyre!("the retention purge could not finish: {error}"))?;
+    print!("{}", render_purge(&report, mode));
     Ok(ExitCode::SUCCESS)
 }
 

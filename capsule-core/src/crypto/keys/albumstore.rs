@@ -110,7 +110,7 @@ pub enum AlbumStoreError {
 type Result<T> = std::result::Result<T, AlbumStoreError>;
 
 /// One album's persisted authority state, behind the
-/// [`AlbumAuthority`](crate::crypto::authority::AlbumAuthority) seam.
+/// [`AlbumAuthority`] seam.
 ///
 /// Both variants exist on **every** build, `mls` or not: a non-mls build must be able to *decode*
 /// an MLS-authority album and report it as [`AlbumStoreError::MlsUnavailable`], which it could not
