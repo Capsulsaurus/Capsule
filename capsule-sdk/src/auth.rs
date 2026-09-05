@@ -15,7 +15,10 @@
 //!   check and the wire is transparently recovered.
 //!
 //! It is hand-rolled over `reqwest` (rustls only) against the server's own
-//! `/v1/auth/{register,login,refresh,logout}`. It does not
+//! `/v1/auth/{register,login,refresh,logout}` and, for a deployment with an identity provider,
+//! `/v1/auth/oidc/{authorize,callback}` (slice `S-N2`: [`AuthClient::begin_oidc_login`] and
+//! [`AuthClient::complete_oidc_login`]; the browser leg between them is the platform's — a
+//! loopback listener on the CLI, `ASWebAuthenticationSession` on iOS). It does not
 //! route through the generated client, but the reason is no longer that spargen is
 //! parked — spargen ships and `S-D8` generates the typed surface today. What lives here
 //! is token *orchestration*: the pre-flight refresh, the `401`-retry-once replay, and
@@ -112,6 +115,30 @@ pub enum AuthError {
     /// [`LoginOutcome`], because a second factor is the system working rather than a failure.
     #[error("this account requires a second factor; complete the sign-in with a code")]
     SecondFactorRequired,
+
+    /// The server has no identity provider (`error.auth.oidc_not_configured`).
+    ///
+    /// A client that read `auth.oidc: null` from `server-info` never sees this; one that offered
+    /// the option anyway does.
+    #[error("single sign-on is not configured on this server")]
+    OidcNotConfigured,
+    /// The redirect URI this client asked for is not one the server admits
+    /// (`error.auth.oidc_redirect_invalid`). A client or deployment misconfiguration.
+    #[error("the server will not send a person back to this redirect URI")]
+    OidcRedirectInvalid,
+    /// The callback was refused: the ceremony expired or was replayed, the provider refused the
+    /// exchange, or the ID token failed a check. Every one means "start the sign-in again", so
+    /// they are one variant; `code` says which for a log line.
+    #[error("the sign-in through the identity provider was refused ({})", code.as_deref().unwrap_or("no code"))]
+    OidcRejected {
+        /// The server's `error.auth.oidc_*` code, when it sent one.
+        code: Option<String>,
+    },
+    /// The identity provider asserted an address that already has a local account
+    /// (`error.auth.oidc_address_taken`). Never linked: the person signs in with that account's
+    /// password instead.
+    #[error("an account with that address already exists; sign in with its password")]
+    OidcAddressTaken,
     /// A server response the client does not model.
     #[error("unexpected {status} response from {endpoint}: {detail}")]
     Unexpected {
@@ -144,7 +171,10 @@ impl AuthError {
         match self {
             Self::InvalidCredentials => Some(error_codes::AUTH_INVALID_CREDENTIALS),
             Self::RateLimited { .. } => Some(error_codes::AUTH_RATE_LIMITED),
-            Self::Unexpected { code, .. } => code.as_deref(),
+            Self::OidcNotConfigured => Some(error_codes::AUTH_OIDC_NOT_CONFIGURED),
+            Self::OidcRedirectInvalid => Some(error_codes::AUTH_OIDC_REDIRECT_INVALID),
+            Self::OidcAddressTaken => Some(error_codes::AUTH_OIDC_ADDRESS_TAKEN),
+            Self::OidcRejected { code } | Self::Unexpected { code, .. } => code.as_deref(),
             _ => None,
         }
     }
@@ -158,6 +188,8 @@ enum Endpoint {
     VerifyTotp,
     Refresh,
     Logout,
+    OidcAuthorize,
+    OidcCallback,
 }
 
 impl Endpoint {
@@ -168,11 +200,13 @@ impl Endpoint {
             Self::VerifyTotp => "login/verify-totp",
             Self::Refresh => "refresh",
             Self::Logout => "logout",
+            Self::OidcAuthorize => "oidc/authorize",
+            Self::OidcCallback => "oidc/callback",
         }
     }
 
     /// What a `401` from this endpoint means.
-    fn unauthorized_error(self) -> AuthError {
+    fn unauthorized_error(self, code: Option<String>) -> AuthError {
         match self {
             // Registration does not authenticate an existing session, so a `401` from
             // it is not a real ceremony outcome; treat it as a credential rejection.
@@ -183,6 +217,32 @@ impl Endpoint {
             // the password — which is what `SessionExpired` says. Neither is a *credential*
             // rejection, because the password already verified to get this far.
             Self::VerifyTotp | Self::Refresh | Self::Logout => AuthError::SessionExpired,
+            // The callback's three `401`s — a spent state, a refused exchange, a refused token —
+            // all mean "start again"; the code is kept for the log. The authorize declares no
+            // `401`, so one from it is a server this client does not model.
+            Self::OidcCallback => AuthError::OidcRejected { code },
+            Self::OidcAuthorize => AuthError::Unexpected {
+                status: 401,
+                endpoint: self.name(),
+                detail: String::new(),
+                code,
+            },
+        }
+    }
+
+    /// The typed refusals only the OIDC endpoints make, matched on the catalog code.
+    fn oidc_refusal(self, status: u16, code: Option<&str>) -> Option<AuthError> {
+        match (self, status, code) {
+            (Self::OidcAuthorize, 404, Some(error_codes::AUTH_OIDC_NOT_CONFIGURED)) => {
+                Some(AuthError::OidcNotConfigured)
+            }
+            (Self::OidcAuthorize, 400, Some(error_codes::AUTH_OIDC_REDIRECT_INVALID)) => {
+                Some(AuthError::OidcRedirectInvalid)
+            }
+            (Self::OidcCallback, 409, Some(error_codes::AUTH_OIDC_ADDRESS_TAKEN)) => {
+                Some(AuthError::OidcAddressTaken)
+            }
+            _ => None,
         }
     }
 }
@@ -234,6 +294,30 @@ struct SecondFactorChallengeBody {
 #[derive(Serialize)]
 struct RefreshRequestBody<'a> {
     refresh_token: &'a str,
+}
+
+/// The `POST /v1/auth/oidc/authorize` body (`S-N2`).
+#[derive(Serialize)]
+struct OidcAuthorizeRequestBody<'a> {
+    redirect_uri: &'a str,
+}
+
+/// The `POST /v1/auth/oidc/callback` body. The cohort rides **here**, because this is the
+/// request that opens the session — the same reason it rides `verify-totp` and not `login`.
+#[derive(Serialize)]
+struct OidcCallbackRequestBody<'a> {
+    state: &'a str,
+    code: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cohort_hash: Option<&'a str>,
+}
+
+/// The server's `OidcAuthorizationResponse`.
+#[derive(Deserialize)]
+struct OidcAuthorizationBody {
+    authorization_url: String,
+    state: String,
+    expires_by: u64,
 }
 
 /// The server's `TokenResponse`. `token_type` and any other
@@ -304,6 +388,8 @@ struct AuthEndpoints {
     verify_totp: String,
     refresh: String,
     logout: String,
+    oidc_authorize: String,
+    oidc_callback: String,
 }
 
 impl AuthEndpoints {
@@ -321,8 +407,26 @@ impl AuthEndpoints {
             verify_totp: format!("{trimmed}/login/verify-totp"),
             refresh: format!("{trimmed}/refresh"),
             logout: format!("{trimmed}/logout"),
+            oidc_authorize: format!("{trimmed}/oidc/authorize"),
+            oidc_callback: format!("{trimmed}/oidc/callback"),
         })
     }
+}
+
+/// A begun sign-in through the identity provider (`S-N2`).
+///
+/// The platform sends the person to `authorization_url`, receives the provider's redirect at
+/// the `redirect_uri` it named, and hands the redirect's `code` with this `state` to
+/// [`AuthClient::complete_oidc_login`]. Good once, and until `expires_by`.
+///
+/// No `Debug`: the state is the key to the pending ceremony and the URL carries it.
+pub struct OidcAuthorization {
+    /// Where to send the person. Carries the whole authorization request in its query.
+    pub authorization_url: String,
+    /// The `state` the provider's redirect will echo.
+    pub state: SecretString,
+    /// The absolute Unix-seconds instant the ceremony stops being redeemable.
+    pub expires_by: u64,
 }
 
 /// What a password login answered with (`S-C55`).
@@ -464,29 +568,118 @@ impl AuthClient {
             .send()
             .await?;
 
-        // `202 Accepted` — the password verified and the sign-in is not finished. Read from the
-        // **status**, which is where the server puts the distinction; a body flag would be a
-        // second place for the two to disagree. Before `S-C63` this fell through to
-        // `read_tokens` and surfaced as `MalformedResponse`, which told a user with a second
-        // factor that their server was broken.
+        let outcome = self.read_login_outcome(Endpoint::Login, response).await?;
+        tracing::info!("login answered");
+        Ok(outcome)
+    }
+
+    /// Begin a sign-in through the server's identity provider (`S-N2`).
+    ///
+    /// `redirect_uri` is where the provider will send the person back — this client's own
+    /// callback, which the server admits if it is the deployment's configured one or a loopback
+    /// IP literal on any port (the shape a CLI's or desktop app's listener has). What comes back
+    /// is where to send the person and the `state` to present with the resulting `code`.
+    ///
+    /// # Errors
+    ///
+    /// [`AuthError::OidcNotConfigured`] when the server has no provider,
+    /// [`AuthError::OidcRedirectInvalid`] when it refuses the redirect.
+    #[instrument(skip_all)]
+    pub async fn begin_oidc_login(
+        &self,
+        redirect_uri: &str,
+    ) -> Result<OidcAuthorization, AuthError> {
+        tracing::info!("beginning a sign-in through the identity provider");
+        let response = self
+            .http
+            .post(&self.base.oidc_authorize)
+            .json(&OidcAuthorizeRequestBody { redirect_uri })
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(error_from_response(Endpoint::OidcAuthorize, response).await);
+        }
+        let body: OidcAuthorizationBody =
+            response
+                .json()
+                .await
+                .map_err(|e| AuthError::MalformedResponse {
+                    endpoint: Endpoint::OidcAuthorize.name(),
+                    reason: e.to_string(),
+                })?;
+        Ok(OidcAuthorization {
+            authorization_url: body.authorization_url,
+            state: SecretString::from(body.state),
+            expires_by: body.expires_by,
+        })
+    }
+
+    /// Finish a sign-in through the identity provider with what its redirect carried (`S-N2`).
+    ///
+    /// Answers a [`LoginOutcome`] exactly as [`login`](AuthClient::login) does — a session, or a
+    /// second-factor challenge for an account that enrolled one — and the configured cohort hash
+    /// rides this request, because this is the one that opens the session.
+    ///
+    /// # Errors
+    ///
+    /// [`AuthError::OidcRejected`] for a spent or expired `state`, a refused exchange or a
+    /// refused ID token (start again); [`AuthError::OidcAddressTaken`] when the provider asserted
+    /// an address that already has a local account.
+    #[instrument(skip_all)]
+    pub async fn complete_oidc_login(
+        &self,
+        state: &SecretString,
+        code: &str,
+    ) -> Result<LoginOutcome, AuthError> {
+        tracing::info!(
+            cohort_emitted = self.cohort().is_some(),
+            "completing a sign-in through the identity provider"
+        );
+        let response = self
+            .http
+            .post(&self.base.oidc_callback)
+            .json(&OidcCallbackRequestBody {
+                state: state.expose_secret(),
+                code,
+                cohort_hash: self.cohort(),
+            })
+            .send()
+            .await?;
+        let outcome = self
+            .read_login_outcome(Endpoint::OidcCallback, response)
+            .await?;
+        tracing::info!("the identity provider sign-in answered");
+        Ok(outcome)
+    }
+
+    /// A `200` is a session and a `202` is a challenge, on every route that opens a session.
+    ///
+    /// Read from the **status**, which is where the server puts the distinction; a body flag
+    /// would be a second place for the two to disagree. Before `S-C63` the `202` fell through to
+    /// `read_tokens` and surfaced as `MalformedResponse`, which told a user with a second factor
+    /// that their server was broken.
+    async fn read_login_outcome(
+        &self,
+        endpoint: Endpoint,
+        response: reqwest::Response,
+    ) -> Result<LoginOutcome, AuthError> {
         if response.status() == reqwest::StatusCode::ACCEPTED {
             let challenge: SecondFactorChallengeBody =
                 response
                     .json()
                     .await
                     .map_err(|e| AuthError::MalformedResponse {
-                        endpoint: Endpoint::Login.name(),
+                        endpoint: endpoint.name(),
                         reason: e.to_string(),
                     })?;
-            tracing::info!("login needs a second factor");
+            tracing::info!("the sign-in needs a second factor");
             return Ok(LoginOutcome::SecondFactorRequired {
                 mfa_token: SecretString::from(challenge.mfa_token),
                 expires_by: challenge.expires_by,
             });
         }
-
-        let tokens = read_tokens(Endpoint::Login, response).await?;
-        tracing::info!("login succeeded; session established");
+        let tokens = read_tokens(endpoint, response).await?;
+        tracing::info!("the sign-in succeeded; session established");
         Ok(LoginOutcome::Session(self.session_with_tokens(tokens)))
     }
 
@@ -813,8 +1006,11 @@ async fn error_from_response(endpoint: Endpoint, response: reqwest::Response) ->
     let code = api_error.as_ref().and_then(|body| body.code.clone());
     let detail = api_error.map_or_else(String::new, |body| body.error);
 
+    if let Some(refusal) = endpoint.oidc_refusal(status.as_u16(), code.as_deref()) {
+        return refusal;
+    }
     match status.as_u16() {
-        401 => endpoint.unauthorized_error(),
+        401 => endpoint.unauthorized_error(code),
         423 => AuthError::AccountLocked,
         429 => AuthError::RateLimited {
             retry_after_secs: retry_after.unwrap_or(0),
@@ -1535,6 +1731,162 @@ mod tests {
         *session.inner.tokens.write().await = None;
         let error = session.refresh().await.unwrap_err();
         assert!(matches!(error, AuthError::NotAuthenticated));
+    }
+
+    // ── OIDC (S-N2) ───────────────────────────────────────────────────────────
+
+    /// A server with an identity provider, answering the two OIDC routes and recording what
+    /// the callback received.
+    fn oidc_handler(captured: Arc<std::sync::Mutex<Option<serde_json::Value>>>) -> Handler {
+        Arc::new(move |req: MockRequest| {
+            let captured = captured.clone();
+            Box::pin(async move {
+                match req.path.as_str() {
+                    "/oidc/authorize" => MockResponse::json(
+                        200,
+                        serde_json::json!({
+                            "authorization_url": "https://idp.test/authorize?state=state-1",
+                            "state": "state-1",
+                            "expires_by": 1_893_456_000,
+                        })
+                        .to_string(),
+                    ),
+                    "/oidc/callback" => {
+                        *captured.lock().unwrap() = serde_json::from_str(&req.body).ok();
+                        MockResponse::json(200, token_json("access-1", "refresh-1", far_future()))
+                    }
+                    _ => MockResponse::json(404, r#"{"error":"x"}"#),
+                }
+            })
+        })
+    }
+
+    /// The two legs round-trip, and the cohort rides the callback rather than the authorize.
+    #[tokio::test]
+    async fn an_oidc_login_begins_completes_and_carries_the_cohort_on_the_callback() {
+        let captured = Arc::new(std::sync::Mutex::new(None));
+        let server = start_mock(oidc_handler(captured.clone())).await;
+        let client = AuthClient::new(&server.base_url)
+            .unwrap()
+            .with_cohort_hash("a-particular-machine".to_owned());
+
+        let begun = client
+            .begin_oidc_login("http://127.0.0.1:4242/callback")
+            .await
+            .unwrap();
+        assert_eq!(
+            begun.authorization_url,
+            "https://idp.test/authorize?state=state-1"
+        );
+        assert_eq!(begun.state.expose_secret(), "state-1");
+        assert_eq!(begun.expires_by, 1_893_456_000);
+
+        let session = finished(
+            client
+                .complete_oidc_login(&begun.state, "code-1")
+                .await
+                .unwrap(),
+        );
+        assert!(session.is_authenticated().await);
+
+        let body = captured
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("callback body captured");
+        assert_eq!(body["state"], "state-1");
+        assert_eq!(body["code"], "code-1");
+        assert_eq!(body["cohort_hash"], "a-particular-machine");
+    }
+
+    /// The callback's `202` is a second-factor challenge, as the password login's is.
+    #[tokio::test]
+    async fn an_oidc_callback_can_answer_a_second_factor_challenge() {
+        let handler: Handler = Arc::new(move |req| {
+            Box::pin(async move {
+                match req.path.as_str() {
+                    "/oidc/callback" => MockResponse::json(
+                        202,
+                        r#"{"mfa_token":"challenge-1","expires_by":1893456000}"#,
+                    ),
+                    _ => MockResponse::json(404, r#"{"error":"x"}"#),
+                }
+            })
+        });
+        let server = start_mock(handler).await;
+        let client = AuthClient::new(&server.base_url).unwrap();
+        let outcome = client
+            .complete_oidc_login(&SecretString::from("state-1"), "code-1")
+            .await
+            .unwrap();
+        assert!(matches!(outcome, LoginOutcome::SecondFactorRequired { .. }));
+    }
+
+    /// Each OIDC refusal maps to its typed variant on the catalog code, and the `401`s to one.
+    #[tokio::test]
+    async fn oidc_refusals_map_to_typed_errors_on_their_codes() {
+        let handler: Handler = Arc::new(move |req| {
+            Box::pin(async move {
+                let problem = |status: u16, code: &str| {
+                    MockResponse::json(status, format!(r#"{{"error":"refused","code":"{code}"}}"#))
+                };
+                match (req.path.as_str(), req.body.contains("evil")) {
+                    ("/oidc/authorize", true) => problem(400, "error.auth.oidc_redirect_invalid"),
+                    ("/oidc/authorize", false) => problem(404, "error.auth.oidc_not_configured"),
+                    ("/oidc/callback", _) if req.body.contains("taken") => {
+                        problem(409, "error.auth.oidc_address_taken")
+                    }
+                    ("/oidc/callback", _) => problem(401, "error.auth.oidc_state_invalid"),
+                    _ => MockResponse::json(404, r#"{"error":"x"}"#),
+                }
+            })
+        });
+        let server = start_mock(handler).await;
+        let client = AuthClient::new(&server.base_url).unwrap();
+
+        let error = client
+            .begin_oidc_login("https://evil.example.test/cb")
+            .await
+            .err()
+            .expect("refused");
+        assert!(matches!(error, AuthError::OidcRedirectInvalid), "{error:?}");
+        assert_eq!(
+            error.error_code(),
+            Some(error_codes::AUTH_OIDC_REDIRECT_INVALID)
+        );
+
+        let error = client
+            .begin_oidc_login("http://127.0.0.1:4242/cb")
+            .await
+            .err()
+            .expect("refused");
+        assert!(matches!(error, AuthError::OidcNotConfigured), "{error:?}");
+        assert_eq!(
+            error.error_code(),
+            Some(error_codes::AUTH_OIDC_NOT_CONFIGURED)
+        );
+
+        let error = expect_login_err(
+            client
+                .complete_oidc_login(&SecretString::from("state-1"), "taken")
+                .await,
+        );
+        assert!(matches!(error, AuthError::OidcAddressTaken), "{error:?}");
+        assert_eq!(
+            error.error_code(),
+            Some(error_codes::AUTH_OIDC_ADDRESS_TAKEN)
+        );
+
+        let error = expect_login_err(
+            client
+                .complete_oidc_login(&SecretString::from("state-1"), "code-1")
+                .await,
+        );
+        assert!(matches!(error, AuthError::OidcRejected { .. }), "{error:?}");
+        assert_eq!(
+            error.error_code(),
+            Some(error_codes::AUTH_OIDC_STATE_INVALID)
+        );
     }
 
     #[test]
