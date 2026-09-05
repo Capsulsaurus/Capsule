@@ -4473,7 +4473,8 @@ Kynos server, which cannot be written until `S-C53` gives the server a way to cr
   whole legacy map rides in the signed sidecar's `_unknown` under `legacy-unsigned-sidecar`, where
   the signature covers it (a tripwire test fails if the fold drops a key). Rating, tags, GPS and
   capture time are carried into their signed homes; `is_deleted` becomes a signed `delete`;
-  `stack_hint` groups of two or more get a UUIDv5 stack id over `(user_id, "{method}:{key}")`
+  `stack_hint` groups of two or more get a deterministic RFC 9562 v8 (custom) stack id —
+  `SHA-256(domain ‖ user_id ‖ "{method}:{key}")`, the construction the default album id uses —
   written at create. The verb ends by calling `rebuild_index`. Idempotent and resumable (an
   interrupted run's chainless signed sidecar is redone from its quarantine copy).
 - **Landed:** `sidecar::{AssetSidecar, StackHint, read_sidecar}` and the FFI codec
