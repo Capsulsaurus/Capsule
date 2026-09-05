@@ -432,7 +432,8 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
             // the handshake enforces and what every response advertises (`negotiation`), and the
             // discovery record above publishes the same two values. One window, three readers.
             UploadPolicy::default()
-                .with_protocol_window(config.protocol_min.clone(), config.protocol_max.clone()),
+                .with_protocol_window(config.protocol_min.clone(), config.protocol_max.clone())
+                .with_min_client_build(config.min_client_build.clone()),
         ),
         sync: SyncContext::new(
             index.clone(),
@@ -737,7 +738,7 @@ mod tests {
         );
         assert_eq!(
             response.header("x-capsule-min-client-build"),
-            Some(crate::upload::policy::DEFAULT_MIN_CLIENT_BUILD)
+            Some(config.min_client_build.as_str())
         );
 
         // And the gate holds a write to the same window: a version one day below the
