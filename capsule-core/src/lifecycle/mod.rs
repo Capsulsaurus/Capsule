@@ -567,6 +567,15 @@ impl Workspace {
             .map(|asset| self.media_path(asset))
     }
 
+    /// Whether a managed asset is currently in trash — a replay of its provenance chain's
+    /// lifecycle actions (a `delete` moves it to trash, a later `trash-restore` brings it
+    /// back), which is the single source of truth the workspace itself applies. `false` for an
+    /// unknown id. Exposed so a client can report or skip trashed assets without re-deriving
+    /// the rule from the chain.
+    pub fn is_trashed(&self, asset_id: &Uuid) -> bool {
+        self.assets.get(asset_id).is_some_and(asset_is_deleted)
+    }
+
     /// A managed asset's current state.
     pub fn asset(&self, asset_id: &Uuid) -> Option<&AssetState> {
         self.assets.get(asset_id)

@@ -435,6 +435,21 @@ mod tests {
         assert_eq!(rebuilt.capture_utc, Some(1_000_000_000));
     }
 
+    /// `is_trashed` is the chain replay the workspace applies, exposed once: a soft delete
+    /// flips it, a restore flips it back, an unknown id is simply not in trash.
+    #[test]
+    fn is_trashed_replays_the_chain_and_is_false_for_an_unknown_id() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let (mut ws, id) = workspace_with(&lib, &src, b"\xFF\xD8\xFF trash replay bytes");
+        assert!(!ws.is_trashed(&id));
+        ws.soft_delete(&id, 30).unwrap();
+        assert!(ws.is_trashed(&id));
+        ws.restore(&id).unwrap();
+        assert!(!ws.is_trashed(&id));
+        assert!(!ws.is_trashed(&Uuid::now_v7()));
+    }
+
     #[test]
     fn a_capture_correction_on_an_unknown_asset_is_refused() {
         let lib = TempDir::new().unwrap();
