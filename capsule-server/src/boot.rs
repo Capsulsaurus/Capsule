@@ -515,6 +515,8 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
             index.clone(),
             blobs.clone(),
             Arc::new(CursorCodec::new(&cursor_key)),
+            albums.clone(),
+            members.clone(),
         ),
         serve: ServeContext::new(
             index.clone(),

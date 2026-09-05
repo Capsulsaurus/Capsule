@@ -41,9 +41,10 @@ use serde::{Deserialize, Serialize};
 use crate::auth::AccessToken;
 use crate::blob::ContentAddress;
 use crate::index::{ChangeKind, FeedEntry};
+use crate::membership::Membership;
 use crate::routes::upload::WireBlobRole;
-use crate::store::OwnerId;
-use crate::sync::{CursorError, MAX_MANIFEST_BYTES, SyncContext, clamp_page_size};
+use crate::store::{AlbumId, OwnerId, UserId};
+use crate::sync::{CursorError, CursorScope, MAX_MANIFEST_BYTES, SyncContext, clamp_page_size};
 
 /// The operation that tells a client what changed.
 #[derive(Tag)]
@@ -71,6 +72,13 @@ pub struct SyncQuery {
     /// right to — a schema whose bounds depend on the server's pointer size is a schema no
     /// client can rely on.
     pub page_size: Option<u32>,
+    /// One album's page rather than the caller's own feed (`S-C51`).
+    ///
+    /// For the album's owner or any account on its current roster. Positions are the owner's
+    /// sequence numbers filtered to the album, and the cursor is bound to `(caller, album)`, so
+    /// it cannot be presented on the caller's own feed or on another album. Absent: the caller's
+    /// own library, as before.
+    pub album_id: Option<String>,
 }
 
 /// What an entry is, relative to the client that asked for it.
@@ -173,6 +181,17 @@ pub enum SyncRejection {
         code: &'static str,
     },
 
+    /// The album is not the caller's and the caller is not on its roster (`S-C51`).
+    ///
+    /// One answer for unprovisioned, never-a-member and removed alike, as the write routes give.
+    #[error("no access to that album")]
+    #[problem(status = 403, title = "Album access denied")]
+    AlbumAccessDenied {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
     /// A collaborator could not answer.
     #[error("the sync feed could not be read")]
     #[problem(status = 500, title = "Internal server error")]
@@ -185,6 +204,13 @@ pub enum SyncRejection {
 
 impl SyncRejection {
     /// The one cursor rejection.
+    /// The album page is not the caller's to read.
+    fn album_access_denied() -> Self {
+        Self::AlbumAccessDenied {
+            code: error_codes::SYNC_ALBUM_ACCESS_DENIED,
+        }
+    }
+
     fn cursor_invalid() -> Self {
         Self::CursorInvalid {
             code: error_codes::SYNC_CURSOR_INVALID,
@@ -214,14 +240,22 @@ pub async fn sync_feed(
     Auth(credential): Auth<AccessToken>,
     Query(query): Query<SyncQuery>,
 ) -> Result<Json<SyncPageResponse>, SyncRejection> {
-    // The feed is owner-scoped and the owner is the caller. There is no on-behalf read here for
-    // the same reason there is no on-behalf upload: the port that would verify the relationship
-    // does not exist, and inventing one at the read side would be the more dangerous half.
+    // The caller's own feed, or — with `album_id` — one album's page, which the caller reads as
+    // its owner or as a member of its current roster (`S-C51`). The relationship is decided
+    // first, and one refusal covers unprovisioned, not-a-member and removed alike.
     let owner = OwnerId::new(credential.user.as_str());
+    let album = query.album_id.as_deref().map(AlbumId::new);
+    if let Some(album) = &album {
+        album_read_access(&sync, &credential.user, album).await?;
+    }
+    let scope = match &album {
+        Some(album) => CursorScope::album(&owner, album),
+        None => CursorScope::feed(&owner),
+    };
 
     let after = sync
         .cursors()
-        .decode(&owner, query.cursor.as_deref())
+        .decode(&scope, query.cursor.as_deref())
         .map_err(|error| {
             // Logged at `info`, not `warn`: a cursor that stopped authenticating is the normal
             // consequence of a key rotation, and an operator who has just rotated should not be
@@ -239,16 +273,20 @@ pub async fn sync_feed(
             .page_size
             .map(|size| usize::try_from(size).unwrap_or(usize::MAX)),
     );
-    let rows = sync
-        .index()
-        .feed_page(&owner, after, limit)
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, %owner, "the asset index could not serve a feed page");
-            SyncRejection::unavailable()
-        })?;
+    let rows = match &album {
+        Some(album) => sync.index().album_feed_page(album, after, limit).await,
+        None => sync.index().feed_page(&owner, after, limit).await,
+    }
+    .map_err(|error| {
+        tracing::error!(%error, %owner, "the asset index could not serve a feed page");
+        SyncRejection::unavailable()
+    })?;
 
-    let head = sync.index().head_seq(&owner).await.map_err(|error| {
+    let head = match &album {
+        Some(album) => sync.index().album_head_seq(album).await,
+        None => sync.index().head_seq(&owner).await,
+    }
+    .map_err(|error| {
         tracing::error!(%error, %owner, "the asset index could not report its head");
         SyncRejection::unavailable()
     })?;
@@ -270,11 +308,49 @@ pub async fn sync_feed(
 
     Ok(Json(SyncPageResponse {
         entries,
-        next_cursor: sync.cursors().encode(&owner, position),
+        next_cursor: sync.cursors().encode(&scope, position),
         // Strictly greater: `position == head` is a caught-up client, and telling it otherwise
         // would make every idle client poll one extra time forever.
         has_more: head > position,
     }))
+}
+
+/// Whether `caller` may read `album`'s page: its owner, or an account on its current roster.
+///
+/// One `403` for every refusal — unprovisioned, never a member, removed — matching the write
+/// routes' uniform `album_access_denied`: the album id is client-derived and unguessable, and a
+/// distinct answer per reason would say whether it is taken and whether the caller was ever on
+/// it. A store that cannot answer is an outage, never a refusal.
+async fn album_read_access(
+    sync: &SyncContext,
+    caller: &UserId,
+    album: &AlbumId,
+) -> Result<(), SyncRejection> {
+    let record = sync.albums().read(album).await.map_err(|error| {
+        tracing::error!(%error, %album, "the album store could not answer a sync page");
+        SyncRejection::unavailable()
+    })?;
+    let Some(record) = record else {
+        tracing::info!(%caller, %album, "an album page was refused: no such album");
+        return Err(SyncRejection::album_access_denied());
+    };
+    if record.owner_id.as_str() == caller.as_str() {
+        return Ok(());
+    }
+    match sync
+        .members()
+        .membership(album, caller)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %album, "the membership store could not answer a sync page");
+            SyncRejection::unavailable()
+        })? {
+        Membership::Member { .. } => Ok(()),
+        Membership::Revoked(_) | Membership::Never => {
+            tracing::info!(%caller, %album, "an album page was refused: not a member");
+            Err(SyncRejection::album_access_denied())
+        }
+    }
 }
 
 /// Render one index entry onto the wire, reading its manifest bytes.

@@ -41661,6 +41661,16 @@
         }
       }
     },
+    "error.sync.album_access_denied": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You don't have access to that album."
+          }
+        }
+      }
+    },
     "error.sync.cursor_invalid": {
       "localizations": {
         "ar": {

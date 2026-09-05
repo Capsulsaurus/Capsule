@@ -1646,6 +1646,95 @@ pub async fn the_row_walk_orders_by_the_identifiers_own_bytes(index: &dyn AssetI
     );
 }
 
+/// An album page is the owner's sequence filtered to one album, with its own head (`S-C51`).
+///
+/// Positions are the owner's numbers, so a member's per-album anti-rewind mark is the same value
+/// the owner's feed carries; gaps are the other albums' entries. The head is the album's last
+/// entry, not the owner's allocator: a member who has seen it is caught up whatever the owner
+/// minted elsewhere since.
+pub async fn an_album_page_is_the_owners_sequence_filtered_to_one_album(index: &dyn AssetIndex) {
+    let owner = OwnerId::new("albumpage-owner");
+    let shared = AlbumId::new("albumpage-shared");
+    let private = AlbumId::new("albumpage-private");
+    let mut in_shared = Vec::new();
+    for (n, album) in [(1_u32, &shared), (2, &private), (3, &shared), (4, &private)] {
+        let row = PendingAsset {
+            asset_id: AssetId::new(format!("albumpage-asset-{n}")),
+            owner_id: owner.clone(),
+            album_id: album.clone(),
+            protocol_version: "2026-01-01".to_owned(),
+            crypto_suite_id: 1,
+            created_at: Timestamp::UNIX_EPOCH,
+        };
+        let asset = row.asset_id.clone();
+        ok(index.reserve(row).await, "reserve a row");
+        record(
+            index,
+            &asset,
+            blob(BlobRole::Provenance, &format!("albumpage-p{n}")),
+        )
+        .await;
+        let seq = record(
+            index,
+            &asset,
+            blob(BlobRole::Metadata, &format!("albumpage-m{n}")),
+        )
+        .await
+        .expect("landing the index tier publishes");
+        if album == &shared {
+            in_shared.push(seq);
+        }
+    }
+
+    let page = ok(index.album_feed_page(&shared, 0, 10).await, "page an album");
+    assert_eq!(
+        page.iter().map(|entry| entry.sync_seq).collect::<Vec<_>>(),
+        in_shared,
+        "the album page is the owner's sequence, filtered, in order"
+    );
+    assert!(page.iter().all(|entry| entry.album_id == shared));
+    assert_eq!(
+        ok(index.album_head_seq(&shared).await, "read an album head"),
+        in_shared[1],
+        "the head is the album's last entry, not the owner's allocator"
+    );
+    assert!(
+        ok(index.album_head_seq(&shared).await, "read an album head")
+            < ok(index.head_seq(&owner).await, "read the owner's head"),
+        "the owner minted more in another album since"
+    );
+
+    // Resuming past the first shared entry yields exactly the second.
+    let resumed = ok(
+        index.album_feed_page(&shared, in_shared[0], 10).await,
+        "resume an album page",
+    );
+    assert_eq!(resumed.len(), 1);
+    assert_eq!(resumed[0].sync_seq, in_shared[1]);
+    // And a bounded page is bounded.
+    assert_eq!(
+        ok(index.album_feed_page(&shared, 0, 1).await, "page one").len(),
+        1
+    );
+
+    // An album nothing was filed into: empty, head zero — not an error.
+    let unknown = AlbumId::new("albumpage-unknown");
+    assert!(
+        ok(
+            index.album_feed_page(&unknown, 0, 10).await,
+            "page an unknown album"
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        ok(
+            index.album_head_seq(&unknown).await,
+            "head of an unknown album"
+        ),
+        0
+    );
+}
+
 pub async fn run_all(index: &dyn AssetIndex) {
     reserving_twice_joins_the_same_row(index).await;
     a_disagreeing_reservation_is_refused_without_disclosure(index).await;
@@ -1658,6 +1747,7 @@ pub async fn run_all(index: &dyn AssetIndex) {
     the_change_kind_is_relative_to_the_reader(index).await;
     paging_is_ordered_bounded_and_resumable(index).await;
     every_minted_number_is_reachable(index).await;
+    an_album_page_is_the_owners_sequence_filtered_to_one_album(index).await;
     an_albums_numbers_are_monotonic_with_gaps(index).await;
     a_tombstone_reaches_every_reader(index).await;
     tombstoning_a_pending_row_publishes_nothing(index).await;

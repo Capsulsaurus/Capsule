@@ -1193,6 +1193,67 @@ impl AssetIndex for PostgresAssetIndex {
             sequence_from(next)
         })
     }
+
+    fn album_feed_page<'a>(
+        &'a self,
+        album: &'a AlbumId,
+        after: u64,
+        limit: usize,
+    ) -> IndexFuture<'a, Vec<FeedEntry>> {
+        Box::pin(async move {
+            // One snapshot, as the owner's page: see `feed_page`.
+            let snapshot = begin_read_snapshot(&self.connection).await?;
+            let found = snapshot
+                .query_all(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    format!(
+                        "SELECT {ASSET_COLUMNS} FROM assets \
+                         WHERE album_id = $1 AND sync_seq > $2 \
+                         ORDER BY sync_seq LIMIT $3"
+                    ),
+                    [
+                        Value::from(album.as_str().to_owned()),
+                        Value::from(after as i64),
+                        Value::from(limit as i64),
+                    ],
+                ))
+                .await
+                .map_err(PORT.failing("reading an album's feed page"))?;
+            let mut rows = found
+                .iter()
+                .map(asset_without_collections)
+                .collect::<Result<Vec<_>, _>>()?;
+            load_all_collections(&snapshot, &mut rows).await?;
+            commit(snapshot).await?;
+            Ok(rows
+                .iter()
+                .filter_map(|row| entry_for(row, after))
+                .collect())
+        })
+    }
+
+    fn album_head_seq<'a>(&'a self, album: &'a AlbumId) -> IndexFuture<'a, u64> {
+        Box::pin(async move {
+            let found = self
+                .connection
+                .query_one(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "SELECT COALESCE(MAX(sync_seq), 0)::bigint AS head FROM assets \
+                     WHERE album_id = $1",
+                    [Value::from(album.as_str().to_owned())],
+                ))
+                .await
+                .map_err(PORT.failing("reading an album's head sequence number"))?
+                .ok_or_else(|| StoreError::Rejected {
+                    store: PORT.store,
+                    detail: "the album head query returned no row".to_owned(),
+                })?;
+            let head: i64 = found
+                .try_get("", "head")
+                .map_err(PORT.failing("reading an album's head sequence number"))?;
+            sequence_from(head)
+        })
+    }
 }
 
 #[cfg(test)]

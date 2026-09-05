@@ -717,6 +717,26 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
     /// What lets a page report whether the client is caught up without asking for another page
     /// that would come back empty.
     fn head_seq<'a>(&'a self, owner: &'a OwnerId) -> IndexFuture<'a, u64>;
+
+    /// Up to `limit` feed entries in `album` after sequence number `after`, in sequence order
+    /// (`S-C51`).
+    ///
+    /// The **owner's** sequence, filtered to one album: positions are the same numbers the
+    /// owner's own feed carries, so they are per-album monotonic exactly as the client's
+    /// anti-rewind mark requires, and gaps are the other albums' entries. A member of the album
+    /// reads this page; the route decides who is one.
+    fn album_feed_page<'a>(
+        &'a self,
+        album: &'a AlbumId,
+        after: u64,
+        limit: usize,
+    ) -> IndexFuture<'a, Vec<FeedEntry>>;
+
+    /// The highest sequence number any entry in `album` carries, or `0` for none (`S-C51`).
+    ///
+    /// The album page's caught-up mark. Not the owner's allocator: a member who has seen the
+    /// album's last entry is caught up whatever the owner has minted in other albums since.
+    fn album_head_seq<'a>(&'a self, album: &'a AlbumId) -> IndexFuture<'a, u64>;
 }
 
 /// The roles an asset may hold exactly one of.

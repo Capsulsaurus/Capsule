@@ -10,12 +10,13 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use capsule_server::blob::{BlobStore, ContentAddress};
 use capsule_server::index::{AssetIndex, BlobRecord, PendingAsset};
-use capsule_server::store::{AssetId, BlobRole};
-use capsule_server::sync::{CURSOR_KEY_LEN, CursorCodec};
+use capsule_server::membership::{MemberRole, MembershipStore as _, RosterRecord};
+use capsule_server::store::{AlbumId, AssetId, BlobRole, OwnerId, UserId};
+use capsule_server::sync::{CURSOR_KEY_LEN, CursorCodec, CursorScope};
 use jiff::Timestamp;
 use kynos::http::StatusCode;
 use serde_json::Value;
-use support::{CURSOR_KEY, Fixture, PROTOCOL_VERSION, album, owner};
+use support::{CURSOR_KEY, Fixture, PROTOCOL_VERSION, album, owner, second_album};
 
 /// The bytes a manifest for `asset` is made of.
 ///
@@ -383,7 +384,9 @@ async fn another_owners_cursor_is_refused_even_under_the_right_key() {
 
     let codec = CursorCodec::new(&CURSOR_KEY);
     let foreign = codec.encode(
-        &capsule_server::store::OwnerId::new("01937b7c-0000-7000-8000-0000000000ff"),
+        &CursorScope::feed(&capsule_server::store::OwnerId::new(
+            "01937b7c-0000-7000-8000-0000000000ff",
+        )),
         0,
     );
 
@@ -404,7 +407,8 @@ async fn another_servers_cursor_is_refused() {
     let bearer = bearer(&fixture).await;
     publish(&fixture, "keyed").await;
 
-    let elsewhere = CursorCodec::new(&[0x11; CURSOR_KEY_LEN]).encode(&owner(), 0);
+    let elsewhere =
+        CursorCodec::new(&[0x11; CURSOR_KEY_LEN]).encode(&CursorScope::feed(&owner()), 0);
     let body = page(
         &fixture,
         &bearer,
@@ -577,4 +581,274 @@ async fn upload(fixture: &Fixture, bearer: &str, role: &str, marker: u8) -> Cont
             .assert_status(StatusCode::NO_CONTENT);
     }
     ContentAddress::parse(&support::checksum(&bytes)).expect("a content address")
+}
+
+// ===========================================================================================
+// Album pages for members (`S-C51`)
+// ===========================================================================================
+
+/// A second account, on the seeded album's roster in whatever state a case puts it.
+const BOB: &str = "01937b7c-0000-7000-8000-0000000000b0";
+
+/// Publish `asset` into `into`, returning the sequence number publication minted.
+async fn publish_into(fixture: &Fixture, asset: &str, into: &AlbumId) -> u64 {
+    let id = AssetId::new(asset);
+    fixture
+        .index
+        .reserve(PendingAsset {
+            asset_id: id.clone(),
+            owner_id: owner(),
+            album_id: into.clone(),
+            protocol_version: PROTOCOL_VERSION.to_owned(),
+            crypto_suite_id: 1,
+            created_at: Timestamp::UNIX_EPOCH,
+        })
+        .await
+        .expect("the index reserves");
+    let provenance = store_blob(fixture, &manifest_bytes(asset)).await;
+    record(fixture, &id, BlobRole::Provenance, &provenance, 0).await;
+    let metadata = store_blob(fixture, format!("metadata-{asset}").as_bytes()).await;
+    record(fixture, &id, BlobRole::Metadata, &metadata, 0)
+        .await
+        .expect("landing the index tier publishes the asset")
+}
+
+/// Provision the seeded album to the seeded account, so the page has an owner to ask about.
+async fn provision(fixture: &Fixture, bearer: &str) {
+    fixture
+        .client
+        .post("/v1/albums")
+        .header("authorization", bearer)
+        .header("accept", "application/json")
+        .json(&serde_json::json!({ "album_id": album().as_str() }))
+        .send()
+        .await
+        .assert_status(StatusCode::CREATED);
+}
+
+/// The seeded album's roster at `version`, naming `members`.
+async fn roster(fixture: &Fixture, version: u64, members: &[(&str, MemberRole)]) {
+    fixture
+        .members
+        .apply_roster(
+            RosterRecord {
+                album_id: album(),
+                roster_version: version,
+                amk_epoch: version,
+                attested_by_device: support::device(),
+                received_at: Timestamp::UNIX_EPOCH,
+                document: format!("sync-test-v{version}").into_bytes(),
+            },
+            members
+                .iter()
+                .map(|(user, role)| (UserId::new(*user), *role))
+                .collect(),
+        )
+        .await
+        .expect("the store applies");
+}
+
+/// Ask for a page and its raw response, for cases comparing bodies.
+async fn page_raw(fixture: &Fixture, bearer: &str, query: &str) -> kynos::test::TestResponse {
+    fixture
+        .client
+        .get(&format!("/v1/sync?{query}"))
+        .header("authorization", bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+}
+
+#[tokio::test]
+async fn a_member_reads_the_albums_page_over_the_owners_sequence() {
+    let fixture = Fixture::working();
+    let owner_bearer = bearer(&fixture).await;
+    provision(&fixture, &owner_bearer).await;
+    let first = publish_into(&fixture, "shared-1", &album()).await;
+    publish_into(&fixture, "private-1", &second_album()).await;
+    let third = publish_into(&fixture, "shared-2", &album()).await;
+    roster(&fixture, 1, &[(BOB, MemberRole::Reader)]).await;
+    let bob = fixture.other_bearer(BOB).await;
+
+    let body = page(
+        &fixture,
+        &bob,
+        &format!("album_id={}", album()),
+        StatusCode::OK,
+    )
+    .await;
+    let entries = body["entries"].as_array().expect("an array");
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry["sync_seq"].as_u64().expect("a position"))
+            .collect::<Vec<_>>(),
+        vec![first, third],
+        "the owner's sequence, filtered to the album, in order"
+    );
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry["album_id"] == album().as_str()),
+        "nothing from the owner's other albums"
+    );
+    assert_eq!(body["has_more"], false);
+    // The cursor is bound to (bob, album): it decodes for that scope and names the last entry.
+    let cursor = body["next_cursor"].as_str().expect("a cursor");
+    assert_eq!(
+        fixture.cursors.decode(
+            &CursorScope::album(&OwnerId::new(BOB), &album()),
+            Some(cursor)
+        ),
+        Ok(third)
+    );
+
+    // Bob's own feed is still empty: the member's read did not move anything into his library.
+    let own = page(&fixture, &bob, "", StatusCode::OK).await;
+    assert!(own["entries"].as_array().expect("an array").is_empty());
+}
+
+#[tokio::test]
+async fn an_album_cursor_is_refused_on_the_callers_own_feed() {
+    // Both shapes carry the owner's sequence numbers, so a cursor that crossed between them
+    // would skip a member's unseen entries.
+    let fixture = Fixture::working();
+    let owner_bearer = bearer(&fixture).await;
+    provision(&fixture, &owner_bearer).await;
+    publish_into(&fixture, "shared-1", &album()).await;
+    roster(&fixture, 1, &[(BOB, MemberRole::Reader)]).await;
+    let bob = fixture.other_bearer(BOB).await;
+
+    let on_album = page(
+        &fixture,
+        &bob,
+        &format!("album_id={}", album()),
+        StatusCode::OK,
+    )
+    .await;
+    let cursor = on_album["next_cursor"]
+        .as_str()
+        .expect("a cursor")
+        .to_owned();
+    let body = page(
+        &fixture,
+        &bob,
+        &format!("cursor={cursor}"),
+        StatusCode::BAD_REQUEST,
+    )
+    .await;
+    assert_eq!(body["code"], "error.sync.cursor_invalid");
+    // And the owner's own feed cursor is not an album cursor either.
+    let own = page(&fixture, &owner_bearer, "", StatusCode::OK).await;
+    let own_cursor = own["next_cursor"].as_str().expect("a cursor").to_owned();
+    let body = page(
+        &fixture,
+        &owner_bearer,
+        &format!("album_id={}&cursor={own_cursor}", album()),
+        StatusCode::BAD_REQUEST,
+    )
+    .await;
+    assert_eq!(body["code"], "error.sync.cursor_invalid");
+}
+
+#[tokio::test]
+async fn a_non_member_a_former_member_and_an_unknown_album_get_one_refusal() {
+    let fixture = Fixture::working();
+    let owner_bearer = bearer(&fixture).await;
+    provision(&fixture, &owner_bearer).await;
+    publish_into(&fixture, "shared-1", &album()).await;
+    roster(&fixture, 1, &[(BOB, MemberRole::Writer)]).await;
+    let bob = fixture.other_bearer(BOB).await;
+
+    // Never a member of the *other* album (which is not even provisioned).
+    let unknown = page_raw(&fixture, &bob, &format!("album_id={}", second_album())).await;
+    unknown.assert_status(StatusCode::FORBIDDEN);
+    let unknown: Value = unknown.json();
+    assert_eq!(unknown["code"], "error.sync.album_access_denied");
+
+    // Removed from the roster.
+    roster(&fixture, 2, &[]).await;
+    let former = page_raw(&fixture, &bob, &format!("album_id={}", album())).await;
+    former.assert_status(StatusCode::FORBIDDEN);
+    let former: Value = former.json();
+
+    // A stranger to a provisioned, shared album.
+    let carol = fixture
+        .other_bearer("01937b7c-0000-7000-8000-0000000000c0")
+        .await;
+    roster(&fixture, 3, &[(BOB, MemberRole::Writer)]).await;
+    let stranger = page_raw(&fixture, &carol, &format!("album_id={}", album())).await;
+    stranger.assert_status(StatusCode::FORBIDDEN);
+    let stranger: Value = stranger.json();
+
+    assert_eq!(unknown, former, "one body for every refusal");
+    assert_eq!(former, stranger, "one body for every refusal");
+}
+
+#[tokio::test]
+async fn the_owner_reads_an_album_page_too_and_it_pages() {
+    let fixture = Fixture::working();
+    let owner_bearer = bearer(&fixture).await;
+    provision(&fixture, &owner_bearer).await;
+    let first = publish_into(&fixture, "shared-1", &album()).await;
+    publish_into(&fixture, "private-1", &second_album()).await;
+    let third = publish_into(&fixture, "shared-2", &album()).await;
+
+    let one = page(
+        &fixture,
+        &owner_bearer,
+        &format!("album_id={}&page_size=1", album()),
+        StatusCode::OK,
+    )
+    .await;
+    assert_eq!(one["entries"][0]["sync_seq"], first);
+    assert_eq!(
+        one["has_more"], true,
+        "the album's head is past this position"
+    );
+    let cursor = one["next_cursor"].as_str().expect("a cursor").to_owned();
+    let two = page(
+        &fixture,
+        &owner_bearer,
+        &format!("album_id={}&page_size=1&cursor={cursor}", album()),
+        StatusCode::OK,
+    )
+    .await;
+    assert_eq!(two["entries"][0]["sync_seq"], third);
+    assert_eq!(
+        two["has_more"], false,
+        "the head is the album's last entry, not the owner's allocator, which minted more in \
+         another album"
+    );
+}
+
+#[tokio::test]
+async fn a_store_that_cannot_answer_the_album_question_is_an_outage() {
+    let fixture = Fixture::working();
+    let owner_bearer = bearer(&fixture).await;
+    provision(&fixture, &owner_bearer).await;
+    roster(&fixture, 1, &[(BOB, MemberRole::Reader)]).await;
+    let bob = fixture.other_bearer(BOB).await;
+
+    fixture.members.set_unavailable(true);
+    let body = page(
+        &fixture,
+        &bob,
+        &format!("album_id={}", album()),
+        StatusCode::INTERNAL_SERVER_ERROR,
+    )
+    .await;
+    assert_eq!(body["code"], "error.sync.unavailable");
+    fixture.members.set_unavailable(false);
+
+    fixture.albums.set_unavailable(true);
+    let body = page(
+        &fixture,
+        &owner_bearer,
+        &format!("album_id={}", album()),
+        StatusCode::INTERNAL_SERVER_ERROR,
+    )
+    .await;
+    assert_eq!(body["code"], "error.sync.unavailable");
+    fixture.albums.set_unavailable(false);
 }

@@ -7695,6 +7695,10 @@
     "message": "Capsule couldn't check whether your photos are safely stored. Please try again.",
     "context": "HTTP 500 on POST /v1/storage/verify (slice S-C3): the asset index or the blob store could not answer, so no durability verdict was reached. Deliberately not a durable=false verdict — a client told \"not durable\" keeps its local copy and is safe, so conflating an outage with a real finding would train users to ignore the state that matters. Retryable."
   },
+  "error.sync.album_access_denied": {
+    "message": "You don't have access to that album.",
+    "context": "HTTP 403 on GET /v1/sync?album_id= (slice S-C51): the album is not the caller's and the caller is not on its roster — never a member, removed, or no such album. One answer for all three, matching the write routes' uniform 403."
+  },
   "error.sync.cursor_invalid": {
     "message": "The sync session is out of date. Capsule will resync from the start.",
     "context": "HTTP 400 on GET /v1/sync (threat-model invariant 22): the opaque sync cursor failed its server MAC — forged, mutated, issued to another owner, or minted under a rotated key. The client discards it and resyncs from an empty cursor."

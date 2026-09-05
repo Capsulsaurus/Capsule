@@ -542,4 +542,37 @@ impl AssetIndex for InMemoryAssetIndex {
     fn head_seq<'a>(&'a self, owner: &'a OwnerId) -> IndexFuture<'a, u64> {
         Box::pin(async move { Ok(lock(&self.inner).minted.get(owner).copied().unwrap_or(0)) })
     }
+
+    fn album_feed_page<'a>(
+        &'a self,
+        album: &'a AlbumId,
+        after: u64,
+        limit: usize,
+    ) -> IndexFuture<'a, Vec<FeedEntry>> {
+        Box::pin(async move {
+            let inner = lock(&self.inner);
+            let mut page: Vec<FeedEntry> = inner
+                .rows
+                .values()
+                .filter(|row| &row.album_id == album)
+                .filter(|row| row.sync_seq.is_some_and(|seq| seq > after))
+                .filter_map(|row| entry_for(row, after))
+                .collect();
+            page.sort_by_key(|entry| entry.sync_seq);
+            page.truncate(limit);
+            Ok(page)
+        })
+    }
+
+    fn album_head_seq<'a>(&'a self, album: &'a AlbumId) -> IndexFuture<'a, u64> {
+        Box::pin(async move {
+            Ok(lock(&self.inner)
+                .rows
+                .values()
+                .filter(|row| &row.album_id == album)
+                .filter_map(|row| row.sync_seq)
+                .max()
+                .unwrap_or(0))
+        })
+    }
 }

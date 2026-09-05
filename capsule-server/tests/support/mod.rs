@@ -2360,6 +2360,25 @@ impl AssetIndex for SwitchableIndex {
         }
         self.inner.head_seq(owner)
     }
+
+    fn album_feed_page<'a>(
+        &'a self,
+        album: &'a AlbumId,
+        after: u64,
+        limit: usize,
+    ) -> IndexFuture<'a, Vec<FeedEntry>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.album_feed_page(album, after, limit)
+    }
+
+    fn album_head_seq<'a>(&'a self, album: &'a AlbumId) -> IndexFuture<'a, u64> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.album_head_seq(album)
+    }
 }
 
 /// The fixture's client: Kynos's in-process `TestClient`, sending the protocol handshake.
@@ -2590,7 +2609,13 @@ impl Fixture {
                 clock.clone(),
                 UploadPolicy::default(),
             ),
-            sync: SyncContext::new(index_fault.clone(), blobs.clone(), cursors.clone()),
+            sync: SyncContext::new(
+                index_fault.clone(),
+                blobs.clone(),
+                cursors.clone(),
+                albums.clone(),
+                members.clone(),
+            ),
             serve: ServeContext::new(
                 index_fault.clone(),
                 blobs.clone(),
@@ -2697,6 +2722,7 @@ impl Fixture {
         let blobs = Arc::new(SwallowingBlobs::new());
         let index = Arc::new(SwitchableIndex::new());
         let members = Arc::new(InMemoryMembership::new());
+        let albums = Arc::new(SwitchableAlbums::new());
         let tokens = Arc::new(signer(clock.clone()));
         let app = App::new(Modules {
             auth: AuthContext::new(AuthCollaborators {
@@ -2722,6 +2748,8 @@ impl Fixture {
                 index.clone(),
                 blobs.clone(),
                 Arc::new(CursorCodec::new(&CURSOR_KEY)),
+                albums.clone(),
+                members.clone(),
             ),
             serve: ServeContext::new(
                 index.clone(),
@@ -2740,7 +2768,7 @@ impl Fixture {
                 Arc::new(SwitchableDirectories::new()),
                 clock.clone(),
             ),
-            albums: AlbumContext::new(Arc::new(SwitchableAlbums::new()), clock.clone()),
+            albums: AlbumContext::new(albums.clone(), clock.clone()),
             membership: MembershipContext::new(members, clock.clone()),
             quota: QuotaContext::new(
                 Arc::new(SwitchableQuota::new()),

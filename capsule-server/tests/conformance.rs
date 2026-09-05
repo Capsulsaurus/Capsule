@@ -800,6 +800,15 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::FORBIDDEN);
 
+    // 403: an album page the caller may not read (`S-C51`) — here an album nobody provisioned,
+    // which is one answer with not-a-member and removed.
+    client
+        .get("/v1/sync?album_id=018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5eff")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
     // 400: the one cursor rejection. Malformed and foreign are deliberately the same answer.
     client
         .get("/v1/sync?cursor=not-a-cursor")

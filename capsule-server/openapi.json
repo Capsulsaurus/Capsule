@@ -16499,6 +16499,18 @@
             }
           },
           {
+            "name": "album_id",
+            "in": "query",
+            "description": "One album's page rather than the caller's own feed (`S-C51`).\n\nFor the album's owner or any account on its current roster. Positions are the owner's\nsequence numbers filtered to the album, and the cursor is bound to `(caller, album)`, so\nit cannot be presented on the caller's own feed or on another album. Absent: the caller's\nown library, as before.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "name": "X-Capsule-Protocol",
             "in": "header",
             "description": "The `YYYY-MM-DD` protocol version this request is written against. Outside the server's `[X-Capsule-Protocol-Min, X-Capsule-Protocol-Max]` window the request is refused with `426`.",

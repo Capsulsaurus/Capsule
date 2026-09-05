@@ -323,6 +323,9 @@ pub mod error_codes {
     /// `error.storage.unavailable`
     pub const STORAGE_UNAVAILABLE: &str = "error.storage.unavailable";
 
+    /// `error.sync.album_access_denied`
+    pub const SYNC_ALBUM_ACCESS_DENIED: &str = "error.sync.album_access_denied";
+
     /// `error.sync.cursor_invalid`
     pub const SYNC_CURSOR_INVALID: &str = "error.sync.cursor_invalid";
 
