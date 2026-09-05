@@ -811,10 +811,15 @@ impl Workspace {
         let record = &candidate.record;
         let enrichment = SidecarEnrichment {
             capture_time: Some(record.capture_fallback()),
+            // Not `Exif`: the fix was read out of the legacy record, not out of these file
+            // bytes, and the sidecar is signed — `Manual` is the honest provenance for a
+            // record-held coordinate, exactly as the Takeout enrichment tags its own
+            // (`import::enrichment::sidecar_enrichment`). A file whose EXIF carries a fix
+            // wins at the write site and is tagged `Exif` there.
             gps: record.gps.map(|(lat, lon)| Gps {
                 lat,
                 lon,
-                source: GpsSource::Exif,
+                source: GpsSource::Manual,
                 datum: GpsDatum::Wgs84,
             }),
             caption: None,
@@ -1018,6 +1023,11 @@ mod tests {
         assert!(tags.contains("trip") && tags.contains("2024"));
         let gps = sidecar.gps.expect("legacy GPS carried");
         assert_eq!((gps.lat, gps.lon), (48.8584, 2.2945));
+        assert_eq!(
+            gps.source,
+            GpsSource::Manual,
+            "a record-held fix is not attributed to these file bytes"
+        );
         // The legacy capture time is the sidecar's capture timestamp (these bytes carry no
         // EXIF, so the fold wins over the import clock).
         assert_eq!(sidecar.capture_timestamp, "2023-11-14T22:13:20Z");
