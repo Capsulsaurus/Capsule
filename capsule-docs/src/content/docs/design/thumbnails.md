@@ -29,6 +29,33 @@ Two derivative tiers per photo asset and one preview tier for video assets:
 - **WebP** is the last-resort fallback for the rare client lacking AVIF. We deliberately do not fall back to JPEG — WebP covers everything JPEG would.
 - **H.264 baseline** for video previews — universally decodable, cheap to decode on every platform. AV1 was considered but mobile encode cost is still high in 2026.
 
+:::note[Implementation status — what ships today]
+The table above is the **contract**, not an inventory of what is built. As of `#410`,
+`capsule-core::media` (on `rawshift-image` 0.1.1, behind the `media` feature that `native`
+implies) generates the **thumbnail tier as JXL** and nothing else. Concretely:
+
+| Tier | Photo formats generated | Missing, and why |
+| --- | --- | --- |
+| Thumbnail | **JXL**, 256 px long edge, **lossless**; or the `original` sentinel when the source is already inside the cap | **AVIF** needs `nasm` on every x86_64 build host (`ravif` → `rav1e/asm`). **WebP** does not compile: `rawshift-image`'s codec passes `*const i8` where `libwebp-sys` declares `*const c_char`, which is `u8` on aarch64 — every mobile target. |
+| Preview | — | Blocked with a *lossy* master codec: a source-resolution lossless still would rival the original in size. |
+| Video (either tier) | — | `rawshift-video` is unpublished; slice `S-B5`. |
+
+The thumbnail's declared **q=50 is advisory today**: the pure-Rust backend is `zune-jpegxl`'s
+`JxlSimpleEncoder`, which is lossless, so a thumbnail costs more bytes than the table intends. A
+lossy JXL needs C libjxl. That is the one place the build knowingly departs from this table, and
+it is asserted by a test rather than left to be discovered.
+
+Decode is JPEG, PNG, JXL, TIFF and GIF. **HEIC, AVIF, WebP and the RAW families are recognised
+and refused** — HEIC and AVIF need system libheif / libdav1d, and WebP shares the aarch64 defect
+above in both directions (the crate compiles that module for decode *or* encode).
+
+None of this is silent. A format with no codec is a typed
+`media::MediaError::UnsupportedFormat { format, op }`, and a `(tier, format)` pair with no encoder
+is recorded on `media::StillDerivatives::deferred` and counted by
+`ImportExecutionSummary::deferred_format_count()` — so the distance between this table and the
+build is a number the import run reports. The remainder is tracked as the `S-B1` follow-up.
+:::
+
 ### Video Previews
 
 The table above stays the SSoT for the video formats; this section only names the implementation seam. Video derivative generation — the first-frame still and the H.264 baseline preview transcode — is its own implementation slice (`S-B5` in the repo-root `SLICES.md`), split from still-image generation (`S-B1`) because transcode brings a distinct toolchain (demux, video decode, H.264/AAC encode) the still path never touches. Both slices sign their outputs identically through the [`DerivativeManifest`](#derivative-provenance) path.
@@ -56,7 +83,7 @@ Four calls carry the whole contract, and the module uses no more than these:
 
 ### Where LQIP Lives
 
-`capsule-core::lqip` — a dedicated module, slice `S-B14` in the repo-root `SLICES.md`. It is deliberately **not** in `capsule-core::media`, which retires to `legacy-review/` with the rest of the decode/encode stack: a placeholder scheme every client depends on cannot live inside something scheduled for teardown. It is equally not in Rawshift — `AGENTS.md` is explicit that Rawshift owns media decoding but must not wrap Chromahash, which Capsule imports directly.
+`capsule-core::lqip` — a dedicated module, slice `S-B14` in the repo-root `SLICES.md`. It is deliberately **not** in `capsule-core::media`, and the reason outlived the teardown that first prompted it: `media` is `native`-only wherever it exists — it links image codecs and a decode budget sized for a workstation, neither of which a browser has any use for, so a placeholder scheme every client depends on cannot live inside it and still reach the browser. It is equally not in Rawshift — `AGENTS.md` is explicit that Rawshift owns media decoding but must not wrap Chromahash, which Capsule imports directly. `media` is the module that *produces* the pixels this one hashes; it never owns the hash.
 
 A small Capsule-owned module outside the retiring stack satisfies both constraints at once, and is reachable from all three places a placeholder is produced or consumed: the import pipeline, the native apps through the uniffi FFI, and the browser through `capsule-wasm`. That is the point of a single home — one implementation for every surface, so a photo's placeholder does not depend on which client happened to import it.
 
@@ -78,6 +105,8 @@ Considered and rejected: ThumbHash on its merits (smaller wire size, worse color
 Thumbnails and previews are *ephemeral by recovery posture* (they can always be regenerated from the original) but not *unowned*. A buggy or hostile client could otherwise quietly replace a good thumbnail with a corrupted one, and the receiving side would have no way to tell. To prevent this, every thumbnail and preview is uploaded as a derivative whose addition or replacement is an authorized, signed lifecycle action.
 
 The full derivative manifest structure and the `derivative-add` / `derivative-replace` action set are owned by [Cryptography — Derivative Provenance](/design/cryptography/provenance/#derivative-provenance) and [Authorization — The Closed Action Set](/design/authorization/#the-closed-action-set); this doc owns only the *format* of the derivative bytes. The two interact at exactly one point: the `DerivativeManifest.format` field names the codec/format from the table above, and the verifying side rejects a manifest whose `format` is not currently recognized (the closed-enum rule from [Threat Model — Schema Rules](/design/threat-model/schema-rules/#schema-evolution-and-field-grammar)).
+
+A receiver never needs a manifest for a tier that was satisfied by the original itself. The signed sidecar carries the asset's pixel `dimensions`, so a receiver can see for itself that an original at or below the thumbnail tier's long edge needs no thumbnail, and must not schedule a regeneration for one; the `format = "original"` sentinel is a **local** record that keeps "this original is small" apart from "this thumbnail is missing" for the client's own rebuild path, and it is not shipped.
 
 A thumbnail whose `DerivativeManifest` fails verification is **regenerated locally from the original** rather than trusted — the [recovery-first principle](/design/principles/) means a derivative is always rebuildable, so refusal-and-regenerate is the safe default. The corrupt copy is discarded (not quarantined — it carries no irreplaceable bytes), and the corresponding regeneration appends a new `derivative-replace` provenance record.
 
