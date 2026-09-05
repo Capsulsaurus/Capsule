@@ -38,6 +38,18 @@ pub mod error_codes {
     /// `error.album.not_available`
     pub const ALBUM_NOT_AVAILABLE: &str = "error.album.not_available";
 
+    /// `error.album.roster_attester`
+    pub const ALBUM_ROSTER_ATTESTER: &str = "error.album.roster_attester";
+
+    /// `error.album.roster_malformed`
+    pub const ALBUM_ROSTER_MALFORMED: &str = "error.album.roster_malformed";
+
+    /// `error.album.roster_not_found`
+    pub const ALBUM_ROSTER_NOT_FOUND: &str = "error.album.roster_not_found";
+
+    /// `error.album.roster_stale`
+    pub const ALBUM_ROSTER_STALE: &str = "error.album.roster_stale";
+
     /// `error.album.unavailable`
     pub const ALBUM_UNAVAILABLE: &str = "error.album.unavailable";
 

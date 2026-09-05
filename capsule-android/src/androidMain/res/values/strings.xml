@@ -1819,6 +1819,10 @@
     <string name="drop_upload_only_badge">Upload only</string>
     <string name="error_album_invalid_id">This album could not be registered because its identifier is malformed.</string>
     <string name="error_album_not_available">This album isn\'t available on your account.</string>
+    <string name="error_album_roster_attester">Only a device on the album owner\'s account can publish its roster.</string>
+    <string name="error_album_roster_malformed">Capsule couldn\'t read that album roster.</string>
+    <string name="error_album_roster_not_found">That album isn\'t yours, or doesn\'t exist.</string>
+    <string name="error_album_roster_stale">The roster you sent is out of step with the one the server holds.</string>
     <string name="error_album_unavailable">Capsule couldn\'t set up that album. Please try again.</string>
     <string name="error_album_upgrade_in_flight">This album is already being upgraded.</string>
     <string name="error_album_upgrade_malformed">Capsule couldn\'t read that album upgrade request.</string>

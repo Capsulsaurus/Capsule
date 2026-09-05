@@ -36895,6 +36895,46 @@
         }
       }
     },
+    "error.album.roster_attester": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only a device on the album owner's account can publish its roster."
+          }
+        }
+      }
+    },
+    "error.album.roster_malformed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule couldn't read that album roster."
+          }
+        }
+      }
+    },
+    "error.album.roster_not_found": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That album isn't yours, or doesn't exist."
+          }
+        }
+      }
+    },
+    "error.album.roster_stale": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The roster you sent is out of step with the one the server holds."
+          }
+        }
+      }
+    },
     "error.album.unavailable": {
       "localizations": {
         "en": {

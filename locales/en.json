@@ -7315,6 +7315,22 @@
     "message": "This album isn't available on your account.",
     "context": "HTTP 403 on POST /v1/albums (album provisioning, S-C25): the submitted album id cannot be bound to the caller. Deliberately identical whatever the reason, so the endpoint never reveals whether another account already holds that id."
   },
+  "error.album.roster_attester": {
+    "message": "Only a device on the album owner's account can publish its roster.",
+    "context": "HTTP 403 on PUT /v1/albums/{album_id}/roster (slice S-C51): the roster's attester signature does not verify against the owner's published device directory, the attesting device is revoked, no directory is published, or attested_by_user is not the caller."
+  },
+  "error.album.roster_malformed": {
+    "message": "Capsule couldn't read that album roster.",
+    "context": "HTTP 400 on PUT /v1/albums/{album_id}/roster (slice S-C51): the body's roster_cbor is not base64 of a signed album roster, is past the 512 KiB ceiling, names a different album than the path, lists the owner or lists an account twice."
+  },
+  "error.album.roster_not_found": {
+    "message": "That album isn't yours, or doesn't exist.",
+    "context": "HTTP 404 on PUT /v1/albums/{album_id}/roster (slice S-C51): no such album, or one owned by a different account. One answer for both — a member, even an MLS admin, cannot publish the owner's roster and learns nothing by trying."
+  },
+  "error.album.roster_stale": {
+    "message": "The roster you sent is out of step with the one the server holds.",
+    "context": "HTTP 409 on PUT /v1/albums/{album_id}/roster (slice S-C51): the roster_version is at or below the one the server holds with different bytes, or a newer version carried a lower AMK epoch. Carries current_version so the client can re-sync and republish."
+  },
   "error.album.unavailable": {
     "message": "Capsule couldn't set up that album. Please try again.",
     "context": "HTTP 500 on POST /v1/albums (slice S-C25): the album store could not answer, so nothing was provisioned. Retryable, and it says nothing about whether the id is available."
