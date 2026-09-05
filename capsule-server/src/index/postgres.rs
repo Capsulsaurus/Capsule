@@ -775,6 +775,7 @@ impl AssetIndex for PostgresAssetIndex {
                 load_collections(&snapshot, &mut row).await?;
                 let reference = BlobReference {
                     asset_id: row.asset_id.clone(),
+                    album_id: row.album_id.clone(),
                     owner_id: row.owner_id.clone(),
                     role: row
                         .blobs
@@ -1190,6 +1191,77 @@ impl AssetIndex for PostgresAssetIndex {
                 .try_get("", "next_seq")
                 .map_err(PORT.failing("reading an owner's head sequence number"))?;
             sequence_from(next)
+        })
+    }
+
+    fn album_feed_page<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        album: &'a AlbumId,
+        after: u64,
+        limit: usize,
+    ) -> IndexFuture<'a, Vec<FeedEntry>> {
+        Box::pin(async move {
+            // One snapshot, as the owner's page: see `feed_page`. Bound to the owner as well as
+            // the album so the `(owner_id, album_id)` index serves it.
+            let snapshot = begin_read_snapshot(&self.connection).await?;
+            let found = snapshot
+                .query_all(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    format!(
+                        "SELECT {ASSET_COLUMNS} FROM assets \
+                         WHERE owner_id = $1 AND album_id = $2 AND sync_seq > $3 \
+                         ORDER BY sync_seq LIMIT $4"
+                    ),
+                    [
+                        Value::from(owner.as_str().to_owned()),
+                        Value::from(album.as_str().to_owned()),
+                        Value::from(after as i64),
+                        Value::from(limit as i64),
+                    ],
+                ))
+                .await
+                .map_err(PORT.failing("reading an album's feed page"))?;
+            let mut rows = found
+                .iter()
+                .map(asset_without_collections)
+                .collect::<Result<Vec<_>, _>>()?;
+            load_all_collections(&snapshot, &mut rows).await?;
+            commit(snapshot).await?;
+            Ok(rows
+                .iter()
+                .filter_map(|row| entry_for(row, after))
+                .collect())
+        })
+    }
+
+    fn album_head_seq<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        album: &'a AlbumId,
+    ) -> IndexFuture<'a, u64> {
+        Box::pin(async move {
+            let found = self
+                .connection
+                .query_one(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "SELECT COALESCE(MAX(sync_seq), 0)::bigint AS head FROM assets \
+                     WHERE owner_id = $1 AND album_id = $2",
+                    [
+                        Value::from(owner.as_str().to_owned()),
+                        Value::from(album.as_str().to_owned()),
+                    ],
+                ))
+                .await
+                .map_err(PORT.failing("reading an album's head sequence number"))?
+                .ok_or_else(|| StoreError::Rejected {
+                    store: PORT.store,
+                    detail: "the album head query returned no row".to_owned(),
+                })?;
+            let head: i64 = found
+                .try_get("", "head")
+                .map_err(PORT.failing("reading an album's head sequence number"))?;
+            sequence_from(head)
         })
     }
 }

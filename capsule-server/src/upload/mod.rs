@@ -54,7 +54,9 @@ pub mod visibility;
 
 use std::sync::Arc;
 
-pub use self::authority::{AlbumWriteAccess, AuthorityError, AuthorityFuture, WriteAuthority};
+pub use self::authority::{
+    AlbumWriteAccess, AuthorityError, AuthorityFuture, WriteAuthority, WriteRole,
+};
 pub use self::envelope::{DeclaredBlob, GateContext, GateReject, ManifestEnvelope};
 pub use self::policy::UploadPolicy;
 use crate::blob::BlobStore;

@@ -17,10 +17,10 @@
 //! | create `200` (active session for the tuple) | **kept and now documented.** Salvo declared it `undocumented()`; it is [`CreateReply::Existing`], carrying `X-Capsule-Offset` so a resuming client needs no second round trip |
 //! | create `400` "Bad request" (untyped) | **deleted.** Never constructed with a code; the 400 a malformed body actually produces is the `Json` extractor's, which Kynos declares |
 //! | create `401` | kept, and now the framework's — `Auth<AccessToken>` declares it and fills the `WWW-Authenticate` challenge |
-//! | create `403` | kept — album access, device authorization, on-behalf refusal |
+//! | create `403` | kept — album access, device authorization, a declared owner that is not the album's |
 //! | create `409 duplicate_blob` | **restored, with `S-C22`'s structured `existing_asset`.** It was deleted while this crate had no asset index, because it must name the existing asset and answering from blob presence alone would tell one account what another holds. `S-C37` answers it honestly and owner-scoped |
 //! | create `413` | kept — the declared size past the deployment ceiling |
-//! | create `426` | kept — the protocol handshake, now with the accepted window as problem extensions |
+//! | create `426` | kept — the manifest envelope's `protocol_version` pin, refused by the envelope gate. The *header* handshake is no longer this surface's: [`crate::negotiation::ProtocolGate`] answers it before the handler runs, and the accepted window rides `X-Capsule-Protocol-Min`/`-Max` on every response |
 //! | create `500` | kept — a collaborator that could not answer, with `error.upload.unavailable` |
 //! | chunk `204` | kept — with the authoritative `X-Capsule-Offset` |
 //! | chunk `400` | kept, and now *coded*: missing offset, missing checksum, checksum mismatch, empty chunk, misalignment, size exceeded, and the two finalization failures each carry their own `error.upload.*` |
@@ -32,7 +32,7 @@
 //! | chunk `409 finalize_in_progress` | **deleted.** Losing the finalize claim is a normal race and the chunk that triggered it was still accepted, so it answers `204`. Telling a client its accepted chunk failed was the Salvo behaviour and it was wrong |
 //! | chunk `500` | kept — storage inconsistency (the stage disagreeing with the counter) and collaborator failure |
 //! | head `200` | kept — [`HeadReply::Progress`], carrying offset, declared length and state on headers, with `Cache-Control: no-store`. A `Reply` rather than a `NoContent`, because `200 with headers` and `204` are different answers |
-//! | head `400` / `401` / `403` / `404` / `426` / `500` | kept; the `403` now covers the owner as well as the uploader, both of whom may look |
+//! | head `400` / `401` / `403` / `404` / `500` | kept; the `403` now covers the owner as well as the uploader, both of whom may look. The `400` is the handshake's, declared by the read gate rather than by this surface; the `426` is gone from `HEAD`, because a read is admitted at any protocol date (issue #404) |
 //! | head `409` | **deleted as unreachable.** `HEAD` reports a state, it does not require one. It would have been declared for free by sharing a rejection type with `DELETE`, which is why they are two types |
 //! | delete `204` | kept |
 //! | delete `409` | kept — finalization is not interruptible, and a terminal session has nothing left to cancel |
@@ -43,15 +43,19 @@
 //! Every status above is produced by a test in `tests/upload.rs`, because
 //! `assert_declared_responses_covered` fails on any the document promises and none produced.
 //!
-//! # Two places the protocol asks for a header this surface cannot send
+//! # One place the protocol asks for a header this surface cannot send
 //!
 //! A Kynos `ApiError` renders an RFC 9457 problem and has **no seam for a response header**, so
-//! the two headers the protocol's census puts on *rejections* — `X-Capsule-Offset` on a `409`
-//! and `X-Capsule-Protocol-Min`/`-Max` on a `426` — ride as problem **extension members**
-//! instead. The data a client needs to recover is there and is machine-readable; the spelling
-//! is not the one the census names. The alternative was to render those two rejections as
-//! plain-JSON `Reply` variants, which would have cost them their `error.*` code — a worse
-//! trade, since the code is what a client switches on. Recorded rather than hidden.
+//! the `X-Capsule-Offset` the protocol's census puts on a `409` rides as a problem **extension
+//! member** instead. The data a client needs to recover is there and is machine-readable; the
+//! spelling is not the one the census names. The alternative was to render the rejection as a
+//! plain-JSON `Reply` variant, which would have cost it its `error.*` code — a worse trade,
+//! since the code is what a client switches on. Recorded rather than hidden.
+//!
+//! The `X-Capsule-Protocol-Min`/`-Max` pair used to be the second such place. It is not any
+//! more: issue #404 moved the handshake onto [`crate::negotiation`], whose advertising
+//! interceptor sits outside every rejection and stamps the window on all of them. The seam an
+//! `ApiError` lacks, an `Interceptor` has.
 //!
 //! # `409 duplicate_blob` refuses, and nothing yet adopts
 //!
@@ -183,10 +187,12 @@ pub struct CreateUploadRequest {
     /// for the album-upgrade ceremony; **required by this server**, which has no way to check
     /// invariant 6 without one and refuses rather than skipping it.
     pub album_id: Option<String>,
-    /// The owner the asset is filed under, when it is not the uploader.
+    /// The owner the asset is filed under, when the client wants to say so.
     ///
-    /// Refused when it is anyone but the uploader: an on-behalf upload needs a verified
-    /// relationship, and the port that would answer for one does not exist here.
+    /// Advisory, never decisive: the asset is filed under the **album's** owner, which the write
+    /// authority answers from the album record — the uploader when it is their album, the owner
+    /// when the uploader is a writer on its roster (`S-C51`). A declared owner that is anyone
+    /// else, the uploading member included, is refused `error.upload.owner_not_permitted`.
     pub owner_id: Option<String>,
     /// The album-upgrade intent this write belongs to, when it belongs to one.
     ///
@@ -243,23 +249,13 @@ pub struct CreateHeaders {
     offset: Option<u64>,
 }
 
-/// The `X-Capsule-Protocol` handshake header, on every upload request.
-#[derive(HeaderParams)]
-pub struct ProtocolHeader {
-    /// The protocol date the client speaks.
-    ///
-    /// Read as a string rather than a typed value so that a malformed one is *this* surface's
-    /// coded `400` rather than the framework's uncoded one.
-    #[header(rename = "X-Capsule-Protocol")]
-    protocol: Option<String>,
-}
-
 /// The headers a chunk carries.
+///
+/// The `X-Capsule-Protocol` handshake is not among them: [`crate::negotiation::ProtocolGate`]
+/// reads and declares it for every operation on this surface, so a chunk handler only sees a
+/// request the handshake already admitted.
 #[derive(HeaderParams)]
 pub struct ChunkHeaders {
-    /// The protocol date the client speaks.
-    #[header(rename = "X-Capsule-Protocol")]
-    protocol: Option<String>,
     /// Where in the blob this chunk starts.
     #[header(rename = "X-Capsule-Offset")]
     offset: Option<String>,
@@ -347,19 +343,6 @@ pub enum CreateRejection {
         code: &'static str,
     },
 
-    /// The request is not one this surface can read — a missing or unreadable handshake
-    /// header, most often.
-    #[error("the request is not a well-formed upload: {detail}")]
-    #[problem(status = 400, title = "Malformed request")]
-    MalformedRequest {
-        /// What was wrong, in English. Reaches the client as the problem's `detail`, via
-        /// `Display`, rather than as a second extension member saying the same thing.
-        detail: String,
-        /// The stable catalog code.
-        #[problem(extension)]
-        code: &'static str,
-    },
-
     /// The account is suspended (`S-C8`).
     ///
     /// Distinct from a quota refusal and from a permission one, deliberately: the three send a
@@ -374,21 +357,16 @@ pub enum CreateRejection {
         code: &'static str,
     },
 
-    /// Invariant 1: the protocol version is outside the window this server accepts.
+    /// Invariant 1: the manifest envelope pins a `protocol_version` outside the window this
+    /// server accepts.
     ///
-    /// The accepted range rides as problem extensions rather than as the
-    /// `X-Capsule-Protocol-Min`/`-Max` headers the protocol's census names: a Kynos `ApiError`
-    /// has no seam for a response header, and a client that cannot read the window cannot show
-    /// the actionable "update to keep uploading". Recorded as a deviation rather than dropped.
-    #[error("this server accepts protocol versions [{protocol_min}, {protocol_max}]")]
+    /// The header handshake never reaches here — the gate answered it — so this is the
+    /// *body's* pin, which an album carries for life. The accepted window is not restated as
+    /// extension members: it rides `X-Capsule-Protocol-Min`/`-Max` on this response like every
+    /// other, which is where the SDK reads it.
+    #[error("the envelope pins a protocol version this server does not accept")]
     #[problem(status = 426, title = "Protocol version unsupported")]
     ProtocolUnsupported {
-        /// The lowest version this server accepts.
-        #[problem(extension)]
-        protocol_min: String,
-        /// The highest version this server accepts.
-        #[problem(extension)]
-        protocol_max: String,
         /// The stable catalog code.
         #[problem(extension)]
         code: &'static str,
@@ -471,30 +449,15 @@ pub enum CreateRejection {
 /// Why a chunk was not accepted, or the finalization it triggered did not commit.
 #[derive(Debug, thiserror::Error, ApiError)]
 pub enum ChunkRejection {
-    /// The request is not a well-formed chunk: a missing handshake header, a missing or
-    /// unreadable offset or checksum, an empty body, a misaligned chunk, a checksum that does
-    /// not match the bytes, or bytes past the declared size.
+    /// The request is not a well-formed chunk: a missing or unreadable offset or checksum, an
+    /// empty body, a misaligned chunk, a checksum that does not match the bytes, or bytes past
+    /// the declared size.
     #[error("{detail}")]
     #[problem(status = 400, title = "Invalid chunk")]
     Invalid {
         /// What was wrong, in English. Reaches the client as the problem's `detail`, via
         /// `Display`, rather than as a second extension member saying the same thing.
         detail: String,
-        /// The stable catalog code.
-        #[problem(extension)]
-        code: &'static str,
-    },
-
-    /// Invariant 1: the protocol version is outside the accepted window.
-    #[error("this server accepts protocol versions [{protocol_min}, {protocol_max}]")]
-    #[problem(status = 426, title = "Protocol version unsupported")]
-    ProtocolUnsupported {
-        /// The lowest version this server accepts.
-        #[problem(extension)]
-        protocol_min: String,
-        /// The highest version this server accepts.
-        #[problem(extension)]
-        protocol_max: String,
         /// The stable catalog code.
         #[problem(extension)]
         code: &'static str,
@@ -618,30 +581,6 @@ pub enum ChunkRejection {
 /// afterwards. Two identical enums would be two places for the answers to drift apart.
 #[derive(Debug, thiserror::Error, ApiError)]
 pub enum SessionRejection {
-    /// The handshake header is missing or is not a protocol date.
-    #[error("X-Capsule-Protocol must be a YYYY-MM-DD date on every upload request")]
-    #[problem(status = 400, title = "Malformed request")]
-    MalformedRequest {
-        /// The stable catalog code.
-        #[problem(extension)]
-        code: &'static str,
-    },
-
-    /// Invariant 1: the protocol version is outside the accepted window.
-    #[error("this server accepts protocol versions [{protocol_min}, {protocol_max}]")]
-    #[problem(status = 426, title = "Protocol version unsupported")]
-    ProtocolUnsupported {
-        /// The lowest version this server accepts.
-        #[problem(extension)]
-        protocol_min: String,
-        /// The highest version this server accepts.
-        #[problem(extension)]
-        protocol_max: String,
-        /// The stable catalog code.
-        #[problem(extension)]
-        code: &'static str,
-    },
-
     /// The caller is neither the session's uploader nor the owner it files under.
     #[error("this session belongs to another account")]
     #[problem(status = 403, title = "Not this caller's session")]
@@ -679,30 +618,6 @@ pub enum SessionRejection {
 /// exact `S-C28` defect this rebuild removes.
 #[derive(Debug, thiserror::Error, ApiError)]
 pub enum CancelRejection {
-    /// The handshake header is missing or is not a protocol date.
-    #[error("X-Capsule-Protocol must be a YYYY-MM-DD date on every upload request")]
-    #[problem(status = 400, title = "Malformed request")]
-    MalformedRequest {
-        /// The stable catalog code.
-        #[problem(extension)]
-        code: &'static str,
-    },
-
-    /// Invariant 1: the protocol version is outside the accepted window.
-    #[error("this server accepts protocol versions [{protocol_min}, {protocol_max}]")]
-    #[problem(status = 426, title = "Protocol version unsupported")]
-    ProtocolUnsupported {
-        /// The lowest version this server accepts.
-        #[problem(extension)]
-        protocol_min: String,
-        /// The highest version this server accepts.
-        #[problem(extension)]
-        protocol_max: String,
-        /// The stable catalog code.
-        #[problem(extension)]
-        code: &'static str,
-    },
-
     /// The caller is neither the session's uploader nor the owner it files under.
     #[error("this session belongs to another account")]
     #[problem(status = 403, title = "Not this caller's session")]
@@ -763,16 +678,6 @@ impl CancelRejection {
 impl From<SessionRejection> for CancelRejection {
     fn from(rejection: SessionRejection) -> Self {
         match rejection {
-            SessionRejection::MalformedRequest { code } => Self::MalformedRequest { code },
-            SessionRejection::ProtocolUnsupported {
-                protocol_min,
-                protocol_max,
-                code,
-            } => Self::ProtocolUnsupported {
-                protocol_min,
-                protocol_max,
-                code,
-            },
             SessionRejection::Forbidden { code } => Self::Forbidden { code },
             SessionRejection::SessionNotFound { code } => Self::SessionNotFound { code },
             SessionRejection::Unavailable { code } => Self::Unavailable { code },
@@ -781,12 +686,6 @@ impl From<SessionRejection> for CancelRejection {
 }
 
 impl SessionRejection {
-    fn malformed_request() -> Self {
-        Self::MalformedRequest {
-            code: error_codes::UPLOAD_MALFORMED_REQUEST,
-        }
-    }
-
     fn forbidden() -> Self {
         Self::Forbidden {
             code: error_codes::UPLOAD_FORBIDDEN,
@@ -822,11 +721,8 @@ pub async fn create_upload(
     Inject(quota): Inject<crate::quota::QuotaContext>,
     Inject(moderation): Inject<crate::moderation::ModerationContext>,
     Auth(credential): Auth<AccessToken>,
-    Headers(handshake): Headers<ProtocolHeader>,
     Json(request): Json<CreateUploadRequest>,
 ) -> Result<WithHeaders<CreateReply, CreateHeaders>, CreateRejection> {
-    handshake_ok(upload.policy(), handshake.protocol.as_deref())?;
-
     let uploader = credential.user.clone();
 
     // Account standing (`S-C8`), checked before anything is reserved. A suspension removes the
@@ -848,28 +744,31 @@ pub async fn create_upload(
         });
     }
 
-    let owner = resolve_owner(&uploader, request.owner_id.as_deref())?;
-
     // Invariant 6, first half: this surface has no way to check an album it was not given.
     let Some(album) = request.album_id.as_deref().map(AlbumId::new) else {
         return Err(CreateRejection::album_access_denied());
     };
 
     let AlbumWriteAccess::Writable {
+        owner_id: owner,
+        role,
         protocol_pin,
         quiescing_under,
     } = upload
         .authority()
-        .album_write_access(&owner, &album)
+        .album_write_access(&uploader, &album)
         .await
         .map_err(|error| {
             tracing::error!(%error, "the write authority could not answer for an album");
             CreateRejection::unavailable()
         })?
     else {
-        tracing::info!(%owner, %album, "an upload was refused: no write capability");
+        tracing::info!(%uploader, %album, "an upload was refused: no write capability");
         return Err(CreateRejection::album_access_denied());
     };
+    tracing::debug!(%uploader, %owner, ?role, %album, "the album admits this upload");
+    // The namespace is the authority's answer; a declared owner may only agree with it.
+    resolve_owner(&uploader, &owner, request.owner_id.as_deref())?;
 
     // Upgrade quiescence (`S-C24`, versioning.md step 2). An album whose members have stopped
     // writing and are draining accepts **only** the ceremony's own writes, so a stale client that
@@ -1012,7 +911,7 @@ pub async fn create_upload(
         })? {
         // A new bundle, or a sibling session of one already open. Both are the normal case.
         crate::index::Reservation::Created(_) | crate::index::Reservation::Joined(_) => {}
-        // The id names a row this caller does not own, or one filed under a different album or
+        // The id names a row filed under another album's owner, or under a different album or
         // pin. Answered as a plain refusal carrying nothing: the id is client-chosen, so a
         // guess costs the caller nothing and must buy them nothing.
         crate::index::Reservation::Conflict => {
@@ -1109,8 +1008,6 @@ pub async fn append_chunk(
     Headers(headers): Headers<ChunkHeaders>,
     body: ChunkBody,
 ) -> Result<WithHeaders<NoContent, OffsetHeader>, ChunkRejection> {
-    chunk_handshake_ok(upload.policy(), headers.protocol.as_deref())?;
-
     let id = UploadId::new(path.id);
     let record = upload
         .sessions()
@@ -1228,15 +1125,8 @@ pub async fn head_upload(
     Inject(upload): Inject<UploadContext>,
     Auth(credential): Auth<AccessToken>,
     Path(path): Path<UploadPath>,
-    Headers(handshake): Headers<ProtocolHeader>,
 ) -> Result<WithHeaders<HeadReply, HeadHeaders>, SessionRejection> {
-    let record = session_for(
-        &upload,
-        &path,
-        handshake.protocol.as_deref(),
-        &credential.user,
-    )
-    .await?;
+    let record = session_for(&upload, &path, &credential.user).await?;
 
     Ok(WithHeaders::new(
         HeadReply::Progress,
@@ -1262,15 +1152,8 @@ pub async fn cancel_upload(
     Inject(quota): Inject<crate::quota::QuotaContext>,
     Auth(credential): Auth<AccessToken>,
     Path(path): Path<UploadPath>,
-    Headers(handshake): Headers<ProtocolHeader>,
 ) -> Result<NoContent, CancelRejection> {
-    let record = session_for(
-        &upload,
-        &path,
-        handshake.protocol.as_deref(),
-        &credential.user,
-    )
-    .await?;
+    let record = session_for(&upload, &path, &credential.user).await?;
 
     if !record.status.is_active() || record.status == UploadSessionStatus::WaitingForProcessing {
         return Err(CancelRejection::not_active());
@@ -1315,23 +1198,8 @@ pub async fn cancel_upload(
 async fn session_for(
     upload: &UploadContext,
     path: &UploadPath,
-    presented: Option<&str>,
     caller: &UserId,
 ) -> Result<UploadSessionRecord, SessionRejection> {
-    match handshake(upload.policy(), presented) {
-        Handshake::Ok => {}
-        Handshake::Missing | Handshake::Malformed => {
-            return Err(SessionRejection::malformed_request());
-        }
-        Handshake::OutOfRange => {
-            return Err(SessionRejection::ProtocolUnsupported {
-                protocol_min: upload.policy().protocol_min().to_owned(),
-                protocol_max: upload.policy().protocol_max().to_owned(),
-                code: error_codes::PROTOCOL_VERSION_UNSUPPORTED,
-            });
-        }
-    }
-
     let id = UploadId::new(path.id.clone());
     let record = upload
         .sessions()
@@ -1350,90 +1218,24 @@ async fn session_for(
     Ok(record)
 }
 
-/// The handshake, for an operation that answers with [`CreateRejection`].
-fn handshake_ok(
-    policy: &crate::upload::UploadPolicy,
-    presented: Option<&str>,
-) -> Result<(), CreateRejection> {
-    match handshake(policy, presented) {
-        Handshake::Ok => Ok(()),
-        Handshake::Missing => Err(CreateRejection::MalformedRequest {
-            detail: "X-Capsule-Protocol is required on every upload request".to_owned(),
-            code: error_codes::UPLOAD_MALFORMED_REQUEST,
-        }),
-        Handshake::Malformed => Err(CreateRejection::MalformedRequest {
-            detail: "X-Capsule-Protocol is not a YYYY-MM-DD date".to_owned(),
-            code: error_codes::UPLOAD_MALFORMED_REQUEST,
-        }),
-        Handshake::OutOfRange => Err(CreateRejection::ProtocolUnsupported {
-            protocol_min: policy.protocol_min().to_owned(),
-            protocol_max: policy.protocol_max().to_owned(),
-            code: error_codes::PROTOCOL_VERSION_UNSUPPORTED,
-        }),
-    }
-}
-
-/// The handshake, for an operation that answers with [`ChunkRejection`].
-fn chunk_handshake_ok(
-    policy: &crate::upload::UploadPolicy,
-    presented: Option<&str>,
-) -> Result<(), ChunkRejection> {
-    match handshake(policy, presented) {
-        Handshake::Ok => Ok(()),
-        Handshake::Missing | Handshake::Malformed => Err(ChunkRejection::Invalid {
-            detail: "X-Capsule-Protocol must be a YYYY-MM-DD date on every upload request"
-                .to_owned(),
-            code: error_codes::UPLOAD_MALFORMED_REQUEST,
-        }),
-        Handshake::OutOfRange => Err(ChunkRejection::ProtocolUnsupported {
-            protocol_min: policy.protocol_min().to_owned(),
-            protocol_max: policy.protocol_max().to_owned(),
-            code: error_codes::PROTOCOL_VERSION_UNSUPPORTED,
-        }),
-    }
-}
-
-/// What the handshake header said.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Handshake {
-    /// Present and inside the accepted window.
-    Ok,
-    /// Absent.
-    Missing,
-    /// Present but not a `YYYY-MM-DD` date.
-    Malformed,
-    /// A date outside the accepted window.
-    OutOfRange,
-}
-
-/// The one-shot compatibility gate: a client either speaks a version this server accepts, or
-/// it does not upload. There is no negotiation and no degrade.
-fn handshake(policy: &crate::upload::UploadPolicy, presented: Option<&str>) -> Handshake {
-    let Some(version) = presented else {
-        return Handshake::Missing;
-    };
-    match capsule_core::validation::protocol_gate(
-        version,
-        policy.protocol_min(),
-        policy.protocol_max(),
-    ) {
-        Ok(()) => Handshake::Ok,
-        Err(capsule_core::validation::HandshakeReject::ProtocolOutOfRange) => Handshake::OutOfRange,
-        Err(_) => Handshake::Malformed,
-    }
-}
-
-/// The owner an upload is filed under.
+/// Check a declared `owner_id` against the namespace the authority filed the write under.
 ///
-/// An on-behalf upload needs a verified relationship between two accounts, and the port that
-/// would answer for one is not part of this slice. So it is refused rather than assumed: a
-/// server that cannot check a permission must not act as though it passed.
-fn resolve_owner(uploader: &UserId, declared: Option<&str>) -> Result<OwnerId, CreateRejection> {
+/// The owner is **not** taken from the request: it is the album's own, answered by the write
+/// authority from the album record, and an uploader who is a writer member of somebody else's
+/// album is filed under that owner whether or not they said so (`S-C51`). What the request may
+/// do is *agree* — name the album owner, or, when the uploader is the owner, themselves. Naming
+/// anyone else is refused: a member declaring their own account as owner would be asking for an
+/// asset the owner's feed never carries, and a stranger's declaration is not a permission.
+fn resolve_owner(
+    uploader: &UserId,
+    owner: &OwnerId,
+    declared: Option<&str>,
+) -> Result<(), CreateRejection> {
     match declared {
-        None => Ok(OwnerId::new(uploader.as_str())),
-        Some(owner) if owner == uploader.as_str() => Ok(OwnerId::new(owner)),
+        None => Ok(()),
+        Some(named) if named == owner.as_str() => Ok(()),
         Some(_) => {
-            tracing::info!(%uploader, "an on-behalf upload was refused: no relationship port");
+            tracing::info!(%uploader, %owner, "an upload was refused: the declared owner is not the album's");
             Err(CreateRejection::owner_not_permitted())
         }
     }
@@ -1530,8 +1332,6 @@ impl CreateRejection {
                 "protocol_version is not a YYYY-MM-DD date",
             ),
             GateReject::ProtocolOutOfRange => Self::ProtocolUnsupported {
-                protocol_min: String::new(),
-                protocol_max: String::new(),
                 code: error_codes::PROTOCOL_VERSION_UNSUPPORTED,
             },
             GateReject::UnknownCryptoSuite => invalid(
@@ -1596,7 +1396,7 @@ impl CreateRejection {
 
     fn owner_not_permitted() -> Self {
         Self::Forbidden {
-            detail: "uploading on behalf of another owner is not permitted".to_owned(),
+            detail: "the declared owner is not the album's owner".to_owned(),
             code: error_codes::UPLOAD_OWNER_NOT_PERMITTED,
         }
     }

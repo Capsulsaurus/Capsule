@@ -46,8 +46,8 @@
 //! new `#[problem(extension)]` field that is not `code` will not appear in the document until
 //! somebody adds a row, and nothing here fails when they forget.
 //!
-//! Three things bound that. The table is small — nine rows against sixteen non-`code` fields
-//! across six enums — and `every_row_names_a_response_that_exists` fails on a row that has gone
+//! Three things bound that. The table is small — six rows against the non-`code` fields
+//! across the rejection enums — and `every_row_names_a_response_that_exists` fails on a row that has gone
 //! stale, so it cannot rot in the other direction. The `code` member, which is the one the i18n
 //! contract turns on and 104 of the 120 extension fields on this surface, needs no table at all.
 //! And the real fix is upstream: `#[problem(extension)]` should carry a schema, which is the
@@ -112,30 +112,6 @@ struct Extra {
 const EXTRAS: &[Extra] = &[
     Extra {
         component: "ProtocolRangeProblem",
-        operation: "create_upload",
-        status: 426,
-        members: PROTOCOL_RANGE,
-    },
-    Extra {
-        component: "ProtocolRangeProblem",
-        operation: "append_chunk",
-        status: 426,
-        members: PROTOCOL_RANGE,
-    },
-    Extra {
-        component: "ProtocolRangeProblem",
-        operation: "head_upload",
-        status: 426,
-        members: PROTOCOL_RANGE,
-    },
-    Extra {
-        component: "ProtocolRangeProblem",
-        operation: "cancel_upload",
-        status: 426,
-        members: PROTOCOL_RANGE,
-    },
-    Extra {
-        component: "ProtocolRangeProblem",
         operation: "album_lifecycle_op",
         status: 426,
         members: PROTOCOL_RANGE,
@@ -185,6 +161,17 @@ const EXTRAS: &[Extra] = &[
         ],
     },
     Extra {
+        component: "RosterStaleProblem",
+        operation: "publish_album_roster",
+        status: 409,
+        members: &[Member {
+            name: "current_version",
+            json_type: "integer",
+            description: "The roster version the server holds. A client re-syncs and republishes above it.",
+            nullable: false,
+        }],
+    },
+    Extra {
         component: "StaleRevivalProblem",
         operation: "album_lifecycle_op",
         status: 409,
@@ -209,7 +196,14 @@ const EXTRAS: &[Extra] = &[
     },
 ];
 
-/// The protocol window a `426` publishes, shared by every operation that pins one.
+/// The protocol window a **body-level** `426` publishes as extension members.
+///
+/// One row is left: `album_lifecycle_op` refuses a manifest envelope pinned outside the window
+/// and still renders the range in the body. The four upload operations no longer do — since
+/// issue #404 the window rides `X-Capsule-Protocol-Min`/`-Max` on every response, header-gated
+/// and body-gated `426`s alike, which is where the SDK reads it; a second spelling in the body
+/// is the drift the census exists to prevent. The remaining row goes when `routes/ops.rs`
+/// drops its members.
 const PROTOCOL_RANGE: &[Member] = &[
     Member {
         name: "protocol_min",
@@ -306,6 +300,60 @@ fn fill_binary(schema: &mut Option<Schema>) {
         }))
         .expect("a literal binary schema is a schema"),
     );
+}
+
+/// Files the protocol window's three response headers under every response (issue #404).
+///
+/// [`crate::negotiation::Negotiation`] attaches `X-Capsule-Protocol-Min`, `-Max` and
+/// `X-Capsule-Min-Client-Build` to **every** response it forwards, and it forwards everything —
+/// a short-circuit from an inner interceptor, an extractor's rejection, a handler's answer.
+/// Kynos describes an interceptor's `Adds` at `StatusPattern::Success` only
+/// (`kynos/src/middleware/erased.rs`), so without this the document would promise the headers
+/// on a `200` and stay silent on the `426` where a client most needs them.
+///
+/// The declarations come from [`crate::negotiation::response_header_declarations`] — the same
+/// source the interceptor's own description uses — and a response that already declares a
+/// header under one of these names is left exactly as the router emitted it, so this can never
+/// overwrite what Kynos said.
+pub(crate) fn describe_negotiation_headers(document: &mut Document) {
+    let declarations = crate::negotiation::response_header_declarations();
+    for item in document.paths.items.values_mut() {
+        let slots: Vec<&mut Option<Box<kynos::openapi::Operation>>> = vec![
+            &mut item.get,
+            &mut item.put,
+            &mut item.post,
+            &mut item.delete,
+            &mut item.options,
+            &mut item.head,
+            &mut item.patch,
+            &mut item.trace,
+            &mut item.query,
+        ];
+        for operation in slots.into_iter().filter_map(|slot| slot.as_deref_mut()) {
+            let responses = operation
+                .responses
+                .responses
+                .values_mut()
+                .chain(operation.responses.default_response.iter_mut());
+            for response in responses {
+                let kynos::openapi::RefOr::Item(response) = response else {
+                    continue;
+                };
+                for (name, header) in &declarations {
+                    let declared = response
+                        .headers
+                        .keys()
+                        .any(|existing| existing.eq_ignore_ascii_case(name));
+                    if !declared {
+                        response.headers.insert(
+                            (*name).to_owned(),
+                            kynos::openapi::RefOr::Item(header.clone()),
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
 
 pub(crate) fn describe_problem_extensions(document: &mut Document) {

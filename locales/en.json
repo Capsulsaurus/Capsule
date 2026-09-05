@@ -7315,6 +7315,22 @@
     "message": "This album isn't available on your account.",
     "context": "HTTP 403 on POST /v1/albums (album provisioning, S-C25): the submitted album id cannot be bound to the caller. Deliberately identical whatever the reason, so the endpoint never reveals whether another account already holds that id."
   },
+  "error.album.roster_attester": {
+    "message": "Only a device on the album owner's account can publish its roster.",
+    "context": "HTTP 403 on PUT /v1/albums/{album_id}/roster (slice S-C51): the roster's attester signature does not verify against the owner's published device directory, the attesting device is revoked, no directory is published, or attested_by_user is not the caller."
+  },
+  "error.album.roster_malformed": {
+    "message": "Capsule couldn't read that album roster.",
+    "context": "HTTP 400 on PUT /v1/albums/{album_id}/roster (slice S-C51): the body's roster_cbor is not base64 of a signed album roster, is past the 512 KiB ceiling, names a different album than the path, lists the owner or lists an account twice."
+  },
+  "error.album.roster_not_found": {
+    "message": "That album isn't yours, or doesn't exist.",
+    "context": "HTTP 404 on PUT /v1/albums/{album_id}/roster (slice S-C51): no such album, or one owned by a different account. One answer for both — a member, even an MLS admin, cannot publish the owner's roster and learns nothing by trying."
+  },
+  "error.album.roster_stale": {
+    "message": "The roster you sent is out of step with the one the server holds.",
+    "context": "HTTP 409 on PUT /v1/albums/{album_id}/roster (slice S-C51): the roster_version is at or below the one the server holds with different bytes, or a newer version carried a lower AMK epoch. Carries current_version so the client can re-sync and republish."
+  },
   "error.album.unavailable": {
     "message": "Capsule couldn't set up that album. Please try again.",
     "context": "HTTP 500 on POST /v1/albums (slice S-C25): the album store could not answer, so nothing was provisioned. Retryable, and it says nothing about whether the id is available."
@@ -7410,6 +7426,10 @@
   "error.auth.user_already_exists": {
     "message": "An account with these details already exists.",
     "context": "High-level error for HTTP 409 on registration. Server sends code `error.auth.user_already_exists`; clients localize this message."
+  },
+  "error.blob.access_revoked": {
+    "message": "You no longer have access to this album.",
+    "context": "HTTP 403 on GET /v1/blob/{hash} (slice S-C51): the caller was once a member of the album that holds these bytes and has since been removed from its roster. Only a former member ever sees this; everyone else gets the same 404 as an unknown address. The client re-syncs the album list and degrades."
   },
   "error.blob.gone": {
     "message": "That photo file is no longer available.",
@@ -7674,6 +7694,10 @@
   "error.storage.unavailable": {
     "message": "Capsule couldn't check whether your photos are safely stored. Please try again.",
     "context": "HTTP 500 on POST /v1/storage/verify (slice S-C3): the asset index or the blob store could not answer, so no durability verdict was reached. Deliberately not a durable=false verdict — a client told \"not durable\" keeps its local copy and is safe, so conflating an outage with a real finding would train users to ignore the state that matters. Retryable."
+  },
+  "error.sync.album_access_denied": {
+    "message": "You don't have access to that album.",
+    "context": "HTTP 403 on GET /v1/sync?album_id= (slice S-C51): the album is not the caller's and the caller is not on its roster — never a member, removed, or no such album. One answer for all three, matching the write routes' uniform 403."
   },
   "error.sync.cursor_invalid": {
     "message": "The sync session is out of date. Capsule will resync from the start.",

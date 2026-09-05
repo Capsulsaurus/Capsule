@@ -37,6 +37,7 @@ use crate::discovery::DiscoveryContext;
 use crate::drop::DropContext;
 use crate::enrollment::EnrollmentContext;
 use crate::escrow::EscrowContext;
+use crate::membership::MembershipContext;
 use crate::moderation::ModerationContext;
 use crate::quota::QuotaContext;
 use crate::serve::ServeContext;
@@ -73,6 +74,8 @@ pub struct App {
     directories: DeviceDirectoryContext,
     /// The album-provisioning module's collaborators.
     albums: AlbumContext,
+    /// The album-membership module's collaborators (`S-C51`).
+    membership: MembershipContext,
     /// The quota module's collaborators.
     quota: QuotaContext,
     /// The custody-receipt module's collaborators.
@@ -118,6 +121,8 @@ pub struct Modules {
     pub directories: DeviceDirectoryContext,
     /// The album-provisioning module's collaborators.
     pub albums: AlbumContext,
+    /// The album-membership module's collaborators (`S-C51`).
+    pub membership: MembershipContext,
     /// The quota module's collaborators.
     pub quota: QuotaContext,
     /// The custody-receipt module's collaborators.
@@ -150,6 +155,7 @@ impl App {
             verify,
             directories,
             albums,
+            membership,
             quota,
             attestation,
             discovery,
@@ -169,6 +175,7 @@ impl App {
             verify,
             directories,
             albums,
+            membership,
             quota,
             attestation,
             discovery,

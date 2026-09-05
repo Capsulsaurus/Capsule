@@ -578,3 +578,122 @@ async fn a_lifecycle_write_requires_a_credential() {
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
 }
+
+// ===========================================================================================
+// Member writes (`S-C51`)
+// ===========================================================================================
+
+/// A second account, on the seeded album's roster in whatever role a case puts it.
+const BOB: &str = "01937b7c-0000-7000-8000-0000000000b0";
+
+fn bobs_device() -> uuid::Uuid {
+    uuid::Uuid::parse_str("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5eb0").expect("a uuid")
+}
+
+/// A fixture with the owner's asset published, Bob's device known, and Bob seated as `role`.
+async fn with_bob(role: Option<capsule_server::membership::MemberRole>) -> (Fixture, String) {
+    let fixture = Fixture::working();
+    publish(&fixture).await;
+    let bob = capsule_server::store::UserId::new(BOB);
+    fixture
+        .authority
+        .add_device(&bob, bobs_device(), fixture.clock.now());
+    if let Some(role) = role {
+        fixture.authority.share(&album(), &bob, role);
+    }
+    let bearer = fixture.other_bearer(BOB).await;
+    (fixture, bearer)
+}
+
+/// The delete bundle, as Bob's device would sign it.
+fn bobs_delete(fixture: &Fixture) -> Value {
+    let mut body = bundle(
+        fixture,
+        "delete",
+        "bob-deletes",
+        Some(&created_head()),
+        None,
+    );
+    body["manifest_envelope"]["created_by_user"] = BOB.into();
+    body["manifest_envelope"]["created_by_device"] = bobs_device().to_string().into();
+    body
+}
+
+#[tokio::test]
+async fn a_writer_members_op_is_filed_under_the_owner_and_reaches_the_owners_feed() {
+    use capsule_server::membership::MemberRole;
+
+    let (fixture, bob) = with_bob(Some(MemberRole::Writer)).await;
+    let owner_bearer = token(&fixture).await;
+    let before = feed(&fixture, &owner_bearer).await;
+    let body = apply(&fixture, &bob, &bobs_delete(&fixture), StatusCode::OK).await;
+    assert_eq!(body["action"], "delete");
+
+    // The owner's feed — the one every member's devices read — advanced with the tombstone.
+    let owners = feed(&fixture, &owner_bearer).await;
+    assert_ne!(owners, before, "the member's op advanced the owner's feed");
+    let entry = &owners["entries"][0];
+    assert_eq!(entry["asset_id"], ASSET);
+    assert_eq!(entry["change"], "deleted");
+    assert_eq!(
+        entry["sync_seq"], body["sync_seq"],
+        "the feed position is the one the op was answered with"
+    );
+    // And Bob's own feed does not: the op was not filed under the member.
+    let bobs = feed(&fixture, &bob).await;
+    assert_eq!(bobs["entries"].as_array().map(Vec::len), Some(0));
+}
+
+#[tokio::test]
+async fn a_reader_a_former_member_and_a_stranger_cannot_apply_an_op() {
+    use capsule_server::membership::MemberRole;
+
+    let (fixture, bob) = with_bob(Some(MemberRole::Reader)).await;
+    let reader = apply(
+        &fixture,
+        &bob,
+        &bobs_delete(&fixture),
+        StatusCode::FORBIDDEN,
+    )
+    .await;
+    assert_eq!(reader["code"], "error.upload.album_access_denied");
+
+    let (fixture, bob) = with_bob(Some(MemberRole::Writer)).await;
+    fixture
+        .authority
+        .unshare(&album(), &capsule_server::store::UserId::new(BOB));
+    let former = apply(
+        &fixture,
+        &bob,
+        &bobs_delete(&fixture),
+        StatusCode::FORBIDDEN,
+    )
+    .await;
+
+    let (fixture, bob) = with_bob(None).await;
+    let owner_bearer = token(&fixture).await;
+    let before = feed(&fixture, &owner_bearer).await;
+    let stranger = apply(
+        &fixture,
+        &bob,
+        &bobs_delete(&fixture),
+        StatusCode::FORBIDDEN,
+    )
+    .await;
+
+    assert_eq!(reader, former);
+    assert_eq!(former, stranger);
+    // Nothing reached the owner's feed.
+    assert_eq!(feed(&fixture, &owner_bearer).await, before);
+}
+
+#[tokio::test]
+async fn a_members_op_is_checked_against_the_members_own_directory() {
+    use capsule_server::membership::MemberRole;
+
+    let (fixture, bob) = with_bob(Some(MemberRole::Writer)).await;
+    let mut body = bobs_delete(&fixture);
+    body["manifest_envelope"]["created_by_device"] = device().to_string().into();
+    let problem = apply(&fixture, &bob, &body, StatusCode::BAD_REQUEST).await;
+    assert_eq!(problem["code"], "error.upload.device_not_authorized");
+}

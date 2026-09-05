@@ -8,6 +8,7 @@
 //! ```text
 //! hash · primitives · rng · kdf · pwkdf        (foundation, no internal deps)
 //!   └─ keys ─ encryption                        (key hierarchy + AEAD)
+//!   └─ keys ─ membership                        (the owner-signed album roster)
 //!   └─ authority ─┐
 //!   └─ provenance ┴─ verify_asset               (the single acknowledgement chokepoint)
 //! ```
@@ -21,6 +22,7 @@ pub mod encryption;
 pub mod hash;
 pub mod kdf;
 pub mod keys;
+pub mod membership;
 pub mod primitives;
 pub mod provenance;
 pub mod pwkdf;

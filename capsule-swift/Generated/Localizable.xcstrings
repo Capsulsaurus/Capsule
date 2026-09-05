@@ -36895,6 +36895,46 @@
         }
       }
     },
+    "error.album.roster_attester": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only a device on the album owner's account can publish its roster."
+          }
+        }
+      }
+    },
+    "error.album.roster_malformed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule couldn't read that album roster."
+          }
+        }
+      }
+    },
+    "error.album.roster_not_found": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That album isn't yours, or doesn't exist."
+          }
+        }
+      }
+    },
+    "error.album.roster_stale": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The roster you sent is out of step with the one the server holds."
+          }
+        }
+      }
+    },
     "error.album.unavailable": {
       "localizations": {
         "en": {
@@ -37995,6 +38035,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "已有使用這些資料的帳戶。"
+          }
+        }
+      }
+    },
+    "error.blob.access_revoked": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You no longer have access to this album."
           }
         }
       }
@@ -41607,6 +41657,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Capsule 無法確認你的相片是否已安全儲存，請重試。"
+          }
+        }
+      }
+    },
+    "error.sync.album_access_denied": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You don't have access to that album."
           }
         }
       }

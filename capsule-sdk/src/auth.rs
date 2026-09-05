@@ -391,9 +391,10 @@ pub struct AuthClient {
 impl AuthClient {
     /// Build a client against the auth base URL (e.g. `https://api.example.com/auth`).
     pub fn new(base_url: &str) -> Result<Self, AuthError> {
-        let http = reqwest::Client::builder()
-            .build()
-            .map_err(AuthError::Transport)?;
+        // The SDK's one HTTP client: every request this client sends — and every request a
+        // `Session` built from it executes on behalf of the upload, album and verify paths —
+        // carries the protocol handshake the server's gate requires.
+        let http = crate::net::http_client().map_err(AuthError::Transport)?;
         Self::from_parts(
             base_url,
             Arc::new(SystemClock),
@@ -404,6 +405,9 @@ impl AuthClient {
 
     /// Assemble a client from explicit parts (clock + HTTP client + skew). Used by
     /// [`AuthClient::new`] and by tests that inject a controllable clock.
+    ///
+    /// `http` **must** come from [`crate::net::http_builder`] or [`crate::net::http_client`]: a
+    /// client built any other way sends no protocol handshake, and every gated route refuses it.
     fn from_parts(
         base_url: &str,
         clock: Arc<dyn Clock>,

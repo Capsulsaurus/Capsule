@@ -64,7 +64,7 @@ use serde::{Deserialize, Serialize};
 use crate::auth::AccessToken;
 use crate::blob::ContentAddress;
 use crate::index::{LifecycleOp, OpAction, OpOutcome};
-use crate::store::{AlbumId, AssetId, OwnerId};
+use crate::store::{AlbumId, AssetId};
 use crate::upload::envelope::{GateContext, GateReject, ManifestEnvelope, check_op};
 use crate::upload::{AlbumWriteAccess, UploadContext};
 
@@ -216,7 +216,6 @@ pub async fn apply_op(
     Json(request): Json<OpRequest>,
 ) -> Result<Json<OpResponse>, OpRejection> {
     let caller = credential.user.clone();
-    let owner = OwnerId::new(caller.as_str());
     let album = AlbumId::new(&path.album_id);
 
     // The envelope must agree with the path it arrived on. A contradiction is a client bug the
@@ -228,17 +227,23 @@ pub async fn apply_op(
         ));
     }
 
-    // Invariant 6, the half only the authority can answer.
-    let AlbumWriteAccess::Writable { protocol_pin, .. } = upload
+    // Invariant 6, the half only the authority can answer — and the namespace the op is filed
+    // under, which is the album owner's whoever the caller is (`S-C51`): the owner's feed is the
+    // one every member's devices read.
+    let AlbumWriteAccess::Writable {
+        owner_id: owner,
+        protocol_pin,
+        ..
+    } = upload
         .authority()
-        .album_write_access(&owner, &album)
+        .album_write_access(&caller, &album)
         .await
         .map_err(|error| {
             tracing::error!(%error, "the write authority could not answer for an album");
             OpRejection::unavailable()
         })?
     else {
-        tracing::info!(%owner, %album, "a lifecycle write was refused: no write capability");
+        tracing::info!(%caller, %album, "a lifecycle write was refused: no write capability");
         return Err(OpRejection::album_access_denied());
     };
 
@@ -395,7 +400,7 @@ pub async fn apply_op(
             &format!("amk_version regresses against the album's recorded epoch {stored}"),
         )),
         OpOutcome::NotFound => {
-            tracing::info!(%owner, asset = %asset_id, "a lifecycle write was refused: not this caller's asset");
+            tracing::info!(%owner, asset = %asset_id, "a lifecycle write was refused: not this album's asset");
             Err(OpRejection::album_access_denied())
         }
     }
@@ -496,7 +501,7 @@ impl OpRejection {
         }
     }
 
-    /// The album is not writable, or the asset is not this caller's.
+    /// The album is not writable, or the asset is not this album's.
     fn album_access_denied() -> Self {
         Self::AlbumAccessDenied {
             code: error_codes::UPLOAD_ALBUM_ACCESS_DENIED,

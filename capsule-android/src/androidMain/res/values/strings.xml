@@ -1819,6 +1819,10 @@
     <string name="drop_upload_only_badge">Upload only</string>
     <string name="error_album_invalid_id">This album could not be registered because its identifier is malformed.</string>
     <string name="error_album_not_available">This album isn\'t available on your account.</string>
+    <string name="error_album_roster_attester">Only a device on the album owner\'s account can publish its roster.</string>
+    <string name="error_album_roster_malformed">Capsule couldn\'t read that album roster.</string>
+    <string name="error_album_roster_not_found">That album isn\'t yours, or doesn\'t exist.</string>
+    <string name="error_album_roster_stale">The roster you sent is out of step with the one the server holds.</string>
     <string name="error_album_unavailable">Capsule couldn\'t set up that album. Please try again.</string>
     <string name="error_album_upgrade_in_flight">This album is already being upgraded.</string>
     <string name="error_album_upgrade_malformed">Capsule couldn\'t read that album upgrade request.</string>
@@ -1843,6 +1847,7 @@
     <string name="error_auth_totp_not_pending">There is no two-factor setup waiting to be confirmed.</string>
     <string name="error_auth_unavailable">Capsule couldn\'t reach your account just now. Please try again.</string>
     <string name="error_auth_user_already_exists">An account with these details already exists.</string>
+    <string name="error_blob_access_revoked">You no longer have access to this album.</string>
     <string name="error_blob_gone">That photo file is no longer available.</string>
     <string name="error_blob_not_found">That photo file isn\'t on the server.</string>
     <string name="error_blob_pending_upload">The original photo hasn\'t been uploaded from its device yet.</string>
@@ -1909,6 +1914,7 @@
     <string name="error_storage_deep_rate_limited">Too many deep storage checks. Please wait and try again.</string>
     <string name="error_storage_invalid_request">The storage-verification request was malformed.</string>
     <string name="error_storage_unavailable">Capsule couldn\'t check whether your photos are safely stored. Please try again.</string>
+    <string name="error_sync_album_access_denied">You don\'t have access to that album.</string>
     <string name="error_sync_cursor_invalid">The sync session is out of date. Capsule will resync from the start.</string>
     <string name="error_sync_unauthenticated">Please sign in again to continue syncing.</string>
     <string name="error_sync_unavailable">Capsule could not reach the server to sync. It will try again.</string>

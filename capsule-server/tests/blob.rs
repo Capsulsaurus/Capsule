@@ -12,7 +12,8 @@ mod support;
 use capsule_server::blob::{BlobStore, ContentAddress};
 use capsule_server::gc::CollectionStore;
 use capsule_server::index::{AssetIndex, BlobRecord, HoldOutcome, PendingAsset, ServingHold};
-use capsule_server::store::{AssetId, BlobRole};
+use capsule_server::membership::{MemberRole, MembershipStore as _, RosterRecord};
+use capsule_server::store::{AssetId, BlobRole, UserId};
 use jiff::Timestamp;
 use kynos::http::StatusCode;
 use support::{Fixture, PROTOCOL_VERSION, album, owner, payload};
@@ -824,7 +825,7 @@ async fn another_accounts_live_blob_is_unknown_rather_than_served() {
 /// differed from the unknown-address answer — would confirm that the address is referenced by
 /// *somebody*, which is an existence oracle over content addresses handed to anyone who can name
 /// one. The `403` the contract describes is reserved for a caller the server can see once *had*
-/// access, and no such caller exists yet — see `S-C51`.
+/// access — a former member, whose row the membership store keeps (`S-C51`).
 #[tokio::test]
 async fn a_strangers_refusal_is_indistinguishable_from_an_unknown_address() {
     let fixture = Fixture::working();
@@ -905,4 +906,197 @@ async fn a_stranger_cannot_tell_a_takedown_from_an_unknown_address() {
         .send()
         .await
         .assert_status(StatusCode::NOT_FOUND);
+}
+
+// ===========================================================================================
+// Membership (`S-C51`)
+// ===========================================================================================
+
+/// A second account, on the seeded album's roster in whatever state a case puts it.
+const BOB: &str = "01937b7c-0000-7000-8000-0000000000b0";
+
+/// Publish the seeded album's roster at `version`, naming `members`.
+async fn roster(fixture: &Fixture, version: u64, members: &[(&str, MemberRole)]) {
+    fixture
+        .members
+        .apply_roster(
+            RosterRecord {
+                album_id: album(),
+                roster_version: version,
+                amk_epoch: version,
+                attested_by_device: support::device(),
+                received_at: Timestamp::UNIX_EPOCH,
+                document: format!("blob-test-v{version}").into_bytes(),
+            },
+            members
+                .iter()
+                .map(|(user, role)| (UserId::new(*user), *role))
+                .collect(),
+        )
+        .await
+        .expect("the store applies");
+}
+
+/// Fetch `address` as `bearer`, asking for a problem body.
+async fn fetch(fixture: &Fixture, bearer: &str, address: &str) -> kynos::test::TestResponse {
+    fixture
+        .client
+        .get(&format!("/v1/blob/{address}"))
+        .header("authorization", bearer)
+        .header("accept", "application/problem+json")
+        .send()
+        .await
+}
+
+#[tokio::test]
+async fn a_member_of_either_role_reads_the_owners_blobs() {
+    let fixture = Fixture::working();
+    let bytes = ciphertext();
+    let address = published_original(&fixture, "shared", &bytes).await;
+    let bob = fixture.other_bearer(BOB).await;
+
+    for role in [MemberRole::Reader, MemberRole::Writer] {
+        roster(
+            &fixture,
+            u64::from(role == MemberRole::Writer) + 1,
+            &[(BOB, role)],
+        )
+        .await;
+        let response = fetch(&fixture, &bob, address.as_str()).await;
+        response.assert_status(StatusCode::OK);
+        assert_eq!(
+            response.bytes().as_ref(),
+            bytes.as_slice(),
+            "{role:?} reads the bytes"
+        );
+        fixture
+            .client
+            .get(&format!("/v1/blob/{address}"))
+            .header("authorization", &bob)
+            .header("range", "bytes=0-1023")
+            .send()
+            .await
+            .assert_status(StatusCode::PARTIAL_CONTENT);
+    }
+}
+
+#[tokio::test]
+async fn a_former_member_is_told_access_was_revoked() {
+    // The `403` the download contract describes, rendered at last: an authorization change, not
+    // a durability loss, so the client re-syncs its membership before it degrades.
+    let fixture = Fixture::working();
+    let address = published_original(&fixture, "unshared", &ciphertext()).await;
+    let bob = fixture.other_bearer(BOB).await;
+    roster(&fixture, 1, &[(BOB, MemberRole::Writer)]).await;
+    fetch(&fixture, &bob, address.as_str())
+        .await
+        .assert_status(StatusCode::OK);
+
+    roster(&fixture, 2, &[]).await;
+    let refused = fetch(&fixture, &bob, address.as_str()).await;
+    refused.assert_status(StatusCode::FORBIDDEN);
+    let problem: serde_json::Value = refused.json();
+    assert_eq!(problem["code"], "error.blob.access_revoked");
+
+    // Re-admitted: the bytes again.
+    roster(&fixture, 3, &[(BOB, MemberRole::Reader)]).await;
+    fetch(&fixture, &bob, address.as_str())
+        .await
+        .assert_status(StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_former_member_gets_the_403_before_any_policy_refusal() {
+    // Authority first, as `S-C39` fixed it: a former member learns nothing about takedowns or
+    // deletions either. The `403` is theirs whatever the asset's state.
+    let fixture = Fixture::working();
+    let address = published_original(&fixture, "held-from-former", &ciphertext()).await;
+    let bob = fixture.other_bearer(BOB).await;
+    roster(&fixture, 1, &[(BOB, MemberRole::Reader)]).await;
+    roster(&fixture, 2, &[]).await;
+    assert_eq!(
+        fixture
+            .index
+            .set_hold(
+                &AssetId::new("held-from-former"),
+                Some(ServingHold::Takedown)
+            )
+            .await
+            .expect("the index holds"),
+        HoldOutcome::Applied
+    );
+
+    fetch(&fixture, &bob, address.as_str())
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    // The owner is told the truth, as before.
+    fetch(&fixture, &bearer(&fixture).await, address.as_str())
+        .await
+        .assert_status(StatusCode::GONE);
+}
+
+#[tokio::test]
+async fn a_never_member_is_indistinguishable_from_an_unknown_address_body_and_headers() {
+    // The full disclosure property with a roster in play: an account the roster never named —
+    // even while *other* accounts are on it — gets the unknown-address answer byte for byte,
+    // headers included (the `date` header aside, which is the clock's).
+    let fixture = Fixture::working();
+    let address = published_original(&fixture, "never-shared", &ciphertext()).await;
+    roster(&fixture, 1, &[(BOB, MemberRole::Writer)]).await;
+    let carol = fixture
+        .other_bearer("01937b7c-0000-7000-8000-0000000000c0")
+        .await;
+
+    let refused = fetch(&fixture, &carol, address.as_str()).await;
+    refused.assert_status(StatusCode::NOT_FOUND);
+    let unknown = fetch(&fixture, &carol, &support::checksum(b"never existed")).await;
+    unknown.assert_status(StatusCode::NOT_FOUND);
+
+    assert_eq!(refused.bytes(), unknown.bytes());
+    // Presence first, so the equalities below cannot pass on two absent headers. (The in-process
+    // client does not materialise `content-length`, so the media type is the one header a problem
+    // body is guaranteed to carry here.)
+    assert!(
+        !refused.headers("content-type").is_empty(),
+        "a problem response carries `content-type`"
+    );
+    // Every header a problem response carries, `date` aside (which is the clock's). The test
+    // client exposes headers by name, so the set is spelled out; a new response header joins it.
+    for name in [
+        "content-type",
+        "content-length",
+        "cache-control",
+        "vary",
+        "www-authenticate",
+        "x-capsule-protocol-min",
+        "x-capsule-protocol-max",
+    ] {
+        assert_eq!(
+            refused.headers(name),
+            unknown.headers(name),
+            "the `{name}` header differs between a never-member's refusal and an unknown address"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_membership_store_that_cannot_answer_is_an_outage_never_a_refusal() {
+    // An outage must not look like a revocation — the client actions are opposite — nor like
+    // an unknown address.
+    let fixture = Fixture::working();
+    let address = published_original(&fixture, "outage", &ciphertext()).await;
+    let bob = fixture.other_bearer(BOB).await;
+    roster(&fixture, 1, &[(BOB, MemberRole::Reader)]).await;
+
+    fixture.members.set_unavailable(true);
+    let failed = fetch(&fixture, &bob, address.as_str()).await;
+    failed.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    let problem: serde_json::Value = failed.json();
+    assert_eq!(problem["code"], "error.blob.unavailable");
+    fixture.members.set_unavailable(false);
+
+    // The owner never asks the roster, so the outage does not touch them.
+    fetch(&fixture, &bearer(&fixture).await, address.as_str())
+        .await
+        .assert_status(StatusCode::OK);
 }

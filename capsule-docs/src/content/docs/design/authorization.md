@@ -48,6 +48,12 @@ The endpoint is deliberately singular — one closed enum, one gate, one transac
 
 The transport row lives in [API Surfaces](/design/api-surfaces/#surface--transport-map). Implementation is planned in `capsule-server::routes::ops` (slice `S-C16`, reusing the upload server's envelope gate).
 
+## Album Membership on the Server
+
+Album sharing between accounts is an MLS group whose roster the server cannot read, by design. What the server holds instead is the album owner's **signed roster** — the whole member list, each with a role of `reader` or `writer`, under a strictly monotonic `roster_version` and the AMK epoch it reflects, signed by a non-revoked device in the owner's published device directory and published at `PUT /v1/albums/{album_id}/roster` (slice `S-C51`; [invariant 33](/design/threat-model/validation/#server-side-validation-invariants)). Only the owner account publishes; removal is a later roster that omits the member, and the server records the version and epoch at which they vanished rather than deleting the row.
+
+That stored fact widens two decisions that were owner-only until it existed. A **writer** on the current roster may write to the album through the upload path and `POST /v1/albums/{album_id}/ops`; the write is filed under the *owner's* namespace — the owner's feed is the one every member's devices read — and billed to the uploader. Any account on the roster, in either role, may fetch the album's blobs; a **former** member receives the `403` [Download & Sync](/design/import/download-sync/) describes; an account the roster never named gets the same `404` an unknown address gets. The roster is a transport control over who the server serves, never a confidentiality control: the server executes what the owner's signed statement permits, and, as below, authorizes nothing itself.
+
 ## The Server Executes But Never Authorizes
 
 Per the principle of [trusting the server for storage, never for authorization](/design/cryptography/), the server **carries out** a remote delete or replace but is **never** the authority that permits it. A server-asserted lifecycle change with no valid write-tier signature is rejected by every client. This bounds the damage a compromised or buggy server can do: it can refuse to store data, but it cannot forge its destruction.
