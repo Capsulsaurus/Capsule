@@ -16,13 +16,18 @@
 //! by [`capsule_list_reports_the_sync_feed_not_the_library`] rather than papered over.
 //!
 //! **The fixture image.** A synthesized 8×8 baseline JPEG (see [`synthetic_jpeg`]) carrying a
-//! real EXIF APP1 segment — no committed binary. The CLI links `capsule-core` **without** the
-//! `media` feature, so nothing on this path decodes pixels (every still reports
-//! `DerivativeStatus::DeferredNoCodec`, slice `S-B13`); the decode the importer genuinely
-//! performs is EXIF, through `extract_exif`. The assertions therefore land on values that can
-//! only have come from parsing the segment: the sidecar's 8×8 dimensions and its GPS fix. The
-//! bytes are a real, decodable JPEG all the same, so the fixture stays honest if a build that
-//! *does* carry a codec ever runs this path.
+//! real EXIF APP1 segment — no committed binary. The CLI links `capsule-core` with default
+//! features, and `native` implies `media`, so this path **does** decode pixels: the import
+//! reports `DerivativeStatus::Decoded`, writes a chromahash `lqip` into the signed sidecar, and
+//! signs a thumbnail-tier derivative (slices `S-B1`, `S-B13`, `S-B14`). At 8×8 the source is
+//! well inside the 256 px thumbnail cap, so that derivative is the signed `format = "original"`
+//! sentinel rather than a re-encode — which is exactly the contract's redundant-derivative rule
+//! and worth pinning end to end.
+//!
+//! The EXIF assertions are still the load-bearing ones, because neither the GPS fix nor the
+//! capture time exists anywhere but inside the APP1 segment `synthetic_jpeg` wrote. The 8×8
+//! dimensions now come from decoded pixels *and* agree with the EXIF tags, which is the
+//! stronger statement: the two independent readings of the fixture match.
 //!
 //! **Argon2id.** `capsule library init` does not create the account — the first `capsule import`
 //! does, at `DeviceTier::Normal` (256 MiB, t=3), which costs ~5 s per unlock in a debug build and
@@ -319,6 +324,30 @@ fn an_import_is_reconstructed_by_a_later_process_from_disk_alone() {
         "the stored original must be the bytes that were imported"
     );
 
+    // ── The signed derivatives, in `media/{YYYY}/{YYYY-MM}/derivatives/`. ──
+    //
+    // The fixture is 8×8, well inside the thumbnail tier's 256 px cap, so the tier is satisfied
+    // by the signed `format = "original"` sentinel — the contract's redundant-derivative rule.
+    // A sentinel *references* the original, so what lands is its signed manifest and no bytes:
+    // copying them would put this fixture's EXIF, GPS fix included, into a derivative blob.
+    let derivatives = bucket.join("derivatives");
+    let bundle = derivatives.join(format!("{simple}.derivatives.cbor"));
+    assert!(
+        bundle.is_file(),
+        "a signed derivative-manifest bundle must exist in {}",
+        derivatives.display()
+    );
+    let derivative_files: Vec<String> = std::fs::read_dir(&derivatives)
+        .expect("read the derivatives directory")
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        derivative_files,
+        vec![format!("{simple}.derivatives.cbor")],
+        "the sentinel writes its manifest and no derivative bytes"
+    );
+
     // ── The signed sidecar, decoded from disk. ──
     let bytes = std::fs::read(bucket.join(format!("{simple}.cbor"))).expect("read the sidecar");
     let sidecar =
@@ -340,8 +369,21 @@ fn an_import_is_reconstructed_by_a_later_process_from_disk_alone() {
     let dimensions = sidecar
         .dimensions
         .as_ref()
-        .expect("dimensions come from the EXIF PixelXDimension/PixelYDimension tags");
+        .expect("dimensions come from the decoded pixels, and agree with the EXIF tags");
     assert_eq!((dimensions.width, dimensions.height), (8, 8));
+
+    // The LQIP producer ran on the decoded pixels: a 32-byte chromahash payload at
+    // `LQIP_FORMAT_V1`, inside the *signed* sidecar (slice `S-B14`).
+    let lqip = sidecar
+        .lqip
+        .as_ref()
+        .expect("a decodable still carries a chromahash placeholder");
+    assert_eq!(
+        lqip.chromahash.len(),
+        32,
+        "chromahash's DEFAULT_TIER is exactly 32 bytes"
+    );
+    assert_eq!(lqip.format_version, 1, "the sidecar LQIP format version");
     let gps = sidecar.gps.as_ref().expect("the EXIF GPS fix");
     assert!(
         (gps.lat - EXIF_LAT).abs() < 1e-6 && (gps.lon - EXIF_LON).abs() < 1e-6,

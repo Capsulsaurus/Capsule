@@ -26,6 +26,7 @@
 
 mod album;
 mod backup;
+mod derivatives;
 mod drops;
 mod groups;
 mod import;
@@ -295,26 +296,34 @@ pub struct SignedImportOptions {
 /// is a real problem someone should look at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DerivativeStatus {
-    /// The still decoded: dimensions and LQIP came from real pixels, and signed derivatives
-    /// were generated if a still encoder is attached to the workspace.
+    /// The still decoded: `dimensions` and `lqip` came from real pixels, and the derivatives
+    /// this build can encode were generated and signed. **Independent of how many *formats*
+    /// deferred** — a decoded still whose AVIF and WebP variants have no encoder here is still
+    /// `Decoded`, because it has a renderable JXL thumbnail. The per-format gap is counted
+    /// separately by
+    /// [`ImportExecutionSummary::deferred_format_count`](crate::import::ImportExecutionSummary::deferred_format_count).
     Decoded,
-    /// **Expected deferral.** This build links no codec for the asset's format — the
-    /// supported-image-format table lives in the retired media stack. The original is safely
-    /// backed up; dimensions fall back to EXIF and there is no LQIP or preview until the codec
-    /// lands, at which point derivatives can be backfilled from the stored original. Counted by
+    /// **Expected deferral.** This build links no codec for the asset's format — see
+    /// [`SUPPORTED_STILL_FORMATS`](crate::media::SUPPORTED_STILL_FORMATS) for what it does
+    /// link, and [`StillFormat`](crate::media::StillFormat) for what it recognises. The
+    /// original is safely backed up; dimensions fall back to EXIF and there is no LQIP or
+    /// thumbnail until the codec lands, at which point derivatives can be backfilled from the
+    /// stored original. Counted by
     /// [`ImportExecutionSummary::deferred_derivative_count`](crate::import::ImportExecutionSummary::deferred_derivative_count).
     ///
-    /// This build links no codecs at all — the media stack is retired to `legacy-review/`
-    /// (`S-B1`) — so every still it imports reports this.
+    /// What reaches here today: HEIC, AVIF and the RAW families, each needing a system library
+    /// (libheif, libdav1d) or an assembler the cross and cargo-ndk builds do not carry.
     DeferredNoCodec,
     /// **A real problem.** The format *is* one this build can decode, but these particular
     /// bytes did not decode — truncation, corruption, or a decoder bug. The original is still
     /// imported (the bytes are backed up verbatim, whatever they are), but this is worth
     /// investigating rather than shrugging at.
     DecodeFailed,
-    /// Nothing to decode: the extension names no still image this build models — a video, an
-    /// XMP sidecar, an unknown suffix, or an exotic RAW flavour the raw-image-format table has
-    /// no variant for. Video derivatives are generated on their own path.
+    /// Nothing to decode: neither the bytes' header nor the extension names a still image
+    /// Capsule models — a video, an XMP sidecar, an SVG, or an unknown suffix. Distinct from
+    /// [`DeferredNoCodec`](Self::DeferredNoCodec), which is a still whose codec is merely
+    /// absent and whose derivatives are therefore backfillable. Video derivatives are generated
+    /// on their own path (slice `S-B5`).
     NotAKnownStill,
 }
 
@@ -339,6 +348,11 @@ pub struct SignedImport {
     pub asset_id: Uuid,
     /// Whether thumbnail/preview derivatives were generated, and if not, why.
     pub derivatives: DerivativeStatus,
+    /// How many `(tier, format)` pairs the tier table commits to and this build cannot encode
+    /// — the per-format half of the `S-B13` gap, which is orthogonal to
+    /// [`derivatives`](Self::derivatives): a `Decoded` asset can still carry deferred formats.
+    /// Zero when the still did not decode at all, because nothing was attempted.
+    pub deferred_formats: u32,
 }
 
 /// A streamed import: everything the [streaming window](crate::import::execute_streaming) needs

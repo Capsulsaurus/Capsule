@@ -8,6 +8,7 @@ use std::path::Path;
 use jiff::Timestamp;
 use uuid::Uuid;
 
+use super::derivatives::{PreparedStill, StillSource};
 use super::{
     AssetState, LifecycleError, Result, SidecarEnrichment, SignedImport, SignedImportOptions,
     StackPlacement, StreamedImport, Workspace, asset_is_deleted, media_dir, now_rfc3339,
@@ -28,7 +29,7 @@ use crate::exif::extract::extract_exif;
 use crate::exif::timezone::resolve_timezone;
 use crate::metadata::crdt::{Lww, OrSet};
 use crate::sidecar::sidecar_v1::{
-    Dimensions, Gps, GpsSource, SIDECAR_SCHEMA_V1, SidecarV1, StackMembership, StackRole,
+    Gps, GpsSource, SIDECAR_SCHEMA_V1, SidecarV1, StackMembership, StackRole,
 };
 
 /// Render a Unix-second capture time as the sidecar's RFC 3339 `capture_timestamp`.
@@ -97,13 +98,19 @@ fn folded_gps(embedded: Option<Gps>, folded: Option<&Gps>) -> Option<Gps> {
     embedded.or_else(|| folded.cloned())
 }
 
+/// The sidecar `content_type` for a file whose bytes named no still image Capsule models.
+///
+/// The **fallback only**: [`Workspace::prepare_still`] sniffs the header first, so a still's
+/// media type comes from [`StillFormat::mime`](crate::media::StillFormat::mime) and a `.jpg`
+/// that is really a HEIC is typed `image/heic`. What is left for this table is the non-still
+/// suffixes — video above all, which has no detection path until slice `S-B5`.
 fn content_type_for(ext: &str) -> String {
     match ext {
-        "jpg" | "jpeg" => "image/jpeg",
-        "png" => "image/png",
-        "heic" => "image/heic",
-        "webp" => "image/webp",
-        "mp4" => "video/mp4",
+        "mp4" | "m4v" => "video/mp4",
+        "mov" | "qt" => "video/quicktime",
+        "mkv" => "video/x-matroska",
+        "webm" => "video/webm",
+        "avi" => "video/x-msvideo",
         _ => "application/octet-stream",
     }
     .to_string()
@@ -303,12 +310,13 @@ impl Workspace {
     /// As [`import_asset`](Self::import_asset) but with executor-supplied [`SignedImportOptions`]
     /// (Move-mode source release + stack placement). This is the single signed write path the
     /// import executor drives (S-B2): every imported member lands as a signed `SidecarV1` +
-    /// manifest + append-only provenance, self-verified through [`verify_asset`], and — when a
-    /// still encoder is attached — with signed thumbnail/preview derivatives + an LQIP in the
-    /// sidecar. No still encoder exists in this build; the media stack is retired (`S-B1`).
+    /// manifest + append-only provenance, self-verified through [`verify_asset`], and — when the
+    /// still decodes — with a chromahash `lqip` in the sidecar and signed thumbnail derivatives
+    /// on disk (the private `prepare_still`, slices `S-B1`/`S-B14`).
     ///
-    /// Returns a [`SignedImport`]: the asset id, plus the [`DerivativeStatus`](super::DerivativeStatus)
-    /// saying whether derivatives were generated and, if not, why. A format this build has no
+    /// Returns a [`SignedImport`]: the asset id, the
+    /// [`DerivativeStatus`](super::DerivativeStatus) saying whether derivatives were generated
+    /// and, if not, why, and the per-format deferral count. A format this build has no
     /// codec for **still imports** — the original is the backup, the thumbnail is a bonus — so
     /// the status is a report, never a rejection (slice `S-B13`).
     #[tracing::instrument(skip_all, fields(album_id = %album_id, src = %src.display()))]
@@ -382,26 +390,47 @@ impl Workspace {
             "import: sidecar metadata resolved"
         );
 
-        // Still-derived sidecar metadata. Dimensions come from EXIF; there is **no decoder in
-        // this build** since `S-C59` retired `capsule_core::media`, so no still is decoded, no
-        // LQIP is computed and no derivatives are generated. The import proceeds regardless: the
-        // original is still backed up as a signed, encrypted blob, and `derivative_status`
-        // records the gap so it is reportable rather than silent (`S-B13`). Rawshift's
-        // replacement is what closes it.
-        let (dimensions, lqip, derivative_status) = (
-            exif.width
-                .zip(exif.height)
-                .map(|(width, height)| Dimensions { width, height }),
-            None::<crate::sidecar::sidecar_v1::Lqip>,
-            super::DerivativeStatus::DeferredNoCodec,
-        );
-
         let album = self.album(&album_id)?;
         let epoch = album.current_epoch;
         let amk = Amk::from_bytes(album.amks[&epoch]);
         // First write: draw a fresh nonce prefix and derive the folded file key together
         // (nothing to replace on a create).
+        //
+        // **Before** the derivatives, and that ordering is load-bearing: the `original`
+        // sentinel is a signed *reference* to this blob, so it commits to this ciphertext's
+        // address and this nonce prefix, neither of which exists until now.
         let (enc, ciphertext, _file_key) = encrypt_asset_rekey(&amk, &asset_id, &plaintext, None)?;
+
+        // Still-derived sidecar metadata, from one decode pass over the plaintext: the
+        // header-derived `content_type`, pixel `dimensions`, the chromahash `lqip`, and the
+        // signed thumbnail derivatives to persist once the asset's own files are durable. Each
+        // generated derivative is encrypted under its own fresh nonce prefix as it is signed —
+        // derivative bytes cross the network encrypted exactly like the original.
+        //
+        // Never fatal. A still this build cannot decode — or cannot decode *these bytes* of —
+        // commits exactly as before: EXIF dimensions, no LQIP, no derivatives, and a
+        // `DerivativeStatus` recording which reason applied so the gap is reportable rather
+        // than silent (`S-B13`).
+        let PreparedStill {
+            format,
+            dimensions,
+            lqip,
+            derivatives,
+            deferred_formats,
+            status: derivative_status,
+        } = self.prepare_still(
+            &StillSource {
+                plaintext: &plaintext,
+                ext: &ext,
+                src,
+                exif: &exif,
+            },
+            asset_id,
+            album_id,
+            capture_utc,
+            &amk,
+            &enc,
+        )?;
 
         // Sealing order (1) the prior head `H` is `None` on a create; (2) author + sign the
         // sidecar with `provenance_chain_hash = H`.
@@ -412,7 +441,9 @@ impl Workspace {
             hash: hash::hash_bytes(&plaintext),
             capture_timestamp: capture_rfc3339(capture_utc),
             import_timestamp: now_rfc3339(),
-            content_type: content_type_for(&ext),
+            // Header-derived wherever the bytes name a still Capsule models; the extension
+            // table is the fallback for everything else (video, unknown suffixes).
+            content_type: format.map_or_else(|| content_type_for(&ext), |f| f.mime().to_string()),
             dimensions,
             lqip,
             tags_user,
@@ -512,6 +543,10 @@ impl Workspace {
             stack: opts.stack.as_ref().map(StackPlacement::from_membership),
         };
         self.write_asset_files(&asset, &plaintext)?;
+        // After the asset's own files, and deliberately: a derivative is regenerable, so a
+        // failure to write one must never fail an import whose signed original is already
+        // durable. `persist_derivatives` logs and continues rather than returning.
+        self.persist_derivatives(&asset, &derivatives);
         self.index_asset_row(&asset)?;
         self.index_original_representation(&asset, plaintext.len())?;
 
@@ -526,6 +561,7 @@ impl Workspace {
         Ok(SignedImport {
             asset_id,
             derivatives: derivative_status,
+            deferred_formats: deferred_formats as u32,
         })
     }
 

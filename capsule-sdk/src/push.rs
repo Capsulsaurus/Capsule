@@ -14,6 +14,12 @@
 //! returns the authoritative offset; across an asset's blobs, a `duplicate_blob` answer is a
 //! merge, not an error. Re-running a push against an unchanged library is therefore a no-op.
 //!
+//! **Every blob this module ships is ciphertext.** The original is re-derived from its
+//! manifest's nonce prefix, the metadata blob is carried sealed, and **derivative blobs are
+//! encrypted too** — `capsule-core` re-derives each one from the plaintext it holds locally
+//! using the prefix that derivative's signed manifest recorded. Nothing here decrypts, encrypts,
+//! or inspects a blob; it moves opaque bytes.
+//!
 //! **One deviation from "the envelope mirrors the signed manifest", and it is the server's
 //! rule:** invariant 15 requires `manifest_envelope.ciphertext_hash == hash` (the top-level
 //! declared content address of *this* blob). A bundle's metadata and derivative blobs are not

@@ -96,10 +96,10 @@ their published upstream releases. Source for each is available from crates.io
 and from the upstream repository named in its own package metadata.
 
   base64urlsafedata, colored, hpke-rs, hpke-rs-crypto, hpke-rs-libcrux,
-  hpke-rs-rust-crypto, option-ext, uniffi, uniffi_bindgen, uniffi_core,
-  uniffi_internal_macros, uniffi_macros, uniffi_meta, uniffi_pipeline,
-  uniffi_udl, webauthn-attestation-ca, webauthn-rs, webauthn-rs-core,
-  webauthn-rs-proto
+  hpke-rs-rust-crypto, option-ext, rawshift-core, rawshift-image, uniffi,
+  uniffi_bindgen, uniffi_core, uniffi_internal_macros, uniffi_macros,
+  uniffi_meta, uniffi_pipeline, uniffi_udl, webauthn-attestation-ca,
+  webauthn-rs, webauthn-rs-core, webauthn-rs-proto
 
 --------------------------------------------------------------------------------
 Conjunctive-license components
