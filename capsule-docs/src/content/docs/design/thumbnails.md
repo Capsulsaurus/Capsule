@@ -49,6 +49,8 @@ Decode is JPEG, PNG, JXL, TIFF and GIF. **HEIC, AVIF, WebP and the RAW families 
 and refused** — HEIC and AVIF need system libheif / libdav1d, and WebP shares the aarch64 defect
 above in both directions (the crate compiles that module for decode *or* encode).
 
+**Generated is not yet uploaded.** The server's upload policy fixes a closed content-type set for the protocol version, and `image/jxl` is not in it, so the T1 session for a JXL thumbnail is refused with `error.upload.unsupported_content_type` — every still larger than the 256 px cap, since only a small one gets the byte-free `original` sentinel. That is [#470](https://github.com/Capsulsaurus/Capsule/issues/470), server-side and being fixed separately; the thumbnails on disk and their signed manifests are unaffected.
+
 None of this is silent. A format with no codec is a typed
 `media::MediaError::UnsupportedFormat { format, op }`, and a `(tier, format)` pair with no encoder
 is recorded on `media::StillDerivatives::deferred` and counted by
