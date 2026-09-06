@@ -7579,6 +7579,18 @@
     "message": "This source is temporarily backed off after repeated errors.",
     "context": "HTTP 429 on a federation pull (slice S-E2): the peer spent its per-peer error budget on malformed input, tripping a circuit breaker that backs it off exponentially (5 / 30 / 60 minutes). Requests are short-circuited until the back-off elapses, so a buggy peer cannot DoS the server."
   },
+  "error.federation.member_not_on_roster": {
+    "message": "That person isn't on this album's member list.",
+    "context": "HTTP 409 on POST /v1/albums/{album_id}/capabilities (slice S-E2): the account the capability would carry is not on the album's current roster, so there is no membership to grant a peer access for. A stale-state class: the owner publishes the roster that lists them first, then mints."
+  },
+  "error.federation.not_configured": {
+    "message": "This server doesn't share albums with other servers.",
+    "context": "HTTP 403 on the federation lifecycle writes — minting, revoking or refreshing a capability, and federated report intake (slice S-E2): this deployment has no FEDERATION_URL, so it does not federate. A capability minted while it did still verifies; configuration does not un-mint a token."
+  },
+  "error.federation.peer_unknown": {
+    "message": "That server isn't one this server knows.",
+    "context": "HTTP 403 on POST /v1/federation/reports (slice S-C49): the reporting server has no pinned signing key here, so its report cannot be verified and is dropped before the admin queue. Peer keys are operator-pinned in v1; there is no network fetch."
+  },
   "error.federation.rate_budget_exceeded": {
     "message": "This source has reached its request limit. Please wait and try again.",
     "context": "HTTP 429 on a federation pull (slice S-E2, threat-model invariant 21): the peer exceeded one of its per-peer transfer budgets — events/hour, bytes/hour, or CPU/hour. Each peer is its own blast-radius boundary; a busy or hostile peer cannot starve good ones."
@@ -7590,6 +7602,10 @@
   "error.federation.scope_insufficient": {
     "message": "This access grant does not cover the requested content.",
     "context": "HTTP 403 on a federation blob fetch (slice S-E2, threat-model invariant 19): a read-derivative-only capability tried to fetch a blob whose server-visible role is 'original'. Scope is enforced structurally against each blob's role."
+  },
+  "error.federation.unavailable": {
+    "message": "Capsule couldn't reach the federation records. Please try again.",
+    "context": "HTTP 500 on the federation surface (slice S-E2): the capability store, the peer store or the per-peer counter could not answer, so nothing was decided — never a refusal and never an admission. A limiter that cannot be reached is an outage, not a limit."
   },
   "error.moderation.account_suspended": {
     "message": "Your account is suspended. You can't upload or share until it's reinstated.",

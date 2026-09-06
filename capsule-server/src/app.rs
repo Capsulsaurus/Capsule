@@ -37,6 +37,7 @@ use crate::discovery::DiscoveryContext;
 use crate::drop::DropContext;
 use crate::enrollment::EnrollmentContext;
 use crate::escrow::EscrowContext;
+use crate::federation::FederationContext;
 use crate::membership::MembershipContext;
 use crate::moderation::ModerationContext;
 use crate::quota::QuotaContext;
@@ -84,6 +85,8 @@ pub struct App {
     discovery: DiscoveryContext,
     /// The master-key escrow's collaborators.
     escrow: EscrowContext,
+    /// The federation module's collaborators (`S-E2`, `S-E5`).
+    federation: FederationContext,
     /// The cross-device add's collaborators.
     enrollment: EnrollmentContext,
     /// The moderation record's collaborators.
@@ -131,6 +134,8 @@ pub struct Modules {
     pub discovery: DiscoveryContext,
     /// The master-key escrow's collaborators.
     pub escrow: EscrowContext,
+    /// The federation module's collaborators (`S-E2`, `S-E5`).
+    pub federation: FederationContext,
     /// The cross-device add's collaborators.
     pub enrollment: EnrollmentContext,
     /// The moderation record's collaborators.
@@ -160,6 +165,7 @@ impl App {
             attestation,
             discovery,
             escrow,
+            federation,
             enrollment,
             moderation,
             share,
@@ -180,6 +186,7 @@ impl App {
             attestation,
             discovery,
             escrow,
+            federation,
             enrollment,
             moderation,
             share,

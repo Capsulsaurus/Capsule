@@ -25,15 +25,22 @@
 //! somebody has to enforce. [`RevocationList::revoke`] refuses an entry whose expiry is beyond
 //! the ceiling, which is what keeps that reasoning true: one accepted long-lived entry and the
 //! list grows without bound while the peer-side staleness math silently stops applying.
+//!
+//! # Where the list lives now
+//!
+//! The port is implemented by the federation capability store
+//! ([`crate::federation::CapabilityStore`]), because once this server *issues* capabilities the
+//! record of one and the fact of its revocation are one row, and a standalone list would be a
+//! second answer to "is this `jti` revoked". The deterministic adapter is
+//! [`crate::federation::InMemoryCapabilities`]; the conformance suite that pins the pruning,
+//! ordering and ceiling rules is `federation::conformance`.
 
-use std::collections::BTreeMap;
 use std::fmt;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
 
 use jiff::{SignedDuration, Timestamp};
 
-use crate::store::{Clock, StoreError, StoreFuture};
+use crate::store::{StoreError, StoreFuture};
 
 /// The ceiling design/federation.md puts on a capability token's lifetime.
 pub const MAX_TOKEN_TTL: SignedDuration = SignedDuration::from_hours(24);
@@ -120,82 +127,6 @@ pub trait RevocationList: fmt::Debug + Send + Sync {
 
     /// The list as it stands, pruned of entries whose expiry has passed.
     fn published(&self) -> StoreFuture<'_, PublishedRevocations>;
-}
-
-/// The deterministic in-memory adapter.
-#[derive(Debug)]
-pub struct InMemoryRevocations {
-    entries: Mutex<BTreeMap<String, Timestamp>>,
-    clock: Arc<dyn Clock>,
-}
-
-impl InMemoryRevocations {
-    /// An empty list reading `clock` for pruning and for `generated_at`.
-    pub fn new(clock: Arc<dyn Clock>) -> Self {
-        Self {
-            entries: Mutex::new(BTreeMap::new()),
-            clock,
-        }
-    }
-}
-
-impl RevocationList for InMemoryRevocations {
-    fn revoke(&self, token: RevokedToken) -> RevokeFuture<'_> {
-        Box::pin(async move {
-            let now = self.clock.now();
-            let ceiling = crate::store::deadline(now, MAX_TOKEN_TTL);
-            if token.expires_at > ceiling {
-                tracing::warn!(
-                    jti = %token.jti,
-                    expires_at = %token.expires_at,
-                    "a revocation was refused: its expiry is beyond the capability TTL ceiling"
-                );
-                return Err(RevocationError::BeyondTtlCeiling {
-                    expires_at: token.expires_at,
-                    ceiling: MAX_TOKEN_TTL,
-                }
-                .into());
-            }
-
-            let mut entries = self
-                .entries
-                .lock()
-                .expect("the revocation list is not poisoned");
-            entries.insert(token.jti.clone(), token.expires_at);
-            tracing::info!(
-                jti = %token.jti,
-                expires_at = %token.expires_at,
-                published = entries.len(),
-                "a federation capability token was revoked"
-            );
-            Ok(())
-        })
-    }
-
-    fn published(&self) -> StoreFuture<'_, PublishedRevocations> {
-        Box::pin(async move {
-            let now = self.clock.now();
-            let mut entries = self
-                .entries
-                .lock()
-                .expect("the revocation list is not poisoned");
-            // Pruned on read *and* retained pruned, so a list nobody fetches does not grow
-            // forever holding entries that already mean nothing.
-            entries.retain(|_, expires_at| *expires_at > now);
-            let mut revoked: Vec<RevokedToken> = entries
-                .iter()
-                .map(|(jti, expires_at)| RevokedToken {
-                    jti: jti.clone(),
-                    expires_at: *expires_at,
-                })
-                .collect();
-            revoked.sort_by_key(|token| (token.expires_at, token.jti.clone()));
-            Ok(PublishedRevocations {
-                generated_at: now,
-                revoked,
-            })
-        })
-    }
 }
 
 /// What a verifier concluded about one `jti`.

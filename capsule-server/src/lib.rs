@@ -28,7 +28,8 @@
 //!
 //! Each module owns one port and, where it has one, the surface over it. [`routes`] is the only
 //! module that knows about HTTP: everything under it — [`album`], [`directory`], [`discovery`],
-//! [`enrollment`], [`escrow`], [`gc`], [`index`], [`membership`], [`moderation`],
+//! [`enrollment`], [`escrow`], [`federation`], [`gc`], [`index`], [`membership`],
+//! [`moderation`],
 //! [`negotiation`], [`quota`],
 //! [`scrub`], [`serve`],
 //! [`share`], [`store`],
@@ -76,6 +77,7 @@ pub mod discovery;
 pub mod drop;
 pub mod enrollment;
 pub mod escrow;
+pub mod federation;
 pub mod gc;
 pub mod index;
 pub mod limits;

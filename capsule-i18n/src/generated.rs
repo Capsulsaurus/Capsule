@@ -236,6 +236,15 @@ pub mod error_codes {
     /// `error.federation.circuit_open`
     pub const FEDERATION_CIRCUIT_OPEN: &str = "error.federation.circuit_open";
 
+    /// `error.federation.member_not_on_roster`
+    pub const FEDERATION_MEMBER_NOT_ON_ROSTER: &str = "error.federation.member_not_on_roster";
+
+    /// `error.federation.not_configured`
+    pub const FEDERATION_NOT_CONFIGURED: &str = "error.federation.not_configured";
+
+    /// `error.federation.peer_unknown`
+    pub const FEDERATION_PEER_UNKNOWN: &str = "error.federation.peer_unknown";
+
     /// `error.federation.rate_budget_exceeded`
     pub const FEDERATION_RATE_BUDGET_EXCEEDED: &str = "error.federation.rate_budget_exceeded";
 
@@ -244,6 +253,9 @@ pub mod error_codes {
 
     /// `error.federation.scope_insufficient`
     pub const FEDERATION_SCOPE_INSUFFICIENT: &str = "error.federation.scope_insufficient";
+
+    /// `error.federation.unavailable`
+    pub const FEDERATION_UNAVAILABLE: &str = "error.federation.unavailable";
 
     /// `error.moderation.account_suspended`
     pub const MODERATION_ACCOUNT_SUSPENDED: &str = "error.moderation.account_suspended";

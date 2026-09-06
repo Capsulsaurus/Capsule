@@ -40219,6 +40219,36 @@
         }
       }
     },
+    "error.federation.member_not_on_roster": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That person isn't on this album's member list."
+          }
+        }
+      }
+    },
+    "error.federation.not_configured": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This server doesn't share albums with other servers."
+          }
+        }
+      }
+    },
+    "error.federation.peer_unknown": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That server isn't one this server knows."
+          }
+        }
+      }
+    },
     "error.federation.rate_budget_exceeded": {
       "localizations": {
         "ar": {
@@ -40389,6 +40419,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "此存取授權不涵蓋所請求的內容。"
+          }
+        }
+      }
+    },
+    "error.federation.unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule couldn't reach the federation records. Please try again."
           }
         }
       }
