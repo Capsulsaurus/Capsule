@@ -298,17 +298,22 @@ impl HttpIdentityProvider {
     /// The egress client every relying-party request is sent with.
     ///
     /// Timeouts on, redirects off: a token endpoint that redirects is sending the client secret
-    /// somewhere the discovery document did not name.
+    /// somewhere the discovery document did not name. `roots` are the operator's additional
+    /// trust anchors (`OIDC_CA_BUNDLE`) — a provider behind a private CA is the ordinary
+    /// enterprise case — added to, never replacing, the public roots.
     ///
     /// # Errors
     ///
     /// Whatever `reqwest` refuses to build with — in practice nothing.
-    pub fn http_client() -> reqwest::Result<reqwest::Client> {
-        reqwest::Client::builder()
+    pub fn http_client(roots: &[reqwest::Certificate]) -> reqwest::Result<reqwest::Client> {
+        let mut builder = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
             .redirect(reqwest::redirect::Policy::none())
-            .user_agent(concat!("capsule-server/", env!("CARGO_PKG_VERSION")))
-            .build()
+            .user_agent(concat!("capsule-server/", env!("CARGO_PKG_VERSION")));
+        for root in roots {
+            builder = builder.add_root_certificate(root.clone());
+        }
+        builder.build()
     }
 
     /// A relying party for `settings`, fetching with `http` and judging time by `clock`.

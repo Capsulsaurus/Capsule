@@ -23,7 +23,7 @@ use jsonwebtoken::jwk::{
 };
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use ring::signature::KeyPair as _;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
 
 /// The `client_id` the provider knows.
@@ -119,6 +119,56 @@ struct State {
 pub(crate) struct MockIdp {
     state: Arc<State>,
     handle: tokio::task::JoinHandle<()>,
+    /// The private CA's certificate, PEM, when the provider serves TLS.
+    ca_pem: Option<String>,
+}
+
+/// `der` as a PEM `CERTIFICATE` block (RFC 7468), without rcgen's `pem` feature.
+fn pem_of(der: &[u8]) -> String {
+    let body = base64::engine::general_purpose::STANDARD.encode(der);
+    let lines: Vec<&str> = body
+        .as_bytes()
+        .chunks(64)
+        .map(|chunk| std::str::from_utf8(chunk).expect("base64 is ASCII"))
+        .collect();
+    format!(
+        "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n",
+        lines.join("\n")
+    )
+}
+
+/// A private CA and the leaf it signed for `127.0.0.1`, for the TLS provider.
+struct PrivateCa {
+    ca_pem: String,
+    config: Arc<rustls::ServerConfig>,
+}
+
+impl PrivateCa {
+    fn generate() -> Self {
+        let ca_key = rcgen::KeyPair::generate().expect("a CA key");
+        let mut ca_params = rcgen::CertificateParams::new(Vec::<String>::new()).expect("params");
+        ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let ca = ca_params.self_signed(&ca_key).expect("a CA certificate");
+
+        let leaf_key = rcgen::KeyPair::generate().expect("a leaf key");
+        let leaf_params =
+            rcgen::CertificateParams::new(vec!["127.0.0.1".to_owned()]).expect("params");
+        let leaf = leaf_params
+            .signed_by(&leaf_key, &ca, &ca_key)
+            .expect("a leaf signed by the CA");
+
+        let config = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![leaf.der().clone(), ca.der().clone()],
+                rustls::pki_types::PrivateKeyDer::Pkcs8(leaf_key.serialize_der().into()),
+            )
+            .expect("a server config");
+        Self {
+            ca_pem: pem_of(ca.der()),
+            config: Arc::new(config),
+        }
+    }
 }
 
 impl Drop for MockIdp {
@@ -132,14 +182,29 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl MockIdp {
-    /// Bind on loopback and start serving, with one published key.
+    /// Bind on loopback and start serving plain HTTP, with one published key.
     pub(crate) async fn start() -> Self {
+        Self::start_with(None).await
+    }
+
+    /// The same provider behind TLS, with a leaf signed by a private CA the test can read.
+    ///
+    /// Its issuer is `https://127.0.0.1:{port}/idp`, so nothing about it is the loopback
+    /// carve-out: the relying party has to trust the CA, which is what `OIDC_CA_BUNDLE` is for.
+    pub(crate) async fn start_tls() -> Self {
+        Self::start_with(Some(PrivateCa::generate())).await
+    }
+
+    async fn start_with(tls: Option<PrivateCa>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("loopback binds");
         let addr = listener.local_addr().expect("a bound address");
+        let scheme = if tls.is_some() { "https" } else { "http" };
+        let ca_pem = tls.as_ref().map(|ca| ca.ca_pem.clone());
+        let acceptor = tls.map(|ca| tokio_rustls::TlsAcceptor::from(ca.config));
         let state = Arc::new(State {
-            issuer: format!("http://{addr}/idp"),
+            issuer: format!("{scheme}://{addr}/idp"),
             published: Mutex::new(vec![Signer::generate("k1".to_owned())]),
             oct_keys: Mutex::new(Vec::new()),
             grants: Mutex::new(BTreeMap::new()),
@@ -158,12 +223,31 @@ impl MockIdp {
                 };
                 while connections.try_join_next().is_some() {}
                 let state = Arc::clone(&serving);
+                let acceptor = acceptor.clone();
                 connections.spawn(async move {
-                    serve(stream, state).await;
+                    match acceptor {
+                        Some(acceptor) => {
+                            // A handshake the client refuses (an untrusted CA) ends here, which
+                            // is the refusal the `OIDC_CA_BUNDLE` case asserts from the other side.
+                            if let Ok(stream) = acceptor.accept(stream).await {
+                                serve(stream, state).await;
+                            }
+                        }
+                        None => serve(stream, state).await,
+                    }
                 });
             }
         });
-        Self { state, handle }
+        Self {
+            state,
+            handle,
+            ca_pem,
+        }
+    }
+
+    /// The private CA's certificate, PEM — what an operator would put in `OIDC_CA_BUNDLE`.
+    pub(crate) fn ca_pem(&self) -> &str {
+        self.ca_pem.as_deref().expect("started with start_tls")
     }
 
     /// The issuer the relying party is configured with. Loopback `http`, the carve-out.
@@ -312,10 +396,18 @@ fn token_response(
             header.kid = Some(signer.kid.clone());
             let token =
                 jsonwebtoken::encode(&header, &claims, &signer.encoding).expect("the key signs");
-            // Flip the last character of the signature to a different base64url character.
+            // Flip the first character of the signature to a different base64url character.
+            // The first, not the last: the last symbol of an unpadded base64url string carries
+            // padding bits, so not every character is valid there and the token would be
+            // malformed rather than mis-signed.
             let mut bytes = token.into_bytes();
-            let last = bytes.last_mut().expect("a token has bytes");
-            *last = if *last == b'A' { b'B' } else { b'A' };
+            let signature_start = bytes
+                .iter()
+                .rposition(|byte| *byte == b'.')
+                .expect("a compact JWS has two dots")
+                + 1;
+            let first = &mut bytes[signature_start];
+            *first = if *first == b'A' { b'B' } else { b'A' };
             String::from_utf8(bytes).expect("still ASCII")
         }
         _ => {
@@ -337,7 +429,7 @@ fn token_response(
     )
 }
 
-async fn serve(mut stream: tokio::net::TcpStream, state: Arc<State>) {
+async fn serve<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, state: Arc<State>) {
     let mut buf = Vec::new();
     let mut tmp = [0u8; 8192];
     let header_end = loop {

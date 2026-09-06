@@ -36,7 +36,25 @@ fn relying_party(idp: &MockIdp, clock: Arc<ManualClock>) -> HttpIdentityProvider
             client_secret: None,
             redirects: RedirectPolicy::new(None, true),
         },
-        HttpIdentityProvider::http_client().expect("the client builds"),
+        HttpIdentityProvider::http_client(&[]).expect("the client builds"),
+        clock,
+    )
+}
+
+/// A relying party over `idp` trusting `roots` beyond the public ones.
+fn relying_party_trusting(
+    idp: &MockIdp,
+    clock: Arc<ManualClock>,
+    roots: &[reqwest::Certificate],
+) -> HttpIdentityProvider {
+    HttpIdentityProvider::new(
+        OidcSettings {
+            issuer: idp.issuer(),
+            client_id: CLIENT_ID.to_owned(),
+            client_secret: None,
+            redirects: RedirectPolicy::new(None, true),
+        },
+        HttpIdentityProvider::http_client(roots).expect("the client builds"),
         clock,
     )
 }
@@ -342,6 +360,45 @@ async fn every_tampered_token_is_refused_with_its_own_reason() {
             other => panic!("{tamper:?} was not refused as a token rejection: {other:?}"),
         }
     }
+}
+
+#[tokio::test]
+async fn a_provider_behind_a_private_ca_is_reached_only_with_its_bundle() {
+    // The enterprise case `OIDC_CA_BUNDLE` exists for: the provider's certificate chains to a
+    // CA no public root store knows.
+    let idp = MockIdp::start_tls().await;
+    assert!(idp.issuer().starts_with("https://127.0.0.1:"));
+
+    // Without the bundle the handshake fails, and it fails as the provider being unreachable —
+    // not as a token or exchange refusal.
+    let untrusting = relying_party(&idp, wall_clock());
+    let state = fresh_state();
+    let nonce = fresh_nonce();
+    let error = untrusting
+        .authorization_url(&AuthorizationRequest {
+            redirect_uri: REDIRECT,
+            state: &state,
+            nonce: &nonce,
+            code_challenge: "x",
+        })
+        .await
+        .expect_err("refused at the handshake");
+    assert!(
+        matches!(error, ProviderError::Unavailable { .. }),
+        "{error:?}"
+    );
+    assert_eq!(idp.discovery_hits(), 0, "nothing reached the provider");
+
+    // With it, the whole handshake round-trips over TLS.
+    let roots = reqwest::Certificate::from_pem_bundle(idp.ca_pem().as_bytes()).expect("a bundle");
+    assert_eq!(roots.len(), 1);
+    let trusting = relying_party_trusting(&idp, wall_clock(), &roots);
+    let ceremony = begin(&trusting).await;
+    let code = idp.grant(grant_for(&ceremony, Tamper::None));
+    let identity = redeem(&trusting, &ceremony, &code)
+        .await
+        .expect("verifies over TLS");
+    assert_eq!(identity.subject, "subject-1");
 }
 
 #[tokio::test]

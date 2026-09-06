@@ -124,10 +124,11 @@ pub enum BootError {
         /// The algorithm's own description.
         detail: String,
     },
-    /// The relying party's outbound HTTP client could not be built.
+    /// The relying party's outbound HTTP client could not be built — including a CA bundle
+    /// (`OIDC_CA_BUNDLE`) that could not be read or holds no certificate.
     #[error("the OIDC relying party's HTTP client could not be built: {detail}")]
     OidcClient {
-        /// `reqwest`'s own description.
+        /// What went wrong; names the bundle's path, never its contents.
         detail: String,
     },
     /// A durable backend was selected and its adapter is not written yet.
@@ -264,6 +265,29 @@ pub async fn assemble_maintenance(config: &Config) -> Result<Maintenance, BootEr
             issue: "#402 (the Postgres index)",
         }),
     }
+}
+
+/// The trust anchors `OIDC_CA_BUNDLE` names, read once at boot.
+///
+/// Refused rather than deferred, like the blob root: a bundle that cannot be read now is a
+/// provider every sign-in will fail against at handshake time, with a less legible error. An
+/// empty bundle is refused too — an operator who named a file meant it to hold something.
+fn oidc_roots(path: &std::path::Path) -> Result<Vec<reqwest::Certificate>, BootError> {
+    let shown = path.display();
+    let pem = std::fs::read(path).map_err(|error| BootError::OidcClient {
+        detail: format!("OIDC_CA_BUNDLE `{shown}` could not be read: {error}"),
+    })?;
+    let roots =
+        reqwest::Certificate::from_pem_bundle(&pem).map_err(|error| BootError::OidcClient {
+            detail: format!("OIDC_CA_BUNDLE `{shown}` is not a PEM certificate bundle: {error}"),
+        })?;
+    if roots.is_empty() {
+        return Err(BootError::OidcClient {
+            detail: format!("OIDC_CA_BUNDLE `{shown}` holds no certificate"),
+        });
+    }
+    tracing::info!(bundle = %shown, roots = roots.len(), "trusting additional roots for the identity provider");
+    Ok(roots)
 }
 
 /// The refusal `store/mod.rs` documents.
@@ -437,10 +461,15 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
     // auth.
     let oidc = match &config.oidc {
         Some(oidc) => {
-            let http =
-                HttpIdentityProvider::http_client().map_err(|error| BootError::OidcClient {
+            let roots = match &oidc.ca_bundle {
+                Some(path) => oidc_roots(path)?,
+                None => Vec::new(),
+            };
+            let http = HttpIdentityProvider::http_client(&roots).map_err(|error| {
+                BootError::OidcClient {
                     detail: error.to_string(),
-                })?;
+                }
+            })?;
             let provider: Arc<dyn IdentityProvider> = Arc::new(HttpIdentityProvider::new(
                 OidcSettings {
                     issuer: oidc.issuer.clone(),
@@ -751,6 +780,46 @@ mod tests {
             "{error:?}"
         );
         assert!(format!("{error}").contains("#460"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn a_ca_bundle_is_read_at_boot_and_refused_by_name_when_unusable() {
+        let root = tempfile::tempdir().expect("a scratch directory");
+        let bundle = root.path().join("idp-ca.pem");
+
+        // Missing: refused, naming the path.
+        let config = memory_config_with(
+            root.path(),
+            &[
+                ("OIDC_ISSUER", "https://idp.example.test"),
+                ("OIDC_CLIENT_ID", "capsule"),
+                ("OIDC_CA_BUNDLE", &bundle.display().to_string()),
+            ],
+        );
+        let error = assemble(&config).await.expect_err("it refuses");
+        assert!(matches!(error, BootError::OidcClient { .. }), "{error:?}");
+        assert!(format!("{error}").contains("idp-ca.pem"), "{error}");
+
+        // Present and not a certificate: refused, and the contents are not echoed.
+        std::fs::write(
+            &bundle,
+            "this is not a certificate, it is a secret-looking string",
+        )
+        .expect("writes");
+        let error = assemble(&config).await.expect_err("it refuses");
+        assert!(matches!(error, BootError::OidcClient { .. }), "{error:?}");
+        assert!(!format!("{error}").contains("secret-looking"), "{error}");
+
+        // A real CA certificate: the server boots, trusting it.
+        let key = rcgen::KeyPair::generate().expect("a key");
+        let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).expect("params");
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let ca = params.self_signed(&key).expect("a CA");
+        let body = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, ca.der());
+        let pem = format!("-----BEGIN CERTIFICATE-----\n{body}\n-----END CERTIFICATE-----\n");
+        std::fs::write(&bundle, pem).expect("writes");
+        let assembled = assemble(&config).await.expect("it assembles");
+        assembled.service().expect("the router builds");
     }
 
     #[tokio::test]

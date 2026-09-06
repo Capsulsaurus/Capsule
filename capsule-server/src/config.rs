@@ -308,6 +308,9 @@ pub struct OidcConfig {
     pub client_secret: Option<ClientSecret>,
     /// Which redirect URIs a client may name.
     pub redirects: RedirectPolicy,
+    /// A PEM bundle of additional trust anchors for reaching the provider, if it sits behind a
+    /// private CA. Read at boot, not here: a path is configuration, its contents are not.
+    pub ca_bundle: Option<PathBuf>,
 }
 
 /// Everything an operator gets to decide.
@@ -677,12 +680,14 @@ fn read_oidc(env: &dyn Environment, faults: &mut Vec<ConfigFault>) -> Option<Oid
     let client_secret = env.var("OIDC_CLIENT_SECRET");
     let redirect_url = env.var("OIDC_REDIRECT_URL");
     let allow_loopback = env.var("OIDC_ALLOW_LOOPBACK_REDIRECT");
+    let ca_bundle = env.var("OIDC_CA_BUNDLE").map(PathBuf::from);
 
     if issuer.is_none()
         && client_id.is_none()
         && client_secret.is_none()
         && redirect_url.is_none()
         && allow_loopback.is_none()
+        && ca_bundle.is_none()
     {
         return None;
     }
@@ -778,6 +783,7 @@ fn read_oidc(env: &dyn Environment, faults: &mut Vec<ConfigFault>) -> Option<Oid
         client_id: client_id?,
         client_secret: client_secret.map(ClientSecret::new),
         redirects: RedirectPolicy::new(redirect_url, allow_loopback),
+        ca_bundle,
     })
 }
 
@@ -1395,6 +1401,26 @@ mod tests {
                 .expect("configured")
                 .redirects
                 .admits("http://127.0.0.1:4242/cb")
+        );
+    }
+
+    #[test]
+    fn a_ca_bundle_is_a_path_read_later_not_here() {
+        let mut environment = serveable();
+        environment.insert(
+            "OIDC_ISSUER".to_owned(),
+            "https://idp.example.test".to_owned(),
+        );
+        environment.insert("OIDC_CLIENT_ID".to_owned(), "capsule".to_owned());
+        environment.insert(
+            "OIDC_CA_BUNDLE".to_owned(),
+            "/etc/capsule/idp-ca.pem".to_owned(),
+        );
+        // The file does not exist and loading does not care: reading it is boot's job.
+        let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+        assert_eq!(
+            config.oidc.expect("configured").ca_bundle.as_deref(),
+            Some(std::path::Path::new("/etc/capsule/idp-ca.pem"))
         );
     }
 
