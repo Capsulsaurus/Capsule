@@ -5,17 +5,17 @@
 /// The same construction as the CLI's import round trip
 /// (`capsule-cli/tests/import_round_trip.rs`), which a test crate cannot import. An 8×8 still
 /// sits inside the thumbnail tier's 256-pixel cap, so the media stack signs the byte-free
-/// `original` sentinel for it and the upload bundle carries no derivative bytes; see
-/// [`large_synthetic_jpeg`] for the still that produces a real thumbnail.
+/// `original` sentinel for it and the upload bundle carries no derivative bytes — the cheap
+/// fixture for every case that is not about derivatives; [`large_synthetic_jpeg`] is the one
+/// that produces a real thumbnail.
 #[must_use]
 pub fn synthetic_jpeg() -> Vec<u8> {
     synthetic_jpeg_sized(8, 8)
 }
 
 /// A 512×512 still of the same construction: past the thumbnail tier's long-edge cap, so the
-/// media stack decodes it and encodes a real JXL thumbnail for the upload ladder's T1 — which
-/// the server's closed content-type set refuses today (issue #470). The still that reproduces
-/// that issue, and the one E2E case 2 switches to when it closes.
+/// media stack decodes it and encodes a real JXL thumbnail for the upload ladder's T1 — the
+/// still E2E case 2 pushes.
 #[must_use]
 pub fn large_synthetic_jpeg() -> Vec<u8> {
     synthetic_jpeg_sized(512, 512)

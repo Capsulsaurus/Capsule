@@ -1,18 +1,18 @@
 //! **E2E case 2** — full import + upload + finalize.
 //!
-//! Local import → the library's upload bundle → the SDK's staged ladder plus the provenance
-//! rung → every blob finalized at its content address under the server's blob root, byte for
-//! byte → the server's storage-verify answer is durable → the asset is on the feed with its
-//! original held and its metadata blob named.
+//! Local import → the library's upload bundle → the SDK's staged ladder (metadata, the JXL
+//! thumbnail, the original) plus the provenance rung → every blob finalized at its content
+//! address under the server's blob root, byte for byte → the server's storage-verify answer is
+//! durable → the asset is on the feed with its original held, its derivative referenced and
+//! its metadata blob named.
 //!
-//! The still is the 8×8 fixture, which sits inside the thumbnail tier's cap: the media stack
-//! signs the byte-free `original` sentinel for it, so T1 has nothing to upload and the ladder
-//! is T0 then T2. A still past the cap gets a real JXL thumbnail, and that upload is refused by
-//! the server's closed content-type set, which does not name `image/jxl` — issue #470;
-//! `fixtures::large_synthetic_jpeg` is the still that reproduces it.
+//! The still is 512×512 — past the thumbnail tier's 256-pixel cap — so the media stack decodes
+//! it and encodes a real thumbnail, and T1 is a real upload rather than the byte-free sentinel
+//! an 8×8 still gets.
 
 use capsule_core::crypto::hash::Hash32;
 use capsule_core::import::UploadTier;
+use capsule_e2e::fixtures::large_synthetic_jpeg;
 use capsule_e2e::push::{provenance_bytes, push_asset};
 use capsule_e2e::{Device, Server, entry_for};
 use capsule_sdk::verify::{AssetQuery, StorageVerifyClient, VerifyTransport};
@@ -21,14 +21,18 @@ use capsule_sdk::verify::{AssetQuery, StorageVerifyClient, VerifyTransport};
 async fn e2e_case_2_import_upload_finalize_lands_every_blob_at_its_content_address() {
     let server = Server::boot().await;
     let mut device = Device::register(&server, "importer").await;
-    let asset = device.import_jpeg("photo.jpg");
+    let asset = device.import_file("photo.jpg", &large_synthetic_jpeg());
 
     let pushed = push_asset(&device, &server, &asset).await;
     let bundle = &pushed.bundle;
     assert_eq!(bundle.asset_id, asset);
     assert!(
-        bundle.derivatives.is_empty(),
-        "an 8×8 still gets the byte-free sentinel, not derivative bytes: {:?}",
+        !bundle.derivatives.is_empty(),
+        "a still past the thumbnail cap yields derivative bytes"
+    );
+    assert!(
+        bundle.derivatives.iter().all(|d| d.format == "image/jxl"),
+        "this build encodes thumbnails as JXL: {:?}",
         bundle
             .derivatives
             .iter()
@@ -36,11 +40,11 @@ async fn e2e_case_2_import_upload_finalize_lands_every_blob_at_its_content_addre
             .collect::<Vec<_>>()
     );
 
-    // The ladder ran T0 and T2; the sentinel left T1 nothing to open a session for.
-    assert_eq!(
-        pushed.report.tier_sequence(),
-        vec![UploadTier::Index, UploadTier::Original]
-    );
+    // The ladder ran every tier: T0, one T1 per derivative, then T2.
+    let mut expected = vec![UploadTier::Index];
+    expected.extend(bundle.derivatives.iter().map(|_| UploadTier::Preview));
+    expected.push(UploadTier::Original);
+    assert_eq!(pushed.report.tier_sequence(), expected);
     assert_eq!(pushed.report.deferred, 0);
 
     // Every blob is on disk at its content address under the blob root, byte for byte.

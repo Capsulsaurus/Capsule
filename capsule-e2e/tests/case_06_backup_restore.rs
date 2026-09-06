@@ -3,15 +3,18 @@
 //! Export a full backup → bootstrap a new device via passphrase and escrow → import the backup
 //! → assert every asset present and verifiable.
 //!
-//! The escrow leg rides the real route through the SDK's `RecoveryClient` (store on A, fetch on
-//! the fresh device); the recovered master key is proved to be A's by re-deriving A's default
-//! album id from it. The fresh library then imports the backup under the exporter's verifying
-//! key, reads the asset back byte for byte and walks its restored chain.
+//! Two tests, because until a `Workspace` can open *as* a recovered account (issue #467) the
+//! escrow and the restore are independent halves: nothing the escrow recovers feeds the
+//! restore, and nothing the restore needs comes from the escrow.
 //!
-//! Two seams bound the case: a `Workspace` cannot open *as* the recovered account (no
-//! constructor from a master key, issue #467), so the fresh library is a new account holding
-//! A's recovered album keys; and the backup artifact carries no album authority (issue #468),
-//! so the restored asset reads but does not `verify`.
+//! - **`E2E case 6 (escrow)`**: A escrows its master key at the low-RAM tier through the SDK's
+//!   `RecoveryClient` over the real route; a second session fetches it byte for byte and
+//!   `recover_master_key` yields A's key, proved by re-deriving A's default album id. Two
+//!   Argon2id passes at `DeviceTier::LowRam` (the wrap and the recovery) — the one memory-hard
+//!   test in the crate.
+//! - **`E2E case 6 (restore)`**: A exports a backup; a fresh library on a new root imports it
+//!   under the exporter's verifying key, reads the asset byte for byte and walks its chain.
+//!   `verify` is asserted to refuse: the artifact carries no album authority (issue #468).
 
 use capsule_core::crypto::keys::MasterKey;
 use capsule_core::crypto::primitives::DeviceTier;
@@ -24,14 +27,13 @@ use capsule_sdk::recovery::RecoveryClient;
 const RECOVERY_SECRET: &[u8] = b"seven words the user wrote down somewhere safe";
 const BACKUP_PASSPHRASE: &[u8] = b"backup passphrase";
 
+/// **E2E case 6 (escrow)**: the master key round-trips through the real escrow route and
+/// recovers on a second device.
 #[tokio::test]
-async fn e2e_case_6_a_fresh_device_recovers_the_master_key_and_restores_the_library() {
+async fn e2e_case_6_the_escrow_round_trips_and_recovers_the_master_key() {
     let server = Server::boot().await;
-    let mut a = Device::register(&server, "device-a").await;
-    let asset = a.import_jpeg("keepsake.jpg");
+    let a = Device::register(&server, "device-a").await;
 
-    // A escrows its master key on the server — at the low-RAM tier, the weakest a device may
-    // choose, which is still two Argon2id passes of this test's wall time — and exports a backup.
     let escrow = a
         .workspace
         .escrow_master_key(RECOVERY_SECRET, DeviceTier::LowRam)
@@ -41,13 +43,8 @@ async fn e2e_case_6_a_fresh_device_recovers_the_master_key_and_restores_the_libr
         .store_escrow(&escrow)
         .await
         .expect("the escrow stores");
-    let archive = a.staging.path().join("backup.tar");
-    a.workspace
-        .export_backup(&archive, BACKUP_PASSPHRASE)
-        .expect("the backup exports");
-    let exporter = a.workspace.exporter_verifying_key();
 
-    // The fresh device: a new session on the account, a new library root, no prior state.
+    // The fresh device: a new session on the account, nothing else.
     let session_b = a.login_again(&server).await;
     let fetched = RecoveryClient::new(session_b, server.base_url())
         .expect("the API root parses")
@@ -64,6 +61,20 @@ async fn e2e_case_6_a_fresh_device_recovers_the_master_key_and_restores_the_libr
         a.workspace.default_album_id(),
         "the recovered master key is A's: it derives A's default album id"
     );
+}
+
+/// **E2E case 6 (restore)**: a fresh library imports the backup, reads every asset and walks
+/// its chain; `verify` refuses for want of the album authority the artifact does not carry.
+#[tokio::test]
+async fn e2e_case_6_a_fresh_library_restores_the_backup() {
+    let server = Server::boot().await;
+    let mut a = Device::register(&server, "device-a").await;
+    let asset = a.import_jpeg("keepsake.jpg");
+    let archive = a.staging.path().join("backup.tar");
+    a.workspace
+        .export_backup(&archive, BACKUP_PASSPHRASE)
+        .expect("the backup exports");
+    let exporter = a.workspace.exporter_verifying_key();
 
     let root_b = tempfile::tempdir().expect("a fresh library root");
     let mut b =

@@ -20,7 +20,7 @@
 
 use capsule_core::crypto::pwkdf::WrappedSecret;
 use capsule_e2e::push::ensure_album;
-use capsule_e2e::{Device, PASSWORD, PROTOCOL_VERSION, Server};
+use capsule_e2e::{Device, PASSWORD, Server};
 use capsule_sdk::auth::{AuthClient, AuthError};
 use capsule_sdk::push::{bundle_blobs, create_request};
 use capsule_sdk::recovery::{RecoveryClient, RecoveryError};
@@ -203,5 +203,4 @@ async fn a_body_past_the_transport_limit_reaches_the_sdk_as_a_codeless_413() {
     ensure_album(&albums, device.workspace.default_album_id())
         .await
         .expect("the session survives the refusal");
-    let _ = PROTOCOL_VERSION;
 }

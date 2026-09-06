@@ -19,7 +19,9 @@ async fn e2e_case_1_sign_in_sync_and_a_local_query_lists_the_album() {
     let asset = device.import_jpeg("first.jpg");
     push_asset(&device, &server, &asset).await;
 
-    // The CLI's state: a migrated SQLite store and the persisted session from sign-in.
+    // The CLI's state: a migrated SQLite store and the session `capsule auth login` persists —
+    // a fresh sign-in on the account, not the registration session.
+    let signed_in = device.login_again(&server).await;
     let home = tempfile::tempdir().expect("a temp CLI home");
     let db_url = format!(
         "sqlite://{}?mode=rwc",
@@ -32,11 +34,7 @@ async fn e2e_case_1_sign_in_sync_and_a_local_query_lists_the_album() {
         .await
         .expect("the CLI migrations run");
     let store = SessionStore::new(home.path().join("session.json"));
-    let persisted = device
-        .session
-        .export()
-        .await
-        .expect("a live session exports");
+    let persisted = signed_in.export().await.expect("a live session exports");
     store.save(&persisted).expect("the session persists");
 
     let remote = RemoteConfig {
