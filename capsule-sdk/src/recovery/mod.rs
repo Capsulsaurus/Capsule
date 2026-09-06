@@ -128,11 +128,17 @@ pub enum RecoveryError {
     /// The (re-)wrap of the master key under the fresh secret failed in core.
     #[error("re-wrapping the master key failed: {0}")]
     Wrap(String),
-    /// The server returned an unmodeled status.
+    /// The server returned a status this client does not model as an escrow outcome — an
+    /// unmodeled status, the body-size backstop's body-less `413` on a read, or the protocol
+    /// gate's `426` (a write from outside the server's window, issue #404).
     #[error("unexpected {status} response from the escrow endpoint")]
     Unexpected {
         /// The HTTP status code the server returned.
         status: u16,
+        /// The stable `error.*` catalog code the response carried, when it came with a coded
+        /// problem body — `error.protocol.version_unsupported` on a `426`, the one that means
+        /// "update the client". `None` when there was no body to read a code from.
+        code: Option<String>,
     },
 }
 
@@ -144,7 +150,8 @@ impl RecoveryError {
         match self {
             Self::Unauthorized { code, .. }
             | Self::Malformed { code, .. }
-            | Self::Unavailable { code, .. } => code.as_deref(),
+            | Self::Unavailable { code, .. }
+            | Self::Unexpected { code, .. } => code.as_deref(),
             // The one code this module states rather than reads. `NotEnrolled` is a *state*
             // ("this account has escrowed nothing"), not a message, and the server's own code
             // for that state is this constant — see `capsule-server/src/routes/escrow.rs`.
@@ -498,7 +505,10 @@ fn fetch_escrow_error(error: rest::Error<rest::FetchEscrowError>) -> RecoveryErr
             rest::FetchEscrowError::Status500(problem) => unavailable(&problem),
             // Declared by the transport backstop and unreachable on a body-less `GET`; kept
             // honest rather than folded into a class it does not belong to.
-            rest::FetchEscrowError::Status413 => RecoveryError::Unexpected { status: 413 },
+            rest::FetchEscrowError::Status413 => RecoveryError::Unexpected {
+                status: 413,
+                code: None,
+            },
         },
         other => wire_error(&other),
     }
@@ -510,16 +520,19 @@ fn store_escrow_error(error: rest::Error<rest::StoreEscrowError>) -> RecoveryErr
         rest::Error::Api(response) => match response.into_inner() {
             // `400` and `415` are the same answer to the caller: these bytes are not an
             // escrow, and sending them again will not help.
-            //
-            // `426` is the protocol gate refusing a write from outside the server's window
-            // (issue #404); the code it carries, `error.protocol.version_unsupported`, is the
-            // one that means "update the client", and the same class applies: sending these
-            // bytes again from this build will not help.
             rest::StoreEscrowError::Status400(problem)
-            | rest::StoreEscrowError::Status415(problem)
-            | rest::StoreEscrowError::Status426(problem) => RecoveryError::Malformed {
+            | rest::StoreEscrowError::Status415(problem) => RecoveryError::Malformed {
                 code: Some(problem.code.clone()),
                 detail: detail(&problem),
+            },
+            // `426` is the protocol gate refusing a write from outside the server's window
+            // (issue #404). It says nothing about the *blob*, so it is not `Malformed`; it is
+            // an outcome this module does not model, carried with the server's own code —
+            // `error.protocol.version_unsupported`, the one that means "update the client" —
+            // so a caller localizing codes reads the gate's judgement, not this client's.
+            rest::StoreEscrowError::Status426(problem) => RecoveryError::Unexpected {
+                status: 426,
+                code: Some(problem.code.clone()),
             },
             rest::StoreEscrowError::Status401(problem)
             | rest::StoreEscrowError::Status403(problem) => refused(&problem),
@@ -573,6 +586,7 @@ where
     match error {
         rest::Error::UnexpectedStatus { status, .. } => RecoveryError::Unexpected {
             status: status.as_u16(),
+            code: None,
         },
         // `RequestConstruction` is **not** a pre-flight-only class. reqwest builds every
         // failure of the request it executes with `error::request(..)`, so `is_request()` is
@@ -1104,7 +1118,7 @@ mod tests {
             .await
             .expect_err("a path the server does not serve is not an empty escrow");
         assert!(
-            matches!(error, RecoveryError::Unexpected { status: 501 }),
+            matches!(error, RecoveryError::Unexpected { status: 501, .. }),
             "got {error:?}"
         );
     }

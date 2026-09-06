@@ -30,9 +30,12 @@ mod support;
 
 use capsule_sdk::auth::AuthClient;
 use capsule_sdk::sync::{ChangeKind, SyncConsumer, SyncCursor, SyncError, SyncState};
+use capsule_server::App;
+use capsule_server::app::Modules;
 use capsule_server::blob::{BlobStore, ContentAddress};
 use capsule_server::index::{AssetIndex, BlobRecord, PendingAsset};
 use capsule_server::store::{AssetId, BlobRole, Clock};
+use capsule_server::upload::{UploadContext, UploadPolicy};
 use jiff::Timestamp;
 use support::{EMAIL, Fixture, PASSWORD, PROTOCOL_VERSION, album, owner};
 
@@ -44,7 +47,12 @@ const CLIENT_MAX_PROTOCOL: &str = "2099-12-31";
 /// The listener serves the **same** context the fixture holds handles on, so an asset seeded
 /// through `fixture.index` is an asset this server serves.
 async fn serve(fixture: &Fixture) -> String {
-    let service = capsule_server::service(fixture.app()).expect("the router builds");
+    serve_app(fixture.app()).await
+}
+
+/// Bind `app` to an ephemeral port and return its base URL.
+async fn serve_app(app: App) -> String {
+    let service = capsule_server::service(app).expect("the router builds");
     let bound = kynos::server::Server::new(service)
         .bind(("127.0.0.1", 0))
         .prepare()
@@ -560,4 +568,113 @@ async fn the_sdk_proposes_an_album_upgrade_over_a_socket() {
         Some("error.album.upgrade_in_flight"),
         "got {error:?}"
     );
+}
+
+/// **Issue #404 meets the escrow route.** A write from outside the server's protocol window is
+/// the gate's `426`, and the SDK reports it as [`RecoveryError::Unexpected`] carrying the
+/// gate's own code — never as a verdict on the blob.
+///
+/// The window is the one knob a second `App` over the fixture's stores turns: every context
+/// but `upload` is the fixture's own (so the session minted on the default-window listener is
+/// live on the windowed one), and `upload` carries a policy whose window this build's protocol
+/// date falls outside. Two listeners, one account, one sessions store.
+#[tokio::test]
+async fn an_escrow_write_outside_the_servers_window_is_a_426_the_sdk_reports_with_its_code() {
+    use capsule_core::crypto::primitives::Argon2Params;
+    use capsule_core::crypto::pwkdf;
+    use capsule_sdk::recovery::{RecoveryClient, RecoveryError};
+    use kynos::di::Provides as _;
+
+    const VERSION_UNSUPPORTED: &str = "error.protocol.version_unsupported";
+
+    let fixture = Fixture::working();
+    let app = fixture.app();
+    let windowed = App::new(Modules {
+        auth: app.provide(),
+        totp: app.provide(),
+        upload: UploadContext::new(
+            fixture.uploads.clone(),
+            fixture.blobs.clone(),
+            fixture.index.clone(),
+            fixture.authority.clone(),
+            fixture.clock.clone(),
+            UploadPolicy::default().with_protocol_window("2000-01-01", "2000-01-01"),
+        ),
+        sync: app.provide(),
+        serve: app.provide(),
+        verify: app.provide(),
+        directories: app.provide(),
+        albums: app.provide(),
+        quota: app.provide(),
+        attestation: app.provide(),
+        discovery: app.provide(),
+        escrow: app.provide(),
+        enrollment: app.provide(),
+        moderation: app.provide(),
+        share: app.provide(),
+        drops: app.provide(),
+        counters: app.provide(),
+    });
+
+    // Sign in where the window admits this build; write where it does not.
+    let admitting = serve(&fixture).await;
+    let session = session(&admitting).await;
+    let refusing = serve_app(windowed).await;
+    let client = RecoveryClient::new(session.clone(), &refusing).expect("an API root parses");
+
+    let blob = pwkdf::wrap_with(
+        &[0x5Au8; 32],
+        b"correct horse battery staple",
+        Argon2Params {
+            mem_kib: 64,
+            t_cost: 1,
+            p_cost: 1,
+        },
+    )
+    .expect("the master key wraps");
+    let refused = client
+        .store_escrow(&blob)
+        .await
+        .expect_err("a write from outside the window is refused");
+    match &refused {
+        RecoveryError::Unexpected { status, code } => {
+            assert_eq!(*status, 426);
+            assert_eq!(code.as_deref(), Some(VERSION_UNSUPPORTED));
+        }
+        other => panic!("expected the gate's 426, got {other:?}"),
+    }
+    assert_eq!(
+        refused.error_code(),
+        Some(VERSION_UNSUPPORTED),
+        "the code a client localizes is the server's, not one this client minted"
+    );
+
+    // The window rides the refusing listener's responses, so the client can say which build
+    // would be admitted.
+    let response = session
+        .execute(|http| http.get(format!("{refusing}/v1/version")))
+        .await
+        .expect("the exempt read answers");
+    let header = |name: &str| {
+        response
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned)
+    };
+    assert_eq!(
+        header("x-capsule-protocol-min").as_deref(),
+        Some("2000-01-01")
+    );
+    assert_eq!(
+        header("x-capsule-protocol-max").as_deref(),
+        Some("2000-01-01")
+    );
+
+    // The same write on the admitting listener lands: the window was the only difference.
+    RecoveryClient::new(session, &admitting)
+        .expect("an API root parses")
+        .store_escrow(&blob)
+        .await
+        .expect("this build's protocol date is inside the default window");
 }
