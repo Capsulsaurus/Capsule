@@ -83,6 +83,15 @@ pub enum CounterKey {
     /// missed — recorded here rather than replaced by an email-keyed limiter, which would bound
     /// repeated probes against one address while doing nothing about a sweep across many.
     RegistrationSource(String),
+    /// Begun OIDC ceremonies naming one redirect host (`S-N1`).
+    ///
+    /// Keyed on the redirect URI's host because it is the one fact the request carries that
+    /// an attacker cannot vary freely: the policy admits the configured redirect and the two
+    /// loopback literals, so the key space is three buckets and the budget is, in effect, a
+    /// deployment-wide ceiling on how fast pending ceremonies can be begun — which is what
+    /// bounds the ceremony store's growth. A per-source key is the better one and is waiting on
+    /// the same missing fact as [`Self::RegistrationSource`].
+    OidcAuthorize(String),
 }
 
 impl CounterKey {
@@ -98,6 +107,7 @@ impl CounterKey {
             Self::DeepVerify(_) => "deep_verify",
             Self::SecondFactor(_) => "second_factor",
             Self::RegistrationSource(_) => "registration_source",
+            Self::OidcAuthorize(_) => "oidc_authorize",
         }
     }
 }

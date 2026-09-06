@@ -52,6 +52,7 @@ use crate::auth::oidc::{
     fresh_nonce, fresh_state, fresh_verifier,
 };
 use crate::auth::{AuthContext, DirectoryError, EnrollmentState, TotpContext};
+use crate::counter::{CounterContext, CounterKey, budgets};
 use crate::store::{AuthorizationCode, OidcState, PendingAuthorization, StoreError};
 
 /// The operations that sign in through an external identity provider.
@@ -158,6 +159,24 @@ pub enum OidcAuthorizeRejection {
         code: &'static str,
     },
 
+    /// Too many ceremonies were begun for this redirect host in the window (`S-C32`).
+    #[error("too many sign-ins were started; wait and try again")]
+    #[problem(status = 429, title = "Too many sign-ins")]
+    RateLimited {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// The pending-ceremony store is at its ceiling. Retryable: ceremonies expire in minutes.
+    #[error("the server is holding too many unfinished sign-ins; try again shortly")]
+    #[problem(status = 503, title = "Sign-in capacity reached")]
+    AtCapacity {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
     /// The provider could not be reached, or a store could not answer.
     ///
     /// One variant carrying one of two codes: `error.auth.oidc_unavailable` when the identity
@@ -241,6 +260,20 @@ impl OidcAuthorizeRejection {
         }
     }
 
+    fn rate_limited() -> Self {
+        Self::RateLimited {
+            code: error_codes::AUTH_RATE_LIMITED,
+        }
+    }
+
+    /// The store refused a write because it is full. The existing retryable code, because the
+    /// remedy is the one `error.auth.unavailable` already tells a person: wait and try again.
+    fn at_capacity() -> Self {
+        Self::AtCapacity {
+            code: error_codes::AUTH_UNAVAILABLE,
+        }
+    }
+
     /// The identity provider could not answer.
     fn provider_unavailable() -> Self {
         Self::Unavailable {
@@ -303,6 +336,10 @@ impl OidcCallbackRejection {
 /// Unauthenticated: this is how a person *becomes* a session. Nothing about the account is
 /// known yet — the ceremony carries fresh random `state`, `nonce` and PKCE material and the
 /// admitted redirect URI, and the record behind the `state` lives for ten minutes.
+///
+/// Bounded twice, because it is an unauthenticated write into a store: a budget per redirect
+/// host ([`budgets::OIDC_AUTHORIZE`]) answers `429` before anything is done, and the store's
+/// own ceiling answers `503` when it is nevertheless full.
 #[kynos::post(
     "/v1/auth/oidc/authorize",
     operation_id = "begin_oidc_login",
@@ -310,10 +347,31 @@ impl OidcCallbackRejection {
 )]
 pub async fn begin_oidc_login(
     Inject(oidc): Inject<OidcContext>,
+    Inject(counters): Inject<CounterContext>,
     Json(request): Json<OidcAuthorizeRequest>,
 ) -> Result<Json<OidcAuthorizationResponse>, OidcAuthorizeRejection> {
     async move {
         let redirect_uri = request.redirect_uri.trim();
+
+        // The budget first, before the provider is asked or anything is generated. Keyed on
+        // the redirect's host; a URI that is not one is keyed on a fixed bucket and refused by
+        // the policy a moment later anyway.
+        let host = reqwest::Url::parse(redirect_uri)
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_owned))
+            .unwrap_or_else(|| "<not a url>".to_owned());
+        let verdict = counters
+            .hit(&CounterKey::OidcAuthorize(host), budgets::OIDC_AUTHORIZE)
+            .await
+            .map_err(|error| {
+                // Fail closed, like every other limiter in this crate.
+                tracing::error!(%error, "the OIDC authorize limiter could not be reached");
+                OidcAuthorizeRejection::store_unavailable()
+            })?;
+        if !verdict.admits() {
+            tracing::warn!("an OIDC sign-in was refused: the redirect host's budget is spent");
+            return Err(OidcAuthorizeRejection::rate_limited());
+        }
 
         // Fresh per ceremony. The verifier never leaves this server; its challenge goes in the
         // URL, and the verifier itself is redeemed at the token endpoint by the callback.
@@ -360,9 +418,15 @@ pub async fn begin_oidc_login(
                 },
             )
             .await
-            .map_err(|error| {
-                store_unavailable(&error, "record a pending OIDC authorization");
-                OidcAuthorizeRejection::store_unavailable()
+            .map_err(|error| match error {
+                StoreError::Rejected { .. } => {
+                    tracing::warn!(%error, "the pending OIDC authorization store is full");
+                    OidcAuthorizeRejection::at_capacity()
+                }
+                other => {
+                    store_unavailable(&other, "record a pending OIDC authorization");
+                    OidcAuthorizeRejection::store_unavailable()
+                }
             })?;
 
         let expires_at = crate::store::deadline(issued_at, oidc.authorizations().ttl());
@@ -567,6 +631,14 @@ mod tests {
         assert!(matches!(
             OidcAuthorizeRejection::store_unavailable(),
             OidcAuthorizeRejection::Unavailable { code } if code == error_codes::AUTH_UNAVAILABLE
+        ));
+        assert!(matches!(
+            OidcAuthorizeRejection::rate_limited(),
+            OidcAuthorizeRejection::RateLimited { code } if code == error_codes::AUTH_RATE_LIMITED
+        ));
+        assert!(matches!(
+            OidcAuthorizeRejection::at_capacity(),
+            OidcAuthorizeRejection::AtCapacity { code } if code == error_codes::AUTH_UNAVAILABLE
         ));
         assert!(matches!(
             OidcCallbackRejection::state_invalid(),

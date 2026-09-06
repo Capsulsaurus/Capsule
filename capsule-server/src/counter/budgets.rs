@@ -60,6 +60,15 @@ pub const DROP_SOURCE: Budget = Budget::new(60, SignedDuration::from_hours(1));
 /// because a code that expires mid-typing costs an attempt through no fault of the user.
 pub const SECOND_FACTOR: Budget = Budget::new(5, SignedDuration::from_mins(5));
 
+/// Begun OIDC ceremonies per redirect host (`S-N1`).
+///
+/// Sixty a minute. A person signing in begins one; a browser that retries a few times begins a
+/// handful; a script filling the pending-ceremony store begins thousands. The key space is
+/// three hosts at most (the configured redirect and the two loopback literals), so this is close
+/// to a deployment-wide ceiling: at the ten-minute ceremony TTL it caps the in-memory store at
+/// well under two thousand live records against its ten-thousand ceiling.
+pub const OIDC_AUTHORIZE: Budget = Budget::new(60, SignedDuration::from_mins(1));
+
 /// Deep storage verifications per account.
 ///
 /// Four an hour. The contract calls the limiter *half of the feature*: a deep verify reads and

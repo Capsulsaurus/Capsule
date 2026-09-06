@@ -785,20 +785,35 @@ impl ChallengeStore for InMemoryChallenges {
     }
 }
 
+/// How many pending OIDC authorizations the in-memory store will hold at once.
+///
+/// Ten thousand: at the ten-minute TTL that is a thousand begun-and-abandoned ceremonies a
+/// minute before anything is refused, which is far beyond a self-hosted deployment's sign-in
+/// rate and well inside the memory a record of four short strings costs. The ceiling exists so
+/// that a caller who begins ceremonies without ever finishing them grows this map to a bound and
+/// not to the heap; the Valkey adapter (#460) gets the same property from the TTL alone.
+pub const PENDING_AUTHORIZATION_CEILING: usize = 10_000;
+
 /// In-memory [`OidcAuthorizationStore`] (slice `S-N1`).
+///
+/// Expired records are purged on every `begin`, so the map holds live ceremonies plus whatever
+/// expired since the last one — never everything ever begun — and a full map answers
+/// [`StoreError::Rejected`], which the route renders as a `503`.
 #[derive(Debug)]
 pub struct InMemoryOidcAuthorizations {
     clock: Arc<dyn Clock>,
     ttl: SignedDuration,
+    ceiling: usize,
     state: Mutex<BTreeMap<OidcState, Entry<PendingAuthorization>>>,
 }
 
 impl InMemoryOidcAuthorizations {
-    /// A store on `clock` with the given authorization lifetime.
+    /// A store on `clock` with the given authorization lifetime and the default ceiling.
     pub fn new(clock: Arc<dyn Clock>, ttl: SignedDuration) -> Self {
         Self {
             clock,
             ttl,
+            ceiling: PENDING_AUTHORIZATION_CEILING,
             state: Mutex::new(BTreeMap::new()),
         }
     }
@@ -806,6 +821,18 @@ impl InMemoryOidcAuthorizations {
     /// A store on `clock` with the [`OIDC_AUTHORIZATION_TTL`].
     pub fn with_default_ttl(clock: Arc<dyn Clock>) -> Self {
         Self::new(clock, OIDC_AUTHORIZATION_TTL)
+    }
+
+    /// The same store holding at most `ceiling` pending ceremonies.
+    #[must_use]
+    pub fn with_ceiling(mut self, ceiling: usize) -> Self {
+        self.ceiling = ceiling;
+        self
+    }
+
+    /// Drop every record past its deadline.
+    fn purge(state: &mut BTreeMap<OidcState, Entry<PendingAuthorization>>, now: Timestamp) {
+        state.retain(|_, entry| entry.is_live_at(now));
     }
 }
 
@@ -821,7 +848,20 @@ impl OidcAuthorizationStore for InMemoryOidcAuthorizations {
     ) -> StoreFuture<'a, ()> {
         Box::pin(async move {
             let now = self.clock.now();
-            lock(&self.state).insert(
+            let mut held = lock(&self.state);
+            Self::purge(&mut held, now);
+            if held.len() >= self.ceiling && !held.contains_key(state) {
+                tracing::warn!(
+                    pending = held.len(),
+                    ceiling = self.ceiling,
+                    "the pending OIDC authorization store is full; a ceremony was refused"
+                );
+                return Err(StoreError::Rejected {
+                    store: "oidc authorizations",
+                    detail: format!("{} pending ceremonies is the ceiling", self.ceiling),
+                });
+            }
+            held.insert(
                 state.clone(),
                 Entry {
                     record,
@@ -1319,6 +1359,52 @@ mod tests {
             CHALLENGE_TTL, ENROLLMENT_CODE_TTL,
             "a ceremony's window belongs to what it is; if these ever coincide by accident \
              this assertion stops being evidence"
+        );
+    }
+
+    /// A full OIDC ceremony store refuses, and expired ceremonies never count against it.
+    #[tokio::test]
+    async fn a_full_oidc_store_refuses_until_its_ceremonies_expire() {
+        use super::super::ceremony::{OidcAuthorizationStore, PendingAuthorization};
+        use super::super::ids::{OidcNonce, OidcState, PkceVerifier};
+
+        let clock = ManualClock::default();
+        let store =
+            InMemoryOidcAuthorizations::new(Arc::new(clock.clone()), SignedDuration::from_mins(10))
+                .with_ceiling(2);
+        let pending = |tag: &str| PendingAuthorization {
+            nonce: OidcNonce::new(format!("{tag}-nonce")),
+            verifier: PkceVerifier::new(format!("{tag}-verifier")),
+            redirect_uri: "http://127.0.0.1:1/cb".to_owned(),
+            issued_at: clock.now(),
+        };
+        store
+            .begin(&OidcState::new("a"), pending("a"))
+            .await
+            .expect("room");
+        store
+            .begin(&OidcState::new("b"), pending("b"))
+            .await
+            .expect("room");
+        assert!(
+            matches!(
+                store.begin(&OidcState::new("c"), pending("c")).await,
+                Err(StoreError::Rejected { .. })
+            ),
+            "the third is refused at a ceiling of two"
+        );
+        // The expired ones are purged on the next begin, so the refusal is not permanent.
+        clock.advance(SignedDuration::from_mins(10));
+        store
+            .begin(&OidcState::new("c"), pending("c"))
+            .await
+            .expect("the expired ceremonies made room");
+        assert!(
+            store
+                .consume(&OidcState::new("a"))
+                .await
+                .expect("answers")
+                .is_none()
         );
     }
 

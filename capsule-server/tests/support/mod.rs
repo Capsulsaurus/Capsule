@@ -363,11 +363,12 @@ impl IdentityProvider for SwitchableIdentityProvider {
     }
 }
 
-/// The OIDC ceremony store, with a switch.
+/// The OIDC ceremony store, with two switches: unreachable, and full.
 #[derive(Debug)]
 pub(crate) struct SwitchableOidcAuthorizations {
     inner: InMemoryOidcAuthorizations,
     unavailable: AtomicBool,
+    full: AtomicBool,
 }
 
 impl SwitchableOidcAuthorizations {
@@ -375,11 +376,17 @@ impl SwitchableOidcAuthorizations {
         Self {
             inner: InMemoryOidcAuthorizations::with_default_ttl(clock),
             unavailable: AtomicBool::new(false),
+            full: AtomicBool::new(false),
         }
     }
 
     pub(crate) fn set_unavailable(&self, unavailable: bool) {
         self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    /// Make every `begin` answer as a store at its ceiling, or stop.
+    pub(crate) fn set_full(&self, full: bool) {
+        self.full.store(full, Ordering::SeqCst);
     }
 
     fn refuse(&self) -> Result<(), StoreError> {
@@ -405,6 +412,12 @@ impl OidcAuthorizationStore for SwitchableOidcAuthorizations {
     ) -> StoreFuture<'a, ()> {
         Box::pin(async move {
             self.refuse()?;
+            if self.full.load(Ordering::SeqCst) {
+                return Err(StoreError::Rejected {
+                    store: "oidc authorizations",
+                    detail: REFUSAL.to_owned(),
+                });
+            }
             self.inner.begin(state, record).await
         })
     }

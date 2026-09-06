@@ -816,6 +816,46 @@ async fn the_published_oidc_endpoints_are_the_ones_the_server_serves() {
 }
 
 #[tokio::test]
+async fn beginning_ceremonies_is_budgeted_per_redirect_host_and_bounded_by_the_store() {
+    let fixture = Fixture::working();
+    // The budget: sixty a minute per host, then 429 with the auth catalog's retry code.
+    for _ in 0..60 {
+        authorize(&fixture, REDIRECT).await;
+    }
+    let body: Value = fixture
+        .client
+        .post("/v1/auth/oidc/authorize")
+        .header("accept", "application/json")
+        .json(&json!({ "redirect_uri": REDIRECT }))
+        .send()
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS)
+        .json();
+    assert_eq!(code_of(&body), "error.auth.rate_limited");
+    // Another host is another bucket.
+    authorize(&fixture, "http://[::1]:4242/callback").await;
+    // And the window passes.
+    fixture.clock.advance(SignedDuration::from_mins(1));
+    authorize(&fixture, REDIRECT).await;
+
+    // The store's ceiling: a 503 with the retryable code, and nothing is asked of the provider
+    // that the store then cannot keep.
+    fixture.oidc_authorizations.set_full(true);
+    let body: Value = fixture
+        .client
+        .post("/v1/auth/oidc/authorize")
+        .header("accept", "application/json")
+        .json(&json!({ "redirect_uri": REDIRECT }))
+        .send()
+        .await
+        .assert_status(StatusCode::SERVICE_UNAVAILABLE)
+        .json();
+    assert_eq!(code_of(&body), "error.auth.unavailable");
+    fixture.oidc_authorizations.set_full(false);
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
 async fn a_provider_or_store_outage_is_a_500_with_the_code_that_names_it() {
     let fixture = Fixture::working();
 

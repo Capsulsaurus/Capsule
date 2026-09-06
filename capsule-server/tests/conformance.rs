@@ -4246,7 +4246,29 @@ async fn oidc_block(client: &support::Client, fixture: &Fixture) {
             .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
     }
 
-    // authorize: 200, then 404 (no provider), 500 (the provider), 500 (the ceremony store).
+    // authorize: 503 (the store at its ceiling), 429 (the redirect host's budget), then 200,
+    // 404 (no provider), 500 (the provider), 500 (the ceremony store).
+    fixture.oidc_authorizations.set_full(true);
+    client
+        .post("/v1/auth/oidc/authorize")
+        .json(&json!({ "redirect_uri": REDIRECT }))
+        .send()
+        .await
+        .assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    fixture.oidc_authorizations.set_full(false);
+    for _ in 0..60 {
+        client
+            .post("/v1/auth/oidc/authorize")
+            .json(&json!({ "redirect_uri": "http://[::1]:4242/budget" }))
+            .send()
+            .await;
+    }
+    client
+        .post("/v1/auth/oidc/authorize")
+        .json(&json!({ "redirect_uri": "http://[::1]:4242/budget" }))
+        .send()
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS);
     let begun: serde_json::Value = client
         .post("/v1/auth/oidc/authorize")
         .json(&json!({ "redirect_uri": REDIRECT }))

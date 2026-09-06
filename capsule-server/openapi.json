@@ -6510,7 +6510,7 @@
     "/v1/auth/oidc/authorize": {
       "post": {
         "summary": "Begin a sign-in through the identity provider.",
-        "description": "Unauthenticated: this is how a person *becomes* a session. Nothing about the account is\nknown yet — the ceremony carries fresh random `state`, `nonce` and PKCE material and the\nadmitted redirect URI, and the record behind the `state` lives for ten minutes.",
+        "description": "Unauthenticated: this is how a person *becomes* a session. Nothing about the account is\nknown yet — the ceremony carries fresh random `state`, `nonce` and PKCE material and the\nadmitted redirect URI, and the record behind the `state` lives for ten minutes.\n\nBounded twice, because it is an unauthenticated write into a store: a budget per redirect\nhost ([`budgets::OIDC_AUTHORIZE`]) answers `429` before anything is done, and the store's\nown ceiling answers `503` when it is nevertheless full.",
         "operationId": "begin_oidc_login",
         "parameters": [
           {
@@ -6703,6 +6703,78 @@
           },
           "404": {
             "description": "Single sign-on not configured",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many sign-ins",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Sign-in capacity reached",
             "headers": {
               "X-Capsule-Protocol-Min": {
                 "description": "The oldest protocol version this server accepts.",
