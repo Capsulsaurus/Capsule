@@ -561,3 +561,166 @@ async fn the_sdk_proposes_an_album_upgrade_over_a_socket() {
         "got {error:?}"
     );
 }
+
+/// **A real push reaching a real feed, decoded and verified** — the two halves of issues #464
+/// and #465, which only meet over a socket.
+///
+/// A library seals an asset, the SDK's ladder pushes it to this router, and the feed is pulled
+/// back. Three things had to be true at once and two of them were not:
+///
+/// - the ladder must upload the **provenance** blob, because the server publishes an asset only
+///   once it holds both index-tier roles (`upload::visibility::INDEX_TIER_ROLES`). Without it
+///   the push succeeded, every blob landed, and the asset was invisible on the feed to every
+///   device including the pusher's — a silent failure with no error anywhere;
+/// - the bytes of that blob must be the canonical CBOR of the chain head `ProvenanceRecord`,
+///   because the server's chain head is their SHA-256 while the client's next
+///   `prior_provenance_hash` is `record_hash()`. Any other encoding and no lifecycle op could
+///   chain onto the asset;
+/// - `apply_remote_entry` must decode what the feed actually serves. It decoded an
+///   `AssetManifest`, so a correctly pushed asset was quarantined as malformed by every
+///   receiving device.
+///
+/// A mock proves none of this: the publish gate, the chain head and the served bytes are all
+/// the server's, and each of the three defects is invisible from either end alone.
+#[tokio::test]
+async fn a_pushed_asset_reaches_the_feed_and_the_entry_decodes_and_verifies() {
+    use std::collections::HashSet;
+
+    use capsule_core::crypto::primitives::Argon2Params;
+    use capsule_core::lifecycle::{RemoteEntry, SyncApplyOutcome, Workspace};
+    use capsule_sdk::albums::{AlbumClient, AlbumTransport};
+    use capsule_sdk::net::ConnectionClass;
+    use capsule_sdk::push::{bundle_blobs, ensure_album, push_bundle};
+    use capsule_sdk::staged::StagedScheduler;
+    use capsule_sdk::upload::{BlobRole, UploadClient, UploadTransport};
+    use capsule_server::store::{AlbumId, UserId};
+
+    // Fast Argon2id: the KDF is proven in core, and the wire is what is under test.
+    const FAST: Argon2Params = Argon2Params {
+        mem_kib: 64,
+        t_cost: 1,
+        p_cost: 1,
+    };
+
+    // ── A real library with one sealed asset ──────────────────────────────────────────────
+    let dir = tempfile::TempDir::new().expect("a temp dir");
+    let lib = dir.path().join("library");
+    std::fs::create_dir_all(&lib).expect("the library root");
+    let src = dir.path().join("photo.jpg");
+    std::fs::write(&src, b"\xFF\xD8\xFF the bytes a push puts on the wire").expect("a source");
+
+    let mut workspace =
+        Workspace::create_with_params(&lib, b"passphrase", FAST).expect("a library");
+    let album_id = workspace.default_album_id();
+    workspace
+        .ensure_album(album_id, "Imports")
+        .expect("an album");
+    let asset_id = workspace.import_asset(album_id, &src).expect("an import");
+    let bundle = workspace.upload_bundle(&asset_id).expect("a bundle");
+
+    // ── A server that admits this library's album and device ──────────────────────────────
+    let fixture = Fixture::working();
+    // The library signs with the wall clock; the fixture's starts at the Unix epoch. Walk the
+    // server's clock up to the manifest's own instant so the timestamp window admits it — the
+    // window is a real check and the point here is the ladder, not the calendar.
+    fixture.clock.advance(
+        Timestamp::now()
+            .as_second()
+            .try_into()
+            .map(jiff::SignedDuration::from_secs)
+            .expect("the current second is representable"),
+    );
+    fixture.authority.allow_album(
+        &support::owner(),
+        &AlbumId::new(album_id.to_string()),
+        PROTOCOL_VERSION,
+    );
+    // Admitted at the epoch, so the device predates every manifest this library writes.
+    fixture.authority.add_device(
+        &UserId::new(support::user().as_str()),
+        bundle.created_by_device,
+        Timestamp::UNIX_EPOCH,
+    );
+    let base_url = serve(&fixture).await;
+    let live = session(&base_url).await;
+
+    // ── The SDK's own ladder, over the socket ─────────────────────────────────────────────
+    let albums = AlbumClient::new(AlbumTransport::with_session(
+        live.clone(),
+        format!("{base_url}/v1/albums"),
+    ));
+    ensure_album(&albums, album_id)
+        .await
+        .expect("the album provisions");
+
+    let uploads = UploadClient::new(UploadTransport::with_session(
+        live.clone(),
+        format!("{base_url}/v1/upload"),
+        PROTOCOL_VERSION,
+    ));
+    let scheduler = StagedScheduler::new(
+        capsule_core::import::UploadPolicy::Full,
+        ConnectionClass::Unmetered,
+    );
+    let report = push_bundle(&uploads, &scheduler, &bundle, &HashSet::new(), false)
+        .await
+        .expect("the ladder pushes every rung");
+
+    // The rung that used to be missing, named in the report the ladder returns.
+    let roles: Vec<BlobRole> = bundle_blobs(&bundle)
+        .into_iter()
+        .map(|(blob, _)| blob.role)
+        .collect();
+    assert_eq!(
+        roles[0],
+        BlobRole::Provenance,
+        "the index tier leads with the provenance blob"
+    );
+    assert_eq!(
+        report.pushed.len(),
+        roles.len(),
+        "every rung opened a session"
+    );
+
+    // ── The feed the push was supposed to reach ───────────────────────────────────────────
+    let consumer = SyncConsumer::with_session(&base_url, live).expect("a consumer builds");
+    let mut state = SyncState::new(CLIENT_MAX_PROTOCOL);
+    let page = consumer.pull_into(&mut state, 10).await.expect("a page");
+    let entry = page
+        .entries
+        .iter()
+        // The feed's `asset_id` is the id's UTF-8 bytes, not its 16 raw ones.
+        .find(|e| e.asset_id == asset_id.to_string().into_bytes())
+        .unwrap_or_else(|| {
+            panic!(
+                "the pushed asset must be on the feed; without the provenance rung the server \
+                 holds only one index-tier role and publishes nothing, silently. Got {} entries",
+                page.entries.len()
+            )
+        });
+
+    assert_eq!(
+        entry.manifest_cbor, bundle.provenance_blob,
+        "the feed serves the provenance blob's bytes back unchanged"
+    );
+
+    // ── …and a receiving device can decode and verify them ────────────────────────────────
+    let outcome = workspace
+        .apply_remote_entry(RemoteEntry {
+            album_id,
+            manifest_cbor: &entry.manifest_cbor,
+            metadata_blob: &bundle.metadata_blob,
+            original_ciphertext: &bundle.ciphertext,
+            local_chain_head: None,
+        })
+        .expect("applying is not a workspace failure");
+    let SyncApplyOutcome::Applied(facts) = outcome else {
+        panic!("the entry the server served must verify, got {outcome:?}");
+    };
+    assert_eq!(facts.asset_id, asset_id);
+    assert_eq!(facts.album_id, album_id);
+    assert!(
+        facts.sidecar.is_some(),
+        "a create carries its decrypted sidecar, which means the metadata blob really opened"
+    );
+}
