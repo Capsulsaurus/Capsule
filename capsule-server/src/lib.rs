@@ -26,7 +26,8 @@
 //!
 //! Each module owns one port and, where it has one, the surface over it. [`routes`] is the only
 //! module that knows about HTTP: everything under it — [`album`], [`directory`], [`discovery`],
-//! [`enrollment`], [`escrow`], [`gc`], [`index`], [`moderation`], [`quota`], [`scrub`], [`serve`],
+//! [`enrollment`], [`escrow`], [`gc`], [`index`], [`moderation`], [`negotiation`], [`quota`],
+//! [`scrub`], [`serve`],
 //! [`share`], [`store`],
 //! [`sync`], [`upload`],
 //! [`verify`] — is framework-free and testable without a router, which is why the operator
@@ -68,6 +69,7 @@ pub mod gc;
 pub mod index;
 pub mod limits;
 pub mod moderation;
+pub mod negotiation;
 mod openapi;
 pub mod problem;
 pub mod quota;
@@ -84,6 +86,7 @@ use kynos::middleware::catch_panic::Propagate;
 use kynos::middleware::limits::BodySize;
 use kynos::middleware::stack::Cons;
 use kynos::prelude::*;
+use kynos::router::group::Group;
 use kynos::router::service::Service;
 
 pub use self::app::App;
@@ -104,95 +107,130 @@ pub fn router() -> ServerRouter {
         // and the bearer scheme's `401`/`403` — and fills in the `error.*` code none of those
         // framework-owned types has a seam to carry. See [`problem`], and `S-C36`.
         .intercept(problem::CodedProblems::new())
+        // Inside the coder and outside everything that can refuse: the protocol window rides
+        // **every** response — the body-size `413` below, an extractor's `400`, the bearer
+        // scheme's `401`, the gate's own `426` — because each of those is produced beneath this
+        // and passes back up through it. See [`negotiation`].
+        .intercept(negotiation::Negotiation::new())
         // Mounted on the whole router, not on the operations that happen to take a body today:
         // an oversized body is refused wherever it is sent, and the `413` that refusal produces
         // is declared on every operation it covers because Kynos derives the declaration from
         // the interceptor's own type. See [`limits`].
         .intercept(limits::body_size())
-        // Seven `mount` calls, not one. Kynos's `EndpointSet` is implemented for tuples up to
-        // sixteen and the seventeenth operation is a compile error, so a split is forced — but
-        // grouping by surface rather than cutting at the arbitrary boundary is what makes the
-        // next addition obvious rather than a puzzle. Each group is well under the cap, so a
-        // new operation joins the surface it belongs to instead of wherever there is room.
-        // The account: who you are, what devices you have, and how you get your key back.
+        // The protocol gate is two `Group`s, not a router interceptor, for two reasons the type
+        // system makes concrete. First, the design exempts ten operations, and a group is how
+        // Kynos spells "these and not those": an operation mounted inside declares the handshake
+        // parameters and the gate's statuses, one mounted on the router below does not and still
+        // carries the response headers. Second, the design holds a **write** to the window (a
+        // grammatical date outside it is `426`) and a **read** to the grammar only ("reads of any
+        // past version succeed", threat-model/validation.md) — and since an interceptor's
+        // declaration is its type, a read operation must sit behind a gate whose `Short` has no
+        // `426` in it, or the document would promise a status the read never renders. So the
+        // non-safe operations sit behind `ProtocolGate` and the `GET`/`HEAD` ones behind
+        // `ProtocolReadGate`. `tests/conformance.rs` pins both sets and the exempt ten against
+        // the emitted document and walks every operation on the wire, so a route cannot change
+        // gate by accident.
+        //
+        // Several `mount` calls per group, not one. Kynos's `EndpointSet` is implemented for
+        // tuples up to sixteen and the seventeenth operation is a compile error, so a split is
+        // forced — but grouping by surface rather than cutting at the arbitrary boundary is what
+        // makes the next addition obvious rather than a puzzle.
+        .group(
+            Group::<App>::new("/")
+                .intercept(negotiation::ProtocolGate::new())
+                // The account: opening, refreshing and closing sessions, revoking them all.
+                .mount(kynos::routes![
+                    routes::auth::register_user,
+                    routes::auth::login_user,
+                    routes::auth::refresh_token,
+                    routes::auth::logout,
+                    routes::auth::revoke_all_challenge,
+                    routes::auth::revoke_all,
+                    routes::auth::reauthenticate,
+                    routes::devices::revoke_session,
+                    routes::directory::publish_device_directory,
+                    routes::escrow::store_escrow,
+                ])
+                // What an account changes about itself, and its second factor.
+                .mount(kynos::routes![
+                    routes::profile::update_profile,
+                    routes::profile::change_password,
+                    routes::totp::totp_enroll,
+                    routes::totp::totp_verify_enrollment,
+                    routes::totp::totp_disable,
+                    routes::totp::totp_verify_login,
+                ])
+                // The cross-device add: one code, one channel, and the writes into it.
+                .mount(kynos::routes![
+                    routes::enroll::issue_enrollment_code,
+                    routes::enroll::redeem_enrollment_code,
+                    routes::enroll::relay_enrollment_payload,
+                    routes::enroll::close_enrollment_channel,
+                ])
+                // The library's own writes: albums, upgrades, uploads, operations, verification.
+                .mount(kynos::routes![
+                    routes::albums::provision_album,
+                    routes::upgrade::begin_album_upgrade,
+                    routes::upgrade::abort_album_upgrade,
+                    routes::upload::create_upload,
+                    routes::upload::append_chunk,
+                    routes::upload::cancel_upload,
+                    routes::ops::apply_op,
+                    routes::storage::verify_storage,
+                ])
+                // Share links and guest drops: the owner's writes on both.
+                .mount(kynos::routes![
+                    routes::share::issue_share,
+                    routes::share::revoke_share,
+                    routes::drop::provision_link,
+                    routes::drop::revoke_link,
+                    routes::drop::adopt_drop,
+                    routes::drop::discard_drop,
+                ]),
+        )
+        // The reads: every gated `GET` and `HEAD`. Held to the handshake's grammar, admitted at
+        // any protocol date, and declaring the `400` alone.
+        .group(
+            Group::<App>::new("/")
+                .intercept(negotiation::ProtocolReadGate::new())
+                .mount(kynos::routes![
+                    routes::devices::list_devices,
+                    routes::directory::fetch_device_directory,
+                    routes::escrow::fetch_escrow,
+                    routes::profile::get_profile,
+                    routes::enroll::drain_enrollment_channel,
+                    routes::upgrade::album_upgrade_phase,
+                    routes::quota::get_quota,
+                    routes::moderation::moderation_record,
+                    routes::upload::head_upload,
+                    routes::sessions::list_upload_sessions,
+                    routes::receipts::get_upload_receipt,
+                    routes::sync::sync_feed,
+                    routes::blob::get_blob,
+                    routes::assets::get_asset_receipts,
+                    routes::drop::list_inbox,
+                ]),
+        )
+        // **The ten operations the design exempts from the gate**, mounted on the router so
+        // the group above does not cover them (`api-surfaces.md`, "Negotiation Across
+        // Transports"). `GET /v1/version` is the reachability probe a client hits before it
+        // knows the window. The four `/.well-known/capsule/*` records are public discovery,
+        // read before any handshake. The three `/s/{opaque_id}*` share reads must answer an
+        // indistinguishable `404` (share-links.md), which a `426` would turn into a probing
+        // oracle. The two `/d/{opaque_id}*` guest deposits have their protocol pinned at link
+        // issuance (web-upload.md), so a browser guest has nothing to assert. All ten still
+        // carry the response headers, because `Negotiation` is the router's.
         .mount(kynos::routes![
             routes::version::get_version,
-            routes::auth::register_user,
-            routes::auth::login_user,
-            routes::auth::refresh_token,
-            routes::auth::logout,
-            routes::auth::revoke_all_challenge,
-            routes::auth::revoke_all,
-            routes::devices::list_devices,
-            routes::devices::revoke_session,
-            routes::directory::publish_device_directory,
-            routes::directory::fetch_device_directory,
-            routes::escrow::store_escrow,
-            routes::escrow::fetch_escrow,
-            routes::auth::reauthenticate,
-        ])
-        // What an account knows about itself, and the credentials it opens sessions with.
-        .mount(kynos::routes![
-            routes::profile::get_profile,
-            routes::profile::update_profile,
-            routes::profile::change_password,
-            routes::totp::totp_enroll,
-            routes::totp::totp_verify_enrollment,
-            routes::totp::totp_disable,
-            routes::totp::totp_verify_login,
-        ])
-        // The cross-device add: one code, one channel, and the two devices' mailboxes.
-        .mount(kynos::routes![
-            routes::enroll::issue_enrollment_code,
-            routes::enroll::redeem_enrollment_code,
-            routes::enroll::relay_enrollment_payload,
-            routes::enroll::drain_enrollment_channel,
-            routes::enroll::close_enrollment_channel,
-        ])
-        // The library's own surfaces, and the public record anybody may read.
-        .mount(kynos::routes![
-            routes::albums::provision_album,
-            routes::upgrade::begin_album_upgrade,
-            routes::upgrade::album_upgrade_phase,
-            routes::upgrade::abort_album_upgrade,
-            routes::quota::get_quota,
-            routes::moderation::moderation_record,
             routes::well_known::attestation_keys,
             routes::well_known::server_info,
             routes::well_known::deprecation_announcements,
             routes::well_known::revoked_jti,
-        ])
-        // The asset surfaces: getting bytes in, changing what they mean, and reading them back.
-        .mount(kynos::routes![
-            routes::upload::create_upload,
-            routes::upload::append_chunk,
-            routes::sessions::list_upload_sessions,
-            routes::upload::head_upload,
-            routes::upload::cancel_upload,
-            routes::receipts::get_upload_receipt,
-            routes::ops::apply_op,
-            routes::sync::sync_feed,
-            routes::blob::get_blob,
-            routes::storage::verify_storage,
-            routes::assets::get_asset_receipts,
-        ])
-        // Share links: two owner operations, and the one path served without an account.
-        .mount(kynos::routes![
-            routes::share::issue_share,
-            routes::share::revoke_share,
             routes::share::share_metadata,
             routes::share::share_wrapped_secret,
             routes::share::share_blob,
-        ])
-        // Guest drops: the owner's link, the guest's deposit, and the inbox between them.
-        .mount(kynos::routes![
-            routes::drop::provision_link,
-            routes::drop::revoke_link,
             routes::drop::create_drop,
             routes::drop::append_drop_chunk,
-            routes::drop::list_inbox,
-            routes::drop::adopt_drop,
-            routes::drop::discard_drop,
         ])
 }
 
@@ -202,7 +240,11 @@ pub fn router() -> ServerRouter {
 /// two interceptors answering with one status a compile error rather than a runtime surprise —
 /// so mounting one changes this signature. That is a feature: the alias is the one place the
 /// server's middleware stack is written down.
-pub type ServerRouter = Router<App, Propagate, Cons<BodySize, Cons<problem::CodedProblems, ()>>>;
+pub type ServerRouter = Router<
+    App,
+    Propagate,
+    Cons<BodySize, Cons<negotiation::Negotiation, Cons<problem::CodedProblems, ()>>>,
+>;
 
 /// Builds the service the server and the in-process tests both drive.
 ///
@@ -254,5 +296,10 @@ pub fn openapi() -> kynos::Result<kynos::openapi::Document> {
     // a generator. Filled in with the binary marker so the SDK's client can be generated from
     // the whole document instead of most of it.
     openapi::describe_raw_byte_payloads(&mut document);
+    // Issue #404: Kynos describes an interceptor's response headers on success responses only,
+    // while [`negotiation::Negotiation`] attaches them to every response it forwards — errors
+    // included. The walk files the same three declarations under every other response, so the
+    // document promises exactly what the wire carries.
+    openapi::describe_negotiation_headers(&mut document);
     Ok(document)
 }
