@@ -304,10 +304,20 @@ async fn publish_roster_sends_the_signed_bytes_verbatim() {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(body["roster_cbor"].as_str().expect("a string"))
         .expect("standard base64");
+    let expected = capsule_core::cbor::to_canonical_vec(&signed).expect("encodes");
     assert_eq!(
-        bytes,
-        capsule_core::cbor::to_canonical_vec(&signed).expect("encodes"),
+        bytes, expected,
         "the wire carries the canonical encoding of exactly what was signed"
+    );
+    assert_eq!(
+        capsule_core::cbor::canonicalize(&bytes).expect("decodes"),
+        bytes,
+        "and those bytes are canonical, which is the form the server stores and replays on"
+    );
+    assert_eq!(
+        body["roster_cbor"].as_str().expect("a string"),
+        base64::engine::general_purpose::STANDARD.encode(&expected),
+        "standard base64 with padding, the alphabet the server decodes"
     );
     assert!(
         requests[0].header("authorization").is_some(),
@@ -350,7 +360,17 @@ async fn a_stale_roster_carries_the_distinct_code() {
         .await
         .expect_err("a stale roster is refused");
     assert_eq!(error.error_code(), Some(error_codes::ALBUM_ROSTER_STALE));
-    assert!(matches!(error, AlbumError::Status { status: 409, .. }));
+    assert!(
+        matches!(
+            error,
+            AlbumError::Status {
+                status: 409,
+                current_version: Some(4),
+                ..
+            }
+        ),
+        "the held version rides the refusal, so the caller can republish above it: {error:?}"
+    );
 }
 
 /// A server answering for a different album than the one asked about is a malformed answer,
