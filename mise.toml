@@ -154,6 +154,8 @@ run = "cargo doc --no-deps --document-private-items -p capsule-core -p capsule-c
 
 # nextest: cross-binary parallel scheduling + process-per-test isolation. Two
 # invocations — the workspace (default features), then capsule-core's FFI surface.
+# The workspace run includes `capsule-e2e`, the bounded E2E cases over the real SDK,
+# library and server composition root (no container, no env gate; issue #409).
 # nextest does not run doctests; the workspace has none (if you add one, also add a
 # `cargo test --doc` step). CI selects the `ci` profile via NEXTEST_PROFILE=ci.
 [tasks.test-rust]
