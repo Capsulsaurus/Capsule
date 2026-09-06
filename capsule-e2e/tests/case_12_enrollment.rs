@@ -7,8 +7,8 @@
 //! expected and closes, and the enrollee's next drain finds no channel.
 //!
 //! The client ceremony — B's hardware keys, the safety-code check, A cross-signing B into the
-//! directory, B's MLS joins — is blocked on seams the tree does not have and is filed by the
-//! pull request that landed this crate; `libraries match` waits on server-side membership.
+//! directory — is blocked on seams the tree does not have (issues #471 and #467); B's MLS
+//! joins and `libraries match` wait on server-side membership (#405).
 
 use capsule_e2e::{Device, PASSWORD, PROTOCOL_VERSION, Server};
 use capsule_sdk::rest;

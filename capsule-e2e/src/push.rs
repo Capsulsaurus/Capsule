@@ -9,8 +9,9 @@
 //! asset: the canonical CBOR of the chain's head `ProvenanceRecord`, whose digest is by
 //! definition core's `record_hash()`. That is what lets a later lifecycle op's
 //! `prior_provenance_hash` — the client's record hash of the previous record — match the head
-//! the server holds. The finding is filed against the SDK; the encoding decision is recorded in
-//! the pull request that landed this crate.
+//! the server holds. The finding is filed against the SDK as issue #464 (and the decode side, in
+//! core's `sync_apply`, as #465); the encoding decision is recorded in the pull request that
+//! landed this crate.
 //!
 //! Every envelope here is projected from the head manifest's [`ManifestCore`] rather than from
 //! an `UploadBundle`, because a bundle re-derives the original's ciphertext and an adopted

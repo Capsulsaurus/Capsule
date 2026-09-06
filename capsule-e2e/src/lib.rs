@@ -20,11 +20,11 @@
 //!
 //! - the **provenance rung** ([`push::push_asset`]): the SDK's push ladder ships metadata,
 //!   derivatives and the original but never the `provenance` blob, and the server publishes an
-//!   asset to the feed only once it holds both index-tier roles;
+//!   asset to the feed only once it holds both index-tier roles (issue #464);
 //! - the **directory publish** ([`Device::publish_directory`]): the server requires the
 //!   `X-Capsule-Identity-Key` header on every publish and the SDK's `DirectoryClient` does not
-//!   send it, and a directory must name the *server's* account id, which a `Workspace` cannot
-//!   learn.
+//!   send it (issue #466), and a directory must name the *server's* account id, which a
+//!   `Workspace` cannot learn (issue #467).
 //!
 //! Every test that uses this crate names its case — `E2E case N` — so `rg "E2E case N"` finds
 //! it, per the module map's contract.
@@ -343,7 +343,7 @@ impl Device {
     ///
     /// Sent through the session's HTTP client rather than `capsule_sdk::directory` because the
     /// server requires `X-Capsule-Identity-Key` (invariant 23's second clause) and the SDK's
-    /// publish does not carry it — recorded as a finding by the pull request that landed this.
+    /// publish does not carry it — issue #466.
     pub async fn publish_directory(&mut self, server: &Server) -> u64 {
         self.directory_version += 1;
         let body = capsule_core::cbor::to_canonical_vec(&self.directory())
@@ -374,15 +374,21 @@ impl Device {
         version
     }
 
-    /// Write the synthetic JPEG to staging under `file_name` and import it into the default
-    /// album, returning the asset id.
+    /// Write the 8×8 synthetic JPEG to staging under `file_name` and import it into the
+    /// default album, returning the asset id.
     pub fn import_jpeg(&mut self, file_name: &str) -> Uuid {
+        self.import_file(file_name, &fixtures::synthetic_jpeg())
+    }
+
+    /// Write `bytes` to staging under `file_name` and import the file into the default album,
+    /// returning the asset id.
+    pub fn import_file(&mut self, file_name: &str, bytes: &[u8]) -> Uuid {
         let path = self.staging.path().join(file_name);
-        std::fs::write(&path, fixtures::synthetic_jpeg()).expect("the fixture writes");
+        std::fs::write(&path, bytes).expect("the fixture writes");
         let album = self.workspace.default_album_id();
         self.workspace
             .import_asset(album, &path)
-            .expect("the JPEG imports")
+            .expect("the file imports")
     }
 
     /// The head of `asset_id`'s provenance chain.
