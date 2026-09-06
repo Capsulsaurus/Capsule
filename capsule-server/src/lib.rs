@@ -32,6 +32,14 @@
 //! [`verify`] — is framework-free and testable without a router, which is why the operator
 //! workers ([`gc`], [`scrub`]) have no wire surface at all and cost nothing to exercise.
 //!
+//! # How a process is assembled
+//!
+//! [`config`] reads what an operator decided; [`boot`] turns it into the one [`App`] the router
+//! is built with. Both are library modules rather than binary code, because a composition root
+//! that lives in `main` is a composition root nothing tests: `boot::assemble` is driven by unit
+//! tests here and by the binary identically, so "the server can be built at all" is an
+//! assertion rather than something discovered on a deployment.
+//!
 //! # Every adapter is in-memory
 //!
 //! Every port in this crate has a deterministic in-memory adapter and a conformance suite, and
@@ -47,6 +55,9 @@ pub mod attestation;
 pub mod auth;
 pub mod blob;
 pub mod body;
+pub mod boot;
+pub mod cli;
+pub mod config;
 pub mod counter;
 pub mod directory;
 pub mod discovery;

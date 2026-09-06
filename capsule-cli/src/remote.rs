@@ -53,7 +53,7 @@ pub struct RemoteConfig {
     pub protocol_version: String,
 }
 
-/// The default server origin — one host, one port, matching `mise run serve-api`.
+/// The default server origin — one host, one port, matching `mise run serve-memory`.
 pub const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:3000";
 
 impl RemoteConfig {

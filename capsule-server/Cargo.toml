@@ -73,7 +73,18 @@ jsonwebtoken = { workspace = true }
 # the three features a ranged read and a durable append need, and nothing more. Already the
 # workspace's async runtime (design/dependencies.md, "Async runtime") and already in this
 # crate's tree through kynos — this promotes it from a dev-dependency, it does not add a crate.
-tokio = { workspace = true, features = ["fs", "io-util", "rt"] }
+# `rt-multi-thread` and `macros` on top of those three for the binary: `serve` runs an accept
+# loop that has to make progress while a request is awaiting the disk, and `#[tokio::main]` is
+# the attribute that starts it. Kynos's `server` feature already unifies `net`/`signal`/`rt` in;
+# these two are named here rather than relied on through it, so a Kynos feature change cannot
+# silently take the binary's runtime away.
+tokio = { workspace = true, features = [
+  "fs",
+  "io-util",
+  "rt",
+  "rt-multi-thread",
+  "macros",
+] }
 # The `.reason.json` a quarantined blob keeps beside it (design/filesystem/server.md). The
 # encoding belongs to the filesystem *adapter*, not to the port's record — which derives no
 # serde traits, exactly as the state ports' records do not — so this is used in one file.
@@ -106,13 +117,32 @@ totp-rs = { workspace = true }
 # design/dependencies.md.
 subtle = { workspace = true }
 
-# `gen_openapi` only. Both are already in the lock file via `capsule-api`'s equivalent binary,
-# and this mirrors it deliberately: two committed documents, two identical drift guards, so the
-# changeover at parity is a re-point rather than a new mechanism.
+# Argon2id for the development profile's account adapter (`auth::credential`,
+# `auth::accounts_memory`). Already a workspace dependency (consumed by `capsule-core` for the
+# escrow key wrap) and already pinned by the Argon2id row in design/cryptography/primitives.md,
+# so this adds no crate and opens no new domain. It is the *server-side password verification*
+# parameter set rather than the escrow KDF's tiered one — see `auth::credential` for why those
+# are unrelated numbers. The Postgres adapter (#402) uses the same helper.
+argon2 = { workspace = true }
+# The `capsule-server` binary: subcommand parsing, and the error report a startup failure prints.
+# `clap` and `color-eyre` were already here for the `gen_openapi` binary this replaces; the
+# binary is now one `capsule-server` with `serve | gc | purge | scrub | gen-openapi`
+# subcommands, for the reason `capsule-cli` is one binary — four executables would each carry
+# their own copy of the config loader and the adapter seam.
 clap = { version = "4.6.1", features = ["derive"] }
 color-eyre = "0.6.5"
+# The log stream the binary installs (`cli::install_tracing`). `env-filter` for `RUST_LOG` and
+# `json` for the one-object-per-event rendering a log shipper wants; both are on in the workspace
+# pin, and the crate already has a row in design/dependencies.md. Written to **stderr**, so
+# `gen-openapi` and the operator commands keep a parseable stdout.
+tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
+# `tests/binary.rs` gives the spawned server a blob root of its own, and deletes it afterwards.
+# Already the workspace's scratch-directory crate (`capsule-core`, `capsule-sdk`,
+# `capsule-core-ffi` all dev-depend on it) and already in the lock file.
+tempfile = "3"
+
 # `test-util` carries `kynos::test::TestClient`, which drives a built `Service` in-process —
 # no socket, no port, no runtime flavour — and the two conformance assertions the suite is
 # built around. `server` is on top of it for exactly one test: `tests/sdk_client.rs` binds the
