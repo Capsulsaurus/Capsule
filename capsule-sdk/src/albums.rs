@@ -27,22 +27,25 @@ pub use crate::upload::StaticToken;
 
 // ─── Errors ───────────────────────────────────────────────────────────────────
 
-/// A failure provisioning an album.
+/// A failure on the album surface: provisioning, or publishing a roster (`S-C51`).
 #[derive(Debug, thiserror::Error)]
 pub enum AlbumError {
     /// The HTTP request failed on the wire, or the session could not authorize it.
-    #[error("album provisioning transport: {0}")]
+    #[error("album request transport: {0}")]
     Transport(String),
-    /// The server refused the provisioning request.
-    #[error("album provisioning refused with status {status}")]
+    /// The server refused the request.
+    #[error("album request refused with status {status}")]
     Status {
         /// The HTTP status code.
         status: u16,
         /// The stable `error.*` code, when the server supplied one.
         code: Option<String>,
+        /// On a stale roster (`409 error.album.roster_stale`), the version the server holds —
+        /// the one a caller re-syncs and republishes above. Absent on every other refusal.
+        current_version: Option<u64>,
     },
     /// The response body was missing a field or otherwise unparsable.
-    #[error("malformed album provisioning response: {0}")]
+    #[error("malformed album response: {0}")]
     Malformed(String),
 }
 
@@ -167,6 +170,8 @@ struct RosterResponseWire {
 struct ApiErrorWire {
     #[serde(default)]
     code: Option<String>,
+    #[serde(default)]
+    current_version: Option<u64>,
 }
 
 /// What provisioning an album resolved to. Both cases are successes; `created` is
@@ -242,6 +247,7 @@ impl AlbumClient {
             return Err(AlbumError::Status {
                 status: status.as_u16(),
                 code,
+                current_version: None,
             });
         }
 
@@ -266,8 +272,8 @@ impl AlbumClient {
     /// Publish `signed` as the roster of the album it names (`S-C51`).
     ///
     /// Orchestration only: the roster is signed in `capsule_core::crypto::membership` by the
-    /// owner's device and sent verbatim, base64-encoded, on the generated operation's JSON
-    /// shape. Idempotent under `(album_id, roster_version)`: the same bytes again succeed with
+    /// owner's device and sent verbatim, base64-encoded, in the JSON shape the server's
+    /// `publish_album_roster` operation declares (mirrored here as `provision` mirrors its). Idempotent under `(album_id, roster_version)`: the same bytes again succeed with
     /// `replayed`. A `409` (`error.album.roster_stale`) means the server holds a roster this one
     /// does not supersede; the caller re-syncs and republishes above it.
     ///
@@ -301,15 +307,19 @@ impl AlbumClient {
 
         let status = response.status();
         if !status.is_success() {
-            let code = response
-                .json::<ApiErrorWire>()
-                .await
-                .ok()
-                .and_then(|e| e.code);
-            tracing::warn!(status = status.as_u16(), ?code, "roster publish refused");
+            let problem = response.json::<ApiErrorWire>().await.ok();
+            let code = problem.as_ref().and_then(|e| e.code.clone());
+            let current_version = problem.and_then(|e| e.current_version);
+            tracing::warn!(
+                status = status.as_u16(),
+                ?code,
+                ?current_version,
+                "roster publish refused"
+            );
             return Err(AlbumError::Status {
                 status: status.as_u16(),
                 code,
+                current_version,
             });
         }
 
