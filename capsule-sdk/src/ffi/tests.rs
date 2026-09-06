@@ -429,12 +429,28 @@ async fn ffi_enroll_album_seal_upload_sync_apply_round_trip() {
     let blobs = workspace.upload_blobs(asset.clone()).unwrap();
     assert_eq!(
         blobs.iter().map(|b| b.tier.as_str()).collect::<Vec<_>>(),
-        vec!["index", "original"],
-        "T0 (metadata) precedes T2 (original); no derivatives without a codec"
+        vec!["index", "index", "original"],
+        "T0 is two blobs — provenance then metadata, the pair the server needs before it may \
+         publish the asset — and precedes T2; no derivatives without a codec"
+    );
+    assert!(
+        matches!(
+            (
+                &blobs[0].request.blob_role,
+                &blobs[1].request.blob_role,
+                &blobs[2].request.blob_role,
+            ),
+            (
+                FfiBlobRole::Provenance,
+                FfiBlobRole::Metadata,
+                FfiBlobRole::Original
+            )
+        ),
+        "the index tier is provenance then metadata; the original is T2"
     );
     // Keep the wire bytes the feed would carry for this asset before consuming the blobs.
-    let metadata_blob = blobs[0].bytes.clone();
-    let ciphertext = blobs[1].bytes.clone();
+    let metadata_blob = blobs[1].bytes.clone();
+    let ciphertext = blobs[2].bytes.clone();
     for blob in blobs {
         // Every envelope names *this* blob's content address (the server's invariant-15
         // consistency rule) while carrying the head manifest's fields verbatim.
@@ -451,7 +467,9 @@ async fn ffi_enroll_album_seal_upload_sync_apply_round_trip() {
 
     // 5. Sync-apply: exactly the three byte strings a feed entry carries.
     let album_bytes = uuid::Uuid::parse_str(&album).unwrap().as_bytes().to_vec();
-    let manifest_cbor = workspace.signed_manifest(asset.clone()).unwrap();
+    // The feed carries the provenance record, not the bare manifest — the record is what the
+    // server's chain head hashes and what `apply_sync_entry` decodes.
+    let manifest_cbor = workspace.provenance_head(asset.clone()).unwrap();
     let entry = || FfiSyncEntry {
         album_id: album_bytes.clone(),
         manifest_cbor: manifest_cbor.clone(),
@@ -515,7 +533,7 @@ async fn ffi_sync_apply_quarantines_a_tampered_entry() {
     let outcome = workspace
         .apply_sync_entry(FfiSyncEntry {
             album_id: uuid::Uuid::parse_str(&album).unwrap().as_bytes().to_vec(),
-            manifest_cbor: workspace.signed_manifest(asset).unwrap(),
+            manifest_cbor: workspace.provenance_head(asset).unwrap(),
             metadata_blob: blobs[0].bytes.clone(),
             original_ciphertext: ciphertext,
             local_chain_head: None,
@@ -717,9 +735,9 @@ async fn ffi_p256_hardware_signer_constructor_reaches_the_same_flow() {
     let outcome = workspace
         .apply_sync_entry(FfiSyncEntry {
             album_id: uuid::Uuid::parse_str(&album).unwrap().as_bytes().to_vec(),
-            manifest_cbor: workspace.signed_manifest(asset).unwrap(),
-            metadata_blob: blobs[0].bytes.clone(),
-            original_ciphertext: blobs[1].bytes.clone(),
+            manifest_cbor: workspace.provenance_head(asset).unwrap(),
+            metadata_blob: blobs[1].bytes.clone(),
+            original_ciphertext: blobs[2].bytes.clone(),
             local_chain_head: None,
         })
         .unwrap();
@@ -778,7 +796,8 @@ fn ffi_workspace_surfaces_errors_instead_of_panicking() {
     // An unknown asset is a typed workspace error.
     let missing = uuid::Uuid::now_v7().to_string();
     assert!(workspace.read_plaintext(missing.clone()).is_err());
-    assert!(workspace.signed_manifest(missing).is_err());
+    assert!(workspace.signed_manifest(missing.clone()).is_err());
+    assert!(workspace.provenance_head(missing).is_err());
     // A short chain head is refused before any verification runs.
     match workspace.apply_sync_entry(FfiSyncEntry {
         album_id: uuid::Uuid::now_v7().as_bytes().to_vec(),
