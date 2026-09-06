@@ -20613,7 +20613,7 @@
           "state",
           "code"
         ],
-        "description": "The `POST /v1/auth/oidc/callback` body: what the provider's redirect carried, plus the two\nadvisory identifiers a client may volunteer for the session this request opens."
+        "description": "The `POST /v1/auth/oidc/callback` body: what the provider's redirect carried, plus the two\nadvisory identifiers a client may volunteer for the session this request opens.\n\nStrict, like [`OidcAuthorizeRequest`]: a client that forwards the provider's whole redirect\nquery — `error`, `error_description`, `iss` (RFC 9207) — gets a `422` naming the field rather\nthan a callback that quietly ignored what the provider said."
       },
       "EnrollmentCodeResponse": {
         "properties": {

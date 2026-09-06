@@ -665,10 +665,12 @@ impl Config {
 ///
 /// `OIDC_ISSUER` must be an absolute `http(s)` URL with no query or fragment (OpenID Connect
 /// Discovery 1.0 §3), and `https` unless it is a loopback address — the development carve-out
-/// `auth::oidc::discovery` applies to the provider's endpoints too. `OIDC_ALLOW_LOOPBACK_REDIRECT`
-/// defaults to **on**, because the CLI's and a desktop client's redirect is an ephemeral
-/// loopback port (RFC 8252 §7.3) and a deployment that wants only its configured web redirect
-/// has to say so.
+/// `auth::oidc::discovery` applies to the provider's endpoints too. `OIDC_REDIRECT_URL` is held
+/// to the same scheme rule. `OIDC_ALLOW_LOOPBACK_REDIRECT` defaults to **off**: admitting a
+/// redirect to any loopback port (RFC 8252 §7.3) is what a CLI's or desktop client's listener
+/// needs, and it is the one knob that widens where the server will send a person back to, so a
+/// deployment turns it on when it has such a client (#461's CLI flow will) rather than getting
+/// it unasked.
 fn read_oidc(env: &dyn Environment, faults: &mut Vec<ConfigFault>) -> Option<OidcConfig> {
     let issuer = env.var("OIDC_ISSUER");
     let client_id = env.var("OIDC_CLIENT_ID");
@@ -705,7 +707,8 @@ fn read_oidc(env: &dyn Environment, faults: &mut Vec<ConfigFault>) -> Option<Oid
                 faults.push(ConfigFault::Invalid {
                     key: "OIDC_ISSUER",
                     detail: format!(
-                        "`{}://` is not accepted; an issuer is https, or http on a loopback                          address for development",
+                        "`{}://` is not accepted; an issuer is https, or http on a loopback \
+                         address for development",
                         url.scheme()
                     ),
                 });
@@ -720,17 +723,33 @@ fn read_oidc(env: &dyn Environment, faults: &mut Vec<ConfigFault>) -> Option<Oid
         }
     }
 
-    if let Some(redirect) = &redirect_url
-        && let Err(error) = reqwest::Url::parse(redirect)
-    {
-        faults.push(ConfigFault::Invalid {
-            key: "OIDC_REDIRECT_URL",
-            detail: format!("`{redirect}` is not an absolute URL ({error})"),
-        });
+    if let Some(redirect) = &redirect_url {
+        match reqwest::Url::parse(redirect) {
+            Ok(url) if url.scheme() == "https" => {}
+            Ok(url)
+                if url.scheme() == "http"
+                    && crate::auth::oidc::discovery::is_loopback_issuer(redirect) => {}
+            Ok(url) => {
+                faults.push(ConfigFault::Invalid {
+                    key: "OIDC_REDIRECT_URL",
+                    detail: format!(
+                        "`{}://` is not accepted; a redirect is https, or http on a loopback \
+                         address for development",
+                        url.scheme()
+                    ),
+                });
+            }
+            Err(error) => {
+                faults.push(ConfigFault::Invalid {
+                    key: "OIDC_REDIRECT_URL",
+                    detail: format!("`{redirect}` is not an absolute URL ({error})"),
+                });
+            }
+        }
     }
 
     let allow_loopback = match allow_loopback.as_deref().map(str::trim) {
-        None => true,
+        None => false,
         Some(raw)
             if ["true", "1", "yes", "on"]
                 .iter()
@@ -750,7 +769,7 @@ fn read_oidc(env: &dyn Environment, faults: &mut Vec<ConfigFault>) -> Option<Oid
                 key: "OIDC_ALLOW_LOOPBACK_REDIRECT",
                 detail: format!("`{raw}` is neither `true` nor `false`"),
             });
-            true
+            false
         }
     };
 
@@ -1353,8 +1372,10 @@ mod tests {
     }
 
     #[test]
-    fn loopback_redirects_are_admitted_by_default_and_a_secret_is_optional() {
-        // RFC 8252 §8.5: a native client cannot keep a secret; PKCE is what makes it sound.
+    fn loopback_redirects_are_opt_in_and_a_secret_is_optional() {
+        // RFC 8252 §8.5: a native client cannot keep a secret; PKCE is what makes it sound. And
+        // the loopback arm is the one knob that widens where the server redirects to, so it is
+        // off until a deployment with such a client turns it on.
         let mut environment = serveable();
         environment.insert(
             "OIDC_ISSUER".to_owned(),
@@ -1364,7 +1385,40 @@ mod tests {
         let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
         let oidc = config.oidc.expect("configured");
         assert!(oidc.client_secret.is_none());
-        assert!(oidc.redirects.admits("http://127.0.0.1:4242/cb"));
+        assert!(!oidc.redirects.admits("http://127.0.0.1:4242/cb"));
+
+        environment.insert("OIDC_ALLOW_LOOPBACK_REDIRECT".to_owned(), "true".to_owned());
+        let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+        assert!(
+            config
+                .oidc
+                .expect("configured")
+                .redirects
+                .admits("http://127.0.0.1:4242/cb")
+        );
+    }
+
+    #[test]
+    fn a_redirect_url_is_https_or_loopback_http() {
+        for (redirect, ok) in [
+            ("https://app.example.test/cb", true),
+            ("http://127.0.0.1:4242/cb", true),
+            ("http://app.example.test/cb", false),
+            ("http://localhost:4242/cb", false),
+        ] {
+            let mut environment = serveable();
+            environment.insert(
+                "OIDC_ISSUER".to_owned(),
+                "https://idp.example.test".to_owned(),
+            );
+            environment.insert("OIDC_CLIENT_ID".to_owned(), "capsule".to_owned());
+            environment.insert("OIDC_REDIRECT_URL".to_owned(), redirect.to_owned());
+            let result = Config::load(&environment, &memory(), Demands::Serve);
+            assert_eq!(result.is_ok(), ok, "{redirect}: {result:?}");
+            if let Err(error) = result {
+                assert!(error.names("OIDC_REDIRECT_URL"), "{error}");
+            }
+        }
     }
 
     #[test]

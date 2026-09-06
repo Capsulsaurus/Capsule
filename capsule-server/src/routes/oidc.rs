@@ -108,7 +108,12 @@ impl fmt::Debug for OidcAuthorizationResponse {
 
 /// The `POST /v1/auth/oidc/callback` body: what the provider's redirect carried, plus the two
 /// advisory identifiers a client may volunteer for the session this request opens.
+///
+/// Strict, like [`OidcAuthorizeRequest`]: a client that forwards the provider's whole redirect
+/// query — `error`, `error_description`, `iss` (RFC 9207) — gets a `422` naming the field rather
+/// than a callback that quietly ignored what the provider said.
 #[derive(Schema, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct OidcCallbackRequest {
     /// The `state` the authorize answered with, as the redirect echoed it.
     pub state: String,

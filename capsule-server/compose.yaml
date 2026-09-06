@@ -79,13 +79,14 @@ services:
   #
   #   OIDC_ISSUER=http://127.0.0.1:5556/dex
   #   OIDC_CLIENT_ID=capsule
+  #   OIDC_ALLOW_LOOPBACK_REDIRECT=true
   #
   # and no client secret: `capsule` is a **public** client, which is what a CLI or desktop app
   # is (RFC 8252 §8.5), and dex admits `http://127.0.0.1:*` and `http://localhost:*` redirects
   # for public clients without listing them — so the CLI's ephemeral loopback listener works
-  # unconfigured, and `OIDC_ALLOW_LOOPBACK_REDIRECT` (on by default) admits the same on Capsule's
-  # side. The issuer is plain `http` on loopback, the one carve-out `auth::oidc::discovery`
-  # makes; a real deployment's issuer is `https`.
+  # unconfigured at dex, and `OIDC_ALLOW_LOOPBACK_REDIRECT=true` (off by default) admits the
+  # same on Capsule's side. The issuer is plain `http` on loopback, the one carve-out
+  # `auth::oidc::discovery` makes; a real deployment's issuer is `https`.
   #
   # Sign in as `admin@example.com` / `password` (the bcrypt below is dex's own documented hash
   # for that word). Development credentials in a checked-in file, like Postgres's above; the
