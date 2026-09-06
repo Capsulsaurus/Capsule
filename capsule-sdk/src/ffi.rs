@@ -63,7 +63,7 @@ pub use workspace::{
 /// variant carries the stable `error.*` catalog `code` (when one applies — clients
 /// localize it) and the English detail `message` (stays English), mirroring the
 /// SDK's `{ error, code }` contract so foreign apps switch on the code, never a
-/// bare HTTP/gRPC status.
+/// bare HTTP status.
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum FfiError {
     /// An authentication flow (login/register/refresh/logout) failed.
@@ -99,8 +99,12 @@ pub enum FfiError {
         message: String,
     },
     /// A master-key escrow flow (store/fetch) failed.
-    #[error("escrow failed: {message}")]
+    #[error("escrow failed ({code:?}): {message}")]
     Escrow {
+        /// Stable `error.*` catalog code, when the server supplied one — `error.escrow.*`
+        /// separates "you have no recovery backup" (a setup prompt) from "we could not read
+        /// it" (a retry), which is the whole reason the catalog distinguishes them.
+        code: Option<String>,
         /// English detail (developer/log message).
         message: String,
     },
@@ -131,12 +135,25 @@ impl From<LifecycleError> for FfiError {
 
 impl From<RecoveryError> for FfiError {
     fn from(err: RecoveryError) -> Self {
-        // An auth failure under an escrow call keeps its auth identity so callers can trigger
-        // interactive re-authentication, exactly as the upload mapping does.
-        if let RecoveryError::Auth(auth) = err {
-            return auth.into();
+        // A refused credential under an escrow call keeps its auth identity so callers can
+        // trigger interactive re-authentication, exactly as the upload mapping does. Before
+        // the escrow calls moved onto the generated client this arrived as
+        // `RecoveryError::Auth`; routing `Unauthorized` here is what stops the move from
+        // silently downgrading "sign in again" into "escrow failed".
+        if let RecoveryError::Unauthorized { code, detail } = err {
+            return Self::Auth {
+                code,
+                message: detail,
+            };
+        }
+        // A malformed argument is the caller's, not the escrow surface's.
+        if let RecoveryError::InvalidBaseUrl { .. } = err {
+            return Self::InvalidArgument {
+                message: err.to_string(),
+            };
         }
         Self::Escrow {
+            code: err.error_code().map(str::to_owned),
             message: err.to_string(),
         }
     }
@@ -758,7 +775,7 @@ impl FfiSession {
         Ok(page.into())
     }
 
-    /// Store or replace this account's **master-key escrow blob** (`PUT /backup/escrow`).
+    /// Store or replace this account's **master-key escrow blob** (`PUT /v1/auth/escrow`).
     /// `blob` is the opaque canonical CBOR
     /// [`FfiWorkspace::escrow_blob`](FfiWorkspace::escrow_blob) minted — the master key itself
     /// never crosses this boundary in either direction.
@@ -767,26 +784,35 @@ impl FfiSession {
     /// secret a rotation retired unwraps nothing.
     ///
     /// `api_base_url` is the API root the session authenticates against (the per-call endpoint
-    /// convention this surface already uses for `sync_pull`).
+    /// convention this surface already uses for `sync_pull`). A URL operation paths cannot hang
+    /// off is [`FfiError::InvalidArgument`]; a refused credential is [`FfiError::Auth`], so a
+    /// caller re-authenticates rather than retrying; everything else is
+    /// [`FfiError::Escrow`] with the server's `error.escrow.*` code when it sent one.
     pub async fn escrow_put(&self, api_base_url: String, blob: Vec<u8>) -> Result<(), FfiError> {
         let blob =
             capsule_core::cbor::from_slice(&blob).map_err(|e| FfiError::InvalidArgument {
                 message: format!("escrow blob is not a canonical WrappedSecret: {e}"),
             })?;
-        RecoveryClient::new(self.session.clone(), &api_base_url)
+        RecoveryClient::new(self.session.clone(), &api_base_url)?
             .store_escrow(&blob)
             .await?;
         Ok(())
     }
 
-    /// Fetch this account's escrow blob (`GET /backup/escrow`) as opaque canonical CBOR — the
+    /// Fetch this account's escrow blob (`GET /v1/auth/escrow`) as opaque canonical CBOR — the
     /// bytes [`FfiWorkspace::verify_escrow_blob`](FfiWorkspace::verify_escrow_blob) checks and
-    /// a recovery flow unwraps. Fails with an `Escrow` error when no escrow is enrolled yet.
+    /// a recovery flow unwraps.
+    ///
+    /// No escrow enrolled yet is [`FfiError::Escrow`] carrying `error.escrow.not_stored` — the
+    /// code that separates "set up a recovery key" from "we could not read the one you have".
+    /// A refused credential is [`FfiError::Auth`].
     pub async fn escrow_get(&self, api_base_url: String) -> Result<Vec<u8>, FfiError> {
-        let cache = RecoveryClient::new(self.session.clone(), &api_base_url)
+        let cache = RecoveryClient::new(self.session.clone(), &api_base_url)?
             .fetch_escrow()
             .await?;
         capsule_core::cbor::to_canonical_vec(cache.blob()).map_err(|e| FfiError::Escrow {
+            // A local encode failure is ours, not the server's: no catalog code applies.
+            code: None,
             message: format!("encoding the fetched escrow blob failed: {e}"),
         })
     }
