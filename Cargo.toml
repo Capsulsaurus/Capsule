@@ -9,6 +9,7 @@ members = [
     "capsule-sdk",
     "capsule-wasm",
     "capsule-server",
+    "capsule-server/migration",
     "capsule-wire",
     "xtask",
 ]
@@ -23,6 +24,7 @@ default-members = [
     "capsule-i18n",
     "capsule-sdk",
     "capsule-server",
+    "capsule-server/migration",
     "capsule-wire",
 ]
 resolver = "3"

@@ -52,12 +52,36 @@ use super::upload::{
 };
 use super::{StoreError, StoreFuture, deadline};
 
-/// The six stores under test, plus the one thing a suite cannot do through a port: move time.
+/// The durable device-cohort map, on its own.
 ///
-/// `advance` is the seam that keeps the suite backend-agnostic. The deterministic double
-/// advances a manual clock; a Valkey- or Postgres-backed harness sleeps, or resets its stores
-/// with a lifetime short enough to wait out. Either way the cases below are identical.
-pub trait Harness: Send + Sync {
+/// Split out of [`Harness`] because [`CohortStore`] is the one port in this module that is
+/// **not** Valkey's. Everything else here is volatile TTL state — sessions, upload progress, four
+/// ceremonies — and the cohort map deliberately outlives all of it: a cohort becomes worth
+/// knowing exactly when the sessions that carried it have expired. Its production adapter is
+/// therefore Postgres (#402) while the other five are Valkey's (#403), and a Postgres-backed
+/// harness that had to implement `auth()`, `uploads()` and three ceremony stores to run four
+/// cohort cases would have to invent five adapters it will never have.
+///
+/// `advance` rides along rather than staying on [`Harness`], for the same reason: a cohort case
+/// asserts the map does *not* expire, and a suite that could not move time could not assert it.
+pub trait CohortHarness: Send + Sync {
+    /// The durable device-cohort map under test.
+    fn cohorts(&self) -> &dyn CohortStore;
+
+    /// Move every store in this harness `by` forward in its own time.
+    ///
+    /// The seam that keeps the suite backend-agnostic. The deterministic double advances a
+    /// manual clock; a Valkey- or Postgres-backed harness sleeps, or resets its stores with a
+    /// lifetime short enough to wait out — and for a store with no TTL at all it is legitimately
+    /// a no-op, because there is nothing to move.
+    fn advance(&self, by: SignedDuration) -> StoreFuture<'_, ()>;
+}
+
+/// The five volatile stores under test, plus the time seam it inherits.
+///
+/// `Harness` extends [`CohortHarness`] rather than restating `advance`, so one deterministic
+/// double still implements both and [`run_all`] still runs every case in this module against it.
+pub trait Harness: CohortHarness {
     /// The authentication-state store under test.
     fn auth(&self) -> &dyn AuthStateStore;
     /// The upload-session store under test.
@@ -68,11 +92,6 @@ pub trait Harness: Send + Sync {
     fn enrollments(&self) -> &dyn EnrollmentStore;
     /// The enrollment relay-channel store under test.
     fn channels(&self) -> &dyn ChannelStore;
-    /// The durable device-cohort map under test.
-    fn cohorts(&self) -> &dyn CohortStore;
-
-    /// Move every store in this harness `by` forward in its own time.
-    fn advance(&self, by: SignedDuration) -> StoreFuture<'_, ()>;
 }
 
 /// Unwrap a store result, failing with the operation that was expected to work.
@@ -1242,7 +1261,7 @@ pub async fn closing_a_channel_drops_both_mailboxes(h: &dyn Harness) {
 // -------------------------------------------------------------------------------------------
 
 /// A cohort is a fact about a device, not an event: seeing it twice is one row.
-pub async fn observing_a_cohort_twice_is_one_row_that_moves_last_seen(h: &dyn Harness) {
+pub async fn observing_a_cohort_twice_is_one_row_that_moves_last_seen(h: &dyn CohortHarness) {
     let user = UserId::new("cohort-user-1");
     let at = Timestamp::UNIX_EPOCH;
 
@@ -1272,7 +1291,7 @@ pub async fn observing_a_cohort_twice_is_one_row_that_moves_last_seen(h: &dyn Ha
 }
 
 /// Cohorts are listed oldest first sighting first, and the order is total.
-pub async fn cohorts_are_listed_oldest_first(h: &dyn Harness) {
+pub async fn cohorts_are_listed_oldest_first(h: &dyn CohortHarness) {
     let user = UserId::new("cohort-user-2");
     let base = Timestamp::UNIX_EPOCH;
     for (hash, hours) in [
@@ -1298,7 +1317,7 @@ pub async fn cohorts_are_listed_oldest_first(h: &dyn Harness) {
 }
 
 /// A cohort is scoped to its account, and the hash folds the account in besides.
-pub async fn a_cohort_is_scoped_to_its_account(h: &dyn Harness) {
+pub async fn a_cohort_is_scoped_to_its_account(h: &dyn CohortHarness) {
     let mine = UserId::new("cohort-user-3");
     let theirs = UserId::new("cohort-user-4");
     ok(
@@ -1316,7 +1335,7 @@ pub async fn a_cohort_is_scoped_to_its_account(h: &dyn Harness) {
 }
 
 /// The cohort map does not expire with the sessions that carried it.
-pub async fn the_cohort_map_does_not_expire(h: &dyn Harness) {
+pub async fn the_cohort_map_does_not_expire(h: &dyn CohortHarness) {
     // The one store in this module with no TTL, and deliberately: a cohort is worth recording
     // precisely because it outlives the sessions that named it. A map that expired with them
     // would forget exactly when "have I seen this device before?" starts being worth asking.
@@ -1378,6 +1397,16 @@ pub async fn run_all(h: &dyn Harness) {
     relaying_requires_a_live_channel(h).await;
     relayed_payloads_drain_in_order_and_by_direction(h).await;
     closing_a_channel_drops_both_mailboxes(h).await;
+
+    run_all_cohorts(h).await;
+}
+
+/// Run every [`CohortHarness`] case above, in order.
+///
+/// A second entry point rather than a subset of [`run_all`], because the cohort map's adapter is
+/// a different backend from the other five stores' — so the two suites are run against different
+/// harnesses, and only the deterministic double is both.
+pub async fn run_all_cohorts(h: &dyn CohortHarness) {
     observing_a_cohort_twice_is_one_row_that_moves_last_seen(h).await;
     cohorts_are_listed_oldest_first(h).await;
     a_cohort_is_scoped_to_its_account(h).await;

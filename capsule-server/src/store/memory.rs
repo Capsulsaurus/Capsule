@@ -1109,6 +1109,19 @@ impl Default for InMemoryStores {
     }
 }
 
+impl super::conformance::CohortHarness for InMemoryStores {
+    fn cohorts(&self) -> &dyn CohortStore {
+        &self.cohorts
+    }
+
+    fn advance(&self, by: SignedDuration) -> StoreFuture<'_, ()> {
+        Box::pin(async move {
+            self.clock.advance(by);
+            Ok::<(), StoreError>(())
+        })
+    }
+}
+
 impl super::conformance::Harness for InMemoryStores {
     fn auth(&self) -> &dyn AuthStateStore {
         &self.auth
@@ -1126,19 +1139,8 @@ impl super::conformance::Harness for InMemoryStores {
         &self.enrollments
     }
 
-    fn cohorts(&self) -> &dyn CohortStore {
-        &self.cohorts
-    }
-
     fn channels(&self) -> &dyn ChannelStore {
         &self.channels
-    }
-
-    fn advance(&self, by: SignedDuration) -> StoreFuture<'_, ()> {
-        Box::pin(async move {
-            self.clock.advance(by);
-            Ok::<(), StoreError>(())
-        })
     }
 }
 
@@ -1198,6 +1200,30 @@ mod tests {
         relaying_requires_a_live_channel,
         relayed_payloads_drain_in_order_and_by_direction,
         closing_a_channel_drops_both_mailboxes,
+    }
+
+    /// The same, for the cases that take a [`conformance::CohortHarness`].
+    ///
+    /// A second macro because the cohort map is a different port with a different production
+    /// backend, so its cases take the narrower harness — and one `#[tokio::test]` each here
+    /// rather than only inside `run_all`, which is what makes a cohort failure name the property
+    /// that broke.
+    macro_rules! cohort_conformance_cases {
+        ($($case:ident),+ $(,)?) => {
+            $(
+                #[tokio::test]
+                async fn $case() {
+                    conformance::$case(&harness()).await;
+                }
+            )+
+        };
+    }
+
+    cohort_conformance_cases! {
+        observing_a_cohort_twice_is_one_row_that_moves_last_seen,
+        cohorts_are_listed_oldest_first,
+        a_cohort_is_scoped_to_its_account,
+        the_cohort_map_does_not_expire,
     }
 
     /// The whole suite, in one pass on one harness.

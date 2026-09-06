@@ -21,7 +21,7 @@ Mechanically, every Rust version is pinned once in the root `Cargo.toml` `[works
 
 | Domain | Canonical choice | Scope | Exceptions |
 | --- | --- | --- | --- |
-| Datetime | `jiff` | All domain logic — parsing, formatting, arithmetic. Signed and wire formats carry RFC 3339 strings or integer epochs, never a datetime library type, so the pin never touches serialized bytes. | `chrono` remains **only** as the sea-orm column type in `capsule-cli/entity`, converted to jiff at the entity boundary, and in non-buildable review-only server code under `legacy-review/`. (The last buildable non-entity holdout, the frozen GraphQL crate with its async-graphql `chrono` scalars, was removed with slice S-G1.) |
+| Datetime | `jiff` | All domain logic — parsing, formatting, arithmetic. Signed and wire formats carry RFC 3339 strings or integer epochs, never a datetime library type, so the pin never touches serialized bytes. | `chrono` remains **only** as the sea-orm column type in `capsule-cli/entity`, converted to jiff at the entity boundary; in `capsule-server-migration`, which cannot avoid it because `sea-orm-migration` pulls sea-orm with its default `with-chrono` feature — which is precisely why `capsule-server` takes that crate as a **dev-dependency only**; and in non-buildable review-only server code under `legacy-review/`. (The last buildable non-entity holdout, the frozen GraphQL crate with its async-graphql `chrono` scalars, was removed with slice S-G1.) |
 | Error handling | `thiserror` in libraries; `eyre` + `color-eyre` in binaries | Libraries define typed error enums; binaries (CLI, server `main`, xtask) wrap them in reports. | `anyhow` is not used. |
 | Logging | `tracing` (facade) + `tracing-subscriber` (binaries) | All crates; structured fields and hot-path spans per the traceability rule in `AGENTS.md`. The `log` facade is forbidden in new code. | Remaining `log::` call sites in `capsule-core` / `capsule-core-ffi` migrate in slice S-F6. |
 | TLS implementation | `rustls` (with `tokio-rustls` as the async adapter) | Wherever Capsule code holds a TLS stack: the SDK's HTTP client, [LAN-peering](/design/peering/) mutual TLS (`tokio-rustls`), server egress, sea-orm's `runtime-tokio-rustls`. The `ring` provider is pinned for the peering stack so it never depends on an ambiguous process-default `CryptoProvider`. Never native-tls/openssl. | **None.** The one exception this row used to carry — `openssl` as a transitive dependency of `webauthn-rs` attestation-certificate verification — goes with passkeys (`S-C56`) and with the `capsule-server` tree that holds them. |
@@ -80,4 +80,14 @@ Bindings likewise ride the uniffi strategy (S-F1); JNA loads the produced librar
 
 ## Validation
 
-The pins are enforced structurally, not by convention: `cargo tree -i chrono -e no-dev` must resolve to `capsule-cli/entity` and sea-orm internals only; `cargo tree -i thumbhash` must resolve to nothing and `rg thumbhash capsule-web` must be empty (the architecture check's retired-dependency list holds the Rust half); `rg 'log::'` outside the S-F6 scope, and any `openssl`/`native-tls` edge outside webauthn-rs, are review-blocking. The per-platform `mise run check-*` gates run the pinned toolchains.
+The pins are enforced structurally, not by convention.
+
+**The chrono gate is per package**, and the distinction is not pedantry. Cargo unifies features across the packages a workspace build selects, and `capsule-cli` inherits sea-orm *with* its defaults — so a workspace-wide `cargo tree -i chrono -e no-dev` lists every member that depends on sea-orm at all, whatever that member's own manifest asks for, and no edit to `capsule-server` can change that while it stays true of `capsule-cli`. The command whose answer is a decision is therefore
+
+```sh
+cargo tree -p <crate> -i chrono -e no-dev   # must print nothing
+```
+
+for every crate outside the exceptions above, and `mise run architecture-check` runs it (`xtask`'s `check_chrono_isolation`) rather than leaving it to be typed. The accepted holders are `capsule-cli/entity` and `capsule-server-migration`; the check asserts the second **still** reaches chrono, so the exemption cannot outlive its reason, and it fails closed when `cargo tree` itself fails.
+
+The rest: `cargo tree -i thumbhash` must resolve to nothing and `rg thumbhash capsule-web` must be empty (the architecture check's retired-dependency list holds the Rust half); `rg 'log::'` outside the S-F6 scope, and any `openssl`/`native-tls` edge outside webauthn-rs, are review-blocking. The per-platform `mise run check-*` gates run the pinned toolchains.

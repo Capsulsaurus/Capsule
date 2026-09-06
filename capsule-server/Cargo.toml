@@ -131,6 +131,29 @@ argon2 = { workspace = true }
 # their own copy of the config loader and the adapter seam.
 clap = { version = "4.6.1", features = ["derive"] }
 color-eyre = "0.6.5"
+# The Postgres adapters for the durable ports (#402). `default-features = false` is
+# load-bearing rather than tidy: sea-orm's defaults include `with-chrono`, and
+# design/dependencies.md makes `cargo tree -i chrono -e no-dev` a review-blocking gate that must
+# keep resolving to `capsule-cli/entity` and sea-orm's own internals. Without a datetime feature
+# there is no Rust binding for `TIMESTAMPTZ` at all, which is why every instant in the server's
+# schema is a `BIGINT` of epoch microseconds converted in `postgres::time`.
+#
+# Three features and no more: `macros` for the `FromQueryResult` derive the adapters' private row
+# structs use, `sqlx-postgres` for the driver, `runtime-tokio-rustls` because the workspace's TLS
+# rule is rustls only. Already a workspace dependency with a row in design/dependencies.md (ORM),
+# consumed until now only by `capsule-cli/entity`.
+#
+# Spelled out rather than `workspace = true`, and only because cargo forbids the one thing this
+# needs: a member may add features to an inherited dependency but may not turn the workspace's
+# defaults **off**. `capsule-cli` and `capsule-cli/entity` inherit sea-orm *with* its defaults —
+# that is exactly why the chrono gate names `capsule-cli/entity` — so flipping the workspace
+# entry would change their build. The version is the workspace pin, restated; keep the two in
+# step when sea-orm is repinned.
+sea-orm = { version = "1.1.20", default-features = false, features = [
+  "macros",
+  "sqlx-postgres",
+  "runtime-tokio-rustls",
+] }
 # The log stream the binary installs (`cli::install_tracing`). `env-filter` for `RUST_LOG` and
 # `json` for the one-object-per-event rendering a log shipper wants; both are on in the workspace
 # pin, and the crate already has a row in design/dependencies.md. Written to **stderr**, so
@@ -138,6 +161,22 @@ color-eyre = "0.6.5"
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
+# The server's schema, applied by the Postgres conformance harness. A **dev-dependency only**,
+# and that is the decision rather than an oversight: `sea-orm-migration` pulls sea-orm with its
+# default `with-chrono` feature, so a normal dependency here would break the
+# `cargo tree -i chrono -e no-dev` gate at design/dependencies.md. The cost is that `serve`
+# cannot migrate — it reads `seaql_migrations` and refuses to boot on a mismatch
+# (`postgres::assert_schema_current`), which is also the safer rollout: a server that migrates on
+# start migrates once per replica during a rolling deploy.
+capsule-server-migration = { path = "migration" }
+# The Postgres container the conformance suites run against, behind `CAPSULE_TEST_POSTGRES=1`.
+# Both crates were pinned at the workspace and consumed by nothing — `xtask`'s
+# `PLANNED_WORKSPACE_DEPENDENCIES` sanctioned them as planned because "no test starts a
+# container yet". These are the tests that start one, so the two entries leave that list with
+# this change. Dev-only: the served binary links neither.
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }
+
 # `tests/binary.rs` gives the spawned server a blob root of its own, and deletes it afterwards.
 # Already the workspace's scratch-directory crate (`capsule-core`, `capsule-sdk`,
 # `capsule-core-ffi` all dev-depend on it) and already in the lock file.
