@@ -535,6 +535,11 @@ impl FederatedAccounts for InMemoryAccounts {
     /// Shares the password directory's rows, as the Postgres adapter will: an asserted address a
     /// password account holds is `AddressTaken`, and a created federated account is one nothing
     /// can sign into with a password, because no password row exists for it.
+    ///
+    /// This double encodes the contract #460 owes — one account table, the cross-directory
+    /// `409`, a null credential `authenticate` refuses — and not behaviour the server ships:
+    /// the development profile's `InMemoryFederatedAccounts` holds rows of its own. Only a
+    /// **verified** address is compared, as the shipped adapter does.
     fn resolve_or_create<'a>(
         &'a self,
         identity: &'a VerifiedIdentity,
@@ -556,6 +561,7 @@ impl FederatedAccounts for InMemoryAccounts {
                 return Ok(FederatedLink::Linked(existing.clone()));
             }
             if let Some(email) = &identity.email
+                && identity.email_verified
                 && self.accounts().contains_key(email)
             {
                 return Ok(FederatedLink::AddressTaken);

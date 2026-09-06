@@ -631,6 +631,23 @@ async fn an_address_another_account_holds_is_refused_never_linked() {
         .await
         .expect("store answers");
     assert!(open.is_empty());
+
+    // The same address asserted **unverified** is not a claim on anything: the identity gets
+    // an account of its own rather than a refusal, so an unverified sign-up at the provider
+    // cannot hold the address's owner out.
+    fixture.idp.set_identity(VerifiedIdentity {
+        issuer: "https://idp.test".to_owned(),
+        subject: "unverified-claimant".to_owned(),
+        email: Some(support::EMAIL.to_owned()),
+        email_verified: false,
+    });
+    let begun = authorize(&fixture, REDIRECT).await;
+    callback(
+        &fixture,
+        json!({ "state": begun["state"], "code": GOOD_CODE }),
+    )
+    .await
+    .assert_status(StatusCode::OK);
     fixture.client.assert_conformance();
 }
 

@@ -28,6 +28,17 @@
 //! it adds no new oracle. Deliberately linking an existing account to a provider identity is a
 //! separate, authenticated ceremony, and is out of scope.
 //!
+//! # Only a verified address is reserved, or compared
+//!
+//! An address the provider asserts **without** `email_verified` is one anybody at that provider
+//! could have typed. Reserving it would let a person register an unverified address at the
+//! provider and thereby block the address's real owner from ever signing in here — a targeted
+//! denial of service costing one sign-up — so an unverified address is carried on the identity
+//! and otherwise ignored: it reserves nothing and collides with nothing. That makes
+//! [`VerifiedIdentity::email_verified`] the one production reader of the claim. It is the
+//! interim rule until #460 folds federated rows into the one account table, where the address
+//! is the verified one a password account registered with.
+//!
 //! # The in-memory adapter holds its own rows
 //!
 //! [`InMemoryFederatedAccounts`] is the development profile's adapter and it does **not** share
@@ -149,14 +160,19 @@ impl FederatedAccounts for InMemoryFederatedAccounts {
             if let Some(row) = held.links.get(&key) {
                 return Ok(FederatedLink::Linked(row.user_id.clone()));
             }
-            if let Some(email) = &identity.email
+            // Verified addresses only, both ways: an unverified one neither blocks nor reserves.
+            let verified_address = identity
+                .email
+                .as_deref()
+                .filter(|_| identity.email_verified);
+            if let Some(email) = verified_address
                 && held.addresses.contains_key(email)
             {
                 tracing::info!(issuer = %identity.issuer, "a federated sign-in asserted an address another account holds");
                 return Ok(FederatedLink::AddressTaken);
             }
-            if let Some(email) = &identity.email {
-                held.addresses.insert(email.clone(), user.clone());
+            if let Some(email) = verified_address {
+                held.addresses.insert(email.to_owned(), user.clone());
             }
             held.links.insert(
                 key,
@@ -261,6 +277,58 @@ mod tests {
                 .resolve_or_create(
                     &identity("sub-2", Some("a@example.test")),
                     &user("3"),
+                    Timestamp::UNIX_EPOCH,
+                )
+                .await
+                .expect("answers"),
+            FederatedLink::AddressTaken
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unverified_address_neither_blocks_nor_reserves() {
+        // A person who registers somebody else's address at the provider, unverified, must not
+        // be able to lock that person out of signing in here.
+        let accounts = InMemoryFederatedAccounts::new();
+        let mut squatter = identity("squatter", Some("owner@example.test"));
+        squatter.email_verified = false;
+        assert_eq!(
+            accounts
+                .resolve_or_create(&squatter, &user("1"), Timestamp::UNIX_EPOCH)
+                .await
+                .expect("answers"),
+            FederatedLink::Created(user("1")),
+            "the squatter gets an account of their own"
+        );
+        // The real owner, verified, is not blocked.
+        assert_eq!(
+            accounts
+                .resolve_or_create(
+                    &identity("owner", Some("owner@example.test")),
+                    &user("2"),
+                    Timestamp::UNIX_EPOCH,
+                )
+                .await
+                .expect("answers"),
+            FederatedLink::Created(user("2"))
+        );
+        // And the reserved, verified address now blocks a *different* unverified claimant? No:
+        // an unverified claim is never compared either, so it is created rather than refused.
+        let mut another = identity("another", Some("owner@example.test"));
+        another.email_verified = false;
+        assert_eq!(
+            accounts
+                .resolve_or_create(&another, &user("3"), Timestamp::UNIX_EPOCH)
+                .await
+                .expect("answers"),
+            FederatedLink::Created(user("3"))
+        );
+        // A verified claim on the reserved address is what the 409 exists for.
+        assert_eq!(
+            accounts
+                .resolve_or_create(
+                    &identity("impersonator", Some("owner@example.test")),
+                    &user("4"),
                     Timestamp::UNIX_EPOCH,
                 )
                 .await
