@@ -11,8 +11,13 @@
 //!   provider claiming to be somebody else, and honouring its endpoints would send the client
 //!   secret and the authorization code wherever it said.
 //! - **Every endpoint must be `https`**, unless the issuer itself is a loopback address — the
-//!   development and test carve-out, stated here rather than left to a flag. A token endpoint
-//!   reached over plain HTTP is a client secret and an ID token on the wire in the clear.
+//!   development and test carve-out, stated here rather than left to a flag — and under that
+//!   carve-out every plain-HTTP endpoint must **itself** be loopback: a loopback issuer whose
+//!   document names an off-box `token_endpoint` would send the code and the verifier across the
+//!   network in the clear. A token endpoint reached over plain HTTP is a client secret and an ID
+//!   token on the wire in the clear. `localhost` is not loopback here, for the reason
+//!   [`RedirectPolicy`](super::provider::RedirectPolicy) refuses it: a resolver can be made to
+//!   send it elsewhere (RFC 8252 §8.3).
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -84,14 +89,13 @@ pub fn discovery_url(issuer: &str) -> String {
 }
 
 /// Whether `issuer` is served from this machine — the one case plain HTTP is admitted.
+///
+/// The loopback IP literals only, never `localhost` (RFC 8252 §8.3): a name is resolved, and
+/// a resolver can be made to answer with something that is not this machine.
 #[must_use]
 pub fn is_loopback_issuer(issuer: &str) -> bool {
     reqwest::Url::parse(issuer).is_ok_and(|url| {
-        url.scheme() == "http"
-            && matches!(
-                url.host_str(),
-                Some("127.0.0.1" | "[::1]" | "::1" | "localhost")
-            )
+        url.scheme() == "http" && matches!(url.host_str(), Some("127.0.0.1" | "[::1]" | "::1"))
     })
 }
 
@@ -102,25 +106,27 @@ pub fn is_loopback_issuer(issuer: &str) -> bool {
 /// # Errors
 ///
 /// [`DiscoveryError::IssuerMismatch`] if the document is somebody else's;
-/// [`DiscoveryError::InsecureEndpoint`] for a plain-HTTP endpoint on a non-loopback issuer.
+/// [`DiscoveryError::InsecureEndpoint`] for an endpoint that is neither `https` nor — under a
+/// loopback issuer — itself loopback `http`.
 pub fn admit(metadata: ProviderMetadata, issuer: &str) -> Result<ProviderMetadata, DiscoveryError> {
     if metadata.issuer != issuer {
         return Err(DiscoveryError::IssuerMismatch {
-            found: metadata.issuer,
+            found: super::claims::bounded(&metadata.issuer),
         });
     }
-    if !is_loopback_issuer(issuer) {
-        for (endpoint, url) in [
-            ("authorization_endpoint", &metadata.authorization_endpoint),
-            ("token_endpoint", &metadata.token_endpoint),
-            ("jwks_uri", &metadata.jwks_uri),
-        ] {
-            if !url.starts_with("https://") {
-                return Err(DiscoveryError::InsecureEndpoint {
-                    endpoint,
-                    url: url.clone(),
-                });
-            }
+    let loopback_issuer = is_loopback_issuer(issuer);
+    for (endpoint, url) in [
+        ("authorization_endpoint", &metadata.authorization_endpoint),
+        ("token_endpoint", &metadata.token_endpoint),
+        ("jwks_uri", &metadata.jwks_uri),
+    ] {
+        let secure = url.starts_with("https://");
+        let loopback = loopback_issuer && is_loopback_issuer(url);
+        if !secure && !loopback {
+            return Err(DiscoveryError::InsecureEndpoint {
+                endpoint,
+                url: super::claims::bounded(url),
+            });
         }
     }
     Ok(metadata)
@@ -257,6 +263,32 @@ mod tests {
     }
 
     #[test]
+    fn an_off_box_endpoint_under_a_loopback_issuer_is_refused() {
+        // The carve-out is for a provider on this machine, not for a provider on this machine
+        // that sends the code somewhere else in the clear.
+        let issuer = "http://127.0.0.1:5556/dex";
+        let mut off_box = metadata(issuer, "http");
+        off_box.authorization_endpoint = format!("{issuer}/auth");
+        off_box.jwks_uri = format!("{issuer}/keys");
+        off_box.token_endpoint = "http://idp.example.test/token".to_owned();
+        assert!(matches!(
+            admit(off_box, issuer).expect_err("refused"),
+            DiscoveryError::InsecureEndpoint {
+                endpoint: "token_endpoint",
+                ..
+            }
+        ));
+        let mut named = metadata(issuer, "http");
+        named.authorization_endpoint = format!("{issuer}/auth");
+        named.jwks_uri = format!("{issuer}/keys");
+        named.token_endpoint = "http://localhost:5556/dex/token".to_owned();
+        assert!(
+            admit(named, issuer).is_err(),
+            "localhost is not loopback either"
+        );
+    }
+
+    #[test]
     fn plain_http_endpoints_are_refused_unless_the_issuer_is_loopback() {
         let error = admit(
             metadata("https://idp.example.test", "http"),
@@ -271,14 +303,22 @@ mod tests {
             }
         ));
 
-        for issuer in [
-            "http://127.0.0.1:5556/dex",
-            "http://[::1]:5556",
-            "http://localhost:5556",
-        ] {
+        for issuer in ["http://127.0.0.1:5556/dex", "http://[::1]:5556"] {
             assert!(is_loopback_issuer(issuer), "{issuer}");
-            assert!(admit(metadata(issuer, "http"), issuer).is_ok(), "{issuer}");
+            // Loopback endpoints under a loopback issuer are the carve-out; https anywhere is
+            // still admitted.
+            let loopback = ProviderMetadata {
+                issuer: issuer.to_owned(),
+                authorization_endpoint: format!("{issuer}/auth"),
+                token_endpoint: format!("{issuer}/token"),
+                jwks_uri: "https://keys.example.test/jwks".to_owned(),
+            };
+            assert!(admit(loopback, issuer).is_ok(), "{issuer}");
         }
+        assert!(
+            !is_loopback_issuer("http://localhost:5556"),
+            "localhost is a name a resolver answers for; RFC 8252 §8.3"
+        );
         assert!(
             !is_loopback_issuer("https://127.0.0.1"),
             "https is not the carve-out"

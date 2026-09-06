@@ -8,11 +8,20 @@
 //! key ids cannot make this server hammer the provider's JWKS endpoint, and a burst of
 //! suppressed refetches in the log is a probe worth reading about.
 //!
-//! # Stale rather than empty
+//! # And a ceiling, so a revoked key stops being honoured
 //!
-//! A failed refresh keeps the previous set. A key set that was good a minute ago is still the
-//! provider's — the failure mode to avoid is the one where a transient network fault turns every
-//! sign-in into a `500`.
+//! Evidence only reaches this cache when a token names a key it does not hold. A key the
+//! provider *revoked* never generates that evidence — every token it signed still names a `kid`
+//! the cache knows — so the cache would keep honouring it until something else rotated. The
+//! ceiling ([`MAX_AGE`]) closes that: a set older than an hour is refetched on its next read,
+//! and a key that left the provider's set stops verifying within the hour.
+//!
+//! # Stale rather than empty, inside the ceiling
+//!
+//! A failed evidence-driven refresh keeps the previous set. A key set that was good a minute ago
+//! is still the provider's — the failure mode to avoid is the one where a transient network
+//! fault turns every sign-in into a `500`. Past the ceiling the failure is returned instead: a
+//! set that could not be confirmed for an hour is not one to keep verifying against.
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -23,6 +32,11 @@ use crate::store::Clock;
 
 /// The shortest interval between two refetches of the key set.
 pub const REFRESH_FLOOR: SignedDuration = SignedDuration::from_secs(60);
+
+/// The longest a fetched key set is honoured before it is read again.
+///
+/// An hour: the bound on how long a key the provider revoked keeps verifying here.
+pub const MAX_AGE: SignedDuration = SignedDuration::from_hours(1);
 
 /// Why the key set could not be fetched.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -78,20 +92,26 @@ impl KeyCache {
         self.cached.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The current key set, fetched from `jwks_uri` if none is cached.
+    /// The current key set, fetched from `jwks_uri` if none is cached or the cached one is
+    /// older than [`MAX_AGE`].
     ///
-    /// No age-based expiry: a key set is refreshed on evidence ([`Self::refresh`]), not on a
-    /// timer, because the only observable fact about a rotation is a token the cached set
-    /// cannot verify.
+    /// Rotation is otherwise detected on evidence ([`Self::refresh`]) rather than on a timer,
+    /// because the only observable fact about a rotation is a token the cached set cannot
+    /// verify; the ceiling exists for the revocation no token ever announces.
     ///
     /// # Errors
     ///
-    /// The fetch's [`KeyError`] if the cache was empty and the fetch failed.
+    /// The fetch's [`KeyError`] if a fetch was needed and failed.
     pub async fn current(&self, jwks_uri: &str) -> Result<Arc<JwkSet>, KeyError> {
-        if let Some(cached) = self.slot().as_ref() {
+        let now = self.clock.now();
+        if let Some(cached) = self.slot().as_ref()
+            && now.duration_since(cached.fetched_at) < MAX_AGE
+        {
             return Ok(Arc::clone(&cached.keys));
         }
-        tracing::info!("fetching the provider's key set for the first time");
+        tracing::info!(
+            "fetching the provider's key set: none is cached, or it reached its ceiling"
+        );
         self.fetch_and_store(jwks_uri).await
     }
 

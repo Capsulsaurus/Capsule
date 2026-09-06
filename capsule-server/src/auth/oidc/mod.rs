@@ -39,8 +39,8 @@ use std::sync::Arc;
 
 pub use self::accounts::{FederatedAccounts, FederatedLink, InMemoryFederatedAccounts};
 pub use self::claims::{
-    ALLOWED_ALGORITHMS, CLOCK_SKEW_SECONDS, ClaimRejection, Expectations, MAX_SUBJECT_LENGTH,
-    VerifiedIdentity, verify_id_token,
+    ALLOWED_ALGORITHMS, CLOCK_SKEW_SECONDS, ClaimRejection, Expectations, MAX_QUOTED_BYTES,
+    MAX_SUBJECT_LENGTH, VerifiedIdentity, bounded, verify_id_token,
 };
 pub use self::provider::{
     AuthorizationRequest, ClientSecret, Disabled, HttpIdentityProvider, IdentityProvider,

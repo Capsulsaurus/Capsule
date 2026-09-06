@@ -300,9 +300,17 @@ async fn every_tampered_token_is_refused_with_its_own_reason() {
     let idp = MockIdp::start().await;
     let rp = relying_party(&idp, wall_clock());
 
+    idp.publish_oct_key("k-oct");
+
     /// Whether a rejection is the one a tamper should produce.
     type Expected = fn(&ClaimRejection) -> bool;
-    let cases: [(Tamper, Expected); 5] = [
+    let cases: [(Tamper, Expected); 7] = [
+        (Tamper::BadSignature, |r| {
+            matches!(r, ClaimRejection::Signature)
+        }),
+        (Tamper::OctKey, |r| {
+            matches!(r, ClaimRejection::UnusableKey { .. })
+        }),
         (
             Tamper::Issuer("https://somebody-else.test".to_owned()),
             |r| matches!(r, ClaimRejection::Issuer { .. }),
@@ -334,6 +342,31 @@ async fn every_tampered_token_is_refused_with_its_own_reason() {
             other => panic!("{tamper:?} was not refused as a token rejection: {other:?}"),
         }
     }
+}
+
+#[tokio::test]
+async fn a_key_set_older_than_an_hour_is_read_again_without_evidence() {
+    // A revoked key never produces the unknown-kid evidence; the ceiling is what retires it.
+    let idp = MockIdp::start().await;
+    let clock = wall_clock();
+    let rp = relying_party(&idp, clock.clone());
+
+    let first = begin(&rp).await;
+    let code = idp.grant(grant_for(&first, Tamper::None));
+    redeem(&rp, &first, &code).await.expect("verifies");
+    assert_eq!(idp.jwks_hits(), 1);
+
+    clock.advance(SignedDuration::from_mins(59));
+    let second = begin(&rp).await;
+    let code = idp.grant(grant_for(&second, Tamper::None));
+    redeem(&rp, &second, &code).await.expect("verifies");
+    assert_eq!(idp.jwks_hits(), 1, "inside the ceiling the set is trusted");
+
+    clock.advance(SignedDuration::from_mins(2));
+    let third = begin(&rp).await;
+    let code = idp.grant(grant_for(&third, Tamper::None));
+    redeem(&rp, &third, &code).await.expect("verifies");
+    assert_eq!(idp.jwks_hits(), 2, "past the ceiling it is read again");
 }
 
 #[tokio::test]

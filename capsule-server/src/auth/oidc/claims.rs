@@ -51,6 +51,26 @@ pub const CLOCK_SKEW_SECONDS: i64 = 60;
 /// that is not conforming, and an unbounded value is a column nothing sized.
 pub const MAX_SUBJECT_LENGTH: usize = 255;
 
+/// The most of a provider-supplied string a log line or an error will carry.
+///
+/// A token's `iss`, its `kid` and a token endpoint's `error_description` all come from the
+/// other side of the wire and all end up in a `WARN`. Bounded here, at construction, so a
+/// provider that answers with a megabyte cannot put a megabyte in the log.
+pub const MAX_QUOTED_BYTES: usize = 255;
+
+/// `text` cut to [`MAX_QUOTED_BYTES`] on a character boundary, with a marker when it was cut.
+#[must_use]
+pub fn bounded(text: &str) -> String {
+    if text.len() <= MAX_QUOTED_BYTES {
+        return text.to_owned();
+    }
+    let mut end = MAX_QUOTED_BYTES;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &text[..end])
+}
+
 /// What the relying party expects the token to say about itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Expectations {
@@ -96,6 +116,14 @@ pub enum ClaimRejection {
         /// The header's `alg`, as written.
         algorithm: String,
     },
+    /// The header carries a non-empty `crit` (RFC 7515 §4.1.11).
+    ///
+    /// `crit` names extensions the recipient **must** understand or reject the token. This
+    /// relying party understands none, so the only conforming answer is to refuse — and a
+    /// forger who could make the verifier skip a header it does not know would have exactly
+    /// the seam `crit` exists to close.
+    #[error("the ID token names critical header extensions this relying party does not implement")]
+    CriticalHeader,
     /// The header names a key the set does not hold.
     ///
     /// The one rejection a caller acts on rather than logs: it is what triggers a JWKS refetch,
@@ -130,7 +158,8 @@ pub enum ClaimRejection {
     /// `aud` does not contain this relying party.
     #[error("the ID token is not addressed to this relying party")]
     Audience,
-    /// `azp` is present and is not this relying party.
+    /// `azp` is present and is not this relying party — or `aud` names several audiences and
+    /// `azp` is absent, which OpenID Connect Core §3.1.3.7 rule 4 says it must not be.
     #[error("the ID token's authorized party is not this relying party")]
     AuthorizedParty,
     /// `exp` is in the past, beyond the skew.
@@ -217,6 +246,9 @@ pub fn verify_id_token(
             algorithm: format!("{:?}", header.alg),
         });
     }
+    if header.crit.as_ref().is_some_and(|crit| !crit.is_empty()) {
+        return Err(ClaimRejection::CriticalHeader);
+    }
 
     // A header without `kid` resolves only when the set holds exactly one key: a provider that
     // publishes several and names none has given the verifier nothing to choose on, and trying
@@ -227,7 +259,7 @@ pub fn verify_id_token(
         None => None,
     }
     .ok_or_else(|| ClaimRejection::UnknownKey {
-        kid: header.kid.clone(),
+        kid: header.kid.as_deref().map(bounded),
     })?;
     if matches!(jwk.algorithm, AlgorithmParameters::OctetKey(_)) {
         return Err(ClaimRejection::UnusableKey {
@@ -277,17 +309,20 @@ pub fn verify_id_token(
     let claims = decoded.claims;
 
     if claims.iss != expect.issuer {
-        return Err(ClaimRejection::Issuer { found: claims.iss });
+        return Err(ClaimRejection::Issuer {
+            found: bounded(&claims.iss),
+        });
     }
     if !claims.aud.contains(&expect.client_id) {
         return Err(ClaimRejection::Audience);
     }
-    if claims
-        .azp
-        .as_deref()
-        .is_some_and(|azp| azp != expect.client_id)
-    {
-        return Err(ClaimRejection::AuthorizedParty);
+    // Core §3.1.3.7: `azp`, when present, must be us; and when `aud` names several parties it
+    // must be present, or a token minted for a different client that merely lists us could be
+    // presented here.
+    match claims.azp.as_deref() {
+        Some(azp) if azp != expect.client_id => return Err(ClaimRejection::AuthorizedParty),
+        None if claims.aud.len() > 1 => return Err(ClaimRejection::AuthorizedParty),
+        _ => {}
     }
 
     let skew = jiff::SignedDuration::from_secs(CLOCK_SKEW_SECONDS);
@@ -584,6 +619,70 @@ mod tests {
             verify(&signer.sign(&claims), &keys(&[&signer])),
             Err(ClaimRejection::Audience)
         );
+    }
+
+    #[test]
+    fn several_audiences_without_an_authorized_party_are_refused() {
+        // Core §3.1.3.7 rule 4: a multi-audience token names who it was issued to, or it is
+        // a token for somebody else that merely lists us.
+        let signer = Signer::generate("k1");
+        let mut claims = good_claims();
+        claims["aud"] = json!([CLIENT, "another-client"]);
+        assert_eq!(
+            verify(&signer.sign(&claims), &keys(&[&signer])),
+            Err(ClaimRejection::AuthorizedParty)
+        );
+    }
+
+    #[test]
+    fn a_critical_header_extension_is_refused() {
+        let signer = Signer::generate("k1");
+        let mut header = Header::new(Algorithm::EdDSA);
+        header.kid = Some("k1".to_owned());
+        header.crit = Some(vec!["b64".to_owned()]);
+        let token = jsonwebtoken::encode(&header, &good_claims(), &signer.encoding).expect("signs");
+        assert_eq!(
+            verify(&token, &keys(&[&signer])),
+            Err(ClaimRejection::CriticalHeader)
+        );
+        // An empty `crit` is a malformed-but-harmless header and is not what the rule is about.
+        header.crit = Some(Vec::new());
+        let token = jsonwebtoken::encode(&header, &good_claims(), &signer.encoding).expect("signs");
+        assert!(verify(&token, &keys(&[&signer])).is_ok());
+    }
+
+    #[test]
+    fn provider_supplied_strings_are_bounded_before_they_reach_a_log() {
+        let signer = Signer::generate("k1");
+        let mut claims = good_claims();
+        let long = format!("https://{}.test", "x".repeat(2_000));
+        claims["iss"] = json!(long);
+        match verify(&signer.sign(&claims), &keys(&[&signer])) {
+            Err(ClaimRejection::Issuer { found }) => {
+                assert!(
+                    found.len() <= MAX_QUOTED_BYTES + '…'.len_utf8(),
+                    "{}",
+                    found.len()
+                );
+                assert!(found.ends_with('…'));
+            }
+            other => panic!("expected an issuer refusal, got {other:?}"),
+        }
+        let mut header = Header::new(Algorithm::EdDSA);
+        header.kid = Some("k".repeat(2_000));
+        let token = jsonwebtoken::encode(&header, &good_claims(), &signer.encoding).expect("signs");
+        match verify(&token, &keys(&[&signer])) {
+            Err(ClaimRejection::UnknownKey { kid: Some(kid) }) => {
+                assert!(kid.len() <= MAX_QUOTED_BYTES + '…'.len_utf8());
+            }
+            other => panic!("expected an unknown key, got {other:?}"),
+        }
+        assert_eq!(bounded("short"), "short");
+        // Cut on a character boundary: a multi-byte character straddling the limit is dropped
+        // whole rather than split.
+        let cut = bounded(&"é".repeat(200));
+        assert!(cut.len() <= MAX_QUOTED_BYTES + '…'.len_utf8());
+        assert!(std::str::from_utf8(cut.as_bytes()).is_ok());
     }
 
     #[test]

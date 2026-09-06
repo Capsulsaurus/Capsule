@@ -47,6 +47,11 @@ pub(crate) enum Tamper {
     UnpublishedKey,
     /// `alg: none`, unsigned.
     AlgNone,
+    /// Signed by the published key, then one byte of the signature flipped.
+    BadSignature,
+    /// Signed under the `kid` of a symmetric (`oct`) key the JWK Set publishes, with `alg`
+    /// EdDSA: the key resolves, and cannot verify anything.
+    OctKey,
 }
 
 /// A code the test issues for the relying party to redeem.
@@ -100,6 +105,8 @@ struct State {
     issuer: String,
     /// Every key the JWK Set publishes; the last one signs.
     published: Mutex<Vec<Signer>>,
+    /// Symmetric keys the JWK Set publishes beside them, by `kid`.
+    oct_keys: Mutex<Vec<String>>,
     grants: Mutex<BTreeMap<String, Grant>>,
     next_code: AtomicUsize,
     discovery_hits: AtomicUsize,
@@ -134,6 +141,7 @@ impl MockIdp {
         let state = Arc::new(State {
             issuer: format!("http://{addr}/idp"),
             published: Mutex::new(vec![Signer::generate("k1".to_owned())]),
+            oct_keys: Mutex::new(Vec::new()),
             grants: Mutex::new(BTreeMap::new()),
             next_code: AtomicUsize::new(1),
             discovery_hits: AtomicUsize::new(0),
@@ -176,6 +184,11 @@ impl MockIdp {
     /// Publish a new key and sign with it from now on.
     pub(crate) fn rotate(&self, kid: &str) {
         lock(&self.state.published).push(Signer::generate(kid.to_owned()));
+    }
+
+    /// Publish a symmetric key under `kid`, as a misconfigured provider might.
+    pub(crate) fn publish_oct_key(&self, kid: &str) {
+        lock(&self.state.oct_keys).push(kid.to_owned());
     }
 
     /// Whether the discovery endpoint answers at all.
@@ -247,7 +260,10 @@ fn token_response(
         "iss": state.issuer,
         "sub": grant.subject,
         "aud": CLIENT_ID,
-        "exp": now + 300,
+        // Three hours, not the five minutes a real provider mints: the relying party under
+        // test judges time by a clock the tests move forward by more than an hour to exercise
+        // the key-cache ceiling, and a five-minute token would expire under it.
+        "exp": now + 3 * 3600,
         "iat": now,
         "nonce": grant.nonce,
     });
@@ -256,7 +272,11 @@ fn token_response(
         claims["email_verified"] = serde_json::json!(true);
     }
     match &grant.tamper {
-        Tamper::None | Tamper::UnpublishedKey | Tamper::AlgNone => {}
+        Tamper::None
+        | Tamper::UnpublishedKey
+        | Tamper::AlgNone
+        | Tamper::BadSignature
+        | Tamper::OctKey => {}
         Tamper::Issuer(issuer) => claims["iss"] = serde_json::json!(issuer),
         Tamper::Audience(audience) => claims["aud"] = serde_json::json!(audience),
         Tamper::Expired => claims["exp"] = serde_json::json!(now - 3600),
@@ -274,6 +294,29 @@ fn token_response(
             let mut header = Header::new(Algorithm::EdDSA);
             header.kid = Some(rogue.kid.clone());
             jsonwebtoken::encode(&header, &claims, &rogue.encoding).expect("the key signs")
+        }
+        Tamper::OctKey => {
+            let kid = lock(&state.oct_keys)
+                .last()
+                .cloned()
+                .expect("publish_oct_key was called");
+            let rogue = Signer::generate(kid.clone());
+            let mut header = Header::new(Algorithm::EdDSA);
+            header.kid = Some(kid);
+            jsonwebtoken::encode(&header, &claims, &rogue.encoding).expect("the key signs")
+        }
+        Tamper::BadSignature => {
+            let published = lock(&state.published);
+            let signer = published.last().expect("a signing key");
+            let mut header = Header::new(Algorithm::EdDSA);
+            header.kid = Some(signer.kid.clone());
+            let token =
+                jsonwebtoken::encode(&header, &claims, &signer.encoding).expect("the key signs");
+            // Flip the last character of the signature to a different base64url character.
+            let mut bytes = token.into_bytes();
+            let last = bytes.last_mut().expect("a token has bytes");
+            *last = if *last == b'A' { b'B' } else { b'A' };
+            String::from_utf8(bytes).expect("still ASCII")
         }
         _ => {
             let published = lock(&state.published);
@@ -364,9 +407,19 @@ async fn serve(mut stream: tokio::net::TcpStream, state: Arc<State>) {
         }
         ("GET", "/idp/keys") => {
             state.jwks_hits.fetch_add(1, Ordering::SeqCst);
-            let set = JwkSet {
-                keys: lock(&state.published).iter().map(Signer::jwk).collect(),
-            };
+            let mut keys: Vec<Jwk> = lock(&state.published).iter().map(Signer::jwk).collect();
+            keys.extend(lock(&state.oct_keys).iter().map(|kid| Jwk {
+                common: CommonParameters {
+                    key_id: Some(kid.clone()),
+                    key_algorithm: Some(KeyAlgorithm::HS256),
+                    ..CommonParameters::default()
+                },
+                algorithm: AlgorithmParameters::OctetKey(jsonwebtoken::jwk::OctetKeyParameters {
+                    key_type: jsonwebtoken::jwk::OctetKeyType::Octet,
+                    value: URL_SAFE_NO_PAD.encode(b"a shared secret"),
+                }),
+            }));
+            let set = JwkSet { keys };
             (
                 200,
                 "application/jwk-set+json",

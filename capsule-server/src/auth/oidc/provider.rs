@@ -38,7 +38,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::Deserialize;
 
-use super::claims::{ClaimRejection, Expectations, VerifiedIdentity, verify_id_token};
+use super::claims::{ClaimRejection, Expectations, VerifiedIdentity, bounded, verify_id_token};
 use super::discovery::{DiscoveryError, MetadataCache};
 use super::jwks::{KeyCache, KeyError, Refresh};
 use crate::store::{AuthorizationCode, Clock, OidcNonce, OidcState, PkceVerifier};
@@ -366,10 +366,13 @@ impl HttpIdentityProvider {
             // RFC 6749 §5.2: a refused grant is a `400` with an `error` member. Anything else in
             // the 4xx range is still the provider saying no to *this* request.
             let refusal: TokenRefusal = response.json().await.unwrap_or_default();
+            // Bounded before it reaches the log: both strings are the provider's to fill.
             let detail = match refusal.error_description {
-                Some(description) => format!("{} ({description})", refusal.error),
+                Some(description) => {
+                    format!("{} ({})", bounded(&refusal.error), bounded(&description))
+                }
                 None if refusal.error.is_empty() => format!("the token endpoint answered {status}"),
-                None => refusal.error,
+                None => bounded(&refusal.error),
             };
             return Err(ProviderError::ExchangeRefused { detail });
         }
