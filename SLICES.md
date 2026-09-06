@@ -312,8 +312,8 @@ row's remainder now lives.
 | S-D19 | Hidden-view DB projection + gate wiring | sdk/clients | — | S | ACTIVE | done | rebuild un-hides → `S-D21` |
 | S-D21 | Index rebuild loses gated state (two sidecar shapes) | sdk/clients | S-D19 | M | ACTIVE | done | importer stacks → `S-B15`; unsigned migration → `S-D24`; no hidden writer → `S-D25` |
 | S-D22 | FFI `Catalog` bypasses the SR1 view gates | sdk/clients | S-D19 | S | ACTIVE | done | Swift half landed with `S-I4`; two small items owed |
-| S-D23 | Client SQLite schema has no upgrade path | sdk/clients | — | M | ACTIVE | done | typed error at the `open` boundary still owed |
-| S-D24 | Migrate unsigned sidecars, then delete the reader | sdk/clients | S-D21 | L | ACTIVE | blocked | needs a design decision first |
+| S-D23 | Client SQLite schema has no upgrade path | sdk/clients | — | M | ACTIVE | done | owed typed error landed with `S-D24` |
+| S-D24 | Migrate unsigned sidecars, then delete the reader | sdk/clients | S-D21 | L | ACTIVE | done | CLI verb → follow-up issue |
 | S-D25 | `hidden` has a column, a gate and views but no writer | sdk/clients | S-D19 | S | ACTIVE | done | |
 | S-D26 | CLI drops the rotated token pair, forcing re-login | sdk/clients | — | S | MIXED | ready | fix in the REST client, not the old one |
 | S-D27 | The SDK test mock never shuts its listener down | sdk/clients | — | S | ACTIVE | done\* | fixed a real leak; the LEAK signal is partly noise |
@@ -4442,6 +4442,13 @@ Kynos server, which cannot be written until `S-C53` gives the server a way to cr
   historical version opens, migrates, and answers every projection.
 - **Done when:** a v1-created fixture library opens at the current version with every column
   present and the gated/default projections correct. **Tier:** Unit.
+- **Owed item, closed (2026-09-02, alongside `S-D24`):** the migrator's `CatalogTooNew` used to
+  be flattened into a `SqliteFailure` message by `DatabaseDriver::open` and re-wrapped as
+  `LibraryError::Db`, then stringified into `LifecycleError::Io` by `Workspace::open`. It is now
+  typed end to end: `open_library` goes through a crate-private `DatabaseDriver::open_typed` and
+  returns `LibraryError::CatalogTooNew { found, supported }` with the catalog untouched and the
+  lock released; `Workspace::open` surfaces it as `LifecycleError::Library(..)`. The public
+  `DatabaseDriver::open` (consumed by `capsule-core-ffi`) keeps flattening.
 
 ### S-D24 — Migrate the unsigned sidecars, then delete the reader
 
@@ -4455,10 +4462,29 @@ Kynos server, which cannot be written until `S-C53` gives the server a way to cr
   and stack hints into signed bytes. They converge by **retirement**, not by merging.
 - **Deliverable:** a one-time migration that rewrites each unsigned sidecar as a `SidecarV1`, after
   which the compatibility reader and the `AssetSidecar` type are deleted outright.
-- **Blocked on a decision, not on code.** An unsigned asset has no provenance chain and no AMK, so
-  someone must decide what a synthesized `create` manifest is permitted to attest — and whether
-  such an asset is admitted to a signed library at all or quarantined. Until that is answered the
-  compatibility read is the honest state, which is why `S-D21` left it in place.
+- **The decision (taken 2026-09-02, recorded in the landing PR):** an unsigned asset is
+  **admitted**, not quarantined-and-stranded. `Workspace::migrate_unsigned_sidecars` — an explicit
+  verb, never automatic at open and never inside the keyless rebuild — authors a signed `create`
+  for each legacy record through the same commit every import takes, attesting only what any
+  import attests: the content hash of the bytes on disk (checked against the legacy `hash_sha256`
+  first; a mismatch or a missing original is refused, never re-signed), this device, this album,
+  and now. The legacy id and media bucket are kept, so nothing moves; the legacy bytes are copied
+  verbatim to `.library/quarantine/{uuid}.cbor` with a `.reason.json` before any signed write; the
+  whole legacy map rides in the signed sidecar's `_unknown` under `legacy-unsigned-sidecar`, where
+  the signature covers it (a tripwire test fails if the fold drops a key). Rating, tags, GPS and
+  capture time are carried into their signed homes; `is_deleted` becomes a signed `delete`;
+  `stack_hint` groups of two or more get a deterministic RFC 9562 v8 (custom) stack id —
+  `SHA-256(domain ‖ user_id ‖ "{method}:{key}")`, the construction the default album id uses —
+  written at create. The verb ends by calling `rebuild_index`. Idempotent and resumable (an
+  interrupted run's chainless signed sidecar is redone from its quarantine copy).
+- **Landed:** `sidecar::{AssetSidecar, StackHint, read_sidecar}` and the FFI codec
+  (`serialize_sidecar` / `deserialize_sidecar` and their Swift wrapper) are deleted; a
+  crate-private shape probe (`sidecar::shape`) replaces the fallback in `rebuild_index`, which now
+  reads one shape and reports an unsigned file instead of indexing it; `Workspace::open` still
+  succeeds on an un-migrated library and lists the files through `unmigrated_sidecars()`.
+- **Still owed:** the CLI verb (`capsule library migrate`) that drives the core verb — filed as a
+  follow-up so it does not collide with `S-B17`'s CLI edits — and, once no unsigned library
+  remains, retiring `lifecycle::migrate_unsigned` and the probe's `LegacyUnsigned` arm.
 - **Done when:** no `AssetSidecar` remains on disk or in the tree, and rebuild has one shape to
   read. **Tier:** Unit + Integration.
 

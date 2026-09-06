@@ -31,6 +31,7 @@ mod drops;
 mod groups;
 mod import;
 mod metadata;
+mod migrate_unsigned;
 mod open;
 mod organize;
 mod provenance;
@@ -47,6 +48,10 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use self::drops::{InboxEntry, IssuedLink};
+pub use self::migrate_unsigned::{
+    LEGACY_FOLD_KEY, MigrationSkip, UnmigratedShape, UnmigratedSidecar, UnsignedMigrationOptions,
+    UnsignedMigrationReport,
+};
 pub use self::open::HardwareDekBinding;
 pub use self::sync_apply::{QuarantineReason, RemoteAssetFacts, RemoteEntry, SyncApplyOutcome};
 pub use self::upload::{DerivativeBlob, UploadBundle};
@@ -63,7 +68,7 @@ use crate::crypto::verify_asset::{MetadataBinding, VerifyOutcome};
 use crate::db::DatabaseDriver;
 use crate::drop::{DropId, UploadLinkId};
 use crate::federation::AlbumGroupAssertion;
-use crate::library::Library;
+use crate::library::{Library, LibraryError};
 use crate::metadata::crdt::Counter;
 use crate::sharing::{ShareLinkId, ShareLinkRecord};
 use crate::sidecar::sidecar_v1::{Gps, SidecarV1, StackMembership, StackRole};
@@ -97,6 +102,11 @@ pub enum LifecycleError {
     /// Library index (SQLite) error.
     #[error("db: {0}")]
     Db(String),
+    /// The on-disk library could not be opened. Typed rather than stringified so a caller
+    /// can act on the one open failure with its own recovery — a catalog stamped by a newer
+    /// build ([`LibraryError::CatalogTooNew`], slice `S-D23`) — instead of matching on text.
+    #[error("open library: {0}")]
+    Library(#[from] LibraryError),
     /// The durable album-key store could not be read or written (slice `S-A10`). Never
     /// swallowed: losing album keys silently is exactly the failure this store exists to fix.
     #[error(transparent)]
@@ -448,6 +458,11 @@ pub struct Workspace {
     /// **Deliberately session-scoped** (`S-A10`): the server's staging store is the authority and
     /// a client refills this from it, so there is nothing here to lose.
     inbox: HashMap<DropId, InboxEntry>,
+    /// The `{uuid}.cbor` files under `media/` that no provenance chain anchors, found at
+    /// [`open`](Self::open): unsigned pre-signed-path sidecars awaiting
+    /// [`migrate_unsigned_sidecars`](Self::migrate_unsigned_sidecars), or the debris of an
+    /// interrupted run (`S-D24`). Recomputed by the verb; empty for a signed-only library.
+    unmigrated: Vec<UnmigratedSidecar>,
 }
 
 fn now_rfc3339() -> String {

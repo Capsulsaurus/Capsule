@@ -20,9 +20,9 @@ public actor ImportService {
     private let metadataExtractor: any MediaMetadataExtracting
     private let sidecarCoder: any SidecarCoding
 
-    /// - Parameter sidecarCoder: the sidecar wire format. Pass
-    ///   `FFISidecarCoder` (canonical CBOR, from `CapsuleCatalogFFI`) in a build
-    ///   that links the Rust core; `JSONSidecarCoder` otherwise.
+    /// - Parameter sidecarCoder: the mock lane's sidecar format, `JSONSidecarCoder`.
+    ///   A build that links the Rust core has no CBOR sidecar codec: the signed
+    ///   `SidecarV1` is authored by the core alone (`S-D24`).
     public init(
         library: ManagedLibrary,
         fileStore: any FileStore,
