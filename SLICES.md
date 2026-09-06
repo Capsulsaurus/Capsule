@@ -360,10 +360,10 @@ row's remainder now lives.
 | S-P6 | SE signer wiring into the app + iOS cohort reader | iOS path | S-P1 | M | ACTIVE | ready | |
 | S-P7 | Dev-server bring-up (task, keys, blob backend, ATS) | iOS path | — | M | MIXED | done | |
 | S-P8 | Swift behavioral FFI harness (flips S-D9) | iOS path | S-P1, S-P7 | M | MIXED | ready | |
-| S-Q1 | Mark/complete E2E cases 2, 3, 11 | e2e | — | S | MIXED | ready | |
-| S-Q2 | E2E case 6: backup → fresh-device restore | e2e | — | M | MIXED | ready | |
-| S-Q3 | E2E case 7: full lifecycle chain | e2e | — | M | MIXED | ready | |
-| S-Q4 | E2E case 12: cross-device enrollment | e2e | — | M | MIXED | ready | |
+| S-Q1 | Mark/complete E2E cases 2, 3, 11 | e2e | — | S | MIXED | done\* | 2, 3 in `capsule-e2e`; 11 lands with #447; JXL T1 → #470 |
+| S-Q2 | E2E case 6: backup → fresh-device restore | e2e | — | M | MIXED | done\* | restore reads; verify → #468; account seam → #467 |
+| S-Q3 | E2E case 7: full lifecycle chain | e2e | — | M | MIXED | done | provenance rung → #464 |
+| S-Q4 | E2E case 12: cross-device enrollment | e2e | — | M | MIXED | done\* | server leg; client ceremony → #471, #467, #405 |
 | S-Q5 | Live-browser smokes (gRPC-web, share, drop) | e2e | S-P7 | M | MIXED | ready | |
 | S-Q6 | E2E case 10: model regen after version bump | e2e | — | M | ACTIVE | done | the case was untestable, not untested |
 | S-U1 | Domain + ports + mock seam | apple-ui | — | L | ACTIVE | done | |
@@ -5200,11 +5200,18 @@ is why Lane Q shipped with no `Contract:` line at all), and each case's wording 
 normative statement of what the slice must prove. Cases are numbered so code can name the
 case it covers (`rg "E2E case N"`).
 
-Current registry state: live = 1, 4 (upgraded by `S-E5`), 9, 10 (`S-Q6`); in-process shape
-= 5, 8 (server half = `S-C24`), 13; this lane closes the rest. Every case with a server or
-SDK leg is **suspended for the duration of the Kynos rebuild** — the module map says so —
-so these slices are written to be re-runnable against the replacement rather than pinned to
-the current transport.
+Current registry state (the module map's status table is the record): landed = 1, 2, 3, 6,
+7, 9, 10 (`S-Q6`) and the server legs of 8, 12, 13, all in the `capsule-e2e` crate against the
+real composition root over the real SDK and a real library — no container, no env gate; 11
+lands with #447; in-process shape = 5 and the ceremony half of 8; 4 has no route (federation
+is post-v1, #406). The earlier note that every server-side case was suspended for the Kynos
+rebuild is stale: the rebuilt server is what these cases run against. What still blocks a
+case's full wording is a seam in the tree rather than a transport, each filed: the SDK's push
+ladder omits the provenance rung (#464), `sync_apply` decodes the feed's record bytes as a
+manifest (#465), the SDK's directory publish omits the identity-key header (#466), a
+`Workspace` cannot open as a server account (#467), the backup artifact carries no album
+authority (#468), a library's adopt registers nothing to publish (#469), the upload policy
+refuses `image/jxl` (#470), and there is no cross-sign or safety-code seam (#471).
 
 ### S-Q1 — Mark/complete E2E cases 2, 3, 11
 
@@ -5214,6 +5221,14 @@ the current transport.
   round trip ≈ case 3, `S-C1` crash-injection ≈ case 11) with explicit `E2E case N`
   markers, fill whatever the audit finds missing to each case's Module-Map wording.
 - **Done when:** `rg "E2E case (2|3|11)"` hits a passing named test each. **Tier:** Smoke.
+- **Landed** (2026-09-05, #409): case 2 is `capsule-e2e/tests/case_02_import_upload_finalize.rs`
+  (a real library import → the SDK ladder plus the provenance rung → every blob byte-equal at
+  its content address → storage-verify durable → on the feed); case 3's client half is
+  `capsule-e2e/tests/case_03_sync_pickup.rs` beside the server half in
+  `capsule-server/tests/sync.rs`; case 11 is `#447`'s named test in
+  `capsule-server/tests/upload.rs` (an in-memory fault decorator on the index, not
+  crash-injection). **Owed:** the JXL thumbnail's T1 upload → #470 (case 2 runs on the 8×8
+  still, whose T1 is the byte-free sentinel).
 
 ### S-Q2 — E2E case 6: backup → fresh-device restore
 
@@ -5222,6 +5237,12 @@ the current transport.
 - **Deliverable:** the full chain: backup artifact + server escrow fetch → restore on
   a fresh workspace (new process, no prior state) → assets decrypt + verify.
 - **Done when:** the named test passes against testcontainers. **Tier:** Smoke.
+- **Landed** (2026-09-05, #409): `capsule-e2e/tests/case_06_backup_restore.rs` — escrow
+  through the SDK's `RecoveryClient` over the real route, the recovered master key proved to
+  be the account's by deriving its default album id, the backup restored into a fresh library
+  that reads the asset byte for byte and walks its chain. No container: the composition root
+  runs in-process. **Owed:** opening the fresh library *as* the recovered account → #467;
+  `verify` on the restored asset (the artifact carries no album authority) → #468.
 
 ### S-Q3 — E2E case 7: full lifecycle chain
 
@@ -5231,6 +5252,13 @@ the current transport.
   client + server (composing `S-C16`'s op path with `S-C11`'s GC), asserting feed order
   and byte deletion honoring grace.
 - **Done when:** the named test passes. **Tier:** Smoke.
+- **Landed** (2026-09-05, #409): `capsule-e2e/tests/case_07_lifecycle.rs` — caption, trash
+  (30-day floor), restore, re-delete and a zero-day trash, each authored by the real library
+  and posted as a lifecycle op through the generated client, watched by an incremental feed
+  reader; `gc::purge_expired` on the operator worker retains the 30-day tombstone and purges
+  the due one, whose original then serves `Gone`. The chain agrees end to end because the
+  harness uploads the provenance rung the SDK ladder omits → #464 (and `sync_apply`'s decode
+  of those bytes → #465).
 
 ### S-Q4 — E2E case 12: cross-device enrollment
 
@@ -5239,6 +5267,11 @@ the current transport.
 - **Deliverable:** the server + CLI halves of the cross-device add (code issue/redeem,
   relay channel, directory update, second device syncs) — the iOS UI half is post-v1.
 - **Done when:** the named two-client test passes against testcontainers. **Tier:** Smoke.
+- **Landed, server leg** (2026-09-05, #409): `capsule-e2e/tests/case_12_enrollment.rs` —
+  fresh local auth, code issue, redeem, relay and drain in both directions (each payload
+  delivered once, mailboxes never cross), initiator close, and the MITM abort at the wire.
+  **Owed:** the client ceremony — B's keys, the safety code, A's cross-sign → #471 and #467;
+  the MLS join → `S-C51` (#405).
 
 ### S-Q5 — Live-browser smokes
 
