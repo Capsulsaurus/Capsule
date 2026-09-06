@@ -10,7 +10,7 @@
 //! [`DerivativeFormat`](crate::derivative_format::DerivativeFormat) is the tier table's format
 //! column as a closed enum. `format` is a `String` in the signed struct and **stays** one,
 //! deliberately: the same field carries `embedding/{model_id}` for embedding-role manifests
-//! ([`crate::ml`]), so a still-only enum cannot be its type; and a `try_from` newtype would make
+//! (`crate::ml`), so a still-only enum cannot be its type; and a `try_from` newtype would make
 //! an *older* manifest carrying a future codec fail at deserialisation, turning a policy
 //! rejection into a parse error before any signature is examined. The closed set is therefore
 //! enforced at the two boundaries the contract names:

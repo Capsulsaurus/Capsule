@@ -252,7 +252,7 @@ pub struct DerivativeCore {
     /// failure:
     ///
     /// - the same field carries the embedding-role grammar `embedding/{model_id}`
-    ///   ([`crate::ml`]), which no still-format enum can model, so a single typed field would
+    ///   (`crate::ml`), which no still-format enum can model, so a single typed field would
     ///   have to be an enum over both grammars;
     /// - a `#[serde(try_from = "String")]` newtype would make an *older* manifest naming a
     ///   future codec fail at deserialisation — before its signature is examined at all —
