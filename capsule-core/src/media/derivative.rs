@@ -7,26 +7,28 @@
 //!
 //! # The closed format set, and where it is enforced
 //!
-//! [`DerivativeFormat`](crate::derivative_format::DerivativeFormat) is the tier table's format
-//! column as a closed enum. `format` is a `String` in the signed struct and **stays** one,
-//! deliberately: the same field carries `embedding/{model_id}` for embedding-role manifests
-//! (`crate::ml`), so a still-only enum cannot be its type; and a `try_from` newtype would make
+//! [`DerivativeFormat`] is the tier table's format column as a closed enum. `format` is a
+//! `String` in the signed struct and **stays** one, deliberately: the same field carries
+//! `embedding/{model_id}` for embedding-role manifests (`crate::ml`), so a still-only enum
+//! cannot be its type; and a `try_from` newtype would make
 //! an *older* manifest carrying a future codec fail at deserialisation, turning a policy
 //! rejection into a parse error before any signature is examined. The closed set is therefore
 //! enforced at the two boundaries the contract names:
 //!
 //! - **production** — [`generate_still_derivatives`] only ever writes
-//!   [`DerivativeFormat::mime`](crate::derivative_format::DerivativeFormat::mime), so no
-//!   other value can be authored here;
+//!   [`DerivativeFormat::mime`], so no other value can be authored here;
 //! - **verification** — [`verify_still_format`](crate::derivative_format::verify_still_format)
 //!   rejects a still-role manifest whose `format` does not parse, which is the structural
 //!   rejection the tier table specifies.
 //!
-//! Both are named by their canonical `crate::derivative_format::` path rather than by the bare
-//! name the `media` re-export provides. Decision 24 moved them out of this feature-gated module
-//! so the crates that *receive* a manifest can link the check; a bare name then resolves through
-//! that re-export under some feature unions and not others, which is a broken doc link in
-//! exactly the merged trees nobody builds in isolation.
+//! Note the asymmetry in how those three are linked. Decision 24 moved all of them out of this
+//! feature-gated module so the crates that *receive* a manifest can link the check; this file
+//! then imported `DerivativeFormat`, but not the verification function, which it never calls.
+//! The function therefore has to be written out as `crate::derivative_format::…`, because a bare
+//! name for it resolves only through the `media` re-export — which holds under some feature
+//! unions and not others, so it was a live link in isolation and a broken one in the merged
+//! tree. The other two resolve through the import above, and spelling them out as well would be
+//! a redundant target.
 //!
 //! # What this build encodes
 //!
