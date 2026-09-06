@@ -256,7 +256,7 @@ row's remainder now lives.
 | S-C26 | Retire the plaintext album name/description columns | server | S-C25 | S | RETIRED | done | the Kynos schema never declared them; a document tripwire keeps it that way |
 | S-C27 | Wire-contract types on plain serde behind an adapter | server | — | M | RETIRED | part 1 done | DTO move → Kynos rebuild; status gaps → `S-C28` |
 | S-C28 | Publish the statuses the server actually returns | server | S-C27 | S | RETIRED | done\* | auth surface closed; folds into each remaining port |
-| S-C29 | The two storage ports + typed ceremony stores | server | S-C27 | L | RETIRED | done\* | Valkey + Postgres adapters owed; counters → `S-C32` |
+| S-C29 | The two storage ports + typed ceremony stores | server | S-C27 | L | RETIRED | done\* | Valkey adapters landed (#403); Postgres adapter owed (#402); counters → `S-C32` |
 | S-C30 | Feed `manifest_cbor` carries the signed manifest | server | S-C1, S-C2 | M | RETIRED | done\* | server half stores and serves verbatim; client producer owed to `S-D1` |
 | S-C31 | Custody receipt attests a hash of server-invented bytes | server | S-C30 | M | RETIRED | done | the chain position replaces it, and the chain head stops riding a coincidence |
 | S-C32 | MFA-attempt and rate-limit counters have no port | server | S-C29 | M | RETIRED | done\* | the port lands with three of its consumers; the per-source half needs a trusted client address |
@@ -2330,7 +2330,16 @@ working on a surface written after it.
   serializable payload, that TTL is a property of the store rather than an argument, and that a
   session record and its per-user index entry cannot be addressed separately — which is what made
   the `revoke_all_for_user` over-count unrepresentable rather than fixed twice.
-- **Owed:** the Valkey and Postgres adapters. Every port has an in-memory adapter and one shared
+- **Landed (#403):** the Valkey adapters — `capsule-server/src/store/valkey.rs` for all six
+  ports and `counter/valkey.rs` for `S-C32`'s counters — over one multiplexed
+  `ConnectionManager`, with every multi-key mutation or decide-and-write as one Lua script.
+  Expiry is decided by the injected `Clock` and written into each record, `PEXPIRE` being only
+  the collector, so the same conformance suite drives them with a manual clock and no sleeps;
+  `capsule-server/tests/valkey.rs` runs it against a live container (`CAPSULE_TEST_VALKEY=1`).
+  The `Durable` boot arm connects and `PING`s `VALKEY_URL` first, then still refuses naming
+  `DATABASE_URL` until #402 fills the Postgres half. The device-cohort map lives in a Valkey hash
+  with no expiry as its interim home.
+- **Owed:** the Postgres adapters (#402). Every port has an in-memory adapter and one shared
   conformance suite, so "the double behaves like Valkey" is an assertion rather than an
   assumption. Counters were deliberately excluded and became `S-C32`.
 - **Done when:** ✅ the conformance suite passes against the in-memory adapter, case by case and

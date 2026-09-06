@@ -697,6 +697,55 @@ pub async fn finalization_is_claimed_exactly_once(h: &dyn Harness) {
     );
 }
 
+/// A claimed session is no longer an eviction candidate — the promise the claim makes.
+///
+/// The winner finalizes from the record it was handed and must not have the bytes discarded
+/// out from under it by the pressure sweep. `WaitingForProcessing` is in flight for every other
+/// purpose, so this is asserted through the eviction view specifically. Works in its own band
+/// of progress time, below every other case's, and clears up after itself.
+pub async fn a_claimed_session_leaves_the_eviction_view(h: &dyn Harness) {
+    let store = h.uploads();
+    let record = upload("claimed", "a", "uploader", -20_000);
+    ok(store.open(record.clone()).await, "open");
+
+    let horizon = deadline(base(), SignedDuration::from_secs(-19_000));
+    assert_eq!(
+        ok(
+            store.least_recently_progressed(horizon, 10).await,
+            "least_recently_progressed"
+        ),
+        vec![record.upload_id.clone()],
+        "an unclaimed, stalled session is a candidate"
+    );
+
+    match ok(
+        store.claim_finalize(&record.upload_id).await,
+        "claim_finalize",
+    ) {
+        FinalizeClaim::Won(_) => {}
+        other => panic!("the first claim must win, got {other:?}"),
+    }
+    assert!(
+        ok(
+            store.least_recently_progressed(horizon, 10).await,
+            "least_recently_progressed"
+        )
+        .is_empty(),
+        "a claimed session has left the eviction view"
+    );
+    assert_eq!(
+        present(
+            ok(store.read(&record.upload_id).await, "read"),
+            "the session"
+        )
+        .status,
+        UploadSessionStatus::WaitingForProcessing,
+        "and is still in flight for every other purpose"
+    );
+
+    ok(store.discard(&record.upload_id).await, "discard");
+}
+
 /// The startup scrub sets the byte counter absolutely and does not fake progress.
 pub async fn reconciling_received_bytes_does_not_move_the_progress_clock(h: &dyn Harness) {
     let store = h.uploads();
@@ -1364,6 +1413,7 @@ pub async fn run_all(h: &dyn Harness) {
     recording_progress_advances_bytes_clock_and_replay_together(h).await;
     chunk_replay_is_offset_addressed(h).await;
     finalization_is_claimed_exactly_once(h).await;
+    a_claimed_session_leaves_the_eviction_view(h).await;
     reconciling_received_bytes_does_not_move_the_progress_clock(h).await;
     a_terminal_session_is_not_an_eviction_candidate(h).await;
     discarding_removes_the_record_its_chunks_and_its_listing(h).await;

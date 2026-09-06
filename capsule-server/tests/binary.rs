@@ -288,9 +288,11 @@ fn serving_without_valkey_and_without_the_memory_profile_refuses_by_name() {
 }
 
 #[test]
-fn a_durable_backend_refuses_with_the_issue_that_will_honour_it() {
-    // The other half: the operator *did* set `VALKEY_URL`, and nothing reads it yet. Falling
-    // back to the in-memory adapters here is the one thing that must never happen.
+fn a_durable_backend_whose_valkey_is_unreachable_refuses_rather_than_falling_back() {
+    // The other half: the operator *did* set `VALKEY_URL`, and the server behind it does not
+    // answer (port 1 on loopback). Falling back to the in-memory adapters here is the one thing
+    // that must never happen, and the refusal names the variable but never the address, which
+    // carries the password. The reachable case lives in `tests/valkey.rs`.
     let root = tempfile::tempdir().expect("a scratch directory");
     let (code, _, stderr) = run(server(&[
         "serve",
@@ -301,9 +303,13 @@ fn a_durable_backend_refuses_with_the_issue_that_will_honour_it() {
     ])
     .env("JWT_ED25519_DER", EXAMPLE_DER)
     .env("ATTESTATION_KEY_SEED", EXAMPLE_SEED)
-    .env("VALKEY_URL", "redis://127.0.0.1:6379"));
+    .env("VALKEY_URL", "redis://127.0.0.1:1"));
     assert_ne!(code, Some(0), "{stderr}");
-    assert!(stderr.contains("#403"), "{stderr}");
+    assert!(stderr.contains("VALKEY_URL"), "{stderr}");
+    assert!(
+        !stderr.contains("127.0.0.1:1"),
+        "never the address: {stderr}"
+    );
 }
 
 #[test]

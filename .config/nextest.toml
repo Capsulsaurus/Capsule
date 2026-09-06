@@ -21,17 +21,26 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 [profile.ci.junit]
 path = "junit.xml"
 
-# The container group is **empty as of `S-C59`**, and the declaration stays.
+# The container group holds the adapter suites that stand up a real backing service.
 #
 # It existed for the retired Salvo auth crate, whose integration tests spun up shared Postgres
 # and Valkey containers and shared a tracing `Once` — running them concurrently was the main
-# flakiness source, so the group was pinned to one thread with retries as the backstop. The
-# rebuilt server has no container test at all: every port has a deterministic in-memory adapter
-# and Kynos's `TestClient` drives a built service in-process, which is why `mise run test-rust`
-# now needs no podman for anything above the storage ports.
+# flakiness source, so the group was pinned to one thread with retries as the backstop. It was
+# empty from `S-C59` until the first adapter arrived: every port has a deterministic in-memory
+# adapter and Kynos's `TestClient` drives a built service in-process, which is why `mise run
+# test-rust` needs no podman — the container suites below are env-gated and pass as skipped
+# without their variable.
 #
-# The group is kept rather than deleted because the first Postgres or Valkey *adapter* will need
-# exactly it, and rediscovering the one-thread rule by watching CI flake is the expensive way to
-# learn it. An empty test group costs nothing.
+# `capsule-server/tests/valkey.rs` (#403) runs the store and counter conformance suites against a
+# `valkey/valkey` container when `CAPSULE_TEST_VALKEY=1`. One thread, because each test starts
+# its own container and the eviction view is one global sorted set.
 [test-groups.containers]
 max-threads = 1
+
+[[profile.default.overrides]]
+filter = 'package(capsule-server) and binary(valkey)'
+test-group = 'containers'
+
+[[profile.ci.overrides]]
+filter = 'package(capsule-server) and binary(valkey)'
+test-group = 'containers'
