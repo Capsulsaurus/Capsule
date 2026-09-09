@@ -18,7 +18,7 @@ use capsule_server::federation::{
     CapabilityCodec, CapabilityRecord, CapabilityStore as _, MintRequest, PeerId, PeerStore as _,
     Scope,
 };
-use capsule_server::index::{AssetIndex, BlobRecord, PendingAsset};
+use capsule_server::index::{AssetIndex, BlobRecord, PendingAsset, ServingHold};
 use capsule_server::membership::{MemberRole, MembershipStore as _, RosterRecord};
 use capsule_server::store::{AlbumId, AssetId, BlobRole, Clock as _, UserId};
 use capsule_server::sync::CursorScope;
@@ -580,4 +580,225 @@ async fn a_store_that_cannot_answer_a_peer_is_an_outage_never_an_admission() {
     let refused: Value = refused.json();
     assert_eq!(refused["code"], "error.sync.unavailable");
     fixture.members.set_unavailable(false);
+}
+
+// ===========================================================================================
+// The pull path: blob bytes under a capability (S-E5)
+// ===========================================================================================
+
+/// Fetch `address` as `bearer` and return the raw response.
+async fn fetch(
+    fixture: &Fixture,
+    bearer: &str,
+    address: &ContentAddress,
+) -> kynos::test::TestResponse {
+    fixture
+        .client
+        .get(&format!("/v1/blob/{address}"))
+        .header("authorization", bearer)
+        .send()
+        .await
+}
+
+/// Publish an asset into `into` carrying an original and a derivative, and return their
+/// addresses.
+///
+/// Landed first — a reserved row is not a reference, so its blobs resolve to `404` for
+/// everybody — and the two roles recorded onto it after.
+async fn two_roles(
+    fixture: &Fixture,
+    asset: &str,
+    into: &AlbumId,
+) -> (ContentAddress, ContentAddress) {
+    publish_into(fixture, asset, into).await;
+    let id = AssetId::new(asset);
+    let original = store_blob(fixture, format!("original-{asset}").as_bytes()).await;
+    record(fixture, &id, BlobRole::Original, &original).await;
+    let derivative = store_blob(fixture, format!("derivative-{asset}").as_bytes()).await;
+    record(fixture, &id, BlobRole::Derivative, &derivative).await;
+    (original, derivative)
+}
+
+/// E2E case 4 (server half): the peer fetches the bytes the page named.
+#[tokio::test]
+async fn a_peer_fetches_the_albums_blobs_and_a_derivative_only_grant_is_refused_the_original() {
+    let (fixture, _) = shared().await;
+    let (original, derivative) = two_roles(&fixture, "shared-3", &album()).await;
+
+    // `read` covers both roles, and the bytes are the bytes.
+    let (full, _) = capability(&fixture, PEER, Scope::Read, 1).await;
+    let served = fetch(&fixture, &full, &original).await;
+    served.assert_status(StatusCode::OK);
+    assert_eq!(served.bytes().as_ref(), b"original-shared-3");
+    fetch(&fixture, &full, &derivative)
+        .await
+        .assert_status(StatusCode::OK);
+
+    // `read-derivative-only` is refused the original, by the blob's server-visible role and not
+    // by anything the peer said it was fetching.
+    let (thumbs, _) = capability(&fixture, PEER, Scope::ReadDerivativeOnly, 1).await;
+    let refused = fetch(&fixture, &thumbs, &original).await;
+    refused.assert_status(StatusCode::FORBIDDEN);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.federation.scope_insufficient");
+    fetch(&fixture, &thumbs, &derivative)
+        .await
+        .assert_status(StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_capability_for_another_album_gets_the_answer_an_unknown_address_gets() {
+    // The disclosure boundary: a `403` would confirm the address is referenced by somebody, so
+    // a peer outside the album is told exactly what a stranger naming a random hash is told —
+    // byte-identical, headers and body.
+    let (fixture, _) = shared().await;
+    let (elsewhere, _derivative) = two_roles(&fixture, "private-2", &second_album()).await;
+    let (bearer, _) = capability(&fixture, PEER, Scope::Read, 1).await;
+
+    let refused = fetch(&fixture, &bearer, &elsewhere).await;
+    refused.assert_status(StatusCode::NOT_FOUND);
+    let refused: Value = refused.json();
+    let unknown = fetch(
+        &fixture,
+        &bearer,
+        &ContentAddress::parse(&support::checksum(b"nothing holds these")).expect("an address"),
+    )
+    .await;
+    unknown.assert_status(StatusCode::NOT_FOUND);
+    let unknown: Value = unknown.json();
+    assert_eq!(refused, unknown);
+}
+
+#[tokio::test]
+async fn a_peer_is_told_a_revoked_grant_apart_from_an_accounts_revoked_membership() {
+    // Both are `403`; the codes differ because the actions differ — an account re-syncs its
+    // membership, a peer asks its home server for a fresh grant.
+    let (fixture, _) = shared().await;
+    let (original, _) = two_roles(&fixture, "shared-4", &album()).await;
+    let (bearer, jti) = capability(&fixture, PEER, Scope::Read, 1).await;
+    fixture
+        .revocations
+        .revoke_issued(&jti, fixture.clock.now())
+        .await
+        .expect("revokes");
+
+    let refused = fetch(&fixture, &bearer, &original).await;
+    refused.assert_status(StatusCode::FORBIDDEN);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.federation.capability_revoked");
+
+    // And a former member of the same album still gets the account's code.
+    let bob = fixture.other_bearer(BOB).await;
+    fetch(&fixture, &bob, &original)
+        .await
+        .assert_status(StatusCode::OK);
+    roster(&fixture, 2, &[]).await;
+    let former = fetch(&fixture, &bob, &original).await;
+    former.assert_status(StatusCode::FORBIDDEN);
+    let former: Value = former.json();
+    assert_eq!(former["code"], "error.blob.access_revoked");
+}
+
+#[tokio::test]
+async fn a_peer_is_never_told_about_an_accounts_upload_in_flight() {
+    // The transient `409` reports the caller's *own* device still sending the bytes. A peer has
+    // no device here, so it gets what an unreferenced address gives and waits for the feed's
+    // `original_held` to flip.
+    let (fixture, _) = shared().await;
+    let owner_bearer = fixture.bearer().await;
+    let coming = vec![b'y'; 4096];
+    let promised = support::checksum(&coming);
+    let address = ContentAddress::parse(&promised).expect("an address");
+    fixture
+        .open_session(&coming, "original", &owner_bearer)
+        .await;
+
+    fetch(&fixture, &owner_bearer, &address)
+        .await
+        .assert_status(StatusCode::CONFLICT);
+    let (bearer, _) = capability(&fixture, PEER, Scope::Read, 1).await;
+    fetch(&fixture, &bearer, &address)
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_takedown_answers_a_peer_the_same_410_and_leaves_the_bytes_alone() {
+    // The authority is asked first, so the `410` is legible only to a reader entitled to the
+    // bytes — and the hold is a serving constraint, never a destruction.
+    let (fixture, _) = shared().await;
+    let (original, _) = two_roles(&fixture, "shared-5", &album()).await;
+    let (bearer, _) = capability(&fixture, PEER, Scope::Read, 1).await;
+    fetch(&fixture, &bearer, &original)
+        .await
+        .assert_status(StatusCode::OK);
+
+    fixture
+        .index
+        .set_hold(&AssetId::new("shared-5"), Some(ServingHold::Takedown))
+        .await
+        .expect("the index holds");
+    fetch(&fixture, &bearer, &original)
+        .await
+        .assert_status(StatusCode::GONE);
+
+    // A peer outside the album still sees nothing, not even the takedown.
+    let (other_album, _) = capability_over(
+        &fixture,
+        &fixture.codec,
+        PEER,
+        &second_album(),
+        Scope::Read,
+        1,
+    )
+    .await;
+    fetch(&fixture, &other_album, &original)
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+
+    assert_eq!(
+        fixture
+            .blobs
+            .read_at(&original, 0, 64)
+            .await
+            .expect("the store answers")
+            .expect("the bytes are there"),
+        b"original-shared-5",
+        "a takedown does not touch the ciphertext"
+    );
+}
+
+#[tokio::test]
+async fn a_blocked_peer_and_a_spent_budget_refuse_the_blob_route_too() {
+    let (fixture, _) = shared().await;
+    let (original, _) = two_roles(&fixture, "shared-6", &album()).await;
+    let (bearer, _) = capability(&fixture, PEER, Scope::Read, 1).await;
+
+    fixture
+        .peers
+        .block(&PeerId::new(PEER), fixture.clock.now(), None)
+        .await
+        .expect("blocks");
+    let blocked = fetch(&fixture, &bearer, &original).await;
+    blocked.assert_status(StatusCode::FORBIDDEN);
+    let blocked: Value = blocked.json();
+    assert_eq!(blocked["code"], "error.moderation.server_blocked");
+    fixture
+        .peers
+        .unblock(&PeerId::new(PEER))
+        .await
+        .expect("unblocks");
+
+    let key = CounterKey::PeerRequests(PEER.to_owned());
+    for _ in 0..budgets::PEER_REQUESTS.limit {
+        fixture
+            .counters
+            .hit(&key, budgets::PEER_REQUESTS, fixture.clock.now())
+            .await
+            .expect("the counter answers");
+    }
+    let spent = fetch(&fixture, &bearer, &original).await;
+    spent.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    let spent: Value = spent.json();
+    assert_eq!(spent["code"], "error.federation.rate_budget_exceeded");
 }

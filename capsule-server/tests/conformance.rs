@@ -1076,6 +1076,34 @@ async fn every_declared_response_is_exercised() {
         .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
     fixture.index.set_unavailable(false);
 
+    // 429: a federated peer over its events budget (`S-E5`, invariant 21), the same admission
+    // the feed charges — refused before the index is touched, which is why the address it names
+    // does not have to exist.
+    for _ in 0..capsule_server::counter::budgets::PEER_REQUESTS.limit {
+        fixture
+            .counters
+            .hit(
+                &capsule_server::counter::CounterKey::PeerRequests("other.test".to_owned()),
+                capsule_server::counter::budgets::PEER_REQUESTS,
+                fixture.clock.now(),
+            )
+            .await
+            .expect("the counter answers");
+    }
+    client
+        .get(&format!("/v1/blob/{address}"))
+        .header("authorization", &peer_bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS);
+    fixture
+        .counters
+        .reset(&capsule_server::counter::CounterKey::PeerRequests(
+            "other.test".to_owned(),
+        ))
+        .await
+        .expect("the counter answers");
+
     // 410 last, because it is the one that consumes the asset.
     fixture
         .index

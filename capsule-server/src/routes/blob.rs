@@ -31,6 +31,18 @@
 //! | `401` | kept, and now the framework's, with the `WWW-Authenticate` challenge |
 //! | `500` | kept, with `error.blob.unavailable` |
 //!
+//! # A peer fetches here too (`S-E5`)
+//!
+//! `Authorization: Bearer` carries a session token **or** a federation capability, on the same
+//! component and through the same scheme the feed uses. A peer is admitted first
+//! ([`crate::federation::admit`]) — revoked grant, blocked peer, spent events budget — and then
+//! resolves through exactly the path an account does, with two differences the principal owns:
+//! there is no transient `409` for a peer (it reports the caller's *own* device), and the
+//! authority may answer `403 error.federation.scope_insufficient` when the grant's scope does
+//! not cover the blob's role. The `403` a peer gets for a revoked grant carries
+//! `error.federation.capability_revoked`, not the account's `error.blob.access_revoked`: the
+//! two say different things about what to do next.
+//!
 //! [Encryption — ranged reads]: ../../../capsule-docs/src/content/docs/design/cryptography/encryption.md
 
 use capsule_i18n::error_codes;
@@ -39,8 +51,11 @@ use kynos::http::etag::ETag;
 use kynos::prelude::*;
 use kynos::response::range::served::{Conditions, Delivery, Served};
 
-use crate::auth::AccessToken;
-use crate::serve::{BlobSource, ServeContext, ServeResolution};
+use crate::counter::CounterContext;
+use crate::federation::{
+    self, FederationContext, Principal, ReadBearer, Refusal, VerifiedCapability,
+};
+use crate::serve::{BlobSource, ReadPrincipal, ServeContext, ServeResolution};
 
 /// The media surface: fetching the opaque ciphertext a sync entry named.
 #[derive(Tag)]
@@ -49,6 +64,14 @@ use crate::serve::{BlobSource, ServeContext, ServeResolution};
     description = "Fetching content-addressed ciphertext, resumably."
 )]
 pub struct MediaTag;
+
+/// Who is fetching, owning the credential the borrowed [`ReadPrincipal`] points into.
+enum Reader {
+    /// An account, through a session access token.
+    Account(crate::store::OwnerId),
+    /// A peer server, through an admitted federation capability (`S-E5`).
+    Peer(Box<VerifiedCapability>),
+}
 
 /// The content address in the path.
 #[derive(PathParams, Schema)]
@@ -116,6 +139,51 @@ pub enum BlobRejection {
         code: &'static str,
     },
 
+    /// A peer's capability has been revoked (`S-E5`).
+    ///
+    /// The federated counterpart of [`Self::Forbidden`], and a different code because the
+    /// action is different: an account re-syncs its album membership, while a peer asks the
+    /// home server for a fresh grant or stops pulling.
+    #[error("this capability has been revoked")]
+    #[problem(status = 403, title = "Capability revoked")]
+    CapabilityRevoked {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// The peer is on this server's blocklist (`S-C49`).
+    #[error("this server is blocked")]
+    #[problem(status = 403, title = "Server blocked")]
+    PeerBlocked {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// The peer is entitled to the album but its grant does not cover this blob's role
+    /// (`S-E5`).
+    ///
+    /// A `read-derivative-only` capability asking for an `original`, or any capability asking
+    /// for a `backup`. `403` rather than `404` because the peer already knows the asset is
+    /// there — the feed told it — and a `404` would send it hunting an address that exists.
+    #[error("this capability does not cover this blob")]
+    #[problem(status = 403, title = "Scope insufficient")]
+    ScopeInsufficient {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// The peer's events-per-hour budget is spent (invariant 21).
+    #[error("this peer has reached its request budget")]
+    #[problem(status = 429, title = "Rate budget exceeded")]
+    RateLimited {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
     /// A collaborator could not answer, so nothing was decided.
     #[error("the blob could not be served")]
     #[problem(status = 500, title = "Internal server error")]
@@ -124,6 +192,25 @@ pub enum BlobRejection {
         #[problem(extension)]
         code: &'static str,
     },
+}
+
+impl From<Refusal> for BlobRejection {
+    fn from(refusal: Refusal) -> Self {
+        match refusal {
+            Refusal::Revoked => Self::CapabilityRevoked {
+                code: error_codes::FEDERATION_CAPABILITY_REVOKED,
+            },
+            Refusal::PeerBlocked => Self::PeerBlocked {
+                code: error_codes::MODERATION_SERVER_BLOCKED,
+            },
+            Refusal::RateLimited { .. } => Self::RateLimited {
+                code: error_codes::FEDERATION_RATE_BUDGET_EXCEEDED,
+            },
+            Refusal::Unavailable => Self::Unavailable {
+                code: error_codes::FEDERATION_UNAVAILABLE,
+            },
+        }
+    }
 }
 
 impl BlobRejection {
@@ -161,6 +248,13 @@ impl BlobRejection {
             code: error_codes::BLOB_UNAVAILABLE,
         }
     }
+
+    /// A peer's grant does not cover this blob's role (`S-E5`).
+    fn scope_insufficient() -> Self {
+        Self::ScopeInsufficient {
+            code: error_codes::FEDERATION_SCOPE_INSUFFICIENT,
+        }
+    }
 }
 
 /// Fetch a ciphertext blob by its content address, ranged.
@@ -172,22 +266,38 @@ impl BlobRejection {
 ///
 /// The one answer that *is* account-scoped is the transient `409`: it reports the caller's own
 /// in-flight upload and nobody else's (`S-C40`).
+///
+/// A federated peer fetches here with a capability instead of a session token (`S-E5`), through
+/// the same resolution and the same authority.
 #[kynos::get("/v1/blob/{hash}", operation_id = "get_blob", tag = MediaTag)]
 pub async fn get_blob(
     Inject(serve): Inject<ServeContext>,
-    Auth(credential): Auth<AccessToken>,
+    Inject(federation): Inject<FederationContext>,
+    Inject(counters): Inject<CounterContext>,
+    Auth(principal): Auth<ReadBearer>,
     Path(path): Path<BlobPath>,
     conditions: Conditions,
 ) -> Result<Delivery<OctetStream>, BlobRejection> {
-    // The caller files under itself. Nothing about *reading* is scoped by it today — any
-    // authenticated account may fetch any live address, see [`crate::serve`] — but the
-    // transient `409` is, and `S-C39` is where the read authority that would scope the rest
-    // arrives.
-    let owner = crate::store::OwnerId::new(credential.user.as_str());
-    let resolution = crate::serve::resolve(&serve, &owner, &path.hash)
+    // Who is asking, in the shape the read authority decides from. A peer is *admitted* before
+    // anything is resolved — a revoked grant, a blocked peer or a spent budget is refused
+    // without the index being touched — and only then does it become a principal.
+    let reader: Reader = match principal {
+        Principal::Session(credential) => {
+            Reader::Account(crate::store::OwnerId::new(credential.user.as_str()))
+        }
+        Principal::Peer(capability) => {
+            federation::admit(&federation, &counters, &capability).await?;
+            Reader::Peer(capability)
+        }
+    };
+    let principal = match &reader {
+        Reader::Account(owner) => ReadPrincipal::Account(owner),
+        Reader::Peer(capability) => ReadPrincipal::Peer(capability),
+    };
+    let resolution = crate::serve::resolve(&serve, principal, &path.hash)
         .await
         .map_err(|error| {
-            tracing::error!(%error, user = %credential.user, "a blob fetch could not be resolved");
+            tracing::error!(%error, reader = %principal, "a blob fetch could not be resolved");
             BlobRejection::unavailable()
         })?;
 
@@ -195,7 +305,16 @@ pub async fn get_blob(
         ServeResolution::Serve { address, size } => (address, size),
         ServeResolution::AwaitingUpload { .. } => return Err(BlobRejection::pending()),
         ServeResolution::NotFound => return Err(BlobRejection::not_found()),
-        ServeResolution::Forbidden => return Err(BlobRejection::forbidden()),
+        // The `403` says the same thing to both readers and says it differently, because what
+        // the reader does next differs: an account re-syncs its membership, a peer asks its
+        // home server for a fresh grant.
+        ServeResolution::Forbidden => {
+            return Err(match &reader {
+                Reader::Account(_) => BlobRejection::forbidden(),
+                Reader::Peer(_) => BlobRejection::from(Refusal::Revoked),
+            });
+        }
+        ServeResolution::ScopeInsufficient => return Err(BlobRejection::scope_insufficient()),
         ServeResolution::Gone => return Err(BlobRejection::gone()),
     };
 

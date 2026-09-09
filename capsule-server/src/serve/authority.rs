@@ -21,6 +21,7 @@
 //! | [`BlobReadAccess::Granted`] | `200`/`206` | the bytes |
 //! | [`BlobReadAccess::Revoked`] | `403` | *"you had this and you do not now"* — re-sync membership, then degrade |
 //! | [`BlobReadAccess::Unrelated`] | `404` | nothing. Byte-identical to an address the server never heard of |
+//! | [`BlobReadAccess::ScopeInsufficient`] | `403` | *"this grant does not cover originals"* — a peer only (`S-E5`) |
 //!
 //! **A `403` is a disclosure and a `404` is not**, which is why the boundary is drawn where it
 //! is. Answering `403` to a caller with no relationship to an asset would confirm that the
@@ -38,6 +39,24 @@
 //! than deleting it, precisely so this answer has a stored fact behind it. An account the roster
 //! never named is [`BlobReadAccess::Unrelated`], indistinguishable from a stranger, because it
 //! is one.
+//!
+//! # And where a peer's fact comes from (`S-E5`)
+//!
+//! A federated peer is not an account, so it is not asked the account's question. Its
+//! relationship to an asset is the **capability** this server minted: one album, one roster
+//! member, one epoch, one scope. So [`ReadPrincipal::Peer`] is decided as — is this blob in the
+//! album the capability names (anything else is a stranger's, `404`), is that member still on
+//! the roster at the epoch the grant was made at (removed, or re-admitted later, is `403`
+//! [`BlobReadAccess::Revoked`]: the peer held the grant, so the change is a disclosure it is
+//! owed), was that member ever on it at all (`404`), and finally does the grant's scope cover
+//! this blob's **role** — a `read-derivative-only` capability is refused an `original` with
+//! [`BlobReadAccess::ScopeInsufficient`], and a `backup` is refused under every scope because a
+//! backup is the owner's durability artefact rather than part of what was shared.
+//!
+//! Whether the grant is still *live* — unrevoked, unexpired — is not asked here: it has no
+//! clock, and the route admits the capability through
+//! [`federation::admit`](crate::federation::admit) before it resolves anything. What is asked
+//! here is only what the stores know.
 //!
 //! The roster itself is the album owner's signed statement, verified against the owner's
 //! published device directory before it is stored ([`crate::membership`]). This server still
@@ -63,6 +82,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use crate::federation::VerifiedCapability;
 use crate::index::BlobReference;
 use crate::membership::{Membership, MembershipStore};
 use crate::store::{OwnerId, UserId};
@@ -109,6 +129,53 @@ pub enum BlobReadAccess {
     ///
     /// Rendered as `404`, byte-identical to an address nothing references — which is the point.
     Unrelated,
+    /// The caller is entitled to the album, but its grant does not cover this blob's role
+    /// (`S-E5`).
+    ///
+    /// Only a peer under a capability ever sees this: an account's membership carries no scope.
+    /// Rendered as `403 error.federation.scope_insufficient` rather than `404`, because the peer
+    /// already knows the album holds the asset — the feed told it — and a `404` would send it
+    /// looking for an address that is there.
+    ScopeInsufficient,
+}
+
+/// Who a blob is being served to (`S-C39`, `S-E5`).
+///
+/// An account and a peer are decided from the same stores, but they are not the same reader:
+/// an account's relationship to an asset is its own membership, while a peer's is the
+/// membership of the roster member its capability was minted for, inside the one album that
+/// capability names. A bare identifier would have let either be read as the other, and a peer
+/// origin and an account id can spell the same string.
+#[derive(Debug, Clone, Copy)]
+pub enum ReadPrincipal<'a> {
+    /// An account, through a session access token.
+    Account(&'a OwnerId),
+    /// A peer server, through a federation capability (`S-E5`).
+    Peer(&'a VerifiedCapability),
+}
+
+impl<'a> ReadPrincipal<'a> {
+    /// The account whose own in-flight uploads may answer a fetch (`S-C40`), or `None`.
+    ///
+    /// A peer has none. The transient `409` reports the caller's *own device* still sending
+    /// exactly these bytes; a peer has no device here, so it is told what an unreferenced
+    /// address tells everyone and waits for the feed's `original_held` to flip instead.
+    #[must_use]
+    pub fn own_account(self) -> Option<&'a OwnerId> {
+        match self {
+            Self::Account(owner) => Some(owner),
+            Self::Peer(_) => None,
+        }
+    }
+}
+
+impl fmt::Display for ReadPrincipal<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Account(owner) => write!(f, "account {owner}"),
+            Self::Peer(capability) => write!(f, "peer {}", capability.record.peer_id),
+        }
+    }
 }
 
 /// Who may read a blob.
@@ -118,20 +185,20 @@ pub enum BlobReadAccess {
 /// stores that will grow (federation next), and a serving path that reached into them directly
 /// would have to grow with them.
 pub trait ReadAuthority: fmt::Debug + Send + Sync {
-    /// May `caller` fetch the bytes `reference` names?
+    /// May `principal` fetch the bytes `reference` names?
     ///
     /// Takes the whole reference rather than an asset id so the decision comes from the same
     /// read that found it. An authority that re-looked-up the asset would open a window in
     /// which the two reads disagree, and would cost a round trip to do it.
     fn blob_read_access<'a>(
         &'a self,
-        caller: &'a OwnerId,
+        principal: ReadPrincipal<'a>,
         reference: &'a BlobReference,
     ) -> ReadAuthorityFuture<'a, BlobReadAccess>;
 }
 
 /// The authority the server runs on: an account reads its own assets' blobs and the blobs of
-/// every album it is currently a member of.
+/// every album it is currently a member of, and a peer reads what its capability names.
 #[derive(Debug, Clone)]
 pub struct MembershipAuthority {
     members: Arc<dyn MembershipStore>,
@@ -145,13 +212,14 @@ impl MembershipAuthority {
     }
 }
 
-impl ReadAuthority for MembershipAuthority {
-    fn blob_read_access<'a>(
-        &'a self,
-        caller: &'a OwnerId,
-        reference: &'a BlobReference,
-    ) -> ReadAuthorityFuture<'a, BlobReadAccess> {
-        Box::pin(async move {
+impl MembershipAuthority {
+    /// What an account may read: its own assets, and the albums it is on the roster of.
+    async fn account_access(
+        &self,
+        caller: &OwnerId,
+        reference: &BlobReference,
+    ) -> Result<BlobReadAccess, ReadAuthorityError> {
+        {
             if &reference.owner_id == caller {
                 return Ok(BlobReadAccess::Granted);
             }
@@ -188,6 +256,94 @@ impl ReadAuthority for MembershipAuthority {
                     BlobReadAccess::Unrelated
                 }
             })
+        }
+    }
+
+    /// What a peer may read: the album its capability names, as the member it was minted for,
+    /// within the scope it was granted (`S-E5`).
+    async fn peer_access(
+        &self,
+        capability: &VerifiedCapability,
+        reference: &BlobReference,
+    ) -> Result<BlobReadAccess, ReadAuthorityError> {
+        let record = &capability.record;
+        // A capability covers exactly one album. A blob in any other is answered as a
+        // stranger's: the peer holds no fact about that album and must not acquire one here,
+        // and `404` is byte-identical to an address nothing references.
+        if reference.album_id != record.album_id {
+            tracing::info!(
+                peer = %record.peer_id,
+                asset = %reference.asset_id,
+                "a peer named an address outside its capability's album"
+            );
+            return Ok(BlobReadAccess::Unrelated);
+        }
+        let membership = self
+            .members
+            .membership(&reference.album_id, &record.member)
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, album = %reference.album_id, "the membership store could not answer a peer's fetch");
+                ReadAuthorityError::unavailable(error.to_string())
+            })?;
+        match membership {
+            Membership::Member { granted_epoch, .. } if granted_epoch == record.granted_epoch => {
+                // Entitled to the album. The last question is the grant's own: a scope is
+                // enforced against the blob's server-visible **role**, so a derivative-only
+                // capability cannot fetch an original whatever the peer says it is fetching.
+                if record.scope.permits(reference.role) {
+                    Ok(BlobReadAccess::Granted)
+                } else {
+                    tracing::info!(
+                        peer = %record.peer_id,
+                        asset = %reference.asset_id,
+                        role = reference.role.as_str(),
+                        scope = record.scope.as_str(),
+                        "a peer's capability does not cover this blob's role"
+                    );
+                    Ok(BlobReadAccess::ScopeInsufficient)
+                }
+            }
+            // The member was never on this roster at all. Not the peer's business that the
+            // album exists, so it is told what a stranger is told.
+            Membership::Never => {
+                tracing::info!(
+                    peer = %record.peer_id,
+                    member = %record.member,
+                    album = %reference.album_id,
+                    "a peer's capability names a member the roster never carried"
+                );
+                Ok(BlobReadAccess::Unrelated)
+            }
+            // Removed, or re-admitted at a later epoch: either way the membership this grant
+            // was minted for has ended. The peer held it, so the change is a disclosure it is
+            // owed — the same `403` a former member gets.
+            membership => {
+                tracing::info!(
+                    peer = %record.peer_id,
+                    member = %record.member,
+                    album = %reference.album_id,
+                    ?membership,
+                    granted_epoch = record.granted_epoch,
+                    "a peer's capability outlived the membership it was minted for"
+                );
+                Ok(BlobReadAccess::Revoked)
+            }
+        }
+    }
+}
+
+impl ReadAuthority for MembershipAuthority {
+    fn blob_read_access<'a>(
+        &'a self,
+        principal: ReadPrincipal<'a>,
+        reference: &'a BlobReference,
+    ) -> ReadAuthorityFuture<'a, BlobReadAccess> {
+        Box::pin(async move {
+            match principal {
+                ReadPrincipal::Account(caller) => self.account_access(caller, reference).await,
+                ReadPrincipal::Peer(capability) => self.peer_access(capability, reference).await,
+            }
         })
     }
 }
@@ -201,6 +357,7 @@ pub fn membership_reads(members: Arc<dyn MembershipStore>) -> Arc<dyn ReadAuthor
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::federation::{CapabilityRecord, PeerId, Scope};
     use crate::index::AssetState;
     use crate::membership::{InMemoryMembership, MemberRole, RosterRecord};
     use crate::store::{AlbumId, AssetId, BlobRole};
@@ -239,8 +396,14 @@ mod tests {
             .expect("the store applies");
     }
 
-    /// An authority over a store where `bob` is a reader, `carol` a writer and `dave` a former
-    /// member of alice's album.
+    /// An authority over a store where `bob` is a reader and `carol` a writer — both since
+    /// version 1, so their membership was granted at epoch 1 — `dave` a former member removed
+    /// at version 2, and `erin` a member removed at version 2 and **re-admitted** at version 3,
+    /// whose membership was therefore granted at epoch 3.
+    ///
+    /// The re-admission is what a peer capability's epoch binding is tested against: the
+    /// membership store keeps a member's original `granted_epoch` while they stay listed, so
+    /// only an interruption moves it.
     async fn authority() -> MembershipAuthority {
         let store = Arc::new(InMemoryMembership::new());
         roster(
@@ -250,6 +413,7 @@ mod tests {
                 ("bob", MemberRole::Reader),
                 ("carol", MemberRole::Writer),
                 ("dave", MemberRole::Writer),
+                ("erin", MemberRole::Reader),
             ],
         )
         .await;
@@ -257,6 +421,16 @@ mod tests {
             &store,
             2,
             &[("bob", MemberRole::Reader), ("carol", MemberRole::Writer)],
+        )
+        .await;
+        roster(
+            &store,
+            3,
+            &[
+                ("bob", MemberRole::Reader),
+                ("carol", MemberRole::Writer),
+                ("erin", MemberRole::Reader),
+            ],
         )
         .await;
         MembershipAuthority::new(store)
@@ -267,8 +441,44 @@ mod tests {
         caller: &str,
         reference: &BlobReference,
     ) -> BlobReadAccess {
+        let owner = OwnerId::new(caller);
         authority
-            .blob_read_access(&OwnerId::new(caller), reference)
+            .blob_read_access(ReadPrincipal::Account(&owner), reference)
+            .await
+            .expect("the authority decides")
+    }
+
+    /// A capability over the shared album, minted for `member` at `granted_epoch` with `scope`.
+    ///
+    /// Built as the store holds one rather than through the codec: what this unit decides from
+    /// is the *record*, and the token behind it is `federation::capability`'s subject.
+    fn capability(member: &str, granted_epoch: u64, scope: Scope) -> VerifiedCapability {
+        let record = CapabilityRecord {
+            jti: "01937b7c-0000-7000-8000-0000000000aa".to_owned(),
+            album_id: AlbumId::new("album"),
+            peer_id: PeerId::new("other.test"),
+            member: UserId::new(member),
+            scope,
+            granted_epoch,
+            min_protocol_version: "2026-06-01".to_owned(),
+            issued_at: jiff::Timestamp::UNIX_EPOCH,
+            expires_at: jiff::Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_hours(6),
+            revoked_at: None,
+            refreshed_to: None,
+        };
+        VerifiedCapability {
+            grant: record.grant(),
+            record,
+        }
+    }
+
+    async fn decide_peer(
+        authority: &MembershipAuthority,
+        capability: &VerifiedCapability,
+        reference: &BlobReference,
+    ) -> BlobReadAccess {
+        authority
+            .blob_read_access(ReadPrincipal::Peer(capability), reference)
             .await
             .expect("the authority decides")
     }
@@ -334,6 +544,157 @@ mod tests {
                 decide(&authority, "dave", &reference).await,
                 BlobReadAccess::Revoked,
                 "nor a former member's"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_peer_reads_the_album_its_capability_names_as_the_member_it_was_minted_for() {
+        // Bob is on the roster at epoch 2, which is what the grant is bound to.
+        let authority = authority().await;
+        assert_eq!(
+            decide_peer(
+                &authority,
+                &capability("bob", 1, Scope::Read),
+                &reference("alice")
+            )
+            .await,
+            BlobReadAccess::Granted
+        );
+        assert_eq!(
+            decide_peer(
+                &authority,
+                &capability("erin", 3, Scope::Read),
+                &reference("alice")
+            )
+            .await,
+            BlobReadAccess::Granted,
+            "the epoch a re-admission was granted at"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_peer_outside_its_capabilitys_album_is_a_stranger() {
+        // Not `Revoked`: the peer has no relationship to another album, and a `403` would tell
+        // it the address is referenced by somebody.
+        let authority = authority().await;
+        let mut elsewhere = reference("alice");
+        elsewhere.album_id = AlbumId::new("another-album");
+        assert_eq!(
+            decide_peer(&authority, &capability("bob", 1, Scope::Read), &elsewhere).await,
+            BlobReadAccess::Unrelated
+        );
+        // And a member the roster never carried is a stranger inside the album too.
+        assert_eq!(
+            decide_peer(
+                &authority,
+                &capability("mallory", 1, Scope::Read),
+                &reference("alice")
+            )
+            .await,
+            BlobReadAccess::Unrelated
+        );
+    }
+
+    #[tokio::test]
+    async fn a_peers_grant_does_not_outlive_the_membership_it_was_minted_for() {
+        // Dave was removed at version 2 and never came back. Erin was removed at 2 and
+        // re-admitted at 3, so a grant naming epoch 1 covers a membership that ended even
+        // though she is on the roster right now. Both are the `403` a former member gets,
+        // because the peer held the grant and the change is a disclosure it is owed.
+        let authority = authority().await;
+        assert_eq!(
+            decide_peer(
+                &authority,
+                &capability("dave", 1, Scope::Read),
+                &reference("alice")
+            )
+            .await,
+            BlobReadAccess::Revoked
+        );
+        assert_eq!(
+            decide_peer(
+                &authority,
+                &capability("erin", 1, Scope::Read),
+                &reference("alice")
+            )
+            .await,
+            BlobReadAccess::Revoked,
+            "re-admission at a later epoch does not revive an older grant"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_derivative_only_grant_is_refused_an_original_and_every_grant_a_backup() {
+        // The scope is enforced against the blob's server-visible role, never against what the
+        // peer says it is fetching.
+        let authority = authority().await;
+        let mut original = reference("alice");
+        original.role = BlobRole::Original;
+        assert_eq!(
+            decide_peer(
+                &authority,
+                &capability("bob", 1, Scope::ReadDerivativeOnly),
+                &original
+            )
+            .await,
+            BlobReadAccess::ScopeInsufficient
+        );
+        assert_eq!(
+            decide_peer(&authority, &capability("bob", 1, Scope::Read), &original).await,
+            BlobReadAccess::Granted
+        );
+
+        for role in [
+            BlobRole::Derivative,
+            BlobRole::Metadata,
+            BlobRole::Provenance,
+        ] {
+            let mut derived = reference("alice");
+            derived.role = role;
+            assert_eq!(
+                decide_peer(
+                    &authority,
+                    &capability("bob", 1, Scope::ReadDerivativeOnly),
+                    &derived
+                )
+                .await,
+                BlobReadAccess::Granted,
+                "{role:?} is what a derivative-only grant is for"
+            );
+        }
+
+        let mut backup = reference("alice");
+        backup.role = BlobRole::Backup;
+        for scope in [Scope::Read, Scope::ReadDerivativeOnly] {
+            assert_eq!(
+                decide_peer(&authority, &capability("bob", 1, scope), &backup).await,
+                BlobReadAccess::ScopeInsufficient,
+                "a backup is the owner's durability artefact, not part of what was shared"
+            );
+        }
+    }
+
+    /// A peer's refusal does not vary with the asset's state either.
+    #[tokio::test]
+    async fn a_peers_answer_does_not_vary_with_the_assets_state() {
+        let authority = authority().await;
+        for state in [AssetState::Visible, AssetState::Tombstoned] {
+            let mut reference = reference("alice");
+            reference.state = state;
+            reference.hold = Some(crate::index::ServingHold::Takedown);
+            assert_eq!(
+                decide_peer(
+                    &authority,
+                    &capability("mallory", 1, Scope::Read),
+                    &reference
+                )
+                .await,
+                BlobReadAccess::Unrelated
+            );
+            assert_eq!(
+                decide_peer(&authority, &capability("dave", 1, Scope::Read), &reference).await,
+                BlobReadAccess::Revoked
             );
         }
     }

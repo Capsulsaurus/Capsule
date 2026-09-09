@@ -16808,7 +16808,7 @@
     "/v1/blob/{hash}": {
       "get": {
         "summary": "Fetch a ciphertext blob by its content address, ranged.",
-        "description": "Opaque octets: the server holds no key and this route never learns what it is serving. An\naccount fetches the blobs of its own assets and of the albums it is currently a member of; a\nformer member is told `403`, and everyone else is told what an unknown address is told —\nsee [`crate::serve`] for the boundary and its reasons.\n\nThe one answer that *is* account-scoped is the transient `409`: it reports the caller's own\nin-flight upload and nobody else's (`S-C40`).",
+        "description": "Opaque octets: the server holds no key and this route never learns what it is serving. An\naccount fetches the blobs of its own assets and of the albums it is currently a member of; a\nformer member is told `403`, and everyone else is told what an unknown address is told —\nsee [`crate::serve`] for the boundary and its reasons.\n\nThe one answer that *is* account-scoped is the transient `409`: it reports the caller's own\nin-flight upload and nobody else's (`S-C40`).\n\nA federated peer fetches here with a capability instead of a session token (`S-E5`), through\nthe same resolution and the same authority.",
         "operationId": "get_blob",
         "parameters": [
           {
@@ -17233,6 +17233,42 @@
           },
           "410": {
             "description": "Gone",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate budget exceeded",
             "headers": {
               "X-Capsule-Protocol-Min": {
                 "description": "The oldest protocol version this server accepts.",
