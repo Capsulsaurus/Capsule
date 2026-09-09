@@ -78,7 +78,19 @@ pub enum CounterKey {
     LoginAttempts(UserId),
     /// Enrollment-code redemptions against one pending enrollment (`S-C7`, invariant 31's
     /// sibling in the enrollment contract).
+    ///
+    /// Built only from a code that passed the route's shape check, for the reason
+    /// [`Self::OidcAuthorize`] is built only from an admitted redirect host: the presented code
+    /// is caller-supplied, and a counter keyed on an unchecked one is a partition an
+    /// unauthenticated caller fills a row at a time. Anything malformed goes to
+    /// [`Self::EnrollmentRedemptionMalformed`].
     EnrollmentRedemption(String),
+    /// Every enrollment redemption presenting a code that is not even shaped like one (`S-C7`).
+    ///
+    /// One bucket, as [`Self::OidcAuthorizeRefused`] is one bucket, and for the same reasons:
+    /// a malformed attempt must still be throttled, and it must not be throttled *per code*,
+    /// because the code is whatever the caller typed.
+    EnrollmentRedemptionMalformed,
     /// Requests against one share link's opaque id (`S-C4`).
     ShareLink(String),
     /// Requests from one source address, on the public share path.
@@ -142,6 +154,7 @@ impl CounterKey {
         match self {
             Self::LoginAttempts(_) => "login_attempts",
             Self::EnrollmentRedemption(_) => "enrollment_redemption",
+            Self::EnrollmentRedemptionMalformed => "enrollment_redemption_malformed",
             Self::ShareLink(_) => "share_link",
             Self::ShareSource(_) => "share_source",
             Self::DropLink(_) => "drop_link",

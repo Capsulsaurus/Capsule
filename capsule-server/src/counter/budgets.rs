@@ -28,6 +28,17 @@ pub const LOGIN_ATTEMPTS: Budget = Budget::new(5, SignedDuration::from_mins(15))
 /// offer at all.
 pub const ENROLLMENT_REDEMPTION: Budget = Budget::new(10, SignedDuration::from_mins(10));
 
+/// Redemption attempts presenting something that is not shaped like a code at all.
+///
+/// Sixty a minute against
+/// [`CounterKey::EnrollmentRedemptionMalformed`](crate::counter::CounterKey::EnrollmentRedemptionMalformed)'s
+/// one bucket, the same shape the refused-redirect bucket takes. Deliberately far more generous
+/// than [`ENROLLMENT_REDEMPTION`]: a malformed code is not a guess at a *particular* pending
+/// enrollment — it cannot match one — so this number is not part of the entropy argument the
+/// per-code budget carries. It exists so that a malformed attempt is not free, and so the
+/// partition holding it can never be more than one key wide.
+pub const ENROLLMENT_REDEMPTION_MALFORMED: Budget = Budget::new(60, SignedDuration::from_mins(1));
+
 /// Requests against one share link's opaque id.
 ///
 /// Sixty a minute: generous for a person opening a shared album, and a hard ceiling on how fast

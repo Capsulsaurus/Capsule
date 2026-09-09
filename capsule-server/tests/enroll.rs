@@ -392,13 +392,18 @@ async fn redemption_is_rate_limited_per_code() {
     let issued: Value = issue(&fixture, &bearer, StatusCode::OK).await.json();
     let code = issued["code"].as_str().expect("a code").to_owned();
 
-    // Wrong guesses against the *same* string are what the budget counts.
+    // Wrong guesses against the *same* string are what the budget counts. The string has to be
+    // shaped like a code — eight digits is the transcribable fallback's shape — because only a
+    // well-formed guess can name a pending enrollment, and only a well-formed guess gets a
+    // counter key of its own. Anything else shares one bucket; see
+    // `redemption_that_is_not_even_shaped_like_a_code_shares_one_bucket`.
+    const WRONG_BUT_CONSISTENT: &str = "00000001";
     for _ in 0..10 {
-        redeem(&fixture, "wrong-but-consistent", StatusCode::NOT_FOUND).await;
+        redeem(&fixture, WRONG_BUT_CONSISTENT, StatusCode::NOT_FOUND).await;
     }
     let problem: Value = redeem(
         &fixture,
-        "wrong-but-consistent",
+        WRONG_BUT_CONSISTENT,
         StatusCode::TOO_MANY_REQUESTS,
     )
     .await
@@ -410,6 +415,36 @@ async fn redemption_is_rate_limited_per_code() {
     redeem(&fixture, &code, StatusCode::OK).await;
 }
 
+/// A code that is not even shaped like one cannot mint a counter key.
+///
+/// The presented value is an arbitrary caller-supplied string, and the limiter is charged before
+/// the code is resolved — deliberately, so probing costs the prober. Keying on an unchecked
+/// string would let an unauthenticated caller fill this partition a row at a time, so anything
+/// malformed is charged to one fixed bucket instead. Well-formed guesses keep their own budgets,
+/// which is the property the entropy argument for the short fallback rests on.
+#[tokio::test]
+async fn redemption_that_is_not_even_shaped_like_a_code_shares_one_bucket() {
+    let fixture = Fixture::working();
+
+    // Sixty distinct malformed strings: all refused on their merits, none rate-limited, because
+    // they share one bucket whose budget is sixty a minute.
+    for index in 0..60 {
+        redeem(&fixture, &format!("garbage-{index}"), StatusCode::NOT_FOUND).await;
+    }
+    // The sixty-first spends that shared bucket, on a string nothing has ever seen.
+    let problem: Value = redeem(&fixture, "garbage-fresh", StatusCode::TOO_MANY_REQUESTS)
+        .await
+        .json();
+    assert_eq!(problem["code"], "error.enrollment.rate_limited");
+
+    // And a *well-formed* code is a different bucket, unaffected by the flood: the malformed
+    // path must not be able to deny a real redemption.
+    let bearer = fresh(&fixture).await;
+    let issued: Value = issue(&fixture, &bearer, StatusCode::OK).await.json();
+    let code = issued["code"].as_str().expect("a code").to_owned();
+    redeem(&fixture, &code, StatusCode::OK).await;
+}
+
 #[tokio::test]
 async fn the_redemption_limiter_counts_successes_too() {
     // Charged on every attempt whatever the outcome. A limiter that only counted failures would
@@ -417,12 +452,15 @@ async fn the_redemption_limiter_counts_successes_too() {
     let fixture = Fixture::working();
     let bearer = fresh(&fixture).await;
 
+    // Eight digits: the transcribable fallback's shape, so this guess gets its own budget the
+    // way a real code does.
+    const ONE_STRING: &str = "00000002";
     for _ in 0..10 {
-        redeem(&fixture, "one-string", StatusCode::NOT_FOUND).await;
+        redeem(&fixture, ONE_STRING, StatusCode::NOT_FOUND).await;
     }
     // Even the *right* code, presented under a spent budget, is refused — because the budget is
     // keyed on the string presented, and this one has been presented ten times.
     let issued: Value = issue(&fixture, &bearer, StatusCode::OK).await.json();
     let _ = issued;
-    redeem(&fixture, "one-string", StatusCode::TOO_MANY_REQUESTS).await;
+    redeem(&fixture, ONE_STRING, StatusCode::TOO_MANY_REQUESTS).await;
 }

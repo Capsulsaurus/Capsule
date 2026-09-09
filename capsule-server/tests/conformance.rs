@@ -1877,16 +1877,19 @@ async fn every_declared_response_is_exercised() {
     fixture.channels.set_unavailable(false);
 
     // 429 on redeem: the per-code budget, spent against one consistent wrong guess (`S-C32`).
+    // Eight digits, because only a guess shaped like a code gets a per-code budget — anything
+    // else is charged to the one malformed bucket, whose budget is far larger.
+    const GRIND: &str = "00000099";
     for _ in 0..10 {
         client
             .post("/v1/auth/devices/enroll/redeem")
-            .json(&serde_json::json!({ "code": "conformance-grind" }))
+            .json(&serde_json::json!({ "code": GRIND }))
             .send()
             .await;
     }
     client
         .post("/v1/auth/devices/enroll/redeem")
-        .json(&serde_json::json!({ "code": "conformance-grind" }))
+        .json(&serde_json::json!({ "code": GRIND }))
         .send()
         .await
         .assert_status(StatusCode::TOO_MANY_REQUESTS);
