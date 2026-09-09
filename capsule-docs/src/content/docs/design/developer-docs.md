@@ -49,7 +49,7 @@ Each surface's owning gate emits a **description artifact**: a small, committed,
 file describing the surface. The docs build reads committed artifacts and nothing else. It never
 invokes cargo, uniffi, or wasm-bindgen.
 
-`capsule-sdk/openapi.json` already is such an artifact — emitted by a state-free binary, refreshed by
+`capsule-server/openapi.json` already is such an artifact — emitted by a state-free binary, refreshed by
 `mise run openapi-kynos`, and drift-gated by `mise run openapi-check-kynos`. This rule generalizes that shape to
 every other surface rather than inventing a second mechanism for each.
 
@@ -96,10 +96,12 @@ Each therefore needs a small committed dump alongside its existing generation st
 symbol-presence assertions already in `mise-tasks/gen-bindings` are the seed of that dump — they
 already enumerate the verbs each binding must export — but they assert, they do not yet emit.
 
-**Why REST is blocked.** The committed `capsule-sdk/openapi.json` is emitted from the retired Salvo
-server. Its Kynos replacement exposes `openapi() -> Document` but has a single route ported and no
-emitter binary, so no Kynos document exists yet. The REST reference is generated from the Kynos
-document when there is one; publishing the Salvo-derived file would document a server nothing runs.
+**Why REST is not blocked any more.** This paragraph used to say the only committed document came
+from the retired Salvo server and that its Kynos replacement had one route ported and no emitter
+binary. `capsule-server/src/bin/gen_openapi.rs` emits `capsule-server/openapi.json` — fifty-nine
+operations at OpenAPI 3.2, pinned with `openapi_as(SpecVersion::V3_2)` — `mise run
+openapi-check-kynos` gates it inside `check-rust`, and the Salvo copy is deleted. What is left is
+the reference generation itself, which is slice `S-Z9`.
 
 **What is deliberately not a reference surface:**
 

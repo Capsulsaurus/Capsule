@@ -9,16 +9,25 @@ both halves of the current programme:
   the code 2026-08-21) plus everything needed to exercise the iOS app against a server end
   to end.
 
+**This file tracks slices; [`ROADMAP.md`](ROADMAP.md) tracks packages.** Read this one for
+what a piece of work is and where it stands; read that one for what state a package is in,
+which gate covers it, and which slices are open against it. `ROADMAP.md` cites slice ids and
+never restates a status, and `mise run check-docs-truth` fails if a citation there has no
+detail block here.
+
 It also absorbs the **post-teardown verdict**: the previous Salvo server, the Progenitor
 SDK and the standalone media crate are review material, and the replacement server is one
 **Kynos** REST/OpenAPI application. That verdict is accepted and final.
 
-**`S-C59` executed it**, and narrowed it on evidence. Three `legacy-review/` buckets remain —
-`server-salvo`, `sdk-progenitor`, `media-pipeline` — and the fourth, `core-import-media`, is
-**gone**: it quarantined `capsule-core::exif` and the import executor's cancellation and progress
-halves, and this branch has since rebuilt all three, live and tested. Quarantining a stale twin of
-a working module is the opposite of what quarantine is for, so those stay in `capsule-core` and
-the bucket went. See [`S-C59`](#s-c59--the-salvo-tree-leaves-the-workspace).
+**`S-C59` executed it**, and narrowed it on evidence. Four `legacy-review/` buckets sit in the
+tree: `server-salvo`, `sdk-progenitor`, `media-pipeline`, and `core-import-media`. The fourth is
+a stale twin rather than a quarantine — it holds a snapshot of `capsule-core::exif` and the
+import executor's cancellation and progress halves, all three of which this branch has since
+rebuilt, live and tested, so those stay in `capsule-core`. Quarantining a stale twin of a working
+module is the opposite of what quarantine is for. **`S-C59` recorded that bucket as deleted and
+did not delete it**: the directory is still there, and its removal is owed to
+[#423](https://github.com/Capsulsaurus/Capsule/issues/423). See
+[`S-C59`](#s-c59--the-salvo-tree-leaves-the-workspace).
 
 Because a slice can now be honest in one tree and dishonest in the other, every row carries
 an **Area**. Read `Status` through `Area`, never on its own.
@@ -44,15 +53,18 @@ an **Area**. Read `Status` through `Area`, never on its own.
 
 | Area | Meaning |
 | --- | --- |
-| `ACTIVE` | The whole surface survives the teardown (`capsule-core` minus its media/exif trees, `capsule-core-ffi`/`-swift`/`-kotlin`, the apps, `capsule-cli` local paths, `capsule-web` local paths, `locales/`, `xtask`, the docs site). Implementable against the live workspace today and unaffected by the Kynos rebuild. |
-| `RETIRED` | The target sits in a `legacy-review/` bucket — `server-salvo` (the whole Salvo tree), `sdk-progenitor`, or `media-pipeline` (`capsule_core::media` and its lifecycle adapter). The deliverable must be re-landed on the replacement: Kynos for the server, the Rawshift-backed pipeline for media, the spargen SDK for the client. **`capsule_core::exif` and `import/{executor_cancellation, progress}.rs` are not on this list**, against the original teardown: this branch rebuilt them and they are live (`S-C59`). |
+| `ACTIVE` | The whole surface survives the teardown (`capsule-core` minus its `media` tree, `capsule-core-ffi`/`-swift`/`-kotlin`, the apps, `capsule-cli` local paths, `capsule-web` local paths, `locales/`, `xtask`, the docs site). Implementable against the live workspace today and unaffected by the Kynos rebuild. |
+| `RETIRED` | The target sits in a `legacy-review/` bucket — `server-salvo` (the whole Salvo tree), `sdk-progenitor`, or `media-pipeline` (`capsule_core::media` and its lifecycle adapter). The deliverable must be re-landed on the replacement: Kynos for the server, the Rawshift-backed pipeline for media, the spargen SDK for the client. **`capsule_core::exif` and `import/{executor_cancellation, progress}.rs` are not on this list**, against the original teardown: this branch rebuilt them and they are live, and the `core-import-media` bucket beside them is a stale twin awaiting deletion ([#423](https://github.com/Capsulsaurus/Capsule/issues/423)), not a quarantine (`S-C59`). |
 | `MIXED` | Both: a surviving `capsule-core`/client/app half that ships and stays, and a server, SDK-wire, or media half that must be re-landed. |
 
 **Status — read through Area.**
 
 - On an `ACTIVE` row, `Status` means what it always meant.
-- On a `MIXED` row, `Status` describes **the surviving half only**. The retiring half is
-  owed to the rebuild by construction; it is not a separate `Owed →` pointer.
+- On a `MIXED` row, `Status` describes **the surviving half only**. Where the retiring half
+  has no slice of its own, it is owed to the rebuild by construction and is not a separate
+  `Owed →` pointer. Where a *named* slice carries it, say so: the row is `done*` and `Owed
+  →` points at that slice, exactly as it would on any other area. A remainder with a live
+  home is not "owed by construction" — it is owed to something a reader can go and read.
 - On a `RETIRED` row, `done` is not available. An implemented `RETIRED` slice reverts to
   `ready`, and its detail block records that it **landed in code that is still live in
   this workspace today** — the contract is proven, the deliverable re-scopes onto the
@@ -85,15 +97,24 @@ tree). Everything the v1 campaign shipped is the floor wave 2 stands on:
   four membership ceremonies, minted-and-distributed write-tier keys, Welcome/history
   delivery, durable group persistence, tombstone-plus-fork upgrade ceremony, re-keying,
   `ReconcileOutcome` reconciliation.
-- **Import/media**: thumbnail/LQIP + video-derivative generation over injected
-  per-platform encoder seams, signed `DerivativeManifest` chains; signed-path import
-  executor; streaming import; staged uploads (tier ladder); Takeout source adapter
-  (`SourceAdapter` trait); planner determinism suite. Derivative byte-encoding is a
-  per-platform SDK seam — CLI-path derivative generation is inert without an injected
-  encoder (by design, thumbnails.md). **Area caveat:** the decode/derivative half lives in
-  `capsule-core::{media, exif}`, which is `RETIRED` territory; the executor, planner,
+- **Import/media**: signed `DerivativeManifest` chains; signed-path import executor;
+  streaming import; staged uploads (tier ladder); Takeout source adapter (`SourceAdapter`
+  trait); planner determinism suite; LQIP on Chromahash 0.7.1 in `capsule-core::lqip`
+  (`S-B14`). Derivative byte-encoding is a per-platform SDK seam — CLI-path derivative
+  generation is inert without an injected encoder (by design, thumbnails.md).
+  **Correction, `S-C59`:** the decode half went to `legacy-review/media-pipeline` with
+  `capsule-core::media`, so **there is no image decoder in the workspace at all** and every
+  still import is a `DeferredNoCodec` — no thumbnail, no preview, and no LQIP producer, since
+  nothing can hand `capsule-core::lqip` an `RgbaImage` (`S-B1`, `S-B13`, `S-B14`; #410).
+  `capsule-core::exif` is **not** retired: it was rebuilt and is live. The executor, planner,
   scanner, importers, streaming, and staged scheduler survive.
-- **Key-free server** (`capsule-api`, Salvo): hardened chunked upload (invariants 1–15 +
+- **Key-free server** — *the contract, not a running binary.* This inventory describes
+  `capsule-api` (Salvo), which `S-C59` moved to `legacy-review/server-salvo`. It is kept
+  here because it is what the Kynos rebuild must reproduce, and because thirty-seven of its
+  documented operations became fifty-nine on the replacement. **Nothing in this bullet ships
+  today**: `capsule-server` is a surface with a committed OpenAPI 3.2 document and a test
+  suite over the real router, and has no binary, no configuration loading and no Postgres or
+  Valkey adapter (#401–#403). What it covered: hardened chunked upload (invariants 1–15 +
   strictness table, testcontainer-proven), `capsule.sync.v1` gRPC feed (+ gRPC-web),
   `/albums/{id}/ops` lifecycle writes, content-addressed blob serving at the 65,536-B
   stride, storage verification + custody receipts + signed attestation
@@ -107,12 +128,16 @@ tree). Everything the v1 campaign shipped is the floor wave 2 stands on:
   found while reproducing it: the login never demanded a confirmed second factor (`S-C55`),
   and the passkey surface could not authenticate at all (`S-C56`). "Real and
   testcontainer-tested" was true of the code and not of the capability.*
-- **SDK/clients**: session store + auto refresh, hand-written upload/sync clients,
-  spargen-generated typed REST client from committed `openapi.json`, verify-before-
-  destroy + receipt gate, adverse-network engine, LAN peering (in-process), recovery
-  cadence, CLI auth/register/status/sync/list/push/demo (E2E cases 1–3), web guest-drop +
-  share-viewer (wasm), aggregated federated albums, uniffi FFI for catalog + SDK user
-  flows.
+- **SDK/clients**: session store + auto refresh, the hand-written resumable upload client,
+  the REST sync consumer, the spargen-generated typed REST client from the committed
+  `capsule-server/openapi.json`, verify-before-destroy + receipt gate, adverse-network
+  engine, LAN peering (in-process), recovery cadence, CLI
+  auth/register/status/sync/list/push/import/cull/demo, web guest-drop + share-viewer
+  (wasm), aggregated federated albums, uniffi FFI for catalog + SDK user flows.
+  **Correction:** the earlier claim that the CLI covers **E2E cases 1–3** was a claim about
+  the commands, not about a run. `capsule demo` is offline by design — it drives the local
+  library and touches no server — and the networked commands have nothing to reach until
+  `capsule-server` has a binary. The three cases are owed to `S-Q1` (#409).
 - **Legacy retired**: GraphQL, plaintext proto/entities/import-executor gone.
 - **Cohesion floor** (2026-08-21, wave-0 ground clearing): `lifecycle.rs` (3501 LOC, reaching
   17 of 24 sibling modules) split into a `lifecycle/` module of twelve sibling files plus
@@ -137,34 +162,42 @@ tree). Everything the v1 campaign shipped is the floor wave 2 stands on:
 
 ## Sequencing — build then retire
 
-The teardown verdict is final; the **order** is not "retire, then rebuild". It is
-**build, then retire**.
+The teardown verdict was final and the **order** was not "retire, then rebuild" but
+**build, then retire**. `S-C59` executed the retirement; this section records the state it
+left, which is what everything below is sequenced against.
 
-- The Salvo server (`capsule-api/**`), `capsule-sdk`, and the in-repo media stack are
-  **still live in this workspace** and stay that way until the Kynos rebuild reaches
-  parity. `legacy-review/`'s own charter is that code leaves quarantine only once its
-  replacement contract and tests exist; retiring first would leave the tree with no
-  server, no CLI network commands, and no end-to-end test for the whole rebuild.
-- `xtask architecture-check` is **adopted and reporting-only**. It reports **63
-  violations** today (`mise run architecture-check`), and that list *is* the rebuild
-  worklist: implicit workspace packages, retired dependencies, buildable manifests under
-  `legacy-review/`, and stale component references.
-- The retirement of `capsule-api/**`, `capsule-core/src/media`, `capsule-core/src/exif`,
-  and `import/{executor_cancellation,progress}.rs` into `legacy-review/` happens in **one
-  future commit**, once Kynos reaches parity — and `architecture-check` joins `check-rust`
-  in that same commit. Until then it is a report, not a gate (the rationale is duplicated
-  in `mise.toml` next to the task so nobody re-wires it early).
-- **Kynos is a git dependency, not a crates.io release.** Pin it at rev
-  `6513109b5725a3e0713808de0eaee6b4b74281e3`; it is not published, so a version
-  requirement will not resolve.
-- **`capsule-sdk` is replacement-in-progress, not review material.** It already satisfies
-  most of `legacy-review/sdk-progenitor/REVIEW.md`'s stated replacement contract:
-  spargen-generated from a checked-in OpenAPI 3.1 document, token refresh / upload / sync /
-  recovery / protocol-version orchestration kept **outside** generated code, no
-  `generate_openapi.sh`, no Progenitor macros. Two things are owed: its **gRPC sync half
-  re-fronted on REST**, and its **schema sourced from Kynos** rather than from the Salvo
-  `gen_openapi` binary. Slices whose target is the SDK are marked `RETIRED` because their
-  wire contract is re-sourced — not because the crate is being thrown away.
+- **The Salvo tree is gone from the workspace.** `capsule-api/**` is
+  `legacy-review/server-salvo/`, `capsule_core::media` is `legacy-review/media-pipeline/`,
+  and `salvo`, `tonic`, `prost`, `async-graphql`, `webauthn-rs` and — with the last of them
+  — `openssl` left the **manifests**. Not all of them left the dependency *graph*, and the
+  difference is the difference between what `architecture-check` proves and what it does
+  not: it reads declared dependencies, so `Cargo.lock` still resolves `prost v0.13.5`
+  transitively through `tzf-rs`, which `capsule-core` takes for timezone lookup. Nothing
+  declares it and nothing calls it as a wire format. The `rustls`-only rule holds with no
+  exception, declared or transitive.
+  The consequences are real and are named rather than hidden: there is no server binary and
+  no image decoder in the workspace (#401, #410).
+- **`xtask architecture-check` is a gate, not a report.** It runs inside `mise run
+  check-rust` (`mise.toml`) and reports **0** violations; the 63 it reported at adoption
+  were the rebuild worklist and are discharged. Adding a retired dependency or a buildable
+  manifest under `legacy-review/` fails the build.
+- **Kynos is a crates.io release.** `Cargo.toml` takes `kynos = { version = "0.1.0",
+  features = ["openapi32"] }`; it published on 2026-08-29, which fired the repin-on-publish
+  exit the dependencies doc carried while it was a git dependency. The rev
+  `6513109b5725a3e0713808de0eaee6b4b74281e3` is history, not a pin. The `openapi32` feature
+  alone does **not** yield a 3.2 document — `capsule-server` pins the version explicitly
+  with `openapi_as(SpecVersion::V3_2)` and a test asserts the emitted `openapi` field.
+- **`capsule-sdk` is replacement-in-progress, and both of its owed items landed.** It
+  satisfies `legacy-review/sdk-progenitor/REVIEW.md`'s replacement contract: spargen
+  generates it from the checked-in OpenAPI **3.2** document, with token refresh, upload,
+  sync, recovery and protocol-version orchestration kept **outside** generated code, no
+  `generate_openapi.sh`, no Progenitor macros. The two items this section used to owe are
+  discharged — the gRPC sync half is re-fronted on REST (`GET /v1/sync` through the
+  generated client, `S-C60`/`S-D28`; `tonic` and `prost` are out of the manifest), and the
+  schema is sourced from Kynos (`capsule-sdk/build.rs` reads `capsule-server/openapi.json`,
+  the one document `mise run openapi-check-kynos` gates). The SDK slices that were marked
+  `RETIRED` for that reason are therefore `MIXED` now: the client half ships, and the server
+  half it exercises is the one still being rebuilt.
 
 - **The Apple client does not wait for the rebuild.** Lane U builds the whole anticipated
   UI against in-memory ports, so the client is written, reviewed and tested while
@@ -192,10 +225,12 @@ either lane works — only a command reaching `-create-xcframework` or a real de
 
 ## Unified Slice Index
 
-All 141 slices — the 74 from the v1 campaign, the 48 from wave 2 (46 indexed plus
-`S-C27` and `S-Q6`), and the 19 of lane U, the Apple client's mocked UI. `Lane`,
-`Depends on`, and `Size` are the campaign's own metadata; `Owed →` names where a `done*`
-row's remainder now lives.
+All 205 slices — the 129 from the v1 campaign and wave 2, the 51 the server rebuild added,
+the 23 of lane U (the Apple client's mocked UI), and the 2 of the notification lane. Every
+indexed row has a detail block and every detail block has a row: `grep -c '^### S-'
+SLICES.md` and the row count of the table below are both 205. `Lane`, `Depends on`, and
+`Size` are the campaign's own metadata; `Owed →` names where a `done*` row's remainder now
+lives.
 
 | ID | Slice | Lane | Depends on | Size | Area | Status | Owed → |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -210,11 +245,11 @@ row's remainder now lives.
 | S-A9 | Add-id counter reseed at `Workspace` open | core-crypto | — | S | ACTIVE | done | |
 | S-A10 | Durable album-key persistence + library open plumbing | core-crypto | — | L | ACTIVE | done | |
 | S-A11 | Publish the DEK in the device directory | core-crypto | — | M | ACTIVE | done | |
-| S-B1 | Thumbnail/LQIP generation | media/import | — | L | RETIRED | ready | |
+| S-B1 | Thumbnail/LQIP generation | media/import | — | L | RETIRED | blocked | Rawshift is unconsumed (gates table) |
 | S-B2 | Signed-path import-executor rewrite | media/import | S-B1 | L | MIXED | done\* | durable album keys → `S-A10` |
 | S-B3 | Streaming import (probe, `total_size`, drive mode) | media/import | S-D1, S-D4 | L | MIXED | done | |
 | S-B4 | Staged uploads (low-data tier ladder) | media/import | S-C1, S-C2, S-D1 | M | MIXED | done | |
-| S-B5 | Video derivatives (first-frame still + H.264 preview) | media/import | S-B1 | M | RETIRED | ready | |
+| S-B5 | Video derivatives (first-frame still + H.264 preview) | media/import | S-B1 | M | RETIRED | blocked | Rawshift is unconsumed (gates table) |
 | S-B6 | Google Takeout importer | media/import | S-B2 | M | MIXED | done\* | sidecar-enrichment write → `S-B10` |
 | S-B7 | iCloud export importer | media/import | S-B6 | M | MIXED | post-v1 | |
 | S-B8 | Immich importer | media/import | S-B6 | M | MIXED | post-v1 | |
@@ -223,8 +258,8 @@ row's remainder now lives.
 | S-B11 | CLI `import --provider takeout` + real-archive run | media/import | S-B10 | S | ACTIVE | done\* | synthesized archive only; real export owed |
 | S-B18 | No CLI surface shows what the importer actually wrote | media/import | S-B10 | S | ACTIVE | ready | users cannot verify enrichment |
 | S-B12 | Base default-album resolution (`resolve_default_album`) | media/import | — | M | ACTIVE | done | scope-override + source-kind rows → post-v1 |
-| S-B13 | Codec stubs → typed `UnsupportedFormat` (no panics) | media/import | — | M | RETIRED | ready | |
-| S-B14 | LQIP on Chromahash 0.7.1 in `capsule-core::lqip` | media/import | — | M | ACTIVE | done | wasm entry point owed to the browser-`lqip` slice |
+| S-B13 | Codec stubs → typed `UnsupportedFormat` (no panics) | media/import | — | M | RETIRED | blocked | Rawshift is unconsumed (gates table) |
+| S-B14 | LQIP on Chromahash 0.7.1 in `capsule-core::lqip` | media/import | — | M | ACTIVE | done\* | no producer (needs a decoder, `S-B1`) and no wasm entry point |
 | S-B15 | Importer-formed stacks exist only in the index | media/import | S-D21 | M | ACTIVE | done | rebuild guard kept as pre-`S-B15` compatibility |
 | S-B16 | Every import stamped by import time, not capture time | media/import | — | S | ACTIVE | done | found by the CLI round-trip test |
 | S-B17 | Repair capture timestamps written before `S-B16` | media/import | S-B16 | M | ACTIVE | ready | the wrong value is in *signed* bytes |
@@ -291,16 +326,16 @@ row's remainder now lives.
 | S-C61 | The drop passphrase is provisioned and never checked | server | S-C5, S-C60 | S | RETIRED | done | a gated link admitted anyone holding the opaque id; the web client was posting to paths that no longer exist |
 | S-C62 | The web auth client speaks a surface that is gone | sdk/clients | S-C54, S-C55, S-C56, S-C60 | M | RETIRED | done | passkey and password-reset screens removed, login reads `202`, profile is the four fields the server keeps |
 | S-C63 | The SDK cannot read a second-factor challenge | sdk/clients | S-C55 | M | RETIRED | done | `login` returns an outcome, not a session; `capsule auth login` prompts for the code |
-| S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
-| S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
+| S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | MIXED | done\* | E2E case 2 → `S-Q1` (#409) |
+| S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | MIXED | done\* | E2E case 3 → `S-Q1` (#409) |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
 | S-D4 | Verify-before-destroy wiring | sdk/clients | S-C3, S-C15 | M | MIXED | done | |
 | S-D5 | CLI auth/sync/list | sdk/clients | S-D1, S-D2 | M | MIXED | done | |
 | S-D6 | Web server gateway (key-free reads) | sdk/clients | S-D2, S-C60 | L | MIXED | done\* | live browser smoke → `S-Q5`; decode boundary → post-v1 |
-| S-D7 | SDK auth/session foundation + auto token refresh | sdk/clients | — | M | RETIRED | ready | |
-| S-D8 | spargen REST client integration | sdk/clients | — | M | RETIRED | ready | 401-retry-once → `S-D17` |
+| S-D7 | SDK auth/session foundation + auto token refresh | sdk/clients | — | M | MIXED | done\* | typed-path 401-retry-once → `S-D17` (#408) |
+| S-D8 | spargen REST client integration | sdk/clients | — | M | MIXED | done\* | 401-retry-once → `S-D17` |
 | S-D9 | capsule-sdk uniffi FFI bindings | sdk/clients | S-F1, S-D7 | M | RETIRED | ready | Swift harness → `S-P8`; Kotlin harness → owed-CI |
-| S-D10 | Adverse-network hardening | sdk/clients | S-D1, S-D2 | M | RETIRED | ready | |
+| S-D10 | Adverse-network hardening | sdk/clients | S-D1, S-D2 | M | MIXED | done | |
 | S-D11 | Client cohort emission + devices grouping UI | sdk/clients | S-C13, S-D7 | M | MIXED | done\* | iOS reader → `S-P6`; devices screen → post-v1; device_id → `S-N3` |
 | S-D12 | Recovery verification cadence + guided re-wrap | sdk/clients | S-C12 | M | MIXED | done | |
 | S-D13 | Culling workflow client UX | sdk/clients | — | M | ACTIVE | done | |
@@ -315,7 +350,7 @@ row's remainder now lives.
 | S-D23 | Client SQLite schema has no upgrade path | sdk/clients | — | M | ACTIVE | done | typed error at the `open` boundary still owed |
 | S-D24 | Migrate unsigned sidecars, then delete the reader | sdk/clients | S-D21 | L | ACTIVE | blocked | needs a design decision first |
 | S-D25 | `hidden` has a column, a gate and views but no writer | sdk/clients | S-D19 | S | ACTIVE | done | |
-| S-D26 | CLI drops the rotated token pair, forcing re-login | sdk/clients | — | S | MIXED | ready | fix in the REST client, not the old one |
+| S-D26 | CLI drops the rotated token pair, forcing re-login | sdk/clients | — | S | MIXED | done | |
 | S-D27 | The SDK test mock never shuts its listener down | sdk/clients | — | S | ACTIVE | done\* | fixed a real leak; the LEAK signal is partly noise |
 | S-D28 | The SDK's second transport, and the document it generates from | client SDK | S-D8, S-C2 | L | MIXED | done\* | gRPC retires; the client generates from the Kynos document; four `application/cbor` operations stay hand-written |
 | S-D29 | Local alert surface (`capsule-core::notify` + native delivery) | sdk/clients | S-Z11 | M | ACTIVE | ready | |
@@ -345,7 +380,7 @@ row's remainder now lives.
 | S-I2 | Official language-set rollout (12 locales + RTL) | i18n | — | L | ACTIVE | done\* | native RTL → post-v1; review → gates |
 | S-I3 | `xtask translate-readme` + CI drift check | i18n | S-I2 | M | ACTIVE | done | |
 | S-I4 | Swift interpolated/plural strings + InfoPlist/LAContext | i18n | — | M | ACTIVE | done | forced an ICU→Apple compiler in the generator |
-| S-I5 | The CLI import arm has no `cli.import.*` catalog namespace | i18n | — | M | ACTIVE | ready | `i18n-guard` never scanned the CLI |
+| S-I5 | The CLI import arm has no `cli.import.*` catalog namespace | i18n | — | M | ACTIVE | done | |
 | S-I6 | Android ships raw ICU to users; the guard never fires | i18n | — | M | ACTIVE | done | `aapt2` unverified — owed-CI |
 | S-I7 | The Rust runtime formatter cannot do ICU plurals | i18n | — | M | ACTIVE | done\* | refuses now; evaluating plurals still owed |
 | S-I8 | clap `--help` text is unreachable from the catalogs | i18n | — | S | ACTIVE | ready | found widening `i18n-guard` |
@@ -401,24 +436,25 @@ row's remainder now lives.
 | S-Z6 | Developer-docs parity pass | design/docs | — | M | MIXED | done | |
 | S-Z7 | Developer reference architecture (design) | design/docs | — | S | ACTIVE | done | |
 | S-Z8 | Reference shell + CLI reference | design/docs | S-Z7 | M | ACTIVE | ready | |
-| S-Z9 | REST reference from the Kynos document | design/docs | S-Z8, S-D8 | M | ACTIVE | blocked | Kynos document → `S-C27`/`S-D8` |
+| S-Z9 | REST reference from the Kynos document | design/docs | S-Z8 | M | ACTIVE | ready | |
 | S-Z10 | SDK / FFI / WASM reference | design/docs | S-Z8 | M | ACTIVE | ready | |
 | S-Z11 | Notification architecture (design) | design/docs | — | S | ACTIVE | done | |
 
 **Row counts.** 205 rows — the 129 from the v1 campaign and wave 2, the 51 the
 server rebuild added, the 23 of lane U, and the 2 of the notification lane. By
-area: **87 ACTIVE / 80 RETIRED / 38 MIXED**. By status:
-**93 done / 55 done\* / 37 ready / 9 part / 7 blocked / 4 post-v1**
+area: **87 ACTIVE / 75 RETIRED / 43 MIXED**. By status:
+**95 done / 60 done\* / 28 ready / 9 part / 9 blocked / 4 post-v1**
 (`S-C8`, `S-C27`, `S-C39`, and `S-U9`–`S-U14` — the table spells these `part`
 and `part 1 done`; they are counted together).
 
 Lanes are independent by construction; within a lane, "Depends on" is the only
-ordering. Seven rows read `blocked`, and only two of them are waiting on code:
-`S-N2` behind `S-N1`, and `S-P4` behind `S-P2`/`S-P3`. The rest are waiting on a
-decision rather than on an implementation — `S-C47` is a legal question, `S-C49`
-and `S-C51` each need a fact the slice that found them could not settle, `S-D24`
-needs a design decision, and `S-Z9` needs the Kynos document
-(`S-C27`/`S-D8`). `S-P1` landing freed the rest of lane P and `S-U19` with it;
+ordering. Nine rows read `blocked`. Five are waiting on code or on a dependency
+that is not in the manifest: `S-N2` behind `S-N1`, `S-P4` behind `S-P2`/`S-P3`,
+and `S-B1`/`S-B5`/`S-B13` behind an unconsumed `rawshift`. The other four are
+waiting on a decision rather than on an implementation — `S-C47` is a legal
+question, `S-C49` and `S-C51` each need a fact the slice that found them could
+not settle, and `S-D24` needs a design decision. `S-Z9` left this list: the Kynos
+document exists and is gated. `S-P1` landing freed the rest of lane P and `S-U19` with it;
 lane U was built so the other twenty-two Apple-client slices never waited on that
 chain in the first place. Everything else that once read `blocked`
 is startable: `S-A10` and `S-P7` are done (freeing `S-B10`, `S-D16`, `S-P1`, `S-Q5` — of
@@ -457,8 +493,8 @@ when" cannot fully pass until the gate lifts.
 | Library / environment | Status | Gates |
 | --- | --- | --- |
 | [`kynos`](https://github.com/getkono/kynos) 0.1.0 | adopted as the replacement server; **published, consumed from crates.io** | Published 2026-08-29, which fired the repin-on-publish exit this row used to carry — the git rev `6513109` is history, not a pin. Taken with the `openapi32` feature, but note that the feature alone does **not** yield a 3.2 document: Kynos emits the lowest version that expresses the API and deliberately refuses to key that on a flag Cargo can unify in from an unrelated crate, so `capsule-server` pins it explicitly via `openapi_as(SpecVersion::V3_2)` and a test asserts the emitted `openapi` field. Gates the whole `RETIRED` rebuild: lane C, `S-E5`, `S-N1`/`S-N3`, and the SDK wire half (`S-D1`, `S-D2`, `S-D7`–`S-D10`, `S-D17`). `S-C27` is its precondition. |
-| `spargen` 0.4.0 | adopted; both known gaps **closed**; consuming OpenAPI **3.2** | Bumped 0.1.0 → 0.4.0 on 2026-08-28. Both gaps this row used to record are gone: 0.2.2 added *decode textual and binary responses* and *serialize typed OpenAPI parameters*, so byte serving and object-typed query params lower correctly and the media asset-serve tree **returns to the generated client** — the hand-written byte path is no longer justified by a generator gap. 0.3.0 added *complete OpenAPI 3.1 and 3.2 conformance* plus runtime dependency contracts (which forced minimum bumps of `bytes`, `reqwest`, `serde`, `serde_json`). The API also changed: `Config` split into `Spec`/`Build`, and `Report::outcome` became a method. **0.4 validates the document strictly, and it rejects four operations the Salvo server emits** — see the row below. |
-| Salvo-emitted schema | **4 of 37 operations structurally invalid** | Found 2026-08-28 when spargen 0.4 refused them; 0.1.0 accepted them silently, which is the only reason they reached the committed contract. `POST /v1/albums/{album_id}/ops` declares **no responses at all** — the handler returns `()` and picks its status at run time (`StatusCode::from_u16(result.status)`) so an idempotent replay returns stored bytes verbatim, leaving salvo-oapi no return type to describe. `GET /v1/auth/devices/directory/{user_id}`, `GET` and `POST /v1/auth/devices/enroll/channel/{channel_id}` carry a path-template variable and **declare no path parameters**. All four are therefore already uncallable from a typed client — which is *why* the SDK hand-writes `capsule_sdk::directory`. Narrowed with `spargen::omit!` in `capsule-sdk/build.rs` rather than repaired: fixing salvo-oapi annotations is work thrown away, and **Kynos makes both classes unrepresentable** (status is part of the return type; `#[kynos::get(..)]` checks at compile time that the path type's fields are exactly the template's variables). These are acceptance criteria for the Kynos port of `S-C16` and the auth-devices tree, and the hand-written directory client goes with them. |
+| `spargen` 0.4.0 | adopted; both known gaps **closed**; consuming OpenAPI **3.2** | Bumped 0.1.0 → 0.4.0 on 2026-08-28. Both gaps this row used to record are gone: 0.2.2 added *decode textual and binary responses* and *serialize typed OpenAPI parameters*, so byte serving and object-typed query params lower correctly and the media asset-serve tree **returns to the generated client** — the hand-written byte path is no longer justified by a generator gap. 0.3.0 added *complete OpenAPI 3.1 and 3.2 conformance* plus runtime dependency contracts (which forced minimum bumps of `bytes`, `reqwest`, `serde`, `serde_json`). The API also changed: `Config` split into `Spec`/`Build`, and `Report::outcome` became a method. **0.4 validates the document strictly**, and four operations are still narrowed with `spargen::omit!` — for a different reason than they used to be; see the row below. |
+| Four `spargen::omit!` operations | **narrowed for a media type spargen cannot classify** | The four that used to sit here were structurally invalid Salvo output, and **Kynos makes both of those defects unrepresentable**: status is part of the return type, so `POST /v1/albums/{album_id}/ops` cannot declare no responses, and `#[kynos::get(..)]` checks at compile time that a path type's fields are exactly the template's variables, so the three device routes cannot take an undeclared path parameter. All four are generated now. **Four different operations take their place, for a reason outside the contract** (`S-D28`, `capsule-sdk/build.rs`): spargen's `classify_media` knows JSON, XML, multipart, form-urlencoded, octet-stream, event-stream, NDJSON, JSON sequences and `text/*`, and no `application/cbor`. Capsule serves four operations in that media type — `POST /v1/auth/devices/directory`, `GET /v1/auth/devices/directory/{user_id}`, `POST /v1/albums/{album_id}/upgrade`, `GET /v1/upload/{id}/receipt` — all of them **signed** documents served byte for byte, which is exactly why they are not JSON. Narrowing them is the instruction's own remedy (*narrow the surface, never mutilate the spec*); relabelling them `application/octet-stream` to satisfy a generator would tell every client that a document with a schema it knows is opaque bytes. `capsule_sdk::directory` hand-writes two of them; the other two have no client yet. |
 | `openmls` 0.8.x | adopted (X-Wing `0x004D`) | The X-Wing codepoint **exists** (`0x004D`) and OpenMLS ships it via libcrux, so `S-X1`–`S-X3` are not blocked and are done. Key serialization surfaces are `test-utils`-gated — persistence rides public fields + ungated codecs; fragile if upstream privatizes (upstream ask filed against openmls). Version pairing is load-bearing (0.8.x ↔ traits/storage 0.5.x ↔ libcrux-crypto 0.3.x). |
 | `libcrux` provider | no wasm32 target | `mls` feature is host-only; a browser MLS surface would need another provider. |
 | BD-09 datum fold | **no crate adopted** | Decision 2026-08-21: `S-A8` implements the error-bounded refined BD-09→GCJ-02 inverse **in-house** (~40 LOC, deterministic, unit-testable) rather than taking a dependency for one function. `geocoordinates-rs` is **not** a gate on `S-A7`/`S-A8` and is not planned; the earlier "exact fold from `geocoordinates-rs`" wording is superseded. Display-side lossy conversions remain unscheduled and are not part of either slice. |
@@ -699,6 +735,10 @@ workspace at all**, so every still import is a `DeferredNoCodec` until Rawshift 
   with `lifecycle/derivatives.rs`, its only caller. **Re-scoped:** re-land on the Rawshift-backed
   pipeline. The signed `DerivativeManifest` chain and the sidecar `lqip` field are `ACTIVE` and
   stay — the field stays here, its producer moves to `S-B14`.
+- **`blocked`, not `ready` (corrected 2026-09-01).** The re-scoped deliverable's one precondition
+  is absent: `rawshift` is a pinned git submodule (`.gitmodules`), not a workspace dependency, and
+  the gates table records it "stabilizing, unconsumed". Nothing in `Cargo.toml` names it, so this
+  slice cannot start, let alone finish. Tracked by #410.
 
 ### S-B2 — Signed-path import-executor rewrite
 
@@ -711,8 +751,10 @@ workspace at all**, so every still import is a `DeferredNoCodec` until Rawshift 
   derivatives; planner determinism suite unchanged.
 - **Tier:** Unit (planner) + Smoke (executor).
 - **Landed:** `capsule-core/src/import/executor.rs` is the new signed executor and is
-  `ACTIVE` — it survives. Its *derivative and EXIF inputs* are `RETIRED`, which is why
-  the row is `MIXED`. **Owed:** durable album keys → `S-A10` (landed).
+  `ACTIVE` — it survives. Its *derivative* input is `RETIRED`, which is why the row is
+  `MIXED`; its **EXIF input is not** (corrected 2026-09-01) — `capsule-core::exif` is live
+  and tested, as the `RETIRED` legend above records. **Owed:** durable album keys → `S-A10`
+  (landed).
 
 ### S-B3 — Streaming import
 
@@ -761,8 +803,12 @@ workspace at all**, so every still import is a `DeferredNoCodec` until Rawshift 
 - **Done when:** a fixture video yields both tiers with signed manifests; the
   closed-format rejection covers the video rows of the tier table.
 - **Tier:** Unit + Smoke.
-- **Landed in retired code:** ships today behind the injected encoder seam; the transcode
-  half is `capsule-core::media` and re-scopes onto the Rawshift-backed pipeline.
+- **Landed in retired code, and retired by `S-C59`:** it shipped behind the injected encoder
+  seam; the transcode half was `capsule-core::media` and is now
+  `legacy-review/media-pipeline/`. **Re-scoped** onto the Rawshift-backed pipeline.
+- **`blocked`, not `ready` (corrected 2026-09-01).** Same precondition as `S-B1`, which this
+  slice also depends on: `rawshift` is an unconsumed submodule, so there is nothing to build
+  the transcode half on.
 
 ### S-B6 — Google Takeout importer
 
@@ -779,9 +825,10 @@ workspace at all**, so every still import is a `DeferredNoCodec` until Rawshift 
   a fixture-archive import is deterministic across runs and skips completed work on
   re-run.
 - **Tier:** Unit (mapping table, determinism) + Smoke (end-to-end archive import).
-- **Landed:** the adapter and trait ship in `import/importers/` and are `ACTIVE`. Only the
-  EXIF side of the precedence fold rides `capsule-core::exif`, which is `RETIRED`.
-  **Owed:** sidecar-enrichment write → `S-B10`.
+- **Landed:** the adapter and trait ship in `import/importers/` and are `ACTIVE`, and so is
+  the EXIF side of the precedence fold: it rides `capsule-core::exif`, which the original
+  teardown listed for retirement and `S-C59` kept — the module is live and tested in
+  `capsule-core/src/exif/`. **Owed:** sidecar-enrichment write → `S-B10`.
 
 ### S-B7 — iCloud export importer (post-v1)
 
@@ -941,6 +988,10 @@ workspace at all**, so every still import is a `DeferredNoCodec` until Rawshift 
   `capsule-core::media`. **Re-scoped:** the uninhabited-stub discipline and the
   `is_decodable`/`from_extension` coverage table are the contract the Rawshift-backed
   rebuild inherits; `DerivativeStatus` on `ImportOutcome` is `ACTIVE` and stays.
+- **`blocked`, not `ready` (corrected 2026-09-01).** There is no `capsule-core::media` to put
+  typed errors into and no Rawshift dependency to build one on — the module is on
+  `capsule-docs/planned-modules.txt`, which is the list of what the design has committed to
+  and nobody has built. Tracked by #410.
 
 ### S-B14 — LQIP on Chromahash 0.7.1, in its own module
 
@@ -1001,6 +1052,13 @@ workspace at all**, so every still import is a `DeferredNoCodec` until Rawshift 
   21 bytes — `COMPACT_TIER`'s length — which is the concrete proof that byte length cannot
   discriminate a stale payload. Both are rejected by `from_bytes` and render as the solid
   dominant-colour fill, never noise.
+- **Owed, and the larger half was missing from this list (corrected 2026-09-01): there is no
+  producer.** `capsule-core/src/lqip/` is `mod.rs`, `sidecar.rs` and `tests.rs` — the encoder,
+  the decoder and the sidecar binding. Nothing in the tree calls `Lqip::encode`, because
+  producing an `RgbaImage` from a stored original needs a decoder and `S-C59` took the only one
+  to `legacy-review/media-pipeline/`. So every import writes no `lqip` at all, exactly as it
+  writes no thumbnail: the encoder is correct, complete and unreachable until
+  `capsule-core::media` lands on Rawshift (`S-B1`, #410).
 - **Owed:** no `wasm_bindgen` export exists. wasm links and compiles the identical encoder, but the
   browser has no decrypted `lqip` to decode yet, so the entry point belongs to that slice.
 
@@ -3386,13 +3444,17 @@ than a transcription:
 Thirty-seven documented operations became **fifty-nine**, and the six that were never
 documented are accounted for.
 
-**The `core-import-media` bucket is deleted rather than refreshed.** It quarantined
-`capsule_core::exif` and the import executor's cancellation and progress halves. All three are
-live, tested and *newer* on this branch than the snapshot that quarantined them — which is
-exactly the charter's exit condition, met in the other direction. Keeping a stale twin of a
-working module beside it is the opposite of what quarantine is for, so the bucket went and those
-modules stay. This is a **deliberate narrowing of the teardown's file list**, recorded here
-because the plan named those files for the move.
+**The `core-import-media` bucket is to be deleted rather than refreshed — and was not.** It
+quarantined `capsule_core::exif` and the import executor's cancellation and progress halves. All
+three are live, tested and *newer* on this branch than the snapshot that quarantined them — which
+is exactly the charter's exit condition, met in the other direction. Keeping a stale twin of a
+working module beside it is the opposite of what quarantine is for, so the modules stay and the
+bucket goes. This is a **deliberate narrowing of the teardown's file list**, recorded here because
+the plan named those files for the move. **Correction 2026-09-01:** this note said the bucket had
+gone. `legacy-review/core-import-media/` is still in the tree — the decision was recorded and
+never carried out — and the deletion, together with the two `import/pipeline.md` citations and the
+`ROADMAP.md` row that go with it, is
+[#423](https://github.com/Capsulsaurus/Capsule/issues/423).
 
 **`capsule_core::media` does go, and it takes the decoder with it.** It was the former standalone
 media crate, gated behind a non-default feature whose only consumer was the equally-gated
@@ -3888,11 +3950,20 @@ them was incidental:
 - **Done when:** the upload doc's client-side Validation bullets pass against a real
   server; the recovery matrix has a mocked-HTTP test per code; E2E case 2 lives.
 - **Tier:** Unit + Smoke + E2E case 9.
-- **Landed in retired code:** `capsule-sdk/src/upload.rs` is a complete resumable client
-  today (`create_session`/`upload`/`upload_resuming`/`head`/`list_sessions`) and
-  `capsule push` drives it end to end. **Re-scoped:** re-point at the Kynos upload
-  surface and re-source the schema. The stateful algorithm, the bounds, and the recovery
-  matrix carry over unchanged — they are protocol, not framework.
+- **Landed.** `capsule-sdk/src/upload.rs` is a complete resumable client
+  (`create_session`/`upload`/`upload_resuming`/`head`/`list_sessions`) and `capsule push`
+  drives it end to end.
+- **`MIXED | done`, not `RETIRED | ready` (corrected 2026-09-01).** The row was `RETIRED`
+  because the SDK's wire contract was re-sourced, not because the crate was review material
+  (Sequencing). That re-source landed: `capsule-sdk/build.rs` generates from
+  `capsule-server/openapi.json`, the Kynos document, and the crate's manifest declares no
+  retired dependency — `prost` still resolves transitively through `capsule-core`'s `tzf-rs`,
+  which is a timezone table and not a wire format. The client half therefore ships, which is
+  what `Status` reports on a `MIXED` row; the server half it drives is what is still being
+  rebuilt (#401, #404).
+- **`done*`, not `done` (decision 12).** The row's own "Done when" ends "E2E case 2 lives",
+  and that case has a named home: `S-Q1` (#409). A remainder a reader can go and read is an
+  `Owed →` pointer, not something owed by construction.
 
 ### S-D2 — SDK sync/download client
 
@@ -3906,10 +3977,16 @@ them was incidental:
 - **Depends on:** S-C2, S-C9. **Blocks:** S-D5, S-D6, S-E3.
 - **Done when:** the download-sync doc's client Validation bullets pass; E2E case 3
   lives. **Tier:** Unit + Smoke.
-- **Landed in retired code:** `SyncConsumer::pull_into` ships against the gRPC feed.
-  **Re-scoped:** this is the SDK's **gRPC-half re-fronting on REST** — the largest single
-  piece of SDK rebuild work, and the reason the crate is replacement-in-progress rather
-  than done.
+- **Landed, including the re-front (corrected 2026-09-01).** `SyncConsumer` drove
+  `capsule.sync.v1.SyncService` over tonic when this row was written, and that was called
+  "the largest single piece of SDK rebuild work". It landed with `S-C60`/`S-D28`:
+  `capsule-sdk/src/sync.rs` drives `GET /v1/sync` through the generated REST client, the
+  opaque server-MAC'd cursor round-trips verbatim, and `tonic`, `tonic-prost` and `prost`
+  are out of `capsule-sdk/Cargo.toml`. `SyncState`'s anti-rewind and forward-version rules
+  never depended on the transport and did not move. The client half ships; the feed it reads
+  is served by the server still being rebuilt.
+- **`done*`, not `done` (decision 12).** "Done when" ends "E2E case 3 lives", which `S-Q1`
+  (#409) carries.
 
 ### S-D3 — Web guest drop client
 
@@ -3976,9 +4053,15 @@ them was incidental:
 - **Done when:** login/refresh/expiry flows round-trip against a dev server; a mocked
   clock exercises pre-flight refresh + single-flight; `capsule-sdk` stays in every
   Rust gate. **Tier:** Unit + Smoke. **Blocks:** S-D9, S-D11; S-D5 consumes it.
-- **Landed in retired code:** the store, the refresh engine, and the session persistence
-  ship. **Re-scoped:** re-point at the Kynos auth endpoints. The 401-retry-once half is
-  still owed on the *typed* path — see `S-D17`.
+- **Landed.** The store, the refresh engine, and the session persistence ship, hand-rolled
+  over `reqwest` (rustls only) against `/v1/auth/{register,login,refresh,logout}` — the
+  server's own paths, not a retired copy of them. Being outside the generated client is
+  deliberate and no longer a spargen gap: what lives here is token *orchestration*, which
+  `ADR-0002` puts outside generated code by contract.
+- **`MIXED | done*`, not `RETIRED | ready` (corrected 2026-09-01).** The Kynos re-point is
+  what the `RETIRED` marking was for, and it landed. The 401-retry-once half is still owed on
+  the *typed* path, and `S-D17` (#408) carries it — which is what makes this `done*` rather
+  than `done`, on the same rule `S-D8` was already read by (decision 12).
 
 ### S-D8 — spargen REST client integration
 
@@ -3992,10 +4075,13 @@ them was incidental:
 - **Done when:** the generated client drives the plain request/response surfaces and
   `AuthenticatedClient` is live over it (it is: see `capsule-sdk/README.md`).
 - **Tier:** Unit + Smoke.
-- **Landed in retired code:** generated from the Salvo server's committed `openapi.json`.
-  **Re-scoped:** the schema must come from **Kynos**, not from the Salvo `gen_openapi`
-  binary — that is the second of the SDK's two owed items.
-- **Owed:** 401-retry-once → `S-D17`.
+- **Landed, from the Kynos document (corrected 2026-09-01).** It generated from the Salvo
+  server's committed `openapi.json` when this row was written, and the re-source was the
+  second of the SDK's two owed items. `S-C59` deleted `capsule-sdk/openapi.json` and
+  `capsule-sdk/build.rs` now reads `../capsule-server/openapi.json` — the one document
+  `mise run openapi-check-kynos` gates, at OpenAPI **3.2**. There is no second copy and no
+  window in which the client is generated from a document the server does not serve.
+- **Owed:** 401-retry-once → `S-D17`, which is why this is `done*`.
 
 ### S-D28 — the SDK's second transport, and the document it generates from
 
@@ -4099,9 +4185,11 @@ Kynos server, which cannot be written until `S-C53` gives the server a way to cr
 - **Depends on:** S-D1, S-D2. **Done when:** the networking doc's four Validation
   bullets pass (mocked-signal class matrix; promotion/demotion; stall-cut-resume with
   zero duplicate bytes; backoff discipline). **Tier:** Unit + Smoke.
-- **Landed in retired code:** the engine ships in `capsule-sdk::net`. **Re-scoped:** it
-  is transport-shaped, so re-instantiate it over the Kynos fetch/upload/sync paths; the
-  policy classes and the mocked-signal matrix carry over unchanged.
+- **Landed.** The engine ships in `capsule-sdk::net` and the fetch, upload and sync paths
+  instantiate it. It is transport-shaped, and the transport it was re-scoped onto is the one
+  in the tree: `capsule-sdk` speaks Kynos REST and nothing else. `MIXED | done` — the policy
+  classes and the mocked-signal matrix are client-side and proven; what an adverse network
+  is measured against is a server still being rebuilt.
 
 ### S-D11 — Client cohort emission + devices grouping UI
 
@@ -4127,7 +4215,10 @@ Kynos server, which cannot be written until `S-C53` gives the server a way to cr
 - **Depends on:** S-C12. **Done when:** the backup doc's cadence Validation bullets
   pass (mocked clock; stale-cache rule; re-wrap smoke with unchanged blob hashes).
 - **Tier:** Unit + Smoke.
-- **Landed:** the cadence scheduler, the verifier, and the re-wrap are `ACTIVE` core; only
+- **Landed:** the verifier is `ACTIVE` core (`capsule-core::backup::verify_recovery_secret`,
+  reached through `capsule-core::lifecycle::backup`); the cadence scheduler and the guided
+  re-wrap are in `capsule-sdk::recovery`, whose `cadence` half is deliberately pure and
+  network-free. **Correction 2026-09-01:** this note used to place all three in core. Only
   the escrow store/replace calls re-scope.
 
 ### S-D13 — Culling workflow client UX
@@ -4407,6 +4498,11 @@ Kynos server, which cannot be written until `S-C53` gives the server a way to cr
   (`export()` is async), so the shape is run-body-then-persist-then-`?`.
 - **Done when:** a command that triggers a refresh leaves the rotated pair on disk, and a
   subsequent command succeeds without re-login. **Tier:** Unit (mock auth server) + Integration.
+- **Landed.** `capsule-cli/src/remote.rs` resumes through `resume_session` and writes back
+  through `checkpoint`, which runs on the way out of every command that used a session — on
+  the success path and the error path alike, because a refresh that landed before a later
+  failure still rotated the token. A failed write-back warns rather than failing the command:
+  the work is done, and the cost is one interactive login.
 
 ### S-D27 — the SDK test mock never shuts its listener down
 
@@ -4778,6 +4874,10 @@ lands on Kynos rather than on Salvo.
   precondition rather than a parallel cleanup.
 - **Done when:** `i18n-guard` covers `capsule-cli` and passes, and no import-arm output is a
   literal. **Tier:** gate.
+- **Landed** in `84f719f6`. `locales/en.json` carries fifteen `cli.import.*` keys, and
+  `xtask/src/i18n_guard.rs` scans `capsule-cli/src` as a fourth surface with its own
+  Rust-literal detector. The guard half is the durable part: without it the next command is
+  free to regress.
 
 ### S-I6 — Android ships raw ICU to users, and the guard that should stop it never fires
 
@@ -5645,17 +5745,22 @@ and all three slices are `done` in `capsule-core`.
 
 ### S-Z9 — REST reference from the Kynos document
 
-- **Gap:** `capsule-sdk/openapi.json` is emitted by `capsule-api`'s salvo-oapi binary, and
-  that server is retired. `capsule-server` exposes `openapi() -> Document` but has one
-  route ported and no emitter binary, so there is no Kynos document to publish. Rendering
-  the Salvo-derived file would document a server nothing runs.
+- **Gap (rewritten 2026-09-01; the slice is no longer blocked).** It read: the only document
+  was `capsule-sdk/openapi.json` from `capsule-api`'s salvo-oapi binary, `capsule-server` had
+  one route ported and no emitter binary, and rendering the Salvo-derived file would document
+  a server nothing runs. All three are out of date. `capsule-server/src/bin/gen_openapi.rs`
+  emits `capsule-server/openapi.json` — fifty-nine operations, OpenAPI 3.2, pinned by
+  `openapi_as(SpecVersion::V3_2)` — `mise run openapi-check-kynos` gates it inside
+  `check-rust`, and the Salvo copy is deleted. What remains is the docs work itself: no
+  `/reference/api/` pages are generated from it yet.
 - **Deliverable:** `/reference/api/` generated from the Kynos document by a Starlight-native
   OpenAPI generator — not an embedded renderer that mounts its own application, which would
   forfeit the search index, the link validator, and the site palette.
 - **Done when:** the committed contract is Kynos-emitted, `openapi-check` gates it, and
   `/reference/api/` renders every path in it as Starlight pages that Pagefind indexes.
-  **Tier:** docs build + `openapi-check`. **Depends on:** S-Z8, S-D8 (**live block** —
-  the schema must come from Kynos, which needs `S-C27`).
+  **Tier:** docs build + `openapi-check-kynos`. **Depends on:** `S-Z8` only — the reference
+  shell it renders into. The `S-D8`/`S-C27` edge was the Kynos-document dependency and is
+  discharged.
 
 ### S-Z10 — SDK / FFI / WASM reference
 

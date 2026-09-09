@@ -53,7 +53,9 @@ pub struct RemoteConfig {
     pub protocol_version: String,
 }
 
-/// The default server origin — one host, one port, matching `mise run serve-api`.
+/// The default server origin — one host, one port. It matched `mise run serve-api`, which
+/// retired with the Salvo binary it launched (`S-C59`); the Kynos server has no binary and no
+/// serve task yet, so nothing listens here until one lands.
 pub const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:3000";
 
 impl RemoteConfig {

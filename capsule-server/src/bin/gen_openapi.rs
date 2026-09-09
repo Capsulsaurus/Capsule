@@ -14,12 +14,14 @@
 //! the router purely to describe it. That is what lets `--check` run in the Rust check gate,
 //! exactly as `i18n-check` and the Salvo `openapi-check` do.
 //!
-//! **This is not yet the SDK's contract.** `capsule-sdk` still generates from
-//! `capsule-sdk/openapi.json`, the Salvo document, and the two are deliberately gated
-//! separately while the port proceeds — committing both as *the* contract at once would leave
-//! no way to say which one a client should believe. The changeover is its own step: it also
-//! drops the four `spargen::OmitRule` narrowings, which exist only because the Salvo document is
-//! structurally invalid in ways Kynos cannot express.
+//! **This is the SDK's contract** (`S-C59`). There was a second document — `capsule-sdk`
+//! generated from `capsule-sdk/openapi.json`, the Salvo one — and the two were gated separately
+//! while the port proceeded, because committing both as *the* contract at once would have left
+//! no way to say which a client should believe. The Salvo copy is deleted and
+//! `capsule-sdk/build.rs` reads what this binary writes. The changeover did drop the four
+//! `spargen::OmitRule` narrowings that existed because the Salvo document was structurally
+//! invalid in ways Kynos cannot express; the four in `build.rs` today are a different set, for
+//! a media type spargen cannot classify.
 //!
 //! Usage:
 //! - `gen_openapi [FILE]` writes the document (default `capsule-server/openapi.json`).
