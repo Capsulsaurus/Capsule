@@ -322,6 +322,155 @@ async fn purging_does_not_change_a_verdict() {
     );
 }
 
+/// The finding decision 22 answers: one shared ceiling makes four unauthenticated surfaces share
+/// a fate.
+///
+/// The drop path keys on a caller-supplied id over an hour-long window, which makes it the
+/// cheapest partition to hold saturated. Under one global ceiling, saturating it would refuse a
+/// *first* key to every other surface — a first-time share view, a first enrollment redemption,
+/// the first OIDC sign-in after a reboot — and every one of those maps a counter error to a
+/// fail-closed 500/503. Partitioned, the flood costs the flooded surface its new keys and costs
+/// the others nothing.
+#[tokio::test]
+async fn flooding_one_surface_does_not_deny_a_fresh_key_to_another() {
+    // The override bounds every partition equally, so the partition *boundary* is what this
+    // test observes rather than the size of any one of them. The real numbers are asserted in
+    // `every_ceiling_is_sized_from_its_own_window`.
+    let counters = InMemoryCounters::new().with_ceiling(50);
+
+    // Fill the drop path to its ceiling with fabricated but well-formed ids.
+    for index in 0..50 {
+        let key = CounterKey::DropLink(format!("{index:032x}"));
+        assert!(
+            counters
+                .hit(&key, budgets::DROP_LINK, at(0))
+                .await
+                .expect("answers")
+                .admits()
+        );
+    }
+    assert_eq!(counters.len_of(&CounterKey::DropLink(String::new())), 50);
+
+    // Saturated: a fifty-first drop id is refused, which is the bound doing its job.
+    counters
+        .hit(
+            &CounterKey::DropLink("ffffffffffffffffffffffffffffffff".to_owned()),
+            budgets::DROP_LINK,
+            at(0),
+        )
+        .await
+        .expect_err("the drop partition is full");
+
+    // And every other surface is untouched. A never-seen key on each of the three that a shared
+    // ceiling would have denied:
+    for (key, budget) in [
+        (
+            CounterKey::ShareLink("never-seen-share".to_owned()),
+            budgets::SHARE_LINK,
+        ),
+        (
+            CounterKey::OidcAuthorize("app.example.test".to_owned()),
+            budgets::OIDC_AUTHORIZE,
+        ),
+        (
+            CounterKey::EnrollmentRedemption("00000000".to_owned()),
+            budgets::ENROLLMENT_REDEMPTION,
+        ),
+        (
+            CounterKey::SecondFactor("challenge-1".to_owned()),
+            budgets::SECOND_FACTOR,
+        ),
+    ] {
+        assert!(
+            counters
+                .hit(&key, budget, at(0))
+                .await
+                .expect("a full drop partition is not another surface's problem")
+                .admits(),
+            "{} was denied by a flood against drop_link",
+            key.as_str()
+        );
+    }
+
+    // The flooded surface's own existing keys keep counting, up to their own budget.
+    let held = CounterKey::DropLink(format!("{0:032x}", 0));
+    assert!(
+        counters
+            .hit(&held, budgets::DROP_LINK, at(0))
+            .await
+            .expect("answers")
+            .admits(),
+        "a key already being counted keeps being counted"
+    );
+    assert_eq!(
+        counters.len_of(&CounterKey::DropLink(String::new())),
+        50,
+        "and counting it minted nothing"
+    );
+}
+
+#[tokio::test]
+async fn a_partition_is_dropped_when_its_last_window_lapses() {
+    let counters = InMemoryCounters::new();
+    let key = CounterKey::ShareLink("a".to_owned());
+    counters.hit(&key, budget(), at(0)).await.expect("answers");
+    assert_eq!(counters.len_of(&key), 1);
+
+    // A hit on a *different* partition purges the lapsed one rather than leaving it behind.
+    counters
+        .hit(&CounterKey::DropLink("b".to_owned()), budget(), at(11))
+        .await
+        .expect("answers");
+    assert_eq!(counters.len_of(&key), 0, "the emptied partition is gone");
+    assert_eq!(counters.len(), 1);
+}
+
+#[test]
+fn every_ceiling_is_sized_from_its_own_window() {
+    use crate::counter::ceilings;
+
+    // The two keys only one value of which can exist hold exactly one window.
+    assert_eq!(CounterKey::OidcAuthorizeRefused.ceiling(), 1);
+    assert_eq!(CounterKey::EnrollmentRedemptionMalformed.ceiling(), 1);
+
+    // The admitted OIDC host is structurally three values; the ceiling is headroom over that
+    // and nothing like the caller-controlled partitions.
+    assert_eq!(CounterKey::OidcAuthorize(String::new()).ceiling(), 16);
+    assert!(
+        CounterKey::OidcAuthorize(String::new()).ceiling()
+            < CounterKey::ShareLink(String::new()).ceiling() / 100,
+        "a bounded key must not be sized like an unbounded one"
+    );
+
+    // The three surfaces that key on a caller-supplied string are the ones that need room.
+    for key in [
+        CounterKey::ShareLink(String::new()),
+        CounterKey::DropLink(String::new()),
+        CounterKey::EnrollmentRedemption(String::new()),
+    ] {
+        assert!(key.ceiling() >= ceilings::ENROLLMENT_REDEMPTION, "{key:?}");
+    }
+
+    // No two variants share a partition name, or one flood would reach two ceilings.
+    let names = [
+        CounterKey::LoginAttempts(UserId::new("u")),
+        CounterKey::EnrollmentRedemption(String::new()),
+        CounterKey::EnrollmentRedemptionMalformed,
+        CounterKey::ShareLink(String::new()),
+        CounterKey::ShareSource(String::new()),
+        CounterKey::DropLink(String::new()),
+        CounterKey::DropSource(String::new()),
+        CounterKey::DeepVerify(UserId::new("u")),
+        CounterKey::SecondFactor(String::new()),
+        CounterKey::RegistrationSource(String::new()),
+        CounterKey::OidcAuthorize(String::new()),
+        CounterKey::OidcAuthorizeRefused,
+    ]
+    .map(|key| key.as_str());
+    let unique: std::collections::BTreeSet<&str> = names.iter().copied().collect();
+    assert_eq!(unique.len(), names.len(), "{names:?}");
+}
+
 #[test]
 fn every_budget_is_declared_in_one_place() {
     // A budget written inline at its call site is a budget nobody can review against the threat

@@ -38,27 +38,45 @@
 //! the algorithm changed, and this paragraph is the record of that trade rather than a comment
 //! somebody later mistakes for a bug.
 //!
-//! # The map of windows is bounded, twice
+//! # The map of windows is bounded, twice — and partitioned, so the bounds are not shared
 //!
-//! A counter's *key* is frequently derived from something a caller sent — a share-link id, a
-//! challenge id, a redirect host. A key space every caller can extend is a map that only grows,
-//! and this one is process-wide and shared by every limiter on the surface, so growth here is
-//! not one feature's problem. Two bounds, the same pair
+//! A counter's *key* is frequently derived from something a caller sent — a share-link id, an
+//! enrollment code, a redirect host. A key space every caller can extend is a map that only
+//! grows, and this one is process-wide and shared by every limiter on the surface, so growth
+//! here is not one feature's problem. Two bounds, the same pair
 //! [`InMemoryOidcAuthorizations`](crate::store::memory::InMemoryOidcAuthorizations) carries:
 //!
 //! - **Purged on every write.** A window whose budget has lapsed decides nothing — [`verdict`]
 //!   already treats it as absent — so it is dropped rather than kept as a row nobody reads. The
 //!   map holds live windows plus whatever lapsed since the last hit, never everything ever
 //!   counted.
-//! - **A ceiling.** Past [`WINDOW_CEILING`] a key that has no window yet is refused with
+//! - **A ceiling.** Past its ceiling a key that has no window yet is refused with
 //!   [`StoreError::Rejected`], while every key that already has one keeps counting. Callers
-//!   treat a counter error as a refusal, so a full map fails *closed*: a limiter under
+//!   treat a counter error as a refusal, so a full partition fails *closed*: a limiter under
 //!   memory pressure denies rather than waves through, and an attacker cannot switch a limiter
 //!   off by loading the store.
 //!
-//! Every derived key should still be bounded at its call site, as the OIDC authorize's is by
-//! validating the redirect before it charges. These two are the facility's defence in depth,
-//! not a licence to key a counter on an arbitrary string.
+//! # The ceiling is per [`CounterKey`] variant, never one number for everything
+//!
+//! One shared ceiling makes every limiter share a fate. Three surfaces charge a caller-controlled
+//! key *before* resolving what it names — the share path, the drop path and the enrollment
+//! redemption — and the drop path's window is an hour long, so it is the cheapest of them to
+//! hold saturated. Under a single ceiling, a flood against that one surface would refuse a
+//! **first** key to every other: a first-time share view, a first enrollment redemption after a
+//! reboot, the first OIDC sign-in of the day. Each of those maps a counter error to a fail-closed
+//! `500`/`503`, so the weakest surface would decide the availability of all four.
+//!
+//! So the store holds one partition per variant, each with [`CounterKey::ceiling`] sized from
+//! that variant's own window and its own plausible rate of *distinct* keys — see the constants
+//! below for the arithmetic. Filling one partition refuses new keys in that partition only. The
+//! totals are deliberately close to the single ceiling they replace, because the point is not to
+//! hold more windows; it is that the windows one surface holds are not the windows another
+//! surface is denied.
+//!
+//! This is defence in depth, not a licence. Every derived key should still be bounded where it
+//! is built — the OIDC authorize validates the redirect before it charges
+//! ([`CounterKey::OidcAuthorizeRefused`]), and the enrollment redemption shape-checks the code
+//! before it charges ([`CounterKey::EnrollmentRedemptionMalformed`]).
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -166,6 +184,27 @@ impl CounterKey {
             Self::OidcAuthorizeRefused => "oidc_authorize_refused",
         }
     }
+
+    /// How many simultaneously live windows this variant's partition may hold.
+    ///
+    /// Per variant and never one number for all of them: see the module docs for why a shared
+    /// ceiling is a shared fate, and [`ceilings`] for each number's arithmetic.
+    pub fn ceiling(&self) -> usize {
+        match self {
+            Self::LoginAttempts(_) => ceilings::LOGIN_ATTEMPTS,
+            Self::EnrollmentRedemption(_) => ceilings::ENROLLMENT_REDEMPTION,
+            Self::EnrollmentRedemptionMalformed => ceilings::ENROLLMENT_REDEMPTION_MALFORMED,
+            Self::ShareLink(_) => ceilings::SHARE_LINK,
+            Self::DropLink(_) => ceilings::DROP_LINK,
+            Self::ShareSource(_) | Self::DropSource(_) | Self::RegistrationSource(_) => {
+                ceilings::SOURCE_ADDRESS
+            }
+            Self::DeepVerify(_) => ceilings::DEEP_VERIFY,
+            Self::SecondFactor(_) => ceilings::SECOND_FACTOR,
+            Self::OidcAuthorize(_) => ceilings::OIDC_AUTHORIZE,
+            Self::OidcAuthorizeRefused => ceilings::OIDC_AUTHORIZE_REFUSED,
+        }
+    }
 }
 
 /// How many, and over how long.
@@ -250,32 +289,96 @@ pub trait CounterStore: std::fmt::Debug + Send + Sync {
     fn reset<'a>(&'a self, key: &'a CounterKey) -> StoreFuture<'a, ()>;
 }
 
-/// How many distinct keys the in-memory counters will hold windows for at once.
+/// How many simultaneously live windows each [`CounterKey`] variant may hold.
 ///
-/// A hundred thousand. A window is a key plus twelve bytes, so this is single-digit megabytes at
-/// the bound; and because windows are purged as they lapse, reaching it means a hundred thousand
-/// *simultaneously live* windows, which at the shortest budget on the surface (one minute) is a
-/// rate no self-hosted deployment produces honestly. It is a backstop for a key derived from
-/// something a caller sends, not the primary defence — that is bounding the key where it is
-/// built.
-pub const WINDOW_CEILING: usize = 100_000;
+/// Each is that variant's window length multiplied by a stated rate of *distinct* keys, rounded
+/// up for headroom. The budget bounds hits **per key**; it says nothing about how many keys
+/// exist, so the key rate is the assumption each number is built on and each is written down.
+pub mod ceilings {
+    /// [`CounterKey::LoginAttempts`](super::CounterKey::LoginAttempts) — 15-minute window, keyed
+    /// on an account.
+    ///
+    /// 900 s × ~1 account entering a failure window per second = 900. Rounded to ten thousand:
+    /// the key is an account id, so the true bound is the size of the directory, and a
+    /// deployment large enough to exceed this has other numbers to raise first.
+    pub const LOGIN_ATTEMPTS: usize = 10_000;
+
+    /// [`CounterKey::EnrollmentRedemption`](super::CounterKey::EnrollmentRedemption) —
+    /// 10-minute window, keyed on a shape-checked code.
+    ///
+    /// 600 s × ~1 code presented per second = 600. Rounded to five thousand. Device enrollment
+    /// is a rare, deliberate act: a deployment redeeming five thousand distinct codes inside ten
+    /// minutes is not one this number is failing.
+    pub const ENROLLMENT_REDEMPTION: usize = 5_000;
+
+    /// [`CounterKey::EnrollmentRedemptionMalformed`](super::CounterKey::EnrollmentRedemptionMalformed)
+    /// — one key exists, so one window.
+    pub const ENROLLMENT_REDEMPTION_MALFORMED: usize = 1;
+
+    /// [`CounterKey::ShareLink`](super::CounterKey::ShareLink) — 1-minute window, keyed on a
+    /// caller-supplied opaque id.
+    ///
+    /// 60 s × ~100 distinct links opened per second = 6 000. Rounded to twenty thousand for
+    /// three-fold headroom, because this is the surface a public link is *meant* to be hit on.
+    pub const SHARE_LINK: usize = 20_000;
+
+    /// [`CounterKey::DropLink`](super::CounterKey::DropLink) — 1-hour window, keyed on a
+    /// caller-supplied opaque id.
+    ///
+    /// 3 600 s × ~1 distinct link receiving a session per second = 3 600. Rounded to twenty
+    /// thousand. The hour-long window makes this the cheapest partition to hold saturated — at
+    /// twenty thousand ids an hour, under six a second — which is exactly why it is a partition:
+    /// saturating it costs the drop path its first-time keys and costs no other surface
+    /// anything.
+    pub const DROP_LINK: usize = 20_000;
+
+    /// [`CounterKey::SecondFactor`](super::CounterKey::SecondFactor) — 5-minute window, keyed on
+    /// a server-minted challenge id.
+    ///
+    /// 300 s × ~10 sign-ins reaching a second factor per second = 3 000. Rounded to ten
+    /// thousand. Not caller-controlled: a challenge id comes off a token this server signed.
+    pub const SECOND_FACTOR: usize = 10_000;
+
+    /// [`CounterKey::DeepVerify`](super::CounterKey::DeepVerify) — 1-hour window, keyed on an
+    /// authenticated account.
+    ///
+    /// Bounded by the directory, as `LOGIN_ATTEMPTS` is, and reached only by accounts that asked
+    /// for a deep scan in the last hour.
+    pub const DEEP_VERIFY: usize = 10_000;
+
+    /// The three source-address keys — 1-minute and 1-hour windows, keyed on a client address.
+    ///
+    /// Charged nowhere yet: all three wait on a trusted client address this server does not have
+    /// behind an unconfigured proxy chain. Sized for the day one arrives — distinct addresses in
+    /// the window, which for a self-hosted deployment is thousands, not millions.
+    pub const SOURCE_ADDRESS: usize = 10_000;
+
+    /// [`CounterKey::OidcAuthorize`](super::CounterKey::OidcAuthorize) — 1-minute window, keyed
+    /// on an **admitted** redirect host.
+    ///
+    /// Three keys can exist: the configured redirect's host and the two loopback literals. Set
+    /// to sixteen rather than three so that changing `OIDC_REDIRECT_URL` while a window is open,
+    /// or a provider spelling `[::1]` differently, meets headroom instead of a cliff — and small
+    /// enough that it is visibly a *bounded* key rather than a hopeful one.
+    pub const OIDC_AUTHORIZE: usize = 16;
+
+    /// [`CounterKey::OidcAuthorizeRefused`](super::CounterKey::OidcAuthorizeRefused) — one key
+    /// exists, so one window.
+    pub const OIDC_AUTHORIZE_REFUSED: usize = 1;
+}
 
 /// A deterministic in-memory adapter.
 ///
-/// Windows are purged as they lapse and the map is bounded; see the module docs.
-#[derive(Debug)]
+/// Windows are purged as they lapse, and each [`CounterKey`] variant is bounded in a partition of
+/// its own; see the module docs.
+#[derive(Debug, Default)]
 pub struct InMemoryCounters {
-    ceiling: usize,
-    windows: Mutex<BTreeMap<CounterKey, Window>>,
-}
-
-impl Default for InMemoryCounters {
-    fn default() -> Self {
-        Self {
-            ceiling: WINDOW_CEILING,
-            windows: Mutex::new(BTreeMap::new()),
-        }
-    }
+    /// Set by [`InMemoryCounters::with_ceiling`], and then the ceiling of **every** partition.
+    /// `None` in production, where each variant carries its own.
+    ceiling_override: Option<usize>,
+    /// Partitioned by [`CounterKey::as_str`], so one variant's occupancy is invisible to
+    /// another's ceiling. An emptied partition is dropped by the purge rather than left behind.
+    windows: Mutex<BTreeMap<&'static str, BTreeMap<CounterKey, Window>>>,
 }
 
 /// One key's open window.
@@ -292,35 +395,60 @@ struct Window {
     purge_after: Timestamp,
 }
 
+/// The partitioned window map: one inner map per [`CounterKey`] variant.
+type Partitions = BTreeMap<&'static str, BTreeMap<CounterKey, Window>>;
+
 impl InMemoryCounters {
-    /// An empty set of counters, bounded at [`WINDOW_CEILING`].
+    /// An empty set of counters, each variant bounded by its own [`CounterKey::ceiling`].
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// The same counters holding windows for at most `ceiling` keys.
+    /// The same counters with **every** partition bounded at `ceiling` instead.
+    ///
+    /// A tuning and testing affordance: it makes the partition boundary observable without
+    /// writing twenty thousand keys. Production leaves it unset, so each variant carries the
+    /// number its own window and key rate justify.
     #[must_use]
     pub fn with_ceiling(mut self, ceiling: usize) -> Self {
-        self.ceiling = ceiling;
+        self.ceiling_override = Some(ceiling);
         self
     }
 
-    /// How many distinct keys hold a window right now.
+    /// How many distinct keys hold a window right now, across every partition.
     ///
     /// For tests that assert the *cardinality* of the key space rather than any one verdict —
     /// the property a caller-controlled key silently destroys.
     pub fn len(&self) -> usize {
-        lock(&self.windows).len()
+        lock(&self.windows).values().map(BTreeMap::len).sum()
+    }
+
+    /// How many distinct keys hold a window in `key`'s partition.
+    ///
+    /// The number the ceiling is actually compared against, so a test can assert that filling
+    /// one surface left another's occupancy alone.
+    pub fn len_of(&self, key: &CounterKey) -> usize {
+        lock(&self.windows)
+            .get(key.as_str())
+            .map_or(0, BTreeMap::len)
     }
 
     /// Whether no key holds a window.
     pub fn is_empty(&self) -> bool {
-        lock(&self.windows).is_empty()
+        self.len() == 0
     }
 
-    /// Drop every window whose budget has lapsed.
-    fn purge(windows: &mut BTreeMap<CounterKey, Window>, now: Timestamp) {
-        windows.retain(|_, window| now < window.purge_after);
+    /// This key's partition ceiling, or the override every partition shares when one is set.
+    fn ceiling_for(&self, key: &CounterKey) -> usize {
+        self.ceiling_override.unwrap_or_else(|| key.ceiling())
+    }
+
+    /// Drop every window whose budget has lapsed, and every partition thereby emptied.
+    fn purge(windows: &mut Partitions, now: Timestamp) {
+        windows.retain(|_, partition| {
+            partition.retain(|_, window| now < window.purge_after);
+            !partition.is_empty()
+        });
     }
 }
 
@@ -368,19 +496,32 @@ impl CounterStore for InMemoryCounters {
         Box::pin(async move {
             let mut windows = lock(&self.windows);
             Self::purge(&mut windows, at);
-            if windows.len() >= self.ceiling && !windows.contains_key(key) {
+
+            let held = windows
+                .get(key.as_str())
+                .and_then(|partition| partition.get(key))
+                .copied();
+            let ceiling = self.ceiling_for(key);
+            let occupancy = windows.get(key.as_str()).map_or(0, BTreeMap::len);
+            // Only a key with no window yet can be refused, and only by its own partition's
+            // occupancy. A key already being counted keeps being counted, and another variant's
+            // flood is not visible here at all.
+            if held.is_none() && occupancy >= ceiling {
                 tracing::warn!(
                     counter = key.as_str(),
-                    windows = windows.len(),
-                    ceiling = self.ceiling,
-                    "the counter store is full; a hit was refused rather than counted"
+                    windows = occupancy,
+                    ceiling,
+                    "a counter partition is full; a hit was refused rather than counted"
                 );
                 return Err(crate::store::StoreError::Rejected {
                     store: "counters",
-                    detail: format!("{} open windows is the ceiling", self.ceiling),
+                    detail: format!(
+                        "{ceiling} open windows is the ceiling for `{}`",
+                        key.as_str()
+                    ),
                 });
             }
-            let (decision, live) = verdict(windows.get(key).copied(), budget, at);
+            let (decision, live) = verdict(held, budget, at);
 
             match decision {
                 Verdict::Limited { retry_after } => {
@@ -406,7 +547,10 @@ impl CounterStore for InMemoryCounters {
                             purge_after: crate::store::deadline(at, budget.window),
                         },
                     };
-                    windows.insert(key.clone(), updated);
+                    windows
+                        .entry(key.as_str())
+                        .or_default()
+                        .insert(key.clone(), updated);
                     Ok(Verdict::Admitted {
                         remaining: budget.limit.saturating_sub(updated.hits),
                     })
@@ -423,13 +567,23 @@ impl CounterStore for InMemoryCounters {
     ) -> StoreFuture<'a, Verdict> {
         Box::pin(async move {
             let windows = lock(&self.windows);
-            Ok(verdict(windows.get(key).copied(), budget, at).0)
+            let held = windows
+                .get(key.as_str())
+                .and_then(|partition| partition.get(key))
+                .copied();
+            Ok(verdict(held, budget, at).0)
         })
     }
 
     fn reset<'a>(&'a self, key: &'a CounterKey) -> StoreFuture<'a, ()> {
         Box::pin(async move {
-            if lock(&self.windows).remove(key).is_some() {
+            let mut windows = lock(&self.windows);
+            if let Some(partition) = windows.get_mut(key.as_str())
+                && partition.remove(key).is_some()
+            {
+                if partition.is_empty() {
+                    windows.remove(key.as_str());
+                }
                 tracing::debug!(counter = key.as_str(), "a counter window was cleared");
             }
             Ok(())
