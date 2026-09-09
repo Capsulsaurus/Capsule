@@ -5,7 +5,7 @@
 //! conformance note records — so what is asserted here is the *observable consequence*: the
 //! n-th hit inside a window is refused, and no sequence of calls admits more than the budget.
 
-use super::{budgets, *};
+use super::{budgets, ceilings, *};
 
 fn key() -> CounterKey {
     CounterKey::LoginAttempts(UserId::new("01937b7c-0000-7000-8000-000000000001"))
@@ -409,6 +409,77 @@ async fn flooding_one_surface_does_not_deny_a_fresh_key_to_another() {
     );
 }
 
+/// The same property against the **real** `DropLink` ceiling rather than a test override.
+///
+/// `flooding_one_surface_does_not_deny_a_fresh_key_to_another` bounds every partition equally so
+/// the boundary is legible; this one spends the twenty thousand the shipped constant actually
+/// allows, so that a future edit which re-shares the ceilings — or sizes `DropLink` off some
+/// other variant's number — is caught by the number a deployment really runs with.
+#[tokio::test]
+async fn the_real_drop_ceiling_is_the_drop_partition_and_nobody_else_s() {
+    let counters = InMemoryCounters::new();
+
+    for index in 0..ceilings::DROP_LINK {
+        counters
+            .hit(
+                &CounterKey::DropLink(format!("{index:032x}")),
+                budgets::DROP_LINK,
+                at(0),
+            )
+            .await
+            .expect("answers");
+    }
+    assert_eq!(
+        counters.len_of(&CounterKey::DropLink(String::new())),
+        ceilings::DROP_LINK
+    );
+    counters
+        .hit(
+            &CounterKey::DropLink("ffffffffffffffffffffffffffffffff".to_owned()),
+            budgets::DROP_LINK,
+            at(0),
+        )
+        .await
+        .expect_err("the drop partition is at its shipped ceiling");
+
+    // The two the finding named: a first-time share view and the first OIDC sign-in.
+    assert!(
+        counters
+            .hit(
+                &CounterKey::ShareLink("never-seen-share".to_owned()),
+                budgets::SHARE_LINK,
+                at(0),
+            )
+            .await
+            .expect("a saturated drop partition denies nobody else")
+            .admits()
+    );
+    assert!(
+        counters
+            .hit(
+                &CounterKey::OidcAuthorize("app.example.test".to_owned()),
+                budgets::OIDC_AUTHORIZE,
+                at(0),
+            )
+            .await
+            .expect("a saturated drop partition denies nobody else")
+            .admits()
+    );
+
+    // And the flooded surface keeps counting the keys it already holds.
+    assert!(
+        counters
+            .hit(
+                &CounterKey::DropLink(format!("{0:032x}", 0)),
+                budgets::DROP_LINK,
+                at(0),
+            )
+            .await
+            .expect("answers")
+            .admits()
+    );
+}
+
 #[tokio::test]
 async fn a_partition_is_dropped_when_its_last_window_lapses() {
     let counters = InMemoryCounters::new();
@@ -427,8 +498,6 @@ async fn a_partition_is_dropped_when_its_last_window_lapses() {
 
 #[test]
 fn every_ceiling_is_sized_from_its_own_window() {
-    use crate::counter::ceilings;
-
     // The two keys only one value of which can exist hold exactly one window.
     assert_eq!(CounterKey::OidcAuthorizeRefused.ceiling(), 1);
     assert_eq!(CounterKey::EnrollmentRedemptionMalformed.ceiling(), 1);
