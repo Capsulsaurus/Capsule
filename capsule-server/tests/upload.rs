@@ -1524,3 +1524,38 @@ async fn a_members_upload_is_still_checked_against_the_members_own_directory() {
         .json();
     assert_eq!(problem["code"], "error.upload.device_not_authorized");
 }
+
+/// **An upload is attributed to the account that made it.** The manifest envelope's
+/// `created_by_user` is stored and served back as the asset's provenance and nothing later
+/// re-derives it, so a writer member could otherwise file an asset into the owner's album under
+/// a third account's name. Invariant 7's device half is already bound to the *uploader's* own
+/// directory; this is the account half of the same rule.
+#[tokio::test]
+async fn an_upload_attributed_to_another_account_is_refused() {
+    use capsule_server::membership::MemberRole;
+
+    let (fixture, bearer) = with_bob(Some(MemberRole::Writer)).await;
+
+    let mut forged = bobs_request(&fixture, &payload(b'x', 8192));
+    forged["manifest_envelope"]["created_by_user"] = support::user().as_str().into();
+    let problem: serde_json::Value = fixture
+        .client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .json(&forged)
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST)
+        .json();
+    assert_eq!(problem["code"], "error.upload.envelope_mismatch");
+
+    // The matching arm: Bob's own create, under Bob's own name, still opens a session.
+    fixture
+        .client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .json(&bobs_request(&fixture, &payload(b'y', 8192)))
+        .send()
+        .await
+        .assert_status(StatusCode::CREATED);
+}

@@ -790,6 +790,20 @@ pub async fn create_upload(
         });
     }
 
+    // Invariant 7's account half: the manifest attributes the asset to an account, and it must
+    // be the authenticated one. The device half below is checked against the *uploader's* own
+    // directory, so without this a writer member could file an asset into the owner's album
+    // attributed to a third account — and the manifest is stored verbatim and served back as
+    // provenance, so nothing later re-derives who wrote it. A `400` with the envelope-mismatch
+    // code, like every other field that contradicts what the request itself establishes.
+    if request.manifest_envelope.created_by_user != uploader.as_str() {
+        tracing::info!(%uploader, "an upload was refused: created_by_user is not the caller");
+        return Err(CreateRejection::Invalid {
+            detail: "created_by_user is not the authenticated caller".to_owned(),
+            code: error_codes::UPLOAD_ENVELOPE_MISMATCH,
+        });
+    }
+
     // Invariant 7: the device the manifest names must be in the uploader's published
     // directory, and the battery compares the moment it was admitted against the manifest.
     let device = crate::upload::envelope::created_by_device(&request.manifest_envelope)

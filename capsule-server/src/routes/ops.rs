@@ -243,6 +243,27 @@ pub async fn apply_op(
         ));
     }
 
+    // The envelope attributes the write to an account, and nothing downstream re-derives it: the
+    // manifest is stored verbatim and served back as the asset's provenance. So an unchecked
+    // `created_by_user` lets a caller who may write to an album sign that album's history in
+    // somebody else's name. Invariant 7 binds the *device* to the caller's own directory; this
+    // binds the *account*, which was implicit while only the owner could write here and stopped
+    // being implicit when `S-C51` admitted every writer member.
+    //
+    // A `400` and the envelope-mismatch code, like every other field that contradicts what the
+    // request itself establishes — the album id in the path, the metadata hash over the bytes in
+    // hand. The `403`s on this surface are about *capability*; this is a contradiction.
+    if request.manifest_envelope.created_by_user != caller.as_str() {
+        tracing::info!(
+            %caller, %album,
+            "a lifecycle write was refused: created_by_user is not the caller"
+        );
+        return Err(OpRejection::invalid(
+            error_codes::UPLOAD_ENVELOPE_MISMATCH,
+            "created_by_user is not the authenticated caller",
+        ));
+    }
+
     // Account standing (`S-C8`), on the seam `POST /v1/upload` uses and for the same reason: a
     // suspension removes the ability to write, and a lifecycle op is a write — the only one that
     // never moves blob bytes, which is exactly why it was easy to miss. Checked before the

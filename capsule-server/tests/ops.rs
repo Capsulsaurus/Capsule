@@ -795,3 +795,39 @@ async fn an_unreachable_moderation_store_refuses_the_lifecycle_op() {
     )
     .await;
 }
+
+/// **A write is attributed to the account that made it.** The envelope carries
+/// `created_by_user` and the manifest is stored verbatim and served back as the asset's
+/// provenance, so nothing downstream re-derives the author. Until `S-C51` only the album owner
+/// could reach this surface and the field could only be their own; a writer member could
+/// otherwise sign the owner's album history in a third account's name.
+#[tokio::test]
+async fn an_op_attributed_to_another_account_is_refused() {
+    use capsule_server::membership::MemberRole;
+
+    let (fixture, bob) = with_bob(Some(MemberRole::Writer)).await;
+    let owner_bearer = token(&fixture).await;
+    let before = feed(&fixture, &owner_bearer).await;
+
+    // Bob, a writer member, attributing his op to the album's owner.
+    let mut forged = bobs_delete(&fixture);
+    forged["manifest_envelope"]["created_by_user"] = user().as_str().into();
+    let problem = apply(&fixture, &bob, &forged, StatusCode::BAD_REQUEST).await;
+    assert_eq!(problem["code"], "error.upload.envelope_mismatch");
+    assert_eq!(
+        feed(&fixture, &owner_bearer).await,
+        before,
+        "nothing was written"
+    );
+
+    // The owner attributing an op to the member is refused by the same rule: the check is
+    // "the author is the caller", not "the author is the owner".
+    let mut theirs = bundle(&fixture, "delete", "d-owner", Some(&created_head()), None);
+    theirs["manifest_envelope"]["created_by_user"] = BOB.into();
+    let mine = apply(&fixture, &owner_bearer, &theirs, StatusCode::BAD_REQUEST).await;
+    assert_eq!(mine["code"], "error.upload.envelope_mismatch");
+
+    // And the matching arm still applies: Bob's own op, under Bob's own name.
+    let applied = apply(&fixture, &bob, &bobs_delete(&fixture), StatusCode::OK).await;
+    assert_eq!(applied["action"], "delete");
+}
