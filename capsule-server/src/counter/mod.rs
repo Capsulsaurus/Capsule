@@ -83,15 +83,35 @@ pub enum CounterKey {
     /// missed — recorded here rather than replaced by an email-keyed limiter, which would bound
     /// repeated probes against one address while doing nothing about a sweep across many.
     RegistrationSource(String),
-    /// Begun OIDC ceremonies naming one redirect host (`S-N1`).
+    /// Begun OIDC ceremonies naming one **admitted** redirect host (`S-N1`).
     ///
-    /// Keyed on the redirect URI's host because it is the one fact the request carries that
-    /// an attacker cannot vary freely: the policy admits the configured redirect and the two
-    /// loopback literals, so the key space is three buckets and the budget is, in effect, a
-    /// deployment-wide ceiling on how fast pending ceremonies can be begun — which is what
-    /// bounds the ceremony store's growth. A per-source key is the better one and is waiting on
-    /// the same missing fact as [`Self::RegistrationSource`].
+    /// Keyed on the redirect URI's host, and constructed only after
+    /// [`IdentityProvider::admits_redirect`](crate::auth::oidc::IdentityProvider::admits_redirect)
+    /// has said so. That ordering is load-bearing rather than tidy: the policy admits the
+    /// configured redirect and the two loopback literals, so **downstream of validation** the key
+    /// space is three buckets and the budget is, in effect, a deployment-wide ceiling on how fast
+    /// pending ceremonies can be begun — which is what bounds the ceremony store's growth.
+    /// Upstream of validation the host is an arbitrary caller-supplied string, and a counter
+    /// keyed on one is a map an unauthenticated caller grows a row at a time. Every refusal goes
+    /// to [`Self::OidcAuthorizeRefused`] instead.
+    ///
+    /// A per-source key is the better one and is waiting on the same missing fact as
+    /// [`Self::RegistrationSource`].
     OidcAuthorize(String),
+    /// Every OIDC authorize whose redirect the policy refused, in one bucket (`S-N1`).
+    ///
+    /// A refusal must still be throttled — otherwise the cheapest request on the surface is the
+    /// one nothing counts — but it must not be throttled *per host*, because the host of a
+    /// refused redirect is whatever the caller typed. So refusals share one deployment-wide
+    /// window. That is deliberately blunt: it means a flood of invalid redirects can spend the
+    /// refusal budget for everybody. It costs nothing real, because a client whose redirect the
+    /// deployment admits never charges this bucket at all — only misconfigured and abusive
+    /// callers do, and a misconfigured client's remedy is to be configured.
+    ///
+    /// A unit variant rather than `OidcAuthorize("<refused>")`: this enum exists because the
+    /// retired surface namespaced counters with hand-formatted strings, and a sentinel string is
+    /// that mistake with a nicer name.
+    OidcAuthorizeRefused,
 }
 
 impl CounterKey {
@@ -108,6 +128,7 @@ impl CounterKey {
             Self::SecondFactor(_) => "second_factor",
             Self::RegistrationSource(_) => "registration_source",
             Self::OidcAuthorize(_) => "oidc_authorize",
+            Self::OidcAuthorizeRefused => "oidc_authorize_refused",
         }
     }
 }
@@ -205,6 +226,19 @@ impl InMemoryCounters {
     /// An empty set of counters.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// How many distinct keys hold a window right now.
+    ///
+    /// For tests that assert the *cardinality* of the key space rather than any one verdict —
+    /// the property a caller-controlled key silently destroys.
+    pub fn len(&self) -> usize {
+        lock(&self.windows).len()
+    }
+
+    /// Whether no key holds a window.
+    pub fn is_empty(&self) -> bool {
+        lock(&self.windows).is_empty()
     }
 }
 

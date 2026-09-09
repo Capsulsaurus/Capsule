@@ -288,7 +288,25 @@ impl SwitchableIdentityProvider {
     }
 }
 
+impl SwitchableIdentityProvider {
+    /// The real policy, so the double's redirect decision is the adapter's decision.
+    ///
+    /// One function for both `admits_redirect` and `authorization_url`: a double that answered
+    /// the look-ahead and the enforcement differently would let the route's counter-key choice
+    /// pass a test the shipped adapter fails.
+    fn policy() -> capsule_server::auth::oidc::RedirectPolicy {
+        capsule_server::auth::oidc::RedirectPolicy::new(
+            Some("https://app.test/oidc/callback".to_owned()),
+            true,
+        )
+    }
+}
+
 impl IdentityProvider for SwitchableIdentityProvider {
+    fn admits_redirect(&self, redirect_uri: &str) -> bool {
+        self.configured.load(Ordering::SeqCst) && Self::policy().admits(redirect_uri)
+    }
+
     fn authorization_url<'a>(
         &'a self,
         request: &'a AuthorizationRequest<'a>,
@@ -297,13 +315,7 @@ impl IdentityProvider for SwitchableIdentityProvider {
             if !self.configured.load(Ordering::SeqCst) {
                 return Err(ProviderError::NotConfigured);
             }
-            // The real policy, so a refused redirect is the same decision the adapter makes.
-            if !capsule_server::auth::oidc::RedirectPolicy::new(
-                Some("https://app.test/oidc/callback".to_owned()),
-                true,
-            )
-            .admits(request.redirect_uri)
-            {
+            if !Self::policy().admits(request.redirect_uri) {
                 return Err(ProviderError::RedirectRefused {
                     redirect_uri: request.redirect_uri.to_owned(),
                 });

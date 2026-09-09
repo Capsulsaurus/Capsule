@@ -929,6 +929,95 @@ async fn beginning_ceremonies_is_budgeted_per_redirect_host_and_bounded_by_the_s
     fixture.client.assert_conformance();
 }
 
+/// A refused redirect must not be able to mint a counter key.
+///
+/// The authorize's budget is keyed on the redirect URI's host, and the redirect URI is
+/// caller-supplied. If the key were charged before the policy validated the URI, an
+/// unauthenticated caller looping this route with a fresh host each time would get a `400` every
+/// time — nothing written to the ceremony store, decision 17 satisfied — while permanently adding
+/// one row per request to the counter store, which never purges and is shared with the login and
+/// second-factor limiters. So: many distinct invalid hosts, and afterwards exactly one key.
+#[tokio::test]
+async fn a_refused_redirect_cannot_mint_a_counter_key_and_is_still_throttled() {
+    let fixture = Fixture::working();
+    assert_eq!(
+        fixture.counters.len(),
+        0,
+        "the fixture starts with no counter windows"
+    );
+
+    // Sixty distinct hosts, none of them admitted: sixty `400`s, and the refusal budget is
+    // exactly spent.
+    for index in 0..60 {
+        let body: Value = fixture
+            .client
+            .post("/v1/auth/oidc/authorize")
+            .header("accept", "application/json")
+            .json(&json!({ "redirect_uri": format!("https://{index}.attacker.example/cb") }))
+            .send()
+            .await
+            .assert_status(StatusCode::BAD_REQUEST)
+            .json();
+        assert_eq!(code_of(&body), "error.auth.oidc_redirect_invalid");
+    }
+
+    assert_eq!(
+        fixture.counters.len(),
+        1,
+        "sixty caller-chosen hosts must share one bucket, not mint sixty"
+    );
+
+    // And the refusals are throttled rather than free: the sixty-first is `429`, on a host
+    // nothing has ever seen before.
+    let body: Value = fixture
+        .client
+        .post("/v1/auth/oidc/authorize")
+        .header("accept", "application/json")
+        .json(&json!({ "redirect_uri": "https://fresh.attacker.example/cb" }))
+        .send()
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS)
+        .json();
+    assert_eq!(code_of(&body), "error.auth.rate_limited");
+    assert_eq!(fixture.counters.len(), 1, "the 429 minted nothing either");
+
+    // The admitted path is a different bucket and is unaffected by the spent refusal budget:
+    // a flood of invalid redirects must not deny sign-in to the clients the policy admits.
+    authorize(&fixture, REDIRECT).await;
+    assert_eq!(
+        fixture.counters.len(),
+        2,
+        "the admitted host is its own bucket"
+    );
+    fixture.client.assert_conformance();
+}
+
+/// A URI that is not a URL at all is refused and buckets with the other refusals.
+#[tokio::test]
+async fn a_redirect_that_is_not_a_url_mints_no_key_of_its_own() {
+    let fixture = Fixture::working();
+    for candidate in [
+        "not a url",
+        "",
+        "   ",
+        "javascript:alert(1)",
+        "/relative/cb",
+    ] {
+        let body: Value = fixture
+            .client
+            .post("/v1/auth/oidc/authorize")
+            .header("accept", "application/json")
+            .json(&json!({ "redirect_uri": candidate }))
+            .send()
+            .await
+            .assert_status(StatusCode::BAD_REQUEST)
+            .json();
+        assert_eq!(code_of(&body), "error.auth.oidc_redirect_invalid");
+    }
+    assert_eq!(fixture.counters.len(), 1);
+    fixture.client.assert_conformance();
+}
+
 #[tokio::test]
 async fn a_provider_or_store_outage_is_a_500_with_the_code_that_names_it() {
     let fixture = Fixture::working();

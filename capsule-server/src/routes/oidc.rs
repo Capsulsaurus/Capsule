@@ -358,23 +358,44 @@ pub async fn begin_oidc_login(
     async move {
         let redirect_uri = request.redirect_uri.trim();
 
-        // The budget first, before the provider is asked or anything is generated. Keyed on
-        // the redirect's host; a URI that is not one is keyed on a fixed bucket and refused by
-        // the policy a moment later anyway.
-        let host = reqwest::Url::parse(redirect_uri)
-            .ok()
-            .and_then(|url| url.host_str().map(str::to_owned))
-            .unwrap_or_else(|| "<not a url>".to_owned());
-        let verdict = counters
-            .hit(&CounterKey::OidcAuthorize(host), budgets::OIDC_AUTHORIZE)
-            .await
-            .map_err(|error| {
-                // Fail closed, like every other limiter in this crate.
-                tracing::error!(%error, "the OIDC authorize limiter could not be reached");
-                OidcAuthorizeRejection::store_unavailable()
-            })?;
+        // The redirect is validated *before* the budget is charged, and the order is the
+        // security property rather than a preference. `redirect_uri` is caller-supplied and
+        // unbounded; charging a counter keyed on its host before the policy has looked at it
+        // would let an unauthenticated caller add one permanent row to the counter store per
+        // request — a `400` every time, and a map that only grows. So the key is picked from
+        // the policy's verdict: an admitted redirect is keyed on its host (three at most), and
+        // every refusal shares one fixed bucket. The look-ahead costs a string comparison; the
+        // `authorization_url` below applies the same policy and remains the authority.
+        let (key, budget) = if oidc.provider().admits_redirect(redirect_uri) {
+            match reqwest::Url::parse(redirect_uri)
+                .ok()
+                .and_then(|url| url.host_str().map(str::to_owned))
+            {
+                Some(host) => (CounterKey::OidcAuthorize(host), budgets::OIDC_AUTHORIZE),
+                // Unreachable: the policy admits an exactly-configured URL, which config
+                // validated as absolute, or a loopback literal it parsed. Bounded anyway,
+                // because "unreachable" is not a thing to key a map on.
+                None => (
+                    CounterKey::OidcAuthorizeRefused,
+                    budgets::OIDC_AUTHORIZE_REFUSED,
+                ),
+            }
+        } else {
+            (
+                CounterKey::OidcAuthorizeRefused,
+                budgets::OIDC_AUTHORIZE_REFUSED,
+            )
+        };
+        let verdict = counters.hit(&key, budget).await.map_err(|error| {
+            // Fail closed, like every other limiter in this crate.
+            tracing::error!(%error, "the OIDC authorize limiter could not be reached");
+            OidcAuthorizeRejection::store_unavailable()
+        })?;
         if !verdict.admits() {
-            tracing::warn!("an OIDC sign-in was refused: the redirect host's budget is spent");
+            tracing::warn!(
+                counter = key.as_str(),
+                "an OIDC sign-in was refused: the budget for this bucket is spent"
+            );
             return Err(OidcAuthorizeRejection::rate_limited());
         }
 

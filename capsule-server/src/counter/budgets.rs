@@ -60,14 +60,26 @@ pub const DROP_SOURCE: Budget = Budget::new(60, SignedDuration::from_hours(1));
 /// because a code that expires mid-typing costs an attempt through no fault of the user.
 pub const SECOND_FACTOR: Budget = Budget::new(5, SignedDuration::from_mins(5));
 
-/// Begun OIDC ceremonies per redirect host (`S-N1`).
+/// Begun OIDC ceremonies per **admitted** redirect host (`S-N1`).
 ///
 /// Sixty a minute. A person signing in begins one; a browser that retries a few times begins a
 /// handful; a script filling the pending-ceremony store begins thousands. The key space is
-/// three hosts at most (the configured redirect and the two loopback literals), so this is close
-/// to a deployment-wide ceiling: at the ten-minute ceremony TTL it caps the in-memory store at
+/// three hosts at most (the configured redirect and the two loopback literals) *because the
+/// route validates the redirect before it charges this budget*, so this is close to a
+/// deployment-wide ceiling: at the ten-minute ceremony TTL it caps the in-memory store at
 /// well under two thousand live records against its ten-thousand ceiling.
 pub const OIDC_AUTHORIZE: Budget = Budget::new(60, SignedDuration::from_mins(1));
+
+/// OIDC authorizes whose redirect the policy refused, deployment-wide (`S-N1`).
+///
+/// Sixty a minute, the same number as the admitted path, against
+/// [`CounterKey::OidcAuthorizeRefused`](crate::counter::CounterKey::OidcAuthorizeRefused)'s one
+/// bucket. A refused authorize does no work worth throttling for its own sake — the redirect
+/// check is a string comparison and nothing is written — so this budget is not protecting the
+/// server's CPU. It is here so that "refused" is not the one request on the surface that costs
+/// an attacker nothing to repeat, and so the log line that reports the refusal is itself
+/// bounded.
+pub const OIDC_AUTHORIZE_REFUSED: Budget = Budget::new(60, SignedDuration::from_mins(1));
 
 /// Deep storage verifications per account.
 ///

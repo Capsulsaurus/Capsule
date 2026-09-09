@@ -138,6 +138,24 @@ impl From<KeyError> for ProviderError {
 
 /// An external identity provider, as the routes see it.
 pub trait IdentityProvider: fmt::Debug + Send + Sync {
+    /// Whether the deployment's [`RedirectPolicy`] admits `redirect_uri`.
+    ///
+    /// Synchronous, pure and free: it is a string comparison against configuration, with no
+    /// clock, no socket and no state. It exists as a port method rather than as a copy of the
+    /// policy held beside the routes because there must be exactly **one** answer to "is this
+    /// redirect admitted" — a second copy is two call sites that eventually disagree, and the
+    /// disagreement would be invisible until one of them admitted something the other refused.
+    ///
+    /// The route calls it **before** it charges the rate limiter, so the counter key it charges
+    /// is one the policy already admitted. That ordering is the whole point: the redirect URI is
+    /// caller-supplied and unbounded, and keying a counter on an unvalidated one hands an
+    /// unauthenticated caller a lever on the counter store's key cardinality. See
+    /// [`CounterKey::OidcAuthorizeRefused`](crate::counter::CounterKey::OidcAuthorizeRefused).
+    ///
+    /// [`authorization_url`](Self::authorization_url) applies the same policy again and is the
+    /// authority; this is the cheap look-ahead, never the enforcement.
+    fn admits_redirect(&self, redirect_uri: &str) -> bool;
+
     /// The URL to send the person to.
     ///
     /// Refuses a redirect the policy does not admit before anything is fetched, so a refused
@@ -414,6 +432,10 @@ impl HttpIdentityProvider {
 }
 
 impl IdentityProvider for HttpIdentityProvider {
+    fn admits_redirect(&self, redirect_uri: &str) -> bool {
+        self.settings.redirects.admits(redirect_uri)
+    }
+
     fn authorization_url<'a>(
         &'a self,
         request: &'a AuthorizationRequest<'a>,
@@ -466,6 +488,14 @@ impl IdentityProvider for HttpIdentityProvider {
 pub struct Disabled;
 
 impl IdentityProvider for Disabled {
+    /// Nothing is admitted, because nothing is configured. The authorize still answers
+    /// `404 error.auth.oidc_not_configured` rather than `400`: this only decides which counter
+    /// bucket the refusal is charged to, and an unconfigured deployment's every request is a
+    /// refusal, so the fixed bucket is the correct one.
+    fn admits_redirect(&self, _redirect_uri: &str) -> bool {
+        false
+    }
+
     fn authorization_url<'a>(
         &'a self,
         _request: &'a AuthorizationRequest<'a>,
