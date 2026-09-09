@@ -30,7 +30,7 @@ impl Workspace {
     /// write like `timestamp` and `client_version` — never inherited from `base`.
     ///
     /// That is not a preference, it is what
-    /// [`verify_asset`](crate::crypto::verify_asset::verify_asset) requires: it resolves
+    /// [`verify_asset`] requires: it resolves
     /// `created_by_device` *inside `created_by_user`'s* published directory (step 6) and then
     /// verifies `device_sig` under **that entry's** key (step 8). A record naming a device that
     /// did not sign it fails step 8 and is unverifiable by every reader. Inheriting the pair
