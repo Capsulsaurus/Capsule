@@ -463,6 +463,7 @@ mod tests {
             min_protocol_version: "2026-06-01".to_owned(),
             issued_at: jiff::Timestamp::UNIX_EPOCH,
             expires_at: jiff::Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_hours(6),
+            not_after: jiff::Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_hours(6),
             revoked_at: None,
             refreshed_to: None,
         };

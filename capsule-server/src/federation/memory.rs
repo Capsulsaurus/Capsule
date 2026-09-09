@@ -62,16 +62,7 @@ impl Inner {
 
     /// Refuse a record whose lifetime the published list could not stay bounded under.
     fn admissible(record: &CapabilityRecord) -> Result<(), StoreError> {
-        if record.expires_at.duration_since(record.issued_at) > MAX_TOKEN_TTL {
-            return Err(StoreError::Rejected {
-                store: "capabilities",
-                detail: format!(
-                    "capability {} would live past the {MAX_TOKEN_TTL} ceiling",
-                    record.jti
-                ),
-            });
-        }
-        Ok(())
+        super::store::admissible(record)
     }
 }
 
@@ -215,17 +206,7 @@ impl CapabilityStore for InMemoryCapabilities {
             let Some(old) = inner.records.get(predecessor) else {
                 return Ok(RefreshOutcome::Unknown);
             };
-            if successor.peer_id != old.peer_id
-                || successor.album_id != old.album_id
-                || successor.member != old.member
-            {
-                return Err(StoreError::Rejected {
-                    store: "capabilities",
-                    detail: format!(
-                        "a successor of {predecessor} must carry its peer, album and member"
-                    ),
-                });
-            }
+            super::store::continues(predecessor, old, &successor)?;
             if let Some(next) = &old.refreshed_to {
                 let existing =
                     inner

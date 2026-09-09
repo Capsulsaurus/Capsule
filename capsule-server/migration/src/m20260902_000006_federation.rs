@@ -65,6 +65,17 @@ impl MigrationTrait for Migration {
                             .big_integer()
                             .not_null(),
                     )
+                    // The absolute deadline of the whole grant, fixed at the original mint and
+                    // copied unchanged into every successor. `expires_at` is one token's life
+                    // and a refresh replaces it; this is the column a refresh cannot move, and
+                    // it is what keeps a chain of refreshes from outliving the lifetime the
+                    // album's owner chose. Equal to `expires_at` for a grant nobody made
+                    // renewable, which is the default.
+                    .col(
+                        ColumnDef::new(FederationCapabilities::NotAfter)
+                            .big_integer()
+                            .not_null(),
+                    )
                     .col(
                         ColumnDef::new(FederationCapabilities::RevokedAt)
                             .big_integer()
@@ -207,6 +218,7 @@ enum FederationCapabilities {
     MinProtocolVersion,
     IssuedAt,
     ExpiresAt,
+    NotAfter,
     RevokedAt,
     RefreshedTo,
 }

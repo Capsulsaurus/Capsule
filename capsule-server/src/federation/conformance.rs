@@ -49,7 +49,21 @@ fn ok<T>(result: Result<T, StoreError>, doing: &str) -> T {
 }
 
 /// A capability for `case`, minted at the clock's now and good for `hours`.
+///
+/// Not renewable: `not_after` equals `expires_at`, which is the default an owner gets when they
+/// do not ask for renewal. The cases that are about the deadline set it themselves.
 fn record(h: &dyn Harness, case: &str, jti: &str, hours: i64) -> CapabilityRecord {
+    renewable_record(h, case, jti, hours, hours)
+}
+
+/// A capability for `case`, good for `hours` and renewable until `grant_hours` from now.
+fn renewable_record(
+    h: &dyn Harness,
+    case: &str,
+    jti: &str,
+    hours: i64,
+    grant_hours: i64,
+) -> CapabilityRecord {
     let now = h.clock().now();
     CapabilityRecord {
         jti: format!("{case}-{jti}"),
@@ -61,6 +75,7 @@ fn record(h: &dyn Harness, case: &str, jti: &str, hours: i64) -> CapabilityRecor
         min_protocol_version: "2026-06-01".to_owned(),
         issued_at: now,
         expires_at: crate::store::deadline(now, SignedDuration::from_hours(hours)),
+        not_after: crate::store::deadline(now, SignedDuration::from_hours(grant_hours)),
         revoked_at: None,
         refreshed_to: None,
     }
@@ -376,6 +391,76 @@ pub async fn a_successor_must_carry_the_predecessors_peer_album_and_member(h: &d
     assert_eq!(old.revoked_at, None);
 }
 
+/// A successor may not move the grant's absolute deadline, in either direction.
+///
+/// The rule that makes "a refresh cannot extend a grant" a property of the *store* rather than
+/// of the one route that computes a successor's TTL. Without it a peer holding a deliberately
+/// short grant refreshes into an indefinite one, and every adapter would have to be trusted to
+/// have re-derived the same check.
+pub async fn a_successor_may_not_move_the_grants_deadline(h: &dyn Harness) {
+    let case = "deadline";
+    let now = h.clock().now();
+    // Renewable for a week; each token lives six hours.
+    let old = renewable_record(h, case, "old", 6, 24 * 7);
+    issue(h, old.clone()).await;
+
+    for (name, not_after) in [
+        (
+            "longer",
+            crate::store::deadline(now, SignedDuration::from_hours(24 * 30)),
+        ),
+        (
+            "shorter",
+            crate::store::deadline(now, SignedDuration::from_hours(12)),
+        ),
+    ] {
+        let successor = CapabilityRecord {
+            not_after,
+            ..renewable_record(h, case, name, 6, 24 * 7)
+        };
+        let error = h
+            .capabilities()
+            .refresh(&old.jti, successor.clone(), now)
+            .await
+            .expect_err("a successor moving the deadline is a rejection");
+        assert!(
+            matches!(error, StoreError::Rejected { .. }),
+            "{name}: {error:?}"
+        );
+        assert_eq!(
+            find(h, &successor.jti).await,
+            None,
+            "{name}: a refusal records nothing"
+        );
+    }
+
+    // And a token that would run past the deadline is refused at issue, before any refresh.
+    let overhanging = CapabilityRecord {
+        expires_at: crate::store::deadline(now, SignedDuration::from_hours(12)),
+        not_after: crate::store::deadline(now, SignedDuration::from_hours(6)),
+        ..record(h, case, "overhanging", 6)
+    };
+    let error = h
+        .capabilities()
+        .issue(overhanging.clone())
+        .await
+        .expect_err("a token outliving its grant is a rejection");
+    assert!(matches!(error, StoreError::Rejected { .. }), "{error:?}");
+    assert_eq!(find(h, &overhanging.jti).await, None);
+
+    // The one successor that *is* admissible carries the deadline unchanged.
+    let successor = renewable_record(h, case, "ok", 6, 24 * 7);
+    match ok(
+        h.capabilities()
+            .refresh(&old.jti, successor.clone(), now)
+            .await,
+        "refresh a renewable grant",
+    ) {
+        RefreshOutcome::Issued(issued) => assert_eq!(issued.not_after, old.not_after),
+        other => panic!("a live renewable predecessor must refresh, got {other:?}"),
+    }
+}
+
 /// An entry leaves the list once the token it names has expired, and the list orders by expiry.
 pub async fn the_published_list_prunes_expired_entries_and_orders_by_expiry(h: &dyn Harness) {
     let case = "prune";
@@ -591,6 +676,7 @@ pub async fn run_all(h: &dyn Harness) {
     a_list_side_revocation_keeps_the_records_expiry(h).await;
     a_record_past_the_ceiling_is_refused(h).await;
     a_successor_must_carry_the_predecessors_peer_album_and_member(h).await;
+    a_successor_may_not_move_the_grants_deadline(h).await;
     the_published_list_prunes_expired_entries_and_orders_by_expiry(h).await;
     a_refresh_is_one_operation_and_a_replay_answers_the_same_successor(h).await;
     a_revoked_or_unknown_predecessor_is_not_refreshed(h).await;

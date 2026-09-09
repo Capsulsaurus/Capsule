@@ -193,6 +193,7 @@ async fn capability_over(
             min_protocol_version: PROTOCOL_VERSION.to_owned(),
             issued_at: minted.grant.issued_at,
             expires_at: minted.grant.expires_at,
+            not_after: minted.grant.expires_at,
             revoked_at: None,
             refreshed_to: None,
         })
@@ -878,9 +879,19 @@ async fn mint(fixture: &Fixture, bearer: &str, body: Value) -> kynos::test::Test
         .await
 }
 
-/// The mint body for `PEER` over Bob's membership.
+/// The mint body for `PEER` over Bob's membership. Not renewable, which is the default.
 fn mint_body(scope: &str) -> Value {
     serde_json::json!({ "peer": PEER, "member": BOB, "scope": scope })
+}
+
+/// The same, renewable until `hours` from the fixture's now.
+fn renewable_body(fixture: &Fixture, scope: &str, hours: i64) -> Value {
+    serde_json::json!({
+        "peer": PEER,
+        "member": BOB,
+        "scope": scope,
+        "renewable_until": crate::support::deadline(fixture, hours).to_string(),
+    })
 }
 
 /// DELETE one capability of `on`, as `bearer`.
@@ -1126,10 +1137,17 @@ async fn a_refresh_issues_a_successor_cuts_the_predecessor_and_replays_to_the_sa
         .await
         .assert_status(StatusCode::OK);
     publish_into(&fixture, "refresh-1", &album()).await;
-    let minted: Value = mint(&fixture, &bearer, mint_body("read-derivative-only"))
-        .await
-        .assert_status(StatusCode::CREATED)
-        .json();
+    let minted: Value = mint(
+        &fixture,
+        &bearer,
+        renewable_body(&fixture, "read-derivative-only", 24 * 7),
+    )
+    .await
+    .assert_status(StatusCode::CREATED)
+    .json();
+    assert_eq!(minted["renewable"], true);
+    assert_ne!(minted["not_after"], minted["expires_at"]);
+    let not_after = minted["not_after"].as_str().expect("a deadline").to_owned();
     let old_jti = minted["jti"].as_str().expect("a jti").to_owned();
     let old = format!("Bearer {}", minted["token"].as_str().expect("a token"));
 
@@ -1144,6 +1162,10 @@ async fn a_refresh_issues_a_successor_cuts_the_predecessor_and_replays_to_the_sa
         .assert_status(StatusCode::OK)
         .json();
     assert_eq!(first["replayed"], false);
+    assert_eq!(
+        first["not_after"], not_after,
+        "a refresh carries the grant's deadline unchanged"
+    );
     let successor = format!("Bearer {}", first["token"].as_str().expect("a token"));
     assert_ne!(first["jti"], old_jti.as_str());
 
@@ -1467,4 +1489,157 @@ async fn blocking_a_peer_cuts_and_publishes_every_grant_it_holds() {
     page(&fixture, &other, &album_query())
         .await
         .assert_status(StatusCode::OK);
+}
+
+// ===========================================================================================
+// The grant's absolute deadline (H1) and the refresh's own roster check
+// ===========================================================================================
+
+#[tokio::test]
+async fn a_grant_the_owner_did_not_make_renewable_cannot_be_refreshed_at_all() {
+    // The default, and the whole of H1's fix: without an absolute deadline a peer holding a
+    // deliberately short grant refreshes to the default TTL inside its own lifetime and chains
+    // forever, leaving `ttl_seconds` advisory for exactly one hop.
+    let dsk = support::identity_key();
+    let (fixture, bearer) = anchored(&dsk).await;
+    publish_roster(&fixture, &bearer, &dsk, 1, &[(BOB, MemberRole::Reader)])
+        .await
+        .assert_status(StatusCode::OK);
+
+    let minted: Value = mint(
+        &fixture,
+        &bearer,
+        serde_json::json!({ "peer": PEER, "member": BOB, "scope": "read", "ttl_seconds": 60 }),
+    )
+    .await
+    .assert_status(StatusCode::CREATED)
+    .json();
+    assert_eq!(minted["renewable"], false);
+    assert_eq!(
+        minted["not_after"], minted["expires_at"],
+        "a grant nobody made renewable dies with its first token"
+    );
+    let capability = format!("Bearer {}", minted["token"].as_str().expect("a token"));
+
+    let refused = refresh(&fixture, &capability).await;
+    refused.assert_status(StatusCode::FORBIDDEN);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.federation.capability_expired");
+}
+
+#[tokio::test]
+async fn a_renewable_grant_stops_at_its_deadline_and_its_last_token_does_not_overhang_it() {
+    let dsk = support::identity_key();
+    let (fixture, bearer) = anchored(&dsk).await;
+    publish_roster(&fixture, &bearer, &dsk, 1, &[(BOB, MemberRole::Reader)])
+        .await
+        .assert_status(StatusCode::OK);
+
+    // Renewable for ten hours; the default token life is six.
+    let minted: Value = mint(&fixture, &bearer, renewable_body(&fixture, "read", 10))
+        .await
+        .assert_status(StatusCode::CREATED)
+        .json();
+    let deadline: Timestamp = minted["not_after"]
+        .as_str()
+        .expect("a deadline")
+        .parse()
+        .expect("an instant");
+    let mut capability = format!("Bearer {}", minted["token"].as_str().expect("a token"));
+
+    // Five hours in, the grant has five left and the default token life is six: the successor
+    // is minted for the five that remain, so it ends *at* the deadline rather than past it.
+    fixture.clock.advance(SignedDuration::from_hours(5));
+    let renewed: Value = refresh(&fixture, &capability)
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    let expires: Timestamp = renewed["expires_at"]
+        .as_str()
+        .expect("an expiry")
+        .parse()
+        .expect("an instant");
+    assert_eq!(
+        expires, deadline,
+        "the last token of a grant is minted for exactly what is left"
+    );
+    assert_eq!(
+        renewed["not_after"], minted["not_after"],
+        "and the deadline itself never moves"
+    );
+    capability = format!("Bearer {}", renewed["token"].as_str().expect("a token"));
+
+    // That successor is the last one. Refused while it is still a perfectly valid token, so the
+    // answer is "this grant is over" and not "your token expired" — the peer's next move is the
+    // album's owner, not this server.
+    let refused = refresh(&fixture, &capability).await;
+    refused.assert_status(StatusCode::FORBIDDEN);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.federation.capability_expired");
+
+    // And the token itself still works right up to the deadline.
+    page(&fixture, &capability, &album_query())
+        .await
+        .assert_status(StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_mint_refuses_a_deadline_that_is_past_or_absurd() {
+    let dsk = support::identity_key();
+    let (fixture, bearer) = anchored(&dsk).await;
+    publish_roster(&fixture, &bearer, &dsk, 1, &[(BOB, MemberRole::Reader)])
+        .await
+        .assert_status(StatusCode::OK);
+
+    for (name, until) in [
+        ("in the past", support::deadline(&fixture, -1).to_string()),
+        (
+            "a century out",
+            support::deadline(&fixture, 24 * 365 * 100).to_string(),
+        ),
+        ("not a date", "next tuesday".to_owned()),
+    ] {
+        let refused = mint(
+            &fixture,
+            &bearer,
+            serde_json::json!({
+                "peer": PEER, "member": BOB, "scope": "read", "renewable_until": until,
+            }),
+        )
+        .await;
+        refused.assert_status(StatusCode::BAD_REQUEST);
+        let refused: Value = refused.json();
+        assert_eq!(
+            refused["code"], "error.federation.capability_malformed",
+            "{name}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_refresh_stops_once_the_member_leaves_the_roster() {
+    // The read path already refuses such a token, so nothing is exposed — but a server that
+    // kept issuing successors for a membership that had ended would be minting tokens that can
+    // never be used and writing a store row for each.
+    let dsk = support::identity_key();
+    let (fixture, bearer) = anchored(&dsk).await;
+    publish_roster(&fixture, &bearer, &dsk, 1, &[(BOB, MemberRole::Reader)])
+        .await
+        .assert_status(StatusCode::OK);
+    let minted: Value = mint(&fixture, &bearer, renewable_body(&fixture, "read", 24 * 7))
+        .await
+        .assert_status(StatusCode::CREATED)
+        .json();
+    let capability = format!("Bearer {}", minted["token"].as_str().expect("a token"));
+    refresh(&fixture, &capability)
+        .await
+        .assert_status(StatusCode::OK);
+
+    publish_roster(&fixture, &bearer, &dsk, 2, &[])
+        .await
+        .assert_status(StatusCode::OK);
+    let refused = refresh(&fixture, &capability).await;
+    refused.assert_status(StatusCode::CONFLICT);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.federation.member_not_on_roster");
 }

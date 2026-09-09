@@ -367,6 +367,7 @@ async fn e2e_case_4_a_peer_pulls_a_shared_album_through_the_sdk_over_a_socket() 
             min_protocol_version: PROTOCOL_VERSION.to_owned(),
             issued_at: minted.grant.issued_at,
             expires_at: minted.grant.expires_at,
+            not_after: minted.grant.expires_at,
             revoked_at: None,
             refreshed_to: None,
         })

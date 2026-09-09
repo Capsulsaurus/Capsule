@@ -3107,6 +3107,14 @@ pub(crate) fn signed_report(
     })
 }
 
+/// `hours` from the fixture's own clock, as an RFC 3339 instant.
+///
+/// The suite's clock starts at the Unix epoch, so a wall-clock literal in a request body is
+/// decades out and refused; every deadline a case names is relative to this.
+pub(crate) fn deadline(fixture: &Fixture, hours: i64) -> jiff::Timestamp {
+    fixture.clock.now() + jiff::SignedDuration::from_hours(hours)
+}
+
 /// The protocol version the suite's manifests and sessions are written under.
 pub(crate) const PROTOCOL_VERSION: &str = capsule_core::crypto::primitives::PROTOCOL_VERSION;
 

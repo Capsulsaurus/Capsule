@@ -7569,7 +7569,7 @@
   },
   "error.federation.capability_expired": {
     "message": "This shared album's access has expired.",
-    "context": "HTTP 401 on a federation pull (slice S-E2, threat-model invariant 19): the capability token is past its exp. Tokens live at most 24h; the peer must refresh before continuing."
+    "context": "HTTP 401 on a federation pull, and HTTP 403 on POST /v1/federation/capabilities/refresh (slice S-E2, threat-model invariant 19). On a pull: the capability token is past its exp. On a refresh: the whole grant is past the absolute deadline its owner fixed at the original mint — which is also what a grant nobody made renewable hits on its first refresh — so no successor will ever be issued from it and the peer's next move is to ask the album's owner, not this server. Tokens live at most 24h regardless."
   },
   "error.federation.capability_invalid": {
     "message": "This shared album's access could not be verified.",

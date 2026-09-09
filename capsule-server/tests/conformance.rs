@@ -64,6 +64,7 @@ async fn federated_peer(fixture: &Fixture) -> String {
             min_protocol_version: PROTOCOL_VERSION.to_owned(),
             issued_at: minted.grant.issued_at,
             expires_at: minted.grant.expires_at,
+            not_after: minted.grant.expires_at,
             revoked_at: None,
             refreshed_to: None,
         })
@@ -1167,10 +1168,17 @@ async fn every_declared_response_is_exercised() {
             .header("x-capsule-protocol", PROTOCOL_VERSION)
             .json(&body)
     };
+    // Renewable, because the refresh operation below has to be reachable: a grant nobody made
+    // renewable answers `403` on its first refresh, which is the default and is asserted in
+    // `tests/federation.rs` rather than here.
     let request = json!({
         "peer": "other.test",
         "member": FEDERATED_MEMBER,
         "scope": "read",
+        // On the fixture's own clock, which starts at the Unix epoch — a wall-clock literal
+        // would be ninety days past the permitted window and answer `400`.
+        "renewable_until": (fixture.clock.now() + jiff::SignedDuration::from_hours(24 * 7))
+            .to_string(),
     });
 
     // 401 and 403 are the scheme's, as everywhere.
@@ -1312,6 +1320,31 @@ async fn every_declared_response_is_exercised() {
         ))
         .await
         .expect("the counter answers");
+
+    // 409: the member the grant was minted for has left the roster, so no successor will ever
+    // be usable. Applied through the store, as the roster above was.
+    {
+        use capsule_server::membership::{MembershipStore as _, RosterRecord};
+        fixture
+            .members
+            .apply_roster(
+                RosterRecord {
+                    album_id: support::album(),
+                    roster_version: 4,
+                    amk_epoch: 4,
+                    attested_by_device: support::device(),
+                    received_at: jiff::Timestamp::UNIX_EPOCH,
+                    document: b"walk-v4".to_vec(),
+                },
+                vec![],
+            )
+            .await
+            .expect("the store applies");
+    }
+    refresh(&successor)
+        .send()
+        .await
+        .assert_status(StatusCode::CONFLICT);
 
     // ── DELETE /v1/albums/{album_id}/capabilities/{jti} ────────────────────────────────────
     let revoke = format!("{caps}/{successor_jti}");

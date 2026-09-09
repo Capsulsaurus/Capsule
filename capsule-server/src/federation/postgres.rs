@@ -44,6 +44,7 @@ use crate::discovery::revocation::{
     MAX_TOKEN_TTL, PublishedRevocations, RevocationError, RevocationList, RevokeFuture,
     RevokedToken,
 };
+use crate::federation::store::admissible;
 use crate::postgres::error::Port;
 use crate::postgres::time::{from_micros, to_micros};
 use crate::store::{AlbumId, Clock, StoreError, StoreFuture, UserId};
@@ -62,8 +63,8 @@ const PEERS: Port = Port {
 
 /// The columns every capability read selects, in the order [`record_from`] decodes them.
 const CAPABILITY_COLUMNS: &str = "jti, album_id, peer_id, member_id, scope, granted_epoch, \
-                                  min_protocol_version, issued_at, expires_at, revoked_at, \
-                                  refreshed_to";
+                                  min_protocol_version, issued_at, expires_at, not_after, \
+                                  revoked_at, refreshed_to";
 
 /// An epoch as the column holds it.
 fn epoch_to_column(value: u64) -> Result<i64, StoreError> {
@@ -91,6 +92,7 @@ fn record_from(row: &sea_orm::QueryResult) -> Result<CapabilityRecord, StoreErro
     let min_protocol_version: String = row.try_get("", "min_protocol_version").map_err(&failed)?;
     let issued_at: i64 = row.try_get("", "issued_at").map_err(&failed)?;
     let expires_at: i64 = row.try_get("", "expires_at").map_err(&failed)?;
+    let not_after: i64 = row.try_get("", "not_after").map_err(&failed)?;
     let revoked_at: Option<i64> = row.try_get("", "revoked_at").map_err(&failed)?;
     let refreshed_to: Option<String> = row.try_get("", "refreshed_to").map_err(&failed)?;
     Ok(CapabilityRecord {
@@ -105,25 +107,12 @@ fn record_from(row: &sea_orm::QueryResult) -> Result<CapabilityRecord, StoreErro
         min_protocol_version,
         issued_at: instant(CAPABILITIES, issued_at)?,
         expires_at: instant(CAPABILITIES, expires_at)?,
+        not_after: instant(CAPABILITIES, not_after)?,
         revoked_at: revoked_at
             .map(|micros| instant(CAPABILITIES, micros))
             .transpose()?,
         refreshed_to,
     })
-}
-
-/// Refuse a record whose lifetime the published list could not stay bounded under.
-fn admissible(record: &CapabilityRecord) -> Result<(), StoreError> {
-    if record.expires_at.duration_since(record.issued_at) > MAX_TOKEN_TTL {
-        return Err(StoreError::Rejected {
-            store: CAPABILITIES.store,
-            detail: format!(
-                "capability {} would live past the {MAX_TOKEN_TTL} ceiling",
-                record.jti
-            ),
-        });
-    }
-    Ok(())
 }
 
 /// Begin a transaction, or say why not.
@@ -184,8 +173,8 @@ async fn insert<C: ConnectionTrait>(
             DbBackend::Postgres,
             "INSERT INTO federation_capabilities \
              (jti, album_id, peer_id, member_id, scope, granted_epoch, min_protocol_version, \
-              issued_at, expires_at, revoked_at, refreshed_to) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, NULL) \
+              issued_at, expires_at, not_after, revoked_at, refreshed_to) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, NULL) \
              ON CONFLICT (jti) DO NOTHING",
             [
                 Value::from(record.jti.clone()),
@@ -197,6 +186,7 @@ async fn insert<C: ConnectionTrait>(
                 Value::from(record.min_protocol_version.clone()),
                 Value::from(to_micros(record.issued_at)),
                 Value::from(to_micros(record.expires_at)),
+                Value::from(to_micros(record.not_after)),
             ],
         ))
         .await
@@ -427,17 +417,7 @@ impl CapabilityStore for PostgresCapabilities {
             let Some(old) = record_of(&transaction, predecessor).await? else {
                 return Ok(RefreshOutcome::Unknown);
             };
-            if successor.peer_id != old.peer_id
-                || successor.album_id != old.album_id
-                || successor.member != old.member
-            {
-                return Err(StoreError::Rejected {
-                    store: CAPABILITIES.store,
-                    detail: format!(
-                        "a successor of {predecessor} must carry its peer, album and member"
-                    ),
-                });
-            }
+            super::store::continues(predecessor, &old, &successor)?;
             if let Some(next) = &old.refreshed_to {
                 let existing =
                     record_of(&transaction, next)

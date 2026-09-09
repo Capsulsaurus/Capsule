@@ -43,8 +43,8 @@ use jiff::Timestamp;
 
 use super::PeerId;
 use super::capability::{CapabilityGrant, Scope};
-use crate::discovery::revocation::RevocationList;
-use crate::store::{AlbumId, StoreFuture, UserId};
+use crate::discovery::revocation::{MAX_TOKEN_TTL, RevocationList};
+use crate::store::{AlbumId, StoreError, StoreFuture, UserId};
 
 /// One capability this server issued.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,6 +67,12 @@ pub struct CapabilityRecord {
     pub issued_at: Timestamp,
     /// When it stops being honoured.
     pub expires_at: Timestamp,
+    /// The absolute deadline the **whole grant** dies at, chosen at the original mint.
+    ///
+    /// The token's own `expires_at` is at most 24 h out and a refresh replaces it; this is the
+    /// thing a refresh cannot move. Equal to `expires_at` for a grant the owner did not make
+    /// renewable, which is the default — see [`CapabilityRecord::may_refresh_at`].
+    pub not_after: Timestamp,
     /// When it was revoked, if it has been.
     pub revoked_at: Option<Timestamp>,
     /// The `jti` of the successor a refresh issued, if one has.
@@ -77,6 +83,28 @@ impl CapabilityRecord {
     /// Whether the capability may still be presented at `now`: unrevoked and unexpired.
     pub fn is_live(&self, now: Timestamp) -> bool {
         self.revoked_at.is_none() && self.expires_at > now
+    }
+
+    /// Whether a successor may still be issued from this grant at `now`.
+    ///
+    /// The absolute deadline, and the whole of what stops a refresh chain. Without it a peer
+    /// holding a deliberate sixty-second grant refreshes inside the minute to the default TTL
+    /// and again forever, and the owner's chosen lifetime is advisory for exactly one hop.
+    ///
+    /// Two conditions, and the first is the default: the owner must have made the grant
+    /// renewable at all, and the deadline must not have passed. The last token of a renewable
+    /// grant is minted for exactly what is left, so it satisfies neither and answers the same
+    /// "this grant is over" as one that was never renewable — which is the honest answer in
+    /// both cases, because in both there is no successor left to have.
+    pub fn may_refresh_at(&self, now: Timestamp) -> bool {
+        self.is_renewable() && self.not_after > now
+    }
+
+    /// Whether the owner made this grant renewable at all.
+    ///
+    /// `false` is the default: renewability is asked for at mint, never assumed.
+    pub fn is_renewable(&self) -> bool {
+        self.not_after > self.expires_at
     }
 
     /// The grant this record describes, which the codec re-signs byte-for-byte.
@@ -91,6 +119,74 @@ impl CapabilityRecord {
             min_protocol_version: self.min_protocol_version.clone(),
         }
     }
+}
+
+/// Refuse a record whose lifetime the published list could not stay bounded under.
+///
+/// Shared by every adapter rather than re-derived in each: the 24 h ceiling and the absolute
+/// deadline are properties of the *record*, and an adapter that checked them differently would
+/// be an adapter that accepted a grant another one refuses.
+///
+/// # Errors
+///
+/// Returns [`StoreError::Rejected`](crate::store::StoreError::Rejected) when the token's own
+/// window is past [`MAX_TOKEN_TTL`], or when it runs past the grant's absolute deadline.
+pub fn admissible(record: &CapabilityRecord) -> Result<(), StoreError> {
+    if record.expires_at.duration_since(record.issued_at) > MAX_TOKEN_TTL {
+        return Err(StoreError::Rejected {
+            store: "capabilities",
+            detail: format!(
+                "capability {} would live past the {MAX_TOKEN_TTL} ceiling",
+                record.jti
+            ),
+        });
+    }
+    if record.expires_at > record.not_after {
+        return Err(StoreError::Rejected {
+            store: "capabilities",
+            detail: format!(
+                "capability {} expires at {}, past its grant's deadline of {}",
+                record.jti, record.expires_at, record.not_after
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Refuse a successor that does not continue exactly what its predecessor granted.
+///
+/// The four things a refresh may never move: the peer, the album, the member, and the absolute
+/// deadline. The first three keep a refresh from *widening* a grant; the fourth keeps it from
+/// *outliving* one, which is the same defect one dimension along.
+///
+/// # Errors
+///
+/// Returns [`StoreError::Rejected`](crate::store::StoreError::Rejected) naming which of them
+/// moved. Every one is a bug in the caller, never a peer's request.
+pub fn continues(
+    predecessor: &str,
+    old: &CapabilityRecord,
+    successor: &CapabilityRecord,
+) -> Result<(), StoreError> {
+    if successor.peer_id != old.peer_id
+        || successor.album_id != old.album_id
+        || successor.member != old.member
+    {
+        return Err(StoreError::Rejected {
+            store: "capabilities",
+            detail: format!("a successor of {predecessor} must carry its peer, album and member"),
+        });
+    }
+    if successor.not_after != old.not_after {
+        return Err(StoreError::Rejected {
+            store: "capabilities",
+            detail: format!(
+                "a successor of {predecessor} must carry its deadline of {}, not {}",
+                old.not_after, successor.not_after
+            ),
+        });
+    }
+    Ok(())
 }
 
 /// Which live capabilities a caller wants.
@@ -163,8 +259,11 @@ pub trait CapabilityStore: RevocationList + fmt::Debug + Send + Sync {
     /// # Errors
     ///
     /// Returns [`StoreError::Rejected`](crate::store::StoreError::Rejected) if `successor` names
-    /// a different peer, album or member than the predecessor, or would live past the ceiling,
-    /// or reuses a recorded `jti`. Every one is a bug in the caller, never a peer's request.
+    /// a different peer, album or member than the predecessor, **carries a different
+    /// `not_after` or one its own `expires_at` runs past**, or would live past the ceiling, or
+    /// reuses a recorded `jti`. Every one is a bug in the caller, never a peer's request — and
+    /// the `not_after` rule is what makes "a refresh cannot extend a grant" structural rather
+    /// than a property of the one route that happens to compute the successor's TTL.
     fn refresh<'a>(
         &'a self,
         predecessor: &'a str,

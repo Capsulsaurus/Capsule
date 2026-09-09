@@ -6,8 +6,10 @@
 //! two reads accept and the three operations that manage it.
 //!
 //! ```text
-//! POST   /v1/albums/{album_id}/capabilities        { peer, member, scope, ttl_seconds? }
-//! 201 { token, jti, album_id, peer, member, scope, issued_at, expires_at, min_protocol_version }
+//! POST   /v1/albums/{album_id}/capabilities
+//!        { peer, member, scope, ttl_seconds?, renewable_until? }
+//! 201 { token, jti, album_id, peer, member, scope, issued_at, expires_at, not_after,
+//!       renewable, min_protocol_version }
 //! 400 error.federation.capability_malformed
 //! 403 error.federation.not_configured | error.moderation.server_blocked
 //! 404 error.federation.album_not_found
@@ -31,7 +33,9 @@
 //! POST   /v1/federation/capabilities/refresh       (the capability itself is the credential)
 //! 200 { token, jti, expires_at, replayed }
 //! 403 error.federation.capability_invalid | error.federation.capability_revoked
-//!     | error.moderation.server_blocked | error.federation.not_configured
+//!     | error.federation.capability_expired | error.moderation.server_blocked
+//!     | error.federation.not_configured
+//! 409 error.federation.member_not_on_roster
 //! 429 error.federation.rate_budget_exceeded
 //! 500 error.federation.unavailable
 //! ```
@@ -63,6 +67,25 @@
 //! ability to cut a grant that is already out there. Nor does an unset `FEDERATION_URL` stop an
 //! already-minted capability verifying — a token is not un-minted by a configuration change, and
 //! silently refusing one would cut a peer off with no revocation anybody can see.
+//!
+//! # Renewability is asked for, never assumed
+//!
+//! A refresh mints a **successor**, and a successor with a fresh TTL is a grant that outlives the
+//! lifetime its owner chose unless something stops it. Nothing about "same peer, same album, same
+//! member" does: an owner who mints a deliberate sixty-second capability would get a peer that
+//! refreshes inside the minute and chains forever, leaving `ttl_seconds` advisory for exactly one
+//! hop and revocation of a `jti` the owner never saw as the only remaining control.
+//!
+//! So the record carries an **absolute deadline**, [`CapabilityRecord::not_after`], fixed at the
+//! original mint and copied unchanged into every successor — the store refuses one that carries a
+//! different deadline, so this is structural rather than a property of the route that happens to
+//! compute the TTL. The default is `not_after == expires_at`: **a grant is not renewable unless
+//! the owner said so**, by naming `renewable_until` at mint. Each successor is minted for
+//! `min(DEFAULT_TTL, not_after − now)`, so the last token of a grant is short rather than
+//! overhanging, and a refresh past the deadline is `403 error.federation.capability_expired`.
+//!
+//! The mint response states both `not_after` and a plain `renewable` flag, because an owner
+//! deciding how long to share for should not have to infer it from two timestamps.
 //!
 //! # Refresh, and why it is idempotent by construction
 //!
@@ -113,6 +136,13 @@ pub struct FederationTag;
 /// contract's 24 hours and the codec clamps to it whatever is asked for.
 pub const DEFAULT_TTL: SignedDuration = SignedDuration::from_hours(6);
 
+/// The furthest out an owner may put a grant's absolute deadline.
+///
+/// Ninety days. Not a security boundary — the owner chose the date and can revoke — but a
+/// mistyped year is the one input here whose blast radius is measured in years, and a cap turns
+/// that into a `400` the client sees rather than a grant nobody remembers making.
+pub const MAX_GRANT_LIFETIME: SignedDuration = SignedDuration::from_hours(24 * 90);
+
 /// What a capability permits, on the wire.
 ///
 /// A mirror of [`Scope`] rather than the type itself, for the reason
@@ -154,8 +184,16 @@ pub struct MintCapabilityRequest {
     pub member: String,
     /// What the grant permits.
     pub scope: WireScope,
-    /// How long it should live, in seconds. Clamped to the 24-hour ceiling; absent is six hours.
+    /// How long **one token** should live, in seconds. Clamped to the 24-hour ceiling; absent is
+    /// six hours.
     pub ttl_seconds: Option<u64>,
+    /// The absolute deadline the whole grant dies at, RFC 3339 — and the only thing that makes
+    /// it **renewable**.
+    ///
+    /// Absent, the default, is a grant that cannot be refreshed at all: it lives exactly
+    /// `ttl_seconds` and then the owner mints again if they still mean to share. Present, it
+    /// must be in the future and at most ninety days out.
+    pub renewable_until: Option<String>,
 }
 
 /// A freshly minted capability.
@@ -178,8 +216,15 @@ pub struct MintedCapabilityResponse {
     pub scope: WireScope,
     /// When it was minted, RFC 3339.
     pub issued_at: String,
-    /// When it stops being honoured, RFC 3339.
+    /// When **this token** stops being honoured, RFC 3339.
     pub expires_at: String,
+    /// When the **whole grant** dies, RFC 3339. Equal to `expires_at` when it is not renewable.
+    pub not_after: String,
+    /// Whether a refresh may issue a successor from this grant.
+    ///
+    /// Stated plainly rather than left to be inferred from the two timestamps above: how long
+    /// an owner is sharing for is the decision this response reports back to them.
+    pub renewable: bool,
     /// The album's pinned protocol date, which the peer must speak to pull.
     pub min_protocol_version: String,
 }
@@ -191,8 +236,10 @@ pub struct RefreshedCapabilityResponse {
     pub token: String,
     /// Its identifier.
     pub jti: String,
-    /// When it stops being honoured, RFC 3339.
+    /// When this token stops being honoured, RFC 3339.
     pub expires_at: String,
+    /// When the whole grant dies, RFC 3339 — unchanged by this or any refresh.
+    pub not_after: String,
     /// Whether this call issued the successor, or answered one an earlier call already issued.
     ///
     /// Advisory. A peer never branches on it: both answers mean "here is the token to keep
@@ -345,6 +392,27 @@ pub enum RefreshRejection {
         code: &'static str,
     },
 
+    /// The grant's absolute deadline has passed, or the owner never made it renewable.
+    ///
+    /// The end of the sharing relationship rather than of one token: no successor will ever be
+    /// issued from it, and the peer's next move is to ask the album's owner, not this server.
+    #[error("this grant cannot be renewed any further")]
+    #[problem(status = 403, title = "Capability expired")]
+    GrantExpired {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// The member the grant was minted for is no longer on the album's roster at its epoch.
+    #[error("that member is not on this album's roster")]
+    #[problem(status = 409, title = "Member not on roster")]
+    NotOnRoster {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
     /// This deployment does not federate.
     #[error("this server does not federate")]
     #[problem(status = 403, title = "Federation not configured")]
@@ -481,6 +549,28 @@ pub async fn issue_capability(
         .ttl_seconds
         .and_then(|seconds| i64::try_from(seconds).ok())
         .map_or(DEFAULT_TTL, SignedDuration::from_secs);
+
+    // The absolute deadline, and the only way a grant becomes renewable at all. Parsed before
+    // anything is signed, so a malformed date costs a `400` rather than a recorded grant.
+    let now = federation.clock().now();
+    let renewable_until = match request.renewable_until.as_deref() {
+        None => None,
+        Some(text) => {
+            let Ok(until) = text.parse::<jiff::Timestamp>() else {
+                tracing::info!(%album, "a mint named an unreadable renewable_until");
+                return Err(MintRejection::Malformed {
+                    code: error_codes::FEDERATION_CAPABILITY_MALFORMED,
+                });
+            };
+            if until <= now || until > crate::store::deadline(now, MAX_GRANT_LIFETIME) {
+                tracing::info!(%album, %until, "a mint named a deadline outside the permitted window");
+                return Err(MintRejection::Malformed {
+                    code: error_codes::FEDERATION_CAPABILITY_MALFORMED,
+                });
+            }
+            Some(until)
+        }
+    };
     let minted = federation
         .codec()
         .mint(&MintRequest {
@@ -496,6 +586,12 @@ pub async fn issue_capability(
             MintRejection::unavailable()
         })?;
 
+    // A deadline earlier than the token's own expiry would be a grant that dies before its first
+    // token does, which is not a thing an owner can mean; the token wins and the grant is simply
+    // not renewable.
+    let not_after = renewable_until.map_or(minted.grant.expires_at, |until| {
+        until.max(minted.grant.expires_at)
+    });
     federation
         .capabilities()
         .issue(CapabilityRecord {
@@ -508,6 +604,7 @@ pub async fn issue_capability(
             min_protocol_version: minted.grant.min_protocol_version.clone(),
             issued_at: minted.grant.issued_at,
             expires_at: minted.grant.expires_at,
+            not_after,
             revoked_at: None,
             refreshed_to: None,
         })
@@ -526,6 +623,8 @@ pub async fn issue_capability(
         scope: scope.into(),
         issued_at: minted.grant.issued_at.to_string(),
         expires_at: minted.grant.expires_at.to_string(),
+        not_after: not_after.to_string(),
+        renewable: not_after > minted.grant.expires_at,
         min_protocol_version: minted.grant.min_protocol_version,
     }))
 }
@@ -616,6 +715,7 @@ pub async fn revoke_capability(
 )]
 pub async fn refresh_capability(
     Inject(federation): Inject<FederationContext>,
+    Inject(membership): Inject<MembershipContext>,
     Inject(counters): Inject<CounterContext>,
     Auth(principal): Auth<ReadBearer>,
 ) -> Result<Json<RefreshedCapabilityResponse>, RefreshRejection> {
@@ -638,8 +738,58 @@ pub async fn refresh_capability(
 
     let predecessor = &capability.record;
     let now = federation.clock().now();
+
+    // The absolute deadline the original mint fixed. A grant the owner did not make renewable
+    // has `not_after == expires_at` and fails here on its own first refresh, which is the
+    // point: renewability is asked for, not assumed.
+    if !predecessor.may_refresh_at(now) {
+        tracing::info!(
+            peer = %predecessor.peer_id,
+            jti = %predecessor.jti,
+            not_after = %predecessor.not_after,
+            renewable = predecessor.is_renewable(),
+            "a refresh was refused: the grant's deadline has passed"
+        );
+        return Err(RefreshRejection::GrantExpired {
+            code: error_codes::FEDERATION_CAPABILITY_EXPIRED,
+        });
+    }
+
+    // The membership the grant was minted for, re-asked. The read path checks this too, so
+    // nothing is *exposed* by skipping it — but a server that kept minting successors for a
+    // membership that has ended would be issuing tokens that can never be used, and writing a
+    // row for each.
+    match membership
+        .members()
+        .membership(&predecessor.album_id, &predecessor.member)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, album = %predecessor.album_id, "the membership store could not answer a refresh");
+            RefreshRejection::Unavailable {
+                code: error_codes::FEDERATION_UNAVAILABLE,
+            }
+        })? {
+        Membership::Member { granted_epoch, .. } if granted_epoch == predecessor.granted_epoch => {}
+        membership => {
+            tracing::info!(
+                peer = %predecessor.peer_id,
+                member = %predecessor.member,
+                album = %predecessor.album_id,
+                ?membership,
+                granted_epoch = predecessor.granted_epoch,
+                "a refresh was refused: its member is not on the roster at the granted epoch"
+            );
+            return Err(RefreshRejection::NotOnRoster {
+                code: error_codes::FEDERATION_MEMBER_NOT_ON_ROSTER,
+            });
+        }
+    }
+
     // The successor carries everything the predecessor granted, unchanged: the store refuses a
-    // successor that names another peer, album or member, so a refresh can never widen a grant.
+    // successor that names another peer, album, member **or deadline**, so a refresh can neither
+    // widen a grant nor outlive one. Its TTL is whatever is left of the grant, capped at the
+    // default — so the last token of a grant is short rather than overhanging its deadline.
+    let remaining = predecessor.not_after.duration_since(now);
     let minted = federation
         .codec()
         .mint(&MintRequest {
@@ -647,7 +797,7 @@ pub async fn refresh_capability(
             album: predecessor.album_id.clone(),
             scope: predecessor.scope,
             min_protocol_version: predecessor.min_protocol_version.clone(),
-            ttl: DEFAULT_TTL,
+            ttl: DEFAULT_TTL.min(remaining),
         })
         .map_err(|error| {
             tracing::error!(%error, "a successor capability could not be signed");
@@ -665,6 +815,7 @@ pub async fn refresh_capability(
         min_protocol_version: predecessor.min_protocol_version.clone(),
         issued_at: minted.grant.issued_at,
         expires_at: minted.grant.expires_at,
+        not_after: predecessor.not_after,
         revoked_at: None,
         refreshed_to: None,
     };
@@ -722,6 +873,7 @@ pub async fn refresh_capability(
         token,
         jti: record.jti,
         expires_at: record.expires_at.to_string(),
+        not_after: record.not_after.to_string(),
         replayed,
     }))
 }

@@ -477,6 +477,7 @@ mod tests {
             min_protocol_version: "2026-06-01".to_owned(),
             issued_at: now,
             expires_at: crate::store::deadline(now, SignedDuration::from_hours(1)),
+            not_after: crate::store::deadline(now, SignedDuration::from_hours(1)),
             revoked_at: None,
             refreshed_to: None,
         };
