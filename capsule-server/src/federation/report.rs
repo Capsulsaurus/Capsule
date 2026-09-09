@@ -82,16 +82,33 @@ impl ReportClaim {
     /// is logged: which check failed is the whole of what is safe to say.
     pub fn verify(&self, signature: &[u8], key: &[u8; 32]) -> Result<(), ReportError> {
         let bytes = self.signing_bytes()?;
-        ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, key.as_slice())
-            .verify(&bytes, signature)
-            .map_err(|_| {
-                tracing::info!(
-                    from = %self.reporting_server,
-                    "a federated report's signature did not verify under the pinned key"
-                );
-                ReportError::NotAuthentic
-            })
+        verify_signed_report(&bytes, signature, key).inspect_err(|_| {
+            tracing::info!(
+                from = %self.reporting_server,
+                "a federated report's signature did not verify under the pinned key"
+            );
+        })
     }
+}
+
+/// Whether `signature` covers `signed` under `key`.
+///
+/// The re-verification an operator does against a filed report, months after intake: it takes
+/// the two byte strings the row carries and the peer's pinned key, and nothing that was derived
+/// or normalized. Deliberately *not* a method on [`ReportClaim`] — reconstructing a claim from a
+/// stored row is exactly the mistake this exists to make unnecessary.
+///
+/// # Errors
+///
+/// Returns [`ReportError::NotAuthentic`] when it does not.
+pub fn verify_signed_report(
+    signed: &[u8],
+    signature: &[u8],
+    key: &[u8; 32],
+) -> Result<(), ReportError> {
+    ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, key.as_slice())
+        .verify(signed, signature)
+        .map_err(|_| ReportError::NotAuthentic)
 }
 
 #[cfg(test)]

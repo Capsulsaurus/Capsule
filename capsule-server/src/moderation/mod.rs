@@ -137,8 +137,20 @@ pub struct ModerationEvent {
 /// something it already holds — everything else would make the intake a channel for a peer to
 /// publish claims about a user into this server's storage.
 ///
-/// The signature is kept beside the report so an operator can re-verify it long after the fact,
-/// and so a key rotation cannot silently turn an accepted report into an unattributable one.
+/// # Re-verifiable, which means the *signed bytes* are what is kept
+///
+/// The signature is kept so an operator can re-verify it long after the fact, and so a key
+/// rotation cannot silently turn an accepted report into an unattributable one. That is only
+/// true if what is stored is what was signed — and the fields below are not: `reporting_server`
+/// is the canonical [`PeerId`](crate::federation::PeerId) form (case-folded, trailing dot
+/// stripped) rather than the string the peer sent, and `reported_at` is a parsed instant rather
+/// than the RFC 3339 text. Re-encoding those back into a claim would produce different bytes and
+/// a signature that no longer verifies.
+///
+/// So [`FederatedReport::signed`] holds the exact canonical-CBOR bytes the signature covers, and
+/// every field below is **derived from them** at intake rather than assembled beside them. An
+/// operator re-verifies with `signed` and the peer's pinned key and needs nothing else;
+/// `moderation::tests` pins the round trip.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FederatedReport {
     /// This server's identifier for the report, a UUIDv7.
@@ -157,8 +169,13 @@ pub struct FederatedReport {
     pub reported_at: Timestamp,
     /// When this server accepted it. The only timestamp this server vouches for.
     pub received_at: Timestamp,
-    /// The peer's Ed25519 signature over the report's canonical CBOR.
+    /// The peer's Ed25519 signature over [`Self::signed`].
     pub signature: Vec<u8>,
+    /// The exact canonical-CBOR bytes the signature covers.
+    ///
+    /// Stored verbatim, never rebuilt: every other field on this record is derived from these
+    /// bytes, and re-encoding a normalized field would produce a report nobody can attribute.
+    pub signed: Vec<u8>,
 }
 
 /// The account-standing and moderation-record port.

@@ -1323,6 +1323,77 @@ async fn a_signed_report_from_a_pinned_peer_is_filed_and_changes_nothing_about_t
 }
 
 #[tokio::test]
+async fn a_filed_reports_signature_re_verifies_against_the_row_that_was_stored() {
+    // H2. The stored fields are *normalized* — `reporting_server` is the canonical PeerId form
+    // and `reported_at` is a parsed instant — so rebuilding a claim from them produces different
+    // bytes and a signature that no longer verifies. What makes the row re-verifiable is that
+    // the exact signed bytes are kept beside it. This case is the round trip an operator does.
+    let (fixture, _) = shared().await;
+    let (signer, public) = support::peer_keypair();
+    pin(&fixture, public).await;
+    let hash = support::checksum(b"the reported bytes");
+
+    // Sent the way a real peer might: a trailing dot and mixed case on the origin, and padding
+    // the intake trims. Every one of them survives into the signed bytes and none into the row.
+    let body = support::signed_report(
+        &signer,
+        "Other.Test.",
+        BOB,
+        &hash,
+        &album(),
+        Some("csam"),
+        "2026-09-02T00:00:00Z",
+    );
+    file(&fixture, body.clone())
+        .await
+        .assert_status(StatusCode::ACCEPTED);
+
+    let filed = fixture
+        .moderation
+        .pending_reports()
+        .await
+        .expect("the store answers");
+    let filed = filed.first().expect("one report");
+    assert_eq!(
+        filed.reporting_server, PEER,
+        "the row carries the canonical peer id, not what the peer wrote"
+    );
+    assert_eq!(
+        filed.reported_at,
+        "2026-09-02T00:00:00Z".parse::<Timestamp>().unwrap()
+    );
+
+    // The row re-verifies, months later, with nothing but its own two byte strings and the key.
+    assert_eq!(
+        capsule_server::federation::verify_signed_report(&filed.signed, &filed.signature, &public),
+        Ok(()),
+        "a filed report must re-verify from what was stored"
+    );
+    // And a different peer's key does not, so this is a real check and not a tautology.
+    let (_, other) = support::peer_keypair();
+    assert!(
+        capsule_server::federation::verify_signed_report(&filed.signed, &filed.signature, &other)
+            .is_err()
+    );
+
+    // The bytes are the peer's own, not a re-encoding of the row: rebuilding a claim from the
+    // normalized fields would produce something else entirely.
+    let rebuilt = capsule_server::federation::ReportClaim {
+        reporting_server: filed.reporting_server.clone(),
+        reported_user: filed.reported_user.as_str().to_owned(),
+        asset_hash: filed.asset_hash.clone(),
+        album_id: filed.album_id.as_str().to_owned(),
+        reason: filed.reason.clone(),
+        reported_at: filed.reported_at.to_string(),
+    };
+    assert_ne!(
+        rebuilt.signing_bytes().expect("it encodes"),
+        filed.signed,
+        "if these were equal the stored bytes would be redundant and this case pointless"
+    );
+}
+
+#[tokio::test]
 async fn a_report_is_refused_unsigned_from_an_unknown_peer_and_from_a_blocked_one() {
     let (fixture, _) = shared().await;
     let (signer, public) = support::peer_keypair();

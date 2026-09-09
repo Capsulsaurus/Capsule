@@ -1083,14 +1083,24 @@ pub async fn submit_federated_report(
         });
     };
 
+    // The claim is built from the body's fields with **surrounding whitespace trimmed and
+    // nothing else** — the one normalization rule, written into design/federation.md so a peer
+    // implementing from the doc signs the bytes this verifies. In particular the peer's own
+    // `reporting_server` string is signed as sent, not folded to the canonical `PeerId` form
+    // used for the lookup, and `reported_at` is the RFC 3339 text and not a re-rendered instant.
     let claim = ReportClaim {
         reporting_server: request.reporting_server.trim().to_owned(),
         reported_user: request.reported_user.trim().to_owned(),
         asset_hash: request.asset_hash.trim().to_owned(),
         album_id: request.album_id.trim().to_owned(),
         reason: request.reason.clone(),
-        reported_at: request.reported_at.clone(),
+        reported_at: request.reported_at.trim().to_owned(),
     };
+    // Kept verbatim: these are the bytes the signature covers, and the only thing an operator
+    // re-verifying months later can use. Every stored field is derived from this claim.
+    let signed = claim
+        .signing_bytes()
+        .map_err(|_| ReportRejection::unavailable())?;
     claim
         .verify(&signature, &key)
         .map_err(|error| match error {
@@ -1130,6 +1140,7 @@ pub async fn submit_federated_report(
         reported_at,
         received_at,
         signature,
+        signed,
     };
     let report_id = report.report_id.clone();
     moderation

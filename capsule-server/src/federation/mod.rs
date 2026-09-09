@@ -49,7 +49,7 @@ pub use self::capability::{
 };
 pub use self::memory::{InMemoryCapabilities, InMemoryPeers};
 pub use self::peers::{BlockOutcome, PeerRecord, PeerStore, UnblockOutcome};
-pub use self::report::{ReportClaim, ReportError};
+pub use self::report::{ReportClaim, ReportError, verify_signed_report};
 pub use self::scheme::{Principal, ReadBearer, VerifiedCapability};
 pub use self::store::{
     CapabilityFilter, CapabilityRecord, CapabilityStore, RefreshOutcome, RevokeOutcome,
