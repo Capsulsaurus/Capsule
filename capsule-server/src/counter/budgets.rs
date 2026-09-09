@@ -66,3 +66,19 @@ pub const SECOND_FACTOR: Budget = Budget::new(5, SignedDuration::from_mins(5));
 /// re-hashes every declared blob, so an unbounded one is an I/O-amplification attack costing the
 /// attacker one small JSON body.
 pub const DEEP_VERIFY: Budget = Budget::new(4, SignedDuration::from_hours(1));
+
+/// Requests from one federated peer, across the sync and blob reads (invariant 21).
+///
+/// Ten thousand an hour — the retired server's established-tier default. A peer pulling a
+/// shared album makes one sync page and a few blob fetches per asset; ten thousand is an
+/// evening of photos from one household of peers, and a hostile peer enumerating addresses
+/// gets fewer than three a second. A fixed window, so a peer that spends it waits for the
+/// hour to turn rather than trickling back in.
+pub const PEER_REQUESTS: Budget = Budget::new(10_000, SignedDuration::from_hours(1));
+
+/// Federated moderation reports from one peer against one account (invariant 24).
+///
+/// Twenty an hour per `(reporting_server, reported_user)`. A real report is one message; a
+/// flood against one user is the false-flag vector the contract names, and backpressure at
+/// twenty bounds it without silencing a peer that has two things to say.
+pub const FEDERATED_REPORTS: Budget = Budget::new(20, SignedDuration::from_hours(1));

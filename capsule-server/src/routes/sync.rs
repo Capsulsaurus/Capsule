@@ -14,6 +14,16 @@
 //! | `INTERNAL` | `500`, and now *coded* — `error.sync.unavailable`, a key this slice added because the retired feed had none and a client could not tell a broken server from a broken cursor |
 //! | page size out of range | **not a rejection.** Clamped; see [`crate::sync::clamp_page_size`] |
 //!
+//! # A peer reads the same page (`S-E5`)
+//!
+//! `Authorization: Bearer` also carries a federation capability. The album arm is then bound to
+//! the capability's album — a peer has no "own feed", so `album_id` absent or different is
+//! `403 error.federation.audience_mismatch` — and the member the capability was minted for must
+//! still be on the roster at the epoch it was granted, which is the same
+//! `403 error.sync.album_access_denied` an account's arm gives. Before any of that the
+//! capability is *admitted* ([`federation::admit`]): revoked `403`, blocked peer `403`, over
+//! budget `429`. The cursor is bound to `(peer, album)`, its own scope.
+//!
 //! # What a tombstone discloses
 //!
 //! A `deleted` entry carries no manifest, no metadata reference and no blob list. The row still
@@ -38,8 +48,11 @@ use kynos::prelude::*;
 use kynos::security::auth::Auth;
 use serde::{Deserialize, Serialize};
 
-use crate::auth::AccessToken;
 use crate::blob::ContentAddress;
+use crate::counter::CounterContext;
+use crate::federation::{
+    self, FederationContext, Principal, ReadBearer, Refusal, VerifiedCapability,
+};
 use crate::index::{ChangeKind, FeedEntry};
 use crate::membership::Membership;
 use crate::routes::upload::WireBlobRole;
@@ -192,6 +205,42 @@ pub enum SyncRejection {
         code: &'static str,
     },
 
+    /// The capability is revoked (`S-E5`).
+    #[error("this capability has been revoked")]
+    #[problem(status = 403, title = "Capability revoked")]
+    CapabilityRevoked {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// The capability is for another album, or no album was named (`S-E5`).
+    #[error("this capability is for a different album")]
+    #[problem(status = 403, title = "Audience mismatch")]
+    AudienceMismatch {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// The peer is on this server's blocklist (`S-C49`).
+    #[error("this server is blocked")]
+    #[problem(status = 403, title = "Server blocked")]
+    PeerBlocked {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// The peer's events-per-hour budget is spent (invariant 21).
+    #[error("this peer has reached its request budget")]
+    #[problem(status = 429, title = "Rate budget exceeded")]
+    RateLimited {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
     /// A collaborator could not answer.
     #[error("the sync feed could not be read")]
     #[problem(status = 500, title = "Internal server error")]
@@ -223,6 +272,41 @@ impl SyncRejection {
             code: error_codes::SYNC_UNAVAILABLE,
         }
     }
+
+    /// The capability names another album, or none was asked for.
+    fn audience_mismatch() -> Self {
+        Self::AudienceMismatch {
+            code: error_codes::FEDERATION_AUDIENCE_MISMATCH,
+        }
+    }
+}
+
+impl From<Refusal> for SyncRejection {
+    fn from(refusal: Refusal) -> Self {
+        match refusal {
+            Refusal::Revoked => Self::CapabilityRevoked {
+                code: error_codes::FEDERATION_CAPABILITY_REVOKED,
+            },
+            Refusal::PeerBlocked => Self::PeerBlocked {
+                code: error_codes::MODERATION_SERVER_BLOCKED,
+            },
+            Refusal::RateLimited { .. } => Self::RateLimited {
+                code: error_codes::FEDERATION_RATE_BUDGET_EXCEEDED,
+            },
+            Refusal::Unavailable => Self::Unavailable {
+                code: error_codes::FEDERATION_UNAVAILABLE,
+            },
+        }
+    }
+}
+
+/// Who is reading, once the credential has been decided.
+///
+/// The account's id or the peer's origin, each in its own type: the cursor scope and the log
+/// field both need to know which, and a string would let the two be confused.
+enum Reader {
+    Account(OwnerId),
+    Peer(Box<VerifiedCapability>),
 }
 
 // ===========================================================================================
@@ -237,26 +321,62 @@ impl SyncRejection {
 #[kynos::get("/v1/sync", operation_id = "sync_feed", tag = SyncTag)]
 pub async fn sync_feed(
     Inject(sync): Inject<SyncContext>,
-    Auth(credential): Auth<AccessToken>,
+    Inject(federation): Inject<FederationContext>,
+    Inject(counters): Inject<CounterContext>,
+    Auth(principal): Auth<ReadBearer>,
     Query(query): Query<SyncQuery>,
 ) -> Result<Json<SyncPageResponse>, SyncRejection> {
-    // The caller's own feed, or — with `album_id` — one album's page, which the caller reads as
-    // its owner or as a member of its current roster (`S-C51`). The relationship is decided
-    // first, and one refusal covers unprovisioned, not-a-member and removed alike.
-    let owner = OwnerId::new(credential.user.as_str());
-    let album = query.album_id.as_deref().map(AlbumId::new);
-    // The album's owner, from the album record: the page is bound to the rows that account
-    // filed, which is also what the index is keyed on.
-    let album = match album {
-        Some(album) => {
-            let filed_by = album_read_access(&sync, &credential.user, &album).await?;
-            Some((album, filed_by))
+    let requested = query.album_id.as_deref().map(AlbumId::new);
+
+    // Who is asking, and which page they may have. An account reads its own feed, or — with
+    // `album_id` — one album's page as its owner or a member of its current roster (`S-C51`).
+    // A peer reads exactly the album its capability names, as the member it was minted for
+    // (`S-E5`). Each relationship is decided first, and one refusal covers every way it fails.
+    let (reader, album) = match principal {
+        Principal::Session(credential) => {
+            let album = match requested {
+                Some(album) => {
+                    let filed_by = album_read_access(&sync, &credential.user, &album).await?;
+                    Some((album, filed_by))
+                }
+                None => None,
+            };
+            (
+                Reader::Account(OwnerId::new(credential.user.as_str())),
+                album,
+            )
         }
-        None => None,
+        Principal::Peer(capability) => {
+            federation::admit(&federation, &counters, &capability).await?;
+            let album = match requested {
+                Some(album) if album == capability.record.album_id => album,
+                _ => {
+                    tracing::info!(
+                        peer = %capability.record.peer_id,
+                        jti = %capability.record.jti,
+                        "a peer asked for a page its capability does not cover"
+                    );
+                    return Err(SyncRejection::audience_mismatch());
+                }
+            };
+            let filed_by = peer_album_access(&sync, &capability, &album).await?;
+            (Reader::Peer(capability), Some((album, filed_by)))
+        }
     };
-    let scope = match &album {
-        Some((album, _)) => CursorScope::album(&owner, album),
-        None => CursorScope::feed(&owner),
+    let scope = match (&reader, &album) {
+        (Reader::Account(owner), Some((album, _))) => CursorScope::album(owner, album),
+        (Reader::Account(owner), None) => CursorScope::feed(owner),
+        (Reader::Peer(capability), Some((album, _))) => {
+            CursorScope::peer(&capability.record.peer_id, album)
+        }
+        // A peer always has an album by the time it is here; the arm above returned otherwise.
+        (Reader::Peer(_), None) => return Err(SyncRejection::audience_mismatch()),
+    };
+    // The account whose rows are paged: the caller's own, or the album owner's.
+    let owner = match (&reader, &album) {
+        (_, Some((_, filed_by))) => filed_by.clone(),
+        (Reader::Account(owner), None) => owner.clone(),
+        (Reader::Peer(_), None) => return Err(SyncRejection::audience_mismatch()),
     };
 
     let after = sync
@@ -309,6 +429,10 @@ pub async fn sync_feed(
 
     tracing::debug!(
         %owner,
+        peer = match &reader {
+            Reader::Peer(capability) => Some(capability.record.peer_id.as_str()),
+            Reader::Account(_) => None,
+        },
         after,
         limit,
         served = entries.len(),
@@ -323,6 +447,53 @@ pub async fn sync_feed(
         // would make every idle client poll one extra time forever.
         has_more: head > position,
     }))
+}
+
+/// Whether the member `capability` was minted for is still on `album`'s roster at the epoch the
+/// grant was made at — answering the album's owner, whose rows the page is (`S-E5`).
+///
+/// The epoch is the server-side half of the grant: a member removed and re-admitted at a later
+/// epoch gets a fresh membership, and a capability minted for the earlier one is refused without
+/// anyone having revoked it. One `403` for every failure, as the account arm gives — the album
+/// id is the capability's own, so the answer discloses nothing a peer does not hold already.
+async fn peer_album_access(
+    sync: &SyncContext,
+    capability: &VerifiedCapability,
+    album: &AlbumId,
+) -> Result<OwnerId, SyncRejection> {
+    let record = sync.albums().read(album).await.map_err(|error| {
+        tracing::error!(%error, %album, "the album store could not answer a peer's sync page");
+        SyncRejection::unavailable()
+    })?;
+    let Some(record) = record else {
+        tracing::info!(peer = %capability.record.peer_id, %album, "a peer's page was refused: no such album");
+        return Err(SyncRejection::album_access_denied());
+    };
+    match sync
+        .members()
+        .membership(album, &capability.record.member)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %album, "the membership store could not answer a peer's sync page");
+            SyncRejection::unavailable()
+        })? {
+        Membership::Member { granted_epoch, .. }
+            if granted_epoch == capability.record.granted_epoch =>
+        {
+            Ok(record.owner_id)
+        }
+        membership => {
+            tracing::info!(
+                peer = %capability.record.peer_id,
+                member = %capability.record.member,
+                %album,
+                ?membership,
+                granted_epoch = capability.record.granted_epoch,
+                "a peer's page was refused: its member is not on the roster at the granted epoch"
+            );
+            Err(SyncRejection::album_access_denied())
+        }
+    }
 }
 
 /// Whether `caller` may read `album`'s page — its owner, or an account on its current roster —

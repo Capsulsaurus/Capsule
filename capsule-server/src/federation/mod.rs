@@ -38,6 +38,7 @@ pub mod capability;
 pub mod conformance;
 pub mod memory;
 pub mod peers;
+pub mod scheme;
 pub mod store;
 
 pub use self::capability::{
@@ -46,22 +47,29 @@ pub use self::capability::{
 };
 pub use self::memory::{InMemoryCapabilities, InMemoryPeers};
 pub use self::peers::{BlockOutcome, PeerRecord, PeerStore, UnblockOutcome};
+pub use self::scheme::{Principal, ReadBearer, VerifiedCapability};
 pub use self::store::{
     CapabilityFilter, CapabilityRecord, CapabilityStore, RefreshOutcome, RevokeOutcome,
 };
+use crate::counter::{CounterContext, CounterKey, budgets};
 use crate::store::Clock;
 
 /// A peer server's identity: its canonical origin, as its own `server-info` publishes it.
 ///
 /// Its own type rather than a `UserId` or a bare string so a peer can never be handed to a port
 /// that expects an account, and so the log field that names one reads as what it is.
+///
+/// Canonical: a host name is case-insensitive and a trailing dot names the same host, so both
+/// are folded at construction. A block on `other.test` therefore covers a capability minted for
+/// `Other.Test.`, and two records can never name one peer twice.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PeerId(String);
 
 impl PeerId {
-    /// Wraps an already-validated origin.
+    /// Wraps an origin, folded to its canonical form.
     pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
+        let value: String = value.into();
+        Self(value.trim().trim_end_matches('.').to_ascii_lowercase())
     }
 
     /// The origin as text.
@@ -165,5 +173,255 @@ impl FederationContext {
     /// without a revocation anybody can see.
     pub fn is_configured(&self) -> bool {
         self.federation_url.is_some()
+    }
+}
+
+/// Why an admitted capability is refused by a route.
+///
+/// Every variant is a *coded* answer the route renders — the authenticator has no seam for one
+/// (see [`scheme`]). The order [`admit`] decides them in is the order a client should learn them:
+/// a revoked grant is refused before anything is charged to the peer's budget, and a blocked
+/// peer is refused before it is either.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// The capability's `jti` is revoked. `403 error.federation.capability_revoked`.
+    Revoked,
+    /// The peer is on this server's blocklist. `403 error.moderation.server_blocked`.
+    PeerBlocked,
+    /// The peer's events-per-hour budget is spent. `429 error.federation.rate_budget_exceeded`.
+    RateLimited {
+        /// When the window resets.
+        retry_after: jiff::Timestamp,
+    },
+    /// A collaborator could not answer, so nothing was decided. `500 error.federation.unavailable`.
+    ///
+    /// Never an admission: a limiter that fails open is a limiter an attacker turns off by
+    /// loading the counter store.
+    Unavailable,
+}
+
+/// Decide whether `capability` may be served at all, and charge the peer's budget if so.
+///
+/// The three questions every federated read asks before it looks at what is being read:
+/// is the grant still live, is the peer still welcome, and is the peer within budget. Asked
+/// here once so the sync and blob routes cannot ask them in different orders.
+///
+/// # Errors
+///
+/// Returns the [`Refusal`] the route renders.
+pub async fn admit(
+    federation: &FederationContext,
+    counters: &CounterContext,
+    capability: &VerifiedCapability,
+) -> Result<(), Refusal> {
+    let peer = &capability.record.peer_id;
+    if !capability.record.is_live(federation.clock().now()) {
+        tracing::info!(
+            %peer,
+            jti = %capability.record.jti,
+            "a revoked capability was presented"
+        );
+        return Err(Refusal::Revoked);
+    }
+
+    let blocked = federation
+        .peers()
+        .read(peer)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %peer, "the peer store could not answer an admission");
+            Refusal::Unavailable
+        })?
+        .is_some_and(|record| record.is_blocked());
+    if blocked {
+        tracing::info!(%peer, "a blocked peer presented a capability");
+        return Err(Refusal::PeerBlocked);
+    }
+
+    let key = CounterKey::PeerRequests(peer.as_str().to_owned());
+    match counters
+        .hit(&key, budgets::PEER_REQUESTS)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %peer, "the per-peer counter could not be reached");
+            Refusal::Unavailable
+        })? {
+        crate::counter::Verdict::Admitted { .. } => Ok(()),
+        crate::counter::Verdict::Limited { retry_after } => {
+            tracing::info!(%peer, %retry_after, "a peer's events budget is spent");
+            Err(Refusal::RateLimited { retry_after })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use jiff::{SignedDuration, Timestamp};
+
+    use super::*;
+    use crate::counter::{Budget, CounterStore, InMemoryCounters, Verdict};
+    use crate::store::memory::ManualClock;
+    use crate::store::{AlbumId, StoreError, StoreFuture, UserId};
+
+    #[test]
+    fn a_peer_id_is_canonical() {
+        assert_eq!(PeerId::new("Other.Test."), PeerId::new("other.test"));
+        assert_eq!(PeerId::new(" other.test ").as_str(), "other.test");
+        assert_ne!(PeerId::new("other.test"), PeerId::new("another.test"));
+    }
+
+    /// A counter that cannot be reached.
+    #[derive(Debug)]
+    struct DownCounters;
+
+    fn down<T>() -> StoreFuture<'static, T> {
+        Box::pin(async {
+            Err(StoreError::Unavailable {
+                store: "counters",
+                detail: "down".to_owned(),
+            })
+        })
+    }
+
+    impl CounterStore for DownCounters {
+        fn hit<'a>(
+            &'a self,
+            _: &'a CounterKey,
+            _: Budget,
+            _: Timestamp,
+        ) -> StoreFuture<'a, Verdict> {
+            down()
+        }
+
+        fn peek<'a>(
+            &'a self,
+            _: &'a CounterKey,
+            _: Budget,
+            _: Timestamp,
+        ) -> StoreFuture<'a, Verdict> {
+            down()
+        }
+
+        fn reset<'a>(&'a self, _: &'a CounterKey) -> StoreFuture<'a, ()> {
+            down()
+        }
+    }
+
+    /// A peer store that cannot be reached.
+    #[derive(Debug)]
+    struct DownPeers;
+
+    impl PeerStore for DownPeers {
+        fn pin<'a>(&'a self, _: &'a PeerId, _: [u8; 32], _: Timestamp) -> StoreFuture<'a, ()> {
+            down()
+        }
+
+        fn read<'a>(&'a self, _: &'a PeerId) -> StoreFuture<'a, Option<PeerRecord>> {
+            down()
+        }
+
+        fn block<'a>(
+            &'a self,
+            _: &'a PeerId,
+            _: Timestamp,
+            _: Option<String>,
+        ) -> StoreFuture<'a, BlockOutcome> {
+            down()
+        }
+
+        fn unblock<'a>(&'a self, _: &'a PeerId) -> StoreFuture<'a, UnblockOutcome> {
+            down()
+        }
+    }
+
+    fn context(peers: Arc<dyn PeerStore>, clock: Arc<ManualClock>) -> FederationContext {
+        let der = ring::signature::Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
+            .expect("a key generates");
+        FederationContext::new(FederationCollaborators {
+            codec: Arc::new(
+                CapabilityCodec::from_pkcs8(der.as_ref(), "home.test", clock.clone())
+                    .expect("parses"),
+            ),
+            capabilities: Arc::new(InMemoryCapabilities::new(clock.clone())),
+            peers,
+            clock,
+            federation_url: None,
+        })
+    }
+
+    fn verified(clock: &ManualClock) -> VerifiedCapability {
+        let now = clock.now();
+        let record = CapabilityRecord {
+            jti: "01937b7c-0000-7000-8000-0000000000aa".to_owned(),
+            album_id: AlbumId::new("album"),
+            peer_id: PeerId::new("other.test"),
+            member: UserId::new("bob"),
+            scope: Scope::Read,
+            granted_epoch: 1,
+            min_protocol_version: "2026-06-01".to_owned(),
+            issued_at: now,
+            expires_at: crate::store::deadline(now, SignedDuration::from_hours(1)),
+            revoked_at: None,
+            refreshed_to: None,
+        };
+        VerifiedCapability {
+            grant: record.grant(),
+            record,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_store_that_cannot_answer_an_admission_is_an_outage_never_an_admission() {
+        // The fail-closed rule at the seam every federated read passes through: a peer store
+        // or a counter that cannot be reached decides nothing, and "nothing" is a refusal.
+        let clock = Arc::new(ManualClock::default());
+        let capability = verified(&clock);
+
+        let federation = context(Arc::new(DownPeers), clock.clone());
+        let counters = CounterContext::new(Arc::new(InMemoryCounters::new()), clock.clone());
+        assert_eq!(
+            admit(&federation, &counters, &capability).await,
+            Err(Refusal::Unavailable)
+        );
+
+        let federation = context(Arc::new(InMemoryPeers::new()), clock.clone());
+        let counters = CounterContext::new(Arc::new(DownCounters), clock.clone());
+        assert_eq!(
+            admit(&federation, &counters, &capability).await,
+            Err(Refusal::Unavailable)
+        );
+
+        let counters = CounterContext::new(Arc::new(InMemoryCounters::new()), clock);
+        assert_eq!(admit(&federation, &counters, &capability).await, Ok(()));
+    }
+
+    #[tokio::test]
+    async fn a_revoked_capability_is_refused_before_the_peer_is_charged() {
+        let clock = Arc::new(ManualClock::default());
+        let mut capability = verified(&clock);
+        capability.record.revoked_at = Some(clock.now());
+        let federation = context(Arc::new(InMemoryPeers::new()), clock.clone());
+        let store = Arc::new(InMemoryCounters::new());
+        let counters = CounterContext::new(store.clone(), clock.clone());
+        assert_eq!(
+            admit(&federation, &counters, &capability).await,
+            Err(Refusal::Revoked)
+        );
+        assert_eq!(
+            store
+                .peek(
+                    &CounterKey::PeerRequests("other.test".to_owned()),
+                    budgets::PEER_REQUESTS,
+                    clock.now(),
+                )
+                .await
+                .expect("answers"),
+            Verdict::Admitted {
+                remaining: budgets::PEER_REQUESTS.limit
+            },
+            "a revoked grant costs the peer nothing"
+        );
     }
 }

@@ -83,6 +83,17 @@ pub enum CounterKey {
     /// missed — recorded here rather than replaced by an email-keyed limiter, which would bound
     /// repeated probes against one address while doing nothing about a sweep across many.
     RegistrationSource(String),
+    /// Requests from one federated peer server, across the sync and blob reads (`S-E2`,
+    /// invariant 21).
+    ///
+    /// Keyed on the peer's origin, never on the capability: a peer holding ten capabilities is
+    /// one blast-radius boundary, and a budget per token would be a budget a peer widens by
+    /// asking for more tokens. Events per hour only; bytes and CPU per hour need a weighted
+    /// counter this port does not have and are post-v1.
+    PeerRequests(String),
+    /// Federated moderation reports from one peer against one account (`S-C49`, invariant
+    /// 24), keyed on `"{reporting_server}:{reported_user}"` as the contract bounds them.
+    FederatedReports(String),
 }
 
 impl CounterKey {
@@ -98,6 +109,8 @@ impl CounterKey {
             Self::DeepVerify(_) => "deep_verify",
             Self::SecondFactor(_) => "second_factor",
             Self::RegistrationSource(_) => "registration_source",
+            Self::PeerRequests(_) => "peer_requests",
+            Self::FederatedReports(_) => "federated_reports",
         }
     }
 }

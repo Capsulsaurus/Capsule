@@ -37,7 +37,7 @@ use crate::discovery::DiscoveryContext;
 use crate::drop::DropContext;
 use crate::enrollment::EnrollmentContext;
 use crate::escrow::EscrowContext;
-use crate::federation::FederationContext;
+use crate::federation::{FederationContext, ReadBearer};
 use crate::membership::MembershipContext;
 use crate::moderation::ModerationContext;
 use crate::quota::QuotaContext;
@@ -149,6 +149,11 @@ pub struct Modules {
 }
 
 impl App {
+    /// The authentication module, for the read scheme that delegates to it first.
+    pub(crate) fn auth(&self) -> &AuthContext {
+        &self.auth
+    }
+
     /// Assembles the application from its modules.
     pub fn new(modules: Modules) -> Self {
         let Modules {
@@ -206,5 +211,18 @@ impl Authenticates<AccessToken> for App {
 
     fn authenticator(&self) -> &Self::Authenticator {
         &self.auth
+    }
+}
+
+/// The federation module verifies the bearer the two read primitives accept two principals on.
+///
+/// Its authenticator asks [`AuthContext`] first and the capability codec second, so a session
+/// token on `GET /v1/sync` or `GET /v1/blob/{hash}` is admitted exactly as it is everywhere
+/// else (`S-E5`).
+impl Authenticates<ReadBearer> for App {
+    type Authenticator = FederationContext;
+
+    fn authenticator(&self) -> &Self::Authenticator {
+        &self.federation
     }
 }

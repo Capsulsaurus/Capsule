@@ -601,9 +601,13 @@ fn map_error(error: rest::Error<rest::SyncFeedError>) -> SyncError {
                 // The 400 includes the protocol gate's malformed-handshake answer (issue #404).
                 // There is no 426 to map: the feed is a read, and a read is admitted at any
                 // grammatical protocol date — the window rides the response headers instead.
+                // The 429 is a federated peer's events budget (`S-E5`): a capability puller
+                // over its hour. Rejected rather than retried, because the window is an hour
+                // and the interactive retry class would give up long before it turned.
                 rest::SyncFeedError::Status400(problem)
                 | rest::SyncFeedError::Status401(problem)
                 | rest::SyncFeedError::Status403(problem)
+                | rest::SyncFeedError::Status429(problem)
                 | rest::SyncFeedError::Status500(problem) => (
                     Some(problem.code.clone()),
                     problem.detail.clone().unwrap_or_default(),

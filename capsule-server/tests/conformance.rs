@@ -30,6 +30,45 @@ fn oversized() -> u64 {
     capsule_server::limits::MAX_REQUEST_BODY_BYTES + 1
 }
 
+/// A bearer for the peer `other.test`, over a capability this server minted and recorded for
+/// an album nobody provisioned — enough to reach the route's admission and nothing past it.
+async fn federated_peer(fixture: &Fixture) -> String {
+    use capsule_server::federation::{
+        CapabilityRecord, CapabilityStore as _, MintRequest, PeerId, Scope,
+    };
+    use capsule_server::store::{AlbumId, UserId};
+
+    let album = AlbumId::new("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5eff");
+    let minted = fixture
+        .codec
+        .mint(&MintRequest {
+            peer: PeerId::new("other.test"),
+            album: album.clone(),
+            scope: Scope::Read,
+            min_protocol_version: PROTOCOL_VERSION.to_owned(),
+            ttl: jiff::SignedDuration::from_hours(1),
+        })
+        .expect("it mints");
+    fixture
+        .revocations
+        .issue(CapabilityRecord {
+            jti: minted.grant.jti.clone(),
+            album_id: album,
+            peer_id: PeerId::new("other.test"),
+            member: UserId::new("01937b7c-0000-7000-8000-0000000000b0"),
+            scope: Scope::Read,
+            granted_epoch: 1,
+            min_protocol_version: PROTOCOL_VERSION.to_owned(),
+            issued_at: minted.grant.issued_at,
+            expires_at: minted.grant.expires_at,
+            revoked_at: None,
+            refreshed_to: None,
+        })
+        .await
+        .expect("the store records");
+    format!("Bearer {}", minted.token)
+}
+
 /// `GET /v1/version` answers the shape `capsule status` reads.
 ///
 /// The literal `capsule-api` is asserted, not derived from the crate name: this crate is
@@ -826,6 +865,37 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
     fixture.index.set_unavailable(false);
+
+    // 429: a federated peer over its events budget (`S-E5`, invariant 21). The budget is spent
+    // through the counter port and the last hit is the route's; the capability is minted and
+    // recorded exactly as the mint route records one.
+    let peer_bearer = federated_peer(&fixture).await;
+    use capsule_server::counter::CounterStore as _;
+    use capsule_server::store::Clock as _;
+    for _ in 0..capsule_server::counter::budgets::PEER_REQUESTS.limit {
+        fixture
+            .counters
+            .hit(
+                &capsule_server::counter::CounterKey::PeerRequests("other.test".to_owned()),
+                capsule_server::counter::budgets::PEER_REQUESTS,
+                fixture.clock.now(),
+            )
+            .await
+            .expect("the counter answers");
+    }
+    client
+        .get("/v1/sync?album_id=018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5eff")
+        .header("authorization", &peer_bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS);
+    fixture
+        .counters
+        .reset(&capsule_server::counter::CounterKey::PeerRequests(
+            "other.test".to_owned(),
+        ))
+        .await
+        .expect("the counter answers");
 
     // 200, on an empty library: a client with nothing to sync still gets a cursor.
     client
@@ -2988,6 +3058,51 @@ async fn a_representative_route_per_module_holds_the_handshake_before_anything_e
         assert_eq!(
             body["code"], "error.request.malformed",
             "{method} {path}: {body}"
+        );
+    }
+}
+
+/// One `bearer` component, and every secured operation names it (`S-E5`).
+///
+/// The two read primitives accept a session token *or* a federation capability through a second
+/// scheme type registered under the same component name. What that must not do is split the
+/// carriage in the document: the generated SDK attaches its credential by this one key, so the
+/// component set stays one entry with the session scheme's description and every operation's
+/// `security` is the same requirement it was before the capability arm existed.
+#[test]
+fn the_bearer_scheme_is_one_component_and_every_secured_operation_names_it() {
+    let document = capsule_server::openapi().expect("router describes itself");
+    let document = serde_json::to_value(&document).expect("a document serializes");
+    let schemes = document["components"]["securitySchemes"]
+        .as_object()
+        .expect("security schemes are an object");
+    assert_eq!(schemes.keys().collect::<Vec<_>>(), ["bearer"]);
+    assert_eq!(
+        schemes["bearer"],
+        json!({
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "JWT",
+            "description": "A short-lived Capsule access token, issued by `POST /v1/auth/login` \
+                            and rotated by `POST /v1/auth/refresh`.",
+        })
+    );
+    let mut secured = 0;
+    for (method, template, operation) in operations(&document) {
+        if let Some(security) = operation.get("security") {
+            assert_eq!(security, &json!([{ "bearer": [] }]), "{method} {template}");
+            secured += 1;
+        }
+    }
+    assert!(
+        secured > 40,
+        "the secured surface did not describe: {secured}"
+    );
+    for template in ["/v1/sync", "/v1/blob/{hash}"] {
+        assert_eq!(
+            document["paths"][template]["get"]["security"],
+            json!([{ "bearer": [] }]),
+            "{template} keeps the one requirement"
         );
     }
 }
