@@ -103,7 +103,7 @@
 //! section holds no `.await` and does `O(log n)` work over at most twenty thousand entries, so at
 //! these sizes it is contention rather than denial. Stated because the claim above ("the windows
 //! one surface holds are not the windows another is denied") is about admission and should not be
-//! read as a latency guarantee. Per-partition locking is deferred, not overlooked.
+//! read as a latency guarantee. Per-partition locking is deferred to issue #477, not overlooked.
 //!
 //! This is defence in depth, not a licence. Every derived key should still be bounded where it
 //! is built — the OIDC authorize validates the redirect before it charges
