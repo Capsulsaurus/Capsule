@@ -85,6 +85,24 @@ async fn membership_of(fixture: &Fixture, user: &str) -> Membership {
         .expect("the store answers")
 }
 
+/// Assert every JSON number in `problem` is inside the range a spargen-generated client decodes.
+///
+/// The generator lowers every `integer` in the contract as `i64` — it emits no `u64` at all,
+/// `format: uint64` or not — so a member above `i64::MAX` is a member no generated client can
+/// read. This walks the whole body rather than the members a case happens to name, so a future
+/// extension that forgets the rule fails here.
+#[track_caller]
+fn assert_decodable(problem: &Value) {
+    for (name, value) in problem.as_object().expect("a problem object") {
+        if let Some(number) = value.as_u64() {
+            assert!(
+                i64::try_from(number).is_ok(),
+                "`{name}` is {number}, past what a generated client decodes"
+            );
+        }
+    }
+}
+
 // ===========================================================================================
 
 #[tokio::test]
@@ -220,6 +238,26 @@ async fn a_version_far_above_the_held_one_is_refused_and_the_next_roster_still_a
         problem["max_version"],
         1 + capsule_server::membership::MAX_ROSTER_VERSION_STEP,
         "the refusal names the ceiling, so the client knows what it may re-sign at"
+    );
+
+    // **Every number in this refusal must survive a generated client.** spargen lowers every
+    // integer in the contract as `i64` and emits no `u64` at all, so an out-of-range member
+    // would make the SDK fail to *decode* the problem — and a decode failure is not a typed API
+    // error, so the `code` and the recovery hint would be lost and the caller could not tell
+    // this refusal from a network fault. The declared version, the one number here the caller
+    // controls, rides the English `detail` for exactly that reason.
+    assert_decodable(&problem);
+    assert!(
+        problem["detail"]
+            .as_str()
+            .expect("a detail string")
+            .contains(&u64::MAX.to_string()),
+        "the declared version is still legible to a human: {}",
+        problem["detail"]
+    );
+    assert!(
+        problem.get("declared").is_none(),
+        "and it is not an extension member: {problem}"
     );
 
     // Nothing was written, and — the point of the bound — the album is not wedged.

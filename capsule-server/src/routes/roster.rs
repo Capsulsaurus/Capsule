@@ -8,7 +8,7 @@
 //!
 //! 200 { "album_id": …, "roster_version": 3, "amk_epoch": 2, "member_count": 4, "replayed": false }
 //! 400 error.album.roster_malformed
-//! 400 error.album.roster_version_leap + declared, current_version, max_version
+//! 400 error.album.roster_version_leap + current_version, max_version
 //! 403 error.album.roster_attester
 //! 404 error.album.roster_not_found
 //! 409 error.album.roster_stale        + current_version
@@ -143,12 +143,21 @@ pub enum RosterRejection {
     #[problem(status = 400, title = "Roster version leap")]
     VersionLeap {
         /// The version the document declared.
-        #[problem(extension)]
+        ///
+        /// **Not** an extension member, deliberately: it is the only number on this response
+        /// the caller controls, and it is unbounded — a document may declare `u64::MAX`. Every
+        /// integer spargen lowers from this contract becomes an `i64` (it emits no `u64` at
+        /// all, `format: uint64` or not), so echoing an out-of-range one as a JSON number makes
+        /// the generated client fail to *decode* the refusal, which discards the `code` and the
+        /// recovery hint and leaves a caller unable to tell a refusal from a network fault. It
+        /// rides the English `detail` instead, where a human can read it and no decoder has to
+        /// parse it — and the caller already knows what it declared.
         declared: u64,
-        /// The version the server holds; `0` when it holds no roster.
+        /// The version the server holds; `0` when it holds no roster. Never above
+        /// [`MAX_ROSTER_VERSION`](crate::membership::MAX_ROSTER_VERSION), so it always decodes.
         #[problem(extension)]
         current_version: u64,
-        /// The highest version this album would have accepted.
+        /// The highest version this album would have accepted. Bounded by the same ceiling.
         #[problem(extension)]
         max_version: u64,
         /// The stable catalog code.

@@ -22180,16 +22180,14 @@
             "type": "string",
             "description": "The stable `error.*` catalog code. The client localizes this; `detail` stays English. Present on every problem this server renders."
           },
-          "declared": {
-            "type": "integer",
-            "description": "The roster version the refused document declared."
-          },
           "current_version": {
             "type": "integer",
+            "format": "uint64",
             "description": "The roster version the server holds; `0` when it holds none."
           },
           "max_version": {
             "type": "integer",
+            "format": "uint64",
             "description": "The highest version this album would have accepted. A client re-signs the same roster at `current_version + 1`; a version nothing could supersede would freeze the album's membership."
           }
         },
@@ -22229,6 +22227,7 @@
           },
           "current_version": {
             "type": "integer",
+            "format": "uint64",
             "description": "The roster version the server holds. A client re-syncs and republishes above it."
           }
         },

@@ -24,6 +24,7 @@
 //! | `a_stale_roster_carries_the_distinct_code` | the `409` is switchable by code |
 //! | `a_roster_echo_mismatch_is_malformed` | the server cannot silently answer for another album |
 //! | `a_version_leap_carries_the_held_version_too` | the `400` too-far-ahead refusal is switchable and carries `current_version` |
+//! | `the_widest_version_the_server_can_name_still_decodes` | the recovery hint survives at the top of the server's range, where an unbounded counter would not |
 //! | `the_roster_publish_goes_through_the_generated_operation` | the path, method and body come from the committed contract, not from a hand-written request |
 
 use std::sync::{Arc, Mutex};
@@ -452,5 +453,51 @@ async fn the_roster_publish_goes_through_the_generated_operation() {
     assert_eq!(
         requests[0].header("authorization"),
         Some("Bearer test-token")
+    );
+}
+
+/// **The refusal has to survive at the top of the server's range.**
+///
+/// spargen lowers every integer in the contract as `i64` and emits no `u64` at all, so a
+/// counter above `i64::MAX` would not be an API error at all — the generated client would fail
+/// to *decode* the body, the typed error would never be built, and `code` and `current_version`
+/// would be replaced by an undifferentiated transport failure. The server bounds every counter
+/// it can emit at `MAX_ROSTER_VERSION` (`i64::MAX`) precisely so this holds; the case pins the
+/// boundary rather than a comfortable value in the middle of the range, and the declared
+/// version — the one number a caller controls and the server therefore cannot bound — is not an
+/// extension member at all.
+#[tokio::test]
+async fn the_widest_version_the_server_can_name_still_decodes() {
+    let ceiling = i64::MAX as u64;
+    let body = format!(
+        r#"{{"type":"about:blank","title":"Roster version leap","status":400,"detail":"roster version 18446744073709551615 is past {ceiling}, the highest this album will accept while it holds version {ceiling}","code":"error.album.roster_version_leap","current_version":{ceiling},"max_version":{ceiling}}}"#
+    );
+    let (server, _) =
+        recording(move |_| MockResponse::new(400, "Bad Request").json_body(body.clone())).await;
+
+    let error = client_for(&server)
+        .publish_roster(&signed_roster(u64::MAX))
+        .await
+        .expect_err("a leap is refused");
+
+    assert_eq!(
+        error.error_code(),
+        Some(error_codes::ALBUM_ROSTER_VERSION_LEAP),
+        "the structured code survives at the boundary: {error:?}"
+    );
+    assert!(
+        matches!(
+            error,
+            AlbumError::Status {
+                status: 400,
+                current_version: Some(held),
+                ..
+            } if held == ceiling
+        ),
+        "and so does the recovery hint: {error:?}"
+    );
+    assert!(
+        !matches!(error, AlbumError::Transport(_)),
+        "a decode failure would have collapsed this into a transport error"
     );
 }

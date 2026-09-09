@@ -88,6 +88,22 @@ struct Member {
     name: &'static str,
     /// Its JSON Schema type.
     json_type: &'static str,
+    /// Its JSON Schema `format`, when the type alone would lose the Rust one.
+    ///
+    /// Kynos gives the *body* schemas their `format` from the Rust type; this table is
+    /// hand-written, so a member that is a `u64` on the wire has to say so here, or the
+    /// document describes it as a bare integer and the contract is less true than the code.
+    ///
+    /// **It buys truthfulness, not safety.** spargen lowers every integer in this document as
+    /// `i64` and emits no `u64` at all — `RosterResponse.roster_version` carries
+    /// `format: uint64` *and* `minimum: 0` and is still generated as `i64`. So a member whose
+    /// value can exceed `i64::MAX` breaks the generated client's *decode*, which is not a typed
+    /// API error: the `code` and every recovery hint are discarded and the caller cannot tell
+    /// the refusal from a network fault. The defence is therefore not this field but the
+    /// bound on the value: every integer member in this table is one the server cannot emit
+    /// above `i64::MAX` (see `MAX_ROSTER_VERSION` for the roster counters), and a number that
+    /// cannot be bounded belongs in the English `detail`, not in an extension.
+    format: Option<&'static str>,
     /// What it means, for the client that has to act on it.
     description: &'static str,
     /// Whether the member may be `null` — the shape a `Option<String>` extension renders as.
@@ -123,6 +139,7 @@ const EXTRAS: &[Extra] = &[
         members: &[Member {
             name: "existing_asset",
             json_type: "string",
+            format: None,
             description: "The asset already holding these exact bytes in the same album. \
                           Structured so a client merges rather than re-parsing a sentence \
                           (slice `S-C22`).",
@@ -136,6 +153,7 @@ const EXTRAS: &[Extra] = &[
         members: &[Member {
             name: "offset",
             json_type: "integer",
+            format: None,
             description: "The offset the server is actually at, so a client resumes from it \
                           instead of asking again.",
             nullable: false,
@@ -149,12 +167,14 @@ const EXTRAS: &[Extra] = &[
             Member {
                 name: "submitted",
                 json_type: "integer",
+                format: None,
                 description: "The directory version the request carried.",
                 nullable: false,
             },
             Member {
                 name: "stored",
                 json_type: "integer",
+                format: None,
                 description: "The version the server holds. A client re-signs above this one.",
                 nullable: false,
             },
@@ -166,20 +186,16 @@ const EXTRAS: &[Extra] = &[
         status: 400,
         members: &[
             Member {
-                name: "declared",
-                json_type: "integer",
-                description: "The roster version the refused document declared.",
-                nullable: false,
-            },
-            Member {
                 name: "current_version",
                 json_type: "integer",
+                format: Some("uint64"),
                 description: "The roster version the server holds; `0` when it holds none.",
                 nullable: false,
             },
             Member {
                 name: "max_version",
                 json_type: "integer",
+                format: Some("uint64"),
                 description: "The highest version this album would have accepted. A client \
                               re-signs the same roster at `current_version + 1`; a version \
                               nothing could supersede would freeze the album's membership.",
@@ -194,6 +210,7 @@ const EXTRAS: &[Extra] = &[
         members: &[Member {
             name: "current_version",
             json_type: "integer",
+            format: Some("uint64"),
             description: "The roster version the server holds. A client re-syncs and republishes above it.",
             nullable: false,
         }],
@@ -205,6 +222,7 @@ const EXTRAS: &[Extra] = &[
         members: &[Member {
             name: "chain_head",
             json_type: "string",
+            format: None,
             description: "The manifest hash the asset's chain is actually at. Absent when the \
                           conflict is not a chain conflict, which is why it is nullable.",
             nullable: true,
@@ -217,6 +235,7 @@ const EXTRAS: &[Extra] = &[
         members: &[Member {
             name: "limit",
             json_type: "integer",
+            format: None,
             description: "The largest file this drop link accepts, in bytes.",
             nullable: false,
         }],
@@ -235,12 +254,14 @@ const PROTOCOL_RANGE: &[Member] = &[
     Member {
         name: "protocol_min",
         json_type: "string",
+        format: None,
         description: "The oldest protocol date this server still speaks (`YYYY-MM-DD`).",
         nullable: false,
     },
     Member {
         name: "protocol_max",
         json_type: "string",
+        format: None,
         description: "The newest protocol date this server speaks (`YYYY-MM-DD`).",
         nullable: false,
     },
@@ -466,6 +487,7 @@ fn extended(base: &Schema, title: &str, members: &[Member]) -> Schema {
         crate::problem::CODE_MEMBER.to_owned(),
         member_schema(
             "string",
+            None,
             false,
             "The stable `error.*` catalog code. The client localizes this; `detail` stays \
              English. Present on every problem this server renders.",
@@ -482,7 +504,12 @@ fn extended(base: &Schema, title: &str, members: &[Member]) -> Schema {
     for member in members {
         object.properties.insert(
             member.name.to_owned(),
-            member_schema(member.json_type, member.nullable, member.description),
+            member_schema(
+                member.json_type,
+                member.format,
+                member.nullable,
+                member.description,
+            ),
         );
     }
 
@@ -490,17 +517,25 @@ fn extended(base: &Schema, title: &str, members: &[Member]) -> Schema {
 }
 
 /// One member's schema.
-fn member_schema(json_type: &str, nullable: bool, description: &str) -> Schema {
+fn member_schema(
+    json_type: &str,
+    format: Option<&str>,
+    nullable: bool,
+    description: &str,
+) -> Schema {
     let types = if nullable {
         serde_json::json!([json_type, "null"])
     } else {
         serde_json::json!(json_type)
     };
-    serde_json::from_value(serde_json::json!({
+    let mut schema = serde_json::json!({
         "type": types,
         "description": description,
-    }))
-    .expect("a literal member schema is a schema")
+    });
+    if let Some(format) = format {
+        schema["format"] = serde_json::json!(format);
+    }
+    serde_json::from_value(schema).expect("a literal member schema is a schema")
 }
 
 #[cfg(test)]
