@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::format::{Value, format_message};
+use crate::format::{Value, format_message_in};
 use crate::generated;
 
 /// A localized message bundle: a primary locale plus the source locale as a fallback.
@@ -47,12 +47,18 @@ impl Bundle {
             .map(String::as_str)
     }
 
-    /// Format `key` with `args`. Returns `key` itself when the key is unknown, so a
-    /// missing message surfaces visibly rather than as an empty string.
+    /// Format `key` with `args`, using **this bundle's locale** to select plural arms
+    /// (see [`crate::format_message_in`] for the supported ICU subset). Returns `key`
+    /// itself when the key is unknown, so a missing message surfaces visibly rather than
+    /// as an empty string.
+    ///
+    /// The locale matters even for a message the bundle fell back to the source catalog
+    /// for: an untranslated English plural still has to pick the arm the *reader's*
+    /// language selects, and `other` is the fallback when the message does not carry it.
     #[must_use]
     pub fn format(&self, key: &str, args: &[(&str, Value<'_>)]) -> String {
         if let Some(template) = self.message(key) {
-            format_message(template, args)
+            format_message_in(&self.locale, template, args)
         } else {
             tracing::warn!(key, locale = %self.locale, "missing i18n message");
             key.to_string()
