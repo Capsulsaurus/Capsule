@@ -51,7 +51,6 @@ jobs:
               - 'hk.pkl'
               - '.cargo/**'
               - 'capsule-server/**'
-              - 'capsule-wire/**'
               - 'capsule-i18n/**'
               - 'capsule-cli/**'
               - 'capsule-core/**'

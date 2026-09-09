@@ -753,7 +753,6 @@ dependencies = [
  "capsule-core",
  "capsule-i18n",
  "capsule-sdk",
- "capsule-wire",
  "clap",
  "color-eyre",
  "http-body-util",
@@ -781,14 +780,6 @@ dependencies = [
  "hex",
  "uuid",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "capsule-wire"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
 ]
 
 [[package]]
