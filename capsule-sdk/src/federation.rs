@@ -482,7 +482,7 @@ mod tests {
 
     #[test]
     fn a_snapshot_refuses_the_jtis_it_carries_and_no_others() {
-        let held = snapshot(&["one", "two"], Duration::from_secs(900));
+        let held = snapshot(&["one", "two"], Duration::from_mins(15));
         assert!(held.refuses("one"));
         assert!(held.refuses("two"));
         assert!(!held.refuses("three"));
@@ -492,10 +492,10 @@ mod tests {
     fn a_snapshot_is_fresh_only_inside_the_issuers_own_bound() {
         // The bound is the issuer's, carried on the list itself, and it is measured on the
         // peer's own clock — the party being checked does not get to say how old its list is.
-        let held = snapshot(&[], Duration::from_secs(900));
+        let held = snapshot(&[], Duration::from_mins(15));
         assert!(held.is_fresh(held.fetched_at));
-        assert!(held.is_fresh(held.fetched_at + Duration::from_secs(900)));
-        assert!(!held.is_fresh(held.fetched_at + Duration::from_secs(901)));
+        assert!(held.is_fresh(held.fetched_at + Duration::from_mins(15)));
+        assert!(!held.is_fresh(held.fetched_at + Duration::from_mins(15) + Duration::from_secs(1)));
 
         // A bound of zero is a list that is stale the instant after it is read, which is what a
         // server publishing `max_staleness_seconds: 0` is asking for.

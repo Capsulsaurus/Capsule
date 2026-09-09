@@ -141,16 +141,17 @@ mod tests {
         let original = claim();
         let signature = pair.sign(&original.signing_bytes().expect("it encodes"));
 
-        let mutations: Vec<Box<dyn Fn(&mut ReportClaim)>> = vec![
-            Box::new(|claim| claim.reporting_server = "third.test".to_owned()),
-            Box::new(|claim| {
-                claim.reported_user = "01937b7c-0000-7000-8000-0000000000cc".to_owned()
-            }),
-            Box::new(|claim| claim.asset_hash = "b".repeat(64)),
-            Box::new(|claim| claim.album_id = "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5eff".to_owned()),
-            Box::new(|claim| claim.reason = Some("spam".to_owned())),
-            Box::new(|claim| claim.reason = None),
-            Box::new(|claim| claim.reported_at = "2026-09-03T00:00:00Z".to_owned()),
+        // Plain function pointers rather than boxed closures: none of them captures, and the
+        // list is the point — one entry per field of the claim, so a field added without a
+        // mutation here is a field this case silently stops covering.
+        let mutations: [fn(&mut ReportClaim); 7] = [
+            |claim| claim.reporting_server = "third.test".to_owned(),
+            |claim| claim.reported_user = "01937b7c-0000-7000-8000-0000000000cc".to_owned(),
+            |claim| claim.asset_hash = "b".repeat(64),
+            |claim| claim.album_id = "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5eff".to_owned(),
+            |claim| claim.reason = Some("spam".to_owned()),
+            |claim| claim.reason = None,
+            |claim| claim.reported_at = "2026-09-03T00:00:00Z".to_owned(),
         ];
         for (index, mutate) in mutations.iter().enumerate() {
             let mut mutated = original.clone();
@@ -177,6 +178,11 @@ mod tests {
     }
 
     fn hex_of(bytes: &[u8]) -> String {
-        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+        use std::fmt::Write as _;
+
+        bytes.iter().fold(String::new(), |mut hex, byte| {
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        })
     }
 }
