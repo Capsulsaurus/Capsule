@@ -136,8 +136,6 @@ impl MembershipStore for PostgresMembership {
         members: Vec<(UserId, MemberRole)>,
     ) -> StoreFuture<'_, RosterOutcome> {
         Box::pin(async move {
-            let roster_version = counter_to_column(roster.roster_version)?;
-            let amk_epoch = counter_to_column(roster.amk_epoch)?;
             let transaction = begin(&self.connection).await?;
 
             // The critical section starts here: everything below runs under the album's lock,
@@ -162,6 +160,16 @@ impl MembershipStore for PostgresMembership {
                 // Nothing to write; the rollback releases the lock.
                 return Ok(outcome);
             }
+
+            // Column widths are decided **after** the port's own rule, never before it. A version
+            // past what a `BIGINT` holds is exactly the wedge `precheck`'s window refuses, and
+            // converting first would answer it as this adapter's storage failure — a `500` where
+            // the in-memory store answers a typed refusal, which is the divergence the shared
+            // conformance suite exists to catch. Anything that reaches here is inside the window
+            // above a version this column already held, so these conversions are a guard on an
+            // earlier check's promise rather than a decision.
+            let roster_version = counter_to_column(roster.roster_version)?;
+            let amk_epoch = counter_to_column(roster.amk_epoch)?;
 
             let roster = RosterRecord {
                 received_at: stored(roster.received_at),
