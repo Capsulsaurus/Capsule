@@ -23,6 +23,8 @@
 //! | `a_published_roster_reports_what_the_server_holds` | the success mapping, replay included |
 //! | `a_stale_roster_carries_the_distinct_code` | the `409` is switchable by code |
 //! | `a_roster_echo_mismatch_is_malformed` | the server cannot silently answer for another album |
+//! | `a_version_leap_carries_the_held_version_too` | the `400` too-far-ahead refusal is switchable and carries `current_version` |
+//! | `the_roster_publish_goes_through_the_generated_operation` | the path, method and body come from the committed contract, not from a hand-written request |
 
 use std::sync::{Arc, Mutex};
 
@@ -384,4 +386,71 @@ async fn a_roster_echo_mismatch_is_malformed() {
         .await
         .expect_err("a mismatched echo is refused");
     assert!(matches!(error, AlbumError::Malformed(_)), "{error:?}");
+}
+
+/// The other version refusal: a roster so far *ahead* of the held one that the server would be
+/// latched if it took it. A `400` rather than the `409`, and it carries the held version for the
+/// same reason — the caller re-signs one above it.
+#[tokio::test]
+async fn a_version_leap_carries_the_held_version_too() {
+    let (server, _) = recording(|_| {
+        MockResponse::new(400, "Bad Request").json_body(
+            r#"{"type":"about:blank","title":"Roster version leap","status":400,"detail":"roster version 9999 is past 17","code":"error.album.roster_version_leap","declared":9999,"current_version":1,"max_version":17}"#.to_owned(),
+        )
+    })
+    .await;
+    let error = client_for(&server)
+        .publish_roster(&signed_roster(9999))
+        .await
+        .expect_err("a leap is refused");
+    assert_eq!(
+        error.error_code(),
+        Some(error_codes::ALBUM_ROSTER_VERSION_LEAP)
+    );
+    assert!(
+        matches!(
+            error,
+            AlbumError::Status {
+                status: 400,
+                current_version: Some(1),
+                ..
+            }
+        ),
+        "the held version rides this refusal too: {error:?}"
+    );
+}
+
+/// **The wire shape is the contract's, not this module's.** `publish_roster` is orchestration
+/// over the generated `publish_album_roster` operation, so the method, the path and the required
+/// protocol header come from `capsule-server/openapi.json` rather than from a hand-written
+/// request this module could drift.
+#[tokio::test]
+async fn the_roster_publish_goes_through_the_generated_operation() {
+    let id = album();
+    let (server, seen) = recording(move |_| held(id, 3, false)).await;
+    let client = AlbumClient::new(AlbumTransport::with_static_token(
+        reqwest::Client::new(),
+        format!("{}/v1/albums", server.base_url().trim_end_matches('/')),
+        StaticToken("test-token".into()),
+    ));
+    client
+        .publish_roster(&signed_roster(3))
+        .await
+        .expect("publish");
+
+    let requests = seen.lock().expect("recorded requests");
+    assert_eq!(requests[0].method, "PUT");
+    assert_eq!(
+        requests[0].path,
+        format!("/v1/albums/{}/roster", id.hyphenated())
+    );
+    assert_eq!(
+        requests[0].header("x-capsule-protocol"),
+        Some(capsule_core::crypto::primitives::PROTOCOL_VERSION),
+        "the generated operation carries the protocol date the document declares required"
+    );
+    assert_eq!(
+        requests[0].header("authorization"),
+        Some("Bearer test-token")
+    );
 }

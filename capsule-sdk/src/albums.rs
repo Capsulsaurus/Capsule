@@ -40,8 +40,10 @@ pub enum AlbumError {
         status: u16,
         /// The stable `error.*` code, when the server supplied one.
         code: Option<String>,
-        /// On a stale roster (`409 error.album.roster_stale`), the version the server holds —
-        /// the one a caller re-syncs and republishes above. Absent on every other refusal.
+        /// On either roster-version refusal — the `409 error.album.roster_stale` that is behind
+        /// the server, and the `400 error.album.roster_version_leap` that is too far ahead of it
+        /// — the version the server holds, which is the one a caller re-signs above. Absent on
+        /// every other refusal.
         current_version: Option<u64>,
     },
     /// The response body was missing a field or otherwise unparsable.
@@ -132,7 +134,58 @@ impl AlbumTransport {
                 .map_err(|e| AlbumError::Transport(e.to_string())),
         }
     }
+
+    /// A `spargen`-generated client for the API root this transport's album endpoint hangs off,
+    /// carrying the same credential.
+    ///
+    /// The roster publish goes through this rather than through [`Self::send`]: everything that
+    /// parses or serializes in this repository is generated, and `publish_album_roster` is a
+    /// JSON operation the document fully describes — request body, success body, and the
+    /// `409`/`400` problem shapes with their extension members. Only `provision` still hand-writes
+    /// its DTOs, and only because `POST /v1/albums` predates this seam.
+    ///
+    /// The root is derived by trimming the endpoint's `/v1/albums` suffix, because the generated
+    /// operations carry their own absolute paths while this transport is constructed with the
+    /// album endpoint (`{origin}/v1/albums`) that `POST {base}` provisions against.
+    fn generated(&self) -> Result<crate::rest::Client, AlbumError> {
+        let root = self
+            .base_url
+            .strip_suffix("/v1/albums")
+            .unwrap_or(&self.base_url);
+        let (http, credential) = match &self.auth {
+            AlbumAuth::Session(session) => {
+                let session = session.clone();
+                // The session's own pre-flight refresh and single-flight coalescing, consulted
+                // per request; the reactive `401` replay is the caller's, below.
+                let provider: crate::rest::TokenProvider = std::sync::Arc::new(move || {
+                    let session = session.clone();
+                    Box::pin(async move {
+                        session
+                            .bearer()
+                            .await
+                            .map_err(|error| crate::rest::AuthError::new(error.to_string()))
+                    })
+                });
+                (
+                    crate::net::http_client()
+                        .map_err(|error| AlbumError::Transport(error.to_string()))?,
+                    crate::rest::Credential::Provider(provider),
+                )
+            }
+            AlbumAuth::Static { http, token } => (
+                http.clone(),
+                crate::rest::Credential::Bearer(token.clone().into()),
+            ),
+        };
+        Ok(crate::rest::Client::with_client(http, root)
+            .map_err(|error| AlbumError::Transport(error.to_string()))?
+            .with_credential(BEARER_SCHEME, credential))
+    }
 }
+
+/// The security-scheme key the document declares for the bearer JWT; the generated client
+/// attaches the registered credential to every operation whose `security` names it.
+const BEARER_SCHEME: &str = "bearer";
 
 // ─── Wire DTOs (mirror the server's transport JSON) ───────────────────────────
 
@@ -149,29 +202,12 @@ struct ProvisionAlbumResponseWire {
     created: bool,
 }
 
-/// The `PUT /v1/albums/{album_id}/roster` request body: the signed roster as standard base64 of
-/// its canonical CBOR. One field, so the bytes the owner's device signed reach the server
-/// verbatim inside a JSON operation the generated client can describe.
-#[derive(Debug, Clone, Serialize)]
-struct RosterRequestWire {
-    roster_cbor: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct RosterResponseWire {
-    album_id: String,
-    roster_version: u64,
-    amk_epoch: u64,
-    member_count: u64,
-    replayed: bool,
-}
-
+/// The one field `provision` reads off a refusal. The roster publish reads its problems through
+/// the generated client's typed error instead, which is why nothing here describes extensions.
 #[derive(Deserialize)]
 struct ApiErrorWire {
     #[serde(default)]
     code: Option<String>,
-    #[serde(default)]
-    current_version: Option<u64>,
 }
 
 /// What provisioning an album resolved to. Both cases are successes; `created` is
@@ -271,11 +307,20 @@ impl AlbumClient {
 
     /// Publish `signed` as the roster of the album it names (`S-C51`).
     ///
-    /// Orchestration only: the roster is signed in `capsule_core::crypto::membership` by the
-    /// owner's device and sent verbatim, base64-encoded, in the JSON shape the server's
-    /// `publish_album_roster` operation declares (mirrored here as `provision` mirrors its). Idempotent under `(album_id, roster_version)`: the same bytes again succeed with
-    /// `replayed`. A `409` (`error.album.roster_stale`) means the server holds a roster this one
-    /// does not supersede; the caller re-syncs and republishes above it.
+    /// Orchestration only, and deliberately thin: the roster is signed in
+    /// `capsule_core::crypto::membership` by one of the owner's devices, base64-encoded, and
+    /// handed to the **generated** `publish_album_roster` operation, so every byte that is
+    /// parsed or serialized on this path comes from the committed OpenAPI document. Idempotent
+    /// under `(album_id, roster_version)`: the same bytes again succeed with `replayed`.
+    ///
+    /// Two refusals a caller acts on: a `409` (`error.album.roster_stale`) means the server holds
+    /// a roster this one does not supersede, and a `400 error.album.roster_version_leap` means
+    /// the version is too far *ahead* of the held one. Both carry
+    /// [`current_version`](AlbumError::Status), and the repair for both is the same — re-sign the
+    /// roster one above it.
+    ///
+    /// Under a session, a `401` is refreshed once and replayed, exactly as the sync feed does:
+    /// the credential provider's pre-flight refresh cannot cover a token revoked mid-flight.
     ///
     /// # Errors
     ///
@@ -292,41 +337,28 @@ impl AlbumClient {
         let album_id = signed.roster.album_id;
         let bytes = capsule_core::cbor::to_canonical_vec(signed)
             .map_err(|e| AlbumError::Malformed(format!("roster encoding: {e}")))?;
-        let body = RosterRequestWire {
+        let body = crate::rest::types::RosterRequest {
             roster_cbor: base64::engine::general_purpose::STANDARD.encode(bytes),
         };
-        let url = format!(
-            "{}/{}/roster",
-            self.transport.base_url,
-            album_id.hyphenated()
-        );
-        let response = self
-            .transport
-            .send(|http| http.put(&url).json(&body))
-            .await?;
 
-        let status = response.status();
-        if !status.is_success() {
-            let problem = response.json::<ApiErrorWire>().await.ok();
-            let code = problem.as_ref().and_then(|e| e.code.clone());
-            let current_version = problem.and_then(|e| e.current_version);
-            tracing::warn!(
-                status = status.as_u16(),
-                ?code,
-                ?current_version,
-                "roster publish refused"
-            );
-            return Err(AlbumError::Status {
-                status: status.as_u16(),
-                code,
-                current_version,
-            });
-        }
+        let client = self.transport.generated()?;
+        let wire = match publish(&client, album_id, &body).await {
+            Ok(wire) => wire,
+            Err(error) if is_unauthenticated(&error) => match &self.transport.auth {
+                AlbumAuth::Session(session) => {
+                    tracing::info!("the roster publish answered 401; refreshing once and retrying");
+                    session.refresh().await?;
+                    publish(&client, album_id, &body)
+                        .await
+                        .map_err(publish_refusal)?
+                }
+                // A fixed token cannot be refreshed, so retrying would ask the same question
+                // twice.
+                AlbumAuth::Static { .. } => return Err(publish_refusal(error)),
+            },
+            Err(error) => return Err(publish_refusal(error)),
+        };
 
-        let wire: RosterResponseWire = response
-            .json()
-            .await
-            .map_err(|e| AlbumError::Malformed(e.to_string()))?;
         let echoed = Uuid::parse_str(&wire.album_id)
             .map_err(|e| AlbumError::Malformed(format!("response album_id: {e}")))?;
         if echoed != album_id {
@@ -341,12 +373,96 @@ impl AlbumClient {
         );
         Ok(PublishedRoster {
             album_id: echoed,
-            roster_version: wire.roster_version,
-            amk_epoch: wire.amk_epoch,
-            member_count: wire.member_count,
+            roster_version: counter(wire.roster_version, "roster_version")?,
+            amk_epoch: counter(wire.amk_epoch, "amk_epoch")?,
+            member_count: counter(wire.member_count, "member_count")?,
             replayed: wire.replayed,
         })
     }
+}
+
+/// One call of the generated roster operation.
+///
+/// The protocol date is a required parameter of every gated operation in the document, so the
+/// generated signature asks for it; the value is this build's own, the same one the transport
+/// sends as a default header.
+async fn publish(
+    client: &crate::rest::Client,
+    album_id: Uuid,
+    body: &crate::rest::types::RosterRequest,
+) -> Result<
+    crate::rest::types::RosterResponse,
+    crate::rest::Error<crate::rest::PublishAlbumRosterError>,
+> {
+    Ok(client
+        .publish_album_roster(
+            album_id.hyphenated().to_string(),
+            capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            None,
+            body,
+        )
+        .await?
+        .into_inner())
+}
+
+/// Whether the refusal was the credential's.
+fn is_unauthenticated(error: &crate::rest::Error<crate::rest::PublishAlbumRosterError>) -> bool {
+    matches!(
+        error,
+        crate::rest::Error::Api(response)
+            if matches!(
+                response.inner(),
+                crate::rest::PublishAlbumRosterError::Status401(_)
+            )
+    )
+}
+
+/// Map the generated operation's typed error onto this module's.
+///
+/// The `code` is what a caller switches on, and `current_version` is what the two version
+/// refusals — the `409` that is behind and the `400` that is too far ahead — both carry so the
+/// caller can re-sign one above what the server holds.
+fn publish_refusal(error: crate::rest::Error<crate::rest::PublishAlbumRosterError>) -> AlbumError {
+    use crate::rest::PublishAlbumRosterError as Refusal;
+
+    let crate::rest::Error::Api(response) = error else {
+        return AlbumError::Transport(error.to_string());
+    };
+    let status = response.status().as_u16();
+    let (code, current_version) = match response.into_inner() {
+        Refusal::Status400(problem) => (
+            Some(problem.code.clone()),
+            problem
+                .current_version
+                .and_then(|held| u64::try_from(held).ok()),
+        ),
+        Refusal::Status409(problem) => (
+            Some(problem.code.clone()),
+            problem
+                .current_version
+                .and_then(|held| u64::try_from(held).ok()),
+        ),
+        // The body-less refusal: a request past the transport's size backstop.
+        Refusal::Status413 => (None, None),
+        Refusal::Status401(problem)
+        | Refusal::Status403(problem)
+        | Refusal::Status404(problem)
+        | Refusal::Status415(problem)
+        | Refusal::Status422(problem)
+        | Refusal::Status426(problem)
+        | Refusal::Status500(problem) => (Some(problem.code.clone()), None),
+    };
+    tracing::warn!(status, ?code, ?current_version, "roster publish refused");
+    AlbumError::Status {
+        status,
+        code,
+        current_version,
+    }
+}
+
+/// A counter the document types as a signed integer, as the SDK speaks it.
+fn counter(value: i64, field: &str) -> Result<u64, AlbumError> {
+    u64::try_from(value).map_err(|_| AlbumError::Malformed(format!("{field}: {value} is negative")))
 }
 
 #[cfg(test)]
