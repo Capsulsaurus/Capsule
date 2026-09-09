@@ -360,9 +360,9 @@ row's remainder now lives.
 | S-P6 | SE signer wiring into the app + iOS cohort reader | iOS path | S-P1 | M | ACTIVE | ready | |
 | S-P7 | Dev-server bring-up (task, keys, blob backend, ATS) | iOS path | — | M | MIXED | done | |
 | S-P8 | Swift behavioral FFI harness (flips S-D9) | iOS path | S-P1, S-P7 | M | MIXED | ready | |
-| S-Q1 | Mark/complete E2E cases 2, 3, 11 | e2e | — | S | MIXED | done\* | 2, 3 in `capsule-e2e`; 11 lands with #447; JXL T1 → #470 |
+| S-Q1 | Mark/complete E2E cases 2, 3, 11 | e2e | — | S | MIXED | done\* | 2, 3 in `capsule-e2e`; 11 lands with #447 |
 | S-Q2 | E2E case 6: backup → fresh-device restore | e2e | — | M | MIXED | done\* | restore reads; verify → #468; account seam → #467 |
-| S-Q3 | E2E case 7: full lifecycle chain | e2e | — | M | MIXED | done | provenance rung → #464 |
+| S-Q3 | E2E case 7: full lifecycle chain | e2e | — | M | MIXED | done | |
 | S-Q4 | E2E case 12: cross-device enrollment | e2e | — | M | MIXED | done\* | server leg; client ceremony → #471, #467, #405 |
 | S-Q5 | Live-browser smokes (gRPC-web, share, drop) | e2e | S-P7 | M | MIXED | ready | |
 | S-Q6 | E2E case 10: model regen after version bump | e2e | — | M | ACTIVE | done | the case was untestable, not untested |
@@ -5206,12 +5206,13 @@ real composition root over the real SDK and a real library — no container, no 
 lands with #447; in-process shape = 5 and the ceremony half of 8; 4 has no route (federation
 is post-v1, #406). The earlier note that every server-side case was suspended for the Kynos
 rebuild is stale: the rebuilt server is what these cases run against. What still blocks a
-case's full wording is a seam in the tree rather than a transport, each filed: the SDK's push
-ladder omits the provenance rung (#464), `sync_apply` decodes the feed's record bytes as a
-manifest (#465), the SDK's directory publish omits the identity-key header (#466), a
-`Workspace` cannot open as a server account (#467), the backup artifact carries no album
-authority (#468), a library's adopt registers nothing to publish (#469), the upload policy
-refuses `image/jxl` (#470), and there is no cross-sign or safety-code seam (#471).
+case's full wording is a seam in the tree rather than a transport, each filed: the SDK's
+directory publish omits the identity-key header (#466), a `Workspace` cannot open as a server
+account (#467), the backup artifact carries no album authority (#468), a library's adopt
+registers nothing to publish (#469), and there is no cross-sign or safety-code seam (#471).
+Two seams closed on the way in and no longer bound a case: the push ladder now ships the
+provenance rung and `sync_apply` decodes the record bytes the feed serves (#464, #465), and
+the upload policy accepts `image/jxl` (#470).
 
 ### S-Q1 — Mark/complete E2E cases 2, 3, 11
 
@@ -5222,13 +5223,13 @@ refuses `image/jxl` (#470), and there is no cross-sign or safety-code seam (#471
   markers, fill whatever the audit finds missing to each case's Module-Map wording.
 - **Done when:** `rg "E2E case (2|3|11)"` hits a passing named test each. **Tier:** Smoke.
 - **Landed** (2026-09-05, #409): case 2 is `capsule-e2e/tests/case_02_import_upload_finalize.rs`
-  (a real library import → the SDK ladder plus the provenance rung → every blob byte-equal at
-  its content address → storage-verify durable → on the feed); case 3's client half is
+  (a real library import → the SDK ladder, index tier through original → every blob byte-equal
+  at its content address → storage-verify durable → on the feed); case 3's client half is
   `capsule-e2e/tests/case_03_sync_pickup.rs` beside the server half in
   `capsule-server/tests/sync.rs`; case 11 is `#447`'s named test in
   `capsule-server/tests/upload.rs` (an in-memory fault decorator on the index, not
-  crash-injection). **Owed:** the JXL thumbnail's T1 upload → #470 (case 2 runs on the 8×8
-  still, whose T1 is the byte-free sentinel).
+  crash-injection). Case 2 imports a 512×512 still, so its T1 is a real JXL thumbnail upload
+  rather than the byte-free sentinel an 8×8 still gets.
 
 ### S-Q2 — E2E case 6: backup → fresh-device restore
 
@@ -5256,9 +5257,9 @@ refuses `image/jxl` (#470), and there is no cross-sign or safety-code seam (#471
   (30-day floor), restore, re-delete and a zero-day trash, each authored by the real library
   and posted as a lifecycle op through the generated client, watched by an incremental feed
   reader; `gc::purge_expired` on the operator worker retains the 30-day tombstone and purges
-  the due one, whose original then serves `Gone`. The chain agrees end to end because the
-  harness uploads the provenance rung the SDK ladder omits → #464 (and `sync_apply`'s decode
-  of those bytes → #465).
+  the due one, whose original then serves `Gone`. The chain agrees end to end because the SDK's
+  own ladder ships the provenance rung the server chains onto — the harness supplies no rung of
+  its own.
 
 ### S-Q4 — E2E case 12: cross-device enrollment
 

@@ -169,14 +169,14 @@ environment gate. "Blocked on" names the issue that holds the rest of the case's
 
 | Case | Named test | Status | Blocked on |
 | --- | --- | --- | --- |
-| 1 | `capsule-e2e/tests/case_01_auth_sync_query.rs` | landed (harness supplies the provenance rung; #464) | #464 |
-| 2 | `capsule-e2e/tests/case_02_import_upload_finalize.rs` | landed (harness supplies the provenance rung; #464) | #464 |
-| 3 | server half `capsule-server/tests/sync.rs`; client half `capsule-e2e/tests/case_03_sync_pickup.rs` | landed (harness supplies the provenance rung; #464) | #464; B's `verify_asset` needs the album keys (cases 6, 12) |
+| 1 | `capsule-e2e/tests/case_01_auth_sync_query.rs` | landed; the push runs the SDK's own ladder | — |
+| 2 | `capsule-e2e/tests/case_02_import_upload_finalize.rs` | landed; the push runs the SDK's own ladder | — |
+| 3 | server half `capsule-server/tests/sync.rs`; client half `capsule-e2e/tests/case_03_sync_pickup.rs` | landed; the push runs the SDK's own ladder | B's `verify_asset` needs the album keys (cases 6, 12) |
 | 4 | — | not started | federation (#406) |
 | 5 | `capsule-sdk/src/peering/tests.rs` | in-process shape | live two-host shape, post-v1 |
 | 6 | `capsule-e2e/tests/case_06_backup_restore.rs` | landed; the restored asset reads and its chain walks | #467 (open as the recovered account), #468 (verify: no authority in the artifact) |
-| 7 | `capsule-e2e/tests/case_07_lifecycle.rs` | landed (harness supplies the provenance rung; #464) | #464 |
-| 8 | server leg `capsule-e2e/tests/case_08_upgrade_ceremony.rs`; ceremony `capsule-core/src/crypto/authority/openmls_authority/tests.rs` | server leg landed; ceremony in-process | a library cannot sign an intent (private DSK) |
+| 7 | `capsule-e2e/tests/case_07_lifecycle.rs` | landed; the push runs the SDK's own ladder | — |
+| 8 | server leg `capsule-e2e/tests/case_08_upgrade_ceremony.rs`; ceremony `capsule-core/src/crypto/authority/openmls_authority/tests.rs` | server leg landed, and its feed-visibility assertion runs the SDK's own ladder; ceremony in-process | a library cannot sign an intent (private DSK) |
 | 9 | `capsule-e2e/tests/protocol_contract.rs` | landed (the UI leg is out of scope) | — |
 | 10 | `capsule-core/tests/model_regen_e2e.rs` (`E2E case 10`) | landed | — |
 | 11 | | lands with #447 (an in-memory fault decorator on the index) | the process-restart variant (#447 defers it) |
