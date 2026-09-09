@@ -187,6 +187,103 @@ async fn an_epoch_that_regresses_is_stale_too() {
     ));
 }
 
+/// **An absurd version cannot wedge the album.** `roster_version` is the client's own counter
+/// and the server's only ordering, so a publish at the top of it would be a roster nothing could
+/// ever supersede — membership frozen for good, with no recovery path in the design. The window
+/// above the held version is what denies it, and the case asserts the half that matters: after
+/// the refusal, the next legitimate roster is still accepted and still changes membership.
+#[tokio::test]
+async fn a_version_far_above_the_held_one_is_refused_and_the_next_roster_still_applies() {
+    let dsk = identity_key();
+    let (fixture, bearer) = ready(&dsk).await;
+    publish(
+        &fixture,
+        &bearer,
+        &album(),
+        &signed_roster(&dsk, device(), &album(), 1, 1, &[(BOB, MemberRole::Writer)]),
+    )
+    .await
+    .assert_status(StatusCode::OK);
+
+    let problem: Value = publish(
+        &fixture,
+        &bearer,
+        &album(),
+        &signed_roster(&dsk, device(), &album(), u64::MAX, 1, &[]),
+    )
+    .await
+    .assert_status(StatusCode::BAD_REQUEST)
+    .json();
+    assert_eq!(problem["code"], "error.album.roster_version_leap");
+    assert_eq!(problem["current_version"], 1);
+    assert_eq!(
+        problem["max_version"],
+        1 + capsule_server::membership::MAX_ROSTER_VERSION_STEP,
+        "the refusal names the ceiling, so the client knows what it may re-sign at"
+    );
+
+    // Nothing was written, and — the point of the bound — the album is not wedged.
+    assert!(matches!(
+        membership_of(&fixture, BOB).await,
+        Membership::Member { .. }
+    ));
+    let body: Value = publish(
+        &fixture,
+        &bearer,
+        &album(),
+        &signed_roster(&dsk, device(), &album(), 2, 2, &[]),
+    )
+    .await
+    .assert_status(StatusCode::OK)
+    .json();
+    assert_eq!(body["roster_version"], 2);
+    assert_eq!(
+        membership_of(&fixture, BOB).await,
+        Membership::Revoked(Revocation {
+            at_version: 2,
+            at_epoch: 2,
+        }),
+        "the legitimate roster after a leap is applied in full"
+    );
+}
+
+/// The window binds an album's **first** roster too: an album with no roster reads as version 0,
+/// so a first publish cannot latch the counter either.
+#[tokio::test]
+async fn a_first_roster_far_above_zero_is_refused() {
+    let dsk = identity_key();
+    let (fixture, bearer) = ready(&dsk).await;
+
+    let problem: Value = publish(
+        &fixture,
+        &bearer,
+        &album(),
+        &signed_roster(
+            &dsk,
+            device(),
+            &album(),
+            u64::from(u32::MAX),
+            1,
+            &[(BOB, MemberRole::Writer)],
+        ),
+    )
+    .await
+    .assert_status(StatusCode::BAD_REQUEST)
+    .json();
+    assert_eq!(problem["code"], "error.album.roster_version_leap");
+    assert_eq!(problem["current_version"], 0);
+    assert_eq!(membership_of(&fixture, BOB).await, Membership::Never);
+
+    publish(
+        &fixture,
+        &bearer,
+        &album(),
+        &signed_roster(&dsk, device(), &album(), 1, 1, &[(BOB, MemberRole::Writer)]),
+    )
+    .await
+    .assert_status(StatusCode::OK);
+}
+
 #[tokio::test]
 async fn a_member_omitted_from_a_later_roster_is_revoked_at_its_version_and_epoch() {
     let dsk = identity_key();

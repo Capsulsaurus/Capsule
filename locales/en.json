@@ -7331,6 +7331,10 @@
     "message": "The roster you sent is out of step with the one the server holds.",
     "context": "HTTP 409 on PUT /v1/albums/{album_id}/roster (slice S-C51): the roster_version is at or below the one the server holds with different bytes, or a newer version carried a lower AMK epoch. Carries current_version so the client can re-sync and republish."
   },
+  "error.album.roster_version_leap": {
+    "message": "That roster's version is too far ahead of the one the server holds.",
+    "context": "HTTP 400 on PUT /v1/albums/{album_id}/roster (slice S-C51): the roster_version is more than the accepted step above the held one, which is refused because a version nothing can supersede would freeze the album's membership for good. Carries declared, current_version and max_version; the client re-signs the same roster at current_version + 1."
+  },
   "error.album.unavailable": {
     "message": "Capsule couldn't set up that album. Please try again.",
     "context": "HTTP 500 on POST /v1/albums (slice S-C25): the album store could not answer, so nothing was provisioned. Retryable, and it says nothing about whether the id is available."

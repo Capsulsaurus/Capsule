@@ -9797,7 +9797,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
+                  "$ref": "#/components/schemas/RosterVersionLeapProblem"
                 }
               }
             }
@@ -22154,6 +22154,53 @@
           "code"
         ],
         "title": "DirectoryConflictProblem",
+        "description": "An RFC 9457 problem detail."
+      },
+      "RosterVersionLeapProblem": {
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "maximum": 65535.0,
+            "minimum": 0.0,
+            "format": "uint16"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "description": "The stable `error.*` catalog code. The client localizes this; `detail` stays English. Present on every problem this server renders."
+          },
+          "declared": {
+            "type": "integer",
+            "description": "The roster version the refused document declared."
+          },
+          "current_version": {
+            "type": "integer",
+            "description": "The roster version the server holds; `0` when it holds none."
+          },
+          "max_version": {
+            "type": "integer",
+            "description": "The highest version this album would have accepted. A client re-signs the same roster at `current_version + 1`; a version nothing could supersede would freeze the album's membership."
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "type",
+          "status",
+          "code"
+        ],
+        "title": "RosterVersionLeapProblem",
         "description": "An RFC 9457 problem detail."
       },
       "RosterStaleProblem": {

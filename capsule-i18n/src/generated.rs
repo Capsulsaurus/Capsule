@@ -50,6 +50,9 @@ pub mod error_codes {
     /// `error.album.roster_stale`
     pub const ALBUM_ROSTER_STALE: &str = "error.album.roster_stale";
 
+    /// `error.album.roster_version_leap`
+    pub const ALBUM_ROSTER_VERSION_LEAP: &str = "error.album.roster_version_leap";
+
     /// `error.album.unavailable`
     pub const ALBUM_UNAVAILABLE: &str = "error.album.unavailable";
 

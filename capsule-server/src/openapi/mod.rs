@@ -161,6 +161,33 @@ const EXTRAS: &[Extra] = &[
         ],
     },
     Extra {
+        component: "RosterVersionLeapProblem",
+        operation: "publish_album_roster",
+        status: 400,
+        members: &[
+            Member {
+                name: "declared",
+                json_type: "integer",
+                description: "The roster version the refused document declared.",
+                nullable: false,
+            },
+            Member {
+                name: "current_version",
+                json_type: "integer",
+                description: "The roster version the server holds; `0` when it holds none.",
+                nullable: false,
+            },
+            Member {
+                name: "max_version",
+                json_type: "integer",
+                description: "The highest version this album would have accepted. A client \
+                              re-signs the same roster at `current_version + 1`; a version \
+                              nothing could supersede would freeze the album's membership.",
+                nullable: false,
+            },
+        ],
+    },
+    Extra {
         component: "RosterStaleProblem",
         operation: "publish_album_roster",
         status: 409,

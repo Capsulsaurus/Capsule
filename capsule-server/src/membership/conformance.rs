@@ -9,8 +9,10 @@
 //! - **Removal is a stored fact.** A member omitted from a later roster answers
 //!   [`Membership::Revoked`] with the version and epoch at which they vanished, never
 //!   [`Membership::Never`]. That is what the blob route's `403` is rendered from.
-//! - **A refusal changes nothing.** `Stale` and `EpochRegressed` leave both the roster and every
-//!   member row exactly as they were.
+//! - **A refusal changes nothing.** `Stale`, `VersionLeap` and `EpochRegressed` leave both the
+//!   roster and every member row exactly as they were.
+//! - **No publish can wedge the album.** A version far above the held one is refused, and the
+//!   next legitimate roster still applies — the counter is bounded above as well as below.
 //!
 //! # Reusing a harness
 //!
@@ -217,6 +219,98 @@ pub async fn a_stale_version_is_refused_and_changes_nothing(h: &dyn Harness) {
     // adapter whose early return leaked its critical section would hang here, visibly.
     assert!(matches!(
         apply(h, roster(case, 2, 1, ""), vec![(bob, MemberRole::Writer)]).await,
+        RosterOutcome::Applied(_)
+    ));
+}
+
+/// A version far above the held one is refused, and the album still takes its next roster.
+///
+/// The wedge this exists to deny: accept one publish at the top of the counter and no later
+/// roster can ever be strictly greater, so the album's membership is frozen for good. The case
+/// therefore asserts both halves — the absurd version changes nothing, *and* the legitimate
+/// successor still applies.
+pub async fn a_version_leap_is_refused_and_the_album_still_takes_its_next_roster(h: &dyn Harness) {
+    let case = "leap";
+    let bob = user(case, "bob");
+    let carol = user(case, "carol");
+    apply(
+        h,
+        roster(case, 1, 1, ""),
+        vec![(bob.clone(), MemberRole::Writer)],
+    )
+    .await;
+
+    assert_eq!(
+        apply(
+            h,
+            roster(case, u64::MAX, 1, ""),
+            vec![(carol.clone(), MemberRole::Writer)]
+        )
+        .await,
+        RosterOutcome::VersionLeap {
+            current_version: 1,
+            max_version: 1 + super::MAX_ROSTER_VERSION_STEP,
+        }
+    );
+    assert_eq!(membership(h, case, &carol).await, Membership::Never);
+    assert_eq!(
+        ok(
+            h.members().current_roster(&album(case)).await,
+            "read the current roster"
+        )
+        .expect("held")
+        .roster_version,
+        1
+    );
+
+    // The whole point: the next legitimate roster is still accepted.
+    assert!(matches!(
+        apply(
+            h,
+            roster(case, 2, 1, ""),
+            vec![
+                (bob, MemberRole::Writer),
+                (carol.clone(), MemberRole::Reader)
+            ]
+        )
+        .await,
+        RosterOutcome::Applied(_)
+    ));
+    assert_eq!(
+        membership(h, case, &carol).await,
+        Membership::Member {
+            role: MemberRole::Reader,
+            granted_epoch: 1,
+        }
+    );
+}
+
+/// A first roster is bounded too: an empty album is a held version of zero.
+pub async fn the_version_window_binds_an_albums_first_roster(h: &dyn Harness) {
+    let case = "leap-first";
+    let bob = user(case, "bob");
+    assert_eq!(
+        apply(
+            h,
+            roster(case, u64::MAX, 1, ""),
+            vec![(bob.clone(), MemberRole::Writer)]
+        )
+        .await,
+        RosterOutcome::VersionLeap {
+            current_version: 0,
+            max_version: super::MAX_ROSTER_VERSION_STEP,
+        }
+    );
+    assert!(
+        ok(
+            h.members().current_roster(&album(case)).await,
+            "read the current roster"
+        )
+        .is_none(),
+        "a refused first roster leaves the album with none"
+    );
+    assert!(matches!(
+        apply(h, roster(case, 1, 1, ""), vec![(bob, MemberRole::Writer)]).await,
         RosterOutcome::Applied(_)
     ));
 }
@@ -492,6 +586,8 @@ pub async fn run_all(h: &dyn Harness) {
     the_returned_record_is_the_record_the_next_read_produces(h).await;
     the_same_bytes_again_are_a_replay(h).await;
     a_stale_version_is_refused_and_changes_nothing(h).await;
+    a_version_leap_is_refused_and_the_album_still_takes_its_next_roster(h).await;
+    the_version_window_binds_an_albums_first_roster(h).await;
     an_epoch_regression_is_refused_and_changes_nothing(h).await;
     one_application_revokes_continues_and_admits(h).await;
     an_account_listed_twice_is_taken_once_last_entry_winning(h).await;
@@ -537,6 +633,8 @@ mod tests {
         the_returned_record_is_the_record_the_next_read_produces,
         the_same_bytes_again_are_a_replay,
         a_stale_version_is_refused_and_changes_nothing,
+        a_version_leap_is_refused_and_the_album_still_takes_its_next_roster,
+        the_version_window_binds_an_albums_first_roster,
         an_epoch_regression_is_refused_and_changes_nothing,
         one_application_revokes_continues_and_admits,
         an_account_listed_twice_is_taken_once_last_entry_winning,

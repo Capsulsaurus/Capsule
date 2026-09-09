@@ -8,6 +8,7 @@
 //!
 //! 200 { "album_id": …, "roster_version": 3, "amk_epoch": 2, "member_count": 4, "replayed": false }
 //! 400 error.album.roster_malformed
+//! 400 error.album.roster_version_leap + declared, current_version, max_version
 //! 403 error.album.roster_attester
 //! 404 error.album.roster_not_found
 //! 409 error.album.roster_stale        + current_version
@@ -33,6 +34,12 @@
 //!
 //! **Idempotent under `(album_id, roster_version)`.** The same bytes again are a `200` with
 //! `replayed: true`; the same version with different bytes is the `409`.
+//!
+//! **The version is bounded above, too.** Strict monotonicity alone lets one publish latch the
+//! counter at a value nothing can ever exceed, freezing the album's membership for good. A
+//! version more than [`MAX_ROSTER_VERSION_STEP`](crate::membership::MAX_ROSTER_VERSION_STEP)
+//! above the held one is refused with `error.album.roster_version_leap` and the held version, so
+//! the owner re-signs at `current_version + 1` and says exactly the same thing.
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -107,6 +114,36 @@ pub enum RosterRejection {
     #[error("no such album")]
     #[problem(status = 404, title = "Not found")]
     NotFound {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// The roster's version is so far above the held one that accepting it would put the
+    /// counter out of reach of every later publish.
+    ///
+    /// A `400` rather than the `409` a stale roster gets, and the distinction is the one the
+    /// two statuses carry everywhere else on this surface: a `409` is a client that is
+    /// *behind* the server and must re-read, while this is a document the server would refuse
+    /// whatever it held — a version that does not follow from the one before it is a
+    /// structural fault in the document, in the same family as a roster naming the wrong
+    /// album. The held version rides it anyway, because the client's repair is to re-sign at
+    /// `current_version + 1`.
+    #[error(
+        "roster version {declared} is past {max_version}, the highest this album will accept \
+         while it holds version {current_version}"
+    )]
+    #[problem(status = 400, title = "Roster version leap")]
+    VersionLeap {
+        /// The version the document declared.
+        #[problem(extension)]
+        declared: u64,
+        /// The version the server holds; `0` when it holds no roster.
+        #[problem(extension)]
+        current_version: u64,
+        /// The highest version this album would have accepted.
+        #[problem(extension)]
+        max_version: u64,
         /// The stable catalog code.
         #[problem(extension)]
         code: &'static str,
@@ -331,6 +368,24 @@ pub async fn publish_album_roster(
             current_version,
             code: error_codes::ALBUM_ROSTER_STALE,
         }),
+        RosterOutcome::VersionLeap {
+            current_version,
+            max_version,
+        } => {
+            tracing::info!(
+                %album,
+                declared = signed.roster.roster_version,
+                current_version,
+                max_version,
+                "a roster was refused: its version is past the window above the held one"
+            );
+            Err(RosterRejection::VersionLeap {
+                declared: signed.roster.roster_version,
+                current_version,
+                max_version,
+                code: error_codes::ALBUM_ROSTER_VERSION_LEAP,
+            })
+        }
         RosterOutcome::EpochRegressed {
             current_version,
             stored,
