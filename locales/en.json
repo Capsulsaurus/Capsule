@@ -7351,6 +7351,10 @@
     "message": "An account with that email address already exists here. Sign in with its password instead.",
     "context": "HTTP 409 on POST /v1/auth/oidc/callback (slice S-N1): the identity provider asserted an email address that already belongs to a local account, and this identity is not linked to it. Capsule never links accounts by an address the provider controls; the person signs in with the existing account's password."
   },
+  "error.auth.oidc_at_capacity": {
+    "message": "Too many sign-ins are already in progress. Please try again in a moment.",
+    "context": "HTTP 503 on POST /v1/auth/oidc/authorize (slice S-N1): the server is already holding as many unfinished single sign-on ceremonies as it will hold, so this one was not begun. Retryable within minutes - pending ceremonies expire ten minutes after they start. Distinct from error.auth.unavailable, which is a 500 meaning a store could not answer at all: this one means the server answered and said 'not now', and a client may retry it on a short timer rather than surfacing an outage."
+  },
   "error.auth.oidc_exchange_failed": {
     "message": "Your identity provider didn't accept that sign-in. Try again.",
     "context": "HTTP 401 on POST /v1/auth/oidc/callback (slice S-N1): the identity provider refused to exchange the authorization code (an invalid, spent or mismatched code). The person starts the sign-in again."

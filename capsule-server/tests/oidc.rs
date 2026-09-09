@@ -924,7 +924,12 @@ async fn beginning_ceremonies_is_budgeted_per_redirect_host_and_bounded_by_the_s
         .await
         .assert_status(StatusCode::SERVICE_UNAVAILABLE)
         .json();
-    assert_eq!(code_of(&body), "error.auth.unavailable");
+    assert_eq!(
+        code_of(&body),
+        "error.auth.oidc_at_capacity",
+        "at capacity is its own code: a client switching on the code, as api-surfaces.md \
+         requires, must be able to tell a short retry from an outage"
+    );
     fixture.oidc_authorizations.set_full(false);
     fixture.client.assert_conformance();
 }

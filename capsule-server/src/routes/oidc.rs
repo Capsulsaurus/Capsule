@@ -174,6 +174,14 @@ pub enum OidcAuthorizeRejection {
     },
 
     /// The pending-ceremony store is at its ceiling. Retryable: ceremonies expire in minutes.
+    ///
+    /// Carries `error.auth.oidc_at_capacity`, its own code and not the `error.auth.unavailable`
+    /// the `500` below carries. `design/api-surfaces.md` is explicit that "REST status is coarse;
+    /// the stable `error.*` code in the `ApiError` body is the precise discriminator. Clients
+    /// switch on the code, never on status alone" — so two conditions that answer with different
+    /// statuses may not share one code, or a client obeying that rule cannot tell "the server
+    /// said not now, retry in a moment" from "a store could not answer at all". The remedies
+    /// differ too: the first is a short timer, the second is an outage to surface.
     #[error("the server is holding too many unfinished sign-ins; try again shortly")]
     #[problem(status = 503, title = "Sign-in capacity reached")]
     AtCapacity {
@@ -271,11 +279,10 @@ impl OidcAuthorizeRejection {
         }
     }
 
-    /// The store refused a write because it is full. The existing retryable code, because the
-    /// remedy is the one `error.auth.unavailable` already tells a person: wait and try again.
+    /// The store refused a write because it is full.
     fn at_capacity() -> Self {
         Self::AtCapacity {
-            code: error_codes::AUTH_UNAVAILABLE,
+            code: error_codes::AUTH_OIDC_AT_CAPACITY,
         }
     }
 
@@ -664,8 +671,13 @@ mod tests {
         ));
         assert!(matches!(
             OidcAuthorizeRejection::at_capacity(),
-            OidcAuthorizeRejection::AtCapacity { code } if code == error_codes::AUTH_UNAVAILABLE
+            OidcAuthorizeRejection::AtCapacity { code } if code == error_codes::AUTH_OIDC_AT_CAPACITY
         ));
+        assert_ne!(
+            error_codes::AUTH_OIDC_AT_CAPACITY,
+            error_codes::AUTH_UNAVAILABLE,
+            "the 503 and the 500 are different conditions and may not share a code"
+        );
         assert!(matches!(
             OidcCallbackRejection::state_invalid(),
             OidcCallbackRejection::StateInvalid { code } if code == error_codes::AUTH_OIDC_STATE_INVALID

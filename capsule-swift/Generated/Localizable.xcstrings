@@ -37129,6 +37129,16 @@
         }
       }
     },
+    "error.auth.oidc_at_capacity": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Too many sign-ins are already in progress. Please try again in a moment."
+          }
+        }
+      }
+    },
     "error.auth.oidc_exchange_failed": {
       "localizations": {
         "en": {

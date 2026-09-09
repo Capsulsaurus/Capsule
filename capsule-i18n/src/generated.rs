@@ -65,6 +65,9 @@ pub mod error_codes {
     /// `error.auth.oidc_address_taken`
     pub const AUTH_OIDC_ADDRESS_TAKEN: &str = "error.auth.oidc_address_taken";
 
+    /// `error.auth.oidc_at_capacity`
+    pub const AUTH_OIDC_AT_CAPACITY: &str = "error.auth.oidc_at_capacity";
+
     /// `error.auth.oidc_exchange_failed`
     pub const AUTH_OIDC_EXCHANGE_FAILED: &str = "error.auth.oidc_exchange_failed";
 
