@@ -7531,6 +7531,10 @@
     "message": "This upload link needs its passphrase.",
     "context": "HTTP 403 on POST /u/{opaque-id}/drop (web-upload): the link carries an Argon2id abuse-gate verifier and the guest supplied no proof, or a proof that did not verify."
   },
+  "error.drop.at_capacity": {
+    "message": "This server is handling too many upload links right now. Please try again shortly.",
+    "context": "HTTP 429 on POST /d/{opaque_id} (slice S-C5): the per-link rate-limit store is holding as many distinct upload links as it will hold, so this link could not be given a window of its own. Saturated by design rather than broken - distinct from error.drop.unavailable, which is a 500 meaning a store could not answer at all. The `retry_after` member is an upper bound: it is the limiter window, after which a lapsed window frees room."
+  },
   "error.drop.rate_limited": {
     "message": "Too many attempts. Please wait and try again.",
     "context": "HTTP 429 on POST /u/{opaque-id}/drop (web-upload, invariant 31): the per-{opaque-id} or per-source-IP drop-session rate limit engaged."
@@ -7550,6 +7554,10 @@
   "error.enrollment.local_auth_required": {
     "message": "Confirm it's you on this device to add another device.",
     "context": "HTTP 403 on POST /devices/enroll (slice S-C7): the access token is not fresh enough to stand in for the doc's fresh local device authorization. A valid session token alone cannot start a cross-device add — the caller must re-authenticate locally so a stolen, stale token cannot enroll a rogue device."
+  },
+  "error.enrollment.at_capacity": {
+    "message": "This server is handling too many enrollment attempts right now. Please try again shortly.",
+    "context": "HTTP 429 on POST /v1/auth/devices/enroll/redeem (slice S-C7): the redemption rate-limit store is holding as many distinct codes as it will hold, so this code could not be given a window of its own. Saturated by design rather than broken - distinct from error.auth.unavailable, which is a 500 meaning a store could not answer at all. The `retry_after` member is an upper bound: it is the limiter window, after which a lapsed window frees room."
   },
   "error.enrollment.rate_limited": {
     "message": "Too many device-add attempts. Please wait and try again.",
@@ -7682,6 +7690,10 @@
   "error.share.malformed": {
     "message": "That share link could not be created.",
     "context": "HTTP 400 on POST /v1/shares (slice S-C4): the record is not a usable share link — an opaque id that is not 32 lowercase hex characters, a malformed content address, a `serves` set that omits the metadata blob, an unparseable expiry, or a non-base64 wrapped secret. The owner's own operation, so the detail is specific; the public serve path never distinguishes anything."
+  },
+  "error.share.at_capacity": {
+    "message": "This server is handling too many shared links right now. Please try again shortly.",
+    "context": "HTTP 429 on the public /s/{opaque_id} routes (slice S-C4): the per-link rate-limit store is holding as many distinct share links as it will hold, so this link could not be given a window of its own. Saturated by design rather than broken - distinct from the 500 this surface renders when a store could not answer at all. The `retry_after` member is an upper bound: it is the limiter window, after which a lapsed window frees room."
   },
   "error.share.rate_limited": {
     "message": "Too many attempts. Please wait and try again.",

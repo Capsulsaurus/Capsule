@@ -173,6 +173,9 @@ pub mod error_codes {
     /// `error.drop.adoption_refused`
     pub const DROP_ADOPTION_REFUSED: &str = "error.drop.adoption_refused";
 
+    /// `error.drop.at_capacity`
+    pub const DROP_AT_CAPACITY: &str = "error.drop.at_capacity";
+
     /// `error.drop.cap_exceeded`
     pub const DROP_CAP_EXCEEDED: &str = "error.drop.cap_exceeded";
 
@@ -205,6 +208,9 @@ pub mod error_codes {
 
     /// `error.drop.unavailable`
     pub const DROP_UNAVAILABLE: &str = "error.drop.unavailable";
+
+    /// `error.enrollment.at_capacity`
+    pub const ENROLLMENT_AT_CAPACITY: &str = "error.enrollment.at_capacity";
 
     /// `error.enrollment.channel_not_found`
     pub const ENROLLMENT_CHANNEL_NOT_FOUND: &str = "error.enrollment.channel_not_found";
@@ -310,6 +316,9 @@ pub mod error_codes {
 
     /// `error.request.unsupported_media_type`
     pub const REQUEST_UNSUPPORTED_MEDIA_TYPE: &str = "error.request.unsupported_media_type";
+
+    /// `error.share.at_capacity`
+    pub const SHARE_AT_CAPACITY: &str = "error.share.at_capacity";
 
     /// `error.share.malformed`
     pub const SHARE_MALFORMED: &str = "error.share.malformed";

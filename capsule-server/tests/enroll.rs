@@ -464,3 +464,39 @@ async fn the_redemption_limiter_counts_successes_too() {
     let _ = issued;
     redeem(&fixture, ONE_STRING, StatusCode::TOO_MANY_REQUESTS).await;
 }
+
+/// A saturated limiter partition must not impersonate an outage.
+///
+/// The redemption limiter charges the presented code before it is resolved, so a caller minting
+/// well-formed codes fills the `EnrollmentRedemption` partition. A first-time redemption is then
+/// refused while it lasts — and it is told `429 error.enrollment.at_capacity` with a retry hint,
+/// not the `500 error.auth.unavailable` this used to render, which said the server was broken
+/// when the limiter was working exactly as designed.
+#[tokio::test]
+async fn a_saturated_limiter_partition_is_a_429_and_not_an_outage() {
+    let fixture = Fixture::with_counter_ceiling(1);
+
+    // One well-formed code fills the partition.
+    redeem(&fixture, "00000010", StatusCode::NOT_FOUND).await;
+
+    // A second, never-seen code finds no room.
+    let problem: Value = redeem(&fixture, "00000011", StatusCode::TOO_MANY_REQUESTS)
+        .await
+        .json();
+    assert_eq!(
+        problem["code"], "error.enrollment.at_capacity",
+        "a full partition has a code of its own, distinct from a spent budget and from an outage"
+    );
+    assert!(problem["retry_after"].as_u64().is_some_and(|s| s > 0));
+
+    // The code already being counted keeps being counted, to its own budget, and the spent
+    // budget keeps its own code — so the two causes stay distinguishable.
+    for _ in 0..9 {
+        redeem(&fixture, "00000010", StatusCode::NOT_FOUND).await;
+    }
+    let problem: Value = redeem(&fixture, "00000010", StatusCode::TOO_MANY_REQUESTS)
+        .await
+        .json();
+    assert_eq!(problem["code"], "error.enrollment.rate_limited");
+    assert!(problem["retry_after"].as_u64().is_some_and(|s| s > 0));
+}

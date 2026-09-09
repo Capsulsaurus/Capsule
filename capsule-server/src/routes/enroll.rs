@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::auth::AccessToken;
-use crate::counter::{CounterContext, CounterKey, budgets};
+use crate::counter::{CounterContext, CounterKey, Verdict, budgets, unix_seconds};
 use crate::enrollment::{EnrollmentContext, MAX_RELAY_BYTES};
 use crate::store::{
     ChannelId, Direction, DrainOutcome, EnrollmentCode, PendingEnrollment, RelayChannel,
@@ -151,12 +151,22 @@ pub enum RedeemRejection {
     /// The limiter design/device-enrollment.md names as the reason the **shorter transcribable
     /// fallback** is safe to offer: it trades entropy for transcribability, and what keeps that
     /// trade honest is that the code cannot be ground through inside its ten-minute life.
+    ///
+    /// Two causes, one status, told apart by `code`: `error.enrollment.rate_limited` is this
+    /// code's own budget spent, `error.enrollment.at_capacity` is the limiter's partition full.
+    /// The second used to render `500 error.auth.unavailable`, which told a client to report an
+    /// outage and an operator to go looking for one, when the limiter was working exactly as
+    /// designed and would clear itself inside the window.
     #[error("too many attempts against this code")]
     #[problem(status = 429, title = "Too many attempts")]
     RateLimited {
         /// The stable catalog code.
         #[problem(extension)]
         code: &'static str,
+        /// When the caller may retry, as Unix seconds. An **upper** bound: one limiter window,
+        /// by which time a live window has lapsed and freed room.
+        #[problem(extension)]
+        retry_after: u64,
     },
 
     /// A store could not answer.
@@ -307,16 +317,26 @@ pub async fn redeem_enrollment_code(
         )
     };
     let verdict = counters.hit(&key, budget).await.map_err(|error| {
-        // Fail closed. A limiter an attacker turns off by loading the counter store is not
-        // a limiter.
-        tracing::error!(%error, "the redemption counter could not be reached");
-        RedeemRejection::Unavailable {
-            code: error_codes::AUTH_UNAVAILABLE,
+        // Fail closed. A limiter an attacker turns off by loading the counter store is not a
+        // limiter — but a *full* partition is the limiter working, not a broken store, and a
+        // caller told `500` cannot tell the difference.
+        if let Some(retry_after) = counters.capacity_refusal(&error, budget) {
+            tracing::warn!(%error, "the redemption limiter is at capacity");
+            RedeemRejection::RateLimited {
+                code: error_codes::ENROLLMENT_AT_CAPACITY,
+                retry_after: unix_seconds(retry_after),
+            }
+        } else {
+            tracing::error!(%error, "the redemption counter could not be reached");
+            RedeemRejection::Unavailable {
+                code: error_codes::AUTH_UNAVAILABLE,
+            }
         }
     })?;
-    if !verdict.admits() {
+    if let Verdict::Limited { retry_after } = verdict {
         return Err(RedeemRejection::RateLimited {
             code: error_codes::ENROLLMENT_RATE_LIMITED,
+            retry_after: unix_seconds(retry_after),
         });
     }
 

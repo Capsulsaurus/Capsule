@@ -7881,7 +7881,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
+                  "$ref": "#/components/schemas/EnrollmentRateLimitedProblem"
                 }
               }
             }
@@ -18775,7 +18775,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
+                  "$ref": "#/components/schemas/ShareMetadataRateLimitedProblem"
                 }
               }
             }
@@ -19005,7 +19005,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
+                  "$ref": "#/components/schemas/ShareSecretRateLimitedProblem"
                 }
               }
             }
@@ -19396,7 +19396,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
+                  "$ref": "#/components/schemas/ShareBlobRateLimitedProblem"
                 }
               }
             }
@@ -19815,7 +19815,7 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
+                  "$ref": "#/components/schemas/DropRateLimitedProblem"
                 }
               }
             }
@@ -22619,6 +22619,201 @@
           "code"
         ],
         "title": "FileTooLargeProblem",
+        "description": "An RFC 9457 problem detail."
+      },
+      "DropRateLimitedProblem": {
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "maximum": 65535.0,
+            "minimum": 0.0,
+            "format": "uint16"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "description": "The stable `error.*` catalog code. The client localizes this; `detail` stays English. Present on every problem this server renders."
+          },
+          "retry_after": {
+            "type": "integer",
+            "description": "When the caller may retry, as Unix seconds. From the limiter's own window when a budget is spent, and an upper bound of one window when the limiter is at capacity (slice `S-C32`)."
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "type",
+          "status",
+          "code"
+        ],
+        "title": "DropRateLimitedProblem",
+        "description": "An RFC 9457 problem detail."
+      },
+      "EnrollmentRateLimitedProblem": {
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "maximum": 65535.0,
+            "minimum": 0.0,
+            "format": "uint16"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "description": "The stable `error.*` catalog code. The client localizes this; `detail` stays English. Present on every problem this server renders."
+          },
+          "retry_after": {
+            "type": "integer",
+            "description": "When the caller may retry, as Unix seconds. From the limiter's own window when a budget is spent, and an upper bound of one window when the limiter is at capacity (slice `S-C32`)."
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "type",
+          "status",
+          "code"
+        ],
+        "title": "EnrollmentRateLimitedProblem",
+        "description": "An RFC 9457 problem detail."
+      },
+      "ShareMetadataRateLimitedProblem": {
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "maximum": 65535.0,
+            "minimum": 0.0,
+            "format": "uint16"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "description": "The stable `error.*` catalog code. The client localizes this; `detail` stays English. Present on every problem this server renders."
+          },
+          "retry_after": {
+            "type": "integer",
+            "description": "When the caller may retry, as Unix seconds. From the limiter's own window when a budget is spent, and an upper bound of one window when the limiter is at capacity (slice `S-C32`)."
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "type",
+          "status",
+          "code"
+        ],
+        "title": "ShareMetadataRateLimitedProblem",
+        "description": "An RFC 9457 problem detail."
+      },
+      "ShareSecretRateLimitedProblem": {
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "maximum": 65535.0,
+            "minimum": 0.0,
+            "format": "uint16"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "description": "The stable `error.*` catalog code. The client localizes this; `detail` stays English. Present on every problem this server renders."
+          },
+          "retry_after": {
+            "type": "integer",
+            "description": "When the caller may retry, as Unix seconds. From the limiter's own window when a budget is spent, and an upper bound of one window when the limiter is at capacity (slice `S-C32`)."
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "type",
+          "status",
+          "code"
+        ],
+        "title": "ShareSecretRateLimitedProblem",
+        "description": "An RFC 9457 problem detail."
+      },
+      "ShareBlobRateLimitedProblem": {
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "maximum": 65535.0,
+            "minimum": 0.0,
+            "format": "uint16"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "description": "The stable `error.*` catalog code. The client localizes this; `detail` stays English. Present on every problem this server renders."
+          },
+          "retry_after": {
+            "type": "integer",
+            "description": "When the caller may retry, as Unix seconds. From the limiter's own window when a budget is spent, and an upper bound of one window when the limiter is at capacity (slice `S-C32`)."
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "type",
+          "status",
+          "code"
+        ],
+        "title": "ShareBlobRateLimitedProblem",
         "description": "An RFC 9457 problem detail."
       }
     },

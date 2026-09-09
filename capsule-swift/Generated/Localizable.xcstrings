@@ -38857,6 +38857,16 @@
         }
       }
     },
+    "error.drop.at_capacity": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This server is handling too many upload links right now. Please try again shortly."
+          }
+        }
+      }
+    },
     "error.drop.cap_exceeded": {
       "localizations": {
         "ar": {
@@ -39323,6 +39333,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Capsule couldn't reach the upload service. Please try again."
+          }
+        }
+      }
+    },
+    "error.enrollment.at_capacity": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This server is handling too many enrollment attempts right now. Please try again shortly."
           }
         }
       }
@@ -41257,6 +41277,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Capsule couldn't read that content type."
+          }
+        }
+      }
+    },
+    "error.share.at_capacity": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This server is handling too many shared links right now. Please try again shortly."
           }
         }
       }

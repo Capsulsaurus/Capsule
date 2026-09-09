@@ -1864,6 +1864,7 @@
     <string name="error_directory_unsupported_media_type">That device list couldn\'t be read.</string>
     <string name="error_directory_version_conflict">This device list is out of date. Capsule will refresh it before continuing.</string>
     <string name="error_drop_adoption_refused">That upload could not be added to the album.</string>
+    <string name="error_drop_at_capacity">This server is handling too many upload links right now. Please try again shortly.</string>
     <string name="error_drop_cap_exceeded">This upload link is full.</string>
     <string name="error_drop_cap_exhausted">This upload link is full. Ask for a new one.</string>
     <string name="error_drop_chunk_refused">That part of the upload could not be accepted. It will be retried.</string>
@@ -1875,6 +1876,7 @@
     <string name="error_drop_passphrase_required">This upload link needs its passphrase.</string>
     <string name="error_drop_rate_limited">Too many attempts. Please wait and try again.</string>
     <string name="error_drop_unavailable">Capsule couldn\'t reach the upload service. Please try again.</string>
+    <string name="error_enrollment_at_capacity">This server is handling too many enrollment attempts right now. Please try again shortly.</string>
     <string name="error_enrollment_channel_not_found">This device-add session has ended. Start again.</string>
     <string name="error_enrollment_code_refused">That device code didn\'t work. Generate a new one and try again.</string>
     <string name="error_enrollment_local_auth_required">Confirm it\'s you on this device to add another device.</string>
@@ -1910,6 +1912,7 @@
     <string name="error_request_unauthenticated">Please sign in again.</string>
     <string name="error_request_unprocessable">Some of that request didn\'t make sense.</string>
     <string name="error_request_unsupported_media_type">Capsule couldn\'t read that content type.</string>
+    <string name="error_share_at_capacity">This server is handling too many shared links right now. Please try again shortly.</string>
     <string name="error_share_malformed">That share link could not be created.</string>
     <string name="error_share_rate_limited">Too many attempts. Please wait and try again.</string>
     <string name="error_share_unavailable">Capsule couldn\'t reach that share. Please try again.</string>

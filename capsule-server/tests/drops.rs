@@ -920,3 +920,68 @@ async fn a_gated_link_that_does_not_exist_is_still_indistinguishable() {
     .await;
     create_drop_with(&fixture, &opaque(65), &bytes, None, StatusCode::NOT_FOUND).await;
 }
+
+/// A saturated limiter partition must not impersonate an outage.
+///
+/// The drop path charges a caller-supplied opaque id before it resolves the link, and its window
+/// is an hour long — the cheapest partition on the surface to hold saturated, at under six
+/// fabricated ids a second. Partitioning (decision 22) keeps that off the other surfaces; it
+/// does not keep it off this one, so every first-time visitor to *any* drop link is refused while
+/// the flood runs. They are told `429 error.drop.at_capacity` with a retry hint rather than the
+/// `500 error.drop.unavailable` this used to render, which is the difference between a client
+/// backing off and an operator being paged for an outage that is not happening.
+#[tokio::test]
+async fn a_saturated_limiter_partition_is_a_429_and_not_an_outage() {
+    let fixture = Fixture::with_counter_ceiling(1);
+    let bearer = fixture.bearer().await;
+    let bytes = payload(b'h', 64);
+
+    let id = opaque(1);
+    provision(
+        &fixture,
+        &bearer,
+        &link_body(&id, json!({ "max_file_count": 1000 })),
+        StatusCode::CREATED,
+    )
+    .await;
+    let other = opaque(2);
+    provision(
+        &fixture,
+        &bearer,
+        &link_body(&other, json!({ "max_file_count": 1000 })),
+        StatusCode::CREATED,
+    )
+    .await;
+
+    // One link fills the partition.
+    create_drop(&fixture, &id, &bytes, StatusCode::CREATED).await;
+
+    // A guest arriving at a different link finds no room, and is told to wait rather than told
+    // the server is broken.
+    let problem = create_drop(&fixture, &other, &bytes, StatusCode::TOO_MANY_REQUESTS).await;
+    assert_eq!(
+        problem["code"], "error.drop.at_capacity",
+        "a full partition has a code of its own, distinct from a spent budget and from an outage"
+    );
+    assert!(problem["retry_after"].as_u64().is_some_and(|s| s > 0));
+
+    // The link already being counted keeps working, to its own budget, and the spent-budget
+    // refusal keeps its own code — the two causes stay distinguishable on the wire.
+    create_drop(&fixture, &id, &bytes, StatusCode::CREATED).await;
+    for _ in 0..30 {
+        fixture
+            .client
+            .post(&format!("/d/{id}"))
+            .json(&json!({
+                "content_type": "image/jpeg",
+                "size": bytes.len(),
+                "ciphertext_hash": checksum(&bytes),
+                "kem_ct": BASE64.encode([9_u8; 64]),
+            }))
+            .send()
+            .await;
+    }
+    let problem = create_drop(&fixture, &id, &bytes, StatusCode::TOO_MANY_REQUESTS).await;
+    assert_eq!(problem["code"], "error.drop.rate_limited");
+    assert!(problem["retry_after"].as_u64().is_some_and(|s| s > 0));
+}

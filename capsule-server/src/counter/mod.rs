@@ -73,6 +73,38 @@
 //! hold more windows; it is that the windows one surface holds are not the windows another
 //! surface is denied.
 //!
+//! # What a legitimate caller experiences when a ceiling bites
+//!
+//! The paragraphs above describe the mechanism. This is the consequence, which is the part worth
+//! knowing at three in the morning.
+//!
+//! Partitioning bounds the blast radius; it does not make the flooded surface well. `DropLink`
+//! is the cheapest partition to hold saturated — twenty thousand fabricated but well-formed ids
+//! across an hour-long window, under six a second — and while it is saturated, every visitor
+//! arriving at a drop link the store holds no window for is refused. That is a **first-time**
+//! visitor: a link already being counted keeps being counted, so the flood cannot evict anyone
+//! it has not already locked out.
+//!
+//! Those callers are told `429` with an `error.*_at_capacity` code and a `retry_after`, **not**
+//! the `500 error.*_unavailable` a broken store renders. The refusal is fail-closed either way;
+//! what changes is that a client can back off instead of reporting an outage, and an operator
+//! paged on `5xx` can tell "saturated by design" from "the store is down" without reading a
+//! server-side `WARN` and inferring it. The distinction is the whole reason the ceiling refusal
+//! has a code of its own.
+//!
+//! What partitioning is *not* is a fix for the flood. A per-source key is what would bound it,
+//! and all three source keys wait on a trusted client address this server does not have.
+//!
+//! # One lock, and what that does and does not cover
+//!
+//! Every partition lives behind the same [`Mutex`]. Admission is genuinely independent — one
+//! partition's occupancy is invisible to another's ceiling — but *latency* is not: a sustained
+//! flood against one key serialises `hit`, `peek` and `reset` for every other. The critical
+//! section holds no `.await` and does `O(log n)` work over at most twenty thousand entries, so at
+//! these sizes it is contention rather than denial. Stated because the claim above ("the windows
+//! one surface holds are not the windows another is denied") is about admission and should not be
+//! read as a latency guarantee. Per-partition locking is deferred, not overlooked.
+//!
 //! This is defence in depth, not a licence. Every derived key should still be bounded where it
 //! is built — the OIDC authorize validates the redirect before it charges
 //! ([`CounterKey::OidcAuthorizeRefused`]), and the enrollment redemption shape-checks the code
@@ -514,7 +546,7 @@ impl CounterStore for InMemoryCounters {
                     "a counter partition is full; a hit was refused rather than counted"
                 );
                 return Err(crate::store::StoreError::Rejected {
-                    store: "counters",
+                    store: COUNTER_STORE,
                     detail: format!(
                         "{ceiling} open windows is the ceiling for `{}`",
                         key.as_str()
@@ -640,6 +672,59 @@ impl CounterContext {
     pub async fn reset(&self, key: &CounterKey) -> Result<(), crate::store::StoreError> {
         self.counters.reset(key).await
     }
+
+    /// What a caller should be told about a failed [`Self::hit`].
+    ///
+    /// `Some(retry_after)` when the partition was full — the limiter working as designed, which
+    /// a route renders `429 error.*_at_capacity` — and `None` when the store could not answer at
+    /// all, which stays a `500`. One method rather than a predicate plus a clock read at three
+    /// call sites, because the half that is easy to forget is the deadline.
+    ///
+    /// The refusal is fail-closed either way; this decides only the answer.
+    pub fn capacity_refusal(
+        &self,
+        error: &crate::store::StoreError,
+        budget: Budget,
+    ) -> Option<Timestamp> {
+        is_at_capacity(error).then(|| capacity_retry_after(self.clock.now(), budget))
+    }
+}
+
+/// Whether a [`CounterStore`] failure was the partition ceiling rather than a broken store.
+///
+/// The two failures arrive as one `Result::Err` and mean opposite things to a caller: a full
+/// partition is the limiter working as designed and clears on its own within the window, while
+/// anything else is a store that could not answer. A route that renders both as `500` tells a
+/// client to report an outage and tells an operator to go looking for one, so every route that
+/// charges a caller-influenced key asks this and answers `429 error.*_at_capacity` when it is
+/// true.
+///
+/// The refusal itself is fail-closed either way. This decides only what the caller is told.
+pub fn is_at_capacity(error: &crate::store::StoreError) -> bool {
+    matches!(
+        error,
+        crate::store::StoreError::Rejected { store, .. } if *store == COUNTER_STORE
+    )
+}
+
+/// The `store` name [`InMemoryCounters`] refuses under, and [`is_at_capacity`] matches on.
+pub const COUNTER_STORE: &str = "counters";
+
+/// When a caller refused by a full partition may expect room, as an **upper** bound.
+///
+/// One window from now. A full partition is full of *live* windows, and the earliest of them
+/// lapses no later than one window after it opened, so a caller that waits this long finds room
+/// unless the flood is still running — in which case it finds the same honest `429` again.
+pub fn capacity_retry_after(now: Timestamp, budget: Budget) -> Timestamp {
+    crate::store::deadline(now, budget.window)
+}
+
+/// `at` as Unix seconds for a `retry_after` extension member.
+///
+/// Saturating at zero, as every other deadline on this surface does: a clock before the epoch is
+/// a misconfiguration, and "retry now" is the safe reading of one.
+pub fn unix_seconds(at: Timestamp) -> u64 {
+    u64::try_from(at.as_second()).unwrap_or(0)
 }
 
 pub mod budgets;

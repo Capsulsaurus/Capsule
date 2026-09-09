@@ -2685,16 +2685,32 @@ impl Fixture {
 
     /// The same server, with a deployment's quota thresholds.
     pub(crate) fn with_quota(quota_limits: QuotaLimits) -> Self {
-        Self::build(quota_limits, None)
+        Self::build(quota_limits, None, None)
     }
 
     /// The working server over a **real** identity provider adapter, for the cases that drive
     /// the wire against the mock provider in [`idp`]. `fixture.idp` is present but unused.
     pub(crate) fn with_identity_provider(provider: Arc<dyn IdentityProvider>) -> Self {
-        Self::build(QuotaLimits::unlimited(), Some(provider))
+        Self::build(QuotaLimits::unlimited(), Some(provider), None)
     }
 
-    fn build(quota_limits: QuotaLimits, provider: Option<Arc<dyn IdentityProvider>>) -> Self {
+    /// The working server whose rate-limit counters hold at most `ceiling` keys **per
+    /// partition**.
+    ///
+    /// The shipped ceilings are twenty thousand keys wide, which is the right number for a
+    /// deployment and the wrong number for a wire test: saturating one over HTTP would be twenty
+    /// thousand requests. The property a saturated partition has to have — `429` with the
+    /// at-capacity code rather than a `500` that impersonates an outage — does not depend on how
+    /// wide it is, so the tests that assert it shrink the partitions and spend two requests.
+    pub(crate) fn with_counter_ceiling(ceiling: usize) -> Self {
+        Self::build(QuotaLimits::unlimited(), None, Some(ceiling))
+    }
+
+    fn build(
+        quota_limits: QuotaLimits,
+        provider: Option<Arc<dyn IdentityProvider>>,
+        counter_ceiling: Option<usize>,
+    ) -> Self {
         let clock = Arc::new(ManualClock::default());
         let sessions = Arc::new(SwitchableSessions::new(clock.clone()));
         let accounts = Arc::new(InMemoryAccounts::new());
@@ -2734,7 +2750,10 @@ impl Fixture {
         let moderation = Arc::new(SwitchableModeration::new());
         let shares = Arc::new(SwitchableShares::new());
         let dropstore = Arc::new(SwitchableDrops::new());
-        let counters = Arc::new(InMemoryCounters::new());
+        let counters = Arc::new(match counter_ceiling {
+            Some(ceiling) => InMemoryCounters::new().with_ceiling(ceiling),
+            None => InMemoryCounters::new(),
+        });
         let totp = Arc::new(InMemoryTotp::new());
         let codes = Arc::new(TotpCodes::new("Capsule"));
         let idp = Arc::new(SwitchableIdentityProvider::new());
