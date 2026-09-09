@@ -16,8 +16,13 @@ pub mod artifact;
 
 pub use artifact::{
     BackupArtifact, BackupAsset, BackupInput, RestoreMode, RestoreReport, WRAP_PARAMS, export,
-    export_with_params, export_with_salt, export_with_salt_and_params,
+    export_with_salt,
 };
+/// The caller-chosen-cost export entry points. Gated identically to their definitions: a weak
+/// Argon2id cost yields a brute-forceable artifact, so reaching one takes `cfg(test)` or an
+/// explicit `test-support` line in the consuming manifest.
+#[cfg(any(test, feature = "test-support"))]
+pub use artifact::{export_with_params, export_with_salt_and_params};
 use thiserror::Error;
 
 use crate::crypto::primitives::DeviceTier;

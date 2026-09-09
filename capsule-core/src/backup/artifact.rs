@@ -41,9 +41,11 @@ type HmacSha256 = Hmac<Sha256>;
 ///
 /// The parameters an export actually used are recorded in the artifact's `VERSION` entry, so a
 /// restore reproduces the wrap key from the artifact and never from a constant. That is why
-/// this is a *default* and not a rule: [`export`] and [`export_with_salt`] apply it, while
-/// [`export_with_params`] and [`export_with_salt_and_params`] take the cost from the caller,
-/// and [`BackupArtifact::open`] reads it back off the artifact either way.
+/// this is a *default* and not a rule: [`export`] and [`export_with_salt`] — the two entry
+/// points a production build has — apply it and take no cost argument, while the `*_with_params`
+/// pair takes the cost from the caller and is compiled only under `cfg(test)` or the non-default
+/// `test-support` feature. [`BackupArtifact::open`] reads the cost back off the artifact either
+/// way.
 ///
 /// It is one constant for every build. It used to be forked on `#[cfg(test)]`, which meant
 /// `capsule-core`'s own tests were the only code in the workspace that never exercised the
@@ -249,28 +251,48 @@ fn open_ledger(wrap_key: &[u8; 32], sealed: &[u8]) -> Result<AmkLedger, BackupEr
 
 // ── Export ──────────────────────────────────────────────────────────────────
 
-/// Assemble a backup artifact with an explicit wrap salt (deterministic; used by tests), at the
-/// production [`WRAP_PARAMS`] cost.
+/// Assemble a backup artifact with an explicit wrap salt (deterministic), at the production
+/// [`WRAP_PARAMS`] cost.
 pub fn export_with_salt(
     input: &BackupInput,
     passphrase: &[u8],
     salt: [u8; 32],
     exporter: &dyn Signer,
 ) -> Result<Vec<u8>, BackupError> {
-    export_with_salt_and_params(input, passphrase, salt, WRAP_PARAMS, exporter)
+    export_inner(input, passphrase, salt, WRAP_PARAMS, exporter)
 }
 
 /// Assemble a backup artifact with an explicit wrap salt **and** an explicit Argon2id cost.
 ///
-/// This is the one implementation the other three export entry points delegate to. `params` is
-/// written into the artifact's `VERSION` entry, so whatever cost is chosen here is the cost
-/// [`BackupArtifact::open`] pays to reproduce the wrap key — a caller that exports cheaply gets
-/// a cheap restore, and neither side needs to be told twice.
+/// `params` is written into the artifact's `VERSION` entry, so whatever cost is chosen here is
+/// the cost [`BackupArtifact::open`] pays to reproduce the wrap key — a caller that exports
+/// cheaply gets a cheap restore, and neither side needs to be told twice.
 ///
-/// A test passes a trivially-fast cost because the wrap key's *strength* is orthogonal to the
-/// format and round-trip correctness under test; anything shipping to a user passes
-/// [`WRAP_PARAMS`], which is what [`export`] and [`export_with_salt`] do for it.
+/// **Not in a production build.** A weak `params` produces a brute-forceable artifact, and
+/// nothing downstream of here re-checks the cost: [`pwkdf::derive_wrap_key`] accepts anything
+/// `argon2::Params::new` validates. So the entry point that can do it is compiled only under
+/// `cfg(test)` or the non-default `test-support` feature, and weakening a real backup therefore
+/// takes a visible line in a production manifest rather than an unnoticed call. The always-
+/// available [`export`] and [`export_with_salt`] cannot be given a cost at all.
+///
+/// This is the same guard [`escrow_master_key`](super::escrow_master_key) gets from taking a
+/// closed [`DeviceTier`](crate::crypto::primitives::DeviceTier) instead of raw parameters,
+/// reached differently: every `DeviceTier` arm is memory-hard by design, so the tier enum has no
+/// arm a test could use as the fast path.
+#[cfg(any(test, feature = "test-support"))]
 pub fn export_with_salt_and_params(
+    input: &BackupInput,
+    passphrase: &[u8],
+    salt: [u8; 32],
+    params: Argon2Params,
+    exporter: &dyn Signer,
+) -> Result<Vec<u8>, BackupError> {
+    export_inner(input, passphrase, salt, params, exporter)
+}
+
+/// The one implementation every export entry point delegates to. Private, so the only way to
+/// reach it with a caller-chosen cost is through the gated entry points above.
+fn export_inner(
     input: &BackupInput,
     passphrase: &[u8],
     salt: [u8; 32],
@@ -399,24 +421,29 @@ pub fn export_with_salt_and_params(
 
 /// Assemble a backup artifact, drawing a fresh random wrap salt, at the production
 /// [`WRAP_PARAMS`] cost (production path).
+///
+/// This is the entry point [`Workspace::export_backup`](crate::lifecycle::Workspace::export_backup)
+/// runs, and it takes no cost argument, so no caller of it can produce a weak artifact.
 pub fn export(
     input: &BackupInput,
     passphrase: &[u8],
     exporter: &dyn Signer,
 ) -> Result<Vec<u8>, BackupError> {
-    export_with_params(input, passphrase, WRAP_PARAMS, exporter)
+    export_with_salt(input, passphrase, rng::random_array::<32>(), exporter)
 }
 
 /// As [`export`] but with an explicit Argon2id cost for the wrap key — the entry point a test
-/// (or any caller that must not pay a memory-hard derivation) uses instead of reaching for a
-/// build-configuration fork.
+/// uses instead of reaching for a build-configuration fork.
+///
+/// **Not in a production build**, for the reason given on [`export_with_salt_and_params`].
+#[cfg(any(test, feature = "test-support"))]
 pub fn export_with_params(
     input: &BackupInput,
     passphrase: &[u8],
     params: Argon2Params,
     exporter: &dyn Signer,
 ) -> Result<Vec<u8>, BackupError> {
-    export_with_salt_and_params(
+    export_inner(
         input,
         passphrase,
         rng::random_array::<32>(),

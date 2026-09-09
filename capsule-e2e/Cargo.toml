@@ -36,6 +36,12 @@ tracing = { workspace = true }
 uuid = { workspace = true, features = ["v7"] }
 
 [dev-dependencies]
+# The same `capsule-core`, with `test-support` on: case 6 exports its backup at an explicit fast
+# Argon2id cost, and the entry point that takes one is compiled out of a production build on
+# purpose (a weak cost is a brute-forceable artifact). Declared here rather than beside the
+# normal dependency above so resolver 3 keeps the feature out of `cargo build --workspace` — it
+# is on only when a test target is being built, which is the only thing this crate has.
+capsule-core = { path = "../capsule-core", features = ["test-support"] }
 # Case 1's client leg is the CLI's own `remote::sync` / `remote::list` over its SQLite store.
 capsule-cli = { path = "../capsule-cli" }
 capsule-cli-migration = { path = "../capsule-cli/migration" }
