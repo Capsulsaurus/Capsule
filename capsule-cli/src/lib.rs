@@ -12,12 +12,10 @@ use std::path::{Path, PathBuf};
 use capitalize::Capitalize;
 use capsule_core::crypto::primitives::DeviceTier;
 use capsule_core::domain::ImportMode;
-use capsule_core::import::scanner::scan as scan_files;
-use capsule_core::import::upload::UploadPolicy;
 use capsule_core::import::{
     CancellationToken, DefaultAlbumContext, ImportConfig, ImportOutcome, ImportProgressEvent,
-    ScanResult, SourceAdapter, SourceMetadataIndex, TakeoutAdapter, execute_with_source_metadata,
-    plan,
+    ScanResult, SourceAdapter, SourceMetadataIndex, TakeoutAdapter, UploadPolicy,
+    execute_with_source_metadata, plan, scan_paths as scan_files,
 };
 use capsule_core::library::{Library, LibraryError, init_library, open_library, rebuild_index};
 use capsule_core::lifecycle::Workspace;

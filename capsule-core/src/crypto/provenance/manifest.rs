@@ -6,7 +6,7 @@
 //! excludes the signatures, so signing bytes are unambiguous and downgrade-resistant
 //! (both sigs cover `crypto_suite_id`, `protocol_version`, and `prior_provenance_hash`).
 //!
-//! [`verify_asset`]: crate::crypto::verify_asset
+//! [`verify_asset`]: fn@crate::crypto::verify_asset
 //! [Cryptography — Provenance]: https://docs/design/cryptography/provenance/
 
 use serde::{Deserialize, Serialize};

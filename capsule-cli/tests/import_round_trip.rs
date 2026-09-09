@@ -43,7 +43,7 @@ use capsule_core::crypto::provenance::action::Action;
 use capsule_core::db::AssetRow;
 use capsule_core::library::open_library;
 use capsule_core::lifecycle::Workspace;
-use capsule_core::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1};
+use capsule_core::sidecar::{SIDECAR_SCHEMA_V1, SidecarV1};
 use jiff::Timestamp;
 use uuid::Uuid;
 

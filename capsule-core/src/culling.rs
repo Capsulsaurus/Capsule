@@ -1,7 +1,7 @@
 //! The client-side **culling** workflow engine (SSoT: [Organization — Culling]).
 //!
 //! Culling is the review pass a photographer makes after a shoot: keep, undecided, toss.
-//! Capsule models it as a trinary [`CullFlag`](crate::sidecar::sidecar_v1::CullFlag) per asset
+//! Capsule models it as a trinary [`CullFlag`] per asset
 //! stored in the sidecar's `cull` LWW register. This module owns the *derived* pieces the
 //! schema deliberately does **not** store, so there is no second source of truth to diverge:
 //!

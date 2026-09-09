@@ -5,7 +5,7 @@
 //! pixels, then land the results —
 //!
 //! - **embeddings** (semantic-search + face-recognition vectors) into the right `vec0` partition of
-//!   the [vector index](crate::db::vector), tagged with the runner's resolved partition
+//!   the [vector index](crate::db::EmbeddingInsert), tagged with the runner's resolved partition
 //!   discriminator ([`resolve_partition`]);
 //! - **zero-shot AI tags** into the asset's `tags_ai` OR-set as a **signed metadata update** through
 //!   the lifecycle ([`AiTagSink::add_ai_tags`]) — structurally separate from user tags, mirroring
@@ -22,7 +22,7 @@
 //! Two invariants are enforced at this boundary:
 //!
 //! - **Provenance.** A runner whose declared model is not the registry canonical for a task is
-//!   refused before any output is stored ([`require_canonical_runner`]).
+//!   refused before any output is stored (`require_canonical_runner`).
 //! - **Platform partition.** Comparable embeddings need byte-identical inference output across
 //!   NPUs/CPUs. A device that reproduces the pinned known-answer bit-exactly shares the
 //!   [`CANONICAL_PARTITION`]; a device that cannot is **not merged** into another platform's index —
@@ -43,7 +43,7 @@ use uuid::Uuid;
 use crate::db::{DatabaseDriver, EmbeddingInsert, KnnHit, VectorIndexError};
 use crate::ml::runner::{Embedding, Frame, ModelRunner, RunnerError};
 use crate::ml::{ModelId, Registry, TaskKind};
-use crate::sidecar::sidecar_v1::AiTag;
+use crate::sidecar::AiTag;
 
 /// The store the orchestrator reads asset pixels from and indexes vectors into.
 ///

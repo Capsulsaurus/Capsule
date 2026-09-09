@@ -1,20 +1,21 @@
-//! Windows TPM 2.0 [`HardwareSigner`] over **TBS** (TPM Base Services) — slice `S-F4`.
+//! Windows TPM 2.0 [`HardwareSigner`](super::HardwareSigner) over **TBS** (TPM Base Services) —
+//! slice `S-F4`.
 //!
-//! The [`tpm`](super::tpm) reference adapter drives a TPM through `tss-esapi`'s high-level ESAPI
-//! and links the system `libtss2` — the Linux path. Windows exposes the TPM through `tbs.dll`
-//! instead: a *raw command channel*. [`Tbsip_Submit_Command`] takes a marshalled TPM 2.0 command
-//! byte-stream and returns the raw response, with no ESAPI in between. This adapter therefore
-//! marshals the same key lifecycle the reference performs — `CreatePrimary` → `Create` → `Load`
-//! → `EvictControl`, then `ReadPublic` / `Hash` + `Sign` — directly to the wire and submits each
-//! through TBS.
+//! The `tpm` reference adapter (`tpm`-feature-gated, so undocumented in a default build) drives a
+//! TPM through `tss-esapi`'s high-level ESAPI and links the system `libtss2` — the Linux path.
+//! Windows exposes the TPM through `tbs.dll` instead: a *raw command channel*.
+//! [`Tbsip_Submit_Command`] takes a marshalled TPM 2.0 command byte-stream and returns the raw
+//! response, with no ESAPI in between. This adapter therefore marshals the same key lifecycle the
+//! reference performs — `CreatePrimary` → `Create` → `Load` → `EvictControl`, then `ReadPublic` /
+//! `Hash` + `Sign` — directly to the wire and submits each through TBS.
 //!
 //! # P-256, composed
 //!
 //! Shipping TPMs expose **ECDSA over NIST P-256**, so — exactly like Secure Enclave and StrongBox
-//! (slice `S-F2`) and the [`tpm`](super::tpm) reference — the classical half is P-256, and this
-//! signer plugs into [`P256HybridSigningKey`](super::p256::P256HybridSigningKey) unchanged:
-//! [`enroll`](HardwareSigner::enroll) returns the bare `x‖y` public point (64 bytes — the form
-//! [`super::p256::parse_p256_public`] normalizes), and [`sign_classical`] returns a **DER-encoded**
+//! (slice `S-F2`) and the `tpm` reference — the classical half is P-256, and this signer plugs
+//! into [`P256HybridSigningKey`](super::p256::P256HybridSigningKey) unchanged:
+//! [`enroll`](super::HardwareSigner::enroll) returns the bare `x‖y` public point (64 bytes — the
+//! form `p256::parse_p256_public` normalizes), and [`sign_classical`] returns a **DER-encoded**
 //! ECDSA signature (the composition's contract; the TPM emits raw `r‖s`, which this adapter
 //! re-encodes). The ML-DSA-65 half stays software-sealed.
 //!
@@ -22,8 +23,8 @@
 //!
 //! The signing key is created with `fixedTPM | fixedParent | sensitiveDataOrigin`, so its private
 //! portion is generated inside the TPM and can never be duplicated out.
-//! [`assert_non_exportable`](HardwareSigner::assert_non_exportable) re-reads the public area and
-//! confirms `fixedTPM`/`fixedParent` — the TBS analogue of the reference's check.
+//! [`assert_non_exportable`](super::HardwareSigner::assert_non_exportable) re-reads the public
+//! area and confirms `fixedTPM`/`fixedParent` — the TBS analogue of the reference's check.
 //!
 //! # Testing
 //!
@@ -34,7 +35,8 @@
 //! Enclave availability gate.
 //!
 //! [`Tbsip_Submit_Command`]: https://learn.microsoft.com/windows/win32/api/tbs/nf-tbs-tbsip_submit_command
-//! [`sign_classical`]: HardwareSigner::sign_classical
+//! [`Tbsi_Is_Tpm_Present`]: https://learn.microsoft.com/windows/win32/api/tbs/nf-tbs-tbsi_is_tpm_present
+//! [`sign_classical`]: super::HardwareSigner::sign_classical
 
 #[cfg(windows)]
 pub use backend::TbsTpmSigner;

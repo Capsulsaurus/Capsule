@@ -40,8 +40,8 @@
 //! [Web Upload]: https://docs/design/web-upload/
 //!
 //! Errors cross the boundary as a **stable machine code string** (`Error.message`), never a
-//! localized sentence — the web viewer maps the code to an i18n catalog key. Codes: see
-//! [`err`].
+//! localized sentence — the web viewer maps the code to an i18n catalog key. The codes are
+//! defined in this crate's private `err` module.
 //!
 //! [Share Links]: https://docs/design/share-links/
 
@@ -360,4 +360,143 @@ pub fn drop_passphrase_proof(
     let proof = pwkdf::derive_wrap_key(passphrase.as_bytes(), &salt, params)
         .map_err(|_| JsError::new(err::SEAL_FAILED))?;
     Ok(hex::encode(proof))
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────────────
+//
+// Host-runnable only, and deliberately confined to the paths that return `Ok`. Every
+// `Err` arm here builds a `JsError`, which goes through wasm-bindgen's
+// `__wbindgen_error_new` extern; off `wasm32` that symbol is a panicking placeholder, so a
+// test that provoked an error would abort rather than assert. The error *codes* are still
+// covered, because `sharing_code`/`open_code` return `&'static str` and never touch
+// `JsValue`. The wasm-side behaviour of the `#[wasm_bindgen]` entry points is covered by
+// `capsule-web`'s bun KATs.
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::*;
+
+    /// The full variant set, written out so the exhaustive match below is meaningful.
+    fn every_sharing_error() -> [SharingError; 5] {
+        [
+            SharingError::ScopeUnavailable,
+            SharingError::NotFound,
+            SharingError::PassphraseRequired,
+            SharingError::WrongPassphrase,
+            SharingError::Crypto("kem"),
+        ]
+    }
+
+    #[test]
+    fn sharing_code_maps_each_variant() {
+        assert_eq!(
+            sharing_code(&SharingError::PassphraseRequired),
+            err::PASSPHRASE_REQUIRED
+        );
+        assert_eq!(
+            sharing_code(&SharingError::WrongPassphrase),
+            err::WRONG_SECRET
+        );
+        assert_eq!(
+            sharing_code(&SharingError::ScopeUnavailable),
+            err::SCOPE_UNAVAILABLE
+        );
+        assert_eq!(sharing_code(&SharingError::NotFound), err::MALFORMED);
+        assert_eq!(sharing_code(&SharingError::Crypto("kem")), err::MALFORMED);
+    }
+
+    /// The oracle property: on the open path a wrong passphrase and a wrong fragment secret
+    /// must be indistinguishable, so both collapse to `wrong_secret`. A viewer that could
+    /// tell them apart would report *which* half of the link was wrong.
+    #[test]
+    fn open_code_cannot_distinguish_a_wrong_passphrase_from_a_wrong_fragment() {
+        assert_eq!(
+            open_code(&SharingError::WrongPassphrase),
+            open_code(&SharingError::Crypto("decapsulate"))
+        );
+        assert_eq!(open_code(&SharingError::WrongPassphrase), err::WRONG_SECRET);
+        assert_eq!(
+            open_code(&SharingError::PassphraseRequired),
+            err::PASSPHRASE_REQUIRED
+        );
+        assert_eq!(open_code(&SharingError::ScopeUnavailable), err::MALFORMED);
+        assert_eq!(open_code(&SharingError::NotFound), err::MALFORMED);
+    }
+
+    /// Every code the boundary can emit. The viewer maps exactly this set to catalog keys, so
+    /// a code outside it reaches the UI as an unmapped string.
+    const DECLARED_CODES: [&str; 6] = [
+        err::MALFORMED,
+        err::PASSPHRASE_REQUIRED,
+        err::WRONG_SECRET,
+        err::SCOPE_UNAVAILABLE,
+        err::TAMPERED,
+        err::SEAL_FAILED,
+    ];
+
+    /// Two guards on adding a `SharingError` variant upstream. The match is exhaustive, so a
+    /// new variant fails the build here rather than reaching the viewer unmapped; and both
+    /// codes must be one of [`DECLARED_CODES`], so the arm you are forced to add cannot answer
+    /// with an ad-hoc literal the viewer has no catalog key for.
+    #[test]
+    fn every_sharing_error_variant_maps_to_a_declared_code() {
+        let all = every_sharing_error();
+        for e in &all {
+            match e {
+                SharingError::ScopeUnavailable
+                | SharingError::NotFound
+                | SharingError::PassphraseRequired
+                | SharingError::WrongPassphrase
+                | SharingError::Crypto(_) => {}
+            }
+            assert!(
+                DECLARED_CODES.contains(&sharing_code(e)),
+                "sharing_code({e:?}) = {:?} is not a declared boundary code",
+                sharing_code(e)
+            );
+            assert!(
+                DECLARED_CODES.contains(&open_code(e)),
+                "open_code({e:?}) = {:?} is not a declared boundary code",
+                open_code(e)
+            );
+        }
+
+        // `every_sharing_error` is hand-written, so guard it against silently listing the same
+        // variant twice and thereby covering one fewer than the array length claims. A set, not
+        // `Vec::dedup`: that collapses only *consecutive* duplicates, so `[A, B, A]` would slip
+        // through with its length unchanged.
+        let kinds: HashSet<_> = all.iter().map(std::mem::discriminant).collect();
+        assert_eq!(
+            kinds.len(),
+            all.len(),
+            "every_sharing_error repeats a variant"
+        );
+    }
+
+    #[test]
+    fn hex_array_decodes_a_canonical_32_byte_field() {
+        let bytes: [u8; LINK_SECRET_LEN] = std::array::from_fn(|i| i as u8);
+        let encoded = hex::encode(bytes);
+        assert_eq!(encoded.len(), 64);
+
+        // Surrounding whitespace is trimmed, as the browser hands the fragment over.
+        let decoded = hex_array::<LINK_SECRET_LEN>(&format!("  {encoded}\n"))
+            .expect("a canonical 64-char hex field decodes");
+        assert_eq!(decoded, bytes);
+    }
+
+    #[test]
+    fn decode_wrapped_round_trips_a_canonical_wrapped_scope() {
+        let wrapped = WrappedScope::LinkOnly {
+            blob: b"sealed-scope-material".to_vec(),
+        };
+        let cbor = capsule_core::cbor::to_canonical_vec(&wrapped).expect("canonical CBOR");
+        let b64 = BASE64.encode(&cbor);
+
+        let decoded = decode_wrapped(&b64).expect("the material the serve path returns decodes");
+        assert_eq!(decoded, wrapped);
+        assert!(!decoded.is_passphrase_protected());
+    }
 }

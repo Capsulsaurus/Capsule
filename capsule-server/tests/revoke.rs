@@ -10,7 +10,7 @@ mod support;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use capsule_core::crypto::keys::hybrid_sig::HybridSigningKey;
+use capsule_core::crypto::keys::HybridSigningKey;
 use capsule_core::crypto::revoke::revoke_all_signing_bytes;
 use jiff::SignedDuration;
 use kynos::http::StatusCode;

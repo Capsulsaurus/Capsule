@@ -142,7 +142,7 @@ fn gcj02_to_bd09(lat: f64, lon: f64) -> (f64, f64) {
 /// Fold a BD-09 input coordinate to GCJ-02 at the input edge, returning the `(lat, lon)`
 /// to store under [`GpsDatum::Gcj02`].
 ///
-/// Only [`gcj02_to_bd09`] — the *forward* direction — is closed-form, so this is the
+/// Only `gcj02_to_bd09` — the *forward* direction — is closed-form, so this is the
 /// **error-bounded iterative inverse** of it: seed with the offset-removed coordinate, then
 /// repeatedly push the estimate forward, measure the residual against the input, and
 /// correct by it. The forward map is the identity plus a small perturbation, so the

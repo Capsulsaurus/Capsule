@@ -65,7 +65,7 @@ impl std::fmt::Debug for HardwareDekBinding {
 /// across restarts]).
 ///
 /// The sweep reads the sidecars **without re-verifying their signatures**, for the same reason
-/// [`rebuild_index`](crate::library::rebuild::rebuild_index) does not: these are the device's own
+/// [`rebuild_index`](crate::library::rebuild_index) does not: these are the device's own
 /// local plaintext files, and the value recovered is only ever a *floor* on the next counter.
 /// An unreadable or foreign-schema sidecar is warned about and skipped rather than failing the
 /// open — but note that skipping can only lower the floor, so the warning is load-bearing for
@@ -477,7 +477,7 @@ impl Workspace {
     /// stack placement, which lives nowhere else.
     ///
     /// The filesystem, not the SQLite index, is the source of truth here for the same
-    /// recovery-first reason [`rebuild_index`](crate::library::rebuild::rebuild_index) exists: an
+    /// recovery-first reason [`rebuild_index`](crate::library::rebuild_index) exists: an
     /// index can be rebuilt from the signed artifacts, but an artifact the index has forgotten is
     /// gone. A missing or undecodable piece for one asset is a `warn` and a skip — never a failed
     /// open, which would take the whole library down for one bad file.

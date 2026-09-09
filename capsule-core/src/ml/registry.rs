@@ -19,7 +19,7 @@
 //! rows* (the v1-committed slots, enriched with the function and fallback the contract names) and
 //! the version-bump **swap primitive** ([`Registry::bump_version`]); the background per-asset
 //! **regeneration orchestration** that consumes the resulting staleness lives in
-//! [`crate::ml::regen`], and the provenance gate the [vector index](crate::db::vector) calls is
+//! [`crate::ml::regen`], and the provenance gate the [vector index](crate::db::EmbeddingInsert) calls is
 //! [`Registry::check_insert`].
 //!
 //! [AI/ML — Models and Algorithms]: https://docs/design/ai/#models-and-algorithms

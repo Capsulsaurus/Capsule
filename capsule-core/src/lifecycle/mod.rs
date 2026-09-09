@@ -21,7 +21,7 @@
 //! ([`rotate_epoch`](Workspace::rotate_epoch)); the MLS membership ceremony (`Welcome`,
 //! add/remove) remains deferred (see `SLICES.md`).
 //!
-//! [`verify_asset`]: crate::crypto::verify_asset
+//! [`verify_asset`]: fn@crate::crypto::verify_asset
 //! [`ReferenceAuthority`]: crate::crypto::authority::ReferenceAuthority
 
 mod album;
@@ -203,7 +203,7 @@ pub struct AssetState {
 /// [`Workspace::set_stack_membership`] write. It survives here for the one case the register
 /// cannot serve — an asset imported **before** `S-B15`, whose placement was written only to the
 /// index and therefore exists nowhere else (see [`Workspace::open`] step (6) and
-/// [`library::rebuild`](crate::library::rebuild)).
+/// [`library::rebuild_index`](crate::library::rebuild_index)).
 #[derive(Debug, Clone)]
 pub struct StackPlacement {
     /// The shared stack id (the `asset_stacks` row id the members belong to).
@@ -224,8 +224,8 @@ impl StackPlacement {
     }
 }
 
-/// Out-of-band metadata a third-party [source adapter](crate::import::importers) folded for one
-/// media file, in the shape the signed sidecar stores it (slice `S-B10`).
+/// Out-of-band metadata a third-party [source adapter](crate::import::SourceAdapter) folded for
+/// one media file, in the shape the signed sidecar stores it (slice `S-B10`).
 ///
 /// The [precedence rule] is resolved in two places, and this type is what keeps the two halves
 /// apart:
@@ -242,7 +242,7 @@ impl StackPlacement {
 ///
 /// Every field left empty writes nothing, so an import carrying no exporter record produces a
 /// sidecar byte-identical to a plain filesystem import's. The provider-specific mapping that
-/// fills this in lives in [`import::enrichment`](crate::import::enrichment).
+/// fills this in lives in [`import::sidecar_enrichment`](crate::import::sidecar_enrichment).
 ///
 /// [precedence rule]: https://docs/design/import/pipeline/#third-party-importers
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -278,9 +278,9 @@ pub struct SignedImportOptions {
     /// row. `None` imports a standalone asset and leaves the register wire-absent.
     pub stack: Option<StackMembership>,
     /// Folded third-party exporter metadata for this file (`S-B10`), attached by the
-    /// [executor](crate::import::executor::execute_with_source_metadata) when the import came
-    /// from a [source adapter](crate::import::importers). `None` — a plain filesystem import —
-    /// leaves every enriched field exactly as it was before the slice.
+    /// [executor](crate::import::execute_with_source_metadata) when the import came
+    /// from a [source adapter](crate::import::SourceAdapter). `None` — a plain filesystem
+    /// import — leaves every enriched field exactly as it was before the slice.
     pub enrichment: Option<SidecarEnrichment>,
 }
 
@@ -296,18 +296,16 @@ pub struct SignedImportOptions {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DerivativeStatus {
     /// The still decoded: dimensions and LQIP came from real pixels, and signed derivatives
-    /// were generated if a [`StillEncoder`](crate::media::image::derivative::StillEncoder) is
-    /// attached to the workspace.
+    /// were generated if a still encoder is attached to the workspace.
     Decoded,
-    /// **Expected deferral.** This build links no codec for the asset's format — see
-    /// [`SUPPORTED_IMAGE_FORMATS`](crate::media::image::types::SUPPORTED_IMAGE_FORMATS). The
-    /// original is safely backed up; dimensions fall back to EXIF and there is no LQIP or
-    /// preview until the codec lands, at which point derivatives can be backfilled from the
-    /// stored original. Counted by
-    /// [`ImportExecutionSummary::deferred_derivative_count`](crate::import::progress::ImportExecutionSummary::deferred_derivative_count).
+    /// **Expected deferral.** This build links no codec for the asset's format — the
+    /// supported-image-format table lives in the retired media stack. The original is safely
+    /// backed up; dimensions fall back to EXIF and there is no LQIP or preview until the codec
+    /// lands, at which point derivatives can be backfilled from the stored original. Counted by
+    /// [`ImportExecutionSummary::deferred_derivative_count`](crate::import::ImportExecutionSummary::deferred_derivative_count).
     ///
-    /// A build compiled without the `media` feature has no codecs at all, so every asset it
-    /// imports reports this.
+    /// This build links no codecs at all — the media stack is retired to `legacy-review/`
+    /// (`S-B1`) — so every still it imports reports this.
     DeferredNoCodec,
     /// **A real problem.** The format *is* one this build can decode, but these particular
     /// bytes did not decode — truncation, corruption, or a decoder bug. The original is still
@@ -315,9 +313,8 @@ pub enum DerivativeStatus {
     /// investigating rather than shrugging at.
     DecodeFailed,
     /// Nothing to decode: the extension names no still image this build models — a video, an
-    /// XMP sidecar, an unknown suffix, or an exotic RAW flavour
-    /// [`RawImageFormat`](crate::media::image::types::RawImageFormat) has no variant for. Video
-    /// derivatives are generated on their own path.
+    /// XMP sidecar, an unknown suffix, or an exotic RAW flavour the raw-image-format table has
+    /// no variant for. Video derivatives are generated on their own path.
     NotAKnownStill,
 }
 
@@ -344,11 +341,12 @@ pub struct SignedImport {
     pub derivatives: DerivativeStatus,
 }
 
-/// A streamed import: everything the [streaming window](crate::import::streaming) needs about one
-/// just-imported asset to drive its upload → verify → release step, without exposing workspace
-/// internals. Produced by [`Workspace::import_asset_streaming`], which commits on the signed path
-/// with source release **deferred** to the server-side verify-before-destroy gate (`S-D4`), since
-/// in streaming mode the local bytes are the only copy until the *server* durably holds them.
+/// A streamed import: everything the [streaming window](crate::import::execute_streaming) needs
+/// about one just-imported asset to drive its upload → verify → release step, without exposing
+/// workspace internals. Produced by [`Workspace::import_asset_streaming`], which commits on the
+/// signed path with source release **deferred** to the server-side verify-before-destroy gate
+/// (`S-D4`), since in streaming mode the local bytes are the only copy until the *server* durably
+/// holds them.
 #[derive(Debug, Clone)]
 pub struct StreamedImport {
     /// The imported asset's id.
@@ -383,7 +381,8 @@ pub struct Workspace {
     albums: HashMap<Uuid, AlbumKeys>,
     /// Per-album write authority behind the [`AlbumAuthority`](crate::crypto::authority::AlbumAuthority)
     /// seam (`&Authority` coerces to `&dyn AlbumAuthority` at every `verify_asset` call site). The
-    /// offline [`ReferenceAuthority`] is the shipped default; the enum lets the live
+    /// offline [`ReferenceAuthority`](crate::crypto::authority::ReferenceAuthority) is the shipped
+    /// default; the enum lets the live
     /// [`OpenMlsAuthority`](crate::crypto::authority::OpenMlsAuthority) drop in without the
     /// lifecycle naming a concrete backend. **Persisted** alongside the album keys in
     /// [`AlbumStore`](crate::crypto::keys::AlbumStore) and restored on open (`S-A10`) — without
@@ -481,7 +480,7 @@ impl Workspace {
     }
 
     /// This device's stable id — the `created_by_device` every manifest this workspace
-    /// authors carries, and the [`DeviceEntry`](crate::crypto::keys::directory::DeviceEntry)
+    /// authors carries, and the [`DeviceEntry`](crate::crypto::keys::DeviceEntry)
     /// key under which its signing key is published in the device directory.
     pub fn device_id(&self) -> Uuid {
         self.account.device.device_id

@@ -7,7 +7,7 @@
 //! this one accessor so there is exactly one copy of that crypto).
 //!
 //! **This is a post-import pass, not an implementation of
-//! [`AssetUploader`](crate::import::streaming::AssetUploader).** That trait cannot be
+//! [`AssetUploader`](crate::import::AssetUploader).** That trait cannot be
 //! implemented: `stream_candidate` holds `&mut Workspace` across the `uploader.upload(...)`
 //! call, so an implementor can never borrow the workspace back to read the bytes it is
 //! supposed to send. Do not try again — push reads a *committed* asset out of an

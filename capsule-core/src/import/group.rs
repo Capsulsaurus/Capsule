@@ -21,16 +21,16 @@ pub const VIDEO_EXTS: &[&str] = &["mp4", "mov", "m4v", "avi", "mkv", "mts", "m2t
 
 const XMP_EXT: &str = "xmp";
 
-pub fn is_raw(ext: &str) -> bool {
+pub(crate) fn is_raw(ext: &str) -> bool {
     RAW_EXTS.contains(&ext.to_lowercase().as_str())
 }
-pub fn is_primary(ext: &str) -> bool {
+pub(crate) fn is_primary(ext: &str) -> bool {
     PRIMARY_EXTS.contains(&ext.to_lowercase().as_str())
 }
-pub fn is_video(ext: &str) -> bool {
+pub(crate) fn is_video(ext: &str) -> bool {
     VIDEO_EXTS.contains(&ext.to_lowercase().as_str())
 }
-pub fn is_xmp(ext: &str) -> bool {
+pub(crate) fn is_xmp(ext: &str) -> bool {
     ext.to_lowercase() == XMP_EXT
 }
 

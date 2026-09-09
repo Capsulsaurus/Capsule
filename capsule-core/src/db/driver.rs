@@ -11,7 +11,7 @@ use crate::domain::model_identity::TaskKind;
 pub struct DatabaseDriver {
     pub(in crate::db) conn: Connection,
     /// Tasks whose `vec0` partition table this driver has already created. The DDL is idempotent,
-    /// so this is purely a hot-path memo — see [`crate::db::vector::VectorTableSpec`] for why the
+    /// so this is purely a hot-path memo — see [`crate::db::VectorTableSpec`] for why the
     /// tables are created by their writer rather than at open time.
     pub(in crate::db) vector_tables: RefCell<BTreeSet<TaskKind>>,
 }
@@ -40,8 +40,8 @@ impl DatabaseDriver {
         }
     }
 
-    /// Bring the catalog to [`crate::db::schema::SCHEMA_VERSION`], creating it if the database is empty
-    /// and otherwise migrating it forward (see [`crate::db::migrate`]).
+    /// Bring the catalog to the crate's `SCHEMA_VERSION`, creating it if the database is empty
+    /// and otherwise migrating it forward (see the crate-private `db::migrate`).
     ///
     /// The migrator's typed [`MigrationError`] is flattened into `rusqlite::Error` here because
     /// this signature is consumed by `capsule-core-ffi` and `library::open`; callers that want
@@ -55,7 +55,7 @@ impl DatabaseDriver {
         Ok(())
     }
 
-    /// Bring the catalog to [`crate::db::schema::SCHEMA_VERSION`], reporting exactly what ran.
+    /// Bring the catalog to the crate's `SCHEMA_VERSION`, reporting exactly what ran.
     ///
     /// Refuses (without writing anything) a catalog stamped newer than this build supports —
     /// see [`MigrationError::CatalogTooNew`].

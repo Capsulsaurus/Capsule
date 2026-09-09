@@ -19,7 +19,7 @@ pub struct Bundle {
 impl Bundle {
     /// Build a bundle for `locale`, using the source locale as the fallback.
     ///
-    /// `locale` should already be a supported tag (see [`crate::negotiate`]); an
+    /// `locale` should already be a supported tag (see [`negotiate`](fn@crate::negotiate)); an
     /// unknown locale yields a bundle backed solely by the source catalog.
     #[must_use]
     pub fn for_locale(locale: &str) -> Self {

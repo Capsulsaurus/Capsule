@@ -10,7 +10,7 @@
 
 use std::collections::HashSet;
 
-use capsule_core::import::upload::UploadPolicy;
+use capsule_core::import::UploadPolicy;
 use capsule_core::lifecycle::{LifecycleError, Workspace};
 use capsule_sdk::albums::{AlbumClient, AlbumTransport};
 use capsule_sdk::auth::{AuthClient, AuthError, LoginOutcome, Session};

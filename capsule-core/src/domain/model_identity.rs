@@ -55,7 +55,7 @@ impl TaskKind {
 
 /// A model identifier (stable across versions; e.g. `mobileclip-b`). Declared in exactly one
 /// [`ModelRow`](crate::ml::ModelRow). Serializes transparently as its string so it interoperates
-/// with the `model_id` fields on [`AiTag`](crate::sidecar::sidecar_v1::AiTag) and
+/// with the `model_id` fields on [`AiTag`](crate::sidecar::AiTag) and
 /// [`DerivativeCore`](crate::crypto::provenance::manifest::DerivativeCore).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -127,7 +127,7 @@ pub enum DistanceMetric {
 }
 
 /// Refusals from the embedding-provenance invariant — produced by the
-/// [gate](crate::db::vector::EmbeddingProvenance) the vector index calls on every insert, and
+/// [gate](crate::db::EmbeddingProvenance) the vector index calls on every insert, and
 /// carried outward by [`VectorIndexError`](crate::db::VectorIndexError).
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum RegistryError {

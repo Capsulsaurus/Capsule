@@ -2,7 +2,7 @@
 //! (SSoT: [Threat Model — Server-Side Validation Invariants]). The server holds no keys,
 //! so it cannot verify signatures — but it validates *structure* refuse-by-default. These
 //! are pure predicates over the manifest core and server-known state; the client mirrors
-//! them via [`verify_asset`](crate::crypto::verify_asset).
+//! them via [`verify_asset`](fn@crate::crypto::verify_asset).
 //!
 //! [Threat Model — Server-Side Validation Invariants]: https://docs/design/threat-model/validation/#server-side-validation-invariants
 
@@ -69,7 +69,7 @@ pub fn prior_hash_matches(
 }
 
 /// Invariant 18: `amk_version` never regresses for an album (server's structural backstop;
-/// MLS is the authority on the ceiling — see [`verify_asset`](crate::crypto::verify_asset)).
+/// MLS is the authority on the ceiling — see [`verify_asset`](fn@crate::crypto::verify_asset)).
 pub fn amk_version_monotonic(new: u32, stored: Option<u32>) -> bool {
     match stored {
         None => true,

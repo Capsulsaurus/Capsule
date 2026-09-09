@@ -94,8 +94,9 @@ fn directory(
     added_at: &str,
     revoked_at: Option<&str>,
 ) -> Vec<u8> {
-    use capsule_core::crypto::keys::hybrid_sig::HybridSigningKey;
-    use capsule_core::crypto::keys::{DeviceDirectory, DeviceEntry, DirectoryCore};
+    use capsule_core::crypto::keys::{
+        DeviceDirectory, DeviceEntry, DirectoryCore, HybridSigningKey,
+    };
 
     let signing = HybridSigningKey::generate();
     let entry = DeviceEntry {
