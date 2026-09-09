@@ -221,6 +221,9 @@ pub mod error_codes {
     /// `error.escrow.unavailable`
     pub const ESCROW_UNAVAILABLE: &str = "error.escrow.unavailable";
 
+    /// `error.federation.album_not_found`
+    pub const FEDERATION_ALBUM_NOT_FOUND: &str = "error.federation.album_not_found";
+
     /// `error.federation.audience_mismatch`
     pub const FEDERATION_AUDIENCE_MISMATCH: &str = "error.federation.audience_mismatch";
 
@@ -229,6 +232,9 @@ pub mod error_codes {
 
     /// `error.federation.capability_invalid`
     pub const FEDERATION_CAPABILITY_INVALID: &str = "error.federation.capability_invalid";
+
+    /// `error.federation.capability_malformed`
+    pub const FEDERATION_CAPABILITY_MALFORMED: &str = "error.federation.capability_malformed";
 
     /// `error.federation.capability_revoked`
     pub const FEDERATION_CAPABILITY_REVOKED: &str = "error.federation.capability_revoked";

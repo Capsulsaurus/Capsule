@@ -286,7 +286,13 @@ pub async fn get_blob(
             Reader::Account(crate::store::OwnerId::new(credential.user.as_str()))
         }
         Principal::Peer(capability) => {
-            federation::admit(&federation, &counters, &capability).await?;
+            federation::admit(
+                &federation,
+                &counters,
+                &capability,
+                federation::Presentation::Read,
+            )
+            .await?;
             Reader::Peer(capability)
         }
     };

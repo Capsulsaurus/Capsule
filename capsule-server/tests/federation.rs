@@ -12,6 +12,7 @@
 
 mod support;
 
+use capsule_core::crypto::keys::HybridSigningKey;
 use capsule_server::blob::{BlobStore, ContentAddress};
 use capsule_server::counter::{CounterKey, CounterStore as _, budgets};
 use capsule_server::federation::{
@@ -32,6 +33,9 @@ const PEER: &str = "other.test";
 
 /// Bob, the member the owner shares with, as the owner lists him on the roster.
 const BOB: &str = "01937b7c-0000-7000-8000-0000000000b0";
+
+/// A second member, for the cases that need a roster to change without Bob leaving it.
+const OTHER_MEMBER: &str = "01937b7c-0000-7000-8000-0000000000c0";
 
 /// Put `bytes` in the blob store at their own address and return it.
 async fn store_blob(fixture: &Fixture, bytes: &[u8]) -> ContentAddress {
@@ -801,4 +805,408 @@ async fn a_blocked_peer_and_a_spent_budget_refuse_the_blob_route_too() {
     spent.assert_status(StatusCode::TOO_MANY_REQUESTS);
     let spent: Value = spent.json();
     assert_eq!(spent["code"], "error.federation.rate_budget_exceeded");
+}
+
+// ===========================================================================================
+// The lifecycle: minting, revoking and refreshing the grant (S-E2)
+// ===========================================================================================
+
+/// A fixture whose seeded account is anchored on `dsk` and whose album is provisioned, so the
+/// roster route — and therefore the revocation write behind it — can run for real.
+async fn anchored(dsk: &HybridSigningKey) -> (Fixture, String) {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    fixture
+        .client
+        .post("/v1/auth/devices/directory")
+        .header("authorization", &bearer)
+        .header("x-capsule-identity-key", &support::identity_header(dsk))
+        .body(
+            "application/cbor",
+            support::signed_directory_with_device(
+                dsk,
+                1,
+                support::device(),
+                dsk,
+                "1970-01-01T00:00:00Z",
+            ),
+        )
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    provision(&fixture, &bearer).await;
+    (fixture, bearer)
+}
+
+/// PUT the seeded album's roster through the route, as the owner's client does.
+async fn publish_roster(
+    fixture: &Fixture,
+    bearer: &str,
+    dsk: &HybridSigningKey,
+    version: u64,
+    members: &[(&str, MemberRole)],
+) -> kynos::test::TestResponse {
+    fixture
+        .client
+        .put(&format!("/v1/albums/{}/roster", album()))
+        .header("authorization", bearer)
+        .header("accept", "application/json")
+        .json(&serde_json::json!({
+            "roster_cbor": support::signed_roster(
+                dsk,
+                support::device(),
+                &album(),
+                version,
+                u32::try_from(version).expect("a small epoch"),
+                members,
+            ),
+        }))
+        .send()
+        .await
+}
+
+/// Mint a capability through the route, as the owner's client does.
+async fn mint(fixture: &Fixture, bearer: &str, body: Value) -> kynos::test::TestResponse {
+    fixture
+        .client
+        .post(&format!("/v1/albums/{}/capabilities", album()))
+        .header("authorization", bearer)
+        .header("accept", "application/json")
+        .json(&body)
+        .send()
+        .await
+}
+
+/// The mint body for `PEER` over Bob's membership.
+fn mint_body(scope: &str) -> Value {
+    serde_json::json!({ "peer": PEER, "member": BOB, "scope": scope })
+}
+
+/// DELETE one capability of `on`, as `bearer`.
+async fn revoke(
+    fixture: &Fixture,
+    bearer: &str,
+    on: &AlbumId,
+    jti: &str,
+) -> kynos::test::TestResponse {
+    fixture
+        .client
+        .delete(&format!("/v1/albums/{on}/capabilities/{jti}"))
+        .header("authorization", bearer)
+        .send()
+        .await
+}
+
+/// POST the refresh, presenting `credential`.
+async fn refresh(fixture: &Fixture, credential: &str) -> kynos::test::TestResponse {
+    fixture
+        .client
+        .post("/v1/federation/capabilities/refresh")
+        .header("authorization", credential)
+        .header("accept", "application/json")
+        .send()
+        .await
+}
+
+/// The `jti`s the published revocation list carries.
+async fn published(fixture: &Fixture) -> Vec<String> {
+    let list: Value = fixture
+        .client
+        .get("/.well-known/capsule/revoked-jti")
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    list["revoked"]
+        .as_array()
+        .expect("an array")
+        .iter()
+        .map(|token| token["jti"].as_str().expect("a jti").to_owned())
+        .collect()
+}
+
+/// E2E case 4 (server half), whole: the owner mints, the peer pulls, the roster cuts the grant.
+#[tokio::test]
+async fn e2e_case_4_the_owner_mints_the_peer_pulls_and_a_roster_change_cuts_the_grant() {
+    let dsk = support::identity_key();
+    let (fixture, bearer) = anchored(&dsk).await;
+    publish_roster(&fixture, &bearer, &dsk, 1, &[(BOB, MemberRole::Reader)])
+        .await
+        .assert_status(StatusCode::OK);
+    let seq = publish_into(&fixture, "case-4", &album()).await;
+
+    // The owner's client mints, over the album's own protocol pin.
+    let minted: Value = mint(&fixture, &bearer, mint_body("read"))
+        .await
+        .assert_status(StatusCode::CREATED)
+        .json();
+    assert_eq!(minted["album_id"], album().as_str());
+    assert_eq!(minted["peer"], PEER);
+    assert_eq!(minted["member"], BOB);
+    assert_eq!(minted["scope"], "read");
+    assert_eq!(minted["min_protocol_version"], PROTOCOL_VERSION);
+    let jti = minted["jti"].as_str().expect("a jti").to_owned();
+    let capability = format!("Bearer {}", minted["token"].as_str().expect("a token"));
+
+    // The peer pulls the page with it.
+    let body: Value = page(&fixture, &capability, &album_query())
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    assert_eq!(
+        body["entries"]
+            .as_array()
+            .expect("an array")
+            .iter()
+            .map(|entry| entry["sync_seq"].as_u64().expect("a position"))
+            .collect::<Vec<_>>(),
+        vec![seq]
+    );
+    assert!(!published(&fixture).await.contains(&jti));
+
+    // The owner publishes a roster that omits Bob. The grant is cut and published, without the
+    // owner having named it.
+    publish_roster(&fixture, &bearer, &dsk, 2, &[])
+        .await
+        .assert_status(StatusCode::OK);
+    assert!(
+        published(&fixture).await.contains(&jti),
+        "the roster change published the grant's jti"
+    );
+    let refused = page(&fixture, &capability, &album_query()).await;
+    refused.assert_status(StatusCode::FORBIDDEN);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.federation.capability_revoked");
+}
+
+#[tokio::test]
+async fn a_roster_change_that_keeps_the_member_cuts_nothing() {
+    // An epoch bump is not a removal: the member still holds their keys and the server has
+    // nothing to cut. Only the *member* leaving revokes.
+    let dsk = support::identity_key();
+    let (fixture, bearer) = anchored(&dsk).await;
+    publish_roster(&fixture, &bearer, &dsk, 1, &[(BOB, MemberRole::Reader)])
+        .await
+        .assert_status(StatusCode::OK);
+    let minted: Value = mint(&fixture, &bearer, mint_body("read"))
+        .await
+        .assert_status(StatusCode::CREATED)
+        .json();
+    let jti = minted["jti"].as_str().expect("a jti").to_owned();
+    let capability = format!("Bearer {}", minted["token"].as_str().expect("a token"));
+
+    publish_roster(
+        &fixture,
+        &bearer,
+        &dsk,
+        2,
+        &[
+            (BOB, MemberRole::Writer),
+            (OTHER_MEMBER, MemberRole::Reader),
+        ],
+    )
+    .await
+    .assert_status(StatusCode::OK);
+    assert!(!published(&fixture).await.contains(&jti));
+    page(&fixture, &capability, &album_query())
+        .await
+        .assert_status(StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_mint_is_refused_for_another_account_a_blocked_peer_and_a_member_off_the_roster() {
+    let dsk = support::identity_key();
+    let (fixture, bearer) = anchored(&dsk).await;
+    publish_roster(&fixture, &bearer, &dsk, 1, &[(BOB, MemberRole::Reader)])
+        .await
+        .assert_status(StatusCode::OK);
+
+    // Not the caller's album is not found — the album ceremonies' answer, so a member holding
+    // somebody else's album id learns nothing.
+    let bob = fixture.other_bearer(BOB).await;
+    let refused = mint(&fixture, &bob, mint_body("read")).await;
+    refused.assert_status(StatusCode::NOT_FOUND);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.federation.album_not_found");
+
+    // A member the roster does not carry.
+    let refused = mint(
+        &fixture,
+        &bearer,
+        serde_json::json!({ "peer": PEER, "member": OTHER_MEMBER, "scope": "read" }),
+    )
+    .await;
+    refused.assert_status(StatusCode::CONFLICT);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.federation.member_not_on_roster");
+
+    // A blocked peer gets no new grant, and gets one again when the block lifts.
+    fixture
+        .peers
+        .block(&PeerId::new(PEER), fixture.clock.now(), None)
+        .await
+        .expect("blocks");
+    let refused = mint(&fixture, &bearer, mint_body("read")).await;
+    refused.assert_status(StatusCode::FORBIDDEN);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.moderation.server_blocked");
+    fixture
+        .peers
+        .unblock(&PeerId::new(PEER))
+        .await
+        .expect("unblocks");
+    mint(&fixture, &bearer, mint_body("read"))
+        .await
+        .assert_status(StatusCode::CREATED);
+
+    // And an empty peer origin is a client bug, not an unknown server.
+    let refused = mint(
+        &fixture,
+        &bearer,
+        serde_json::json!({ "peer": "   ", "member": BOB, "scope": "read" }),
+    )
+    .await;
+    refused.assert_status(StatusCode::BAD_REQUEST);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.federation.capability_malformed");
+}
+
+#[tokio::test]
+async fn an_owner_revokes_one_grant_idempotently_and_cannot_reach_another_albums() {
+    let dsk = support::identity_key();
+    let (fixture, bearer) = anchored(&dsk).await;
+    publish_roster(&fixture, &bearer, &dsk, 1, &[(BOB, MemberRole::Reader)])
+        .await
+        .assert_status(StatusCode::OK);
+    let minted: Value = mint(&fixture, &bearer, mint_body("read"))
+        .await
+        .assert_status(StatusCode::CREATED)
+        .json();
+    let jti = minted["jti"].as_str().expect("a jti").to_owned();
+    let capability = format!("Bearer {}", minted["token"].as_str().expect("a token"));
+
+    // Another album cannot revoke this album's grant, even though both are the owner's: the
+    // record's own album is checked, so a `jti` is not a handle on somebody else's grant. The
+    // second album is not provisioned, so the answer is the same not-found either way.
+    revoke(&fixture, &bearer, &second_album(), &jti)
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    assert!(!published(&fixture).await.contains(&jti));
+
+    revoke(&fixture, &bearer, &album(), &jti)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert!(published(&fixture).await.contains(&jti));
+    // Idempotent, and silent about a jti it never held: not a probe over identifiers.
+    revoke(&fixture, &bearer, &album(), &jti)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    revoke(
+        &fixture,
+        &bearer,
+        &album(),
+        "01937b7c-0000-7000-8000-0000000000ff",
+    )
+    .await
+    .assert_status(StatusCode::NO_CONTENT);
+
+    let refused = page(&fixture, &capability, &album_query()).await;
+    refused.assert_status(StatusCode::FORBIDDEN);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.federation.capability_revoked");
+}
+
+#[tokio::test]
+async fn a_refresh_issues_a_successor_cuts_the_predecessor_and_replays_to_the_same_token() {
+    let dsk = support::identity_key();
+    let (fixture, bearer) = anchored(&dsk).await;
+    publish_roster(&fixture, &bearer, &dsk, 1, &[(BOB, MemberRole::Reader)])
+        .await
+        .assert_status(StatusCode::OK);
+    publish_into(&fixture, "refresh-1", &album()).await;
+    let minted: Value = mint(&fixture, &bearer, mint_body("read-derivative-only"))
+        .await
+        .assert_status(StatusCode::CREATED)
+        .json();
+    let old_jti = minted["jti"].as_str().expect("a jti").to_owned();
+    let old = format!("Bearer {}", minted["token"].as_str().expect("a token"));
+
+    // An account has nothing to refresh here.
+    let refused = refresh(&fixture, &bearer).await;
+    refused.assert_status(StatusCode::FORBIDDEN);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.federation.capability_invalid");
+
+    let first: Value = refresh(&fixture, &old)
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    assert_eq!(first["replayed"], false);
+    let successor = format!("Bearer {}", first["token"].as_str().expect("a token"));
+    assert_ne!(first["jti"], old_jti.as_str());
+
+    // The predecessor is cut and published; the successor pulls, and carries the same scope.
+    assert!(published(&fixture).await.contains(&old_jti));
+    page(&fixture, &old, &album_query())
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    page(&fixture, &successor, &album_query())
+        .await
+        .assert_status(StatusCode::OK);
+
+    // A replay of the same predecessor answers the same successor, byte for byte: the grant is
+    // re-signed from its record, and every instant is at whole seconds.
+    let replay: Value = refresh(&fixture, &old)
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    assert_eq!(replay["replayed"], true);
+    assert_eq!(replay["token"], first["token"]);
+    assert_eq!(replay["jti"], first["jti"]);
+
+    // And a replay whose successor has since been revoked is refused rather than re-issued.
+    fixture
+        .revocations
+        .revoke_issued(first["jti"].as_str().expect("a jti"), fixture.clock.now())
+        .await
+        .expect("revokes");
+    let refused = refresh(&fixture, &old).await;
+    refused.assert_status(StatusCode::FORBIDDEN);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.federation.capability_revoked");
+}
+
+#[tokio::test]
+async fn a_deployment_that_does_not_federate_mints_nothing_but_still_revokes() {
+    // Turning federation off must never be the thing that takes away an operator's ability to
+    // cut a grant that is already out there.
+    let fixture = Fixture::without_federation();
+    let bearer = fixture.bearer().await;
+    provision(&fixture, &bearer).await;
+    roster(&fixture, 1, &[(BOB, MemberRole::Reader)]).await;
+
+    let refused = mint(&fixture, &bearer, mint_body("read")).await;
+    refused.assert_status(StatusCode::FORBIDDEN);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.federation.not_configured");
+
+    // A grant minted while it federated still verifies — a token is not un-minted by a
+    // configuration change — and can still be revoked and refused.
+    let (capability, jti) = capability(&fixture, PEER, Scope::Read, 1).await;
+    publish_into(&fixture, "unfederated-1", &album()).await;
+    page(&fixture, &capability, &album_query())
+        .await
+        .assert_status(StatusCode::OK);
+    // But it cannot be continued.
+    refresh(&fixture, &capability)
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    revoke(&fixture, &bearer, &album(), &jti)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let refused = page(&fixture, &capability, &album_query()).await;
+    refused.assert_status(StatusCode::FORBIDDEN);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.federation.capability_revoked");
 }

@@ -200,11 +200,27 @@ pub enum Refusal {
     Unavailable,
 }
 
-/// Decide whether `capability` may be served at all, and charge the peer's budget if so.
+/// What a capability is being presented for.
 ///
-/// The three questions every federated read asks before it looks at what is being read:
+/// Only the liveness rule differs, and it differs for one reason: a predecessor that was revoked
+/// **because it was refreshed** is exactly what a replayed refresh looks like, and refusing it
+/// would make the idempotency the contract promises unreachable. Every other revocation refuses
+/// both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Presentation {
+    /// A read: a sync page or a blob fetch. The grant must be live.
+    Read,
+    /// A refresh, presenting the predecessor. A predecessor already linked to a successor is
+    /// admitted so the replay can be answered with that successor — whose own liveness the
+    /// route then asks about, because a block cascades over it too.
+    Refresh,
+}
+
+/// Decide whether `capability` may be presented at all, and charge the peer's budget if so.
+///
+/// The three questions every federated request asks before it looks at what is being asked for:
 /// is the grant still live, is the peer still welcome, and is the peer within budget. Asked
-/// here once so the sync and blob routes cannot ask them in different orders.
+/// here once so the sync, blob and refresh routes cannot ask them in different orders.
 ///
 /// # Errors
 ///
@@ -213,9 +229,17 @@ pub async fn admit(
     federation: &FederationContext,
     counters: &CounterContext,
     capability: &VerifiedCapability,
+    presentation: Presentation,
 ) -> Result<(), Refusal> {
     let peer = &capability.record.peer_id;
-    if !capability.record.is_live(federation.clock().now()) {
+    let live = match presentation {
+        Presentation::Read => capability.record.is_live(federation.clock().now()),
+        Presentation::Refresh => {
+            capability.record.refreshed_to.is_some()
+                || capability.record.is_live(federation.clock().now())
+        }
+    };
+    if !live {
         tracing::info!(
             %peer,
             jti = %capability.record.jti,
@@ -252,6 +276,60 @@ pub async fn admit(
             Err(Refusal::RateLimited { retry_after })
         }
     }
+}
+
+/// Revoke every live capability over `album` whose member is not on the roster `listed` names.
+///
+/// The one automatic revocation write (`S-E5`). A roster is the album owner's statement of who
+/// may read it; a capability minted for a member the owner has just removed is a grant the
+/// owner has withdrawn, and the peer holding it learns so from
+/// `/.well-known/capsule/revoked-jti` rather than from a refusal it cannot explain.
+///
+/// **An epoch bump alone revokes nothing.** A member still on the roster still holds their keys
+/// and the server has nothing to cut; the grant's own epoch binding, re-checked at every
+/// presentation, is what handles a member who *left and came back*.
+///
+/// **A takedown revokes nothing either.** A moderation hold is a per-asset serving constraint
+/// answering `410`, not a statement about who may read the album (design/moderation.md).
+///
+/// # Errors
+///
+/// Returns the store error. The caller — the roster route — logs it and still answers the
+/// roster's own success: the roster is the fact, and a capability whose member has gone is
+/// refused at its next presentation anyway, because membership is re-checked there. The gap is
+/// bounded by the token's TTL and closes at the next revocation write.
+pub async fn on_roster_applied(
+    federation: &FederationContext,
+    album: &crate::store::AlbumId,
+    listed: &[crate::store::UserId],
+) -> Result<usize, crate::store::StoreError> {
+    let now = federation.clock().now();
+    let live = federation
+        .capabilities()
+        .live(&CapabilityFilter::Album(album.clone()), now)
+        .await?;
+    let mut revoked = 0;
+    for record in live {
+        if listed.contains(&record.member) {
+            continue;
+        }
+        federation
+            .capabilities()
+            .revoke_issued(&record.jti, now)
+            .await?;
+        revoked += 1;
+        tracing::info!(
+            %album,
+            peer = %record.peer_id,
+            member = %record.member,
+            jti = %record.jti,
+            "a roster change revoked a federation capability"
+        );
+    }
+    if revoked > 0 {
+        tracing::info!(%album, revoked, "a roster change cut federated grants");
+    }
+    Ok(revoked)
 }
 
 #[cfg(test)]
@@ -373,6 +451,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_predecessor_revoked_by_its_own_refresh_is_admitted_only_to_be_refreshed() {
+        // What makes a replayed refresh answerable: the predecessor is revoked the moment its
+        // successor is issued, and a rule that refused every revoked grant would make the
+        // idempotency the contract promises unreachable. A read is still refused.
+        let clock = Arc::new(ManualClock::default());
+        let mut capability = verified(&clock);
+        capability.record.revoked_at = Some(clock.now());
+        capability.record.refreshed_to = Some("01937b7c-0000-7000-8000-0000000000bb".to_owned());
+        let federation = context(Arc::new(InMemoryPeers::new()), clock.clone());
+        let counters = CounterContext::new(Arc::new(InMemoryCounters::new()), clock);
+        assert_eq!(
+            admit(&federation, &counters, &capability, Presentation::Refresh).await,
+            Ok(())
+        );
+        assert_eq!(
+            admit(&federation, &counters, &capability, Presentation::Read).await,
+            Err(Refusal::Revoked)
+        );
+
+        // A grant revoked without a successor is refused on both.
+        capability.record.refreshed_to = None;
+        assert_eq!(
+            admit(&federation, &counters, &capability, Presentation::Refresh).await,
+            Err(Refusal::Revoked)
+        );
+    }
+
+    #[tokio::test]
     async fn a_store_that_cannot_answer_an_admission_is_an_outage_never_an_admission() {
         // The fail-closed rule at the seam every federated read passes through: a peer store
         // or a counter that cannot be reached decides nothing, and "nothing" is a refusal.
@@ -382,19 +488,22 @@ mod tests {
         let federation = context(Arc::new(DownPeers), clock.clone());
         let counters = CounterContext::new(Arc::new(InMemoryCounters::new()), clock.clone());
         assert_eq!(
-            admit(&federation, &counters, &capability).await,
+            admit(&federation, &counters, &capability, Presentation::Read).await,
             Err(Refusal::Unavailable)
         );
 
         let federation = context(Arc::new(InMemoryPeers::new()), clock.clone());
         let counters = CounterContext::new(Arc::new(DownCounters), clock.clone());
         assert_eq!(
-            admit(&federation, &counters, &capability).await,
+            admit(&federation, &counters, &capability, Presentation::Read).await,
             Err(Refusal::Unavailable)
         );
 
         let counters = CounterContext::new(Arc::new(InMemoryCounters::new()), clock);
-        assert_eq!(admit(&federation, &counters, &capability).await, Ok(()));
+        assert_eq!(
+            admit(&federation, &counters, &capability, Presentation::Read).await,
+            Ok(())
+        );
     }
 
     #[tokio::test]
@@ -406,7 +515,7 @@ mod tests {
         let store = Arc::new(InMemoryCounters::new());
         let counters = CounterContext::new(store.clone(), clock.clone());
         assert_eq!(
-            admit(&federation, &counters, &capability).await,
+            admit(&federation, &counters, &capability, Presentation::Read).await,
             Err(Refusal::Revoked)
         );
         assert_eq!(

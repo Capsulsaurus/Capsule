@@ -2128,6 +2128,7 @@ impl AlbumStore for SwitchableAlbums {
 pub(crate) struct SwitchableRevocations {
     inner: InMemoryCapabilities,
     unavailable: AtomicBool,
+    writes_unavailable: AtomicBool,
 }
 
 impl SwitchableRevocations {
@@ -2136,12 +2137,23 @@ impl SwitchableRevocations {
         Self {
             inner: InMemoryCapabilities::new(clock),
             unavailable: AtomicBool::new(false),
+            writes_unavailable: AtomicBool::new(false),
         }
     }
 
     /// Make every subsequent operation fail, or stop.
     pub(crate) fn set_unavailable(&self, unavailable: bool) {
         self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    /// Make every subsequent *write* fail while reads keep answering, or stop.
+    ///
+    /// The one seam a route-level `500` can be reached through: a store that cannot be **read**
+    /// refuses the credential in the authenticator, which can render only `401`, so a whole
+    /// outage never reaches a handler. A store that answers `find` and refuses `refresh` is the
+    /// partial failure the coded `500` exists for.
+    pub(crate) fn set_writes_unavailable(&self, unavailable: bool) {
+        self.writes_unavailable.store(unavailable, Ordering::SeqCst);
     }
 
     fn refuse<T>() -> Result<T, StoreError> {
@@ -2154,11 +2166,15 @@ impl SwitchableRevocations {
     fn is_down(&self) -> bool {
         self.unavailable.load(Ordering::SeqCst)
     }
+
+    fn writes_down(&self) -> bool {
+        self.is_down() || self.writes_unavailable.load(Ordering::SeqCst)
+    }
 }
 
 impl RevocationList for SwitchableRevocations {
     fn revoke(&self, token: RevokedToken) -> RevokeFuture<'_> {
-        if self.is_down() {
+        if self.writes_down() {
             return Box::pin(async { Self::refuse().map_err(Into::into) });
         }
         self.inner.revoke(token)
@@ -2174,7 +2190,7 @@ impl RevocationList for SwitchableRevocations {
 
 impl CapabilityStore for SwitchableRevocations {
     fn issue(&self, record: CapabilityRecord) -> StoreFuture<'_, ()> {
-        if self.is_down() {
+        if self.writes_down() {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.issue(record)
@@ -2199,7 +2215,7 @@ impl CapabilityStore for SwitchableRevocations {
     }
 
     fn revoke_issued<'a>(&'a self, jti: &'a str, at: Timestamp) -> StoreFuture<'a, RevokeOutcome> {
-        if self.is_down() {
+        if self.writes_down() {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.revoke_issued(jti, at)
@@ -2211,7 +2227,7 @@ impl CapabilityStore for SwitchableRevocations {
         successor: CapabilityRecord,
         at: Timestamp,
     ) -> StoreFuture<'a, RefreshOutcome> {
-        if self.is_down() {
+        if self.writes_down() {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.refresh(predecessor, successor, at)
@@ -2606,6 +2622,19 @@ impl Fixture {
 
     /// The same server, with a deployment's quota thresholds.
     pub(crate) fn with_quota(quota_limits: QuotaLimits) -> Self {
+        Self::build(quota_limits, Some(FEDERATION_URL.to_owned()))
+    }
+
+    /// The same server on a deployment that does **not** federate: `FEDERATION_URL` unset.
+    ///
+    /// Its own constructor rather than a switch on the built fixture, because the setting is
+    /// read once at boot and a server that changed its mind at runtime would be testing a
+    /// deployment nobody runs.
+    pub(crate) fn without_federation() -> Self {
+        Self::build(QuotaLimits::unlimited(), None)
+    }
+
+    fn build(quota_limits: QuotaLimits, federation_url: Option<String>) -> Self {
         let clock = Arc::new(ManualClock::default());
         let sessions = Arc::new(SwitchableSessions::new(clock.clone()));
         let accounts = Arc::new(InMemoryAccounts::new());
@@ -2715,14 +2744,13 @@ impl Fixture {
             ),
             discovery: DiscoveryContext::new(Arc::new(server_info(&tokens)), revocations.clone()),
             escrow: EscrowContext::new(escrows.clone(), clock.clone()),
-            // Configured, so the lifecycle writes are reachable; the cases about a deployment
-            // that does not federate build their own context.
+            // Configured unless the case asked otherwise ([`Fixture::without_federation`]).
             federation: FederationContext::new(FederationCollaborators {
                 codec: codec.clone(),
                 capabilities: revocations.clone(),
                 peers: peers.clone(),
                 clock: clock.clone(),
-                federation_url: Some(FEDERATION_URL.to_owned()),
+                federation_url,
             }),
             enrollment: EnrollmentContext::new(
                 enrollments.clone(),

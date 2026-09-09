@@ -202,6 +202,14 @@ pub fn router() -> ServerRouter {
                     routes::drop::revoke_link,
                     routes::drop::adopt_drop,
                     routes::drop::discard_drop,
+                ])
+                // Federation's lifecycle: minting, revoking and refreshing the capability a
+                // peer pulls with. The pull itself is `sync_feed` and `get_blob` in the read
+                // group below — federation adds no new data protocol (design/federation.md).
+                .mount(kynos::routes![
+                    routes::federation::issue_capability,
+                    routes::federation::revoke_capability,
+                    routes::federation::refresh_capability,
                 ]),
         )
         // The reads: every gated `GET` and `HEAD`. Held to the handshake's grammar, admitted at

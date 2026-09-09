@@ -1880,9 +1880,11 @@
     <string name="error_escrow_malformed">The recovery backup could not be saved.</string>
     <string name="error_escrow_not_stored">No recovery backup is saved for this account.</string>
     <string name="error_escrow_unavailable">Capsule couldn\'t reach the recovery backup. Please try again.</string>
+    <string name="error_federation_album_not_found">That album couldn\'t be found.</string>
     <string name="error_federation_audience_mismatch">This access grant is for a different album.</string>
     <string name="error_federation_capability_expired">This shared album\'s access has expired.</string>
     <string name="error_federation_capability_invalid">This shared album\'s access could not be verified.</string>
+    <string name="error_federation_capability_malformed">That sharing request isn\'t valid.</string>
     <string name="error_federation_capability_revoked">Access to this shared album has been revoked.</string>
     <string name="error_federation_circuit_open">This source is temporarily backed off after repeated errors.</string>
     <string name="error_federation_member_not_on_roster">That person isn\'t on this album\'s member list.</string>

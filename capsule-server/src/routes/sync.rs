@@ -347,7 +347,13 @@ pub async fn sync_feed(
             )
         }
         Principal::Peer(capability) => {
-            federation::admit(&federation, &counters, &capability).await?;
+            federation::admit(
+                &federation,
+                &counters,
+                &capability,
+                federation::Presentation::Read,
+            )
+            .await?;
             let album = match requested {
                 Some(album) if album == capability.record.album_id => album,
                 _ => {

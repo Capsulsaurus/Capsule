@@ -26,6 +26,9 @@ use serde_json::json;
 use support::{EMAIL, Fixture, PASSWORD, PROTOCOL_VERSION, checksum, create_request, payload};
 
 /// A `Content-Length` no operation will accept.
+/// The roster member every federated grant in the walk is minted for.
+const FEDERATED_MEMBER: &str = "01937b7c-0000-7000-8000-0000000000b0";
+
 fn oversized() -> u64 {
     capsule_server::limits::MAX_REQUEST_BODY_BYTES + 1
 }
@@ -161,6 +164,9 @@ async fn every_declared_response_is_exercised() {
         ("GET", "/v1/albums/anything/upgrade"),
         ("DELETE", "/v1/albums/anything/upgrade"),
         ("PUT", "/v1/albums/anything/roster"),
+        ("POST", "/v1/albums/anything/capabilities"),
+        ("DELETE", "/v1/albums/anything/capabilities/anything"),
+        ("POST", "/v1/federation/capabilities/refresh"),
         ("GET", "/v1/quota"),
         ("GET", "/v1/upload/sessions"),
         ("GET", "/v1/assets/anything/receipts"),
@@ -1116,6 +1122,239 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::GONE);
+
+    // ── The federation capability lifecycle (`S-E2`) ───────────────────────────────────────
+    // A member on the album's roster to mint for, applied through the store: the roster route
+    // and its verification are `tests/roster.rs`'s, and this walk is about which statuses exist.
+    {
+        use capsule_server::membership::{MemberRole, MembershipStore as _, RosterRecord};
+        fixture
+            .members
+            .apply_roster(
+                RosterRecord {
+                    album_id: support::album(),
+                    roster_version: 3,
+                    amk_epoch: 3,
+                    attested_by_device: support::device(),
+                    received_at: jiff::Timestamp::UNIX_EPOCH,
+                    document: b"walk-v3".to_vec(),
+                },
+                vec![(
+                    capsule_server::store::UserId::new(FEDERATED_MEMBER),
+                    MemberRole::Reader,
+                )],
+            )
+            .await
+            .expect("the store applies");
+    }
+    // The album itself, bound to the caller: the walk's fixture seeds the *index* with the
+    // album's assets but provisions no album row, and a capability is minted over an album the
+    // caller owns.
+    client
+        .post("/v1/albums")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .json(&json!({ "album_id": support::album().as_str() }))
+        .send()
+        .await
+        .assert_status(StatusCode::CREATED);
+    let caps = format!("/v1/albums/{}/capabilities", support::album());
+    let mint = |body: serde_json::Value| {
+        client
+            .post(&caps)
+            .header("authorization", &bearer)
+            .header("x-capsule-protocol", PROTOCOL_VERSION)
+            .json(&body)
+    };
+    let request = json!({
+        "peer": "other.test",
+        "member": FEDERATED_MEMBER,
+        "scope": "read",
+    });
+
+    // 401 and 403 are the scheme's, as everywhere.
+    client
+        .post(&caps)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .json(&request)
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .post(&caps)
+        .header(
+            "authorization",
+            &format!("Bearer {}", rotated.refresh_token),
+        )
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .json(&request)
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    // 415 and 422 are the `Json` extractor's; 400 is the surface's own floor.
+    client
+        .post(&caps)
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .body("text/plain", "{}")
+        .send()
+        .await
+        .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    mint(json!({ "peer": "other.test", "member": FEDERATED_MEMBER, "scope": "everything" }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+    mint(json!({ "peer": "  ", "member": FEDERATED_MEMBER, "scope": "read" }))
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    // 404: an album that is not the caller's, answered as not-found.
+    client
+        .post("/v1/albums/018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5eff/capabilities")
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .json(&request)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+
+    // 409: a member the roster does not carry.
+    mint(json!({
+        "peer": "other.test",
+        "member": "01937b7c-0000-7000-8000-0000000000cc",
+        "scope": "read",
+    }))
+    .send()
+    .await
+    .assert_status(StatusCode::CONFLICT);
+
+    // 500: the album store could not answer, which must never look like "not your album".
+    fixture.albums.set_unavailable(true);
+    mint(request.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.albums.set_unavailable(false);
+
+    // 201: the grant itself.
+    let minted: serde_json::Value = mint(request.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::CREATED)
+        .json();
+    let capability = format!(
+        "Bearer {}",
+        minted["token"].as_str().expect("a minted token")
+    );
+
+    // ── POST /v1/federation/capabilities/refresh ───────────────────────────────────────────
+    let refresh = |credential: &str| {
+        client
+            .post("/v1/federation/capabilities/refresh")
+            .header("authorization", credential)
+            .header("x-capsule-protocol", PROTOCOL_VERSION)
+    };
+    refresh(&bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    client
+        .post("/v1/federation/capabilities/refresh")
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    // 500: the store answers `find` — so the credential is admitted — and refuses the write.
+    // A store that could not be read at all would be refused in the authenticator, which can
+    // render only a `401`, so this is the one seam the coded `500` is reachable through.
+    fixture.revocations.set_writes_unavailable(true);
+    refresh(&capability)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.revocations.set_writes_unavailable(false);
+
+    let refreshed: serde_json::Value = refresh(&capability)
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    let successor = format!(
+        "Bearer {}",
+        refreshed["token"].as_str().expect("a successor token")
+    );
+    let successor_jti = refreshed["jti"].as_str().expect("a jti").to_owned();
+
+    // 429: the peer over its events budget.
+    for _ in 0..capsule_server::counter::budgets::PEER_REQUESTS.limit {
+        fixture
+            .counters
+            .hit(
+                &capsule_server::counter::CounterKey::PeerRequests("other.test".to_owned()),
+                capsule_server::counter::budgets::PEER_REQUESTS,
+                fixture.clock.now(),
+            )
+            .await
+            .expect("the counter answers");
+    }
+    refresh(&successor)
+        .send()
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS);
+    fixture
+        .counters
+        .reset(&capsule_server::counter::CounterKey::PeerRequests(
+            "other.test".to_owned(),
+        ))
+        .await
+        .expect("the counter answers");
+
+    // ── DELETE /v1/albums/{album_id}/capabilities/{jti} ────────────────────────────────────
+    let revoke = format!("{caps}/{successor_jti}");
+    client
+        .delete(&revoke)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .delete(&revoke)
+        .header(
+            "authorization",
+            &format!("Bearer {}", rotated.refresh_token),
+        )
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    client
+        .delete(&format!(
+            "/v1/albums/018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5eff/capabilities/{successor_jti}"
+        ))
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    fixture.albums.set_unavailable(true);
+    client
+        .delete(&revoke)
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.albums.set_unavailable(false);
+    client
+        .delete(&revoke)
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
 
     // ── POST /v1/storage/verify ────────────────────────────────────────────────────────────
     // 401 and 403 are the scheme's; 415 and 422 are the `Json` extractor's, declared on every

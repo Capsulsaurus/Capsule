@@ -39809,6 +39809,16 @@
         }
       }
     },
+    "error.federation.album_not_found": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That album couldn't be found."
+          }
+        }
+      }
+    },
     "error.federation.audience_mismatch": {
       "localizations": {
         "ar": {
@@ -40051,6 +40061,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "無法驗證此共享相簿的存取權限。"
+          }
+        }
+      }
+    },
+    "error.federation.capability_malformed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That sharing request isn't valid."
           }
         }
       }
