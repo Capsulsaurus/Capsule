@@ -772,6 +772,7 @@ mod tests {
             BTreeMap, BootError, Config, Demands, Overrides, assemble, durable_environment,
         };
         use crate::auth::{Credentials, PostgresAccounts};
+        use crate::federation::postgres::{PostgresCapabilities, PostgresPeers};
         use crate::index::postgres::PostgresAssetIndex;
         use crate::membership::PostgresMembership;
         use crate::postgres::testing;
@@ -839,7 +840,7 @@ mod tests {
             );
         }
 
-        /// The five Postgres adapters compose out of exactly what the boot path has.
+        /// The seven Postgres adapters compose out of exactly what the boot path has.
         ///
         /// Asserted here rather than by constructing them in `assemble` and throwing them away:
         /// production code that builds something it cannot use is theatre, and what #403 needs
@@ -872,7 +873,12 @@ mod tests {
             let quotas: Arc<dyn crate::quota::QuotaStore> =
                 Arc::new(PostgresQuota::new(connection.clone()));
             let members: Arc<dyn crate::membership::MembershipStore> =
-                Arc::new(PostgresMembership::new(connection));
+                Arc::new(PostgresMembership::new(connection.clone()));
+            let capabilities: Arc<dyn crate::federation::CapabilityStore> = Arc::new(
+                PostgresCapabilities::new(connection.clone(), Arc::new(SystemClock)),
+            );
+            let peers: Arc<dyn crate::federation::PeerStore> =
+                Arc::new(PostgresPeers::new(connection));
 
             // Each one answers through its port, which is what makes this a boot check rather
             // than a compile check: the schema the migration applied is the schema the adapters
@@ -904,6 +910,20 @@ mod tests {
                     .await
                     .expect("the membership store answers"),
                 crate::membership::Membership::Never
+            );
+            assert!(
+                capabilities
+                    .find("boot-probe-jti")
+                    .await
+                    .expect("the capability store answers")
+                    .is_none()
+            );
+            assert!(
+                peers
+                    .read(&crate::federation::PeerId::new("boot-probe.test"))
+                    .await
+                    .expect("the peer store answers")
+                    .is_none()
             );
         }
     }

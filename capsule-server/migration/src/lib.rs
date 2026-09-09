@@ -1,9 +1,10 @@
 //! The server's PostgreSQL schema, one migration per ordinal.
 //!
-//! # What the five ordinals cover
+//! # What the six ordinals cover
 //!
 //! The four durable ports issue #402 lands adapters for — the asset index, the account
-//! cluster, the device-cohort map and the quota ledger — plus album membership (`S-C51`, #405).
+//! cluster, the device-cohort map and the quota ledger — plus album membership (`S-C51`, #405)
+//! and federation's capabilities, revocation list and peers (`S-E2`, #406).
 //! The remaining durable ports keep their
 //! in-memory adapters and gain ordinals with their adapters, so a migration never describes a
 //! table nothing reads.
@@ -25,6 +26,7 @@ mod m20260902_000002_accounts;
 mod m20260902_000003_cohorts;
 mod m20260902_000004_quota;
 mod m20260902_000005_album_membership;
+mod m20260902_000006_federation;
 
 /// The server's migrator.
 pub struct Migrator;
@@ -38,6 +40,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260902_000003_cohorts::Migration),
             Box::new(m20260902_000004_quota::Migration),
             Box::new(m20260902_000005_album_membership::Migration),
+            Box::new(m20260902_000006_federation::Migration),
         ]
     }
 }

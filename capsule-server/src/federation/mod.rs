@@ -38,6 +38,7 @@ pub mod capability;
 pub mod conformance;
 pub mod memory;
 pub mod peers;
+pub mod postgres;
 pub mod report;
 pub mod scheme;
 pub mod store;
