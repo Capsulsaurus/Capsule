@@ -18,6 +18,7 @@ pub mod auth;
 pub mod client;
 pub mod cohort;
 pub mod directory;
+pub mod federation;
 pub mod fetch;
 pub mod net;
 pub mod peering;
