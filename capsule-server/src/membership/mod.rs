@@ -21,6 +21,24 @@
 //! the former member is indistinguishable from a stranger, and the authorization-change signal
 //! design/import/download-sync.md requires is gone.
 //!
+//! # Removing a member reclaims nothing, and that is observable
+//!
+//! A writer member's upload is filed under the album **owner**'s namespace and charged to the
+//! **uploader** (`routes/upload.rs`: `owner_id` is the namespace, `upload_user_id` is billed).
+//! Removing that member from a later roster changes neither fact. The asset stays in the
+//! owner's album, and its bytes stay against the removed member's quota — they are still stored,
+//! so the ledger is not wrong, but the account they are charged to can no longer reach them:
+//! a removed member may not write ops to that album, so they cannot delete their way back under
+//! quota. The only thing that ever releases the attribution is the refcount collector
+//! (`gc/mod.rs`, `QuotaStore::release_attribution`, `S-C44`), which runs when the last reference
+//! to the bytes goes — i.e. only if the *owner* deletes the asset.
+//!
+//! This is recorded rather than repaired: reclaiming on removal is a protocol question (does the
+//! owner inherit the bytes, does the member keep paying for what the owner still holds, is
+//! removal a deletion at all?) that no design document in this tree answers, and inventing an
+//! answer inside a storage port is how a quota becomes a way to delete somebody else's photos.
+//! Tracked as issue #473.
+//!
 //! # One critical section
 //!
 //! [`MembershipStore::apply_roster`] compares versions and replaces the roster in **one**
