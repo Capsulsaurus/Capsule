@@ -551,3 +551,90 @@ fn every_budget_is_declared_in_one_place() {
     assert!(budgets::DROP_SOURCE.limit > budgets::DROP_LINK.limit);
     assert_eq!(budgets::DEEP_VERIFY.window.as_hours(), 1);
 }
+
+/// The classifier must say "capacity" for the ceiling and **only** for the ceiling.
+///
+/// [`is_at_capacity`] decides capacity-versus-outage by matching
+/// `StoreError::Rejected { store: COUNTER_STORE, .. }`. Today that is safe by construction:
+/// `InMemoryCounters::hit`'s only error path *is* the ceiling, so no route can misclassify. It
+/// stops being safe by construction the moment a second `CounterStore` exists — `COUNTER_STORE`
+/// is `pub`, and a Valkey adapter (#460) that refuses under that same store name for an
+/// unrelated reason would have a genuine outage rendered `429 error.*_at_capacity`. That tells a
+/// caller to retry a store that is down and tells an operator nothing is wrong, which is a worse
+/// failure than the `500`-for-everything this round replaced.
+///
+/// So the negative cases are pinned now, against the adapter that does not exist yet.
+#[test]
+fn only_the_counter_store_s_own_ceiling_reads_as_capacity() {
+    use crate::store::StoreError;
+
+    let ceiling = StoreError::Rejected {
+        store: COUNTER_STORE,
+        detail: "2 open windows is the ceiling for `share_link`".to_owned(),
+    };
+    assert!(is_at_capacity(&ceiling), "the ceiling is the capacity case");
+
+    for outage in [
+        // A store that could not answer at all — the `500` this must stay.
+        StoreError::Unavailable {
+            store: COUNTER_STORE,
+            detail: "the connection was refused".to_owned(),
+        },
+        // A refusal from some *other* store that happens to travel the same channel.
+        StoreError::Rejected {
+            store: "something-else",
+            detail: "a refusal that is not this port's ceiling".to_owned(),
+        },
+        StoreError::Unavailable {
+            store: "something-else",
+            detail: "an outage that is not this port's at all".to_owned(),
+        },
+    ] {
+        assert!(
+            !is_at_capacity(&outage),
+            "only the counter store's own ceiling is a capacity refusal: {outage:?}"
+        );
+    }
+}
+
+/// And the method the routes actually call agrees with the predicate, including the deadline.
+#[tokio::test]
+async fn capacity_refusal_offers_a_deadline_for_the_ceiling_and_none_for_an_outage() {
+    use std::sync::Arc;
+
+    use crate::store::StoreError;
+    use crate::store::memory::ManualClock;
+
+    let clock = Arc::new(ManualClock::new(at(0)));
+    let counters = CounterContext::new(Arc::new(InMemoryCounters::new()), clock.clone());
+
+    // The ceiling: a deadline one window out, on the same clock the windows themselves use.
+    let ceiling = StoreError::Rejected {
+        store: COUNTER_STORE,
+        detail: "full".to_owned(),
+    };
+    assert_eq!(
+        counters.capacity_refusal(&ceiling, budget()),
+        Some(at(10)),
+        "one window from now, which is the bound on when a live window lapses"
+    );
+
+    // Everything else: no deadline, so the route renders its `500` rather than a `429` telling
+    // a caller to retry a store that is down.
+    for outage in [
+        StoreError::Unavailable {
+            store: COUNTER_STORE,
+            detail: "the connection was refused".to_owned(),
+        },
+        StoreError::Rejected {
+            store: "something-else",
+            detail: "not this port's ceiling".to_owned(),
+        },
+    ] {
+        assert_eq!(
+            counters.capacity_refusal(&outage, budget()),
+            None,
+            "{outage:?}"
+        );
+    }
+}
