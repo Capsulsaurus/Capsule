@@ -17,8 +17,9 @@
 //!
 //! The [`Backends::Durable`] arm now does its **Postgres half** (#402): it demands
 //! `DATABASE_URL`, opens the pool, refuses to continue against a database whose schema is not
-//! the one this binary was built for, and builds the four durable adapters — the asset index,
-//! the account store, the device-cohort map and the quota ledger. Then it still refuses, because
+//! the one this binary was built for, and builds the durable adapters — the asset index, the
+//! account store, the device-cohort map, the quota ledger and the membership store. Then it
+//! still refuses, because
 //! the Valkey half does not exist: `AuthStateStore`, `UploadSessionStore`, the three ceremony
 //! stores and the rate-limit counters are #403's, and five other durable ports are #446's.
 //!
@@ -72,6 +73,7 @@ use crate::escrow::{EscrowContext, InMemoryEscrow};
 use crate::gc::CollectionContext;
 use crate::gc::memory::InMemoryCollection;
 use crate::index::memory::InMemoryAssetIndex;
+use crate::membership::{InMemoryMembership, MembershipContext};
 use crate::moderation::{InMemoryModeration, ModerationContext};
 use crate::quota::{InMemoryQuota, QuotaContext, QuotaLimits};
 use crate::scrub::ScrubContext;
@@ -241,7 +243,7 @@ pub async fn assemble(config: &Config) -> Result<Assembled, BootError> {
             // the arm still refuses, because the ports it cannot fill are the ones a server
             // loses state without. See the module docs.
             //
-            // The connection is dropped rather than handed on. Constructing the four adapters
+            // The connection is dropped rather than handed on. Constructing the adapters
             // and throwing them away would be theatre in production code; that they *do*
             // compose out of exactly what this function has is asserted in
             // `tests::postgres_conformance` instead, which is where an assertion belongs.
@@ -443,6 +445,7 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
     ));
 
     let albums = Arc::new(InMemoryAlbums::new());
+    let members = Arc::new(InMemoryMembership::new());
     let directories = Arc::new(InMemoryDeviceDirectory::new());
     // The production write authority (`S-C19`/`S-C20`), not a permissive double: it reads the
     // album's own pin and the account's published device directory, so invariants 6 and 7 mean
@@ -450,6 +453,7 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
     let authority = Arc::new(ProvisionedAuthority::new(
         albums.clone(),
         directories.clone(),
+        members.clone(),
         clock.clone(),
     ));
     let receipts = Arc::new(InMemoryReceipts::new());
@@ -500,23 +504,31 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
             index.clone(),
             authority.clone(),
             clock.clone(),
-            UploadPolicy::default(),
+            // The window the operator configured, not the crate default: this policy is what
+            // the handshake enforces and what every response advertises (`negotiation`), and the
+            // discovery record above publishes the same two values. One window, three readers.
+            UploadPolicy::default()
+                .with_protocol_window(config.protocol_min.clone(), config.protocol_max.clone())
+                .with_min_client_build(config.min_client_build.clone()),
         ),
         sync: SyncContext::new(
             index.clone(),
             blobs.clone(),
             Arc::new(CursorCodec::new(&cursor_key)),
+            albums.clone(),
+            members.clone(),
         ),
         serve: ServeContext::new(
             index.clone(),
             blobs.clone(),
             marks.clone(),
             uploads.clone(),
-            crate::serve::owned_assets(),
+            crate::serve::membership_reads(members.clone()),
         ),
         verify: VerifyContext::new(index.clone(), blobs.clone(), marks.clone(), clock.clone()),
         directories: DeviceDirectoryContext::new(directories.clone(), clock.clone()),
         albums: AlbumContext::new(albums.clone(), clock.clone()),
+        membership: MembershipContext::new(members, clock.clone()),
         // Unlimited, which is what a self-hosted deployment runs. A configurable ceiling is a
         // quota policy this slice does not own; `QuotaLimits` already takes one.
         quota: QuotaContext::new(quotas.clone(), clock.clone(), QuotaLimits::unlimited()),
@@ -605,6 +617,10 @@ mod tests {
     async fn register(client: &kynos::test::TestClient<App>, password: &str) {
         client
             .post("/v1/auth/register")
+            .header(
+                "x-capsule-protocol",
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            )
             .header("accept", "application/json")
             .json(&serde_json::json!({ "email": "somebody@example.test", "password": password }))
             .send()
@@ -619,6 +635,10 @@ mod tests {
     ) -> kynos::http::StatusCode {
         client
             .post("/v1/auth/login")
+            .header(
+                "x-capsule-protocol",
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            )
             .header("accept", "application/json")
             .json(&serde_json::json!({ "email": "somebody@example.test", "password": password }))
             .send()
@@ -727,6 +747,7 @@ mod tests {
         };
         use crate::auth::{Credentials, PostgresAccounts};
         use crate::index::postgres::PostgresAssetIndex;
+        use crate::membership::PostgresMembership;
         use crate::postgres::testing;
         use crate::quota::PostgresQuota;
         use crate::store::{PostgresCohorts, SystemClock};
@@ -792,7 +813,7 @@ mod tests {
             );
         }
 
-        /// The four Postgres adapters compose out of exactly what the boot path has.
+        /// The five Postgres adapters compose out of exactly what the boot path has.
         ///
         /// Asserted here rather than by constructing them in `assemble` and throwing them away:
         /// production code that builds something it cannot use is theatre, and what #403 needs
@@ -823,7 +844,9 @@ mod tests {
             let cohorts: Arc<dyn crate::store::CohortStore> =
                 Arc::new(PostgresCohorts::new(connection.clone()));
             let quotas: Arc<dyn crate::quota::QuotaStore> =
-                Arc::new(PostgresQuota::new(connection));
+                Arc::new(PostgresQuota::new(connection.clone()));
+            let members: Arc<dyn crate::membership::MembershipStore> =
+                Arc::new(PostgresMembership::new(connection));
 
             // Each one answers through its port, which is what makes this a boot check rather
             // than a compile check: the schema the migration applied is the schema the adapters
@@ -847,6 +870,14 @@ mod tests {
             assert_eq!(
                 quotas.usage(&user).await.expect("the ledger answers").used,
                 0
+            );
+            let album = crate::store::AlbumId::new("boot-probe-album");
+            assert_eq!(
+                members
+                    .membership(&album, &user)
+                    .await
+                    .expect("the membership store answers"),
+                crate::membership::Membership::Never
             );
         }
     }
@@ -908,6 +939,62 @@ mod tests {
         assert_eq!(body["api_base_url"], config.api_base_url);
     }
 
+    /// The window the handshake enforces and advertises is the configured one (issue #404).
+    ///
+    /// Before this the upload policy was `UploadPolicy::default()` regardless of `PROTOCOL_MIN`
+    /// and `PROTOCOL_MAX`, so a deployment that narrowed its window published one range on
+    /// `/.well-known/capsule/server-info` and enforced another on `POST /v1/upload`.
+    #[tokio::test]
+    async fn the_enforced_and_advertised_window_is_the_configured_one() {
+        let root = tempfile::tempdir().expect("a scratch directory");
+        let config = memory_config(root.path());
+        let assembled = assemble(&config).await.expect("it assembles");
+        let client = kynos::test::TestClient::new(assembled.service().expect("the router builds"));
+
+        // Every response advertises the window, an exempt read included.
+        let response = client
+            .get("/v1/version")
+            .header("accept", "application/json")
+            .send()
+            .await;
+        response.assert_status(kynos::http::StatusCode::OK);
+        assert_eq!(
+            response.header("x-capsule-protocol-min"),
+            Some(config.protocol_min.as_str())
+        );
+        assert_eq!(
+            response.header("x-capsule-protocol-max"),
+            Some(config.protocol_max.as_str())
+        );
+        assert_eq!(
+            response.header("x-capsule-min-client-build"),
+            Some(config.min_client_build.as_str())
+        );
+
+        // And the gate holds a write to the same window: a version one day below the
+        // configured minimum is refused before authentication is even looked at. (A read would
+        // be admitted at any date — threat-model/validation.md — which is why this is a `DELETE`.)
+        let below = format!(
+            "{}",
+            config
+                .protocol_min
+                .parse::<jiff::civil::Date>()
+                .expect("the configured minimum is a date")
+                .yesterday()
+                .expect("there is a day before it")
+        );
+        let refused = client
+            .delete("/v1/upload/anything")
+            .header("x-capsule-protocol", &below)
+            .send()
+            .await;
+        refused.assert_status(kynos::http::StatusCode::UPGRADE_REQUIRED);
+        assert_eq!(
+            refused.header("x-capsule-protocol-min"),
+            Some(config.protocol_min.as_str())
+        );
+    }
+
     #[tokio::test]
     async fn an_account_can_be_registered_and_signed_in_to() {
         // The whole point of the amended deliverable boundary: `mise run serve-memory` is a
@@ -920,6 +1007,10 @@ mod tests {
 
         let registered: serde_json::Value = client
             .post("/v1/auth/register")
+            .header(
+                "x-capsule-protocol",
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            )
             .header("accept", "application/json")
             .json(&serde_json::json!({
                 "email": "somebody@example.test",
@@ -933,6 +1024,10 @@ mod tests {
 
         let signed_in: serde_json::Value = client
             .post("/v1/auth/login")
+            .header(
+                "x-capsule-protocol",
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            )
             .header("accept", "application/json")
             .json(&serde_json::json!({
                 "email": "somebody@example.test",
@@ -1023,6 +1118,10 @@ mod tests {
         let client = kynos::test::TestClient::new(assembled.service().expect("the router builds"));
         client
             .post("/v1/auth/register")
+            .header(
+                "x-capsule-protocol",
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            )
             .header("accept", "application/json")
             .json(&serde_json::json!({
                 "email": "somebody@example.test",
@@ -1033,6 +1132,10 @@ mod tests {
             .assert_status(kynos::http::StatusCode::OK);
         client
             .post("/v1/auth/login")
+            .header(
+                "x-capsule-protocol",
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            )
             .header("accept", "application/json")
             .json(&serde_json::json!({
                 "email": "somebody@example.test",

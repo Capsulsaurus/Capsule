@@ -36,7 +36,7 @@ pub mod cursor;
 
 use std::sync::Arc;
 
-pub use self::cursor::{CURSOR_KEY_LEN, CursorCodec, CursorError};
+pub use self::cursor::{CURSOR_KEY_LEN, CursorCodec, CursorError, CursorScope};
 use crate::blob::BlobStore;
 use crate::index::AssetIndex;
 
@@ -67,6 +67,8 @@ pub struct SyncContext {
     index: Arc<dyn AssetIndex>,
     blobs: Arc<dyn BlobStore>,
     cursors: Arc<CursorCodec>,
+    albums: Arc<dyn crate::album::AlbumStore>,
+    members: Arc<dyn crate::membership::MembershipStore>,
 }
 
 impl SyncContext {
@@ -75,12 +77,26 @@ impl SyncContext {
         index: Arc<dyn AssetIndex>,
         blobs: Arc<dyn BlobStore>,
         cursors: Arc<CursorCodec>,
+        albums: Arc<dyn crate::album::AlbumStore>,
+        members: Arc<dyn crate::membership::MembershipStore>,
     ) -> Self {
         Self {
             index,
             blobs,
             cursors,
+            albums,
+            members,
         }
+    }
+
+    /// The albums, for deciding whose album a member's page is (`S-C51`).
+    pub fn albums(&self) -> &dyn crate::album::AlbumStore {
+        self.albums.as_ref()
+    }
+
+    /// The roster, for deciding whether the caller may read an album's page (`S-C51`).
+    pub fn members(&self) -> &dyn crate::membership::MembershipStore {
+        self.members.as_ref()
     }
 
     /// The asset index (`S-C37`) — the only source of positions and entries.

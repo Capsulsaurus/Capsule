@@ -166,4 +166,22 @@ impl AssetIndex for CrashBeforeCommit {
     fn head_seq<'a>(&'a self, owner: &'a OwnerId) -> IndexFuture<'a, u64> {
         self.inner.head_seq(owner)
     }
+
+    fn album_feed_page<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        album: &'a AlbumId,
+        after: u64,
+        limit: usize,
+    ) -> IndexFuture<'a, Vec<FeedEntry>> {
+        self.inner.album_feed_page(owner, album, after, limit)
+    }
+
+    fn album_head_seq<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        album: &'a AlbumId,
+    ) -> IndexFuture<'a, u64> {
+        self.inner.album_head_seq(owner, album)
+    }
 }

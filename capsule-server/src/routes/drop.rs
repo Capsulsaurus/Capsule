@@ -1080,10 +1080,17 @@ async fn adopt_claimed(
     let album = crate::store::AlbumId::new(&request.album_id);
 
     // Invariant 6, unchanged: adoption is a write into an album and needs the same capability
-    // any other write does.
-    let crate::upload::AlbumWriteAccess::Writable { protocol_pin, .. } = upload
+    // any other write does. And it stays a write into the link owner's **own** album: a drop is
+    // deposited with one account, and promoting it into an album that account merely writes to
+    // would file a guest's bytes under a third party.
+    let crate::upload::AlbumWriteAccess::Writable {
+        owner_id: filed_under,
+        role,
+        protocol_pin,
+        ..
+    } = upload
         .authority()
-        .album_write_access(&owner_id, &album)
+        .album_write_access(owner, &album)
         .await
         .map_err(|error| {
             tracing::error!(%error, "the write authority could not answer for an adoption");
@@ -1094,6 +1101,12 @@ async fn adopt_claimed(
             "no write capability for that album",
         ));
     };
+    if role != crate::upload::WriteRole::Owner || filed_under != owner_id {
+        tracing::info!(%owner, %album, "an adoption was refused: the album is not the link owner's own");
+        return Err(AdoptRejection::refused(
+            "no write capability for that album",
+        ));
+    }
 
     // Invariant 7, unchanged.
     let device = crate::upload::envelope::created_by_device(&request.manifest_envelope)

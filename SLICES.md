@@ -252,7 +252,7 @@ row's remainder now lives.
 | S-C22 | Structured `duplicate_blob` ref + adopt in OpenAPI | server | S-C37 | S | RETIRED | done\* | server half; adopt endpoint → `S-C5`; undescribed extension → `S-C38` |
 | S-C23 | `revoke_all_sessions` with master-key proof | server | S-C42 | M | RETIRED | done | `S-C48` closed the access-token window it left open |
 | S-C24 | Album-upgrade server halves (quiescence/drain/lineage) | server | S-C42 | M-L | RETIRED | done\* | the ceremony's wire vocabulary was `mls`-gated and therefore unreachable; the projection deliberately gets no lineage |
-| S-C25 | Album provisioning + UUID album ids (unblocks push) | server | S-C29 | M | RETIRED | done\* | also lands the first real `WriteAuthority`; sharing widens it → `S-C4`/`S-C5` |
+| S-C25 | Album provisioning + UUID album ids (unblocks push) | server | S-C29 | M | RETIRED | done\* | also lands the first real `WriteAuthority`; sharing widened it in `S-C51`; the `AlbumStore` Postgres adapter is still owed |
 | S-C26 | Retire the plaintext album name/description columns | server | S-C25 | S | RETIRED | done | the Kynos schema never declared them; a document tripwire keeps it that way |
 | S-C27 | Wire-contract types on plain serde behind an adapter | server | — | M | RETIRED | part 1 done | DTO move → Kynos rebuild; status gaps → `S-C28` |
 | S-C28 | Publish the statuses the server actually returns | server | S-C27 | S | RETIRED | done\* | auth surface closed; folds into each remaining port |
@@ -266,7 +266,7 @@ row's remainder now lives.
 | S-C36 | Kynos's framework rejections carry no `error.*` code | server | S-C33 | M | RETIRED | done | a Capsule interceptor fills the member in; the upstream seam is still the better fix |
 | S-C37 | The asset index port, one sequence instead of two | server | S-C27, S-C29 | L | RETIRED | done | Postgres adapter landed under the row lock the design rests on; absorbs `S-C21`, unblocks `S-C22` |
 | S-C38 | Problem extensions are absent from the OpenAPI document | server | S-C34 | M | RETIRED | done\* | `code` is universal and derived; the sixteen other members ride a small table |
-| S-C39 | Blob fetch has no read authority, so its `403` is unwritable | server | S-C10 | M | RETIRED | part | the authority lands and owner-scopes the path; the `403` needs a membership fact → `S-C51` |
+| S-C39 | Blob fetch has no read authority, so its `403` is unwritable | server | S-C10 | M | RETIRED | done | the authority landed owner-scoped; the `403` landed with `S-C51`'s membership fact |
 | S-C40 | `awaiting-original` is not observable on the blob path | server | S-C10, S-C37 | M | RETIRED | done | the promise is the open upload session, so it needed no lifetime of its own |
 | S-C41 | The `deep` re-hash, with the limiter that makes it safe | server | S-C3, S-C32 | M | RETIRED | done\* | coalescing is deliberately absent, and the reason is in the note |
 | S-C42 | Nothing verifies the device directory's own signature | server | S-C9 | M | RETIRED | done | trust-on-first-publish anchor; unblocks `S-C23` |
@@ -278,7 +278,7 @@ row's remainder now lives.
 | S-C48 | The bearer scheme never reads the session ledger | server | S-C23, S-C29 | M | RETIRED | done\* | fails closed as `401`; the honest `503` needs the seam `S-C36` wants |
 | S-C49 | Moderation's federated halves have no federation to hang on | server | S-C8, S-C32 | M | RETIRED | blocked | found by `S-C8`; report intake and the blocklist both need the federation layer |
 | S-C50 | The share-link privacy strip is specified where it cannot run | docs | S-C4 | S | ACTIVE | done | both docs now name the issuing client, with containment as the server's half |
-| S-C51 | Server-side album membership, which two authorities are waiting on | server | S-C25, S-C39 | L | RETIRED | blocked | found by `S-C39`; the read `403` and the widening of album *write* access are one missing fact |
+| S-C51 | Server-side album membership, which two authorities are waiting on | server | S-C25, S-C39 | L | RETIRED | done | the owner-signed roster is the fact; `PUT /v1/albums/{album_id}/roster`, the write widening, the blob `403` and `GET /v1/sync?album_id=` land together; shared bytes across owners → #462 |
 | S-C52 | The server keeps one manifest per asset, not the chain it is documented to hold | server | S-C16, S-C43, S-C45 | M | RETIRED | done | retention decided *for*, and scrub check 4 lands with it |
 | S-C53 | Account creation has no surface on the rebuilt server | server | S-C13 | M | RETIRED | done | registration lands; the unported operations are decided one by one on `S-C54`–`S-C58` |
 | S-C54 | The profile surface, and a password change that is not a reset | server | S-C53 | M | RETIRED | done | three operations where Salvo had one; the address becomes immutable and `/validate` and password reset are deleted rather than owed |
@@ -2190,9 +2190,10 @@ working on a surface written after it.
 - **The name refusal is a `422`, not a silent drop.** The body is strict, so a `name` or
   `description` is refused — a client is told the server will not hold album titles rather than
   left to assume it did. `S-C26` retires the columns themselves.
-- **Owed:** sharing widens "writable" from *owner* to *member*, which is `S-C4`/`S-C5`; until
-  then an album is writable only by the account it was provisioned to, which is the safe
-  direction. The Postgres adapter is owed with the rest.
+- **Owed:** sharing widens "writable" from *owner* to *member* — landed with `S-C51`, not with
+  `S-C4`/`S-C5` (a share link is not a member): `album_write_access` is keyed on the caller and
+  answers a writer on the album's roster with the owner's namespace. The Postgres adapter for
+  `AlbumStore` is still owed with the rest.
 
 [`WriteAuthority`]: #s-c20--ground-invariant-7s-floor-in-the-device-directory
 
@@ -2686,8 +2687,13 @@ design/moderation.md states the per-surface rule as *"takedown of known content 
 re-reading a landed, tested contract on an inference is not this slice's to do. Recorded here for
 whoever owns that question.
 
-- **Done when:** the account unshared from an album receives `403` — **not met**, and blocked on
-  `S-C51`. ✅ what did land: `another_accounts_live_blob_is_unknown_rather_than_served`,
+- **Done when:** the account unshared from an album receives `403` — **met with `S-C51`**
+  (2026-09-03): `MembershipAuthority` replaces `OwnedAssetAuthority`, `BlobReadAccess::Revoked`
+  renders `403 error.blob.access_revoked` for an account the membership store holds a revoked
+  row for, and the authority is still asked first. ✅ `a_former_member_is_told_access_was_revoked`,
+  `a_former_member_gets_the_403_before_any_policy_refusal`,
+  `a_never_member_is_indistinguishable_from_an_unknown_address_body_and_headers`, plus what
+  landed with the `part`: `another_accounts_live_blob_is_unknown_rather_than_served`,
   `a_strangers_refusal_is_indistinguishable_from_an_unknown_address`,
   `a_stranger_cannot_tell_a_takedown_from_an_unknown_address`, and the authority's own unit cases.
   **Tier:** Unit + Integration.
@@ -3878,8 +3884,8 @@ them was incidental:
 - **Gap** (found 2026-08-31 landing `S-C39`): the server holds no fact about who, other than the
   owner, may read or write an album. Two separate authorities are pinned to "owner only" by the
   same absence:
-  - `OwnedAssetAuthority` cannot render the `403` the download contract describes, because there
-    is no membership to withdraw;
+  - `OwnedAssetAuthority` (since replaced by `MembershipAuthority`) cannot render the `403` the
+    download contract describes, because there is no membership to withdraw;
   - `ProvisionedAuthority::album_write_access` has answered `Denied` for anything but the owner
     since `S-C25`, with a comment deferring the widening to `S-C4`/`S-C5` — which landed as
     **link** and **drop** capabilities and did not add it, correctly: a share link is not a
@@ -3893,10 +3899,32 @@ them was incidental:
   end-to-end encryption exists to avoid.
 - **Blocked on:** the same signed-capability primitive federation needs, so it should be designed
   with `S-C49` rather than beside it.
+- **Landed 2026-09-03 (#405).** The fact is a **full-roster attestation** the album owner signs
+  with a non-revoked device in their published device directory —
+  `capsule_core::crypto::membership::SignedAlbumRoster`, canonical CBOR, strictly monotonic
+  `roster_version`, non-decreasing `amk_epoch`, removal as absence at a higher version — published
+  at `PUT /v1/albums/{album_id}/roster` (invariant 33) and held by the `membership` port
+  (in-memory and Postgres, ordinal 5, one conformance suite). Removal is a *stored* fact: the row
+  is marked with the version and epoch at which the member vanished, which is what lets the blob
+  route disclose `403` to a former member and nothing to anyone else. It is a **transport**
+  control, never a confidentiality one; the server still cannot read the MLS group.
+  Widened on it: `WriteAuthority::album_write_access` is caller-keyed and admits a writer member
+  under the owner's namespace (upload, ops; adoption and finalization re-check); `MembershipAuthority`
+  serves either role and answers `Revoked` → `403 error.blob.access_revoked`;
+  `GET /v1/sync?album_id=` pages the owner's sequence filtered to the album for its members, with
+  the cursor bound to `(caller, album)`. Not here: the federation capability path (#406, which
+  stacks on `MembershipStore`, `CursorScope`, `album_feed_page` and `BlobReadAccess`); rosters
+  published by non-owner admins; bytes shared across unrelated owners, which `find_reference` still
+  decides from the first live row (#462).
 - **Done when:** a member of a shared album reads its blobs through `/v1/blob/{hash}` and writes
   to it through the upload path; a former member receives `403` on the first and a write refusal
   on the second; and a non-member remains unable to tell either from an address that does not
-  exist. **Tier:** Unit + Integration.
+  exist — **met**: `a_member_of_either_role_reads_the_owners_blobs`,
+  `a_writer_member_uploads_into_the_owners_album_and_pays_for_it`,
+  `a_former_member_is_told_access_was_revoked`,
+  `a_reader_a_former_member_and_a_stranger_get_the_one_album_refusal`,
+  `a_never_member_is_indistinguishable_from_an_unknown_address_body_and_headers`.
+  **Tier:** Unit + Integration.
 
 ### S-D1 — SDK upload client
 

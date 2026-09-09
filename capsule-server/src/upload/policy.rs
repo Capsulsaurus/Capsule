@@ -9,9 +9,14 @@
 //! - **Protocol surface** — the 4 KiB alignment, the `[4 KiB, 16 MiB]` chunk range, the
 //!   offset semantics — is *not* here. It is fixed for a protocol version, so it lives as
 //!   constants in [`super::chunk`] where no deployment can move it.
-//! - **Server-tunable** — the accepted protocol window, the per-file ceiling, the closed
-//!   `content_type` enum, the timestamp-drift bound, and the suggested chunk-size tiers — is
-//!   here, because a self-hosted deployment legitimately sets them differently.
+//! - **Server-tunable** — the accepted protocol window and the client-build cutoff it
+//!   advertises beside it, the per-file ceiling, the closed `content_type` enum, the
+//!   timestamp-drift bound, and the suggested chunk-size tiers — is here, because a self-hosted
+//!   deployment legitimately sets them differently.
+//!
+//! The protocol window is read by more than the upload surface: [`crate::negotiation`]
+//! advertises it on every response and gates every covered operation against it, from this one
+//! value, so the window a client is told and the window it is held to cannot be two numbers.
 //!
 //! Every value carries the Salvo deployment's default, so the rebuild starts from the
 //! behaviour clients already see rather than from a fresh set of numbers.
@@ -44,6 +49,14 @@ pub const DEFAULT_PROTOCOL_MIN: &str = "2026-01-01";
 /// Highest protocol date this server accepts (`X-Capsule-Protocol-Max`).
 pub const DEFAULT_PROTOCOL_MAX: &str = "2026-12-31";
 
+/// The semver client build below which this server stops answering
+/// (`X-Capsule-Min-Client-Build`).
+///
+/// `0.0.0` is "no cutoff announced": every build satisfies it. The header is advisory until a
+/// path is hard-deprecated (threat-model/validation.md), and no path is, so nothing refuses on
+/// it — but it is sent on every response so a client that reads it today reads a real value.
+pub const DEFAULT_MIN_CLIENT_BUILD: &str = "0.0.0";
+
 /// Gross-drift sanity bound for the envelope timestamp, in days (invariant 8).
 pub const DEFAULT_DRIFT_DAYS: i64 = 30;
 
@@ -64,6 +77,8 @@ pub struct UploadPolicy {
     protocol_min: String,
     /// Highest accepted protocol date (`YYYY-MM-DD`).
     protocol_max: String,
+    /// The advisory semver deprecation cutoff advertised on every response.
+    min_client_build: String,
     /// The closed `content_type` allow-list (invariant 5).
     content_types: Vec<String>,
     /// Gross-drift sanity bound in days for the envelope timestamp (invariant 8).
@@ -77,6 +92,7 @@ impl Default for UploadPolicy {
         Self {
             protocol_min: DEFAULT_PROTOCOL_MIN.to_owned(),
             protocol_max: DEFAULT_PROTOCOL_MAX.to_owned(),
+            min_client_build: DEFAULT_MIN_CLIENT_BUILD.to_owned(),
             content_types: DEFAULT_CONTENT_TYPES
                 .iter()
                 .map(|kind| (*kind).to_owned())
@@ -96,6 +112,11 @@ impl UploadPolicy {
     /// The highest protocol date this server accepts.
     pub fn protocol_max(&self) -> &str {
         &self.protocol_max
+    }
+
+    /// The semver client build below which this server stops answering.
+    pub fn min_client_build(&self) -> &str {
+        &self.min_client_build
     }
 
     /// The closed `content_type` allow-list, as the shared predicate wants it.
@@ -118,6 +139,13 @@ impl UploadPolicy {
     pub fn with_protocol_window(mut self, min: impl Into<String>, max: impl Into<String>) -> Self {
         self.protocol_min = min.into();
         self.protocol_max = max.into();
+        self
+    }
+
+    /// Announce a client-build cutoff.
+    #[must_use]
+    pub fn with_min_client_build(mut self, build: impl Into<String>) -> Self {
+        self.min_client_build = build.into();
         self
     }
 
@@ -171,6 +199,11 @@ mod tests {
     }
 
     #[test]
+    fn no_cutoff_is_the_build_every_client_satisfies() {
+        assert_eq!(UploadPolicy::default().min_client_build(), "0.0.0");
+    }
+
+    #[test]
     fn the_allow_list_carries_the_opaque_blob_type() {
         // Metadata, provenance and backup blobs all declare `application/octet-stream`; an
         // allow-list without it would refuse every blob but the original.
@@ -185,12 +218,14 @@ mod tests {
     fn a_deployment_can_narrow_every_tunable() {
         let policy = UploadPolicy::default()
             .with_protocol_window("2026-06-01", "2026-06-30")
+            .with_min_client_build("1.2.3")
             .with_content_types(["image/jpeg"])
             .with_max_file_bytes(1024)
             .with_drift_days(1);
 
         assert_eq!(policy.protocol_min(), "2026-06-01");
         assert_eq!(policy.protocol_max(), "2026-06-30");
+        assert_eq!(policy.min_client_build(), "1.2.3");
         assert_eq!(policy.content_types(), vec!["image/jpeg"]);
         assert_eq!(policy.max_file_bytes(), 1024);
         assert_eq!(policy.drift_days(), 1);

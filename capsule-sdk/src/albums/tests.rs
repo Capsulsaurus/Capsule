@@ -19,6 +19,13 @@
 //! | `a_malformed_id_carries_the_invalid_id_code` | the 400 path |
 //! | `an_echoed_mismatch_is_malformed` | the server cannot silently rebind another album |
 //! | `the_request_is_authorized` | the bearer rides every call |
+//! | `publish_roster_sends_the_signed_bytes_verbatim` | the roster on the wire is the one the device signed (`S-C51`) |
+//! | `a_published_roster_reports_what_the_server_holds` | the success mapping, replay included |
+//! | `a_stale_roster_carries_the_distinct_code` | the `409` is switchable by code |
+//! | `a_roster_echo_mismatch_is_malformed` | the server cannot silently answer for another album |
+//! | `a_version_leap_carries_the_held_version_too` | the `400` too-far-ahead refusal is switchable and carries `current_version` |
+//! | `the_widest_version_the_server_can_name_still_decodes` | the recovery hint survives at the top of the server's range, where an unbounded counter would not |
+//! | `the_roster_publish_goes_through_the_generated_operation` | the path, method and body come from the committed contract, not from a hand-written request |
 
 use std::sync::{Arc, Mutex};
 
@@ -234,5 +241,263 @@ async fn the_request_is_authorized() {
         requests[0].header("authorization"),
         Some("Bearer test-token"),
         "every provisioning call rides the caller's bearer"
+    );
+}
+
+// ─── Roster publish (`S-C51`) ─────────────────────────────────────────────────
+
+/// A roster for [`album`] at `version`, signed by a fresh device key.
+fn signed_roster(version: u64) -> capsule_core::crypto::membership::SignedAlbumRoster {
+    use capsule_core::crypto::keys::{AmkVersion, HybridSigningKey};
+    use capsule_core::crypto::membership::{AlbumRoster, MemberRole, RosterMember};
+
+    let roster = AlbumRoster {
+        album_id: album(),
+        roster_version: version,
+        amk_epoch: AmkVersion(2),
+        attested_by_user: Uuid::from_u128(0xA11CE),
+        attested_by_device: Uuid::from_u128(0xD1),
+        attested_at: "2026-09-02T00:00:00Z".to_owned(),
+        members: vec![RosterMember {
+            user_id: Uuid::from_u128(0xB0B),
+            role: MemberRole::Writer,
+        }],
+    };
+    capsule_core::crypto::membership::SignedAlbumRoster::sign(
+        roster,
+        &HybridSigningKey::from_seed_bytes(&[7; 32], &[8; 32]),
+    )
+    .expect("a roster signs")
+}
+
+/// The canonical success body the server sends for a roster publish.
+fn held(id: Uuid, version: u64, replayed: bool) -> MockResponse {
+    MockResponse::new(200, "OK").json_body(format!(
+        r#"{{"album_id":"{id}","roster_version":{version},"amk_epoch":2,"member_count":1,"replayed":{replayed}}}"#
+    ))
+}
+
+/// **The bytes on the wire are the bytes the device signed.** The client base64-encodes the
+/// canonical CBOR and changes nothing: a re-serialization would be a roster whose signature no
+/// longer verifies, and the server decides a replay on these exact bytes.
+#[tokio::test]
+async fn publish_roster_sends_the_signed_bytes_verbatim() {
+    use base64::Engine as _;
+
+    let id = album();
+    let signed = signed_roster(3);
+    let (server, seen) = recording(move |_| held(id, 3, false)).await;
+    // At the production layout — `{origin}/v1/albums` — so the path is the server's own.
+    let client = AlbumClient::new(AlbumTransport::with_static_token(
+        reqwest::Client::new(),
+        format!("{}/v1/albums", server.base_url().trim_end_matches('/')),
+        StaticToken("test-token".into()),
+    ));
+    client.publish_roster(&signed).await.expect("publish");
+
+    let requests = seen.lock().expect("recorded requests");
+    assert_eq!(requests[0].method, "PUT");
+    assert_eq!(
+        requests[0].path,
+        format!("/v1/albums/{}/roster", id.hyphenated())
+    );
+    let body: serde_json::Value = serde_json::from_slice(&requests[0].body).expect("JSON");
+    let object = body.as_object().expect("a JSON object");
+    assert_eq!(object.keys().collect::<Vec<_>>(), vec!["roster_cbor"]);
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(body["roster_cbor"].as_str().expect("a string"))
+        .expect("standard base64");
+    let expected = capsule_core::cbor::to_canonical_vec(&signed).expect("encodes");
+    assert_eq!(
+        bytes, expected,
+        "the wire carries the canonical encoding of exactly what was signed"
+    );
+    assert_eq!(
+        capsule_core::cbor::canonicalize(&bytes).expect("decodes"),
+        bytes,
+        "and those bytes are canonical, which is the form the server stores and replays on"
+    );
+    assert_eq!(
+        body["roster_cbor"].as_str().expect("a string"),
+        base64::engine::general_purpose::STANDARD.encode(&expected),
+        "standard base64 with padding, the alphabet the server decodes"
+    );
+    assert!(
+        requests[0].header("authorization").is_some(),
+        "the bearer rides the roster publish too"
+    );
+}
+
+#[tokio::test]
+async fn a_published_roster_reports_what_the_server_holds() {
+    let id = album();
+    let (server, _) = recording(move |_| held(id, 3, true)).await;
+    let result = client_for(&server)
+        .publish_roster(&signed_roster(3))
+        .await
+        .expect("publish");
+    assert_eq!(
+        result,
+        PublishedRoster {
+            album_id: id,
+            roster_version: 3,
+            amk_epoch: 2,
+            member_count: 1,
+            replayed: true,
+        }
+    );
+}
+
+/// The `409` is the one refusal a client acts on differently — re-sync and republish above the
+/// version the server names — so its code must come through.
+#[tokio::test]
+async fn a_stale_roster_carries_the_distinct_code() {
+    let (server, _) = recording(|_| {
+        MockResponse::new(409, "Conflict").json_body(
+            r#"{"type":"about:blank","title":"Roster stale","status":409,"detail":"the server holds roster version 4, which this does not supersede","code":"error.album.roster_stale","current_version":4}"#.to_owned(),
+        )
+    })
+    .await;
+    let error = client_for(&server)
+        .publish_roster(&signed_roster(3))
+        .await
+        .expect_err("a stale roster is refused");
+    assert_eq!(error.error_code(), Some(error_codes::ALBUM_ROSTER_STALE));
+    assert!(
+        matches!(
+            error,
+            AlbumError::Status {
+                status: 409,
+                current_version: Some(4),
+                ..
+            }
+        ),
+        "the held version rides the refusal, so the caller can republish above it: {error:?}"
+    );
+}
+
+/// A server answering for a different album than the one asked about is a malformed answer,
+/// not a success with the wrong id in it.
+#[tokio::test]
+async fn a_roster_echo_mismatch_is_malformed() {
+    let other = Uuid::parse_str("0198f3c2-9c4a-7b3d-8f21-4d7c9a1b2eff").expect("a uuid");
+    let (server, _) = recording(move |_| held(other, 3, false)).await;
+    let error = client_for(&server)
+        .publish_roster(&signed_roster(3))
+        .await
+        .expect_err("a mismatched echo is refused");
+    assert!(matches!(error, AlbumError::Malformed(_)), "{error:?}");
+}
+
+/// The other version refusal: a roster so far *ahead* of the held one that the server would be
+/// latched if it took it. A `400` rather than the `409`, and it carries the held version for the
+/// same reason — the caller re-signs one above it.
+#[tokio::test]
+async fn a_version_leap_carries_the_held_version_too() {
+    let (server, _) = recording(|_| {
+        MockResponse::new(400, "Bad Request").json_body(
+            r#"{"type":"about:blank","title":"Roster version leap","status":400,"detail":"roster version 9999 is past 17","code":"error.album.roster_version_leap","declared":9999,"current_version":1,"max_version":17}"#.to_owned(),
+        )
+    })
+    .await;
+    let error = client_for(&server)
+        .publish_roster(&signed_roster(9999))
+        .await
+        .expect_err("a leap is refused");
+    assert_eq!(
+        error.error_code(),
+        Some(error_codes::ALBUM_ROSTER_VERSION_LEAP)
+    );
+    assert!(
+        matches!(
+            error,
+            AlbumError::Status {
+                status: 400,
+                current_version: Some(1),
+                ..
+            }
+        ),
+        "the held version rides this refusal too: {error:?}"
+    );
+}
+
+/// **The wire shape is the contract's, not this module's.** `publish_roster` is orchestration
+/// over the generated `publish_album_roster` operation, so the method, the path and the required
+/// protocol header come from `capsule-server/openapi.json` rather than from a hand-written
+/// request this module could drift.
+#[tokio::test]
+async fn the_roster_publish_goes_through_the_generated_operation() {
+    let id = album();
+    let (server, seen) = recording(move |_| held(id, 3, false)).await;
+    let client = AlbumClient::new(AlbumTransport::with_static_token(
+        reqwest::Client::new(),
+        format!("{}/v1/albums", server.base_url().trim_end_matches('/')),
+        StaticToken("test-token".into()),
+    ));
+    client
+        .publish_roster(&signed_roster(3))
+        .await
+        .expect("publish");
+
+    let requests = seen.lock().expect("recorded requests");
+    assert_eq!(requests[0].method, "PUT");
+    assert_eq!(
+        requests[0].path,
+        format!("/v1/albums/{}/roster", id.hyphenated())
+    );
+    assert_eq!(
+        requests[0].header("x-capsule-protocol"),
+        Some(capsule_core::crypto::primitives::PROTOCOL_VERSION),
+        "the generated operation carries the protocol date the document declares required"
+    );
+    assert_eq!(
+        requests[0].header("authorization"),
+        Some("Bearer test-token")
+    );
+}
+
+/// **The refusal has to survive at the top of the server's range.**
+///
+/// spargen lowers every integer in the contract as `i64` and emits no `u64` at all, so a
+/// counter above `i64::MAX` would not be an API error at all — the generated client would fail
+/// to *decode* the body, the typed error would never be built, and `code` and `current_version`
+/// would be replaced by an undifferentiated transport failure. The server bounds every counter
+/// it can emit at `MAX_ROSTER_VERSION` (`i64::MAX`) precisely so this holds; the case pins the
+/// boundary rather than a comfortable value in the middle of the range, and the declared
+/// version — the one number a caller controls and the server therefore cannot bound — is not an
+/// extension member at all.
+#[tokio::test]
+async fn the_widest_version_the_server_can_name_still_decodes() {
+    let ceiling = i64::MAX as u64;
+    let body = format!(
+        r#"{{"type":"about:blank","title":"Roster version leap","status":400,"detail":"roster version 18446744073709551615 is past {ceiling}, the highest this album will accept while it holds version {ceiling}","code":"error.album.roster_version_leap","current_version":{ceiling},"max_version":{ceiling}}}"#
+    );
+    let (server, _) =
+        recording(move |_| MockResponse::new(400, "Bad Request").json_body(body.clone())).await;
+
+    let error = client_for(&server)
+        .publish_roster(&signed_roster(u64::MAX))
+        .await
+        .expect_err("a leap is refused");
+
+    assert_eq!(
+        error.error_code(),
+        Some(error_codes::ALBUM_ROSTER_VERSION_LEAP),
+        "the structured code survives at the boundary: {error:?}"
+    );
+    assert!(
+        matches!(
+            error,
+            AlbumError::Status {
+                status: 400,
+                current_version: Some(held),
+                ..
+            } if held == ceiling
+        ),
+        "and so does the recovery hint: {error:?}"
+    );
+    assert!(
+        !matches!(error, AlbumError::Transport(_)),
+        "a decode failure would have collapsed this into a transport error"
     );
 }
