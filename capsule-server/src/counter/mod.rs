@@ -37,6 +37,28 @@
 //! v1 abuse gate needs. Where the doubled burst would matter the budget is halved rather than
 //! the algorithm changed, and this paragraph is the record of that trade rather than a comment
 //! somebody later mistakes for a bug.
+//!
+//! # The map of windows is bounded, twice
+//!
+//! A counter's *key* is frequently derived from something a caller sent — a share-link id, a
+//! challenge id, a redirect host. A key space every caller can extend is a map that only grows,
+//! and this one is process-wide and shared by every limiter on the surface, so growth here is
+//! not one feature's problem. Two bounds, the same pair
+//! [`InMemoryOidcAuthorizations`](crate::store::memory::InMemoryOidcAuthorizations) carries:
+//!
+//! - **Purged on every write.** A window whose budget has lapsed decides nothing — [`verdict`]
+//!   already treats it as absent — so it is dropped rather than kept as a row nobody reads. The
+//!   map holds live windows plus whatever lapsed since the last hit, never everything ever
+//!   counted.
+//! - **A ceiling.** Past [`WINDOW_CEILING`] a key that has no window yet is refused with
+//!   [`StoreError::Rejected`], while every key that already has one keeps counting. Callers
+//!   treat a counter error as a refusal, so a full map fails *closed*: a limiter under
+//!   memory pressure denies rather than waves through, and an attacker cannot switch a limiter
+//!   off by loading the store.
+//!
+//! Every derived key should still be bounded at its call site, as the OIDC authorize's is by
+//! validating the redirect before it charges. These two are the facility's defence in depth,
+//! not a licence to key a counter on an arbitrary string.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -183,6 +205,12 @@ pub trait CounterStore: std::fmt::Debug + Send + Sync {
     /// read the same under-limit value, which is the burst the limiter exists to stop. Every
     /// adapter owes this atomically; the in-memory one gets it from a mutex and Valkey from
     /// `INCR` plus a first-hit `EXPIRE`.
+    ///
+    /// An adapter may answer [`StoreError::Rejected`](crate::store::StoreError::Rejected) when
+    /// it cannot hold another key's window. That is an error and not a [`Verdict`], deliberately:
+    /// the caller's rule for *any* counter failure is already "refuse", so a full store denies
+    /// through the path that is documented to fail closed rather than through a new one somebody
+    /// could handle as an admission.
     fn hit<'a>(
         &'a self,
         key: &'a CounterKey,
@@ -209,10 +237,32 @@ pub trait CounterStore: std::fmt::Debug + Send + Sync {
     fn reset<'a>(&'a self, key: &'a CounterKey) -> StoreFuture<'a, ()>;
 }
 
+/// How many distinct keys the in-memory counters will hold windows for at once.
+///
+/// A hundred thousand. A window is a key plus twelve bytes, so this is single-digit megabytes at
+/// the bound; and because windows are purged as they lapse, reaching it means a hundred thousand
+/// *simultaneously live* windows, which at the shortest budget on the surface (one minute) is a
+/// rate no self-hosted deployment produces honestly. It is a backstop for a key derived from
+/// something a caller sends, not the primary defence — that is bounding the key where it is
+/// built.
+pub const WINDOW_CEILING: usize = 100_000;
+
 /// A deterministic in-memory adapter.
-#[derive(Debug, Default)]
+///
+/// Windows are purged as they lapse and the map is bounded; see the module docs.
+#[derive(Debug)]
 pub struct InMemoryCounters {
+    ceiling: usize,
     windows: Mutex<BTreeMap<CounterKey, Window>>,
+}
+
+impl Default for InMemoryCounters {
+    fn default() -> Self {
+        Self {
+            ceiling: WINDOW_CEILING,
+            windows: Mutex::new(BTreeMap::new()),
+        }
+    }
 }
 
 /// One key's open window.
@@ -220,12 +270,26 @@ pub struct InMemoryCounters {
 struct Window {
     hits: u32,
     opened_at: Timestamp,
+    /// When this window may be dropped, from the budget in force when it opened.
+    ///
+    /// A **purge hint only.** Admission is always recomputed by [`verdict`] from `opened_at`
+    /// against the budget the caller supplies, so re-tuning a budget takes effect on the next
+    /// hit exactly as it did before this field existed; all this decides is when a row nobody
+    /// will read again is collected.
+    purge_after: Timestamp,
 }
 
 impl InMemoryCounters {
-    /// An empty set of counters.
+    /// An empty set of counters, bounded at [`WINDOW_CEILING`].
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The same counters holding windows for at most `ceiling` keys.
+    #[must_use]
+    pub fn with_ceiling(mut self, ceiling: usize) -> Self {
+        self.ceiling = ceiling;
+        self
     }
 
     /// How many distinct keys hold a window right now.
@@ -239,6 +303,11 @@ impl InMemoryCounters {
     /// Whether no key holds a window.
     pub fn is_empty(&self) -> bool {
         lock(&self.windows).is_empty()
+    }
+
+    /// Drop every window whose budget has lapsed.
+    fn purge(windows: &mut BTreeMap<CounterKey, Window>, now: Timestamp) {
+        windows.retain(|_, window| now < window.purge_after);
     }
 }
 
@@ -285,6 +354,19 @@ impl CounterStore for InMemoryCounters {
     ) -> StoreFuture<'a, Verdict> {
         Box::pin(async move {
             let mut windows = lock(&self.windows);
+            Self::purge(&mut windows, at);
+            if windows.len() >= self.ceiling && !windows.contains_key(key) {
+                tracing::warn!(
+                    counter = key.as_str(),
+                    windows = windows.len(),
+                    ceiling = self.ceiling,
+                    "the counter store is full; a hit was refused rather than counted"
+                );
+                return Err(crate::store::StoreError::Rejected {
+                    store: "counters",
+                    detail: format!("{} open windows is the ceiling", self.ceiling),
+                });
+            }
             let (decision, live) = verdict(windows.get(key).copied(), budget, at);
 
             match decision {
@@ -303,10 +385,12 @@ impl CounterStore for InMemoryCounters {
                         Some(open) => Window {
                             hits: open.hits.saturating_add(1),
                             opened_at: open.opened_at,
+                            purge_after: crate::store::deadline(open.opened_at, budget.window),
                         },
                         None => Window {
                             hits: 1,
                             opened_at: at,
+                            purge_after: crate::store::deadline(at, budget.window),
                         },
                     };
                     windows.insert(key.clone(), updated);

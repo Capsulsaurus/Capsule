@@ -206,6 +206,122 @@ async fn no_sequence_of_calls_admits_more_than_the_budget() {
     assert_eq!(admitted, 3);
 }
 
+#[tokio::test]
+async fn a_lapsed_window_is_dropped_rather_than_kept_as_a_row_nobody_reads() {
+    // The map is process-wide and shared by every limiter, and several keys are derived from
+    // something a caller sent. A window that decides nothing must not still occupy a row.
+    let counters = InMemoryCounters::new();
+    for index in 0..50 {
+        let key = CounterKey::ShareLink(format!("link-{index}"));
+        assert!(
+            counters
+                .hit(&key, budget(), at(0))
+                .await
+                .expect("answers")
+                .admits()
+        );
+    }
+    assert_eq!(counters.len(), 50);
+
+    // One hit after every window has lapsed, and the fifty are collected with it.
+    let key = CounterKey::ShareLink("link-fresh".to_owned());
+    assert!(
+        counters
+            .hit(&key, budget(), at(11))
+            .await
+            .expect("answers")
+            .admits()
+    );
+    assert_eq!(counters.len(), 1, "only the live window survives");
+}
+
+#[tokio::test]
+async fn a_full_store_refuses_a_new_key_and_keeps_counting_the_ones_it_holds() {
+    let counters = InMemoryCounters::new().with_ceiling(2);
+    let first = CounterKey::ShareLink("a".to_owned());
+    let second = CounterKey::ShareLink("b".to_owned());
+
+    for key in [&first, &second] {
+        assert!(
+            counters
+                .hit(key, budget(), at(0))
+                .await
+                .expect("answers")
+                .admits()
+        );
+    }
+
+    // A third key finds no room. An error and not a verdict: every caller treats a counter
+    // failure as a refusal, so this fails closed.
+    let refusal = counters
+        .hit(&CounterKey::ShareLink("c".to_owned()), budget(), at(0))
+        .await
+        .expect_err("the ceiling refuses");
+    assert!(
+        matches!(refusal, crate::store::StoreError::Rejected { store, .. } if store == "counters"),
+        "{refusal:?}"
+    );
+    assert_eq!(counters.len(), 2, "the refused key wrote nothing");
+
+    // A key the store already holds keeps counting: a flood of new keys must not switch off a
+    // limiter that is already tracking somebody.
+    assert!(
+        counters
+            .hit(&first, budget(), at(0))
+            .await
+            .expect("answers")
+            .admits()
+    );
+    // Right up to its own budget, which is still the thing that limits it.
+    assert!(
+        counters
+            .hit(&first, budget(), at(0))
+            .await
+            .expect("answers")
+            .admits()
+    );
+    assert!(
+        !counters
+            .hit(&first, budget(), at(0))
+            .await
+            .expect("answers")
+            .admits(),
+        "the budget still ends the run"
+    );
+
+    // And the ceiling is not a one-way door: once the windows lapse, a new key fits again.
+    assert!(
+        counters
+            .hit(&CounterKey::ShareLink("c".to_owned()), budget(), at(11))
+            .await
+            .expect("answers")
+            .admits()
+    );
+}
+
+#[tokio::test]
+async fn purging_does_not_change_a_verdict() {
+    // The purge hint is recorded from the budget in force when a window opened; admission is
+    // still recomputed from `opened_at` against the budget the caller supplies. A budget that
+    // was re-tuned between two hits must decide by the new one.
+    let counters = InMemoryCounters::new();
+    let wide = Budget::new(3, SignedDuration::from_mins(60));
+    assert!(
+        counters
+            .hit(&key(), wide, at(0))
+            .await
+            .expect("answers")
+            .admits()
+    );
+    // Re-tuned to ten minutes: at minute eleven the window has lapsed under the new budget, so
+    // the hit opens a fresh one with the full allowance, exactly as before this field existed.
+    let narrow = Budget::new(3, SignedDuration::from_mins(10));
+    assert_eq!(
+        counters.hit(&key(), narrow, at(11)).await.expect("answers"),
+        Verdict::Admitted { remaining: 2 }
+    );
+}
+
 #[test]
 fn every_budget_is_declared_in_one_place() {
     // A budget written inline at its call site is a budget nobody can review against the threat
