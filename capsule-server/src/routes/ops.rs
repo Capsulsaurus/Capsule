@@ -50,6 +50,7 @@
 //! | `200` | kept, and now **static**. The retired handler picked its status at run time with `StatusCode::from_u16(result.status)`, which is why salvo-oapi could describe no responses at all and spargen refused the operation outright — and the value was unconditionally `200` every time |
 //! | `400` (envelope, action, amk) | kept, each with its own `error.*` code |
 //! | `403 error.upload.album_access_denied` | kept, and it now also answers an asset that is not the caller's — one value, because the asset id is client-chosen |
+//! | `403 error.moderation.account_suspended` | **added.** A suspension removes the ability to write and a lifecycle op is a write; `POST /v1/upload` refused one from the start and this surface did not, which stopped being merely inconsistent when `S-C51` widened it from the owner to every writer member |
 //! | `409 error.upload.stale_revival` | kept — invariant 17, the status this surface exists to be able to give |
 //! | `401` | kept, and now the framework's |
 //! | `500` | kept |
@@ -175,6 +176,20 @@ pub enum OpRejection {
         code: &'static str,
     },
 
+    /// The account is suspended (`S-C8`).
+    ///
+    /// The same status, code and reasoning as `POST /v1/upload`'s: a suspension removes the
+    /// ability to *write*, and a lifecycle op is a write. Distinct from the quota `403` and from
+    /// the permission one because the three send a client to three different screens, which is
+    /// what design/moderation.md asks a structured code for.
+    #[error("this account is suspended and cannot write")]
+    #[problem(status = 403, title = "Account suspended")]
+    AccountSuspended {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
     /// The account is past its grace window, and this write would grow stored metadata.
     ///
     /// Never returned for a `delete` or a `trash-restore`: a user must be able to delete their
@@ -211,6 +226,7 @@ pub enum OpRejection {
 pub async fn apply_op(
     Inject(upload): Inject<UploadContext>,
     Inject(quota): Inject<crate::quota::QuotaContext>,
+    Inject(moderation): Inject<crate::moderation::ModerationContext>,
     Auth(credential): Auth<AccessToken>,
     Path(path): Path<AlbumPath>,
     Json(request): Json<OpRequest>,
@@ -225,6 +241,25 @@ pub async fn apply_op(
             error_codes::UPLOAD_ENVELOPE_MISMATCH,
             "the manifest's album_id is not the album this op was addressed to",
         ));
+    }
+
+    // Account standing (`S-C8`), on the seam `POST /v1/upload` uses and for the same reason: a
+    // suspension removes the ability to write, and a lifecycle op is a write — the only one that
+    // never moves blob bytes, which is exactly why it was easy to miss. Checked before the
+    // authority, before the quota and before anything is stored.
+    let standing = moderation
+        .store()
+        .standing(&crate::store::UserId::new(caller.as_str()))
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %caller, "the moderation store could not answer");
+            OpRejection::unavailable()
+        })?;
+    if !standing.may_write() {
+        tracing::info!(%caller, "a lifecycle write was refused: the account is suspended");
+        return Err(OpRejection::AccountSuspended {
+            code: error_codes::MODERATION_ACCOUNT_SUSPENDED,
+        });
     }
 
     // Invariant 6, the half only the authority can answer — and the namespace the op is filed

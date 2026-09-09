@@ -697,3 +697,101 @@ async fn a_members_op_is_checked_against_the_members_own_directory() {
     let problem = apply(&fixture, &bob, &body, StatusCode::BAD_REQUEST).await;
     assert_eq!(problem["code"], "error.upload.device_not_authorized");
 }
+
+/// **A suspended account may not write, and a lifecycle op is a write.** `POST /v1/upload`
+/// refused a suspended uploader from the start; this surface did not, which stopped being merely
+/// inconsistent once `S-C51` widened it from the owner to every writer member. Both principals
+/// are asserted, because the refusal has to be about *standing* and not about ownership.
+#[tokio::test]
+async fn a_suspended_account_may_not_apply_a_lifecycle_op() {
+    use capsule_server::membership::MemberRole;
+    use capsule_server::moderation::{
+        ModerationAction, ModerationEvent, ModerationStore as _, Standing,
+    };
+    use capsule_server::store::UserId;
+
+    // The album's own owner, suspended.
+    let fixture = Fixture::working();
+    let bearer = token(&fixture).await;
+    publish(&fixture).await;
+    let since = fixture.clock.now();
+    fixture
+        .moderation
+        .apply(
+            ModerationEvent {
+                user_id: UserId::new(user().as_str()),
+                action: ModerationAction::Suspended,
+                asset_id: None,
+                at: since,
+                reason: Some("verified report".to_owned()),
+            },
+            Some(Standing::Suspended { since }),
+        )
+        .await
+        .expect("the moderation store applies");
+
+    let before = feed(&fixture, &bearer).await;
+    let problem = apply(
+        &fixture,
+        &bearer,
+        &bundle(&fixture, "delete", "suspended", Some(&created_head()), None),
+        StatusCode::FORBIDDEN,
+    )
+    .await;
+    assert_eq!(problem["code"], "error.moderation.account_suspended");
+    assert_eq!(
+        feed(&fixture, &bearer).await,
+        before,
+        "a refused write reaches no feed"
+    );
+
+    // And a writer member, suspended: the standing is the account's, not the album's.
+    let (fixture, bob) = with_bob(Some(MemberRole::Writer)).await;
+    let since = fixture.clock.now();
+    fixture
+        .moderation
+        .apply(
+            ModerationEvent {
+                user_id: UserId::new(BOB),
+                action: ModerationAction::Suspended,
+                asset_id: None,
+                at: since,
+                reason: None,
+            },
+            Some(Standing::Suspended { since }),
+        )
+        .await
+        .expect("the moderation store applies");
+    let members = apply(
+        &fixture,
+        &bob,
+        &bobs_delete(&fixture),
+        StatusCode::FORBIDDEN,
+    )
+    .await;
+    assert_eq!(members["code"], "error.moderation.account_suspended");
+}
+
+/// Fail closed: a moderation store that cannot answer "is this account suspended" must not be
+/// read as "no", or an outage becomes a window in which every suspension is lifted.
+#[tokio::test]
+async fn an_unreachable_moderation_store_refuses_the_lifecycle_op() {
+    let fixture = Fixture::working();
+    let bearer = token(&fixture).await;
+    publish(&fixture).await;
+    fixture.moderation.set_unavailable(true);
+
+    apply(
+        &fixture,
+        &bearer,
+        &bundle(
+            &fixture,
+            "delete",
+            "unreachable",
+            Some(&created_head()),
+            None,
+        ),
+        StatusCode::INTERNAL_SERVER_ERROR,
+    )
+    .await;
+}
