@@ -7619,6 +7619,10 @@
     "message": "Your account is suspended. You can't upload or share until it's reinstated.",
     "context": "HTTP 403 at POST /upload session creation (slice S-C8): the account carries an admin/billing suspension flag. Distinct from quota and permission rejections so the client surfaces the right remediation. Suspension is an access-level action — the user's data is untouched and the block is reversible."
   },
+  "error.moderation.report_malformed": {
+    "message": "That report isn't valid.",
+    "context": "HTTP 400 on POST /v1/federation/reports (slice S-C49): a field of the signed report is empty, its reported_at is not an RFC 3339 timestamp, or its signature is not base64. Structural, and decided before any store is touched — a report that cannot be read cannot be attributed either."
+  },
   "error.moderation.report_rate_limited": {
     "message": "Too many reports from this source. Please wait and try again.",
     "context": "HTTP 429 on federated report intake (slice S-C8, threat-model invariant 24): the per-(reporting_server, reported_user) report budget for the current window is exhausted. Backpressure defeats the false-flag / mass-report abuse vector rather than amplifying it."

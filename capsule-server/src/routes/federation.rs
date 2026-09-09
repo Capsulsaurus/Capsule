@@ -19,6 +19,15 @@
 //! 404 error.federation.album_not_found
 //! 500 error.federation.unavailable
 //!
+//! POST   /v1/federation/reports                    (the report's own signature is the credential)
+//! 202 { report_id, received_at }
+//! 400 error.moderation.report_malformed
+//! 401 error.moderation.report_unsigned
+//! 403 error.federation.peer_unknown | error.moderation.server_blocked
+//!     | error.federation.not_configured
+//! 429 error.moderation.report_rate_limited
+//! 500 error.moderation.unavailable
+//!
 //! POST   /v1/federation/capabilities/refresh       (the capability itself is the credential)
 //! 200 { token, jti, expires_at, replayed }
 //! 403 error.federation.capability_invalid | error.federation.capability_revoked
@@ -69,6 +78,8 @@
 //! A successor answered to a replay may itself have been revoked since — a block cascades over
 //! every live capability of a peer — so its liveness is re-checked before it is re-signed.
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use capsule_i18n::error_codes;
 use jiff::SignedDuration;
 use kynos::prelude::*;
@@ -78,12 +89,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::album::AlbumContext;
 use crate::auth::AccessToken;
-use crate::counter::CounterContext;
+use crate::counter::{CounterContext, CounterKey, budgets};
 use crate::federation::{
     self, CapabilityRecord, FederationContext, MintRequest, PeerId, Presentation, Principal,
-    ReadBearer, Refusal, Scope,
+    ReadBearer, Refusal, ReportClaim, Scope,
 };
 use crate::membership::{Membership, MembershipContext};
+use crate::moderation::{FederatedReport, ModerationContext};
 use crate::store::{AlbumId, UserId};
 
 /// The federation surface: the capability a peer server pulls a shared album with.
@@ -712,4 +724,284 @@ pub async fn refresh_capability(
         expires_at: record.expires_at.to_string(),
         replayed,
     }))
+}
+
+// ===========================================================================================
+// Federated moderation report intake (S-C49)
+// ===========================================================================================
+
+/// A moderation report one peer server files against an account on this one.
+///
+/// Every field except `signature` is covered by the signature, in canonical CBOR — see
+/// [`ReportClaim`](crate::federation::ReportClaim).
+#[derive(Schema, Serialize, Deserialize, Debug, Clone)]
+pub struct FederatedReportRequest {
+    /// The peer filing the report, as its own `server-info` names it.
+    pub reporting_server: String,
+    /// The account on this server the report is about.
+    pub reported_user: String,
+    /// The content address of the asset complained about.
+    pub asset_hash: String,
+    /// The album it was pulled from.
+    pub album_id: String,
+    /// A short reason, where the peer gives one.
+    pub reason: Option<String>,
+    /// When the peer says it was reported, RFC 3339.
+    pub reported_at: String,
+    /// The peer's Ed25519 signature over the canonical CBOR of the fields above, base64.
+    pub signature: String,
+}
+
+/// An accepted report.
+///
+/// The identifier is this server's, so an operator and the reporting peer can talk about one
+/// report. Nothing about the reported account is echoed — accepting a report says nothing about
+/// whether it is true, and a body that reported on the account's standing would say it does.
+#[derive(Schema, Serialize, Deserialize, Debug, Clone)]
+pub struct FederatedReportResponse {
+    /// This server's identifier for the report.
+    pub report_id: String,
+    /// When this server accepted it, RFC 3339.
+    pub received_at: String,
+}
+
+/// Why a report was not accepted.
+#[derive(Debug, thiserror::Error, ApiError)]
+pub enum ReportRejection {
+    /// A field of the body is not what it must be.
+    #[error("the report is malformed")]
+    #[problem(status = 400, title = "Malformed report")]
+    Malformed {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// The signature does not verify under the peer's pinned key.
+    #[error("the report's signature could not be verified")]
+    #[problem(status = 401, title = "Report unsigned")]
+    Unsigned {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// No operator has pinned a key for the reporting server.
+    #[error("this server is not one we know")]
+    #[problem(status = 403, title = "Peer unknown")]
+    PeerUnknown {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// The reporting server is on this server's blocklist.
+    #[error("this server is blocked")]
+    #[problem(status = 403, title = "Server blocked")]
+    PeerBlocked {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// This deployment does not federate.
+    #[error("this server does not federate")]
+    #[problem(status = 403, title = "Federation not configured")]
+    NotConfigured {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// Too many reports from this peer about this account.
+    #[error("too many reports from this server about this account")]
+    #[problem(status = 429, title = "Report rate limited")]
+    RateLimited {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// A collaborator could not answer, so nothing was filed.
+    #[error("the report could not be filed")]
+    #[problem(status = 500, title = "Internal server error")]
+    Unavailable {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+}
+
+impl ReportRejection {
+    /// A field of the body is not what it must be.
+    fn malformed() -> Self {
+        Self::Malformed {
+            code: error_codes::MODERATION_REPORT_MALFORMED,
+        }
+    }
+
+    /// A collaborator could not answer.
+    fn unavailable() -> Self {
+        Self::Unavailable {
+            code: error_codes::MODERATION_UNAVAILABLE,
+        }
+    }
+}
+
+/// File a signed moderation report from a peer server.
+///
+/// # No bearer, and why that is not "unauthenticated"
+///
+/// The reporting peer holds no capability here — it is reporting *this* server's content, not
+/// pulling it — so there is nothing to present. What it does hold is a key an operator has
+/// **pinned**, and the report carries its own Ed25519 signature over the canonical CBOR of every
+/// other field. A report from a server nobody has pinned is `403`: intake is not the moment a
+/// peer becomes trusted (design/federation.md's TOFU is explicitly not done here).
+///
+/// # The order the checks run in
+///
+/// Who is speaking, then whether they are welcome, then whether they really said it, then
+/// whether they have said it too often. The signature is verified **before** the budget is
+/// charged, so a third party spoofing `reporting_server` cannot spend a real peer's allowance;
+/// the cost of that ordering is one Ed25519 verification per unsigned request, which the
+/// router's body-size limit already bounds.
+///
+/// # What accepting one does
+///
+/// It writes a row an operator will read ([`ModerationStore::pending_reports`]) and **nothing
+/// else**. A peer's report is an input to a decision, never a decision: no standing changes, no
+/// serving hold appears, and the reported account sees nothing — because nothing has been done
+/// to them.
+#[kynos::post(
+    "/v1/federation/reports",
+    operation_id = "submit_federated_report",
+    tag = FederationTag
+)]
+pub async fn submit_federated_report(
+    Inject(federation): Inject<FederationContext>,
+    Inject(moderation): Inject<ModerationContext>,
+    Inject(counters): Inject<CounterContext>,
+    Json(request): Json<FederatedReportRequest>,
+) -> Result<ReportReply, ReportRejection> {
+    if !federation.is_configured() {
+        tracing::info!("a federated report was refused: this deployment does not federate");
+        return Err(ReportRejection::NotConfigured {
+            code: error_codes::FEDERATION_NOT_CONFIGURED,
+        });
+    }
+    let peer = PeerId::new(request.reporting_server.trim());
+    if peer.as_str().is_empty()
+        || request.reported_user.trim().is_empty()
+        || request.asset_hash.trim().is_empty()
+        || request.album_id.trim().is_empty()
+    {
+        return Err(ReportRejection::malformed());
+    }
+    let Ok(reported_at) = request.reported_at.parse::<jiff::Timestamp>() else {
+        tracing::info!(%peer, "a federated report carried an unreadable reported_at");
+        return Err(ReportRejection::malformed());
+    };
+    let Ok(signature) = BASE64.decode(request.signature.as_bytes()) else {
+        tracing::info!(%peer, "a federated report's signature is not base64");
+        return Err(ReportRejection::malformed());
+    };
+
+    // Who is speaking. A peer nobody pinned, and a peer pinned without a key, are the same
+    // answer: there is nothing to verify against, so nothing is verified.
+    let record = federation.peers().read(&peer).await.map_err(|error| {
+        tracing::error!(%error, %peer, "the peer store could not answer a report intake");
+        ReportRejection::unavailable()
+    })?;
+    let Some(record) = record else {
+        tracing::info!(%peer, "a report was refused: the peer is unknown");
+        return Err(ReportRejection::PeerUnknown {
+            code: error_codes::FEDERATION_PEER_UNKNOWN,
+        });
+    };
+    if record.is_blocked() {
+        tracing::info!(%peer, "a report was refused: the peer is blocked");
+        return Err(ReportRejection::PeerBlocked {
+            code: error_codes::MODERATION_SERVER_BLOCKED,
+        });
+    }
+    let Some(key) = record.signing_key else {
+        tracing::info!(%peer, "a report was refused: the peer has no pinned key");
+        return Err(ReportRejection::PeerUnknown {
+            code: error_codes::FEDERATION_PEER_UNKNOWN,
+        });
+    };
+
+    let claim = ReportClaim {
+        reporting_server: request.reporting_server.trim().to_owned(),
+        reported_user: request.reported_user.trim().to_owned(),
+        asset_hash: request.asset_hash.trim().to_owned(),
+        album_id: request.album_id.trim().to_owned(),
+        reason: request.reason.clone(),
+        reported_at: request.reported_at.clone(),
+    };
+    claim
+        .verify(&signature, &key)
+        .map_err(|error| match error {
+            crate::federation::ReportError::NotAuthentic => ReportRejection::Unsigned {
+                code: error_codes::MODERATION_REPORT_UNSIGNED,
+            },
+            crate::federation::ReportError::Unencodable => ReportRejection::unavailable(),
+        })?;
+
+    // Only now is anything charged: a spoofed `reporting_server` must not be able to spend a
+    // real peer's allowance, and the budget the contract bounds is per `(server, account)`.
+    let key = CounterKey::FederatedReports(format!("{peer}:{}", claim.reported_user));
+    match counters
+        .hit(&key, budgets::FEDERATED_REPORTS)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %peer, "the report counter could not be reached");
+            ReportRejection::unavailable()
+        })? {
+        crate::counter::Verdict::Admitted { .. } => {}
+        crate::counter::Verdict::Limited { retry_after } => {
+            tracing::info!(%peer, %retry_after, "a peer's report budget is spent");
+            return Err(ReportRejection::RateLimited {
+                code: error_codes::MODERATION_REPORT_RATE_LIMITED,
+            });
+        }
+    }
+
+    let received_at = federation.clock().now();
+    let report = FederatedReport {
+        report_id: uuid::Uuid::now_v7().to_string(),
+        reporting_server: peer.as_str().to_owned(),
+        reported_user: UserId::new(&claim.reported_user),
+        asset_hash: claim.asset_hash.clone(),
+        album_id: AlbumId::new(&claim.album_id),
+        reason: claim.reason.clone(),
+        reported_at,
+        received_at,
+        signature,
+    };
+    let report_id = report.report_id.clone();
+    moderation
+        .store()
+        .file_report(report)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %peer, "a federated report could not be filed");
+            ReportRejection::unavailable()
+        })?;
+
+    Ok(ReportReply::Accepted(FederatedReportResponse {
+        report_id,
+        received_at: received_at.to_string(),
+    }))
+}
+
+/// The one way intake succeeds.
+///
+/// `202`, never `201`: this server has accepted the report for an operator to look at, and has
+/// created nothing the reporting peer can address. A `200` would read as "handled".
+#[derive(Reply)]
+pub enum ReportReply {
+    /// The report was filed for an operator to read.
+    #[reply(status = 202, description = "The report was accepted for review")]
+    Accepted(FederatedReportResponse),
 }

@@ -38,6 +38,7 @@ pub mod capability;
 pub mod conformance;
 pub mod memory;
 pub mod peers;
+pub mod report;
 pub mod scheme;
 pub mod store;
 
@@ -47,6 +48,7 @@ pub use self::capability::{
 };
 pub use self::memory::{InMemoryCapabilities, InMemoryPeers};
 pub use self::peers::{BlockOutcome, PeerRecord, PeerStore, UnblockOutcome};
+pub use self::report::{ReportClaim, ReportError};
 pub use self::scheme::{Principal, ReadBearer, VerifiedCapability};
 pub use self::store::{
     CapabilityFilter, CapabilityRecord, CapabilityStore, RefreshOutcome, RevokeOutcome,
@@ -329,6 +331,39 @@ pub async fn on_roster_applied(
     if revoked > 0 {
         tracing::info!(%album, revoked, "a roster change cut federated grants");
     }
+    Ok(revoked)
+}
+
+/// Revoke every live capability held by `peer`, because it has just been blocked.
+///
+/// A block is already consulted at every federation boundary, so this cuts nothing the
+/// blocklist would have let through. What it adds is **publication**: the peer's `jti`s go onto
+/// `/.well-known/capsule/revoked-jti`, so a blocked peer learns its grants are gone from the
+/// record every peer polls rather than only from a refusal, and an operator who later unblocks
+/// the peer does not silently restore access the block was meant to end.
+///
+/// # Errors
+///
+/// Returns the store error. The caller — an operator command — reports it; the block itself has
+/// already been written, and a block whose cascade failed still refuses every request.
+pub async fn on_peer_blocked(
+    federation: &FederationContext,
+    peer: &PeerId,
+) -> Result<usize, crate::store::StoreError> {
+    let now = federation.clock().now();
+    let live = federation
+        .capabilities()
+        .live(&CapabilityFilter::Peer(peer.clone()), now)
+        .await?;
+    let mut revoked = 0;
+    for record in live {
+        federation
+            .capabilities()
+            .revoke_issued(&record.jti, now)
+            .await?;
+        revoked += 1;
+    }
+    tracing::info!(%peer, revoked, "a peer was blocked and its grants were cut");
     Ok(revoked)
 }
 

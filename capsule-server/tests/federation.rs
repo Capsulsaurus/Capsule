@@ -16,11 +16,12 @@ use capsule_core::crypto::keys::HybridSigningKey;
 use capsule_server::blob::{BlobStore, ContentAddress};
 use capsule_server::counter::{CounterKey, CounterStore as _, budgets};
 use capsule_server::federation::{
-    CapabilityCodec, CapabilityRecord, CapabilityStore as _, MintRequest, PeerId, PeerStore as _,
-    Scope,
+    CapabilityCodec, CapabilityRecord, CapabilityStore as _, FederationCollaborators,
+    FederationContext, MintRequest, PeerId, PeerStore as _, Scope,
 };
 use capsule_server::index::{AssetIndex, BlobRecord, PendingAsset, ServingHold};
 use capsule_server::membership::{MemberRole, MembershipStore as _, RosterRecord};
+use capsule_server::moderation::ModerationStore as _;
 use capsule_server::store::{AlbumId, AssetId, BlobRole, Clock as _, UserId};
 use capsule_server::sync::CursorScope;
 use jiff::{SignedDuration, Timestamp};
@@ -1209,4 +1210,261 @@ async fn a_deployment_that_does_not_federate_mints_nothing_but_still_revokes() {
     refused.assert_status(StatusCode::FORBIDDEN);
     let refused: Value = refused.json();
     assert_eq!(refused["code"], "error.federation.capability_revoked");
+}
+
+// ===========================================================================================
+// Moderation's federated halves (S-C49)
+// ===========================================================================================
+
+/// Pin `key` as `PEER`'s operational key, as an operator does.
+async fn pin(fixture: &Fixture, key: [u8; 32]) {
+    fixture
+        .peers
+        .pin(&PeerId::new(PEER), key, fixture.clock.now())
+        .await
+        .expect("the operator pins");
+}
+
+/// POST a federated report body.
+async fn file(fixture: &Fixture, body: Value) -> kynos::test::TestResponse {
+    fixture
+        .client
+        .post("/v1/federation/reports")
+        .header("accept", "application/json")
+        .json(&body)
+        .send()
+        .await
+}
+
+/// A report from `PEER` about Bob's copy of `hash`, signed by `pair`.
+fn report(pair: &ring::signature::Ed25519KeyPair, hash: &str, reason: Option<&str>) -> Value {
+    support::signed_report(
+        pair,
+        PEER,
+        BOB,
+        hash,
+        &album(),
+        reason,
+        "2026-09-02T00:00:00Z",
+    )
+}
+
+#[tokio::test]
+async fn a_signed_report_from_a_pinned_peer_is_filed_and_changes_nothing_about_the_account() {
+    let (fixture, _) = shared().await;
+    let (signer, public) = support::peer_keypair();
+    pin(&fixture, public).await;
+    let hash = support::checksum(b"the reported bytes");
+
+    let accepted: Value = file(&fixture, report(&signer, &hash, Some("csam")))
+        .await
+        .assert_status(StatusCode::ACCEPTED)
+        .json();
+    let report_id = accepted["report_id"].as_str().expect("a report id");
+
+    // Asserted against the store the server wrote, never against a second read of the body.
+    let pending = fixture
+        .moderation
+        .pending_reports()
+        .await
+        .expect("the store answers");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].report_id, report_id);
+    assert_eq!(pending[0].reporting_server, PEER);
+    assert_eq!(pending[0].reported_user, UserId::new(BOB));
+    assert_eq!(pending[0].asset_hash, hash);
+    assert_eq!(pending[0].album_id, album());
+    assert_eq!(pending[0].reason.as_deref(), Some("csam"));
+    assert!(
+        !pending[0].signature.is_empty(),
+        "the signature is kept so an operator can re-verify it"
+    );
+
+    // A report is an input to a decision, never a decision: nothing was done to the account.
+    assert_eq!(
+        fixture
+            .moderation
+            .standing(&UserId::new(BOB))
+            .await
+            .expect("the store answers"),
+        capsule_server::moderation::Standing::Active
+    );
+    assert!(
+        fixture
+            .moderation
+            .events_for_user(&UserId::new(BOB))
+            .await
+            .expect("the store answers")
+            .is_empty(),
+        "nothing was done to the account, so nothing is on its record"
+    );
+}
+
+#[tokio::test]
+async fn a_report_is_refused_unsigned_from_an_unknown_peer_and_from_a_blocked_one() {
+    let (fixture, _) = shared().await;
+    let (signer, public) = support::peer_keypair();
+    let hash = support::checksum(b"the reported bytes");
+
+    // Nobody has pinned this peer, so there is nothing to verify against.
+    let refused = file(&fixture, report(&signer, &hash, None)).await;
+    refused.assert_status(StatusCode::FORBIDDEN);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.federation.peer_unknown");
+
+    pin(&fixture, public).await;
+
+    // Another key's signature over the same claim.
+    let (impostor, _) = support::peer_keypair();
+    let refused = file(&fixture, report(&impostor, &hash, None)).await;
+    refused.assert_status(StatusCode::UNAUTHORIZED);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.moderation.report_unsigned");
+
+    // The peer's own signature over a *different* claim, replayed onto this one.
+    let mut tampered = report(&signer, &hash, Some("csam"));
+    tampered["asset_hash"] = Value::from(support::checksum(b"other bytes"));
+    let refused = file(&fixture, tampered).await;
+    refused.assert_status(StatusCode::UNAUTHORIZED);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.moderation.report_unsigned");
+
+    // Blocked: refused before the signature is even looked at.
+    fixture
+        .peers
+        .block(
+            &PeerId::new(PEER),
+            fixture.clock.now(),
+            Some("noise".into()),
+        )
+        .await
+        .expect("blocks");
+    let refused = file(&fixture, report(&signer, &hash, None)).await;
+    refused.assert_status(StatusCode::FORBIDDEN);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.moderation.server_blocked");
+
+    assert!(
+        fixture
+            .moderation
+            .pending_reports()
+            .await
+            .expect("the store answers")
+            .is_empty(),
+        "nothing a refusal saw reached the queue"
+    );
+}
+
+#[tokio::test]
+async fn a_peers_reports_about_one_account_are_bounded_and_another_account_is_its_own_budget() {
+    // Invariant 24: the budget is per `(reporting_server, reported_user)`, so a flood against
+    // one user cannot silence a peer that has something to say about another.
+    let (fixture, _) = shared().await;
+    let (signer, public) = support::peer_keypair();
+    pin(&fixture, public).await;
+    let hash = support::checksum(b"the reported bytes");
+
+    for _ in 1..budgets::FEDERATED_REPORTS.limit {
+        fixture
+            .counters
+            .hit(
+                &CounterKey::FederatedReports(format!("{PEER}:{BOB}")),
+                budgets::FEDERATED_REPORTS,
+                fixture.clock.now(),
+            )
+            .await
+            .expect("the counter answers");
+    }
+    file(&fixture, report(&signer, &hash, None))
+        .await
+        .assert_status(StatusCode::ACCEPTED);
+    let refused = file(&fixture, report(&signer, &hash, None)).await;
+    refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.moderation.report_rate_limited");
+
+    // Another account on this server is a different boundary.
+    file(
+        &fixture,
+        support::signed_report(
+            &signer,
+            PEER,
+            OTHER_MEMBER,
+            &hash,
+            &album(),
+            None,
+            "2026-09-02T00:00:00Z",
+        ),
+    )
+    .await
+    .assert_status(StatusCode::ACCEPTED);
+
+    fixture.clock.advance(budgets::FEDERATED_REPORTS.window);
+    file(&fixture, report(&signer, &hash, None))
+        .await
+        .assert_status(StatusCode::ACCEPTED);
+}
+
+#[tokio::test]
+async fn blocking_a_peer_cuts_and_publishes_every_grant_it_holds() {
+    // The blocklist already refuses at every boundary; the cascade is what puts the peer's jtis
+    // on the record every peer polls, so a block is legible rather than only enforced.
+    let (fixture, _) = shared().await;
+    let (first, first_jti) = capability(&fixture, PEER, Scope::Read, 1).await;
+    let (_, second_jti) = capability(&fixture, PEER, Scope::ReadDerivativeOnly, 1).await;
+    let (other, other_jti) = capability(&fixture, "third.test", Scope::Read, 1).await;
+
+    fixture
+        .peers
+        .block(&PeerId::new(PEER), fixture.clock.now(), None)
+        .await
+        .expect("blocks");
+    // Over the *same* stores the server holds, so what the cascade writes is what the
+    // published list and the next presentation read.
+    let federation = FederationContext::new(FederationCollaborators {
+        codec: fixture.codec.clone(),
+        capabilities: fixture.revocations.clone(),
+        peers: fixture.peers.clone(),
+        clock: fixture.clock.clone(),
+        federation_url: Some(support::FEDERATION_URL.to_owned()),
+    });
+    let cut = capsule_server::federation::on_peer_blocked(&federation, &PeerId::new(PEER))
+        .await
+        .expect("the cascade runs");
+    assert_eq!(cut, 2);
+
+    let list: Value = fixture
+        .client
+        .get("/.well-known/capsule/revoked-jti")
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    let published: Vec<&str> = list["revoked"]
+        .as_array()
+        .expect("an array")
+        .iter()
+        .map(|token| token["jti"].as_str().expect("a jti"))
+        .collect();
+    assert!(published.contains(&first_jti.as_str()));
+    assert!(published.contains(&second_jti.as_str()));
+    assert!(
+        !published.contains(&other_jti.as_str()),
+        "another peer's grant is not this peer's block"
+    );
+
+    // Unblocking does not restore what the cascade cut.
+    fixture
+        .peers
+        .unblock(&PeerId::new(PEER))
+        .await
+        .expect("unblocks");
+    let refused = page(&fixture, &first, &album_query()).await;
+    refused.assert_status(StatusCode::FORBIDDEN);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.federation.capability_revoked");
+    page(&fixture, &other, &album_query())
+        .await
+        .assert_status(StatusCode::OK);
 }

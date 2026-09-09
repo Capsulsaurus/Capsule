@@ -40535,6 +40535,16 @@
         }
       }
     },
+    "error.moderation.report_malformed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That report isn't valid."
+          }
+        }
+      }
+    },
     "error.moderation.report_rate_limited": {
       "localizations": {
         "ar": {

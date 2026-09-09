@@ -63,7 +63,8 @@ use capsule_server::enrollment::EnrollmentContext;
 use capsule_server::escrow::{EscrowContext, EscrowRecord, EscrowStore, InMemoryEscrow, Replaced};
 use capsule_server::federation::{
     CapabilityCodec, CapabilityFilter, CapabilityRecord, CapabilityStore, FederationCollaborators,
-    FederationContext, InMemoryCapabilities, InMemoryPeers, RefreshOutcome, RevokeOutcome,
+    FederationContext, InMemoryCapabilities, InMemoryPeers, RefreshOutcome, ReportClaim,
+    RevokeOutcome,
 };
 use capsule_server::gc::memory::InMemoryCollection;
 use capsule_server::index::memory::InMemoryAssetIndex;
@@ -76,7 +77,8 @@ use capsule_server::membership::{
     RosterRecord,
 };
 use capsule_server::moderation::{
-    InMemoryModeration, ModerationContext, ModerationEvent, ModerationStore, Standing,
+    FederatedReport, InMemoryModeration, ModerationContext, ModerationEvent, ModerationStore,
+    Standing,
 };
 use capsule_server::quota::{
     ChargeOutcome, InMemoryQuota, QuotaContext, QuotaLimits, QuotaStore, StoredUsage,
@@ -950,6 +952,20 @@ impl ModerationStore for SwitchableModeration {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.events_for_user(user)
+    }
+
+    fn file_report(&self, report: FederatedReport) -> StoreFuture<'_, ()> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.file_report(report)
+    }
+
+    fn pending_reports(&self) -> StoreFuture<'_, Vec<FederatedReport>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.pending_reports()
     }
 }
 
@@ -3036,6 +3052,59 @@ impl Fixture {
             .header("x-capsule-checksum", &checksum(payload))
             .body("application/octet-stream", payload.to_vec())
     }
+}
+
+/// A peer server's operational key pair: the signer, and the raw thirty-two public bytes an
+/// operator pins with `PeerStore::pin`.
+///
+/// Generated per call rather than fixed, so a case that means "a *different* peer's key" gets
+/// one by asking again.
+pub(crate) fn peer_keypair() -> (ring::signature::Ed25519KeyPair, [u8; 32]) {
+    use ring::signature::KeyPair as _;
+
+    let der = ring::signature::Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
+        .expect("a key generates");
+    let pair = ring::signature::Ed25519KeyPair::from_pkcs8(der.as_ref()).expect("it parses");
+    let public = pair
+        .public_key()
+        .as_ref()
+        .try_into()
+        .expect("an Ed25519 public key is thirty-two bytes");
+    (pair, public)
+}
+
+/// A federated moderation report body, signed by `pair` exactly as a peer signs one.
+///
+/// Built through [`ReportClaim::signing_bytes`] rather than by re-encoding the JSON, so the
+/// suite signs the same bytes the server verifies and a change to the signing contract fails as
+/// a verification failure rather than as a silently-different test.
+pub(crate) fn signed_report(
+    pair: &ring::signature::Ed25519KeyPair,
+    reporting_server: &str,
+    reported_user: &str,
+    asset_hash: &str,
+    album: &AlbumId,
+    reason: Option<&str>,
+    reported_at: &str,
+) -> serde_json::Value {
+    let claim = ReportClaim {
+        reporting_server: reporting_server.to_owned(),
+        reported_user: reported_user.to_owned(),
+        asset_hash: asset_hash.to_owned(),
+        album_id: album.as_str().to_owned(),
+        reason: reason.map(str::to_owned),
+        reported_at: reported_at.to_owned(),
+    };
+    let signature = pair.sign(&claim.signing_bytes().expect("a claim encodes"));
+    serde_json::json!({
+        "reporting_server": claim.reporting_server,
+        "reported_user": claim.reported_user,
+        "asset_hash": claim.asset_hash,
+        "album_id": claim.album_id,
+        "reason": claim.reason,
+        "reported_at": claim.reported_at,
+        "signature": base64::engine::general_purpose::STANDARD.encode(signature.as_ref()),
+    })
 }
 
 /// The protocol version the suite's manifests and sessions are written under.

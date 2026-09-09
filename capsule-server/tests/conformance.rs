@@ -167,6 +167,7 @@ async fn every_declared_response_is_exercised() {
         ("POST", "/v1/albums/anything/capabilities"),
         ("DELETE", "/v1/albums/anything/capabilities/anything"),
         ("POST", "/v1/federation/capabilities/refresh"),
+        ("POST", "/v1/federation/reports"),
         ("GET", "/v1/quota"),
         ("GET", "/v1/upload/sessions"),
         ("GET", "/v1/assets/anything/receipts"),
@@ -1355,6 +1356,114 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::NO_CONTENT);
+
+    // ── POST /v1/federation/reports (`S-C49`) ──────────────────────────────────────────────
+    // The report carries its own signature and no bearer, so the peer must be *pinned* before
+    // anything it says can be verified: a peer nobody pinned is `403`, which is also what a
+    // pinned peer with no key gets.
+    let (peer_signer, peer_public) = support::peer_keypair();
+    let report = |body: serde_json::Value| {
+        client
+            .post("/v1/federation/reports")
+            .header("x-capsule-protocol", PROTOCOL_VERSION)
+            .json(&body)
+    };
+    let signed = |reason: Option<&str>| {
+        support::signed_report(
+            &peer_signer,
+            "other.test",
+            FEDERATED_MEMBER,
+            &checksum(b"reported bytes"),
+            &support::album(),
+            reason,
+            "2026-09-02T00:00:00Z",
+        )
+    };
+    report(signed(Some("csam")))
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    // 415 and 422 are the `Json` extractor's; 400 is the surface's own floor, decided before
+    // any store is touched — which is why it answers even while the peer is unknown.
+    client
+        .post("/v1/federation/reports")
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .body("text/plain", "{}")
+        .send()
+        .await
+        .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    report(json!({ "reporting_server": 42 }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+    let mut malformed = signed(None);
+    malformed["reported_at"] = json!("yesterday");
+    report(malformed)
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    {
+        use capsule_server::federation::PeerStore as _;
+        fixture
+            .peers
+            .pin(
+                &capsule_server::federation::PeerId::new("other.test"),
+                peer_public,
+                fixture.clock.now(),
+            )
+            .await
+            .expect("the operator pins");
+    }
+
+    // 401: signed by a key that is not the pinned one.
+    let (impostor, _) = support::peer_keypair();
+    report(support::signed_report(
+        &impostor,
+        "other.test",
+        FEDERATED_MEMBER,
+        &checksum(b"reported bytes"),
+        &support::album(),
+        None,
+        "2026-09-02T00:00:00Z",
+    ))
+    .send()
+    .await
+    .assert_status(StatusCode::UNAUTHORIZED);
+
+    // 202: filed for an operator to read.
+    report(signed(Some("csam")))
+        .send()
+        .await
+        .assert_status(StatusCode::ACCEPTED);
+
+    // 500: the moderation store could not answer, so nothing was filed.
+    fixture.moderation.set_unavailable(true);
+    report(signed(Some("csam")))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.moderation.set_unavailable(false);
+
+    // 429: this peer has said enough about this account for one hour.
+    for _ in 0..capsule_server::counter::budgets::FEDERATED_REPORTS.limit {
+        fixture
+            .counters
+            .hit(
+                &capsule_server::counter::CounterKey::FederatedReports(format!(
+                    "other.test:{FEDERATED_MEMBER}"
+                )),
+                capsule_server::counter::budgets::FEDERATED_REPORTS,
+                fixture.clock.now(),
+            )
+            .await
+            .expect("the counter answers");
+    }
+    report(signed(Some("csam")))
+        .send()
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS);
 
     // ── POST /v1/storage/verify ────────────────────────────────────────────────────────────
     // 401 and 403 are the scheme's; 415 and 422 are the `Json` extractor's, declared on every

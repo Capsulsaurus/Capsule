@@ -266,6 +266,9 @@ pub mod error_codes {
     /// `error.moderation.account_suspended`
     pub const MODERATION_ACCOUNT_SUSPENDED: &str = "error.moderation.account_suspended";
 
+    /// `error.moderation.report_malformed`
+    pub const MODERATION_REPORT_MALFORMED: &str = "error.moderation.report_malformed";
+
     /// `error.moderation.report_rate_limited`
     pub const MODERATION_REPORT_RATE_LIMITED: &str = "error.moderation.report_rate_limited";
 

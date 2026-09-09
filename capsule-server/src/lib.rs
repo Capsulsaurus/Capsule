@@ -210,6 +210,7 @@ pub fn router() -> ServerRouter {
                     routes::federation::issue_capability,
                     routes::federation::revoke_capability,
                     routes::federation::refresh_capability,
+                    routes::federation::submit_federated_report,
                 ]),
         )
         // The reads: every gated `GET` and `HEAD`. Held to the handshake's grammar, admitted at
