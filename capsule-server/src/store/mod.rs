@@ -71,12 +71,13 @@ use jiff::{SignedDuration, Timestamp};
 pub use self::auth::{AuthStateStore, CohortRecord, CohortStore, SessionRecord};
 pub use self::ceremony::{
     CHALLENGE_TTL, ChallengeStore, ChannelStore, Direction, DrainOutcome, ENROLLMENT_CODE_TTL,
-    EnrollmentStore, PendingEnrollment, RELAY_CHANNEL_TTL, RelayChannel, RelayOutcome,
-    RelayPayload, RevokeAllChallenge,
+    EnrollmentStore, OIDC_AUTHORIZATION_TTL, OidcAuthorizationStore, PendingAuthorization,
+    PendingEnrollment, RELAY_CHANNEL_TTL, RelayChannel, RelayOutcome, RelayPayload,
+    RevokeAllChallenge,
 };
 pub use self::ids::{
-    AlbumId, AssetId, ChallengeToken, ChannelId, EnrollmentCode, OwnerId, SessionId, UploadId,
-    UserId,
+    AlbumId, AssetId, AuthorizationCode, ChallengeToken, ChannelId, EnrollmentCode, OidcNonce,
+    OidcState, OwnerId, PkceVerifier, SessionId, UploadId, UserId,
 };
 pub use self::upload::{
     AcceptedChunk, BlobRole, FinalizeClaim, UploadSessionRecord, UploadSessionStatus,

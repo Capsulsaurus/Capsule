@@ -49,6 +49,7 @@
 pub mod accounts_memory;
 pub mod credential;
 pub mod directory;
+pub mod oidc;
 pub mod profile;
 pub mod registry;
 pub mod scheme;

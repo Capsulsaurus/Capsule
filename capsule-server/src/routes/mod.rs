@@ -16,6 +16,7 @@ pub mod drop;
 pub mod enroll;
 pub mod escrow;
 pub mod moderation;
+pub mod oidc;
 pub mod ops;
 pub mod profile;
 pub mod quota;

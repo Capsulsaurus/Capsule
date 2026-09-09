@@ -451,3 +451,53 @@ async fn probing_a_link_that_does_not_exist_still_costs_the_prober() {
     )
     .await;
 }
+
+/// A saturated limiter partition must not impersonate an outage.
+///
+/// The share path charges a caller-supplied opaque id before it resolves it, so an attacker
+/// minting ids fills the `ShareLink` partition. Partitioning (decision 22) stops that reaching
+/// the other surfaces; it does not stop it reaching *this* one, and a first-time visitor to any
+/// share link is refused while it lasts. What they are told matters: `429` with a code of its own
+/// and a retry hint means a client backs off and an operator paged on `5xx` is not paged at all,
+/// where the `500 error.share.unavailable` this used to render said "the server is broken".
+#[tokio::test]
+async fn a_saturated_limiter_partition_is_a_429_and_not_an_outage() {
+    let fixture = Fixture::with_counter_ceiling(1);
+    let bearer = fixture.bearer().await;
+    let (id, _, _) = live_link(&fixture, &bearer, 1).await;
+
+    // One key fills the partition.
+    fetch(&fixture, &format!("/s/{id}"), StatusCode::OK).await;
+
+    // A second, never-seen link finds no room. It is told to wait, not that the server broke.
+    let (other, _, _) = live_link(&fixture, &bearer, 2).await;
+    let problem: Value = fetch(
+        &fixture,
+        &format!("/s/{other}"),
+        StatusCode::TOO_MANY_REQUESTS,
+    )
+    .await
+    .json();
+    assert_eq!(
+        problem["code"], "error.share.at_capacity",
+        "a full partition has a code of its own, distinct from a spent budget and from an outage"
+    );
+    let retry_after = problem["retry_after"]
+        .as_u64()
+        .expect("a retry hint the client can act on");
+    assert!(retry_after > 0);
+
+    // And the link that already holds a window keeps being served: the flood locks out new
+    // keys, never the ones already counted.
+    fetch(&fixture, &format!("/s/{id}"), StatusCode::OK).await;
+
+    // The spent-budget 429 stays its own code, so the two causes remain distinguishable.
+    for _ in 0..60 {
+        fixture.client.get(&format!("/s/{id}")).send().await;
+    }
+    let problem: Value = fetch(&fixture, &format!("/s/{id}"), StatusCode::TOO_MANY_REQUESTS)
+        .await
+        .json();
+    assert_eq!(problem["code"], "error.share.rate_limited");
+    assert!(problem["retry_after"].as_u64().is_some_and(|s| s > 0));
+}

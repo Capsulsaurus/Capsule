@@ -236,12 +236,21 @@ impl ServerStatus {
         // exactly the base the generated operation paths hang off.
         let api_endpoint = remote.sync_endpoint.clone();
 
-        let client = match capsule_sdk::rest::Client::new(&api_endpoint) {
+        // Over the SDK's one HTTP client rather than the generated `Client::new`, so the probe
+        // carries the same protocol handshake every other request does; `/v1/version` is
+        // exempt from the gate, and a probe that spoke differently from the calls it precedes
+        // would tell the user nothing about them.
+        let client = match capsule_sdk::net::http_client()
+            .map_err(|error| error.to_string())
+            .and_then(|http| {
+                capsule_sdk::rest::Client::with_client(http, &api_endpoint)
+                    .map_err(|error| error.to_string())
+            }) {
             Ok(client) => client,
             Err(error) => {
                 return Ok(ServerStatus {
                     api_endpoint,
-                    connection_status: ConnectionStatus::Error(error.to_string()),
+                    connection_status: ConnectionStatus::Error(error),
                     api_version: None,
                     response_time: None,
                     server_health: None,

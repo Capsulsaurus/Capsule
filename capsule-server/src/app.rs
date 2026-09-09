@@ -30,6 +30,7 @@ use kynos::security::Authenticates;
 
 use crate::album::AlbumContext;
 use crate::attestation::AttestationContext;
+use crate::auth::oidc::OidcContext;
 use crate::auth::{AccessToken, AuthContext, TotpContext};
 use crate::counter::CounterContext;
 use crate::directory::DeviceDirectoryContext;
@@ -61,6 +62,8 @@ pub struct App {
     auth: AuthContext,
     /// The second factor's collaborators (`S-C55`).
     totp: TotpContext,
+    /// The OIDC relying party's collaborators (`S-N1`).
+    oidc: OidcContext,
     /// The upload module's collaborators.
     upload: UploadContext,
     /// The sync feed's collaborators.
@@ -106,6 +109,8 @@ pub struct Modules {
     pub auth: AuthContext,
     /// The second factor's collaborators (`S-C55`).
     pub totp: TotpContext,
+    /// The OIDC relying party's collaborators (`S-N1`).
+    pub oidc: OidcContext,
     /// The upload module's collaborators.
     pub upload: UploadContext,
     /// The sync feed's collaborators.
@@ -144,6 +149,7 @@ impl App {
         let Modules {
             auth,
             totp,
+            oidc,
             upload,
             sync,
             serve,
@@ -163,6 +169,7 @@ impl App {
         Self {
             auth,
             totp,
+            oidc,
             upload,
             sync,
             serve,

@@ -40,11 +40,13 @@ use uuid::Uuid;
 
 use super::auth::{AuthStateStore, CohortStore, SessionRecord};
 use super::ceremony::{
-    ChallengeStore, ChannelStore, Direction, DrainOutcome, EnrollmentStore, PendingEnrollment,
-    RelayChannel, RelayOutcome, RelayPayload, RevokeAllChallenge,
+    ChallengeStore, ChannelStore, Direction, DrainOutcome, EnrollmentStore, OidcAuthorizationStore,
+    PendingAuthorization, PendingEnrollment, RelayChannel, RelayOutcome, RelayPayload,
+    RevokeAllChallenge,
 };
 use super::ids::{
-    AssetId, ChallengeToken, ChannelId, EnrollmentCode, OwnerId, SessionId, UploadId, UserId,
+    AssetId, ChallengeToken, ChannelId, EnrollmentCode, OidcNonce, OidcState, OwnerId,
+    PkceVerifier, SessionId, UploadId, UserId,
 };
 use super::upload::{
     AcceptedChunk, BlobRole, FinalizeClaim, UploadSessionRecord, UploadSessionStatus,
@@ -70,6 +72,16 @@ pub trait Harness: Send + Sync {
     fn channels(&self) -> &dyn ChannelStore;
     /// The durable device-cohort map under test.
     fn cohorts(&self) -> &dyn CohortStore;
+    /// The pending OIDC authorization store under test (slice `S-N1`), if this harness has one.
+    ///
+    /// Optional **for now**, and the default is the whole reason: the port landed with its
+    /// in-memory adapter while the Valkey adapter is owed, and a required accessor would stop a
+    /// container-backed harness compiling until it exists. The rows that read it panic on
+    /// `None` when driven individually and are skipped by [`run_all`]; the slice that lands the
+    /// Valkey adapter removes the `Option` and the skip with it.
+    fn oidc_authorizations(&self) -> Option<&dyn OidcAuthorizationStore> {
+        None
+    }
 
     /// Move every store in this harness `by` forward in its own time.
     fn advance(&self, by: SignedDuration) -> StoreFuture<'_, ()>;
@@ -141,6 +153,28 @@ fn upload(case: &str, tag: &str, uploader: &str, offset: i64) -> UploadSessionRe
         status: UploadSessionStatus::Pending,
         created_at,
         last_progress_at: created_at,
+    }
+}
+
+/// The OIDC authorization store, or a failure naming what the harness lacks.
+fn oidc_authorizations(h: &dyn Harness) -> &dyn OidcAuthorizationStore {
+    match h.oidc_authorizations() {
+        Some(store) => store,
+        None => {
+            panic!(
+                "this harness offers no OidcAuthorizationStore; see Harness::oidc_authorizations"
+            )
+        }
+    }
+}
+
+/// A pending authorization for `case`, begun `offset` seconds after [`base`].
+fn pending(case: &str, offset: i64) -> PendingAuthorization {
+    PendingAuthorization {
+        nonce: OidcNonce::new(format!("{case}-nonce")),
+        verifier: PkceVerifier::new(format!("{case}-verifier")),
+        redirect_uri: format!("http://127.0.0.1:4242/{case}"),
+        issued_at: deadline(base(), SignedDuration::from_secs(offset)),
     }
 }
 
@@ -973,6 +1007,59 @@ pub async fn a_challenge_expires_with_its_store(h: &dyn Harness) {
     );
 }
 
+/// A begun authorization is redeemed by the first callback, successful or not.
+///
+/// The property that makes a replayed `state` — and therefore a replayed authorization code
+/// on a stolen redirect — unrepeatable, and the reason the nonce can never be checked twice.
+pub async fn an_oidc_authorization_is_single_use(h: &dyn Harness) {
+    let store = oidc_authorizations(h);
+    let state = OidcState::new("oidc-single-use");
+    let record = pending("oidc-single-use", 0);
+    ok(
+        store.begin(&state, record.clone()).await,
+        "begin an authorization",
+    );
+
+    assert_eq!(
+        ok(store.consume(&state).await, "consume"),
+        Some(record),
+        "the first callback gets the record, every field intact"
+    );
+    assert_eq!(
+        ok(store.consume(&state).await, "consume again"),
+        None,
+        "a consumed state cannot be replayed"
+    );
+    assert_eq!(
+        ok(
+            store.consume(&OidcState::new("oidc-never-begun")).await,
+            "consume unknown"
+        ),
+        None,
+        "an unknown state is indistinguishable from a spent one"
+    );
+}
+
+/// A pending authorization dies at its store's TTL, with no caller involved.
+pub async fn an_oidc_authorization_expires_with_its_store(h: &dyn Harness) {
+    let store = oidc_authorizations(h);
+    let state = OidcState::new("oidc-expiry");
+    ok(
+        store.begin(&state, pending("oidc-expiry", 0)).await,
+        "begin an authorization",
+    );
+
+    ok(
+        h.advance(store.ttl()).await,
+        "advance to the authorization TTL",
+    );
+    assert_eq!(
+        ok(store.consume(&state).await, "consume at the deadline"),
+        None,
+        "an authorization is gone at its TTL, and the expired record is burned with it"
+    );
+}
+
 /// An enrollment redeems under either spelling, and redeeming burns both.
 pub async fn an_enrollment_redeems_by_either_spelling_and_burns_both(h: &dyn Harness) {
     let store = h.enrollments();
@@ -1382,4 +1469,10 @@ pub async fn run_all(h: &dyn Harness) {
     cohorts_are_listed_oldest_first(h).await;
     a_cohort_is_scoped_to_its_account(h).await;
     the_cohort_map_does_not_expire(h).await;
+
+    // Skipped, not failed, for a harness without the store — see `Harness::oidc_authorizations`.
+    if h.oidc_authorizations().is_some() {
+        an_oidc_authorization_is_single_use(h).await;
+        an_oidc_authorization_expires_with_its_store(h).await;
+    }
 }
