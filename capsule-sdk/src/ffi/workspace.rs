@@ -644,6 +644,11 @@ impl FfiWorkspace {
     /// and the bytes. Feed each straight to
     /// [`FfiSession::upload`](crate::ffi::FfiSession::upload).
     ///
+    /// The index tier (`T0`) is **two** blobs — the provenance record then the sealed metadata
+    /// blob — because the server publishes an asset to other devices only once it holds both
+    /// roles. Push all of them: an app that stopped after the metadata blob would upload an
+    /// asset no device, its own included, could ever see.
+    ///
     /// The original's ciphertext is re-derived from the manifest's recorded nonce prefix and
     /// gated on the manifest's own content address, so what reaches the network is what the
     /// signed manifest vouches for.
@@ -684,12 +689,40 @@ impl FfiWorkspace {
         self.with(|ws| Ok(ws.asset_ids().iter().map(Uuid::to_string).collect()))
     }
 
-    /// The asset's **head signed manifest** as opaque canonical CBOR — the exact document a
-    /// receiving device runs through [`apply_sync_entry`](Self::apply_sync_entry).
+    /// The asset's **head provenance record** as opaque canonical CBOR — the exact bytes the
+    /// `provenance` blob carries, the feed serves back as `manifest_cbor`, and a receiving
+    /// device runs through [`apply_sync_entry`](Self::apply_sync_entry).
+    ///
+    /// The record wraps the head signed manifest with its chain position. That wrapper is not
+    /// optional: the server's chain head is the SHA-256 of these bytes while a client's next
+    /// `prior_provenance_hash` is the record's own hash, so the bare manifest is the one
+    /// encoding under which no lifecycle op can ever chain. Canonical CBOR is deterministic, so
+    /// the manifest inside is byte-identical to its own signed bytes — nothing is re-authored
+    /// and the two signatures still verify over exactly what they covered.
+    ///
+    /// Use [`signed_manifest`](Self::signed_manifest) when the *manifest* is what is wanted.
+    pub fn provenance_head(&self, asset_id: String) -> Result<Vec<u8>, FfiError> {
+        let asset_id = parse_uuid("asset_id", &asset_id)?;
+        self.with(|ws| {
+            Ok(ws
+                .upload_bundle(&asset_id)
+                .map_err(|e| FfiError::Workspace {
+                    message: format!("reading the provenance head of {asset_id}: {e}"),
+                })?
+                .provenance_blob)
+        })
+    }
+
+    /// The asset's **head signed manifest** as opaque canonical CBOR.
     ///
     /// This is a serialization of an already-signed structure, not a re-authoring: the two
     /// signatures the manifest carries are covered by these bytes, which is why they travel
     /// verbatim and are never re-modeled on any wire.
+    ///
+    /// **Not what the sync feed carries** — that is
+    /// [`provenance_head`](Self::provenance_head), the record that wraps this manifest with its
+    /// chain position. Handing these bytes to
+    /// [`apply_sync_entry`](Self::apply_sync_entry) is refused as malformed.
     pub fn signed_manifest(&self, asset_id: String) -> Result<Vec<u8>, FfiError> {
         let asset_id = parse_uuid("asset_id", &asset_id)?;
         self.with(|ws| {

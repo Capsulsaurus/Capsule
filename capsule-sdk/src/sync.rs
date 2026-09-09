@@ -138,7 +138,9 @@ pub struct FeedEntry {
     pub kind: ChangeKind,
     /// The asset id.
     pub asset_id: Vec<u8>,
-    /// The signed `AssetManifest` as opaque canonical CBOR (verified by core).
+    /// The asset's head **provenance record** as opaque canonical CBOR — the `provenance`
+    /// blob's bytes, served back unchanged, carrying the signed `AssetManifest` inside it
+    /// (decoded and verified by core's `apply_remote_entry`). Never re-encoded here.
     pub manifest_cbor: Vec<u8>,
     /// The encrypted metadata blob's **content address**, as its UTF-8 bytes; empty when the
     /// entry carries none (a tombstone).

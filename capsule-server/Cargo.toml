@@ -138,7 +138,10 @@ color-eyre = "0.6.5"
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
-# `tests/binary.rs` gives the spawned server a blob root of its own, and deletes it afterwards.
+# Throwaway directories on disk. `tests/binary.rs` gives the spawned server a blob root of its
+# own and deletes it afterwards; `tests/sdk_client.rs` puts a **real** `capsule_core::Workspace`
+# there, because the only way to prove the upload ladder puts an asset on this server's feed is
+# to push the ladder's own input — a hand-built bundle would agree with a wrong ladder.
 # Already the workspace's scratch-directory crate (`capsule-core`, `capsule-sdk`,
 # `capsule-core-ffi` all dev-depend on it) and already in the lock file.
 tempfile = "3"

@@ -14,6 +14,28 @@
 //! returns the authoritative offset; across an asset's blobs, a `duplicate_blob` answer is a
 //! merge, not an error. Re-running a push against an unchanged library is therefore a no-op.
 //!
+//! **Every blob this module ships is ciphertext.** The original is re-derived from its
+//! manifest's nonce prefix, the metadata blob is carried sealed, and **derivative blobs are
+//! encrypted too** — `capsule-core` re-derives each one from the plaintext it holds locally
+//! using the prefix that derivative's signed manifest recorded. Nothing here decrypts, encrypts,
+//! or inspects a blob; it moves opaque bytes.
+//!
+//! # The index tier is two blobs, not one
+//!
+//! `T0` is **provenance and metadata**, in that order. The server publishes an asset to other
+//! devices only once it holds both index-tier roles
+//! (`capsule_server::upload::visibility::INDEX_TIER_ROLES`), and the head of the server-side
+//! provenance chain — what a later lifecycle op's `prior_provenance_hash` must equal — is the
+//! SHA-256 of the provenance blob's bytes. A ladder that shipped only the metadata blob
+//! therefore uploaded an asset that no device could ever see and no op could ever chain onto:
+//! the bytes were on the server and the asset was not in anybody's library.
+//!
+//! The provenance blob is the canonical CBOR of the chain's head `ProvenanceRecord`
+//! ([`UploadBundle::provenance_blob`]), which `capsule-core` encodes once so the SDK and the
+//! FFI cannot disagree about it. It goes **first** within `T0`: it is the blob the server reads
+//! `prior_provenance_hash`, `action` and `retention_until` out of, so sending it first is the
+//! order in which the asset's own claims arrive before the bytes they describe.
+//!
 //! **One deviation from "the envelope mirrors the signed manifest", and it is the server's
 //! rule:** invariant 15 requires `manifest_envelope.ciphertext_hash == hash` (the top-level
 //! declared content address of *this* blob). A bundle's metadata and derivative blobs are not
@@ -22,6 +44,7 @@
 
 use std::collections::HashSet;
 
+use capsule_core::crypto::hash::hash_bytes;
 use capsule_core::import::UploadTier;
 use capsule_core::lifecycle::UploadBundle;
 use serde::Serialize;
@@ -33,9 +56,9 @@ use crate::upload::{
     BlobRole, CreateUploadRequest, ManifestEnvelope, UploadClient, UploadError, UploadOutcome,
 };
 
-/// The content type a blob that is opaque ciphertext declares. The sealed metadata blob is
-/// AMK ciphertext, not an image — the server's closed content-type enum (invariant 5) admits
-/// exactly this for it.
+/// The content type a blob the server may not parse declares. The sealed metadata blob is AMK
+/// ciphertext and the provenance blob is a signed CBOR document with no media type of its own —
+/// the server's closed content-type enum (invariant 5) admits exactly this for both.
 const OPAQUE_CONTENT_TYPE: &str = "application/octet-stream";
 
 // ─── Blob view over a bundle ──────────────────────────────────────────────────
@@ -55,14 +78,30 @@ pub struct BundleBlob<'a> {
     pub bytes: &'a [u8],
 }
 
-/// Every transferable blob of `bundle`, in ladder order: the sealed metadata blob (T0, the
-/// index tier that makes the asset visible), each derivative (T1), then the original (T2).
+/// Every transferable blob of `bundle`, in ladder order: the **index tier** (T0) — the
+/// provenance blob then the sealed metadata blob — each derivative (T1), then the original
+/// (T2).
 ///
-/// A bundle whose head action binds no metadata blob (`delete`, `trash-restore`, …) simply has
-/// no T0 blob — the ladder is whatever the manifest actually commits to, never a fabrication.
+/// The provenance blob is unconditional: a managed asset always has a chain head, and the
+/// server needs that blob both to publish the asset and to hold a chain head for the next
+/// lifecycle op. The metadata blob is conditional — a head action that binds none (`delete`,
+/// `trash-restore`, …) simply contributes no metadata rung, because the ladder is whatever the
+/// manifest actually commits to and never a fabrication.
 #[must_use]
 pub fn bundle_blobs(bundle: &UploadBundle) -> Vec<(BundleBlob<'_>, String)> {
-    let mut blobs = Vec::with_capacity(2 + bundle.derivatives.len());
+    let mut blobs = Vec::with_capacity(3 + bundle.derivatives.len());
+    blobs.push((
+        BundleBlob {
+            tier: UploadTier::Index,
+            role: BlobRole::Provenance,
+            content_type: OPAQUE_CONTENT_TYPE,
+            bytes: &bundle.provenance_blob,
+        },
+        // The content address of the provenance blob is `record_hash()` by definition — the
+        // digest of the canonical record — so it is derived from the bytes rather than read off
+        // a field. Nothing signs it: it *is* the chain head, and the chain is what signs.
+        hash_bytes(&bundle.provenance_blob).to_hex(),
+    ));
     if let Some(hash) = &bundle.metadata_blob_hash {
         blobs.push((
             BundleBlob {

@@ -17,10 +17,11 @@
 //! publish. Every verb reaches `capsule-core` for its crypto; what is under test here
 //! is the wiring, the shapes, and the verdicts.
 //!
-//! `sync_pull` itself is gRPC and is exercised by the native harness against the real
-//! server; its Rust-side shape is compiled here (the surface builds) but not
-//! behaviorally driven — the sync-apply test below feeds `apply_sync_entry` the exact
-//! three byte strings a feed entry carries, which is the half `S-P1` owns.
+//! `sync_pull` itself rides the generated `GET /v1/sync` operation (`S-D28` retired the gRPC
+//! feed) and is exercised over a socket in `capsule-server/tests/sdk_client.rs` against the
+//! real router; its Rust-side shape is compiled here (the surface builds) but not behaviorally
+//! driven — the sync-apply test below feeds `apply_sync_entry` the exact three byte strings a
+//! feed entry carries, which is the half `S-P1` owns.
 
 use std::sync::Arc;
 
@@ -294,6 +295,12 @@ fn enroll(root: &std::path::Path) -> Arc<FfiWorkspace> {
 /// The escrow endpoints are **stateful** — a `PUT` stores the bytes verbatim and a `GET`
 /// serves them back, exactly as the single-active-escrow contract says — so `escrow_put`
 /// and `escrow_get` can be asserted as a real round trip rather than two isolated calls.
+///
+/// They are served on `/v1/auth/escrow` under the API root, which is the path the committed
+/// document declares and the generated client therefore requests. The `PUT` answers a JSON
+/// `StoreEscrowResponse` and the empty-escrow `GET` answers an RFC 9457 problem, because a
+/// generated operation decodes both — a bare `204` or a body-less `404` would arrive as a
+/// decode failure rather than as the typed outcome this test is asserting.
 async fn flow_server() -> MockServer {
     let escrow: Arc<std::sync::Mutex<Vec<u8>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
     MockServer::start(
@@ -310,17 +317,36 @@ async fn flow_server() -> MockServer {
                     .to_string(),
                 ),
             ("PATCH", "/upload/sess-1") => MockResponse::new(200, "OK"),
-            ("PUT", "/api/backup/escrow") => {
-                if let Ok(mut stored) = escrow.lock() {
+            ("PUT", "/api/v1/auth/escrow") => {
+                let replaced = if let Ok(mut stored) = escrow.lock() {
+                    let replaced = !stored.is_empty();
                     stored.clone_from(&req.body);
-                }
-                MockResponse::new(204, "No Content")
+                    replaced
+                } else {
+                    false
+                };
+                MockResponse::new(200, "OK").json_body(
+                    serde_json::json!({
+                        "stored_at": "2026-01-01T00:00:00Z",
+                        "replaced": replaced,
+                    })
+                    .to_string(),
+                )
             }
-            ("GET", "/api/backup/escrow") => {
+            ("GET", "/api/v1/auth/escrow") => {
                 let stored = escrow.lock().map(|s| s.clone()).unwrap_or_default();
                 if stored.is_empty() {
                     // Nothing enrolled yet — the typed `NotEnrolled` path.
-                    MockResponse::new(404, "Not Found")
+                    MockResponse::new(404, "Not Found").json_body(
+                        serde_json::json!({
+                            "type": "about:blank",
+                            "title": "Not found",
+                            "status": 404,
+                            "detail": "no escrow has been stored for this account",
+                            "code": "error.escrow.not_stored",
+                        })
+                        .to_string(),
+                    )
                 } else {
                     let mut response = MockResponse::new(200, "OK")
                         .header("Content-Type", "application/octet-stream");
@@ -403,12 +429,28 @@ async fn ffi_enroll_album_seal_upload_sync_apply_round_trip() {
     let blobs = workspace.upload_blobs(asset.clone()).unwrap();
     assert_eq!(
         blobs.iter().map(|b| b.tier.as_str()).collect::<Vec<_>>(),
-        vec!["index", "original"],
-        "T0 (metadata) precedes T2 (original); no derivatives without a codec"
+        vec!["index", "index", "original"],
+        "T0 is two blobs — provenance then metadata, the pair the server needs before it may \
+         publish the asset — and precedes T2; no derivatives without a codec"
+    );
+    assert!(
+        matches!(
+            (
+                &blobs[0].request.blob_role,
+                &blobs[1].request.blob_role,
+                &blobs[2].request.blob_role,
+            ),
+            (
+                FfiBlobRole::Provenance,
+                FfiBlobRole::Metadata,
+                FfiBlobRole::Original
+            )
+        ),
+        "the index tier is provenance then metadata; the original is T2"
     );
     // Keep the wire bytes the feed would carry for this asset before consuming the blobs.
-    let metadata_blob = blobs[0].bytes.clone();
-    let ciphertext = blobs[1].bytes.clone();
+    let metadata_blob = blobs[1].bytes.clone();
+    let ciphertext = blobs[2].bytes.clone();
     for blob in blobs {
         // Every envelope names *this* blob's content address (the server's invariant-15
         // consistency rule) while carrying the head manifest's fields verbatim.
@@ -425,7 +467,9 @@ async fn ffi_enroll_album_seal_upload_sync_apply_round_trip() {
 
     // 5. Sync-apply: exactly the three byte strings a feed entry carries.
     let album_bytes = uuid::Uuid::parse_str(&album).unwrap().as_bytes().to_vec();
-    let manifest_cbor = workspace.signed_manifest(asset.clone()).unwrap();
+    // The feed carries the provenance record, not the bare manifest — the record is what the
+    // server's chain head hashes and what `apply_sync_entry` decodes.
+    let manifest_cbor = workspace.provenance_head(asset.clone()).unwrap();
     let entry = || FfiSyncEntry {
         album_id: album_bytes.clone(),
         manifest_cbor: manifest_cbor.clone(),
@@ -489,7 +533,7 @@ async fn ffi_sync_apply_quarantines_a_tampered_entry() {
     let outcome = workspace
         .apply_sync_entry(FfiSyncEntry {
             album_id: uuid::Uuid::parse_str(&album).unwrap().as_bytes().to_vec(),
-            manifest_cbor: workspace.signed_manifest(asset).unwrap(),
+            manifest_cbor: workspace.provenance_head(asset).unwrap(),
             metadata_blob: blobs[0].bytes.clone(),
             original_ciphertext: ciphertext,
             local_chain_head: None,
@@ -691,9 +735,9 @@ async fn ffi_p256_hardware_signer_constructor_reaches_the_same_flow() {
     let outcome = workspace
         .apply_sync_entry(FfiSyncEntry {
             album_id: uuid::Uuid::parse_str(&album).unwrap().as_bytes().to_vec(),
-            manifest_cbor: workspace.signed_manifest(asset).unwrap(),
-            metadata_blob: blobs[0].bytes.clone(),
-            original_ciphertext: blobs[1].bytes.clone(),
+            manifest_cbor: workspace.provenance_head(asset).unwrap(),
+            metadata_blob: blobs[1].bytes.clone(),
+            original_ciphertext: blobs[2].bytes.clone(),
             local_chain_head: None,
         })
         .unwrap();
@@ -752,7 +796,8 @@ fn ffi_workspace_surfaces_errors_instead_of_panicking() {
     // An unknown asset is a typed workspace error.
     let missing = uuid::Uuid::now_v7().to_string();
     assert!(workspace.read_plaintext(missing.clone()).is_err());
-    assert!(workspace.signed_manifest(missing).is_err());
+    assert!(workspace.signed_manifest(missing.clone()).is_err());
+    assert!(workspace.provenance_head(missing).is_err());
     // A short chain head is refused before any verification runs.
     match workspace.apply_sync_entry(FfiSyncEntry {
         album_id: uuid::Uuid::now_v7().as_bytes().to_vec(),

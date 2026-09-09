@@ -12,8 +12,9 @@
 //! steps. What this module adds is the orchestration a feed entry needs and a local import
 //! does not:
 //!
-//! 1. decode the manifest from the **opaque canonical CBOR** the feed carries verbatim (never
-//!    re-encoded — re-encoding would detach it from its signatures);
+//! 1. decode the **provenance record** from the opaque canonical CBOR the feed carries
+//!    verbatim (never re-encoded — re-encoding would detach the manifest inside it from its
+//!    signatures), and check the record's `prior_provenance_hash` against the manifest's;
 //! 2. run [`verify_asset`] against this workspace's device directory, the album's attested
 //!    authority, and the caller's local provenance head;
 //! 3. bind the sealed metadata blob to the manifest (content address, then AEAD open under the
@@ -39,7 +40,31 @@
 //! federation pull, and a LAN peering delta all deliver the identical three byte strings, so
 //! these signatures are unaffected by which one a client speaks.
 //!
+//! # What the feed's `manifest_cbor` actually carries
+//!
+//! The **provenance blob's** bytes, unchanged — and the provenance blob is the canonical CBOR
+//! of a [`ProvenanceRecord`], not of a bare [`AssetManifest`]. That is forced, not chosen:
+//! [provenance.md § Physical Storage] makes the server-side chain an append-only sequence of
+//! envelope objects "served back unchanged", and the server's chain head is the SHA-256 of
+//! those bytes while a client's next `prior_provenance_hash` is
+//! [`record_hash()`](crate::crypto::provenance::ProvenanceRecord::record_hash) — the digest of
+//! the canonical *record*. Any other encoding makes the two disagree, and no lifecycle op could
+//! ever chain onto a synced asset.
+//!
+//! The manifest is not re-encoded by the wrapper: canonical CBOR is deterministic, so the
+//! manifest sub-map inside the record is byte-identical to the manifest's own signed bytes, and
+//! [provenance.md § Asset Manifest]'s "the signed bytes are the served bytes" holds through it.
+//! [`verify_asset`] still verifies over the manifest's recomputed signing bytes, exactly as
+//! before.
+//!
+//! The record's `prior_provenance_hash` is checked against the manifest's own before either is
+//! used — [provenance.md § Chained, Append-Only Structure] calls the pair "a checked invariant,
+//! not trusted redundancy", and this is the wire path where nothing else would check it.
+//!
 //! [download & sync]: https://docs/design/import/download-sync/
+//! [provenance.md § Asset Manifest]: https://docs/design/cryptography/provenance/#asset-manifest
+//! [provenance.md § Chained, Append-Only Structure]: https://docs/design/cryptography/provenance/#chained-append-only-structure
+//! [provenance.md § Physical Storage]: https://docs/design/cryptography/provenance/#physical-storage
 //! [`verify_asset`]: crate::crypto::verify_asset::verify_asset
 //! [`VerifyOutcome`]: crate::crypto::verify_asset::VerifyOutcome
 
@@ -189,15 +214,45 @@ impl Workspace {
             Binding, MalformedManifest, MalformedSidecar, Rejected, SidecarSignature, UnknownAlbum,
         };
 
-        let manifest: AssetManifest = match cbor::from_slice(entry.manifest_cbor) {
-            Ok(manifest) => manifest,
+        // The feed serves the provenance blob's bytes, which are a *record* — see the module
+        // docs. Decoding them as a bare manifest is why a correctly pushed asset used to be
+        // quarantined by every receiving device.
+        let record: ProvenanceRecord = match cbor::from_slice(entry.manifest_cbor) {
+            Ok(record) => record,
             Err(e) => {
-                tracing::warn!(error = %e, "sync-apply: manifest CBOR did not decode");
+                tracing::warn!(error = %e, "sync-apply: provenance record CBOR did not decode");
                 return Ok(SyncApplyOutcome::Quarantined(MalformedManifest(
                     e.to_string(),
                 )));
             }
         };
+        // The two copies of the chain link, checked before either is used. A record that
+        // disagrees with the manifest it carries is malformed whichever copy is right, and the
+        // manifest's is the signed one — so preferring either would be trusting a value no
+        // signature covers.
+        if !record.mirrors_manifest() {
+            tracing::warn!(
+                asset_id = %record.asset_id,
+                "sync-apply: the record's prior_provenance_hash does not mirror the manifest's"
+            );
+            return Ok(SyncApplyOutcome::Quarantined(MalformedManifest(
+                "the record's prior_provenance_hash does not mirror the manifest's".to_owned(),
+            )));
+        }
+        // The record names its asset too; a record whose subject is not the manifest's `file_id`
+        // is a splice of two assets' history and never applies.
+        if record.asset_id != record.manifest.core.file_id {
+            tracing::warn!(
+                record_asset = %record.asset_id,
+                manifest_asset = %record.manifest.core.file_id,
+                "sync-apply: the record names a different asset than its manifest"
+            );
+            return Ok(SyncApplyOutcome::Quarantined(MalformedManifest(format!(
+                "record names asset {} but its manifest names {}",
+                record.asset_id, record.manifest.core.file_id
+            ))));
+        }
+        let manifest: AssetManifest = record.manifest;
         let core = manifest.core.clone();
         tracing::debug!(
             asset_id = %core.file_id,
@@ -343,6 +398,9 @@ mod tests {
     /// The three byte strings a feed entry carries for one asset, exactly as `upload_bundle`
     /// puts them on the wire.
     struct Wire {
+        /// The **provenance blob**: the canonical CBOR of the chain head record, taken
+        /// straight off `UploadBundle::provenance_blob` so these fixtures cannot drift from
+        /// what the push ladder actually uploads.
         manifest_cbor: Vec<u8>,
         metadata_blob: Vec<u8>,
         ciphertext: Vec<u8>,
@@ -357,16 +415,8 @@ mod tests {
         let asset = ws.import_asset(album, &img).unwrap();
 
         let bundle = ws.upload_bundle(&asset).unwrap();
-        let head = &ws
-            .asset(&asset)
-            .unwrap()
-            .chain
-            .records()
-            .last()
-            .unwrap()
-            .manifest;
         let wire = Wire {
-            manifest_cbor: cbor::to_canonical_vec(head).unwrap(),
+            manifest_cbor: bundle.provenance_blob.clone(),
             metadata_blob: bundle.metadata_blob.clone(),
             ciphertext: bundle.ciphertext.clone(),
         };
@@ -423,7 +473,7 @@ mod tests {
         let create_head = records[0].record_hash();
         let bundle = ws.upload_bundle(&asset).unwrap();
         let wire = Wire {
-            manifest_cbor: cbor::to_canonical_vec(&records[1].manifest).unwrap(),
+            manifest_cbor: bundle.provenance_blob.clone(),
             // A tombstone carries no metadata blob on the wire.
             metadata_blob: Vec::new(),
             ciphertext: bundle.ciphertext.clone(),
@@ -520,6 +570,106 @@ mod tests {
         assert_eq!(
             ws.apply_remote_entry(entry(foreign, &wire, None)).unwrap(),
             SyncApplyOutcome::Quarantined(QuarantineReason::UnknownAlbum(foreign))
+        );
+    }
+
+    /// **The encoding the whole chain rests on.** The bytes the push ladder uploads as the
+    /// `provenance` blob — and therefore the bytes the feed serves back as `manifest_cbor` —
+    /// are the canonical CBOR of the head record, whose digest is by definition
+    /// `record_hash()`.
+    ///
+    /// That equality is the entire reason the encoding is not a free choice: the server's chain
+    /// head is the SHA-256 of the blob's bytes, and a client's next `prior_provenance_hash` is
+    /// `record_hash()`. Encode the bare manifest instead and the two are different numbers, so
+    /// no lifecycle op can ever chain onto a synced asset.
+    #[test]
+    fn the_provenance_blob_is_the_canonical_record_and_hashes_to_the_chain_head() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let (ws, _album, asset, wire) = seeded(&lib, &src);
+
+        let head = ws
+            .asset(&asset)
+            .unwrap()
+            .chain
+            .records()
+            .last()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            crate::crypto::hash::hash_bytes(&wire.manifest_cbor),
+            head.record_hash(),
+            "the blob's digest is the value a later op's prior_provenance_hash must equal"
+        );
+
+        let decoded: ProvenanceRecord = cbor::from_slice(&wire.manifest_cbor).unwrap();
+        assert_eq!(
+            decoded, head,
+            "the wire bytes round-trip to the head record"
+        );
+        // "The signed bytes are the served bytes" survives the wrapper: canonical CBOR is
+        // deterministic, so the manifest that comes back out of the record encodes to exactly
+        // the bytes the manifest encodes to on its own — the wrapper carries it, it does not
+        // re-author it. That the signatures over those bytes still verify is
+        // `unseen_entry_verifies_and_yields_facts`, through `verify_asset`.
+        assert_eq!(
+            cbor::to_canonical_vec(&decoded.manifest).unwrap(),
+            cbor::to_canonical_vec(&head.manifest).unwrap(),
+        );
+    }
+
+    /// The record's `prior_provenance_hash` and its manifest's must agree — provenance.md calls
+    /// them "a checked invariant, not trusted redundancy". Only the manifest's copy is signed,
+    /// so a divergence is refused rather than resolved in either direction.
+    #[test]
+    fn a_record_whose_mirror_diverges_is_quarantined() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let (ws, album, _asset, wire) = seeded(&lib, &src);
+
+        let mut record: ProvenanceRecord = cbor::from_slice(&wire.manifest_cbor).unwrap();
+        assert_eq!(record.prior_provenance_hash, None, "a create has no prior");
+        // A prior the signed manifest does not carry: the unsigned copy claims a chain
+        // position the signed one denies.
+        record.prior_provenance_hash = Some(Hash32::from_bytes([0x11; 32]));
+
+        let forged = Wire {
+            manifest_cbor: cbor::to_canonical_vec(&record).unwrap(),
+            metadata_blob: wire.metadata_blob.clone(),
+            ciphertext: wire.ciphertext.clone(),
+        };
+        assert!(
+            matches!(
+                ws.apply_remote_entry(entry(album, &forged, None)).unwrap(),
+                SyncApplyOutcome::Quarantined(QuarantineReason::MalformedManifest(_))
+            ),
+            "a divergent mirror is malformed, not applied"
+        );
+    }
+
+    /// A record whose `asset_id` is not its manifest's `file_id` is a splice of two assets'
+    /// history. The manifest still verifies — it is genuinely signed — so nothing downstream
+    /// would catch it.
+    #[test]
+    fn a_record_naming_another_asset_is_quarantined() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let (ws, album, _asset, wire) = seeded(&lib, &src);
+
+        let mut record: ProvenanceRecord = cbor::from_slice(&wire.manifest_cbor).unwrap();
+        record.asset_id = Uuid::now_v7();
+
+        let spliced = Wire {
+            manifest_cbor: cbor::to_canonical_vec(&record).unwrap(),
+            metadata_blob: wire.metadata_blob.clone(),
+            ciphertext: wire.ciphertext.clone(),
+        };
+        assert!(
+            matches!(
+                ws.apply_remote_entry(entry(album, &spliced, None)).unwrap(),
+                SyncApplyOutcome::Quarantined(QuarantineReason::MalformedManifest(_))
+            ),
+            "a record must name the asset its manifest names"
         );
     }
 }

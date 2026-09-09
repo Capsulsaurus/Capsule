@@ -54,6 +54,7 @@ jobs:
               - 'capsule-wire/**'
               - 'capsule-i18n/**'
               - 'capsule-cli/**'
+              - 'capsule-e2e/**'
               - 'capsule-core/**'
               - 'capsule-sdk/**'
               - 'xtask/**'
