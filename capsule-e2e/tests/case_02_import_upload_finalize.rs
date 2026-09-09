@@ -1,10 +1,10 @@
 //! **E2E case 2** — full import + upload + finalize.
 //!
-//! Local import → the library's upload bundle → the SDK's staged ladder (metadata, the JXL
-//! thumbnail, the original) plus the provenance rung → every blob finalized at its content
-//! address under the server's blob root, byte for byte → the server's storage-verify answer is
-//! durable → the asset is on the feed with its original held, its derivative referenced and
-//! its metadata blob named.
+//! Local import → the library's upload bundle → the SDK's staged ladder (the index tier's
+//! provenance and metadata blobs, then the JXL thumbnail, then the original) → every blob
+//! finalized at its content address under the server's blob root, byte for byte → the server's
+//! storage-verify answer is durable → the asset is on the feed with its original held, its
+//! derivative referenced and its metadata blob named.
 //!
 //! The still is 512×512 — past the thumbnail tier's 256-pixel cap — so the media stack decodes
 //! it and encodes a real thumbnail, and T1 is a real upload rather than the byte-free sentinel
@@ -13,7 +13,7 @@
 use capsule_core::crypto::hash::Hash32;
 use capsule_core::import::UploadTier;
 use capsule_e2e::fixtures::large_synthetic_jpeg;
-use capsule_e2e::push::{provenance_bytes, push_asset};
+use capsule_e2e::push::push_asset;
 use capsule_e2e::{Device, Server, entry_for};
 use capsule_sdk::verify::{AssetQuery, StorageVerifyClient, VerifyTransport};
 
@@ -40,8 +40,9 @@ async fn e2e_case_2_import_upload_finalize_lands_every_blob_at_its_content_addre
             .collect::<Vec<_>>()
     );
 
-    // The ladder ran every tier: T0, one T1 per derivative, then T2.
-    let mut expected = vec![UploadTier::Index];
+    // The ladder ran every tier: two T0 rungs (provenance, then metadata), one T1 per
+    // derivative, then T2.
+    let mut expected = vec![UploadTier::Index, UploadTier::Index];
     expected.extend(bundle.derivatives.iter().map(|_| UploadTier::Preview));
     expected.push(UploadTier::Original);
     assert_eq!(pushed.report.tier_sequence(), expected);
@@ -61,10 +62,7 @@ async fn e2e_case_2_import_upload_finalize_lands_every_blob_at_its_content_addre
             derivative.bytes
         );
     }
-    assert_eq!(
-        on_disk(&pushed.provenance_hash),
-        provenance_bytes(&device, &asset)
-    );
+    assert_eq!(on_disk(&pushed.provenance_hash), bundle.provenance_blob);
 
     // The server's own custody answer for the whole set is durable.
     let mut hashes = vec![
@@ -128,8 +126,7 @@ async fn e2e_case_2_import_upload_finalize_lands_every_blob_at_its_content_addre
         "the feed names the metadata blob by its content address"
     );
     assert_eq!(
-        entry.manifest_cbor,
-        provenance_bytes(&device, &asset),
+        entry.manifest_cbor, bundle.provenance_blob,
         "the feed serves the provenance blob's bytes unchanged"
     );
 }

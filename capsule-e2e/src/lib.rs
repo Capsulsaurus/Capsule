@@ -18,9 +18,6 @@
 //! What the harness adds on top of the SDK is exactly the seams the SDK does not have yet, each
 //! recorded as a finding in the pull request that landed this crate:
 //!
-//! - the **provenance rung** ([`push::push_asset`]): the SDK's push ladder ships metadata,
-//!   derivatives and the original but never the `provenance` blob, and the server publishes an
-//!   asset to the feed only once it holds both index-tier roles (issue #464);
 //! - the **directory publish** ([`Device::publish_directory`]): the server requires the
 //!   `X-Capsule-Identity-Key` header on every publish and the SDK's `DirectoryClient` does not
 //!   send it (issue #466), and a directory must name the *server's* account id, which a
