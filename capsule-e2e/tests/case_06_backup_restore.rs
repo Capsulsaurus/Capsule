@@ -10,11 +10,14 @@
 //! - **`E2E case 6 (escrow)`**: A escrows its master key at the low-RAM tier through the SDK's
 //!   `RecoveryClient` over the real route; a second session fetches it byte for byte and
 //!   `recover_master_key` yields A's key, proved by re-deriving A's default album id. Two
-//!   Argon2id passes at `DeviceTier::LowRam` (the wrap and the recovery) — the one memory-hard
-//!   test in the crate.
+//!   Argon2id passes at `DeviceTier::LowRam` (the wrap and the recovery), which is the only
+//!   memory-hard cost this crate pays: the tier is the thing under test here, so it is spelled
+//!   out rather than made cheap.
 //! - **`E2E case 6 (restore)`**: A exports a backup; a fresh library on a new root imports it
 //!   under the exporter's verifying key, reads the asset byte for byte and walks its chain.
 //!   `verify` is asserted to refuse: the artifact carries no album authority (issue #468).
+//!   The export names [`FAST_KDF`] explicitly, and the import needs no such argument: the
+//!   artifact records the cost it was wrapped under, so a cheap export is a cheap restore.
 
 use capsule_core::crypto::keys::MasterKey;
 use capsule_core::crypto::primitives::DeviceTier;
@@ -72,7 +75,7 @@ async fn e2e_case_6_a_fresh_library_restores_the_backup() {
     let asset = a.import_jpeg("keepsake.jpg");
     let archive = a.staging.path().join("backup.tar");
     a.workspace
-        .export_backup(&archive, BACKUP_PASSPHRASE)
+        .export_backup_with_params(&archive, BACKUP_PASSPHRASE, FAST_KDF)
         .expect("the backup exports");
     let exporter = a.workspace.exporter_verifying_key();
 

@@ -14,7 +14,7 @@ use crate::backup::{
 };
 use crate::crypto::hash::{self, Hash32};
 use crate::crypto::keys::HybridVerifyingKey;
-use crate::crypto::primitives::{CRYPTO_SUITE_ID, DeviceTier};
+use crate::crypto::primitives::{Argon2Params, CRYPTO_SUITE_ID, DeviceTier};
 use crate::crypto::provenance::{AssetManifest, ProvenanceChain};
 use crate::crypto::pwkdf::WrappedSecret;
 use crate::metadata::crdt::Lww;
@@ -69,9 +69,27 @@ impl Workspace {
             .collect()
     }
 
-    /// Export every managed asset to a portable backup artifact.
-    #[tracing::instrument(skip_all, fields(out = %out.display()))]
+    /// Export every managed asset to a portable backup artifact, wrapping the AMK ledger at the
+    /// production Argon2id cost ([`backup::WRAP_PARAMS`]).
     pub fn export_backup(&self, out: &Path, passphrase: &[u8]) -> Result<()> {
+        self.export_backup_with_params(out, passphrase, backup::WRAP_PARAMS)
+    }
+
+    /// As [`export_backup`](Self::export_backup) but with an explicit Argon2id cost for the
+    /// artifact's wrap key.
+    ///
+    /// The cost is recorded in the artifact, so
+    /// [`import_backup`](Self::import_backup) reproduces the wrap key from what it reads rather
+    /// than from a constant: exporting cheaply makes *both* legs of a backup round trip cheap,
+    /// and no import-side entry point is needed. A test uses this; anything a user runs uses
+    /// [`export_backup`](Self::export_backup), whose wrap key is memory-hard.
+    #[tracing::instrument(skip_all, fields(out = %out.display(), ?params))]
+    pub fn export_backup_with_params(
+        &self,
+        out: &Path,
+        passphrase: &[u8],
+        params: Argon2Params,
+    ) -> Result<()> {
         let mut assets = Vec::new();
         let mut amks: BTreeMap<(Uuid, u32), [u8; 32]> = BTreeMap::new();
 
@@ -112,7 +130,8 @@ impl Workspace {
             source_library_version: "1".into(),
             export_timestamp: now_rfc3339(),
         };
-        let bytes = backup::export(&input, passphrase, self.device_signer.as_ref())?;
+        let bytes =
+            backup::export_with_params(&input, passphrase, params, self.device_signer.as_ref())?;
         fs::write(out, &bytes).map_err(|e| LifecycleError::Io(e.to_string()))?;
         tracing::info!(bytes = bytes.len(), "backup: export complete");
         Ok(())

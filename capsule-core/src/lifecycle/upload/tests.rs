@@ -145,7 +145,8 @@ fn export_backup_still_round_trips_through_the_accessor() {
 
     let (exporter_pub, bundle) = {
         let ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
-        ws.export_backup(&archive, b"backup-pass").unwrap();
+        ws.export_backup_with_params(&archive, b"backup-pass", FAST)
+            .unwrap();
         (
             ws.exporter_verifying_key(),
             ws.upload_bundle(&asset_id).unwrap(),

@@ -15,7 +15,8 @@
 pub mod artifact;
 
 pub use artifact::{
-    BackupArtifact, BackupAsset, BackupInput, RestoreMode, RestoreReport, export, export_with_salt,
+    BackupArtifact, BackupAsset, BackupInput, RestoreMode, RestoreReport, WRAP_PARAMS, export,
+    export_with_params, export_with_salt, export_with_salt_and_params,
 };
 use thiserror::Error;
 
