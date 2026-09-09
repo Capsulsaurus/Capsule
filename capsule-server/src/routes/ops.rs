@@ -21,6 +21,51 @@
 //! chain head and then both write would both pass a handler-side check and double-apply, which
 //! is the stale revival invariant 17 exists to catch, reintroduced by the code enforcing it.
 //!
+//! # What a continuation's author means, and what actually authenticates the caller
+//!
+//! Every action this surface admits is a **chain continuation**. The allow-list in
+//! [`check_op`](crate::upload::envelope::check_op) is `delete | trash-restore |
+//! metadata-update | derivative-add | derivative-replace` — the five that do not move blob
+//! bytes — and none of them may carry a null `prior_provenance_hash`. The two that *do* move
+//! bytes, `create` and `replace`, are `POST /v1/upload`'s by definition.
+//!
+//! That matters for one field. `capsule_core`'s continuation builder
+//! (`lifecycle::provenance::sign_lifecycle`) fills everything it does not explicitly override
+//! from the chain head — `..base.clone()` — so `created_by_user` and `created_by_device` travel
+//! **down the chain from the asset's creator**, and only `action`, `prior_provenance_hash`,
+//! `retention_until`, `metadata_blob_hash`, `timestamp` and `client_version` are re-minted per
+//! write. On a shared album that is the whole point of `S-C51`: a writer member deleting an
+//! asset the owner created continues the owner's chain, and the record legitimately names the
+//! owner. **So this surface does not compare `created_by_user` to the caller.** A server that
+//! did would refuse exactly the writes the membership widening exists to admit.
+//!
+//! What authenticates the write, then, in the order it is decided:
+//!
+//! 1. the **bearer token** — the caller is an authenticated account, and every check below is
+//!    about that account, never about a field in the body;
+//! 2. **standing** (`S-C8`) — a suspended account may not write, whoever the manifest names;
+//! 3. **write capability** — [`WriteAuthority::album_write_access`] answers owner-or-writer-member
+//!    for *this caller* on *this album*, and a reader, a former member and a stranger get one
+//!    indistinguishable `403`;
+//! 4. **invariant 7** — `created_by_device` must be a device in the **caller's own** published
+//!    directory. This is the binding between the document and the account presenting it, and it
+//!    is strictly stronger than comparing an account id: a device id in your directory is not
+//!    something another account can borrow.
+//!
+//! And what is **not** verified here, plainly: the server holds no keys and never parses
+//! `manifest_cbor`, so it cannot check `device_sig` at all. It cannot therefore verify
+//! *attribution* — that the account the record names really signed it. That check is the
+//! client's, in `capsule_core::crypto::verify_asset`, which resolves `created_by_device` inside
+//! `created_by_user`'s published directory and verifies the device signature under that entry.
+//! The server's job is to refuse writes from accounts that may not write; deciding whether a
+//! stored record is authentic is a key-holder's job and stays one.
+//!
+//! One consequence is worth naming because it is not the server's to fix: `sign_lifecycle`
+//! inherits `created_by_device` from the chain head as well, while signing with the *current*
+//! device, so a continuation written by any device other than the creating one names a device
+//! that did not sign it and fails `verify_asset`'s device-signature check. Invariant 7 refuses
+//! such a manifest here too, for its own reason. Tracked as issue #475.
+//!
 //! # A rejection writes nothing a client can observe
 //!
 //! The bundle's blobs are stored *before* the index is asked to apply the op, so a refusal can
@@ -243,26 +288,12 @@ pub async fn apply_op(
         ));
     }
 
-    // The envelope attributes the write to an account, and nothing downstream re-derives it: the
-    // manifest is stored verbatim and served back as the asset's provenance. So an unchecked
-    // `created_by_user` lets a caller who may write to an album sign that album's history in
-    // somebody else's name. Invariant 7 binds the *device* to the caller's own directory; this
-    // binds the *account*, which was implicit while only the owner could write here and stopped
-    // being implicit when `S-C51` admitted every writer member.
-    //
-    // A `400` and the envelope-mismatch code, like every other field that contradicts what the
-    // request itself establishes — the album id in the path, the metadata hash over the bytes in
-    // hand. The `403`s on this surface are about *capability*; this is a contradiction.
-    if request.manifest_envelope.created_by_user != caller.as_str() {
-        tracing::info!(
-            %caller, %album,
-            "a lifecycle write was refused: created_by_user is not the caller"
-        );
-        return Err(OpRejection::invalid(
-            error_codes::UPLOAD_ENVELOPE_MISMATCH,
-            "created_by_user is not the authenticated caller",
-        ));
-    }
+    // `created_by_user` is deliberately **not** compared to the caller here. See the module
+    // docs' "What a continuation's author means" — every action this surface admits is a chain
+    // continuation, and `capsule_core`'s continuation builder carries the field down from the
+    // chain head, so on a shared album a writer member's delete legitimately names the *owner*.
+    // What binds the write to the caller is invariant 7 below: the device the manifest names
+    // must be in the caller's own published directory.
 
     // Account standing (`S-C8`), on the seam `POST /v1/upload` uses and for the same reason: a
     // suspension removes the ability to write, and a lifecycle op is a write — the only one that

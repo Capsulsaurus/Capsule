@@ -605,7 +605,25 @@ async fn with_bob(role: Option<capsule_server::membership::MemberRole>) -> (Fixt
     (fixture, bearer)
 }
 
-/// The delete bundle, as Bob's device would sign it.
+/// The delete bundle a writer member's device really produces, continuing the owner's chain.
+///
+/// **`created_by_user` is left as the chain head's — the owner — on purpose.** A lifecycle op is
+/// a chain continuation, and `capsule_core`'s continuation builder
+/// (`lifecycle::provenance::sign_lifecycle`) fills every field it does not explicitly override
+/// from `base` (`..base.clone()`), overriding only `action`, `prior_provenance_hash`,
+/// `retention_until`, `metadata_blob_hash`, `timestamp` and `client_version`. So the author
+/// travels down the chain from the creator and a member's delete of the owner's asset names the
+/// owner. An earlier revision of this helper overwrote the field to Bob's own id, which is what
+/// let a server-side "author must be the caller" check look correct while refusing every real
+/// member write; the field is inherited here so this suite tests the shape a client actually
+/// sends.
+///
+/// `created_by_device` **is** Bob's, and that is not a contradiction of the above: invariant 7
+/// resolves it in the *caller's* published directory, so it is the one field on a continuation
+/// this surface can and does bind to the account presenting the token. That `sign_lifecycle`
+/// inherits the device too — signing with the current device while naming the base's — is a
+/// core-side defect that no server check can repair and that `verify_asset` refuses on its own
+/// terms: issue #475.
 fn bobs_delete(fixture: &Fixture) -> Value {
     let mut body = bundle(
         fixture,
@@ -614,7 +632,11 @@ fn bobs_delete(fixture: &Fixture) -> Value {
         Some(&created_head()),
         None,
     );
-    body["manifest_envelope"]["created_by_user"] = BOB.into();
+    assert_eq!(
+        body["manifest_envelope"]["created_by_user"],
+        Value::from(user().as_str()),
+        "the continuation inherits the creator, which is what this suite is here to send"
+    );
     body["manifest_envelope"]["created_by_device"] = bobs_device().to_string().into();
     body
 }
@@ -796,38 +818,53 @@ async fn an_unreachable_moderation_store_refuses_the_lifecycle_op() {
     .await;
 }
 
-/// **A write is attributed to the account that made it.** The envelope carries
-/// `created_by_user` and the manifest is stored verbatim and served back as the asset's
-/// provenance, so nothing downstream re-derives the author. Until `S-C51` only the album owner
-/// could reach this surface and the field could only be their own; a writer member could
-/// otherwise sign the owner's album history in a third account's name.
+/// **The owner creates, a writer member deletes, and the write is accepted** — with the record
+/// still naming the owner as its author, because a lifecycle op is a chain continuation and
+/// `capsule_core`'s builder carries `created_by_user` down from the chain head.
+///
+/// This is the case the membership widening exists for, and it is the one a server-side
+/// "`created_by_user` must be the caller" check silently refuses. It passed once against a
+/// hand-overwritten envelope that no client produces; it is written here against the shape
+/// `sign_lifecycle` really emits, so that whoever reads this next can see which of the two the
+/// surface means.
+///
+/// The second arm is what the surface *does* bind: swap the device back to the owner's — the
+/// other half `sign_lifecycle` inherits — and invariant 7 refuses it, because the device a
+/// manifest names must live in the caller's own directory. Author is inherited; device is the
+/// caller's. See issue #475 for the core-side gap between those two facts.
 #[tokio::test]
-async fn an_op_attributed_to_another_account_is_refused() {
+async fn a_member_continues_the_owners_chain_under_the_owners_authorship() {
     use capsule_server::membership::MemberRole;
 
     let (fixture, bob) = with_bob(Some(MemberRole::Writer)).await;
     let owner_bearer = token(&fixture).await;
     let before = feed(&fixture, &owner_bearer).await;
 
-    // Bob, a writer member, attributing his op to the album's owner.
-    let mut forged = bobs_delete(&fixture);
-    forged["manifest_envelope"]["created_by_user"] = user().as_str().into();
-    let problem = apply(&fixture, &bob, &forged, StatusCode::BAD_REQUEST).await;
-    assert_eq!(problem["code"], "error.upload.envelope_mismatch");
+    let body = bobs_delete(&fixture);
     assert_eq!(
-        feed(&fixture, &owner_bearer).await,
-        before,
-        "nothing was written"
+        body["manifest_envelope"]["created_by_user"],
+        Value::from(user().as_str()),
+        "the member's continuation is authored by the owner, not by the caller"
+    );
+    assert_ne!(
+        body["manifest_envelope"]["created_by_user"],
+        Value::from(BOB),
+        "and the caller is a different account, which is the whole point of the case"
     );
 
-    // The owner attributing an op to the member is refused by the same rule: the check is
-    // "the author is the caller", not "the author is the owner".
-    let mut theirs = bundle(&fixture, "delete", "d-owner", Some(&created_head()), None);
-    theirs["manifest_envelope"]["created_by_user"] = BOB.into();
-    let mine = apply(&fixture, &owner_bearer, &theirs, StatusCode::BAD_REQUEST).await;
-    assert_eq!(mine["code"], "error.upload.envelope_mismatch");
-
-    // And the matching arm still applies: Bob's own op, under Bob's own name.
-    let applied = apply(&fixture, &bob, &bobs_delete(&fixture), StatusCode::OK).await;
+    let applied = apply(&fixture, &bob, &body, StatusCode::OK).await;
     assert_eq!(applied["action"], "delete");
+
+    let owners = feed(&fixture, &owner_bearer).await;
+    assert_ne!(owners, before, "the member's op advanced the owner's feed");
+    assert_eq!(owners["entries"][0]["asset_id"], ASSET);
+    assert_eq!(owners["entries"][0]["change"], "deleted");
+    assert_eq!(owners["entries"][0]["sync_seq"], applied["sync_seq"]);
+
+    // What the surface binds to the caller is the *device*, not the author.
+    let (fixture, bob) = with_bob(Some(MemberRole::Writer)).await;
+    let mut owners_device = bobs_delete(&fixture);
+    owners_device["manifest_envelope"]["created_by_device"] = device().to_string().into();
+    let problem = apply(&fixture, &bob, &owners_device, StatusCode::BAD_REQUEST).await;
+    assert_eq!(problem["code"], "error.upload.device_not_authorized");
 }
