@@ -99,8 +99,9 @@ fn manifest_envelope_mirrors_the_signed_manifest() {
     }
 }
 
-/// **The ladder.** A bundle's blobs come out strictly T0 (metadata index) → T1 (derivatives) →
-/// T2 (original), and each blob's declared size and role match what it actually carries.
+/// **The ladder.** A bundle's blobs come out strictly T0 (the index tier: provenance, then the
+/// metadata blob) → T1 (derivatives) → T2 (original), and each blob's declared size and role
+/// match what it actually carries.
 #[test]
 fn tier_blobs_are_ladder_ordered() {
     let (_dir, bundle) = real_bundle();
@@ -109,8 +110,8 @@ fn tier_blobs_are_ladder_ordered() {
     let tiers: Vec<_> = asset.ladder_ordered().iter().map(|b| b.tier).collect();
     assert_eq!(
         tiers,
-        vec![UploadTier::Index, UploadTier::Original],
-        "a CLI-shaped import has a metadata index and an original, no derivatives"
+        vec![UploadTier::Index, UploadTier::Index, UploadTier::Original],
+        "a CLI-shaped import has a two-blob index tier and an original, no derivatives"
     );
     assert!(
         tiers.windows(2).all(|w| w[0] <= w[1]),
@@ -118,19 +119,63 @@ fn tier_blobs_are_ladder_ordered() {
     );
 
     let blobs = bundle_blobs(&bundle);
-    assert_eq!(blobs[0].0.role, BlobRole::Metadata);
+    assert_eq!(
+        blobs.iter().map(|(b, _)| b.role).collect::<Vec<_>>(),
+        vec![BlobRole::Provenance, BlobRole::Metadata, BlobRole::Original],
+        "provenance leads the index tier: it is the blob the server reads the asset's own \
+         claims out of"
+    );
     assert_eq!(blobs[0].0.content_type, "application/octet-stream");
-    assert_eq!(blobs[0].1, bundle.metadata_blob_hash.unwrap().to_hex());
-    assert_eq!(blobs.last().unwrap().0.role, BlobRole::Original);
+    assert_eq!(blobs[0].0.bytes, bundle.provenance_blob.as_slice());
+    assert_eq!(blobs[1].0.content_type, "application/octet-stream");
+    assert_eq!(blobs[1].1, bundle.metadata_blob_hash.unwrap().to_hex());
     assert_eq!(blobs.last().unwrap().1, bundle.ciphertext_hash.to_hex());
 
-    // Server truth prunes the ladder: a held original leaves only the index outstanding.
+    // Server truth prunes the ladder: a held original leaves the index tier outstanding.
     let held: HashSet<String> = [bundle.ciphertext_hash.to_hex()].into_iter().collect();
     let remaining = remaining_tiers(&asset, &held);
     assert_eq!(
         remaining.blobs.iter().map(|b| b.tier).collect::<Vec<_>>(),
-        vec![UploadTier::Index]
+        vec![UploadTier::Index, UploadTier::Index]
     );
+}
+
+/// **The rung the ladder used to omit** (issue #464). The provenance blob is uploaded under
+/// the `provenance` role, its bytes are the canonical CBOR of the chain head, and its content
+/// address is `record_hash()` — the value a later lifecycle op's `prior_provenance_hash` must
+/// equal.
+///
+/// Without it the server never holds both index-tier roles, so a pushed asset is invisible on
+/// the feed to every device including the pusher's, and its row has no chain head for an op to
+/// build on. Both are silent: the upload succeeds.
+#[test]
+fn the_index_tier_carries_the_provenance_rung() {
+    use capsule_core::crypto::hash::hash_bytes;
+    use capsule_core::crypto::provenance::ProvenanceRecord;
+
+    let (_dir, bundle) = real_bundle();
+    let blobs = bundle_blobs(&bundle);
+    let (rung, hash) = &blobs[0];
+
+    assert_eq!(rung.role, BlobRole::Provenance);
+    assert_eq!(rung.tier, UploadTier::Index);
+
+    let record: ProvenanceRecord =
+        capsule_core::cbor::from_slice(rung.bytes).expect("the rung is a provenance record");
+    assert_eq!(record.asset_id, bundle.asset_id);
+    assert_eq!(
+        *hash,
+        record.record_hash().to_hex(),
+        "the rung's content address is record_hash(), which is what makes the server's chain \
+         head and a client's next prior_provenance_hash the same number"
+    );
+    assert_eq!(hash_bytes(rung.bytes).to_hex(), *hash);
+
+    // The envelope the server checks against invariant 15 names *this* blob.
+    let request = create_request(&bundle, rung, hash);
+    assert_eq!(request.hash, request.manifest_envelope.ciphertext_hash);
+    assert_eq!(request.blob_role, BlobRole::Provenance);
+    assert_eq!(request.size, bundle.provenance_blob.len() as u64);
 }
 
 /// **`duplicate_blob` is a merge, not a failure.** The server answers `409` +
@@ -185,14 +230,14 @@ async fn duplicate_blob_resolves_as_merge_not_error() {
 
     assert_eq!(
         report.tier_sequence(),
-        vec![UploadTier::Index, UploadTier::Original],
+        vec![UploadTier::Index, UploadTier::Index, UploadTier::Original],
         "the whole ladder still runs"
     );
     assert!(matches!(
         report.pushed[0].outcome,
         TierSessionOutcome::Uploaded { .. }
     ));
-    match &report.pushed[1].outcome {
+    match &report.pushed[2].outcome {
         TierSessionOutcome::AlreadyStored { asset_ref } => {
             assert_eq!(asset_ref, "asset-77", "the merge carries the existing ref");
         }
@@ -200,7 +245,7 @@ async fn duplicate_blob_resolves_as_merge_not_error() {
             panic!("expected AlreadyStored (merge), got {other:?}")
         }
     }
-    assert_eq!(creates.load(Ordering::SeqCst), 2, "one create per blob");
+    assert_eq!(creates.load(Ordering::SeqCst), 3, "one create per blob");
 }
 
 /// **Re-running a push is a no-op.** With every blob in the server-truth `held` set, nothing is
@@ -255,8 +300,9 @@ fn a_staged_policy_defers_the_original_on_a_metered_link() {
             .iter()
             .map(|b| b.tier)
             .collect::<Vec<_>>(),
-        vec![UploadTier::Index],
-        "a metered link escapes the index only"
+        vec![UploadTier::Index, UploadTier::Index],
+        "a metered link escapes the index tier only — both of its blobs, since an asset the \
+         server cannot publish is not worth the metered bytes either half costs"
     );
 
     let unmetered = StagedScheduler::new(

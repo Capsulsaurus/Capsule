@@ -79,6 +79,22 @@ pub struct UploadBundle {
     pub key_mode: KeyMode,
     /// The **exact** sealed metadata-blob wire bytes the manifest commits to.
     pub metadata_blob: Vec<u8>,
+    /// The **exact** provenance-blob wire bytes: the canonical CBOR of the chain's head
+    /// [`ProvenanceRecord`](crate::crypto::provenance::ProvenanceRecord).
+    ///
+    /// This is the asset's *envelope object* — the `provenance` blob of
+    /// [provenance.md § Physical Storage](https://docs/design/cryptography/provenance/#physical-storage),
+    /// stored by the server verbatim and served back unchanged on the sync feed. It is the
+    /// record and not the bare manifest because the server's chain head is the SHA-256 of these
+    /// bytes, while a client's next `prior_provenance_hash` is `record_hash()` — the digest of
+    /// the canonical record — so no other encoding lets a later lifecycle op chain onto what
+    /// this upload established. The manifest travels inside it, canonically encoded and
+    /// therefore byte-identical to its own signed bytes: "the signed bytes are the served
+    /// bytes" holds through the wrapper.
+    ///
+    /// Always present, unlike [`metadata_blob_hash`](Self::metadata_blob_hash): a managed asset
+    /// always has a chain head, even when its head action binds no metadata blob.
+    pub provenance_blob: Vec<u8>,
     /// The content address of the sealed metadata blob, when the head action binds one.
     pub metadata_blob_hash: Option<Hash32>,
     /// The asset's derivative blobs, if any were generated and persisted.
@@ -123,13 +139,18 @@ impl Workspace {
             .get(asset_id)
             .ok_or_else(|| LifecycleError::NotFound(format!("asset {asset_id}")))?;
         let album = self.album(&asset.album_id)?;
-        let head = &asset
+        let head_record = asset
             .chain
             .records()
             .last()
-            .expect("provenance chain is never empty")
-            .manifest
-            .core;
+            .expect("provenance chain is never empty");
+        let head = &head_record.manifest.core;
+        // The envelope object, encoded once here so the SDK ladder and the FFI hand the wire
+        // the same bytes. Canonical by construction: `record_hash()` is defined as the digest
+        // of exactly this encoding, which is what makes the server's chain head and a client's
+        // next `prior_provenance_hash` the same value.
+        let provenance_blob = cbor::to_canonical_vec(head_record)
+            .map_err(|e| LifecycleError::Cbor(format!("encoding the provenance record: {e}")))?;
 
         let plaintext =
             fs::read(self.media_path(asset)).map_err(|e| LifecycleError::Io(e.to_string()))?;
@@ -157,6 +178,7 @@ impl Workspace {
             amk_version = epoch,
             ciphertext_bytes = ciphertext.len(),
             metadata_blob_bytes = asset.metadata_blob.len(),
+            provenance_blob_bytes = provenance_blob.len(),
             derivatives = derivatives.len(),
             action = ?head.action,
             "upload bundle built"
@@ -176,6 +198,7 @@ impl Workspace {
             key_mode: head.key_mode,
             metadata_blob: asset.metadata_blob.clone(),
             metadata_blob_hash: head.metadata_blob_hash,
+            provenance_blob,
             derivatives,
             created_by_user: head.created_by_user,
             created_by_device: head.created_by_device,
