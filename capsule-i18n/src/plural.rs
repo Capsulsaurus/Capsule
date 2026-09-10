@@ -5,8 +5,8 @@
 //! per-platform renderers never needed this table: Apple and Android compile a plural
 //! ahead of time into a native resource and let the platform's own CLDR data pick the arm
 //! at display time (see `xtask i18n`). The Rust runtime has no platform underneath it, so
-//! it is the one target that must carry the rules itself — which is why [`crate::format`]
-//! refused plurals outright until this module existed.
+//! it is the one target that must carry the rules itself — which is why this crate's
+//! runtime formatter refused plurals outright until this module existed.
 //!
 //! # Scope
 //!
@@ -184,8 +184,8 @@ const RULES: &[Rules] = &[
 /// `locale` may be a full tag (`pt-BR`, `zh-Hans`) — only its language subtag matters.
 /// Selection uses the **absolute value** of `n`, as CLDR's `n` operand does, so `-1`
 /// selects the same category as `1` and `i64::MIN` cannot overflow. A language with no
-/// row in [`RULES`] yields [`Category::Other`], the category every language selects and
-/// every well-formed ICU plural carries.
+/// row in this module's rule table yields [`Category::Other`], the category every language
+/// selects and every well-formed ICU plural carries.
 #[must_use]
 pub fn category(locale: &str, n: i64) -> Category {
     rules(locale).map_or(Category::Other, |r| (r.select)(n.unsigned_abs()))

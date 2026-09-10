@@ -144,6 +144,14 @@ export const API_GROUPS = [
             "The account's own moderation record — every action taken against it, in order.",
         pathPrefixes: ['/v1/moderation/'],
     },
+    {
+        slug: 'federation',
+        label: 'Federation',
+        description:
+            'Server-to-server: refreshing a capability a peer holds, and receiving a ' +
+            'moderation report from one.',
+        pathPrefixes: ['/v1/federation/'],
+    },
 ];
 
 /**

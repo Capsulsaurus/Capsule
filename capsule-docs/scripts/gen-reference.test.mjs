@@ -779,6 +779,83 @@ describe('readOpenApiDocument', () => {
         expect(() => readOpenApiDocument(root)).toThrow(/oneOf/);
     });
 
+    // OpenAPI 3.1 has no `nullable`, so every `Option<T>` over a struct is spelled as a
+    // union with `null`. That is a composition by the letter and not by intent: one real
+    // branch flattens to a property table perfectly well. `AuthEndpointsResponse.oidc` was
+    // the first to reach the generator, and refusing it would have meant no REST reference
+    // at all for a document the server emits correctly.
+    it.each([
+        'anyOf',
+        'oneOf',
+    ])('accepts an optional object spelled as %s with null', (keyword) => {
+        const document = structuredClone(MINIMAL_OPENAPI);
+        document.components.schemas.TokenResponse = {
+            title: 'TokenResponse',
+            type: 'object',
+            properties: {
+                maybe: {
+                    [keyword]: [
+                        { $ref: '#/components/schemas/VersionResponse' },
+                        { type: 'null' },
+                    ],
+                },
+            },
+        };
+        writeOpenApi(document);
+        expect(() => readOpenApiDocument(root)).not.toThrow();
+    });
+
+    // The narrowness is the point: dropping the null arm must not become "drop any arm".
+    it('still refuses a union of two real branches beside null', () => {
+        const document = structuredClone(MINIMAL_OPENAPI);
+        document.components.schemas.TokenResponse = {
+            title: 'TokenResponse',
+            type: 'object',
+            properties: {
+                choice: {
+                    anyOf: [
+                        { type: 'string' },
+                        { type: 'integer' },
+                        { type: 'null' },
+                    ],
+                },
+            },
+        };
+        writeOpenApi(document);
+        expect(() => readOpenApiDocument(root)).toThrow(/TokenResponse/);
+        expect(() => readOpenApiDocument(root)).toThrow(/anyOf/);
+    });
+
+    // A genuine union hiding *inside* an optional is still a union.
+    it('refuses a composition nested inside a nullable branch', () => {
+        const document = structuredClone(MINIMAL_OPENAPI);
+        document.components.schemas.TokenResponse = {
+            title: 'TokenResponse',
+            type: 'object',
+            properties: {
+                maybe: {
+                    anyOf: [
+                        {
+                            type: 'object',
+                            properties: {
+                                choice: {
+                                    oneOf: [
+                                        { type: 'string' },
+                                        { type: 'integer' },
+                                    ],
+                                },
+                            },
+                        },
+                        { type: 'null' },
+                    ],
+                },
+            },
+        };
+        writeOpenApi(document);
+        expect(() => readOpenApiDocument(root)).toThrow(/TokenResponse/);
+        expect(() => readOpenApiDocument(root)).toThrow(/oneOf/);
+    });
+
     // A `$ref` is scanned on the target's own pass. Following it would report the same
     // composition once per reference, under whichever name was scanned first.
     it('reports a composed schema once, under its own name', () => {

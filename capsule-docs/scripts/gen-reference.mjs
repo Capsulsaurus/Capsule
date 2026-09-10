@@ -703,6 +703,34 @@ function assertRenderable(document) {
 }
 
 /**
+ * The one branch of a nullable union, or `null` when the schema is not one.
+ *
+ * OpenAPI 3.1 has no `nullable` keyword, so an optional *object* is spelled
+ * `anyOf: [{ $ref }, { type: 'null' }]` — which is what every `Option<T>` over a struct
+ * emits, `AuthEndpointsResponse.oidc` being the first to reach this generator. That is a
+ * composition by the letter of the document and not by intent: there is exactly one real
+ * branch, so it flattens to a property table perfectly well once the null arm is dropped.
+ *
+ * Deliberately narrow. A union with two real branches still has no property table and is
+ * still refused by {@link assertNoComposition} — this recognises the nullable idiom only,
+ * which is the difference between rendering an `Option` and guessing at a sum type.
+ *
+ * @param {unknown} schema
+ * @returns {Record<string, any> | null} The non-null branch, or `null`.
+ */
+function nullableBranch(schema) {
+    if (!schema || typeof schema !== 'object' || Array.isArray(schema))
+        return null;
+    for (const word of ['anyOf', 'oneOf']) {
+        const branches = schema[word];
+        if (!Array.isArray(branches)) continue;
+        const real = branches.filter((branch) => branch?.type !== 'null');
+        if (real.length === 1 && real.length < branches.length) return real[0];
+    }
+    return null;
+}
+
+/**
  * Refuse `oneOf`/`allOf`/`anyOf` anywhere in a named schema, not only at its root.
  *
  * Checking the root alone is the shape of the bug it was meant to prevent: a composition one
@@ -722,6 +750,14 @@ function assertRenderable(document) {
 function assertNoComposition(name, at, schema) {
     if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return;
     if (schema.$ref) return;
+
+    // An optional object is a composition only by spelling; see `nullableBranch`. Walk into
+    // the real branch so a genuine union *inside* an optional is still caught.
+    const nullable = nullableBranch(schema);
+    if (nullable) {
+        assertNoComposition(name, at, nullable);
+        return;
+    }
 
     const composed = COMPOSITION_KEYWORDS.filter((word) => schema[word]);
     if (composed.length > 0) {
@@ -804,6 +840,10 @@ export function bucketOperations(document) {
 function typeOf(schema) {
     if (!schema || typeof schema !== 'object') return 'unknown';
     if (schema.$ref) return refName(schema.$ref);
+    // `Option<T>` over an object, spelled as a union with `null`. Rendered as the branch it
+    // actually carries, so a reader sees `OidcEndpointsResponse | null` rather than `object`.
+    const nullable = nullableBranch(schema);
+    if (nullable) return `${typeOf(nullable)} | null`;
     if (schema.type === 'array') {
         return `${typeOf(schema.items ?? {})}[]`;
     }
