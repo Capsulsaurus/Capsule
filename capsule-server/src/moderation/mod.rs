@@ -23,22 +23,32 @@
 //! forget: a takedown that failed to record itself is exactly the silent operation the rule
 //! forbids, and it would fail silently in the direction that hides it.
 //!
-//! # What is not here, and why
+//! # The federated half (`S-C49`)
 //!
-//! - **Federated report intake** needs a peer's signing key to verify against, and federation
-//!   has no surface on this port. Its rate limit needs `S-C32`'s counter besides.
-//! - **The server-level blocklist** operates at the federation-capability layer, which likewise
-//!   does not exist here.
+//! Both halves design/moderation.md names are now here. **Federated report intake** is
+//! [`ModerationStore::file_report`], written by `POST /v1/federation/reports` once the report's
+//! Ed25519 signature verifies against the reporting peer's operator-pinned key and the
+//! `(reporting_server, reported_user)` budget admits it; [`ModerationStore::pending_reports`] is
+//! how an operator reads the queue. The content is a hash and an album pointer and nothing else,
+//! because a report must not become a channel for a peer to say things about a user.
 //!
-//! Both are `S-C8` deliverables and both are recorded as owed rather than stubbed, because a
-//! blocklist nothing consults is worse than an absent one: it reads as protection.
+//! **The server-level blocklist** is not here and is not meant to be: it operates at the
+//! federation-capability layer, so it is a column on [`crate::federation::PeerRecord`] and is
+//! consulted at mint, at every presentation, at refresh and at intake. Per-user blocks are
+//! MLS-side and never propagate.
+//!
+//! # What is still not here, and why
+//!
+//! **An admin surface.** design/moderation.md names an admin queue and an admin who acts on it,
+//! and specifies no way for that admin to authenticate. [`ModerationStore::pending_reports`] is
+//! the queue; reading it over HTTP is what waits for an admin authentication model.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use jiff::Timestamp;
 
-use crate::store::{AssetId, StoreFuture, UserId};
+use crate::store::{AlbumId, AssetId, StoreFuture, UserId};
 
 /// Whether an account may act.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,6 +127,57 @@ pub struct ModerationEvent {
     pub reason: Option<String>,
 }
 
+/// A moderation report one peer server filed against an account on this one (`S-C49`).
+///
+/// # The content is a pointer, not a complaint
+///
+/// design/moderation.md fixes what a federated report may carry: the reported user, the asset's
+/// **content hash** and the album it is in, and a short reason. No text about the person, no
+/// evidence blob, no copy of anything. A report is a request that this server's operator look at
+/// something it already holds — everything else would make the intake a channel for a peer to
+/// publish claims about a user into this server's storage.
+///
+/// # Re-verifiable, which means the *signed bytes* are what is kept
+///
+/// The signature is kept so an operator can re-verify it long after the fact, and so a key
+/// rotation cannot silently turn an accepted report into an unattributable one. That is only
+/// true if what is stored is what was signed — and the fields below are not: `reporting_server`
+/// is the canonical [`PeerId`](crate::federation::PeerId) form (case-folded, trailing dot
+/// stripped) rather than the string the peer sent, and `reported_at` is a parsed instant rather
+/// than the RFC 3339 text. Re-encoding those back into a claim would produce different bytes and
+/// a signature that no longer verifies.
+///
+/// So [`FederatedReport::signed`] holds the exact canonical-CBOR bytes the signature covers, and
+/// every field below is **derived from them** at intake rather than assembled beside them. An
+/// operator re-verifies with `signed` and the peer's pinned key and needs nothing else;
+/// `moderation::tests` pins the round trip.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FederatedReport {
+    /// This server's identifier for the report, a UUIDv7.
+    pub report_id: String,
+    /// The peer that filed it, as its own `server-info` names it.
+    pub reporting_server: String,
+    /// The account on **this** server the report is about.
+    pub reported_user: UserId,
+    /// The content address of the asset complained about.
+    pub asset_hash: String,
+    /// The album it was pulled from.
+    pub album_id: AlbumId,
+    /// The peer's short reason, where it gave one.
+    pub reason: Option<String>,
+    /// When the peer says it was reported.
+    pub reported_at: Timestamp,
+    /// When this server accepted it. The only timestamp this server vouches for.
+    pub received_at: Timestamp,
+    /// The peer's Ed25519 signature over [`Self::signed`].
+    pub signature: Vec<u8>,
+    /// The exact canonical-CBOR bytes the signature covers.
+    ///
+    /// Stored verbatim, never rebuilt: every other field on this record is derived from these
+    /// bytes, and re-encoding a normalized field would produce a report nobody can attribute.
+    pub signed: Vec<u8>,
+}
+
 /// The account-standing and moderation-record port.
 pub trait ModerationStore: std::fmt::Debug + Send + Sync {
     /// Apply `event` and move `standing` to match, as one operation.
@@ -134,7 +195,40 @@ pub trait ModerationStore: std::fmt::Debug + Send + Sync {
     /// The order is part of the contract: this is a user-visible surface, and a reader following
     /// what happened to their account needs it in the order it happened.
     fn events_for_user<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, Vec<ModerationEvent>>;
+
+    /// Record a federated report (`S-C49`).
+    ///
+    /// Writes nothing about the reported account's standing: a peer's report is an *input* to a
+    /// decision, never a decision. Filing one has no effect a user can observe, which is why it
+    /// is not a [`ModerationEvent`] — the no-silent-operations rule is about actions taken
+    /// against a user, and nothing has been taken.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::Rejected`](crate::store::StoreError::Rejected) if a report with the
+    /// same `report_id` is already recorded. The id is a fresh UUIDv7 per accepted report, so a
+    /// collision is a bug rather than a retry.
+    fn file_report(&self, report: FederatedReport) -> StoreFuture<'_, ()>;
+
+    /// Every federated report on file, oldest first.
+    ///
+    /// "Pending" is the whole set until an admin surface exists to work through it — there is no
+    /// authentication model for the admin who would resolve one (see the module docs), so a
+    /// resolved state would be a column nothing could ever set.
+    fn pending_reports(&self) -> StoreFuture<'_, Vec<FederatedReport>>;
 }
+
+/// The most federated reports the in-memory adapter keeps.
+///
+/// Reports arrive on an unauthenticated route from parties an operator pinned, and an in-memory
+/// map with no eviction is process memory that never returns — a `--memory` deployment left
+/// running would grow until it did not. Ten thousand is far above any real queue an operator
+/// works by hand and far below anything that matters to a process.
+///
+/// **Eviction is oldest-first and loud.** A dropped report is a moderation input nobody will
+/// ever see, so it is a `warn`, not a silent trim; the durable adapter (#476) is where a queue
+/// that must not lose anything belongs.
+pub const MAX_IN_MEMORY_REPORTS: usize = 10_000;
 
 /// A deterministic in-memory adapter.
 #[derive(Debug, Default)]
@@ -146,6 +240,8 @@ pub struct InMemoryModeration {
 struct Inner {
     standing: BTreeMap<UserId, Standing>,
     events: BTreeMap<UserId, Vec<ModerationEvent>>,
+    /// Keyed by `report_id`, which is a UUIDv7 — so iteration order is arrival order.
+    reports: BTreeMap<String, FederatedReport>,
 }
 
 impl InMemoryModeration {
@@ -189,6 +285,44 @@ impl ModerationStore for InMemoryModeration {
                 .cloned()
                 .unwrap_or(Standing::Active))
         })
+    }
+
+    fn file_report(&self, report: FederatedReport) -> StoreFuture<'_, ()> {
+        Box::pin(async move {
+            let mut inner = lock(&self.inner);
+            if inner.reports.contains_key(&report.report_id) {
+                return Err(crate::store::StoreError::Rejected {
+                    store: "moderation",
+                    detail: format!("report {} is already on file", report.report_id),
+                });
+            }
+            tracing::info!(
+                report = %report.report_id,
+                from = %report.reporting_server,
+                about = %report.reported_user,
+                album = %report.album_id,
+                "a federated moderation report was filed"
+            );
+            inner.reports.insert(report.report_id.clone(), report);
+            // The `report_id` is a UUIDv7, so the map's own order is arrival order and the first
+            // key is the oldest report.
+            while inner.reports.len() > MAX_IN_MEMORY_REPORTS {
+                let Some(oldest) = inner.reports.keys().next().cloned() else {
+                    break;
+                };
+                tracing::warn!(
+                    report = %oldest,
+                    kept = MAX_IN_MEMORY_REPORTS,
+                    "the in-memory report queue is full; the oldest report was dropped"
+                );
+                inner.reports.remove(&oldest);
+            }
+            Ok(())
+        })
+    }
+
+    fn pending_reports(&self) -> StoreFuture<'_, Vec<FederatedReport>> {
+        Box::pin(async move { Ok(lock(&self.inner).reports.values().cloned().collect()) })
     }
 
     fn events_for_user<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, Vec<ModerationEvent>> {

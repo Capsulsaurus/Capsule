@@ -322,6 +322,12 @@ pub struct Config {
     pub server_domain: String,
     /// The absolute base URL clients reach the versioned API at.
     pub api_base_url: String,
+    /// Where federated peers reach this server, when it federates at all (`FEDERATION_URL`).
+    ///
+    /// `None` is a deployment that does not federate: `server-info` publishes no
+    /// `federation_url`, and the capability lifecycle writes refuse with
+    /// `error.federation.not_configured`.
+    pub federation_url: Option<String>,
     /// The filesystem tree ciphertext blobs are written to. There is no object store.
     pub blob_root: Option<PathBuf>,
     /// The Postgres URL, once an adapter reads it (#402).
@@ -419,6 +425,10 @@ impl Config {
         let api_base_url = env
             .var("API_BASE_URL")
             .unwrap_or_else(|| format!("http://{server_domain}:{}/v1", listen.port()));
+        // Opt-in, and the value is the URL peers pull from: the federation surface is the
+        // versioned API itself (design/federation.md, "no new data protocol"), so a deployment
+        // that federates publishes its API base here.
+        let federation_url = env.var("FEDERATION_URL");
 
         // ── Storage ─────────────────────────────────────────────────────────────────────
         // `UPLOAD_DIR` is the name the retired deployment used, accepted so an operator's
@@ -640,6 +650,7 @@ impl Config {
                 listen,
                 server_domain,
                 api_base_url,
+                federation_url,
                 blob_root,
                 database_url,
                 valkey_url,

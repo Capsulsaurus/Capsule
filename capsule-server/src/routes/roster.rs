@@ -58,6 +58,7 @@ use serde::{Deserialize, Serialize};
 use crate::album::AlbumContext;
 use crate::auth::AccessToken;
 use crate::directory::DeviceDirectoryContext;
+use crate::federation::{self, FederationContext};
 use crate::membership::{MemberRole, MembershipContext, RosterOutcome, RosterRecord};
 use crate::routes::albums::AlbumsTag;
 use crate::routes::upgrade::AlbumPath;
@@ -295,6 +296,7 @@ pub async fn publish_album_roster(
     Inject(albums): Inject<AlbumContext>,
     Inject(directories): Inject<DeviceDirectoryContext>,
     Inject(membership): Inject<MembershipContext>,
+    Inject(federation): Inject<FederationContext>,
     Auth(credential): Auth<AccessToken>,
     Path(path): Path<AlbumPath>,
     Json(request): Json<RosterRequest>,
@@ -378,7 +380,28 @@ pub async fn publish_album_roster(
 
     let member_count = u64::try_from(signed.roster.members.len()).unwrap_or(u64::MAX);
     match outcome {
-        RosterOutcome::Applied(record) => Ok(Json(describe(&record, member_count, false))),
+        RosterOutcome::Applied(record) => {
+            // A roster the owner just narrowed is a set of federated grants the owner just
+            // withdrew (`S-E5`). Published to `/.well-known/capsule/revoked-jti` here so a peer
+            // learns from the list rather than from a refusal it cannot explain — and logged
+            // rather than surfaced, because the roster is the fact this operation answers for
+            // and a capability whose member has gone is refused at its next presentation
+            // regardless, membership being re-checked there.
+            let listed: Vec<UserId> = signed
+                .roster
+                .members
+                .iter()
+                .map(|member| UserId::new(member.user_id.to_string()))
+                .collect();
+            if let Err(error) = federation::on_roster_applied(&federation, &album, &listed).await {
+                tracing::error!(
+                    %error,
+                    %album,
+                    "a roster was applied but its federated grants could not be revoked"
+                );
+            }
+            Ok(Json(describe(&record, member_count, false)))
+        }
         RosterOutcome::Replayed(record) => Ok(Json(describe(&record, member_count, true))),
         RosterOutcome::Stale { current_version } => Err(RosterRejection::Stale {
             current_version,

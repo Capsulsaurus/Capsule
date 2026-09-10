@@ -196,6 +196,33 @@ pub enum CounterKey {
     /// retired surface namespaced counters with hand-formatted strings, and a sentinel string is
     /// that mistake with a nicer name.
     OidcAuthorizeRefused,
+    /// Requests from one federated peer server, across the sync and blob reads (`S-E2`,
+    /// invariant 21).
+    ///
+    /// Keyed on the peer's origin, never on the capability: a peer holding ten capabilities is
+    /// one blast-radius boundary, and a budget per token would be a budget a peer widens by
+    /// asking for more tokens. Events per hour only; bytes and CPU per hour need a weighted
+    /// counter this port does not have and are post-v1.
+    PeerRequests(String),
+    /// Federated moderation reports from one peer against one account (`S-C49`, invariant
+    /// 24), keyed on `"{reporting_server}:{reported_user}"` as the contract bounds them.
+    FederatedReports(String),
+    /// Federated moderation reports from one peer against **every** account (`S-C49`).
+    ///
+    /// The ceiling the per-account budget cannot provide: `reported_user` is a string a peer
+    /// chooses, so a peer cycling accounts gets a fresh per-account allowance each time, and
+    /// only a key that ignores the account bounds the peer's total volume.
+    PeerReports(String),
+    /// Attempts at `POST /v1/federation/reports`, keyed on the **claimed** reporting origin.
+    ///
+    /// Charged before the peer is looked up, which is the only place a bound can sit on this
+    /// route: it is the server's one unauthenticated write, and everything after it — a store
+    /// read and an Ed25519 verification — is work an anonymous caller would otherwise get for
+    /// free. The key is attacker-chosen and that is stated rather than papered over: it bounds
+    /// one claimed origin looping, not a caller cycling origins, and this server has no trusted
+    /// client address to key on instead (see
+    /// [`CounterKey::RegistrationSource`], which waits on the same missing fact).
+    FederatedIntake(String),
 }
 
 /// The scope segment a key with nothing to be scoped *to* carries.
@@ -221,6 +248,10 @@ impl CounterKey {
             Self::RegistrationSource(_) => "registration_source",
             Self::OidcAuthorize(_) => "oidc_authorize",
             Self::OidcAuthorizeRefused => "oidc_authorize_refused",
+            Self::PeerRequests(_) => "peer_requests",
+            Self::FederatedReports(_) => "federated_reports",
+            Self::PeerReports(_) => "peer_reports",
+            Self::FederatedIntake(_) => "federated_intake",
         }
     }
 
@@ -242,6 +273,9 @@ impl CounterKey {
             Self::SecondFactor(_) => ceilings::SECOND_FACTOR,
             Self::OidcAuthorize(_) => ceilings::OIDC_AUTHORIZE,
             Self::OidcAuthorizeRefused => ceilings::OIDC_AUTHORIZE_REFUSED,
+            Self::PeerRequests(_) | Self::PeerReports(_) => ceilings::PEER_ORIGIN,
+            Self::FederatedReports(_) => ceilings::FEDERATED_REPORTS,
+            Self::FederatedIntake(_) => ceilings::FEDERATED_INTAKE,
         }
     }
 
@@ -257,6 +291,10 @@ impl CounterKey {
             | Self::DropSource(scope)
             | Self::SecondFactor(scope)
             | Self::OidcAuthorize(scope)
+            | Self::PeerRequests(scope)
+            | Self::FederatedReports(scope)
+            | Self::PeerReports(scope)
+            | Self::FederatedIntake(scope)
             | Self::RegistrationSource(scope) => scope,
             // The two unit variants are each **one** global bucket by construction — that is why
             // they are unit variants rather than a scoped one carrying a sentinel string (see
@@ -428,6 +466,39 @@ pub mod ceilings {
     /// [`CounterKey::OidcAuthorizeRefused`](super::CounterKey::OidcAuthorizeRefused) — one key
     /// exists, so one window.
     pub const OIDC_AUTHORIZE_REFUSED: usize = 1;
+
+    /// [`CounterKey::PeerRequests`](super::CounterKey::PeerRequests) and
+    /// [`CounterKey::PeerReports`](super::CounterKey::PeerReports) — both keyed on a peer's
+    /// origin, so both are bounded by the same thing and share one number.
+    ///
+    /// Not caller-controlled: a peer origin reaches either key only off a capability this
+    /// server minted, so the true bound is the size of the peer list an operator pinned. Ten
+    /// thousand is the same rounding as [`LOGIN_ATTEMPTS`], and for the same reason — a
+    /// deployment federating with more peers than that has other numbers to raise first.
+    pub const PEER_ORIGIN: usize = 10_000;
+
+    /// [`CounterKey::FederatedReports`](super::CounterKey::FederatedReports) — 1-hour window,
+    /// keyed on `"{reporting_server}:{reported_user}"`.
+    ///
+    /// The account half is a string a peer chooses, so this partition *is* growable by a
+    /// misbehaving peer — which is exactly why
+    /// [`CounterKey::PeerReports`](super::CounterKey::PeerReports) exists. That is also what
+    /// bounds this: a report charges both keys, so a peer cannot create more distinct pairs per
+    /// hour than [`budgets::PEER_REPORTS`](super::budgets::PEER_REPORTS) admits — 200. Across a
+    /// pinned peer list of the order [`PEER_ORIGIN`] anticipates, twenty thousand is roughly a
+    /// hundred peers each spending their whole hourly allowance on distinct accounts.
+    pub const FEDERATED_REPORTS: usize = 20_000;
+
+    /// [`CounterKey::FederatedIntake`](super::CounterKey::FederatedIntake) — 1-hour window,
+    /// keyed on the **claimed** reporting origin.
+    ///
+    /// The one federation key charged before anything is authenticated, so the key space is
+    /// attacker-chosen outright and this ceiling is the only bound on it. Sized like
+    /// [`SHARE_LINK`] and [`DROP_LINK`], the other partitions a caller supplies the key for:
+    /// twenty thousand distinct claimed origins in an hour is under six a second, and spending
+    /// it costs the intake path its first-time keys and costs no other surface anything. That
+    /// containment is the whole reason it is a partition rather than a share of one.
+    pub const FEDERATED_INTAKE: usize = 20_000;
 }
 
 /// A deterministic in-memory adapter.

@@ -38,6 +38,7 @@ use crate::discovery::DiscoveryContext;
 use crate::drop::DropContext;
 use crate::enrollment::EnrollmentContext;
 use crate::escrow::EscrowContext;
+use crate::federation::{FederationContext, ReadBearer};
 use crate::membership::MembershipContext;
 use crate::moderation::ModerationContext;
 use crate::quota::QuotaContext;
@@ -87,6 +88,8 @@ pub struct App {
     discovery: DiscoveryContext,
     /// The master-key escrow's collaborators.
     escrow: EscrowContext,
+    /// The federation module's collaborators (`S-E2`, `S-E5`).
+    federation: FederationContext,
     /// The cross-device add's collaborators.
     enrollment: EnrollmentContext,
     /// The moderation record's collaborators.
@@ -136,6 +139,8 @@ pub struct Modules {
     pub discovery: DiscoveryContext,
     /// The master-key escrow's collaborators.
     pub escrow: EscrowContext,
+    /// The federation module's collaborators (`S-E2`, `S-E5`).
+    pub federation: FederationContext,
     /// The cross-device add's collaborators.
     pub enrollment: EnrollmentContext,
     /// The moderation record's collaborators.
@@ -149,6 +154,11 @@ pub struct Modules {
 }
 
 impl App {
+    /// The authentication module, for the read scheme that delegates to it first.
+    pub(crate) fn auth(&self) -> &AuthContext {
+        &self.auth
+    }
+
     /// Assembles the application from its modules.
     pub fn new(modules: Modules) -> Self {
         let Modules {
@@ -166,6 +176,7 @@ impl App {
             attestation,
             discovery,
             escrow,
+            federation,
             enrollment,
             moderation,
             share,
@@ -187,6 +198,7 @@ impl App {
             attestation,
             discovery,
             escrow,
+            federation,
             enrollment,
             moderation,
             share,
@@ -206,5 +218,18 @@ impl Authenticates<AccessToken> for App {
 
     fn authenticator(&self) -> &Self::Authenticator {
         &self.auth
+    }
+}
+
+/// The federation module verifies the bearer the two read primitives accept two principals on.
+///
+/// Its authenticator asks [`AuthContext`] first and the capability codec second, so a session
+/// token on `GET /v1/sync` or `GET /v1/blob/{hash}` is admitted exactly as it is everywhere
+/// else (`S-E5`).
+impl Authenticates<ReadBearer> for App {
+    type Authenticator = FederationContext;
+
+    fn authenticator(&self) -> &Self::Authenticator {
+        &self.federation
     }
 }

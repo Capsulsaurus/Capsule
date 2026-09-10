@@ -57,7 +57,7 @@ use capsule_server::directory::{
     PublishedDirectory,
 };
 use capsule_server::discovery::revocation::{
-    InMemoryRevocations, PublishedRevocations, RevocationList, RevokeFuture, RevokedToken,
+    PublishedRevocations, RevocationList, RevokeFuture, RevokedToken,
 };
 use capsule_server::discovery::{DiscoveryContext, ProtocolWindow, ServerInfo};
 use capsule_server::drop::{
@@ -65,6 +65,11 @@ use capsule_server::drop::{
 };
 use capsule_server::enrollment::EnrollmentContext;
 use capsule_server::escrow::{EscrowContext, EscrowRecord, EscrowStore, InMemoryEscrow, Replaced};
+use capsule_server::federation::{
+    CapabilityCodec, CapabilityFilter, CapabilityRecord, CapabilityStore, FederationCollaborators,
+    FederationContext, InMemoryCapabilities, InMemoryPeers, RefreshOutcome, ReportClaim,
+    RevokeOutcome,
+};
 use capsule_server::gc::memory::InMemoryCollection;
 use capsule_server::index::memory::InMemoryAssetIndex;
 use capsule_server::index::{
@@ -76,7 +81,8 @@ use capsule_server::membership::{
     RosterRecord,
 };
 use capsule_server::moderation::{
-    InMemoryModeration, ModerationContext, ModerationEvent, ModerationStore, Standing,
+    FederatedReport, InMemoryModeration, ModerationContext, ModerationEvent, ModerationStore,
+    Standing,
 };
 use capsule_server::quota::{
     ChargeOutcome, InMemoryQuota, QuotaContext, QuotaLimits, QuotaStore, StoredUsage,
@@ -201,6 +207,9 @@ pub(crate) fn identity_header(ik: &HybridSigningKey) -> String {
 /// receipt binds to the origin that signed it and a test asserting the two agree has to be
 /// asserting about one fact rather than two matching literals.
 pub(crate) const SERVER_ORIGIN: &str = "capsule.test";
+
+/// Where peers pull from, in every fixture that federates. The API base, as the design has it.
+pub(crate) const FEDERATION_URL: &str = "https://capsule.test/v1";
 
 /// The account [`Fixture::working`] seeds.
 pub(crate) const EMAIL: &str = "somebody@example.test";
@@ -1225,6 +1234,20 @@ impl ModerationStore for SwitchableModeration {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.events_for_user(user)
+    }
+
+    fn file_report(&self, report: FederatedReport) -> StoreFuture<'_, ()> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.file_report(report)
+    }
+
+    fn pending_reports(&self) -> StoreFuture<'_, Vec<FederatedReport>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.pending_reports()
     }
 }
 
@@ -2388,31 +2411,47 @@ impl AlbumStore for SwitchableAlbums {
     }
 }
 
-/// A revocation list that can be made to fail on demand.
+/// A capability store — and therefore a revocation list — that can be made to fail on demand.
 ///
-/// Delegates to a real in-memory list, so the failing case and the working case differ in
+/// Delegates to the real in-memory store, so the failing case and the working case differ in
 /// exactly one thing. It exists because `503` on the published record is a *claim*: the
 /// endpoint refuses to serve an empty list on a storage failure, since an empty list is the
 /// strongest statement the record can make and serving it during an outage would silently
 /// un-revoke every token a peer holds. A status nothing can reach is a status nothing proves.
+///
+/// One object behind two ports, exactly as `boot` wires it: discovery reads it as the list and
+/// federation writes it as the store, so a revocation the federation layer records is the one
+/// `revoked-jti` publishes.
 #[derive(Debug)]
 pub(crate) struct SwitchableRevocations {
-    inner: InMemoryRevocations,
+    inner: InMemoryCapabilities,
     unavailable: AtomicBool,
+    writes_unavailable: AtomicBool,
 }
 
 impl SwitchableRevocations {
-    /// A working list reading `clock` for pruning.
+    /// A working store reading `clock` for pruning.
     pub(crate) fn new(clock: Arc<ManualClock>) -> Self {
         Self {
-            inner: InMemoryRevocations::new(clock),
+            inner: InMemoryCapabilities::new(clock),
             unavailable: AtomicBool::new(false),
+            writes_unavailable: AtomicBool::new(false),
         }
     }
 
     /// Make every subsequent operation fail, or stop.
     pub(crate) fn set_unavailable(&self, unavailable: bool) {
         self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    /// Make every subsequent *write* fail while reads keep answering, or stop.
+    ///
+    /// The one seam a route-level `500` can be reached through: a store that cannot be **read**
+    /// refuses the credential in the authenticator, which can render only `401`, so a whole
+    /// outage never reaches a handler. A store that answers `find` and refuses `refresh` is the
+    /// partial failure the coded `500` exists for.
+    pub(crate) fn set_writes_unavailable(&self, unavailable: bool) {
+        self.writes_unavailable.store(unavailable, Ordering::SeqCst);
     }
 
     fn refuse<T>() -> Result<T, StoreError> {
@@ -2425,11 +2464,15 @@ impl SwitchableRevocations {
     fn is_down(&self) -> bool {
         self.unavailable.load(Ordering::SeqCst)
     }
+
+    fn writes_down(&self) -> bool {
+        self.is_down() || self.writes_unavailable.load(Ordering::SeqCst)
+    }
 }
 
 impl RevocationList for SwitchableRevocations {
     fn revoke(&self, token: RevokedToken) -> RevokeFuture<'_> {
-        if self.is_down() {
+        if self.writes_down() {
             return Box::pin(async { Self::refuse().map_err(Into::into) });
         }
         self.inner.revoke(token)
@@ -2440,6 +2483,52 @@ impl RevocationList for SwitchableRevocations {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.published()
+    }
+}
+
+impl CapabilityStore for SwitchableRevocations {
+    fn issue(&self, record: CapabilityRecord) -> StoreFuture<'_, ()> {
+        if self.writes_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.issue(record)
+    }
+
+    fn find<'a>(&'a self, jti: &'a str) -> StoreFuture<'a, Option<CapabilityRecord>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.find(jti)
+    }
+
+    fn live<'a>(
+        &'a self,
+        filter: &'a CapabilityFilter,
+        now: Timestamp,
+    ) -> StoreFuture<'a, Vec<CapabilityRecord>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.live(filter, now)
+    }
+
+    fn revoke_issued<'a>(&'a self, jti: &'a str, at: Timestamp) -> StoreFuture<'a, RevokeOutcome> {
+        if self.writes_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.revoke_issued(jti, at)
+    }
+
+    fn refresh<'a>(
+        &'a self,
+        predecessor: &'a str,
+        successor: CapabilityRecord,
+        at: Timestamp,
+    ) -> StoreFuture<'a, RefreshOutcome> {
+        if self.writes_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.refresh(predecessor, successor, at)
     }
 }
 
@@ -2788,8 +2877,13 @@ pub(crate) struct Fixture {
     /// The attestation key the server signs receipts with — the *same* one, so a test can
     /// verify a fetched receipt the way a client would.
     pub(crate) attestation_key: Arc<LocalAttestationKey>,
-    /// The federation capability revocations this server publishes.
+    /// The federation capabilities this server issued, and the revocations it publishes.
     pub(crate) revocations: Arc<SwitchableRevocations>,
+    /// The peers this server has pinned or blocked.
+    pub(crate) peers: Arc<InMemoryPeers>,
+    /// The capability codec the server mints with — the *same* one, over the *same* key as
+    /// `tokens`, so a test can mint a capability the server will accept, or one it must not.
+    pub(crate) codec: Arc<CapabilityCodec>,
     /// The single-use revoke-all challenges.
     pub(crate) challenges: Arc<SwitchableChallenges>,
     /// The account's wrapped master key.
@@ -2830,13 +2924,18 @@ impl Fixture {
 
     /// The same server, with a deployment's quota thresholds.
     pub(crate) fn with_quota(quota_limits: QuotaLimits) -> Self {
-        Self::build(quota_limits, None, None)
+        Self::build(quota_limits, None, None, Some(FEDERATION_URL.to_owned()))
     }
 
     /// The working server over a **real** identity provider adapter, for the cases that drive
     /// the wire against the mock provider in [`idp`]. `fixture.idp` is present but unused.
     pub(crate) fn with_identity_provider(provider: Arc<dyn IdentityProvider>) -> Self {
-        Self::build(QuotaLimits::unlimited(), Some(provider), None)
+        Self::build(
+            QuotaLimits::unlimited(),
+            Some(provider),
+            None,
+            Some(FEDERATION_URL.to_owned()),
+        )
     }
 
     /// The working server whose rate-limit counters hold at most `ceiling` keys **per
@@ -2848,19 +2947,41 @@ impl Fixture {
     /// at-capacity code rather than a `500` that impersonates an outage — does not depend on how
     /// wide it is, so the tests that assert it shrink the partitions and spend two requests.
     pub(crate) fn with_counter_ceiling(ceiling: usize) -> Self {
-        Self::build(QuotaLimits::unlimited(), None, Some(ceiling))
+        Self::build(
+            QuotaLimits::unlimited(),
+            None,
+            Some(ceiling),
+            Some(FEDERATION_URL.to_owned()),
+        )
+    }
+
+    /// The same server on a deployment that does **not** federate: `FEDERATION_URL` unset.
+    ///
+    /// Its own constructor rather than a switch on the built fixture, because the setting is
+    /// read once at boot and a server that changed its mind at runtime would be testing a
+    /// deployment nobody runs.
+    pub(crate) fn without_federation() -> Self {
+        Self::build(QuotaLimits::unlimited(), None, None, None)
     }
 
     fn build(
         quota_limits: QuotaLimits,
         provider: Option<Arc<dyn IdentityProvider>>,
         counter_ceiling: Option<usize>,
+        federation_url: Option<String>,
     ) -> Self {
         let clock = Arc::new(ManualClock::default());
         let sessions = Arc::new(SwitchableSessions::new(clock.clone()));
         let accounts = Arc::new(InMemoryAccounts::new());
         accounts.insert(EMAIL, PASSWORD, &user());
-        let tokens = Arc::new(signer(clock.clone()));
+        // One key pair for both token types, as `boot` wires it: the capability a peer verifies
+        // against `server-info`'s key is signed by the key that signs sessions.
+        let der = signing_key_der();
+        let tokens = Arc::new(signer_from(&der, clock.clone()));
+        let codec = Arc::new(
+            CapabilityCodec::from_pkcs8(&der, SERVER_ORIGIN, clock.clone())
+                .expect("a key just generated parses"),
+        );
 
         let uploads = Arc::new(SwitchableUploads::new(clock.clone()));
         let blobs = Arc::new(SwallowingBlobs::new());
@@ -2889,6 +3010,7 @@ impl Fixture {
             capsule_core::crypto::keys::HybridSigningKey::generate(),
         ));
         let revocations = Arc::new(SwitchableRevocations::new(clock.clone()));
+        let peers = Arc::new(InMemoryPeers::new());
         let challenges = Arc::new(SwitchableChallenges::new(clock.clone()));
         let escrows = Arc::new(SwitchableEscrow::new());
         let cohorts = Arc::new(SwitchableCohorts::new());
@@ -2963,6 +3085,14 @@ impl Fixture {
             ),
             discovery: DiscoveryContext::new(Arc::new(server_info(&tokens)), revocations.clone()),
             escrow: EscrowContext::new(escrows.clone(), clock.clone()),
+            // Configured unless the case asked otherwise ([`Fixture::without_federation`]).
+            federation: FederationContext::new(FederationCollaborators {
+                codec: codec.clone(),
+                capabilities: revocations.clone(),
+                peers: peers.clone(),
+                clock: clock.clone(),
+                federation_url,
+            }),
             enrollment: EnrollmentContext::new(
                 enrollments.clone(),
                 channels.clone(),
@@ -3009,6 +3139,8 @@ impl Fixture {
             receipts,
             attestation_key,
             revocations,
+            peers,
+            codec,
             challenges,
             escrows,
             cohorts,
@@ -3054,7 +3186,9 @@ impl Fixture {
         let index = Arc::new(SwitchableIndex::new());
         let members = Arc::new(InMemoryMembership::new());
         let albums = Arc::new(SwitchableAlbums::new());
-        let tokens = Arc::new(signer(clock.clone()));
+        let der = signing_key_der();
+        let tokens = Arc::new(signer_from(&der, clock.clone()));
+        let issued = Arc::new(SwitchableRevocations::new(clock.clone()));
         let app = App::new(Modules {
             auth: AuthContext::new(AuthCollaborators {
                 sessions: Arc::new(SwitchableSessions::new(clock.clone())),
@@ -3114,11 +3248,18 @@ impl Fixture {
                 )),
                 Timestamp::UNIX_EPOCH,
             ),
-            discovery: DiscoveryContext::new(
-                Arc::new(server_info(&tokens)),
-                Arc::new(SwitchableRevocations::new(clock.clone())),
-            ),
+            discovery: DiscoveryContext::new(Arc::new(server_info(&tokens)), issued.clone()),
             escrow: EscrowContext::new(Arc::new(SwitchableEscrow::new()), clock.clone()),
+            federation: FederationContext::new(FederationCollaborators {
+                codec: Arc::new(
+                    CapabilityCodec::from_pkcs8(&der, SERVER_ORIGIN, clock.clone())
+                        .expect("a key just generated parses"),
+                ),
+                capabilities: issued,
+                peers: Arc::new(InMemoryPeers::new()),
+                clock: clock.clone(),
+                federation_url: Some(FEDERATION_URL.to_owned()),
+            }),
             enrollment: EnrollmentContext::new(
                 Arc::new(InMemoryEnrollments::new(clock.clone(), ENROLLMENT_CODE_TTL)),
                 Arc::new(InMemoryChannels::new(clock.clone(), RELAY_CHANNEL_TTL)),
@@ -3245,6 +3386,67 @@ impl Fixture {
             .header("x-capsule-checksum", &checksum(payload))
             .body("application/octet-stream", payload.to_vec())
     }
+}
+
+/// A peer server's operational key pair: the signer, and the raw thirty-two public bytes an
+/// operator pins with `PeerStore::pin`.
+///
+/// Generated per call rather than fixed, so a case that means "a *different* peer's key" gets
+/// one by asking again.
+pub(crate) fn peer_keypair() -> (ring::signature::Ed25519KeyPair, [u8; 32]) {
+    use ring::signature::KeyPair as _;
+
+    let der = ring::signature::Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
+        .expect("a key generates");
+    let pair = ring::signature::Ed25519KeyPair::from_pkcs8(der.as_ref()).expect("it parses");
+    let public = pair
+        .public_key()
+        .as_ref()
+        .try_into()
+        .expect("an Ed25519 public key is thirty-two bytes");
+    (pair, public)
+}
+
+/// A federated moderation report body, signed by `pair` exactly as a peer signs one.
+///
+/// Built through [`ReportClaim::signing_bytes`] rather than by re-encoding the JSON, so the
+/// suite signs the same bytes the server verifies and a change to the signing contract fails as
+/// a verification failure rather than as a silently-different test.
+pub(crate) fn signed_report(
+    pair: &ring::signature::Ed25519KeyPair,
+    reporting_server: &str,
+    reported_user: &str,
+    asset_hash: &str,
+    album: &AlbumId,
+    reason: Option<&str>,
+    reported_at: &str,
+) -> serde_json::Value {
+    let claim = ReportClaim {
+        reporting_server: reporting_server.to_owned(),
+        reported_user: reported_user.to_owned(),
+        asset_hash: asset_hash.to_owned(),
+        album_id: album.as_str().to_owned(),
+        reason: reason.map(str::to_owned),
+        reported_at: reported_at.to_owned(),
+    };
+    let signature = pair.sign(&claim.signing_bytes().expect("a claim encodes"));
+    serde_json::json!({
+        "reporting_server": claim.reporting_server,
+        "reported_user": claim.reported_user,
+        "asset_hash": claim.asset_hash,
+        "album_id": claim.album_id,
+        "reason": claim.reason,
+        "reported_at": claim.reported_at,
+        "signature": base64::engine::general_purpose::STANDARD.encode(signature.as_ref()),
+    })
+}
+
+/// `hours` from the fixture's own clock, as an RFC 3339 instant.
+///
+/// The suite's clock starts at the Unix epoch, so a wall-clock literal in a request body is
+/// decades out and refused; every deadline a case names is relative to this.
+pub(crate) fn deadline(fixture: &Fixture, hours: i64) -> jiff::Timestamp {
+    fixture.clock.now() + jiff::SignedDuration::from_hours(hours)
 }
 
 /// The protocol version the suite's manifests and sessions are written under.
@@ -3394,10 +3596,23 @@ pub(crate) fn server_info(tokens: &SessionTokens) -> ServerInfo {
 }
 
 pub(crate) fn signer(clock: Arc<ManualClock>) -> SessionTokens {
-    let der = ring::signature::Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
-        .expect("the platform can generate an Ed25519 key");
+    signer_from(&signing_key_der(), clock)
+}
 
-    SessionTokens::from_pkcs8(der.as_ref(), clock).expect("a key just generated parses")
+/// A freshly generated PKCS#8 Ed25519 private key.
+///
+/// One of these backs both the session signer and the capability codec of a fixture, because
+/// that is the one-key invariant `boot` holds: the key `server-info` publishes signs both.
+pub(crate) fn signing_key_der() -> Vec<u8> {
+    ring::signature::Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
+        .expect("the platform can generate an Ed25519 key")
+        .as_ref()
+        .to_vec()
+}
+
+/// The session signer over `der`.
+pub(crate) fn signer_from(der: &[u8], clock: Arc<ManualClock>) -> SessionTokens {
+    SessionTokens::from_pkcs8(der, clock).expect("a key just generated parses")
 }
 
 /// A `POST /v1/upload` body for one member of a **replace** bundle (`S-C43`).

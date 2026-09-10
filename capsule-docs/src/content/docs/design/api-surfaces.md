@@ -24,7 +24,8 @@ the gate that keeps it current — is [Developer Documentation](/design/develope
 | Album roster publish (`PUT /v1/albums/{album_id}/roster`) | REST | `capsule-server::membership` | [Threat Model — Validation](/design/threat-model/validation/) (invariant 33) |
 | Blob fetch (`GET /v1/blob/{hash}`, HTTP `Range`) | REST | `capsule-server::blob` | [Download & Sync](/design/import/download-sync/) |
 | Sync feed (change discovery after a cursor) | REST | `capsule-server::sync` | [Download & Sync](/design/import/download-sync/) |
-| Federation pull | REST | `capsule-server::federation` | [Federation](/design/federation/) |
+| Federation capability lifecycle (`POST /v1/albums/{album_id}/capabilities`, `DELETE /v1/albums/{album_id}/capabilities/{jti}`, `POST /v1/federation/capabilities/refresh`) and signed report intake (`POST /v1/federation/reports`) | REST | `capsule-server::federation` | [Federation](/design/federation/) |
+| Federation **pull** — no route of its own: a peer reads `GET /v1/sync?album_id=` and `GET /v1/blob/{hash}` with a capability in the `bearer` slot | REST | `capsule-server::federation` (the credential and its admission) over `::sync` / `::serve` | [Federation](/design/federation/) |
 | Share serving (`/s/{opaque_id}`) | REST | `capsule-server::share` | [Share Links](/design/share-links/) |
 | Guest drops (`POST /d/{opaque_id}`, inbox, adoption) | REST | `capsule-server::drop` | [Web Upload](/design/web-upload/) |
 | Storage verification (`POST /v1/storage/verify`) | REST | `capsule-server::verify` | [Storage Verification](/design/import/storage-verification/) |
@@ -167,7 +168,13 @@ gate by accident.
 
 Credentials use `Authorization: Bearer`. Session access tokens and federation capabilities are
 different token types verified by their owning modules, even though both use the standard HTTP
-carriage.
+carriage. **The document carries one `bearer` component for both.** The two read primitives a peer
+pulls through — `GET /v1/sync` and `GET /v1/blob/{hash}` — register a second Kynos security scheme
+under the same component name and a byte-identical description, so every operation's `security` is
+the one requirement it always was and the generated client attaches either token type under the one
+credential key it knows. A second key would have split one carriage into two for a difference the
+wire does not have. `capsule-server/tests/conformance.rs` pins the component set at exactly one
+entry.
 
 ## Rejection Mapping
 

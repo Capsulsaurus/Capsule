@@ -29,7 +29,8 @@
 //!
 //! Each module owns one port and, where it has one, the surface over it. [`routes`] is the only
 //! module that knows about HTTP: everything under it — [`album`], [`directory`], [`discovery`],
-//! [`enrollment`], [`escrow`], [`gc`], [`index`], [`membership`], [`moderation`],
+//! [`enrollment`], [`escrow`], [`federation`], [`gc`], [`index`], [`membership`],
+//! [`moderation`],
 //! [`negotiation`], [`quota`],
 //! [`scrub`], [`serve`],
 //! [`share`], [`store`],
@@ -77,6 +78,7 @@ pub mod discovery;
 pub mod drop;
 pub mod enrollment;
 pub mod escrow;
+pub mod federation;
 pub mod gc;
 pub mod index;
 pub mod limits;
@@ -204,6 +206,23 @@ pub fn router() -> ServerRouter {
                     routes::drop::revoke_link,
                     routes::drop::adopt_drop,
                     routes::drop::discard_drop,
+                ]),
+        )
+        // Federation's lifecycle: minting, revoking and refreshing the capability a peer pulls
+        // with, and the signed report intake. The pull itself is `sync_feed` and `get_blob` in
+        // the read group below — federation adds no new data protocol (design/federation.md).
+        //
+        // Its own group rather than a fifth `mount` on the one above, because these four are one
+        // surface and the sixteen-operation tuple ceiling is close. A **tighter body cap** was
+        // tried here and cannot be expressed: see [`crate::limits::MAX_FEDERATION_BODY_BYTES`].
+        .group(
+            Group::<App>::new("/")
+                .intercept(negotiation::ProtocolGate::new())
+                .mount(kynos::routes![
+                    routes::federation::issue_capability,
+                    routes::federation::revoke_capability,
+                    routes::federation::refresh_capability,
+                    routes::federation::submit_federated_report,
                 ]),
         )
         // The reads: every gated `GET` and `HEAD`. Held to the handshake's grammar, admitted at

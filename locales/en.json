@@ -8091,17 +8091,25 @@
     "message": "Capsule couldn't reach the recovery backup. Please try again.",
     "context": "HTTP 500 on the master-key escrow surface (slice S-C12): the store could not answer, so nothing was written or read. Retryable, and it says nothing about whether an escrow exists."
   },
+  "error.federation.album_not_found": {
+    "message": "That album couldn't be found.",
+    "context": "HTTP 404 on POST/DELETE /v1/albums/{album_id}/capabilities (slice S-E2): no such album, or one owned by a different account. One answer for both, as on the roster and upgrade ceremonies — an album id somebody else holds must not be confirmed to exist."
+  },
   "error.federation.audience_mismatch": {
     "message": "This access grant is for a different album.",
     "context": "HTTP 403 on a federation pull (slice S-E2, threat-model invariant 19): the capability's aud (an urn:capsule:album:UUID) does not match the album the peer is pulling. The aud is matched against the album, never against the verifying server (a deliberate RFC 7519 deviation)."
   },
   "error.federation.capability_expired": {
     "message": "This shared album's access has expired.",
-    "context": "HTTP 401 on a federation pull (slice S-E2, threat-model invariant 19): the capability token is past its exp. Tokens live at most 24h; the peer must refresh before continuing."
+    "context": "HTTP 401 on a federation pull, and HTTP 403 on POST /v1/federation/capabilities/refresh (slice S-E2, threat-model invariant 19). On a pull: the capability token is past its exp. On a refresh: the whole grant is past the absolute deadline its owner fixed at the original mint — which is also what a grant nobody made renewable hits on its first refresh — so no successor will ever be issued from it and the peer's next move is to ask the album's owner, not this server. Tokens live at most 24h regardless."
   },
   "error.federation.capability_invalid": {
     "message": "This shared album's access could not be verified.",
-    "context": "HTTP 401 on a federation pull (slice S-E2, threat-model invariant 19): the presented capability token failed structural verification — a missing claim, a bad Ed25519 signature, an unparseable RFC 3339 claim, a wrong issuer, a not-yet-valid (nbf) token, or an expiry window wider than the 24h ceiling. The token never establishes access; the peer must obtain a fresh, well-formed one."
+    "context": "HTTP 401 on a federation pull, and HTTP 403 on POST /v1/federation/capabilities/refresh (slice S-E2, threat-model invariant 19): the presented capability token failed structural verification — a missing claim, a bad Ed25519 signature, an unparseable RFC 3339 claim, a wrong issuer, a not-yet-valid (nbf) token, or an expiry window wider than the 24h ceiling — or, on refresh, the credential was a session access token, which grants an account nothing to continue. The token never establishes access; the peer must obtain a fresh, well-formed one."
+  },
+  "error.federation.capability_malformed": {
+    "message": "That sharing request isn't valid.",
+    "context": "HTTP 400 on POST /v1/albums/{album_id}/capabilities (slice S-E2): the peer origin or the member id in the body is empty. Always a client bug — the values come from the album's roster and the peer's own server-info."
   },
   "error.federation.capability_revoked": {
     "message": "Access to this shared album has been revoked.",
@@ -8110,6 +8118,18 @@
   "error.federation.circuit_open": {
     "message": "This source is temporarily backed off after repeated errors.",
     "context": "HTTP 429 on a federation pull (slice S-E2): the peer spent its per-peer error budget on malformed input, tripping a circuit breaker that backs it off exponentially (5 / 30 / 60 minutes). Requests are short-circuited until the back-off elapses, so a buggy peer cannot DoS the server."
+  },
+  "error.federation.member_not_on_roster": {
+    "message": "That person isn't on this album's member list.",
+    "context": "HTTP 409 on POST /v1/albums/{album_id}/capabilities (slice S-E2): the account the capability would carry is not on the album's current roster, so there is no membership to grant a peer access for. A stale-state class: the owner publishes the roster that lists them first, then mints."
+  },
+  "error.federation.not_configured": {
+    "message": "This server doesn't share albums with other servers.",
+    "context": "HTTP 403 on the federation lifecycle writes — minting, revoking or refreshing a capability, and federated report intake (slice S-E2): this deployment has no FEDERATION_URL, so it does not federate. A capability minted while it did still verifies; configuration does not un-mint a token."
+  },
+  "error.federation.peer_unknown": {
+    "message": "That server isn't one this server knows.",
+    "context": "HTTP 403 on POST /v1/federation/reports (slice S-C49): the reporting server has no pinned signing key here, so its report cannot be verified and is dropped before the admin queue. Peer keys are operator-pinned in v1; there is no network fetch."
   },
   "error.federation.rate_budget_exceeded": {
     "message": "This source has reached its request limit. Please wait and try again.",
@@ -8123,9 +8143,17 @@
     "message": "This access grant does not cover the requested content.",
     "context": "HTTP 403 on a federation blob fetch (slice S-E2, threat-model invariant 19): a read-derivative-only capability tried to fetch a blob whose server-visible role is 'original'. Scope is enforced structurally against each blob's role."
   },
+  "error.federation.unavailable": {
+    "message": "Capsule couldn't reach the federation records. Please try again.",
+    "context": "HTTP 500 on the federation surface (slice S-E2): the capability store, the peer store or the per-peer counter could not answer, so nothing was decided — never a refusal and never an admission. A limiter that cannot be reached is an outage, not a limit."
+  },
   "error.moderation.account_suspended": {
     "message": "Your account is suspended. You can't upload or share until it's reinstated.",
     "context": "HTTP 403 at POST /upload session creation (slice S-C8): the account carries an admin/billing suspension flag. Distinct from quota and permission rejections so the client surfaces the right remediation. Suspension is an access-level action — the user's data is untouched and the block is reversible."
+  },
+  "error.moderation.report_malformed": {
+    "message": "That report isn't valid.",
+    "context": "HTTP 400 on POST /v1/federation/reports (slice S-C49): a field of the signed report is empty, its reported_at is not an RFC 3339 timestamp, or its signature is not base64. Structural, and decided before any store is touched — a report that cannot be read cannot be attributed either."
   },
   "error.moderation.report_rate_limited": {
     "message": "Too many reports from this source. Please wait and try again.",

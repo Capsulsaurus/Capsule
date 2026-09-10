@@ -132,7 +132,9 @@ covers (`rg "E2E case N"`), and slices in the repo-root `SLICES.md` reference th
 3. **Sync feed pickup.** Upload from device A → device B's feed advances → device B fetches the
    metadata blob and, per scope, the original.
 4. **Federation cross-server pull.** Alice on `home.tld` shares to Bob on `other.tld` → capability
-   token → Bob's server pulls metadata and blobs → Bob's client renders.
+   token → Bob's server pulls metadata and blobs → Bob's client renders. (The **server half** and
+   the SDK's pull over a socket land with `S-E2`/`S-E5`: `capsule-server/tests/federation.rs` and
+   `capsule-server/tests/sdk_client.rs`. Bob's client rendering is `capsule-e2e`'s.)
 5. **LAN peering A→B.** Two devices on one LAN; discovery → TLS handshake → delta-scoped artifact →
    restore on the receiver → byte-equal libraries.
 6. **Backup → restore on a fresh device.** Export a full backup → bootstrap a new device via
