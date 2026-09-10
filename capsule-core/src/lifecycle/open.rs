@@ -11,6 +11,7 @@ use jiff::tz::TimeZone;
 use uuid::Uuid;
 use walkdir::WalkDir;
 
+use super::migrate_unsigned::find_unanchored;
 use super::{
     AssetState, LifecycleError, Result, StackPlacement, Workspace, media_dir, now_rfc3339,
 };
@@ -136,7 +137,7 @@ fn sweep_max_add_counter(root: &Path, device: &Uuid) -> Option<u64> {
 /// The extension of an asset's **original** media file in `dir`: the sibling named
 /// `{uuid}.{ext}` that is not one of the sidecar / provenance / receipts / metadata-blob
 /// artifacts the lifecycle writes beside it.
-fn original_extension(dir: &Path, asset_id: &Uuid) -> Option<String> {
+pub(super) fn original_extension(dir: &Path, asset_id: &Uuid) -> Option<String> {
     let prefix = format!("{}.", asset_id.simple());
     let entries = fs::read_dir(dir).ok()?;
     for entry in entries.filter_map(std::result::Result::ok) {
@@ -161,7 +162,7 @@ fn original_extension(dir: &Path, asset_id: &Uuid) -> Option<String> {
 /// The UTC timestamp of the first instant of the `{YYYY}/{YYYY-MM}` bucket `dir` names — a value
 /// that provably resolves back to `dir` through [`media_dir`], used as the fallback when an
 /// asset's recorded capture time does not.
-fn month_dir_timestamp(dir: &Path) -> i64 {
+pub(super) fn month_dir_timestamp(dir: &Path) -> i64 {
     let parse = || -> Option<i64> {
         let name = dir.file_name()?.to_string_lossy().into_owned();
         let (year, month) = name.split_once('-')?;
@@ -302,6 +303,7 @@ impl Workspace {
             share_links: HashMap::new(),
             upload_links: HashMap::new(),
             inbox: HashMap::new(),
+            unmigrated: Vec::new(),
         })
     }
 
@@ -332,6 +334,11 @@ impl Workspace {
     ///
     /// A library with no `albums.cbor` predates this and opens with zero albums plus a `warn`
     /// naming backup restore — see [`AlbumStore::load`].
+    ///
+    /// A library holding **unsigned pre-signed-path sidecars** still opens (`S-D24`): those
+    /// assets have no provenance chain, so they are not restored, but each is reported through
+    /// [`unmigrated_sidecars`](Self::unmigrated_sidecars) with a `warn` naming
+    /// [`migrate_unsigned_sidecars`](Self::migrate_unsigned_sidecars) as the way in.
     ///
     /// Still session-scoped by design, and dropped on close: the federation group assertions
     /// (re-delivered by the feed), the pending guest-drop inbox (server-authoritative), and the
@@ -368,8 +375,7 @@ impl Workspace {
         params: crate::crypto::primitives::Argon2Params,
         dek_binding: Option<HardwareDekBinding>,
     ) -> Result<Self> {
-        let library = crate::library::open_library(root)
-            .map_err(|e| LifecycleError::Io(format!("open library: {e}")))?;
+        let library = crate::library::open_library(root)?;
         let account_path = root.join(".library").join("account.cbor");
         let account = if account_path.exists() {
             let bytes = fs::read(&account_path).map_err(|e| LifecycleError::Io(e.to_string()))?;
@@ -428,6 +434,7 @@ impl Workspace {
             share_links: HashMap::new(),
             upload_links: HashMap::new(),
             inbox: HashMap::new(),
+            unmigrated: Vec::new(),
         };
         // `S-A10`: album keys, authorities, and every managed asset come back from disk here.
         // Without this the reopened workspace would hold an unlocked account and nothing else.
@@ -521,6 +528,28 @@ impl Workspace {
             skipped,
             "workspace open: assets restored from disk"
         );
+
+        // Second pass (`S-D24`): the sidecars no chain anchors. An unsigned pre-signed-path
+        // record has never had one; a signed sidecar without one is an interrupted migration.
+        // Neither is restorable here — open holds no album write capability and must not author
+        // signed records unasked — so each is recorded and named, never silently dropped.
+        self.unmigrated = find_unanchored(&self.root);
+        for found in &self.unmigrated {
+            tracing::warn!(
+                sidecar = %found.path.display(),
+                asset_id = ?found.asset_id,
+                shape = ?found.shape,
+                "workspace open: sidecar with no provenance chain; the asset is invisible until \
+                 `Workspace::migrate_unsigned_sidecars` runs"
+            );
+        }
+        if !self.unmigrated.is_empty() {
+            tracing::info!(
+                unmigrated = self.unmigrated.len(),
+                "workspace open: unmigrated sidecars found; run \
+                 `Workspace::migrate_unsigned_sidecars` to admit them as signed assets"
+            );
+        }
     }
 
     fn restore_one_asset(&self, provenance_path: &Path, stem: &str) -> Result<AssetState> {
@@ -1335,5 +1364,37 @@ mod tests {
         .unwrap();
         let (hw_ct, _) = encapsulate_to_p256_public(&hw_ws.device_dek_public()).unwrap();
         assert!(reopened.device_dek_decapsulate(&hw_ct).is_err());
+    }
+
+    /// **S-D23, the owed half at the workspace boundary.** `Workspace::open` no longer
+    /// stringifies a library-open failure into `Io`: a catalog newer than this build surfaces
+    /// as `LifecycleError::Library(LibraryError::CatalogTooNew { .. })`, so a client can name
+    /// both versions and tell the user to update rather than to check their disk.
+    #[test]
+    fn open_surfaces_a_too_new_catalog_as_a_typed_library_error() {
+        use crate::db::schema::SCHEMA_VERSION;
+        use crate::library::LibraryError;
+
+        let lib = TempDir::new().unwrap();
+        drop(fast_workspace(lib.path()));
+
+        let db_path = lib.path().join("index/library.sqlite");
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute_batch(&format!("PRAGMA user_version = {};", SCHEMA_VERSION + 1))
+                .unwrap();
+        }
+        let before = fs::read(&db_path).unwrap();
+
+        match Workspace::open(lib.path(), b"passphrase", fast_params()) {
+            Err(LifecycleError::Library(LibraryError::CatalogTooNew { found, supported })) => {
+                assert_eq!(found, SCHEMA_VERSION + 1);
+                assert_eq!(supported, SCHEMA_VERSION);
+            }
+            Ok(_) => panic!("a too-new catalog must not open"),
+            Err(other) => panic!("expected Library(CatalogTooNew), got {other:?}"),
+        }
+        assert_eq!(fs::read(&db_path).unwrap(), before, "nothing was written");
+        assert!(!lib.path().join(".library/lock").exists());
     }
 }
