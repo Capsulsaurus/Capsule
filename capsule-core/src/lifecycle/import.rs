@@ -26,8 +26,8 @@ use crate::crypto::verify_asset::{
     MetadataBinding, VerifyOutcome, verify_asset, verify_metadata_binding,
 };
 use crate::db::{AssetRow, CachedRepresentationRow};
-use crate::exif::extract::extract_exif;
-use crate::exif::timezone::resolve_timezone;
+use crate::exif::extract_exif;
+use crate::exif::resolve_timezone;
 use crate::metadata::crdt::{Lww, OrSet};
 use crate::sidecar::sidecar_v1::{
     Gps, GpsSource, SIDECAR_SCHEMA_V1, SidecarV1, StackMembership, StackRole,

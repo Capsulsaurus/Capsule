@@ -35,7 +35,7 @@ use crate::crypto::keys::{Amk, AmkVersion};
 use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
 use crate::crypto::provenance::{DerivativeManifest, DerivativeRole};
 use crate::crypto::rng;
-use crate::exif::extract::ExifExtract;
+use crate::exif::ExifExtract;
 use crate::lqip::Lqip;
 use crate::media::{
     DecodedImage, DerivativeContext, DerivativeSealer, DerivativeTier, GeneratedDerivative,
