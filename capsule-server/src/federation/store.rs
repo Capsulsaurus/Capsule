@@ -130,8 +130,23 @@ impl CapabilityRecord {
 /// # Errors
 ///
 /// Returns [`StoreError::Rejected`](crate::store::StoreError::Rejected) when the token's own
-/// window is past [`MAX_TOKEN_TTL`], or when it runs past the grant's absolute deadline.
+/// window is past [`MAX_TOKEN_TTL`], when it runs past the grant's absolute deadline, or when
+/// its `granted_epoch` is wider than every adapter can hold.
 pub fn admissible(record: &CapabilityRecord) -> Result<(), StoreError> {
+    // The port says `u64` and the durable column is a `BIGINT`, so an epoch above `i64::MAX` is
+    // representable to a caller and not to one adapter. Refused here, for every adapter at once,
+    // rather than narrowed: a grant recorded under a different epoch than the one asked for is a
+    // grant that admits the wrong membership, and an in-memory store that accepted what Postgres
+    // refuses is the divergence class the conformance suite exists to catch.
+    if i64::try_from(record.granted_epoch).is_err() {
+        return Err(StoreError::Rejected {
+            store: "capabilities",
+            detail: format!(
+                "capability {}'s granted epoch {} is wider than a stored epoch",
+                record.jti, record.granted_epoch
+            ),
+        });
+    }
     if record.expires_at.duration_since(record.issued_at) > MAX_TOKEN_TTL {
         return Err(StoreError::Rejected {
             store: "capabilities",

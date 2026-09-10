@@ -173,10 +173,22 @@ impl FederationPull {
         let list = client
             .revoked_jti()
             .await
-            .map_err(|error| refusal("the revocation list", &error.to_string()))?
+            .map_err(|error| {
+                // The list declares one coded refusal, so the generated error is a newtype
+                // over the problem rather than an enum of statuses.
+                let code = match &error {
+                    rest::Error::Api(response) => Some(response.inner().0.code.clone()),
+                    _ => None,
+                };
+                refusal("the revocation list", code, &error.to_string())
+            })?
             .into_inner();
+        // Fail **closed** on a bound this client cannot read: a negative or absurd
+        // `max_staleness_seconds` means the snapshot is stale the instant it is taken, so the
+        // next `admit` re-polls rather than honouring the list forever. `u64::MAX` here would
+        // have read as fail-open the day the schema widened.
         let max_staleness =
-            Duration::from_secs(u64::try_from(list.max_staleness_seconds).unwrap_or(u64::MAX));
+            Duration::from_secs(u64::try_from(list.max_staleness_seconds).unwrap_or(0));
         let snapshot = RevocationSnapshot {
             revoked: list
                 .revoked
@@ -257,7 +269,10 @@ impl FederationPull {
         crate::fetch::fetch_blob(&blobs, hash, expected_len)
             .await
             .map_err(|error| FederationError::Refused {
-                code: String::new(),
+                // The stable code the server sent, not a prose rendering of it: the doc above
+                // promises `error.federation.scope_insufficient` here, and a caller that had to
+                // string-match a message to find it would be matching on a message.
+                code: error.error_code().unwrap_or_default().to_owned(),
                 detail: error.to_string(),
             })
     }
@@ -351,11 +366,11 @@ fn client_for(base_url: &str, token: &str) -> Result<rest::Client, FederationErr
         ))
 }
 
-/// A refusal from the home server, with whatever it said.
-fn refusal(doing: &str, detail: &str) -> FederationError {
-    tracing::info!(%doing, %detail, "the home server refused a federated call");
+/// A refusal from the home server, carrying the stable code when the answer had one.
+fn refusal(doing: &str, code: Option<String>, detail: &str) -> FederationError {
+    tracing::info!(%doing, ?code, %detail, "the home server refused a federated call");
     FederationError::Refused {
-        code: String::new(),
+        code: code.unwrap_or_default(),
         detail: detail.to_owned(),
     }
 }

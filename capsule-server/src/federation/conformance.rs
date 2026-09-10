@@ -461,6 +461,59 @@ pub async fn a_successor_may_not_move_the_grants_deadline(h: &dyn Harness) {
     }
 }
 
+/// Every adapter accepts the widest `granted_epoch` the port's type allows, and refuses the
+/// first one it does not — identically.
+///
+/// The suite fixes `granted_epoch` at 3 everywhere else, which is exactly the shape of divergence
+/// this file exists to catch and cannot: the port says `u64` and the Postgres column is a
+/// `BIGINT`, so an epoch above `i64::MAX` is representable to a caller and not to one adapter.
+/// The rule is that it is **refused**, not silently narrowed — a grant recorded under a different
+/// epoch than the one asked for is a grant that admits the wrong membership — and that both
+/// adapters draw the line in the same place.
+pub async fn the_widest_epoch_every_adapter_accepts_is_the_same_one(h: &dyn Harness) {
+    let case = "epoch";
+    let widest = u64::try_from(i64::MAX).expect("i64::MAX is a u64");
+
+    // The widest value that round-trips, stored and read back unchanged.
+    let mut held = record(h, case, "widest", 6);
+    held.granted_epoch = widest;
+    issue(h, held.clone()).await;
+    assert_eq!(
+        find(h, &held.jti).await.expect("recorded").granted_epoch,
+        widest,
+        "the widest epoch must survive the round trip unchanged"
+    );
+
+    // Zero is the other end, and is a legitimate epoch rather than a missing one.
+    let mut zero = record(h, case, "zero", 6);
+    zero.granted_epoch = 0;
+    issue(h, zero.clone()).await;
+    assert_eq!(find(h, &zero.jti).await.expect("recorded").granted_epoch, 0);
+
+    // One past it is refused, and refused *before* anything is written.
+    let mut past = record(h, case, "past", 6);
+    past.granted_epoch = widest + 1;
+    let error = h
+        .capabilities()
+        .issue(past.clone())
+        .await
+        .expect_err("an epoch past the port's width is a rejection, never a truncation");
+    assert!(matches!(error, StoreError::Rejected { .. }), "{error:?}");
+    assert_eq!(
+        find(h, &past.jti).await,
+        None,
+        "a refused epoch records nothing"
+    );
+
+    // And `live` still finds the widest one, so the refusal did not disturb the rows beside it.
+    let filter = CapabilityFilter::Album(held.album_id.clone());
+    let found = ok(
+        h.capabilities().live(&filter, h.clock().now()).await,
+        "list live capabilities",
+    );
+    assert!(found.iter().any(|row| row.jti == held.jti));
+}
+
 /// An entry leaves the list once the token it names has expired, and the list orders by expiry.
 pub async fn the_published_list_prunes_expired_entries_and_orders_by_expiry(h: &dyn Harness) {
     let case = "prune";
@@ -677,6 +730,7 @@ pub async fn run_all(h: &dyn Harness) {
     a_record_past_the_ceiling_is_refused(h).await;
     a_successor_must_carry_the_predecessors_peer_album_and_member(h).await;
     a_successor_may_not_move_the_grants_deadline(h).await;
+    the_widest_epoch_every_adapter_accepts_is_the_same_one(h).await;
     the_published_list_prunes_expired_entries_and_orders_by_expiry(h).await;
     a_refresh_is_one_operation_and_a_replay_answers_the_same_successor(h).await;
     a_revoked_or_unknown_predecessor_is_not_refreshed(h).await;

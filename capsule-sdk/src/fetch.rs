@@ -223,8 +223,17 @@ pub enum FetchError {
     Gone,
     /// `403` — an authorization change, not a durability loss. Re-sync membership
     /// then retry; only then degrade (the asset may have been unshared).
+    ///
+    /// Carries the stable code, because the `403`s on this route no longer say one thing: an
+    /// account's `error.blob.access_revoked` means re-sync membership, while a federated
+    /// peer's `error.federation.scope_insufficient` means the grant never covered this blob and
+    /// re-syncing anything will not change that. A caller that could not tell them apart would
+    /// retry the second forever.
     #[error("blob authorization changed")]
-    AuthorizationChanged,
+    AuthorizationChanged {
+        /// Stable `error.*` code, when the refusal carried one.
+        code: Option<String>,
+    },
     /// `error.blob.pending_upload` — the original has not landed yet
     /// (`awaiting-original`); show the badge, never a failure, and re-fetch when
     /// the feed flips `original_held`. Explicitly distinct from `410 Gone`.
@@ -259,7 +268,7 @@ impl FetchError {
     pub fn error_code(&self) -> Option<&str> {
         match self {
             Self::PendingUpload => Some(error_codes::BLOB_PENDING_UPLOAD),
-            Self::Rejected { code, .. } => code.as_deref(),
+            Self::AuthorizationChanged { code } | Self::Rejected { code, .. } => code.as_deref(),
             _ => None,
         }
     }
@@ -278,7 +287,7 @@ fn classify_status(status: u16, code: Option<String>) -> FetchError {
         return FetchError::PendingUpload;
     }
     match status {
-        403 => FetchError::AuthorizationChanged,
+        403 => FetchError::AuthorizationChanged { code },
         404 | 410 => FetchError::Gone,
         0 => FetchError::Transient("transport error".to_string()),
         s if (500..600).contains(&s) => FetchError::Transient(format!("server status {s}")),
@@ -554,7 +563,7 @@ where
             representation: desired,
             bytes,
         },
-        Err(FetchError::AuthorizationChanged) => {
+        Err(FetchError::AuthorizationChanged { .. }) => {
             tracing::info!("403 on fetch — re-syncing album membership before retrying");
             on_authorization_change().await;
             match fetch_representation(source, asset, desired).await {
