@@ -36,14 +36,27 @@
 //!
 //! # Adapters, and what they are for
 //!
-//! Two adapters exist per port — the Valkey one in [`valkey`] and a deterministic in-memory
-//! one in [`memory`] — and **two adapters are not two deployment modes**. Valkey is required;
-//! the server refuses to boot without `VALKEY_URL` (design/filesystem/server.md, "Required
-//! Services"), and [`crate::boot`] connects to it before anything else is assembled. The
-//! in-memory adapter is a **test double**, never a deployment profile. The rejected alternative
-//! was a Postgres fallback removing Valkey, which would mean emulating TTL and expiry in SQL —
-//! the generic TTL abstraction this slice exists to delete. The one exception is the durable
-//! device-cohort map, whose Valkey home is interim until the Postgres adapter (#402) carries it.
+//! **Two** adapters per port, and which two is a property of the port rather than a menu.
+//! The five volatile stores — [`AuthStateStore`], [`UploadSessionStore`] and the three ceremony
+//! stores — get the Valkey adapter in [`valkey`] and the deterministic in-memory double in
+//! [`memory`], and nothing else: Valkey is required, the server refuses to boot without
+//! `VALKEY_URL` (design/filesystem/server.md, "Required Services"), and [`crate::boot`] connects
+//! to it and proves it answers `PING` before anything else is assembled. The rejected
+//! alternative was a Postgres fallback removing Valkey, which would mean emulating TTL and
+//! expiry in SQL — the generic TTL abstraction this slice exists to delete. The in-memory
+//! adapter is a **test double**, never a deployment profile.
+//!
+//! [`CohortStore`] is the exception and gets **Postgres** and the double, because it is the one
+//! record here that deliberately outlives the sessions that carried it (see [`auth`]); its
+//! adapter is [`cohorts_postgres::PostgresCohorts`]. [`valkey::ValkeyCohorts`] also exists — a
+//! Valkey hash with no expiry, written as the interim home while the Postgres adapter was owed —
+//! and `PostgresCohorts` supersedes it: it is the adapter [`crate::boot`] will bind when the
+//! durable arm can be assembled at all (#446), and the Valkey one is kept only so
+//! `tests/valkey.rs` can drive the whole port set on one connection.
+//!
+//! An earlier version of this paragraph said three adapters were planned per port. That was
+//! never true of any port in this module and was the one line in the tree pointing at a
+//! Postgres session table.
 //!
 //! Whichever adapter is in play, it must pass the one shared suite in [`conformance`]. That
 //! suite is what makes "the in-memory adapter behaves like Valkey" an assertion rather than an
@@ -59,6 +72,7 @@
 
 pub mod auth;
 pub mod ceremony;
+pub mod cohorts_postgres;
 pub mod conformance;
 pub mod ids;
 pub mod memory;
@@ -77,6 +91,7 @@ pub use self::ceremony::{
     EnrollmentStore, PendingEnrollment, RELAY_CHANNEL_TTL, RelayChannel, RelayOutcome,
     RelayPayload, RevokeAllChallenge,
 };
+pub use self::cohorts_postgres::PostgresCohorts;
 pub use self::ids::{
     AlbumId, AssetId, ChallengeToken, ChannelId, EnrollmentCode, OwnerId, SessionId, UploadId,
     UserId,

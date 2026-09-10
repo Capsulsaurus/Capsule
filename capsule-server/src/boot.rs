@@ -9,21 +9,29 @@
 //! verify under" are all properties of *this function*, and they are asserted below rather than
 //! discovered on a deployment.
 //!
-//! # The seam, and what #402 and #403 change
+//! # The seam, and what #446 still changes
 //!
 //! Selection is a two-arm `match` on [`Backends`] and not a trait. The `Arc<dyn Port>` fields in
 //! [`Modules`] already **are** the abstraction; a second one over the top would abstract the
-//! composition root from itself. The Postgres (#402) and Valkey (#403) adapters fill the
-//! [`Backends::Durable`] arm, and nothing else here moves.
+//! composition root from itself. The Postgres (#402) and Valkey (#403) adapters fill both halves
+//! of the [`Backends::Durable`] arm, and nothing else here moves.
 //!
-//! The Valkey half is filled: [`valkey`] connects to `VALKEY_URL` and proves it answers `PING`
-//! before any module is assembled, and a server that cannot be reached is
+//! Both halves of that arm are real. [`open_durable_database`] demands `DATABASE_URL`, opens the
+//! pool, and refuses to continue against a database whose schema is not the one this binary was
+//! built for — naming the command that fixes it, never the URL. [`valkey`] then connects to
+//! `VALKEY_URL` and proves it answers `PING`; a server that cannot be reached is
 //! [`BootError::Valkey`] — the refusal `store/mod.rs` has said since `S-C29` a required service
-//! earns: *"Valkey is required; the server refuses to boot without `VALKEY_URL`"*. The Postgres
-//! half is not, so [`durable`] then refuses as [`BootError::AdapterUnavailable`] naming
-//! `DATABASE_URL` and #402 rather than assembling a profile that mixes durable adapters with
-//! in-memory doubles. No `VALKEY_URL` and no `--memory` is a configuration fault naming the
-//! variable ([`Config::load`]). Nothing here ever silently becomes an in-memory server.
+//! earns: *"Valkey is required; the server refuses to boot without `VALKEY_URL`"*.
+//!
+//! And then the arm **still refuses**, because five durable ports have an adapter on neither
+//! side: they are #446's. Refusing there rather than filling them with in-memory adapters is the
+//! whole point. design/filesystem/server.md is explicit — *"Required means required"* — and a
+//! server that came up holding state it will lose on the next restart is worse than one that does
+//! not start. So the arm proves everything it honestly can, says exactly what is missing, and
+//! #446 turns the last `Err` into an `Ok`.
+//!
+//! No `VALKEY_URL` and no `--memory` is a configuration fault naming the variable
+//! ([`Config::load`]). Nothing here ever silently becomes an in-memory server.
 //!
 //! # What the memory profile is, precisely
 //!
@@ -36,7 +44,8 @@
 //!   will honestly report every blob as an orphan.
 //! - **The collector's marks do not survive either.** [`crate::gc::collect`] marks a blob on one
 //!   pass and sweeps it on a later pass once the grace window has passed, so a fresh process can
-//!   only ever mark. Sweeping needs the durable mark store #402 brings.
+//!   only ever mark. Sweeping needs a durable `CollectionStore`, which is #446's — #402 landed
+//!   the durable index the collector *reads*, not the marks it writes.
 
 use std::sync::Arc;
 
@@ -122,6 +131,15 @@ pub enum BootError {
         /// The algorithm's own description.
         detail: String,
     },
+    /// The durable backend could not be opened, or is not the schema this binary expects.
+    ///
+    /// Never carries the connection URL: a `DATABASE_URL` holds a password, and a startup error
+    /// is the most-copied line in any incident channel.
+    #[error("the durable backend could not be opened: {detail}")]
+    Database {
+        /// The driver's own description, or which migration is missing. Never the URL.
+        detail: String,
+    },
     /// A durable backend was selected and its adapter is not written yet.
     ///
     /// Named with the issue that will honour it, because "not implemented" without a pointer is
@@ -143,14 +161,20 @@ pub enum BootError {
         /// The adapter's own description of the failure.
         detail: String,
     },
-    /// An operator command was run without `--memory` and there is no durable index to read.
+    /// An operator command was run without `--memory` and one of the stores it reads has no
+    /// durable adapter.
     ///
     /// Deliberately not [`Self::AdapterUnavailable`]: that one names `DATABASE_URL`, which an
     /// operator running `capsule-server scrub` has typically never set, and pointing them at a
     /// variable that would not have helped is worse than saying nothing.
+    ///
+    /// The durable **index** exists as of #402, so this no longer says otherwise. What is still
+    /// missing is on the worker's own side: the collector marks a blob on one pass and sweeps it
+    /// on a later one, so a volatile `CollectionStore` means a process can only ever mark; and
+    /// the scrub reads the upload-session store to tell a live transfer apart from an orphan.
     #[error(
-        "this command needs `--memory`: it compares the index against the blob store, and the \
-         only index adapter written is the in-memory one (see {issue})"
+        "this command needs `--memory`: it reads stores that have no durable adapter yet — the \
+         collector's marks and the upload sessions the scrub reconciles against (see {issue})"
     )]
     MaintenanceNeedsMemory {
         /// Where the work is tracked.
@@ -222,10 +246,50 @@ pub async fn assemble(config: &Config) -> Result<Assembled, BootError> {
     match config.backends {
         Backends::Memory => memory(config, stores),
         Backends::Durable => {
-            let valkey = valkey(config).await?;
-            durable(config, stores, valkey)
+            // Both probes run for real, in the order the ports are declared: `DATABASE_URL` is
+            // demanded and the pool opened first — a schema that is not the one this binary was
+            // built for refuses here — and then Valkey must answer `PING`. The arm still refuses
+            // afterwards, because the ports it cannot fill are the ones a server loses state
+            // without. See the module docs.
+            //
+            // Neither handle is passed on. Constructing the adapters and throwing them away
+            // would be theatre in production code; that they *do* compose out of exactly what
+            // this function has is asserted in `tests::postgres_conformance` instead, which is
+            // where an assertion belongs.
+            let _connection = open_durable_database(config).await?;
+            let _valkey = valkey(config).await?;
+            Err(durable_ports_owed())
         }
     }
+}
+
+/// Open the durable pool and refuse a schema this binary was not built for.
+///
+/// The check is **not** a migration. `capsule-server` cannot link the migrator — see
+/// `capsule-server/migration`'s manifest for the `chrono` gate that forces it — and a server that
+/// migrated on start would run the migration once per replica during a rolling deploy anyway.
+/// What it does instead is read `seaql_migrations` and refuse, naming the command an operator has
+/// to run.
+///
+/// `DATABASE_URL` is demanded here rather than by [`crate::config::Demands`] because it is this
+/// *path* that needs it: `gc`, `purge` and `scrub` never reach here, and `serve --memory` does
+/// not either.
+async fn open_durable_database(config: &Config) -> Result<sea_orm::DatabaseConnection, BootError> {
+    let database_url = config.database_url.as_ref().ok_or(BootError::Missing {
+        key: "DATABASE_URL",
+    })?;
+    let connection = crate::postgres::connect(database_url)
+        .await
+        .map_err(|error| BootError::Database {
+            detail: error.to_string(),
+        })?;
+    crate::postgres::assert_schema_current(&connection)
+        .await
+        .map_err(|error| BootError::Database {
+            detail: error.to_string(),
+        })?;
+    tracing::info!("the durable database is open and its schema is current");
+    Ok(connection)
 }
 
 /// Assemble only what `gc`, `purge` and `scrub` read.
@@ -246,24 +310,29 @@ pub async fn assemble_maintenance(config: &Config) -> Result<Maintenance, BootEr
             );
             Ok(maintenance)
         }
-        // **Not** `durable()`. A maintenance command reaching here has almost always set no
-        // backend variable at all — `gc`/`purge`/`scrub` never demand `VALKEY_URL`, so naming it
-        // would send an operator to configure a variable that would not have helped. What is
-        // actually missing is the durable **index**: these two workers compare the index against
-        // the blob store, and the only index this crate has is the in-memory one, which is what
-        // `--memory` selects.
+        // **Not** `durable_ports_owed()`. A maintenance command reaching here has almost always
+        // set no backend variable at all — `gc`/`purge`/`scrub` never demand `VALKEY_URL`, so
+        // naming it would send an operator to configure a variable that would not have helped.
+        //
+        // The durable index exists as of #402, and it is not what is missing. The collector
+        // marks a blob on one pass and sweeps it on a later one, so a `CollectionStore` that
+        // forgets is a collector that can only ever mark — and it has no durable adapter at all,
+        // which is #446's. The upload-session store the scrub reconciles against (how it tells a
+        // live transfer apart from an orphan) does have one as of #403, but it is on Valkey and
+        // these commands deliberately never demand `VALKEY_URL`; opening a connection they were
+        // built not to need is its own decision, and #446 is where it belongs.
         Backends::Durable => Err(BootError::MaintenanceNeedsMemory {
-            issue: "#402 (the Postgres index)",
+            issue: "#446 (the collector's marks, and a durable read path for these commands)",
         }),
     }
 }
 
 /// Connect to `VALKEY_URL` and prove it answers, before any module is assembled.
 ///
-/// Right after the blob root, which is the only other side effect on this path: a Valkey that
-/// cannot be reached is the fault an operator most needs named before a socket is bound. Every
-/// Valkey store — sessions, upload sessions, the three ceremonies and the cohort map — comes
-/// back on one connection and the real clock; the counter adapter shares that connection.
+/// Straight after the durable pool, and before a socket is bound: a Valkey that cannot be
+/// reached is the fault an operator most needs named early. Every Valkey store — sessions,
+/// upload sessions and the three ceremonies — comes back on one connection and the real clock;
+/// the counter adapter shares that connection.
 async fn valkey(config: &Config) -> Result<ValkeyStores, BootError> {
     let url = config
         .valkey_url
@@ -278,24 +347,19 @@ async fn valkey(config: &Config) -> Result<ValkeyStores, BootError> {
     Ok(stores)
 }
 
-/// The durable profile — its Postgres half is not written yet (#402).
+/// The refusal `store/mod.rs` documents, now reached only for the ports neither #402 nor #403
+/// landed.
 ///
-/// Refused rather than assembled over in-memory doubles for the index, the accounts and the rest:
-/// `store/mod.rs` is explicit that the doubles are a test double, never a deployment mode, and a
-/// server whose sessions survived a restart while its asset index did not would be the worst of
-/// the two. `Config::load` already required `VALKEY_URL`, and [`valkey`] has reached it, so the
-/// honest answer names the half that is missing. #402 replaces this body with the assembly over
-/// `valkey` and its Postgres stores; nothing else here moves.
-fn durable(
-    _config: &Config,
-    _stores: Stores,
-    valkey: ValkeyStores,
-) -> Result<Assembled, BootError> {
-    drop(valkey);
-    Err(BootError::AdapterUnavailable {
+/// `Config::load` already turned "no `VALKEY_URL` and no `--memory`" into a configuration fault
+/// naming the variable, so reaching here means the operator *did* set it — and both probes have
+/// run by this point: the pool is open, the schema has been checked, and Valkey has answered
+/// `PING`. A durable deployment therefore fails on the ports that are genuinely absent rather
+/// than on the first one anybody happened to write.
+fn durable_ports_owed() -> BootError {
+    BootError::AdapterUnavailable {
         key: "DATABASE_URL",
-        issue: "#402 (Postgres)",
-    })
+        issue: "#446 (the remaining durable ports)",
+    }
 }
 
 /// The stores every subcommand shares, and the only one of them that is durable.
@@ -645,16 +709,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_durable_backend_whose_valkey_is_unreachable_refuses_rather_than_falling_back() {
-        // The half of `store/mod.rs`'s claim that `Config::load` cannot make: the operator did
-        // set `VALKEY_URL`, and the server behind it does not answer. Falling back to the
-        // in-memory adapters here is the one thing that must never happen. Port 1 on loopback:
-        // nothing listens there, so the refusal is immediate and the retry budget bounds the
-        // wait. The reachable case — Valkey answers, and the Postgres half is then named — needs
-        // a live server and lives in `tests/valkey.rs`.
+    async fn a_durable_backend_without_a_database_url_refuses_by_name() {
+        // `Config::load` demands `VALKEY_URL` for the durable path and deliberately does not
+        // demand `DATABASE_URL` — `gc`, `purge` and `scrub` load the same configuration and need
+        // neither. So the demand belongs to this *path*, and this is the assertion that it is
+        // made rather than discovered as a `None` somewhere further in.
         let root = tempfile::tempdir().expect("a scratch directory");
-        let environment: BTreeMap<String, String> = [
-            ("BLOB_ROOT".to_owned(), root.path().display().to_string()),
+        let config = Config::load(
+            &durable_environment(root.path()),
+            &Overrides::default(),
+            Demands::Serve,
+        )
+        .expect("it is well-formed");
+        let error = assemble(&config).await.expect_err("it refuses");
+        assert!(
+            matches!(
+                error,
+                BootError::Missing {
+                    key: "DATABASE_URL"
+                }
+            ),
+            "{error:?}"
+        );
+    }
+
+    /// The environment a durable `serve` needs, minus the backend URLs a case adds itself.
+    fn durable_environment(root: &std::path::Path) -> BTreeMap<String, String> {
+        [
+            ("BLOB_ROOT".to_owned(), root.display().to_string()),
             ("JWT_ED25519_DER".to_owned(), EXAMPLE_DER.to_owned()),
             ("VALKEY_URL".to_owned(), "redis://127.0.0.1:1".to_owned()),
             // A durable deployment supplies its own attestation identity rather than having one
@@ -668,14 +750,141 @@ mod tests {
             ),
         ]
         .into_iter()
-        .collect();
-        let config = Config::load(&environment, &Overrides::default(), Demands::Serve)
-            .expect("it is well-formed");
-        let error = assemble(&config).await.expect_err("it refuses");
-        assert!(matches!(error, BootError::Valkey { .. }), "{error:?}");
-        let message = format!("{error}");
-        assert!(message.contains("VALKEY_URL"), "{message}");
-        assert!(!message.contains("127.0.0.1:1"), "never the URL: {message}");
+        .collect()
+    }
+
+    /// What a durable boot does once it can actually reach a database.
+    mod postgres_conformance {
+        use std::sync::Arc;
+
+        use super::{
+            BTreeMap, BootError, Config, Demands, Overrides, assemble, durable_environment,
+        };
+        use crate::auth::{Credentials, PostgresAccounts};
+        use crate::index::postgres::PostgresAssetIndex;
+        use crate::postgres::testing;
+        use crate::quota::PostgresQuota;
+        use crate::store::{PostgresCohorts, SystemClock};
+
+        /// A config pointing at `url`, with everything else a durable `serve` needs.
+        fn config_for(root: &std::path::Path, url: &str) -> Config {
+            let mut environment: BTreeMap<String, String> = durable_environment(root);
+            environment.insert("DATABASE_URL".to_owned(), url.to_owned());
+            Config::load(&environment, &Overrides::default(), Demands::Serve)
+                .expect("it is well-formed")
+        }
+
+        /// A durable boot clears Postgres and refuses on Valkey rather than falling back.
+        ///
+        /// The property that matters is *which* refusal: falling back to the in-memory adapters
+        /// is the one thing that must never happen, and refusing on the first port anybody
+        /// happened to write would hide what is actually missing. Getting as far as the Valkey
+        /// probe proves the pool opened and the schema check passed.
+        ///
+        /// This was two cases before #402 and #403 met. #403 asserted the Valkey refusal as a
+        /// unit test, because nothing had yet demanded `DATABASE_URL` ahead of it; #402 asserted
+        /// that the arm reached `AdapterUnavailable { key: "VALKEY_URL" }`, which was the
+        /// refusal of a port *no adapter read*. Both halves have landed, so the durable arm now
+        /// needs a real database before it dials Valkey at all, and the honest error at
+        /// `redis://127.0.0.1:1` is [`BootError::Valkey`] — the adapter tried and nothing
+        /// answered. One case, both lanes' assertions, and it needs a container to reach.
+        #[tokio::test]
+        async fn the_durable_arm_clears_postgres_and_refuses_on_an_unreachable_valkey() {
+            let Some(database) = testing::start("the durable boot arm").await else {
+                return;
+            };
+            let root = tempfile::tempdir().expect("a scratch directory");
+            let config = config_for(root.path(), database.url());
+            let error = assemble(&config).await.expect_err("it refuses");
+            assert!(matches!(error, BootError::Valkey { .. }), "{error:?}");
+            let message = format!("{error}");
+            assert!(message.contains("VALKEY_URL"), "{message}");
+            assert!(!message.contains("127.0.0.1:1"), "never the URL: {message}");
+        }
+
+        /// A database that has not been migrated refuses, and names the command that fixes it.
+        ///
+        /// The whole reason `serve` reads `seaql_migrations` rather than running
+        /// `Migrator::up`: the alternative is a rolling deploy in which every replica races to
+        /// apply the same schema change.
+        #[tokio::test]
+        async fn an_unmigrated_database_refuses_and_names_the_migration_command() {
+            let Some(database) = testing::start("an unmigrated durable boot").await else {
+                return;
+            };
+            database.roll_back().await;
+            let root = tempfile::tempdir().expect("a scratch directory");
+            let config = config_for(root.path(), database.url());
+            let error = assemble(&config).await.expect_err("it refuses");
+            assert!(matches!(error, BootError::Database { .. }), "{error:?}");
+            let rendered = format!("{error}");
+            assert!(
+                rendered.contains("capsule-server-migration up"),
+                "the refusal must name the command that fixes it, got {rendered}"
+            );
+            assert!(
+                !rendered.contains(database.url()),
+                "a startup error must never carry the connection URL: {rendered}"
+            );
+        }
+
+        /// The four Postgres adapters compose out of exactly what the boot path has.
+        ///
+        /// Asserted here rather than by constructing them in `assemble` and throwing them away:
+        /// production code that builds something it cannot use is theatre, and what #446 needs
+        /// to know is that its one hunk will type-check. Every constructor takes the shared
+        /// connection plus values `Config` already carries.
+        #[tokio::test]
+        async fn every_postgres_adapter_composes_from_the_boot_configuration() {
+            let Some(database) = testing::start("the durable adapter set").await else {
+                return;
+            };
+            let root = tempfile::tempdir().expect("a scratch directory");
+            let config = config_for(root.path(), database.url());
+            let connection = crate::postgres::connect(&config.database_url.clone().expect("set"))
+                .await
+                .expect("the pool opens");
+            let credentials = Credentials::new().expect("the platform hashes");
+            let clock = Arc::new(SystemClock);
+
+            let index: Arc<dyn crate::index::AssetIndex> =
+                Arc::new(PostgresAssetIndex::new(connection.clone()));
+            let accounts = Arc::new(PostgresAccounts::new(
+                connection.clone(),
+                credentials,
+                clock,
+                config.lockout_attempts,
+                config.lockout_window,
+            ));
+            let cohorts: Arc<dyn crate::store::CohortStore> =
+                Arc::new(PostgresCohorts::new(connection.clone()));
+            let quotas: Arc<dyn crate::quota::QuotaStore> =
+                Arc::new(PostgresQuota::new(connection));
+
+            // Each one answers through its port, which is what makes this a boot check rather
+            // than a compile check: the schema the migration applied is the schema the adapters
+            // query.
+            let owner = crate::store::OwnerId::new("boot-probe-owner");
+            assert_eq!(index.head_seq(&owner).await.expect("the index answers"), 0);
+            let user = crate::store::UserId::new("boot-probe-user");
+            assert!(
+                crate::auth::AccountProfiles::read(accounts.as_ref(), &user)
+                    .await
+                    .expect("the account store answers")
+                    .is_none()
+            );
+            assert!(
+                cohorts
+                    .cohorts_for_user(&user)
+                    .await
+                    .expect("the cohort map answers")
+                    .is_empty()
+            );
+            assert_eq!(
+                quotas.usage(&user).await.expect("the ledger answers").used,
+                0
+            );
+        }
     }
 
     #[tokio::test]

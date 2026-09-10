@@ -138,6 +138,29 @@ redis = { workspace = true, features = ["tokio-rustls-comp", "script"] }
 # their own copy of the config loader and the adapter seam.
 clap = { version = "4.6.1", features = ["derive"] }
 color-eyre = "0.6.5"
+# The Postgres adapters for the durable ports (#402). `default-features = false` is
+# load-bearing rather than tidy: sea-orm's defaults include `with-chrono`, and
+# design/dependencies.md makes `cargo tree -i chrono -e no-dev` a review-blocking gate that must
+# keep resolving to `capsule-cli/entity` and sea-orm's own internals. Without a datetime feature
+# there is no Rust binding for `TIMESTAMPTZ` at all, which is why every instant in the server's
+# schema is a `BIGINT` of epoch microseconds converted in `postgres::time`.
+#
+# Three features and no more: `macros` for the `FromQueryResult` derive the adapters' private row
+# structs use, `sqlx-postgres` for the driver, `runtime-tokio-rustls` because the workspace's TLS
+# rule is rustls only. Already a workspace dependency with a row in design/dependencies.md (ORM),
+# consumed until now only by `capsule-cli/entity`.
+#
+# Spelled out rather than `workspace = true`, and only because cargo forbids the one thing this
+# needs: a member may add features to an inherited dependency but may not turn the workspace's
+# defaults **off**. `capsule-cli` and `capsule-cli/entity` inherit sea-orm *with* its defaults —
+# that is exactly why the chrono gate names `capsule-cli/entity` — so flipping the workspace
+# entry would change their build. The version is the workspace pin, restated; keep the two in
+# step when sea-orm is repinned.
+sea-orm = { version = "1.1.20", default-features = false, features = [
+  "macros",
+  "sqlx-postgres",
+  "runtime-tokio-rustls",
+] }
 # The log stream the binary installs (`cli::install_tracing`). `env-filter` for `RUST_LOG` and
 # `json` for the one-object-per-event rendering a log shipper wants; both are on in the workspace
 # pin, and the crate already has a row in design/dependencies.md. Written to **stderr**, so
@@ -145,6 +168,30 @@ color-eyre = "0.6.5"
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
+# The server's schema, applied by the Postgres conformance harness. A **dev-dependency only**,
+# and that is the decision rather than an oversight: `sea-orm-migration` pulls sea-orm with its
+# default `with-chrono` feature, so a normal dependency here would break the
+# `cargo tree -i chrono -e no-dev` gate at design/dependencies.md. The cost is that `serve`
+# cannot migrate — it reads `seaql_migrations` and refuses to boot on a mismatch
+# (`postgres::assert_schema_current`), which is also the safer rollout: a server that migrates on
+# start migrates once per replica during a rolling deploy.
+capsule-server-migration = { path = "migration" }
+# The containers the conformance suites run against: a Postgres for `postgres::testing`, behind
+# `CAPSULE_TEST_POSTGRES=1`, and a Valkey for `tests/valkey.rs`, behind `CAPSULE_TEST_VALKEY=1`
+# (or `CAPSULE_TEST_VALKEY_URL` for a server already running). Both suites run the same cases the
+# in-memory doubles pass, so `mise run test-rust` still needs no podman and `.config/nextest.toml`
+# puts both in the one-thread `containers` group.
+#
+# Both crates were pinned at the workspace and consumed by nothing — `xtask`'s
+# `PLANNED_WORKSPACE_DEPENDENCIES` sanctioned them as planned because "no test starts a
+# container yet". These are the tests that start one, so the two entries leave that list.
+# Dev-only: the served binary links neither.
+#
+# `postgres` and `redis` are on the workspace pin; `valkey` is added here because it is the image
+# `capsule-server/compose.yaml` runs and no other member needs it.
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true, features = ["valkey"] }
+
 # `tests/binary.rs` gives the spawned server a blob root of its own, and deletes it afterwards,
 # and `tests/sdk_client.rs` pushes an asset a **real** `capsule_core::Workspace` sealed — the only
 # way to prove the upload ladder puts an asset on this server's feed is to have the ladder's own
@@ -186,11 +233,3 @@ totp-rs = { workspace = true }
 # key somebody eventually reuses. `ring` is a normal dependency since `S-C2` (the cursor MAC);
 # it stays listed here only so the intent of the test usage is recorded.
 
-# One Valkey container for `tests/valkey.rs`, which runs the `store::conformance` and
-# `counter::conformance` suites — the same cases the in-memory doubles pass — against a live
-# server. Env-gated (`CAPSULE_TEST_VALKEY=1`, or `CAPSULE_TEST_VALKEY_URL` for a server already
-# running) so `mise run test-rust` still needs no podman; `.config/nextest.toml` puts the file
-# in the one-thread `containers` group. Both crates are workspace pins already in the Test
-# runner row of design/dependencies.md; the `valkey` module is the image the deployment runs.
-testcontainers = { workspace = true }
-testcontainers-modules = { workspace = true, features = ["valkey"] }

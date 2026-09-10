@@ -1,0 +1,35 @@
+[package]
+name = "capsule-server-migration"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The server's schema, as an operator binary and as a library the conformance harness applies.
+#
+# `capsule-server` takes this crate as a **dev-dependency only**, which is a deliberate
+# constraint rather than an accident of layering: `sea-orm-migration` pulls `sea-orm` with its
+# default features, `with-chrono` among them, and design/dependencies.md makes
+# `cargo tree -i chrono -e no-dev` a review-blocking gate. Keeping the migrator out of the
+# server's normal dependency graph is what keeps that gate resolving to `capsule-cli/entity`
+# and sea-orm's own internals. The consequence is recorded where it is felt:
+# `capsule_server::postgres::assert_schema_current` refuses to boot on a pending migration and
+# names the command below, rather than running `Migrator::up` on `serve`.
+
+[lib]
+# Not `migration`: `capsule-cli/migration` already publishes a lib of that name, and two libs
+# called `migration` in one workspace is legal and a trap for anybody writing `use migration::`.
+name = "server_migration"
+path = "src/lib.rs"
+
+[[bin]]
+name = "capsule-server-migration"
+path = "src/main.rs"
+
+[dependencies]
+# The runtime `cli::run_cli` drives. Already the workspace's async runtime.
+tokio = { workspace = true }
+# The migrator itself, pinned at the workspace with `sqlx-postgres` and `runtime-tokio-rustls`
+# — the server's schema is PostgreSQL's, and the TLS rule is rustls only. See the ORM row in
+# design/dependencies.md; this crate opens no new dependency domain.
+sea-orm-migration = { workspace = true }

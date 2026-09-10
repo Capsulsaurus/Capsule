@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use capsule_server::counter::valkey::ValkeyCounters;
 use capsule_server::counter::{Budget, CounterKey, CounterStore, conformance as counters};
-use capsule_server::store::conformance::{self, Harness};
+use capsule_server::store::conformance::{self, CohortHarness, Harness};
 use capsule_server::store::memory::ManualClock;
 use capsule_server::store::upload::{
     BlobRole, FinalizeClaim, UploadSessionRecord, UploadSessionStatus, UploadSessionStore,
@@ -129,6 +129,25 @@ impl ValkeyHarness {
     }
 }
 
+// `Harness` was one trait when #403 wrote this file and is two since #402: `CohortHarness`
+// carries the cohort map and the time seam, `Harness` extends it with the five volatile stores.
+// The split exists so a Postgres-backed cohort harness need not implement five adapters it will
+// never have. This harness has all six — the Valkey cohort hash is the interim adapter
+// `PostgresCohorts` supersedes — so it implements both halves and `run_all` still drives every
+// case in the module against one connection.
+impl CohortHarness for ValkeyHarness {
+    fn cohorts(&self) -> &dyn CohortStore {
+        &*self.cohorts
+    }
+
+    fn advance(&self, by: SignedDuration) -> StoreFuture<'_, ()> {
+        Box::pin(async move {
+            self.clock.advance(by);
+            Ok::<(), StoreError>(())
+        })
+    }
+}
+
 impl Harness for ValkeyHarness {
     fn auth(&self) -> &dyn AuthStateStore {
         &*self.auth
@@ -148,17 +167,6 @@ impl Harness for ValkeyHarness {
 
     fn channels(&self) -> &dyn ChannelStore {
         &*self.channels
-    }
-
-    fn cohorts(&self) -> &dyn CohortStore {
-        &*self.cohorts
-    }
-
-    fn advance(&self, by: SignedDuration) -> StoreFuture<'_, ()> {
-        Box::pin(async move {
-            self.clock.advance(by);
-            Ok::<(), StoreError>(())
-        })
     }
 }
 

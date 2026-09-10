@@ -288,13 +288,23 @@ fn serving_without_valkey_and_without_the_memory_profile_refuses_by_name() {
 }
 
 #[test]
-fn a_durable_backend_whose_valkey_is_unreachable_refuses_rather_than_falling_back() {
-    // The other half: the operator *did* set `VALKEY_URL`, and the server behind it does not
-    // answer (port 1 on loopback). Falling back to the in-memory adapters here is the one thing
-    // that must never happen, and the refusal names the variable but never the address, which
-    // carries the password. The reachable case lives in `tests/valkey.rs`.
+fn a_durable_backend_refuses_by_name_rather_than_falling_back() {
+    // The other half of the same property: the operator *did* set `VALKEY_URL`, so
+    // `Config::load` is satisfied, and falling back to the in-memory adapters is the one thing
+    // that must never happen.
+    //
+    // What the refusal *names* moved with #402. It used to be `#403`, because nothing read
+    // either backend URL; now the durable arm demands `DATABASE_URL` first — it is what the
+    // Postgres half opens the pool from — so a deployment that set one variable and not the
+    // other is told which one is missing rather than being pointed at an issue number.
+    //
+    // The Valkey refusal is still there, one step further in, and #403 landed the adapter that
+    // makes it a real connection failure rather than an unimplemented port. It is asserted where
+    // it can now be reached — `boot::tests::postgres_conformance::
+    // the_durable_arm_clears_postgres_and_refuses_on_an_unreachable_valkey` — which needs a live
+    // database to get past the schema check first, and is gated accordingly.
     let root = tempfile::tempdir().expect("a scratch directory");
-    let (code, _, stderr) = run(server(&[
+    let (code, stdout, stderr) = run(server(&[
         "serve",
         "--listen",
         EPHEMERAL,
@@ -305,10 +315,17 @@ fn a_durable_backend_whose_valkey_is_unreachable_refuses_rather_than_falling_bac
     .env("ATTESTATION_KEY_SEED", EXAMPLE_SEED)
     .env("VALKEY_URL", "redis://127.0.0.1:1"));
     assert_ne!(code, Some(0), "{stderr}");
-    assert!(stderr.contains("VALKEY_URL"), "{stderr}");
+    assert!(stderr.contains("DATABASE_URL"), "{stderr}");
+    // A refusal names the variable, never the address, which carries the password.
     assert!(
         !stderr.contains("127.0.0.1:1"),
         "never the address: {stderr}"
+    );
+    // It refused rather than coming up: `serve` prints the address it bound to on stdout, and a
+    // silent fallback to the in-memory adapters would look exactly like a successful start.
+    assert!(
+        stdout.trim().is_empty(),
+        "a refused boot must not have bound a listener: {stdout}"
     );
 }
 

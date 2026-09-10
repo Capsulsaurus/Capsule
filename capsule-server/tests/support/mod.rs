@@ -23,6 +23,8 @@
     reason = "each test binary uses a different part of the fixture"
 )]
 
+pub(crate) mod fault;
+
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -2275,6 +2277,12 @@ pub(crate) struct Fixture {
     pub(crate) authority: Arc<TestAuthority>,
     /// The durable asset index the feed reads from.
     pub(crate) index: Arc<SwitchableIndex>,
+    /// The crash seam wrapped around it, disarmed unless a case arms it (E2E case 11).
+    ///
+    /// Always in the chain rather than swapped in by a second constructor: a decorator that only
+    /// some fixtures carried would be a second wiring for the tests that carry it, and this one
+    /// delegates every call it is not armed for.
+    pub(crate) index_fault: Arc<fault::CrashBeforeCommit>,
     /// The cursor codec the server mints with — the *same* one, so a test can mint a cursor
     /// the server will accept, or one it must not.
     pub(crate) cursors: Arc<CursorCodec>,
@@ -2346,6 +2354,7 @@ impl Fixture {
         authority.add_device(&user(), device(), clock.now());
 
         let index = Arc::new(SwitchableIndex::new());
+        let index_fault = Arc::new(fault::CrashBeforeCommit::new(index.clone()));
         let cursors = Arc::new(CursorCodec::new(&CURSOR_KEY));
         let directories = Arc::new(SwitchableDirectories::new());
         let albums = Arc::new(SwitchableAlbums::new());
@@ -2386,23 +2395,31 @@ impl Fixture {
                 tokens: tokens.clone(),
                 clock: clock.clone(),
             }),
+            // Every module reads the index **through** the crash seam, so an armed fault is a
+            // property of the server rather than of one module's wiring — and a disarmed one is
+            // a delegating pass-through, which is what every other case sees.
             upload: UploadContext::new(
                 uploads.clone(),
                 blobs.clone(),
-                index.clone(),
+                index_fault.clone(),
                 authority.clone(),
                 clock.clone(),
                 UploadPolicy::default(),
             ),
-            sync: SyncContext::new(index.clone(), blobs.clone(), cursors.clone()),
+            sync: SyncContext::new(index_fault.clone(), blobs.clone(), cursors.clone()),
             serve: ServeContext::new(
-                index.clone(),
+                index_fault.clone(),
                 blobs.clone(),
                 marks.clone(),
                 uploads.clone(),
                 capsule_server::serve::owned_assets(),
             ),
-            verify: VerifyContext::new(index.clone(), blobs.clone(), marks.clone(), clock.clone()),
+            verify: VerifyContext::new(
+                index_fault.clone(),
+                blobs.clone(),
+                marks.clone(),
+                clock.clone(),
+            ),
             directories: DeviceDirectoryContext::new(directories.clone(), clock.clone()),
             albums: AlbumContext::new(albums.clone(), clock.clone()),
             quota: QuotaContext::new(quotas.clone(), clock.clone(), quota_limits),
@@ -2443,6 +2460,7 @@ impl Fixture {
             blobs,
             authority,
             index,
+            index_fault,
             cursors,
             directories,
             albums,

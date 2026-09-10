@@ -9,6 +9,7 @@ members = [
     "capsule-sdk",
     "capsule-wasm",
     "capsule-server",
+    "capsule-server/migration",
     "xtask",
 ]
 # capsule-sdk's REST client is generated at build time by spargen from the committed
@@ -22,6 +23,7 @@ default-members = [
     "capsule-i18n",
     "capsule-sdk",
     "capsule-server",
+    "capsule-server/migration",
 ]
 resolver = "3"
 
