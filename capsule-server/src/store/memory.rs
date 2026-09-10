@@ -24,11 +24,13 @@ use jiff::{SignedDuration, Timestamp};
 use super::auth::{AuthStateStore, CohortRecord, CohortStore, DEFAULT_SESSION_TTL, SessionRecord};
 use super::ceremony::{
     CHALLENGE_TTL, ChallengeStore, ChannelStore, Direction, DrainOutcome, ENROLLMENT_CODE_TTL,
-    EnrollmentStore, PendingEnrollment, RELAY_CHANNEL_TTL, RelayChannel, RelayOutcome,
-    RelayPayload, RevokeAllChallenge,
+    EnrollmentStore, OIDC_AUTHORIZATION_TTL, OidcAuthorizationStore, PendingAuthorization,
+    PendingEnrollment, RELAY_CHANNEL_TTL, RelayChannel, RelayOutcome, RelayPayload,
+    RevokeAllChallenge,
 };
 use super::ids::{
-    AlbumId, ChallengeToken, ChannelId, EnrollmentCode, OwnerId, SessionId, UploadId, UserId,
+    AlbumId, ChallengeToken, ChannelId, EnrollmentCode, OidcState, OwnerId, SessionId, UploadId,
+    UserId,
 };
 use super::upload::{
     AcceptedChunk, FinalizeClaim, LIFETIME_CAP, UploadSessionRecord, UploadSessionStatus,
@@ -783,6 +785,112 @@ impl ChallengeStore for InMemoryChallenges {
     }
 }
 
+/// How many pending OIDC authorizations the in-memory store will hold at once.
+///
+/// Ten thousand: at the ten-minute TTL that is a thousand begun-and-abandoned ceremonies a
+/// minute before anything is refused, which is far beyond a self-hosted deployment's sign-in
+/// rate and well inside the memory a record of four short strings costs. The ceiling exists so
+/// that a caller who begins ceremonies without ever finishing them grows this map to a bound and
+/// not to the heap; the Valkey adapter (#460) gets the same property from the TTL alone.
+pub const PENDING_AUTHORIZATION_CEILING: usize = 10_000;
+
+/// In-memory [`OidcAuthorizationStore`] (slice `S-N1`).
+///
+/// Expired records are purged on every `begin`, so the map holds live ceremonies plus whatever
+/// expired since the last one — never everything ever begun — and a full map answers
+/// [`StoreError::Rejected`], which the route renders as a `503`.
+#[derive(Debug)]
+pub struct InMemoryOidcAuthorizations {
+    clock: Arc<dyn Clock>,
+    ttl: SignedDuration,
+    ceiling: usize,
+    state: Mutex<BTreeMap<OidcState, Entry<PendingAuthorization>>>,
+}
+
+impl InMemoryOidcAuthorizations {
+    /// A store on `clock` with the given authorization lifetime and the default ceiling.
+    pub fn new(clock: Arc<dyn Clock>, ttl: SignedDuration) -> Self {
+        Self {
+            clock,
+            ttl,
+            ceiling: PENDING_AUTHORIZATION_CEILING,
+            state: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    /// A store on `clock` with the [`OIDC_AUTHORIZATION_TTL`].
+    pub fn with_default_ttl(clock: Arc<dyn Clock>) -> Self {
+        Self::new(clock, OIDC_AUTHORIZATION_TTL)
+    }
+
+    /// The same store holding at most `ceiling` pending ceremonies.
+    #[must_use]
+    pub fn with_ceiling(mut self, ceiling: usize) -> Self {
+        self.ceiling = ceiling;
+        self
+    }
+
+    /// Drop every record past its deadline.
+    fn purge(state: &mut BTreeMap<OidcState, Entry<PendingAuthorization>>, now: Timestamp) {
+        state.retain(|_, entry| entry.is_live_at(now));
+    }
+}
+
+impl OidcAuthorizationStore for InMemoryOidcAuthorizations {
+    fn ttl(&self) -> SignedDuration {
+        self.ttl
+    }
+
+    fn begin<'a>(
+        &'a self,
+        state: &'a OidcState,
+        record: PendingAuthorization,
+    ) -> StoreFuture<'a, ()> {
+        Box::pin(async move {
+            let now = self.clock.now();
+            let mut held = lock(&self.state);
+            Self::purge(&mut held, now);
+            if held.len() >= self.ceiling && !held.contains_key(state) {
+                tracing::warn!(
+                    pending = held.len(),
+                    ceiling = self.ceiling,
+                    "the pending OIDC authorization store is full; a ceremony was refused"
+                );
+                return Err(StoreError::Rejected {
+                    store: "oidc authorizations",
+                    detail: format!("{} pending ceremonies is the ceiling", self.ceiling),
+                });
+            }
+            held.insert(
+                state.clone(),
+                Entry {
+                    record,
+                    expires_at: deadline(now, self.ttl),
+                },
+            );
+            tracing::debug!("recorded a pending OIDC authorization");
+            Ok(())
+        })
+    }
+
+    fn consume<'a>(
+        &'a self,
+        state: &'a OidcState,
+    ) -> StoreFuture<'a, Option<PendingAuthorization>> {
+        Box::pin(async move {
+            let now = self.clock.now();
+            let mut held = lock(&self.state);
+            // Burned on every attempt, live or not: a replayed `state` finds nothing.
+            let taken = held.remove(state).filter(|entry| entry.is_live_at(now));
+            tracing::debug!(
+                hit = taken.is_some(),
+                "consumed a pending OIDC authorization"
+            );
+            Ok(taken.map(|entry| entry.record))
+        })
+    }
+}
+
 /// In-memory [`EnrollmentStore`].
 ///
 /// Both spellings index the same record and are inserted and removed together, so one
@@ -1053,6 +1161,7 @@ pub struct InMemoryStores {
     channels: InMemoryChannels,
     /// The one store here with no TTL and no clock — see [`InMemoryCohorts`].
     cohorts: InMemoryCohorts,
+    oidc_authorizations: InMemoryOidcAuthorizations,
 }
 
 impl InMemoryStores {
@@ -1065,6 +1174,7 @@ impl InMemoryStores {
             CHALLENGE_TTL,
             ENROLLMENT_CODE_TTL,
             RELAY_CHANNEL_TTL,
+            OIDC_AUTHORIZATION_TTL,
         )
     }
 
@@ -1074,9 +1184,13 @@ impl InMemoryStores {
     /// one operation rather than five, and it is legitimate precisely because the TTL is a
     /// property of the *store instance* — varying it is configuration, not a per-call argument.
     pub fn with_uniform_ttl(ttl: SignedDuration) -> Self {
-        Self::with_ttl(ManualClock::default(), ttl, ttl, ttl, ttl, ttl)
+        Self::with_ttl(ManualClock::default(), ttl, ttl, ttl, ttl, ttl, ttl)
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one lifetime per store, named in the order the stores are declared"
+    )]
     fn with_ttl(
         clock: ManualClock,
         session: SignedDuration,
@@ -1084,6 +1198,7 @@ impl InMemoryStores {
         challenge: SignedDuration,
         enrollment: SignedDuration,
         channel: SignedDuration,
+        oidc_authorization: SignedDuration,
     ) -> Self {
         let shared: Arc<dyn Clock> = Arc::new(clock.clone());
         Self {
@@ -1093,6 +1208,10 @@ impl InMemoryStores {
             enrollments: InMemoryEnrollments::new(Arc::clone(&shared), enrollment),
             channels: InMemoryChannels::new(Arc::clone(&shared), channel),
             cohorts: InMemoryCohorts::new(),
+            oidc_authorizations: InMemoryOidcAuthorizations::new(
+                Arc::clone(&shared),
+                oidc_authorization,
+            ),
             clock,
         }
     }
@@ -1141,6 +1260,10 @@ impl super::conformance::Harness for InMemoryStores {
 
     fn channels(&self) -> &dyn ChannelStore {
         &self.channels
+    }
+
+    fn oidc_authorizations(&self) -> Option<&dyn OidcAuthorizationStore> {
+        Some(&self.oidc_authorizations)
     }
 }
 
@@ -1201,6 +1324,8 @@ mod tests {
         relaying_requires_a_live_channel,
         relayed_payloads_drain_in_order_and_by_direction,
         closing_a_channel_drops_both_mailboxes,
+        an_oidc_authorization_is_single_use,
+        an_oidc_authorization_expires_with_its_store,
     }
 
     /// The same, for the cases that take a [`conformance::CohortHarness`].
@@ -1253,10 +1378,60 @@ mod tests {
             ENROLLMENT_CODE_TTL
         );
         assert_eq!(ChannelStore::ttl(&stores.channels), RELAY_CHANNEL_TTL);
+        assert_eq!(
+            OidcAuthorizationStore::ttl(&stores.oidc_authorizations),
+            OIDC_AUTHORIZATION_TTL
+        );
         assert_ne!(
             CHALLENGE_TTL, ENROLLMENT_CODE_TTL,
             "a ceremony's window belongs to what it is; if these ever coincide by accident \
              this assertion stops being evidence"
+        );
+    }
+
+    /// A full OIDC ceremony store refuses, and expired ceremonies never count against it.
+    #[tokio::test]
+    async fn a_full_oidc_store_refuses_until_its_ceremonies_expire() {
+        use super::super::ceremony::{OidcAuthorizationStore, PendingAuthorization};
+        use super::super::ids::{OidcNonce, OidcState, PkceVerifier};
+
+        let clock = ManualClock::default();
+        let store =
+            InMemoryOidcAuthorizations::new(Arc::new(clock.clone()), SignedDuration::from_mins(10))
+                .with_ceiling(2);
+        let pending = |tag: &str| PendingAuthorization {
+            nonce: OidcNonce::new(format!("{tag}-nonce")),
+            verifier: PkceVerifier::new(format!("{tag}-verifier")),
+            redirect_uri: "http://127.0.0.1:1/cb".to_owned(),
+            issued_at: clock.now(),
+        };
+        store
+            .begin(&OidcState::new("a"), pending("a"))
+            .await
+            .expect("room");
+        store
+            .begin(&OidcState::new("b"), pending("b"))
+            .await
+            .expect("room");
+        assert!(
+            matches!(
+                store.begin(&OidcState::new("c"), pending("c")).await,
+                Err(StoreError::Rejected { .. })
+            ),
+            "the third is refused at a ceiling of two"
+        );
+        // The expired ones are purged on the next begin, so the refusal is not permanent.
+        clock.advance(SignedDuration::from_mins(10));
+        store
+            .begin(&OidcState::new("c"), pending("c"))
+            .await
+            .expect("the expired ceremonies made room");
+        assert!(
+            store
+                .consume(&OidcState::new("a"))
+                .await
+                .expect("answers")
+                .is_none()
         );
     }
 

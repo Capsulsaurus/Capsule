@@ -183,7 +183,51 @@ const EXTRAS: &[Extra] = &[
             nullable: false,
         }],
     },
+    Extra {
+        component: "DropRateLimitedProblem",
+        operation: "create_drop",
+        status: 429,
+        members: RETRY_AFTER,
+    },
+    Extra {
+        component: "EnrollmentRateLimitedProblem",
+        operation: "redeem_enrollment_code",
+        status: 429,
+        members: RETRY_AFTER,
+    },
+    Extra {
+        component: "ShareMetadataRateLimitedProblem",
+        operation: "share_metadata",
+        status: 429,
+        members: RETRY_AFTER,
+    },
+    Extra {
+        component: "ShareSecretRateLimitedProblem",
+        operation: "share_wrapped_secret",
+        status: 429,
+        members: RETRY_AFTER,
+    },
+    Extra {
+        component: "ShareBlobRateLimitedProblem",
+        operation: "share_blob",
+        status: 429,
+        members: RETRY_AFTER,
+    },
 ];
+
+/// The retry hint every throttled response carries (`S-C32`).
+///
+/// One `429` reaches a caller from two causes — the key's own budget spent, or the limiter's
+/// partition full — and the `code` tells them apart. `retry_after` is what a client acts on
+/// either way, which is why it is not nullable: both causes set it.
+const RETRY_AFTER: &[Member] = &[Member {
+    name: "retry_after",
+    json_type: "integer",
+    description: "When the caller may retry, as Unix seconds. From the limiter's own window \
+                  when a budget is spent, and an upper bound of one window when the limiter \
+                  is at capacity (slice `S-C32`).",
+    nullable: false,
+}];
 
 /// The protocol window a **body-level** `426` publishes as extension members.
 ///

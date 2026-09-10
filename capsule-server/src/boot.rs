@@ -55,6 +55,10 @@ use crate::album::authority::ProvisionedAuthority;
 use crate::album::{AlbumContext, InMemoryAlbums};
 use crate::app::{App, Modules};
 use crate::attestation::{AttestationContext, InMemoryReceipts, LocalAttestationKey};
+use crate::auth::oidc::{
+    HttpIdentityProvider, IdentityProvider, InMemoryFederatedAccounts, OidcCollaborators,
+    OidcContext, OidcSettings,
+};
 use crate::auth::{
     AuthCollaborators, AuthContext, Credentials, InMemoryAccounts, InMemoryTotp, SessionTokens,
     TotpCodes, TotpContext,
@@ -79,7 +83,7 @@ use crate::share::{InMemoryShares, ShareContext};
 use crate::store::SystemClock;
 use crate::store::memory::{
     InMemoryAuthState, InMemoryChallenges, InMemoryChannels, InMemoryCohorts, InMemoryEnrollments,
-    InMemoryUploadSessions,
+    InMemoryOidcAuthorizations, InMemoryUploadSessions,
 };
 use crate::store::valkey::ValkeyStores;
 use crate::sync::{CursorCodec, SyncContext};
@@ -138,6 +142,13 @@ pub enum BootError {
     #[error("the durable backend could not be opened: {detail}")]
     Database {
         /// The driver's own description, or which migration is missing. Never the URL.
+        detail: String,
+    },
+    /// The relying party's outbound HTTP client could not be built — including a CA bundle
+    /// (`OIDC_CA_BUNDLE`) that could not be read or holds no certificate.
+    #[error("the OIDC relying party's HTTP client could not be built: {detail}")]
+    OidcClient {
+        /// What went wrong; names the bundle's path, never its contents.
         detail: String,
     },
     /// A durable backend was selected and its adapter is not written yet.
@@ -246,6 +257,17 @@ pub async fn assemble(config: &Config) -> Result<Assembled, BootError> {
     match config.backends {
         Backends::Memory => memory(config, stores),
         Backends::Durable => {
+            // Checked before anything else the durable arm does, so it survives the adapters
+            // filling that arm: the OIDC ceremony store and the federated-account directory have
+            // in-memory adapters only (#460), and a durable profile must never run one of those
+            // beside a real Valkey — a pending authorization that lives in one replica's memory
+            // is a sign-in that fails whenever the callback lands on another.
+            if config.oidc.is_some() {
+                return Err(BootError::AdapterUnavailable {
+                    key: "OIDC_ISSUER",
+                    issue: "#460 (the OIDC ceremony and federated-account adapters)",
+                });
+            }
             // Both probes run for real, in the order the ports are declared: `DATABASE_URL` is
             // demanded and the pool opened first — a schema that is not the one this binary was
             // built for refuses here — and then Valkey must answer `PING`. The arm still refuses
@@ -345,6 +367,29 @@ async fn valkey(config: &Config) -> Result<ValkeyStores, BootError> {
         })?;
     tracing::info!("VALKEY_URL answers; the volatile state ports are on Valkey");
     Ok(stores)
+}
+
+/// The trust anchors `OIDC_CA_BUNDLE` names, read once at boot.
+///
+/// Refused rather than deferred, like the blob root: a bundle that cannot be read now is a
+/// provider every sign-in will fail against at handshake time, with a less legible error. An
+/// empty bundle is refused too — an operator who named a file meant it to hold something.
+fn oidc_roots(path: &std::path::Path) -> Result<Vec<reqwest::Certificate>, BootError> {
+    let shown = path.display();
+    let pem = std::fs::read(path).map_err(|error| BootError::OidcClient {
+        detail: format!("OIDC_CA_BUNDLE `{shown}` could not be read: {error}"),
+    })?;
+    let roots =
+        reqwest::Certificate::from_pem_bundle(&pem).map_err(|error| BootError::OidcClient {
+            detail: format!("OIDC_CA_BUNDLE `{shown}` is not a PEM certificate bundle: {error}"),
+        })?;
+    if roots.is_empty() {
+        return Err(BootError::OidcClient {
+            detail: format!("OIDC_CA_BUNDLE `{shown}` holds no certificate"),
+        });
+    }
+    tracing::info!(bundle = %shown, roots = roots.len(), "trusting additional roots for the identity provider");
+    Ok(roots)
 }
 
 /// The refusal `store/mod.rs` documents, now reached only for the ports neither #402 nor #403
@@ -501,7 +546,7 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
         capsule_core::crypto::keys::HybridSigningKey::from_seed64(&seed),
     ));
 
-    let server_info = Arc::new(ServerInfo::new(
+    let mut server_info = ServerInfo::new(
         config.server_domain.clone(),
         config.api_base_url.clone(),
         ProtocolWindow {
@@ -509,7 +554,49 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
             max: config.protocol_max.clone(),
         },
         tokens.public_key().to_vec(),
-    ));
+    );
+    if config.oidc.is_some() {
+        // Endpoints only; the issuer and client id stay the server's.
+        server_info = server_info.with_oidc();
+    }
+    let server_info = Arc::new(server_info);
+
+    // The relying party, or the null object. Discovery is lazy: nothing here reaches the
+    // provider, so an identity provider that is down does not stop a server from serving local
+    // auth.
+    let oidc = match &config.oidc {
+        Some(oidc) => {
+            let roots = match &oidc.ca_bundle {
+                Some(path) => oidc_roots(path)?,
+                None => Vec::new(),
+            };
+            let http = HttpIdentityProvider::http_client(&roots).map_err(|error| {
+                BootError::OidcClient {
+                    detail: error.to_string(),
+                }
+            })?;
+            let provider: Arc<dyn IdentityProvider> = Arc::new(HttpIdentityProvider::new(
+                OidcSettings {
+                    issuer: oidc.issuer.clone(),
+                    client_id: oidc.client_id.clone(),
+                    client_secret: oidc.client_secret.clone(),
+                    redirects: oidc.redirects.clone(),
+                },
+                http,
+                clock.clone(),
+            ));
+            tracing::info!(issuer = %oidc.issuer, "the OIDC relying party is configured");
+            OidcContext::new(OidcCollaborators {
+                provider,
+                authorizations: Arc::new(InMemoryOidcAuthorizations::with_default_ttl(
+                    clock.clone(),
+                )),
+                accounts: Arc::new(InMemoryFederatedAccounts::new()),
+                clock: clock.clone(),
+            })
+        }
+        None => OidcContext::disabled(clock.clone()),
+    };
 
     let app = App::new(Modules {
         auth: AuthContext::new(AuthCollaborators {
@@ -529,6 +616,7 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
             // deployment's own name rather than a constant every deployment shares.
             Arc::new(TotpCodes::new(config.server_domain.clone())),
         ),
+        oidc,
         upload: UploadContext::new(
             uploads.clone(),
             blobs.clone(),
@@ -898,6 +986,101 @@ mod tests {
                 0
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_durable_backend_with_oidc_configured_names_the_adapter_issue() {
+        // The in-memory ceremony and federated-account adapters are the only ones written; a
+        // durable profile must never run one of them beside a real Valkey.
+        let root = tempfile::tempdir().expect("a scratch directory");
+        let environment: BTreeMap<String, String> = [
+            ("BLOB_ROOT".to_owned(), root.path().display().to_string()),
+            ("JWT_ED25519_DER".to_owned(), EXAMPLE_DER.to_owned()),
+            ("VALKEY_URL".to_owned(), "redis://127.0.0.1:6379".to_owned()),
+            (
+                "ATTESTATION_KEY_SEED".to_owned(),
+                base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    [9_u8; 64].as_slice(),
+                ),
+            ),
+            (
+                "OIDC_ISSUER".to_owned(),
+                "https://idp.example.test".to_owned(),
+            ),
+            ("OIDC_CLIENT_ID".to_owned(), "capsule".to_owned()),
+        ]
+        .into_iter()
+        .collect();
+        let config = Config::load(&environment, &Overrides::default(), Demands::Serve)
+            .expect("it is well-formed");
+        let error = assemble(&config).await.expect_err("it refuses");
+        assert!(
+            matches!(
+                error,
+                BootError::AdapterUnavailable {
+                    key: "OIDC_ISSUER",
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
+        assert!(format!("{error}").contains("#460"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn a_ca_bundle_is_read_at_boot_and_refused_by_name_when_unusable() {
+        let root = tempfile::tempdir().expect("a scratch directory");
+        let bundle = root.path().join("idp-ca.pem");
+
+        // Missing: refused, naming the path.
+        let config = memory_config_with(
+            root.path(),
+            &[
+                ("OIDC_ISSUER", "https://idp.example.test"),
+                ("OIDC_CLIENT_ID", "capsule"),
+                ("OIDC_CA_BUNDLE", &bundle.display().to_string()),
+            ],
+        );
+        let error = assemble(&config).await.expect_err("it refuses");
+        assert!(matches!(error, BootError::OidcClient { .. }), "{error:?}");
+        assert!(format!("{error}").contains("idp-ca.pem"), "{error}");
+
+        // Present and not a certificate: refused, and the contents are not echoed.
+        std::fs::write(
+            &bundle,
+            "this is not a certificate, it is a secret-looking string",
+        )
+        .expect("writes");
+        let error = assemble(&config).await.expect_err("it refuses");
+        assert!(matches!(error, BootError::OidcClient { .. }), "{error:?}");
+        assert!(!format!("{error}").contains("secret-looking"), "{error}");
+
+        // A real CA certificate: the server boots, trusting it.
+        let key = rcgen::KeyPair::generate().expect("a key");
+        let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).expect("params");
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let ca = params.self_signed(&key).expect("a CA");
+        let body = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, ca.der());
+        let pem = format!("-----BEGIN CERTIFICATE-----\n{body}\n-----END CERTIFICATE-----\n");
+        std::fs::write(&bundle, pem).expect("writes");
+        let assembled = assemble(&config).await.expect("it assembles");
+        assembled.service().expect("the router builds");
+    }
+
+    #[tokio::test]
+    async fn the_memory_profile_assembles_with_a_relying_party_without_reaching_it() {
+        // Discovery is lazy: an issuer nothing answers at is still a server that boots.
+        let root = tempfile::tempdir().expect("a scratch directory");
+        let config = memory_config_with(
+            root.path(),
+            &[
+                ("OIDC_ISSUER", "http://127.0.0.1:9/nothing-listens-here"),
+                ("OIDC_CLIENT_ID", "capsule"),
+            ],
+        );
+        let assembled = assemble(&config).await.expect("it assembles");
+        assembled.service().expect("the router builds");
     }
 
     #[tokio::test]

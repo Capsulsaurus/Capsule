@@ -7835,6 +7835,38 @@
     "message": "Invalid email or password.",
     "context": "High-level error for HTTP 401 on login. Server sends code `error.auth.invalid_credentials`."
   },
+  "error.auth.oidc_address_taken": {
+    "message": "An account with that email address already exists here. Sign in with its password instead.",
+    "context": "HTTP 409 on POST /v1/auth/oidc/callback (slice S-N1): the identity provider asserted an email address that already belongs to a local account, and this identity is not linked to it. Capsule never links accounts by an address the provider controls; the person signs in with the existing account's password."
+  },
+  "error.auth.oidc_at_capacity": {
+    "message": "Too many sign-ins are already in progress. Please try again in a moment.",
+    "context": "HTTP 503 on POST /v1/auth/oidc/authorize (slice S-N1): the server is already holding as many unfinished single sign-on ceremonies as it will hold, so this one was not begun. Retryable within minutes - pending ceremonies expire ten minutes after they start. Distinct from error.auth.unavailable, which is a 500 meaning a store could not answer at all: this one means the server answered and said 'not now', and a client may retry it on a short timer rather than surfacing an outage."
+  },
+  "error.auth.oidc_exchange_failed": {
+    "message": "Your identity provider didn't accept that sign-in. Try again.",
+    "context": "HTTP 401 on POST /v1/auth/oidc/callback (slice S-N1): the identity provider refused to exchange the authorization code (an invalid, spent or mismatched code). The person starts the sign-in again."
+  },
+  "error.auth.oidc_not_configured": {
+    "message": "Single sign-on isn't set up on this server.",
+    "context": "HTTP 404 on POST /v1/auth/oidc/authorize (slice S-N1): this deployment has no OIDC identity provider configured, so there is nowhere to send the person. The server-info record publishes auth.oidc as null in this case; a client that shows the option anyway sees this."
+  },
+  "error.auth.oidc_redirect_invalid": {
+    "message": "That sign-in can't return to this app.",
+    "context": "HTTP 400 on POST /v1/auth/oidc/authorize (slice S-N1): the redirect URI the client asked for is neither the deployment's configured one nor a loopback address it admits, so the server will not send the person back there. A client bug or a misconfigured deployment, not something the person can fix."
+  },
+  "error.auth.oidc_state_invalid": {
+    "message": "That sign-in has expired. Start again.",
+    "context": "HTTP 401 on POST /v1/auth/oidc/callback (slice S-N1): the state is unknown, already redeemed, or past its ten-minute window. One answer for all three, so the callback is not an oracle; the person starts the sign-in again."
+  },
+  "error.auth.oidc_token_invalid": {
+    "message": "Your identity provider's answer couldn't be verified.",
+    "context": "HTTP 401 on POST /v1/auth/oidc/callback (slice S-N1): the identity provider's ID token failed a check (signature, issuer, audience, expiry or nonce). One answer for every check, deliberately; the specific reason reaches the server log, not the client."
+  },
+  "error.auth.oidc_unavailable": {
+    "message": "Capsule couldn't reach your identity provider just now. Please try again.",
+    "context": "HTTP 500 on the /v1/auth/oidc routes (slice S-N1): the identity provider could not be reached, or its published metadata or keys could not be used. Retryable, and distinct from error.auth.unavailable because 'the identity provider is down' and 'the session store is down' are different operator actions."
+  },
   "error.auth.password_invalid": {
     "message": "That password cannot be used.",
     "context": "HTTP 400 on POST /v1/auth/password (slice S-C54): the proposed new password is under the 12-character floor, or is the password already in use. The second case matters because a change that changes nothing leaves the caller believing a leaked credential has been rotated."
@@ -7987,6 +8019,10 @@
     "message": "This upload link needs its passphrase.",
     "context": "HTTP 403 on POST /u/{opaque-id}/drop (web-upload): the link carries an Argon2id abuse-gate verifier and the guest supplied no proof, or a proof that did not verify."
   },
+  "error.drop.at_capacity": {
+    "message": "This server is handling too many upload links right now. Please try again shortly.",
+    "context": "HTTP 429 on POST /d/{opaque_id} (slice S-C5): the per-link rate-limit store is holding as many distinct upload links as it will hold, so this link could not be given a window of its own. Saturated by design rather than broken - distinct from error.drop.unavailable, which is a 500 meaning a store could not answer at all. The `retry_after` member is an upper bound: it is the limiter window, after which a lapsed window frees room."
+  },
   "error.drop.rate_limited": {
     "message": "Too many attempts. Please wait and try again.",
     "context": "HTTP 429 on POST /u/{opaque-id}/drop (web-upload, invariant 31): the per-{opaque-id} or per-source-IP drop-session rate limit engaged."
@@ -8006,6 +8042,10 @@
   "error.enrollment.local_auth_required": {
     "message": "Confirm it's you on this device to add another device.",
     "context": "HTTP 403 on POST /devices/enroll (slice S-C7): the access token is not fresh enough to stand in for the doc's fresh local device authorization. A valid session token alone cannot start a cross-device add — the caller must re-authenticate locally so a stolen, stale token cannot enroll a rogue device."
+  },
+  "error.enrollment.at_capacity": {
+    "message": "This server is handling too many enrollment attempts right now. Please try again shortly.",
+    "context": "HTTP 429 on POST /v1/auth/devices/enroll/redeem (slice S-C7): the redemption rate-limit store is holding as many distinct codes as it will hold, so this code could not be given a window of its own. Saturated by design rather than broken - distinct from error.auth.unavailable, which is a 500 meaning a store could not answer at all. The `retry_after` member is an upper bound: it is the limiter window, after which a lapsed window frees room."
   },
   "error.enrollment.rate_limited": {
     "message": "Too many device-add attempts. Please wait and try again.",
@@ -8138,6 +8178,10 @@
   "error.share.malformed": {
     "message": "That share link could not be created.",
     "context": "HTTP 400 on POST /v1/shares (slice S-C4): the record is not a usable share link — an opaque id that is not 32 lowercase hex characters, a malformed content address, a `serves` set that omits the metadata blob, an unparseable expiry, or a non-base64 wrapped secret. The owner's own operation, so the detail is specific; the public serve path never distinguishes anything."
+  },
+  "error.share.at_capacity": {
+    "message": "This server is handling too many shared links right now. Please try again shortly.",
+    "context": "HTTP 429 on the public /s/{opaque_id} routes (slice S-C4): the per-link rate-limit store is holding as many distinct share links as it will hold, so this link could not be given a window of its own. Saturated by design rather than broken - distinct from the 500 this surface renders when a store could not answer at all. The `retry_after` member is an upper bound: it is the limiter window, after which a lapsed window frees room."
   },
   "error.share.rate_limited": {
     "message": "Too many attempts. Please wait and try again.",

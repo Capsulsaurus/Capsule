@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::auth::AccessToken;
-use crate::counter::{CounterContext, CounterKey, budgets};
+use crate::counter::{CounterContext, CounterKey, Verdict, budgets, unix_seconds};
 use crate::enrollment::{EnrollmentContext, MAX_RELAY_BYTES};
 use crate::store::{
     ChannelId, Direction, DrainOutcome, EnrollmentCode, PendingEnrollment, RelayChannel,
@@ -151,12 +151,22 @@ pub enum RedeemRejection {
     /// The limiter design/device-enrollment.md names as the reason the **shorter transcribable
     /// fallback** is safe to offer: it trades entropy for transcribability, and what keeps that
     /// trade honest is that the code cannot be ground through inside its ten-minute life.
+    ///
+    /// Two causes, one status, told apart by `code`: `error.enrollment.rate_limited` is this
+    /// code's own budget spent, `error.enrollment.at_capacity` is the limiter's partition full.
+    /// The second used to render `500 error.auth.unavailable`, which told a client to report an
+    /// outage and an operator to go looking for one, when the limiter was working exactly as
+    /// designed and would clear itself inside the window.
     #[error("too many attempts against this code")]
     #[problem(status = 429, title = "Too many attempts")]
     RateLimited {
         /// The stable catalog code.
         #[problem(extension)]
         code: &'static str,
+        /// When the caller may retry, as Unix seconds. An **upper** bound: one limiter window,
+        /// by which time a live window has lapsed and freed room.
+        #[problem(extension)]
+        retry_after: u64,
     },
 
     /// A store could not answer.
@@ -275,7 +285,8 @@ pub async fn redeem_enrollment_code(
     Inject(counters): Inject<CounterContext>,
     Json(request): Json<RedeemRequest>,
 ) -> Result<Json<ChannelResponse>, RedeemRejection> {
-    let presented = EnrollmentCode::new(request.code.trim());
+    let offered = request.code.trim();
+    let presented = EnrollmentCode::new(offered);
 
     // Charged **before** the redemption is attempted, and charged on every attempt whatever the
     // outcome (`S-C32`). A limiter that only counted failures would let a caller who guesses
@@ -285,21 +296,47 @@ pub async fn redeem_enrollment_code(
     // Keyed on the presented code rather than on a source address, because the contract's
     // budget is per *pending enrollment* — the thing being guessed — and a caller behind many
     // addresses is exactly the caller a per-address key would miss.
-    let key = CounterKey::EnrollmentRedemption(request.code.trim().to_owned());
-    let verdict = counters
-        .hit(&key, budgets::ENROLLMENT_REDEMPTION)
-        .await
-        .map_err(|error| {
-            // Fail closed. A limiter an attacker turns off by loading the counter store is not
-            // a limiter.
+    //
+    // But keyed on it **only when it is shaped like a code**. The presented value is an
+    // arbitrary caller-supplied string, and a counter keyed on one is a partition an
+    // unauthenticated caller fills a row at a time; anything else goes to one fixed bucket, as
+    // the OIDC authorize charges a refused redirect to one. This is a *shape* check and never an
+    // existence check: it cannot say whether a code is pending, so it tells a prober nothing and
+    // leaves untouched the charge-before-resolve ordering above, which is what stops this route
+    // being a free existence oracle. A malformed code still walks the same path to the same
+    // `error.enrollment.code_refused` it always did.
+    let (key, budget) = if is_enrollment_code(offered) {
+        (
+            CounterKey::EnrollmentRedemption(offered.to_owned()),
+            budgets::ENROLLMENT_REDEMPTION,
+        )
+    } else {
+        (
+            CounterKey::EnrollmentRedemptionMalformed,
+            budgets::ENROLLMENT_REDEMPTION_MALFORMED,
+        )
+    };
+    let verdict = counters.hit(&key, budget).await.map_err(|error| {
+        // Fail closed. A limiter an attacker turns off by loading the counter store is not a
+        // limiter — but a *full* partition is the limiter working, not a broken store, and a
+        // caller told `500` cannot tell the difference.
+        if let Some(retry_after) = counters.capacity_refusal(&error, budget) {
+            tracing::warn!(%error, "the redemption limiter is at capacity");
+            RedeemRejection::RateLimited {
+                code: error_codes::ENROLLMENT_AT_CAPACITY,
+                retry_after: unix_seconds(retry_after),
+            }
+        } else {
             tracing::error!(%error, "the redemption counter could not be reached");
             RedeemRejection::Unavailable {
                 code: error_codes::AUTH_UNAVAILABLE,
             }
-        })?;
-    if !verdict.admits() {
+        }
+    })?;
+    if let Verdict::Limited { retry_after } = verdict {
         return Err(RedeemRejection::RateLimited {
             code: error_codes::ENROLLMENT_RATE_LIMITED,
+            retry_after: unix_seconds(retry_after),
         });
     }
 
@@ -473,6 +510,30 @@ pub async fn close_enrollment_channel(
     Ok(NoContent)
 }
 
+/// How many digits the transcribable fallback carries. See [`mint`], which is what produces it.
+const TEXT_FALLBACK_DIGITS: usize = 8;
+
+/// Whether `raw` is shaped like one of the two spellings [`mint`] issues.
+///
+/// The full-entropy form is a canonical hyphenated UUID; the transcribable fallback is exactly
+/// [`TEXT_FALLBACK_DIGITS`] ASCII digits. Nothing else can name a pending enrollment, so nothing
+/// else needs a counter key of its own — that is the whole of what this decides.
+///
+/// **Not an existence check, and it must not become one.** It reads only the presented string's
+/// shape, never the store, so it distinguishes "cannot possibly be a code" from "is a code",
+/// never "is a code that exists" from "is a code that does not". Case is accepted either way for
+/// the UUID form: a client that upper-cases what it scanned is presenting a real code, and
+/// pushing it into the malformed bucket would throttle an honest caller on a technicality. The
+/// store remains the only thing that decides whether a code redeems.
+fn is_enrollment_code(raw: &str) -> bool {
+    if raw.len() == TEXT_FALLBACK_DIGITS && raw.bytes().all(|b| b.is_ascii_digit()) {
+        return true;
+    }
+    // `try_parse` also accepts the simple, braced and URN spellings; the length pins the
+    // hyphenated one `mint` actually issues.
+    raw.len() == 36 && Uuid::try_parse(raw).is_ok()
+}
+
 /// Mint a code pair, refusing one that is already taken.
 async fn mint(
     enrollment: &EnrollmentContext,
@@ -480,8 +541,11 @@ async fn mint(
     // UUIDv4 rather than v7: an enrollment code's creation time must not leak, and a v7 code
     // read off a screen would carry a timestamp. That is the Identifiers rule's exact carve-out.
     let code = EnrollmentCode::new(Uuid::new_v4().to_string());
-    let text_fallback =
-        EnrollmentCode::new(format!("{:08}", Uuid::new_v4().as_u128() % 100_000_000));
+    let text_fallback = EnrollmentCode::new(format!(
+        "{:0width$}",
+        Uuid::new_v4().as_u128() % 100_000_000,
+        width = TEXT_FALLBACK_DIGITS
+    ));
 
     for candidate in [&code, &text_fallback] {
         let taken = enrollment
@@ -538,5 +602,66 @@ impl RelayRejection {
         Self::Unavailable {
             code: error_codes::AUTH_UNAVAILABLE,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn both_spellings_mint_issues_are_shaped_like_codes() {
+        // The predicate has to admit exactly what `mint` produces, or a legitimate redemption
+        // would be counted in the malformed bucket and throttled deployment-wide.
+        for _ in 0..64 {
+            let uuid = Uuid::new_v4().to_string();
+            assert!(is_enrollment_code(&uuid), "{uuid}");
+            let fallback = format!(
+                "{:0width$}",
+                Uuid::new_v4().as_u128() % 100_000_000,
+                width = TEXT_FALLBACK_DIGITS
+            );
+            assert!(is_enrollment_code(&fallback), "{fallback}");
+        }
+        // Including the leading-zero fallback, which is where an "is it a number" check breaks.
+        assert!(is_enrollment_code("00000042"));
+        // And an upper-cased UUID, which is a real code a client re-spelled.
+        assert!(is_enrollment_code(
+            &Uuid::new_v4().to_string().to_ascii_uppercase()
+        ));
+    }
+
+    #[test]
+    fn nothing_else_gets_a_counter_key_of_its_own() {
+        for candidate in [
+            "",
+            "   ",
+            "1234567",                             // one digit short
+            "123456789",                           // one digit long
+            "0000000a",                            // right length, not digits
+            "not-a-uuid-at-all-not-even-close-xx", // right length, not a uuid
+            "0193d2f4a1b74c3e8f5a6b7c8d9e0f10",    // simple uuid: not the spelling minted
+            "urn:uuid:0193d2f4-a1b7-4c3e-8f5a-6b7c8d9e0f10",
+            "{0193d2f4-a1b7-4c3e-8f5a-6b7c8d9e0f10}",
+        ] {
+            assert!(!is_enrollment_code(candidate), "{candidate:?}");
+        }
+        // The point of the bound: an arbitrarily long string cannot mint a key.
+        let long = "a".repeat(64 * 1024);
+        assert!(!is_enrollment_code(&long));
+    }
+
+    #[test]
+    fn the_shape_check_reads_no_store() {
+        // It is a shape check and must never become an existence check: it takes only a string,
+        // so it cannot distinguish a pending code from an absent one, and the charge-before-
+        // resolve ordering that stops this route being an existence oracle is untouched.
+        let minted = Uuid::new_v4().to_string();
+        let never_issued = "0193d2f4-a1b7-4c3e-8f5a-6b7c8d9e0f10";
+        assert_eq!(
+            is_enrollment_code(&minted),
+            is_enrollment_code(never_issued),
+            "a code that exists and one that never will are shaped the same"
+        );
     }
 }
