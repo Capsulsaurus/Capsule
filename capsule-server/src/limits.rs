@@ -88,7 +88,7 @@ pub fn body_size() -> BodySize {
 /// Both answer `413`, and an operation cannot declare two of them. The alternative — moving
 /// `BodySize` off the router and onto every group — would take `413` off the ten operations
 /// mounted outside every group, which `tests/conformance.rs` pins as declared on *every*
-/// operation, and that contract is `S-C33`'s rather than this lane's to change.
+/// operation, and that contract is `S-C33`'s rather than this lane's to change. Filed as #478.
 ///
 /// What bounds the route meanwhile is not nothing, and is not this: every field is length-capped
 /// before any store is read ([`crate::routes::federation`]), and
