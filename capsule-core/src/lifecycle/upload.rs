@@ -23,8 +23,8 @@ use crate::cbor;
 use crate::crypto::encryption::stream;
 use crate::crypto::hash::{self, Hash32};
 use crate::crypto::provenance::DerivativeManifest;
-use crate::crypto::provenance::action::{Action, DerivativeRole};
-use crate::crypto::provenance::manifest::KeyMode;
+use crate::crypto::provenance::{Action, DerivativeRole};
+use crate::crypto::provenance::KeyMode;
 use crate::media::{DerivativeFormat, verify_still_format};
 
 /// One derivative blob of an asset bundle: the **ciphertext** plus the content address its

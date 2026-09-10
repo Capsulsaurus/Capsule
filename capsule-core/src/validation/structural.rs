@@ -187,8 +187,8 @@ mod tests {
     use crate::crypto::CRYPTO_SUITE_ID;
     use crate::crypto::keys::{AmkVersion, HybridSigningKey};
     use crate::crypto::primitives::PROTOCOL_VERSION;
-    use crate::crypto::provenance::action::Action;
-    use crate::crypto::provenance::manifest::{ASSET_MANIFEST_VERSION, KeyMode, ManifestCore};
+    use crate::crypto::provenance::Action;
+    use crate::crypto::provenance::{ASSET_MANIFEST_VERSION, KeyMode, ManifestCore};
 
     #[test]
     fn hash_length_and_size_and_content_type() {

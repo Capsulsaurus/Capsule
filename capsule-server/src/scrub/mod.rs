@@ -438,7 +438,7 @@ async fn mirrored_facts_agree(
                 continue;
             };
             let Ok(manifest) = capsule_core::cbor::from_slice::<
-                capsule_core::crypto::provenance::manifest::AssetManifest,
+                capsule_core::crypto::provenance::AssetManifest,
             >(&bytes) else {
                 report.findings.push(Finding::ManifestUnreadable {
                     asset: row.asset_id.clone(),
@@ -477,10 +477,10 @@ async fn mirrored_facts_agree(
 async fn chain_walks_back(
     context: &ScrubContext,
     row: &crate::index::AssetRow,
-    head: &capsule_core::crypto::provenance::manifest::ManifestCore,
+    head: &capsule_core::crypto::provenance::ManifestCore,
     report: &mut ScrubReport,
 ) -> Result<(), StoreError> {
-    use capsule_core::crypto::provenance::manifest::AssetManifest;
+    use capsule_core::crypto::provenance::AssetManifest;
 
     let mut at = row
         .address_for(BlobRole::Provenance)
@@ -567,7 +567,7 @@ async fn chain_walks_back(
 /// the same way is what keeps a finding readable without knowing the field's type.
 fn compare(
     row: &crate::index::AssetRow,
-    core: &capsule_core::crypto::provenance::manifest::ManifestCore,
+    core: &capsule_core::crypto::provenance::ManifestCore,
     report: &mut ScrubReport,
 ) {
     let mut mismatch = |fact: &'static str, index: String, manifest: String| {
@@ -627,7 +627,7 @@ fn compare(
         );
     }
     if core.action.is_create()
-        || core.action == capsule_core::crypto::provenance::action::Action::Replace
+        || core.action == capsule_core::crypto::provenance::Action::Replace
     {
         // The two actions that carry an original. A `create` whose original has not landed yet
         // is the staged-upload carve-out, and holds nothing to compare.

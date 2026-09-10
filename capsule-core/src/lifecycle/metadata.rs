@@ -9,7 +9,7 @@ use jiff::Timestamp;
 use uuid::Uuid;
 
 use super::{LifecycleError, Result, Workspace, now_rfc3339};
-use crate::crypto::provenance::action::Action;
+use crate::crypto::provenance::Action;
 use crate::db::DatabaseDriver;
 use crate::metadata::crdt::AddId;
 use crate::ml::orchestrator::{AiTagSink, AssetSource};

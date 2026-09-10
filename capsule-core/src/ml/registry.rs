@@ -81,7 +81,7 @@ impl ModelRow {
     }
 
     /// The derivative `format` string for this model's embeddings, e.g. `embedding/mobileclip-b`
-    /// — the value carried in [`DerivativeCore::format`](crate::crypto::provenance::manifest::DerivativeCore::format).
+    /// — the value carried in [`DerivativeCore::format`](crate::crypto::provenance::DerivativeCore::format).
     pub fn embedding_format(&self) -> String {
         format!("embedding/{}", self.model_id)
     }

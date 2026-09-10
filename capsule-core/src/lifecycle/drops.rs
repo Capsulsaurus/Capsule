@@ -12,8 +12,8 @@ use crate::crypto::hash;
 use crate::crypto::keys::{Amk, AmkVersion, DekKeypair};
 use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
 use crate::crypto::provenance::AssetManifest;
-use crate::crypto::provenance::action::Action;
-use crate::crypto::provenance::manifest::{
+use crate::crypto::provenance::Action;
+use crate::crypto::provenance::{
     ASSET_MANIFEST_VERSION, KeyMode, ManifestCore, WrappedFileKey,
 };
 use crate::crypto::verify_asset::{

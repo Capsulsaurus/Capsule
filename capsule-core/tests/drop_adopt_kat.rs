@@ -21,8 +21,8 @@ use capsule_core::crypto::keys::{
     Amk, AmkVersion, DekKeypair, DeviceDirectory, DeviceEntry, DirectoryCore, HybridSigningKey,
 };
 use capsule_core::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
-use capsule_core::crypto::provenance::action::Action;
-use capsule_core::crypto::provenance::manifest::{
+use capsule_core::crypto::provenance::Action;
+use capsule_core::crypto::provenance::{
     ASSET_MANIFEST_VERSION, KeyMode, ManifestCore, WrappedFileKey,
 };
 use capsule_core::crypto::verify_asset::{VerifyOutcome, verify_asset};

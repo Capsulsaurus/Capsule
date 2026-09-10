@@ -40,7 +40,7 @@ use crate::crypto::encryption::encrypt_asset_rekey;
 use crate::crypto::hash::Hash32;
 use crate::crypto::keys::{Amk, AmkVersion, HybridSigningKey};
 use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
-use crate::crypto::provenance::manifest::{DERIVATIVE_MANIFEST_VERSION, DerivativeCore};
+use crate::crypto::provenance::{DERIVATIVE_MANIFEST_VERSION, DerivativeCore};
 use crate::crypto::provenance::{DerivativeManifest, DerivativeRole};
 use crate::derivative_format::{DerivativeFormat, verify_still_format};
 use crate::lqip::{Gamut, Lqip, RgbaImage};

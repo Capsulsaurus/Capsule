@@ -9,8 +9,8 @@ use super::{AlbumKeys, LifecycleError, Result, Workspace, now_rfc3339};
 use crate::crypto::encryption::{blob_ciphertext_hash, blob_nonce, seal_metadata_blob, stream};
 use crate::crypto::hash::Hash32;
 use crate::crypto::keys::Amk;
-use crate::crypto::provenance::action::Action;
-use crate::crypto::provenance::manifest::ManifestCore;
+use crate::crypto::provenance::Action;
+use crate::crypto::provenance::ManifestCore;
 use crate::crypto::provenance::{AssetManifest, ProvenanceRecord};
 use crate::crypto::verify_asset::{
     MetadataBinding, VerifyOutcome, verify_asset, verify_metadata_binding,

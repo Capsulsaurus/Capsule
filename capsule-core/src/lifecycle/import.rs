@@ -19,8 +19,8 @@ use crate::crypto::encryption::{blob_ciphertext_hash, encrypt_asset_rekey, seal_
 use crate::crypto::hash;
 use crate::crypto::keys::{Amk, AmkVersion};
 use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
-use crate::crypto::provenance::action::Action;
-use crate::crypto::provenance::manifest::{ASSET_MANIFEST_VERSION, KeyMode, ManifestCore};
+use crate::crypto::provenance::Action;
+use crate::crypto::provenance::{ASSET_MANIFEST_VERSION, KeyMode, ManifestCore};
 use crate::crypto::provenance::{ProvenanceChain, ProvenanceRecord};
 use crate::crypto::verify_asset::{
     MetadataBinding, VerifyOutcome, verify_asset, verify_metadata_binding,

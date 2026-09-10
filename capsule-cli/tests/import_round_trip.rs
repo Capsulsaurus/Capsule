@@ -44,7 +44,7 @@ use std::process::{Command, Output, Stdio};
 use capsule_core::crypto::hash;
 use capsule_core::crypto::primitives::Argon2Params;
 use capsule_core::crypto::provenance::ProvenanceRecord;
-use capsule_core::crypto::provenance::action::Action;
+use capsule_core::crypto::provenance::Action;
 use capsule_core::db::AssetRow;
 use capsule_core::library::open_library;
 use capsule_core::lifecycle::Workspace;

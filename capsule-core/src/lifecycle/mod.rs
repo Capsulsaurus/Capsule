@@ -63,7 +63,7 @@ use crate::crypto::keys::albumstore::AlbumStoreError;
 use crate::crypto::keys::{Account, DeviceDirectory, HybridSigningKey, HybridVerifyingKey, Signer};
 use crate::crypto::primitives::Argon2Params;
 use crate::crypto::provenance::ProvenanceChain;
-use crate::crypto::provenance::action::Action;
+use crate::crypto::provenance::Action;
 use crate::crypto::verify_asset::{MetadataBinding, VerifyOutcome};
 use crate::db::DatabaseDriver;
 use crate::drop::{DropId, UploadLinkId};

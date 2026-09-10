@@ -47,7 +47,7 @@
 //! invisible.
 //!
 //! [`DerivativeManifest`]: crate::crypto::provenance::DerivativeManifest
-//! [`DerivativeCore::sign`]: crate::crypto::provenance::manifest::DerivativeCore::sign
+//! [`DerivativeCore::sign`]: crate::crypto::provenance::DerivativeCore::sign
 
 use std::collections::HashMap;
 use std::fmt;
@@ -67,7 +67,7 @@ use crate::crypto::CryptoError;
 use crate::crypto::encryption::stream::NONCE_PREFIX_LEN;
 use crate::crypto::hash::{self, Hash32};
 use crate::crypto::keys::{AmkVersion, Signer};
-use crate::crypto::provenance::manifest::{DERIVATIVE_MANIFEST_VERSION, DerivativeCore};
+use crate::crypto::provenance::{DERIVATIVE_MANIFEST_VERSION, DerivativeCore};
 use crate::crypto::provenance::{DerivativeManifest, DerivativeRole};
 use crate::derivative_format::DerivativeFormat;
 use crate::lqip::RgbaImage;

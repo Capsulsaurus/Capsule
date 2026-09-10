@@ -10,9 +10,9 @@
 //! [`verify_asset`]: fn@crate::crypto::verify_asset
 //! [Cryptography — Provenance]: https://docs/design/cryptography/provenance/
 
-pub mod action;
-pub mod manifest;
-pub mod record;
+mod action;
+mod manifest;
+mod record;
 
 pub use action::{Action, DerivativeRole};
 pub use manifest::{

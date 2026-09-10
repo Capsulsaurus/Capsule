@@ -371,7 +371,7 @@ fn signed_derivative_at_epoch(
 ) -> DerivativeManifest {
     use crate::crypto::keys::{AmkVersion, HybridSigningKey};
     use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
-    use crate::crypto::provenance::manifest::{DERIVATIVE_MANIFEST_VERSION, DerivativeCore};
+    use crate::crypto::provenance::{DERIVATIVE_MANIFEST_VERSION, DerivativeCore};
 
     let device = HybridSigningKey::from_seed_bytes(&[21; 32], &[22; 32]);
     let write = HybridSigningKey::from_seed_bytes(&[23; 32], &[24; 32]);

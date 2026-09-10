@@ -358,8 +358,8 @@ mod tests {
     use crate::crypto::keys::directory::{DeviceEntry, DirectoryCore};
     use crate::crypto::keys::{Amk, AmkVersion, DekKeypair, HybridSigningKey};
     use crate::crypto::primitives::{Argon2Params, CRYPTO_SUITE_ID, PROTOCOL_VERSION};
-    use crate::crypto::provenance::action::Action;
-    use crate::crypto::provenance::manifest::{
+    use crate::crypto::provenance::Action;
+    use crate::crypto::provenance::{
         ASSET_MANIFEST_VERSION, KeyMode, ManifestCore, WrappedFileKey,
     };
     use crate::crypto::verify_asset::{VerifyOutcome, verify_asset};

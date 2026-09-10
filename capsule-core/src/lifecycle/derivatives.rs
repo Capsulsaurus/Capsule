@@ -1219,7 +1219,7 @@ mod sealer_tests {
     #[test]
     fn existing_derivatives_reports_every_persisted_prefix() {
         use crate::crypto::keys::HybridSigningKey;
-        use crate::crypto::provenance::manifest::{DERIVATIVE_MANIFEST_VERSION, DerivativeCore};
+        use crate::crypto::provenance::{DERIVATIVE_MANIFEST_VERSION, DerivativeCore};
 
         let dir = tempfile::tempdir().expect("scratch");
         let asset_id = Uuid::from_u128(0xFEED);

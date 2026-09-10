@@ -728,8 +728,8 @@ mod tests {
     use super::*;
     use crate::crypto::keys::{Amk, AmkVersion, HybridSigningKey};
     use crate::crypto::primitives::PROTOCOL_VERSION;
-    use crate::crypto::provenance::action::Action;
-    use crate::crypto::provenance::manifest::{
+    use crate::crypto::provenance::Action;
+    use crate::crypto::provenance::{
         ASSET_MANIFEST_VERSION, KeyMode, ManifestCore as MCore,
     };
 
