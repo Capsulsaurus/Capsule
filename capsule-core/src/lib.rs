@@ -19,6 +19,13 @@ pub mod sharing;
 /// build-embedded git commit (S-D15). Always compiled: pure string formatting, no native deps.
 pub mod client_build;
 
+/// The closed set of still-derivative formats and the structural check over it — the tier
+/// table's format column as a type. Always compiled, and for the same reason [`lqip`] is: the
+/// crates that *receive* a `DerivativeManifest` (`capsule-server`, `capsule-wasm`) build with
+/// `default-features = false`, so a check they cannot link is a check that never runs. Depends
+/// only on [`crypto::provenance`]; `media` re-exports it.
+pub mod derivative_format;
+
 /// LQIP — the chromahash placeholder carried in the signed sidecar's `lqip` field (S-B14).
 /// Always compiled, and deliberately so: the placeholder is produced by the import pipeline,
 /// read by the apps through the uniffi FFI, and read by the browser through `capsule-wasm`, so
@@ -54,6 +61,13 @@ pub mod import;
 pub mod library;
 #[cfg(feature = "native")]
 pub mod lifecycle;
+/// Still decode, orientation, metadata normalisation and derivative generation over
+/// `rawshift-image` (`media` feature, implied by `native`; slices `S-B1`/`S-B13`). Feature-gated
+/// rather than `native`-gated so the codec stack is one manifest edit away from being dropped
+/// from a size-constrained build, and so the `wasm32-unknown-unknown` sealing surface provably
+/// does not link it. See [`media`].
+#[cfg(feature = "media")]
+pub mod media;
 #[cfg(feature = "native")]
 pub mod metadata;
 #[cfg(feature = "native")]
