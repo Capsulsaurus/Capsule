@@ -1038,6 +1038,20 @@ impl ReportRejection {
 
 /// File a signed moderation report from a peer server.
 ///
+/// # Its only reachable answer today is `403`
+///
+/// A report is verified against the peer's **operator-pinned** key, and nothing can pin one:
+/// [`boot::assemble`](crate::boot::assemble) refuses the durable backend until #403 lands its
+/// adapters, so an operator command that pinned a peer could only run against `serve --memory`
+/// and would forget the moment it exited. The command is owed with #476. Until it lands this
+/// operation answers `403 error.federation.peer_unknown` to every real peer.
+///
+/// It is mounted anyway, deliberately: a peer implementing against the published contract needs
+/// the operation to exist and to answer honestly, and what is missing is the command, not the
+/// surface. What is *not* acceptable is a route that reads as protection it cannot provide —
+/// hence this paragraph, and the matching status notes in design/moderation.md and
+/// design/federation.md.
+///
 /// # No bearer, and why that is not "unauthenticated"
 ///
 /// The reporting peer holds no capability here — it is reporting *this* server's content, not
