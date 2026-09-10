@@ -122,12 +122,22 @@ replaced.
 a task that leaks them. Bring them down with
 `podman compose -f capsule-server/compose.yaml down` (`docker compose` accepts the same file).
 
-**`mise run serve` does not work yet, and refuses rather than pretending.** The Postgres and
-Valkey adapters are not written. Without `VALKEY_URL` and without `--memory` it exits 2 naming
-the variable — the refusal `capsule-server/src/store/mod.rs` has documented since `S-C29` and
-nothing could enforce until there was a boot path; with `VALKEY_URL` set it exits non-zero naming
-the issue that will honour it. Neither ever silently falls back to the in-memory adapters, which
-is the whole point: a deployment that forgot a variable must fail closed.
+**`mise run serve` does not work yet, and refuses rather than pretending.** The Valkey half is
+real: `VALKEY_URL` is connected to and `PING`ed before anything else is assembled, and a server
+that cannot be reached is a refusal naming the failure (never the URL). The Postgres adapters are
+not written, so with Valkey reachable `serve` exits non-zero naming `DATABASE_URL` and the issue
+that will honour it (#402). Without `VALKEY_URL` and without `--memory` it exits 2 naming the
+variable — the refusal `capsule-server/src/store/mod.rs` has documented since `S-C29` and nothing
+could enforce until there was a boot path. Neither ever silently falls back to the in-memory
+adapters, which is the whole point: a deployment that forgot a variable must fail closed.
+
+The Valkey adapters are proven against a live server by `capsule-server/tests/valkey.rs`, which
+runs the same conformance suites the in-memory doubles pass. It is env-gated so `mise run
+test-rust` needs no podman: `CAPSULE_TEST_VALKEY=1` starts a `valkey/valkey` container through
+testcontainers (`DOCKER_HOST` pointing at the podman socket; `CAPSULE_TEST_VALKEY_TAG` overrides
+the image tag), and `CAPSULE_TEST_VALKEY_URL=redis://127.0.0.1:6379` runs it against a server
+already up — the one `mise run serve-deps` starts, say. The suite writes under the `capsule:`
+namespace, so point it at a database you do not mind sharing with test keys.
 
 A configured server also has to supply `ATTESTATION_KEY_SEED`. It is **not** derived from
 `JWT_ED25519_DER`, and that is deliberate: the attestation key signs custody receipts and has to
