@@ -60,24 +60,26 @@
 //! arbitrary strings. A reference is looked up **before** the store is touched, so a fetch for
 //! an address nothing references never reaches the bytes. Only then is presence asked about.
 //!
-//! # What is disclosed, stated plainly (`S-C39`)
+//! # What is disclosed, stated plainly (`S-C39`, `S-C51`)
 //!
-//! **An account fetches its own assets' blobs and nothing else.** Until `S-C39` any
-//! authenticated account could fetch any live address it could name, defended as a capability
-//! model — a content address is the hash of ciphertext, so producing one without holding the
-//! bytes is producing a preimage. The defence is not wrong and it is not the contract, and it
-//! stacks badly besides: an address that leaks once is a permanent capability, because the
-//! address never changes.
+//! **An account fetches the blobs of its own assets and of the albums it is currently a member
+//! of, and nothing else.** Until `S-C39` any authenticated account could fetch any live address
+//! it could name, defended as a capability model — a content address is the hash of ciphertext,
+//! so producing one without holding the bytes is producing a preimage. The defence is not wrong
+//! and it is not the contract, and it stacks badly besides: an address that leaks once is a
+//! permanent capability, because the address never changes.
 //!
-//! The decision is [`ReadAuthority`]'s, and a stranger is told exactly what a caller naming an
-//! unknown address is told. See [`crate::serve::authority`] for why the `403`/`404` boundary is
-//! drawn there and not one step further out, and for why the `403` itself still has no
-//! production source: it is no longer a missing authority, it is a missing **membership fact**,
-//! and that fact is `S-C51`'s.
+//! The decision is [`ReadAuthority`]'s, asked from the reference the index returned and asked
+//! **first**. A former member of the album — an account the owner's roster once named and no
+//! longer does — is answered [`ServeResolution::Forbidden`], the `403` the download contract
+//! describes as an authorization change; everyone else with no relationship is told exactly
+//! what a caller naming an unknown address is told. See [`crate::serve::authority`] for why the
+//! `403`/`404` boundary is drawn there and not one step further out, and [`crate::membership`]
+//! for where the fact behind the `403` comes from.
 //!
-//! Non-owners are not locked out of shared content: `/s/{id}/blob/{hash}` serves exactly the
-//! addresses a share link enumerates, and the drop surface serves its own. Neither routes
-//! through here, which is what makes owner-scoping this path safe to do at all.
+//! Non-accounts are not locked out of shared content either: `/s/{id}/blob/{hash}` serves
+//! exactly the addresses a share link enumerates, and the drop surface serves its own. Neither
+//! routes through here.
 //!
 //! # What is missing, and owned elsewhere
 //!
@@ -102,8 +104,8 @@ use bytes::Bytes;
 pub mod authority;
 
 pub use self::authority::{
-    BlobReadAccess, OwnedAssetAuthority, ReadAuthority, ReadAuthorityError, ReadAuthorityFuture,
-    owned_assets,
+    BlobReadAccess, MembershipAuthority, ReadAuthority, ReadAuthorityError, ReadAuthorityFuture,
+    membership_reads,
 };
 use crate::blob::{BlobError, BlobStore, ContentAddress};
 use crate::index::{AssetIndex, AssetState};
@@ -198,6 +200,12 @@ pub enum ServeResolution {
     /// No live reference names the address, it is not an address at all, or the caller has no
     /// relationship to the asset that holds it.
     NotFound,
+    /// The caller once had access to the album that holds it and does not now (`S-C51`).
+    ///
+    /// The one refusal that discloses the address is live, and it discloses it only to an
+    /// account the server holds a revoked membership row for. Decided **before** every policy
+    /// refusal below, so a former member learns nothing about holds or deletions either.
+    Forbidden,
     /// Referenced but not retrievable per policy: a deleted asset, or a dangling reference.
     Gone,
 }
@@ -271,6 +279,7 @@ pub async fn resolve(
             ServeUnavailable("the read authority could not decide".to_owned())
         })? {
         BlobReadAccess::Granted => {}
+        BlobReadAccess::Revoked => return Ok(ServeResolution::Forbidden),
         BlobReadAccess::Unrelated => return Ok(ServeResolution::NotFound),
     }
 

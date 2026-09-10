@@ -5,12 +5,12 @@
 //!
 //! Only the cross-cutting machinery lives in this module. Each adapter lives beside the port it
 //! implements — `index/postgres.rs`, `auth/accounts_postgres.rs`, `store/cohorts_postgres.rs`,
-//! `quota/postgres.rs` — because design/module-map.md assigns contract ownership per *behaviour
-//! module* rather than per backend, and the tree already does it that way for the blob store
+//! `quota/postgres.rs`, `membership/postgres.rs` — because design/module-map.md assigns
+//! contract ownership per *behaviour module* rather than per backend, and the tree already does it that way for the blob store
 //! (`blob/fs.rs`, `blob/memory.rs`). A `postgres/` tree holding every adapter would make one
 //! directory the co-owner of every durable contract in the crate.
 //!
-//! Nothing forces the alternative either: no invariant in these four ports needs a transaction
+//! Nothing forces the alternative either: no invariant in these ports needs a transaction
 //! spanning two of them. The sequence mint is inside `record_blob`, the attribution check is
 //! inside `QuotaStore::charge`, and the account row is one table.
 //!
@@ -47,6 +47,7 @@ pub const EXPECTED_MIGRATIONS: &[&str] = &[
     "m20260902_000002_accounts",
     "m20260902_000003_cohorts",
     "m20260902_000004_quota",
+    "m20260902_000005_album_membership",
 ];
 
 /// The command an operator runs to apply them.

@@ -29,7 +29,8 @@
 //!
 //! Each module owns one port and, where it has one, the surface over it. [`routes`] is the only
 //! module that knows about HTTP: everything under it — [`album`], [`directory`], [`discovery`],
-//! [`enrollment`], [`escrow`], [`gc`], [`index`], [`moderation`], [`negotiation`], [`quota`],
+//! [`enrollment`], [`escrow`], [`gc`], [`index`], [`membership`], [`moderation`],
+//! [`negotiation`], [`quota`],
 //! [`scrub`], [`serve`],
 //! [`share`], [`store`],
 //! [`sync`], [`upload`],
@@ -79,6 +80,7 @@ pub mod escrow;
 pub mod gc;
 pub mod index;
 pub mod limits;
+pub mod membership;
 pub mod moderation;
 pub mod negotiation;
 mod openapi;
@@ -187,6 +189,7 @@ pub fn router() -> ServerRouter {
                     routes::albums::provision_album,
                     routes::upgrade::begin_album_upgrade,
                     routes::upgrade::abort_album_upgrade,
+                    routes::roster::publish_album_roster,
                     routes::upload::create_upload,
                     routes::upload::append_chunk,
                     routes::upload::cancel_upload,

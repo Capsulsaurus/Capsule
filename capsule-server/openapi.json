@@ -10440,6 +10440,469 @@
         ]
       }
     },
+    "/v1/albums/{album_id}/roster": {
+      "put": {
+        "summary": "Publish the caller's roster for one of their albums.",
+        "operationId": "publish_album_roster",
+        "parameters": [
+          {
+            "name": "album_id",
+            "in": "path",
+            "description": "The album's id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Capsule-Protocol",
+            "in": "header",
+            "description": "The `YYYY-MM-DD` protocol version this request is written against. Outside the server's `[X-Capsule-Protocol-Min, X-Capsule-Protocol-Max]` window the request is refused with `426`.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+            }
+          },
+          {
+            "name": "X-Capsule-Crypto-Suite",
+            "in": "header",
+            "description": "The crypto suite id from the primitives inventory. Sent on writes; a suite this server does not implement is refused with `400`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 65535.0,
+              "minimum": 0.0
+            }
+          },
+          {
+            "name": "X-Capsule-Sidecar-Schema",
+            "in": "header",
+            "description": "The sidecar schema version declared at `sidecar_schema` field 0. Sent on metadata updates; a schema newer than this server indexes is refused with `400`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 65535.0,
+              "minimum": 0.0
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RosterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              },
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RosterVersionLeapProblem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RosterResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Roster stale",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RosterStaleProblem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Protocol version unsupported",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/upload": {
       "post": {
         "summary": "Open an upload session for one blob of an asset bundle.",
@@ -16848,6 +17311,18 @@
             }
           },
           {
+            "name": "album_id",
+            "in": "query",
+            "description": "One album's page rather than the caller's own feed (`S-C51`).\n\nFor the album's owner or any account on its current roster. Positions are the owner's\nsequence numbers filtered to the album, and the cursor is bound to `(caller, album)`, so\nit cannot be presented on the caller's own feed or on another album. Absent: the caller's\nown library, as before.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
             "name": "X-Capsule-Protocol",
             "in": "header",
             "description": "The `YYYY-MM-DD` protocol version this request is written against. Outside the server's `[X-Capsule-Protocol-Min, X-Capsule-Protocol-Max]` window the request is refused with `426`.",
@@ -17109,7 +17584,7 @@
     "/v1/blob/{hash}": {
       "get": {
         "summary": "Fetch a ciphertext blob by its content address, ranged.",
-        "description": "Opaque octets: the server holds no key and this route never learns what it is serving. Any\nauthenticated account may fetch any live address — see [`crate::serve`] for why that is a\ncapability model rather than a hole, and for the `403` the contract describes and nothing\nimplements.\n\nThe one answer that *is* account-scoped is the transient `409`: it reports the caller's own\nin-flight upload and nobody else's (`S-C40`).",
+        "description": "Opaque octets: the server holds no key and this route never learns what it is serving. An\naccount fetches the blobs of its own assets and of the albums it is currently a member of; a\nformer member is told `403`, and everyone else is told what an unknown address is told —\nsee [`crate::serve`] for the boundary and its reasons.\n\nThe one answer that *is* account-scoped is the transient `409`: it reports the caller's own\nin-flight upload and nobody else's (`S-C40`).",
         "operationId": "get_blob",
         "parameters": [
           {
@@ -20764,6 +21239,58 @@
         ],
         "description": "The ceremony this album is in, as a client polls it."
       },
+      "RosterRequest": {
+        "properties": {
+          "roster_cbor": {
+            "type": "string",
+            "description": "The signed roster, as standard base64 of its canonical CBOR encoding."
+          }
+        },
+        "type": "object",
+        "required": [
+          "roster_cbor"
+        ],
+        "description": "The publish request."
+      },
+      "RosterResponse": {
+        "properties": {
+          "album_id": {
+            "type": "string",
+            "description": "The album, echoed."
+          },
+          "roster_version": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "The roster version the server holds after this call."
+          },
+          "amk_epoch": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "The AMK epoch that roster reflects."
+          },
+          "member_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "How many members the held roster names, the owner excluded."
+          },
+          "replayed": {
+            "type": "boolean",
+            "description": "Whether this call was a replay of the roster already held. Advisory: both answers mean\n\"the server holds this roster\"."
+          }
+        },
+        "type": "object",
+        "required": [
+          "album_id",
+          "roster_version",
+          "amk_epoch",
+          "member_count",
+          "replayed"
+        ],
+        "description": "What the server now holds for the album."
+      },
       "WireBlobRole": {
         "type": "string",
         "enum": [
@@ -20941,7 +21468,7 @@
               "string",
               "null"
             ],
-            "description": "The owner the asset is filed under, when it is not the uploader.\n\nRefused when it is anyone but the uploader: an on-behalf upload needs a verified\nrelationship, and the port that would answer for one does not exist here."
+            "description": "The owner the asset is filed under, when the client wants to say so.\n\nAdvisory, never decisive: the asset is filed under the **album's** owner, which the write\nauthority answers from the album record — the uploader when it is their album, the owner\nwhen the uploader is a writer on its roster (`S-C51`). A declared owner that is anyone\nelse, the uploading member included, is refused `error.upload.owner_not_permitted`."
           },
           "intent_id": {
             "type": [
@@ -22540,6 +23067,91 @@
         "title": "DirectoryConflictProblem",
         "description": "An RFC 9457 problem detail."
       },
+      "RosterVersionLeapProblem": {
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "maximum": 65535.0,
+            "minimum": 0.0,
+            "format": "uint16"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "description": "The stable `error.*` catalog code. The client localizes this; `detail` stays English. Present on every problem this server renders."
+          },
+          "current_version": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "The roster version the server holds; `0` when it holds none."
+          },
+          "max_version": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "The highest version this album would have accepted. A client re-signs the same roster at `current_version + 1`; a version nothing could supersede would freeze the album's membership."
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "type",
+          "status",
+          "code"
+        ],
+        "title": "RosterVersionLeapProblem",
+        "description": "An RFC 9457 problem detail."
+      },
+      "RosterStaleProblem": {
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "maximum": 65535.0,
+            "minimum": 0.0,
+            "format": "uint16"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "description": "The stable `error.*` catalog code. The client localizes this; `detail` stays English. Present on every problem this server renders."
+          },
+          "current_version": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "The roster version the server holds. A client re-syncs and republishes above it."
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "type",
+          "status",
+          "code"
+        ],
+        "title": "RosterStaleProblem",
+        "description": "An RFC 9457 problem detail."
+      },
       "StaleRevivalProblem": {
         "properties": {
           "type": {
@@ -22647,6 +23259,7 @@
           },
           "retry_after": {
             "type": "integer",
+            "format": "uint64",
             "description": "When the caller may retry, as Unix seconds. From the limiter's own window when a budget is spent, and an upper bound of one window when the limiter is at capacity (slice `S-C32`)."
           }
         },
@@ -22686,6 +23299,7 @@
           },
           "retry_after": {
             "type": "integer",
+            "format": "uint64",
             "description": "When the caller may retry, as Unix seconds. From the limiter's own window when a budget is spent, and an upper bound of one window when the limiter is at capacity (slice `S-C32`)."
           }
         },
@@ -22725,6 +23339,7 @@
           },
           "retry_after": {
             "type": "integer",
+            "format": "uint64",
             "description": "When the caller may retry, as Unix seconds. From the limiter's own window when a budget is spent, and an upper bound of one window when the limiter is at capacity (slice `S-C32`)."
           }
         },
@@ -22764,6 +23379,7 @@
           },
           "retry_after": {
             "type": "integer",
+            "format": "uint64",
             "description": "When the caller may retry, as Unix seconds. From the limiter's own window when a budget is spent, and an upper bound of one window when the limiter is at capacity (slice `S-C32`)."
           }
         },
@@ -22803,6 +23419,7 @@
           },
           "retry_after": {
             "type": "integer",
+            "format": "uint64",
             "description": "When the caller may retry, as Unix seconds. From the limiter's own window when a budget is spent, and an upper bound of one window when the limiter is at capacity (slice `S-C32`)."
           }
         },

@@ -75,6 +75,7 @@ use crate::escrow::{EscrowContext, InMemoryEscrow};
 use crate::gc::CollectionContext;
 use crate::gc::memory::InMemoryCollection;
 use crate::index::memory::InMemoryAssetIndex;
+use crate::membership::{InMemoryMembership, MembershipContext};
 use crate::moderation::{InMemoryModeration, ModerationContext};
 use crate::quota::{InMemoryQuota, QuotaContext, QuotaLimits};
 use crate::scrub::ScrubContext;
@@ -523,6 +524,7 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
     ));
 
     let albums = Arc::new(InMemoryAlbums::new());
+    let members = Arc::new(InMemoryMembership::new());
     let directories = Arc::new(InMemoryDeviceDirectory::new());
     // The production write authority (`S-C19`/`S-C20`), not a permissive double: it reads the
     // album's own pin and the account's published device directory, so invariants 6 and 7 mean
@@ -530,6 +532,7 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
     let authority = Arc::new(ProvisionedAuthority::new(
         albums.clone(),
         directories.clone(),
+        members.clone(),
         clock.clone(),
     ));
     let receipts = Arc::new(InMemoryReceipts::new());
@@ -634,17 +637,20 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
             index.clone(),
             blobs.clone(),
             Arc::new(CursorCodec::new(&cursor_key)),
+            albums.clone(),
+            members.clone(),
         ),
         serve: ServeContext::new(
             index.clone(),
             blobs.clone(),
             marks.clone(),
             uploads.clone(),
-            crate::serve::owned_assets(),
+            crate::serve::membership_reads(members.clone()),
         ),
         verify: VerifyContext::new(index.clone(), blobs.clone(), marks.clone(), clock.clone()),
         directories: DeviceDirectoryContext::new(directories.clone(), clock.clone()),
         albums: AlbumContext::new(albums.clone(), clock.clone()),
+        membership: MembershipContext::new(members, clock.clone()),
         // Unlimited, which is what a self-hosted deployment runs. A configurable ceiling is a
         // quota policy this slice does not own; `QuotaLimits` already takes one.
         quota: QuotaContext::new(quotas.clone(), clock.clone(), QuotaLimits::unlimited()),
@@ -863,6 +869,7 @@ mod tests {
         };
         use crate::auth::{Credentials, PostgresAccounts};
         use crate::index::postgres::PostgresAssetIndex;
+        use crate::membership::PostgresMembership;
         use crate::postgres::testing;
         use crate::quota::PostgresQuota;
         use crate::store::{PostgresCohorts, SystemClock};
@@ -929,7 +936,7 @@ mod tests {
             );
         }
 
-        /// The four Postgres adapters compose out of exactly what the boot path has.
+        /// The five Postgres adapters compose out of exactly what the boot path has.
         ///
         /// Asserted here rather than by constructing them in `assemble` and throwing them away:
         /// production code that builds something it cannot use is theatre, and what #446 needs
@@ -960,7 +967,9 @@ mod tests {
             let cohorts: Arc<dyn crate::store::CohortStore> =
                 Arc::new(PostgresCohorts::new(connection.clone()));
             let quotas: Arc<dyn crate::quota::QuotaStore> =
-                Arc::new(PostgresQuota::new(connection));
+                Arc::new(PostgresQuota::new(connection.clone()));
+            let members: Arc<dyn crate::membership::MembershipStore> =
+                Arc::new(PostgresMembership::new(connection));
 
             // Each one answers through its port, which is what makes this a boot check rather
             // than a compile check: the schema the migration applied is the schema the adapters
@@ -984,6 +993,14 @@ mod tests {
             assert_eq!(
                 quotas.usage(&user).await.expect("the ledger answers").used,
                 0
+            );
+            let album = crate::store::AlbumId::new("boot-probe-album");
+            assert_eq!(
+                members
+                    .membership(&album, &user)
+                    .await
+                    .expect("the membership store answers"),
+                crate::membership::Membership::Never
             );
         }
     }

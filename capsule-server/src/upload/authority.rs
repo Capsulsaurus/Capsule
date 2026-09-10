@@ -72,15 +72,36 @@ impl AuthorityError {
     }
 }
 
-/// Whether an owner may add a blob to an album, and under which protocol pin.
+/// In what capacity a caller may write to an album.
 ///
-/// A missing album and a forbidden one are **one variant**, deliberately: the error taxonomy
-/// answers both with `403 error.upload.album_access_denied`, and telling a caller which
-/// applied would turn the endpoint into an oracle for album ids it cannot otherwise see.
+/// Two values, because the server decides two things from it and no more: under whose namespace
+/// the write is filed (always the owner's) and whether the caller is that owner. The finer
+/// MLS-side distinctions never reach the server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteRole {
+    /// The account the album was provisioned to.
+    Owner,
+    /// A writer on the album's current roster (`S-C51`).
+    Member,
+}
+
+/// Whether a caller may add a blob to an album, under whose namespace, and under which protocol
+/// pin.
+///
+/// A missing album, somebody else's album, a reader's membership and a revoked one are **one
+/// variant**, deliberately: the error taxonomy answers all of them with
+/// `403 error.upload.album_access_denied`, and telling a caller which applied would turn the
+/// endpoint into an oracle for album ids and rosters it cannot otherwise see.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AlbumWriteAccess {
-    /// The album exists, the owner may write to it, and this is its immutable protocol pin.
+    /// The album exists, the caller may write to it, and this is its immutable protocol pin.
     Writable {
+        /// The account the album is filed under — the namespace every write lands in, whoever
+        /// makes it. A member's asset is the owner's asset: the owner's feed is the one every
+        /// device of every member reads, so filing elsewhere would make the write invisible.
+        owner_id: OwnerId,
+        /// Whether the caller is that owner or a writer member.
+        role: WriteRole,
         /// The album's pinned protocol version (`YYYY-MM-DD`), set when it was provisioned.
         protocol_pin: String,
         /// The upgrade ceremony the album is quiescing under, if any (`S-C24`).
@@ -93,16 +114,21 @@ pub enum AlbumWriteAccess {
         /// none by design.
         quiescing_under: Option<uuid::Uuid>,
     },
-    /// The album does not exist, or the owner may not write to it.
+    /// The album does not exist, or the caller may not write to it.
     Denied,
 }
 
 /// The durable facts invariants 6 and 7 are decided against.
 pub trait WriteAuthority: fmt::Debug + Send + Sync {
-    /// Whether `owner` may add a blob to `album`, and the album's protocol pin.
+    /// Whether `caller` may add a blob to `album`, under whose namespace, and the album's
+    /// protocol pin.
+    ///
+    /// Keyed on the **caller**, not on a declared owner: the authority is what knows whose album
+    /// it is, and a route that asked "may this owner write" with an owner the caller named would
+    /// be checking the caller's own claim.
     fn album_write_access<'a>(
         &'a self,
-        owner: &'a OwnerId,
+        caller: &'a UserId,
         album: &'a AlbumId,
     ) -> AuthorityFuture<'a, AlbumWriteAccess>;
 

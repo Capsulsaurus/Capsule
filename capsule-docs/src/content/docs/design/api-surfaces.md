@@ -21,6 +21,7 @@ the gate that keeps it current — is [Developer Documentation](/design/develope
 | Authentication (sessions, TOTP, OIDC) | REST | `capsule-server::auth` | [Authentication](/design/authentication/) |
 | Resumable upload (`POST /v1/upload`, then `HEAD/PATCH /v1/upload/{id}`) | REST | `capsule-server::upload` | [Upload Protocol](/design/import/upload-protocol/) |
 | Lifecycle writes (`POST /v1/albums/{album_id}/ops`) | REST | `capsule-server::routes::ops` | [Authorization](/design/authorization/#the-lifecycle-write-surface) |
+| Album roster publish (`PUT /v1/albums/{album_id}/roster`) | REST | `capsule-server::membership` | [Threat Model — Validation](/design/threat-model/validation/) (invariant 33) |
 | Blob fetch (`GET /v1/blob/{hash}`, HTTP `Range`) | REST | `capsule-server::blob` | [Download & Sync](/design/import/download-sync/) |
 | Sync feed (change discovery after a cursor) | REST | `capsule-server::sync` | [Download & Sync](/design/import/download-sync/) |
 | Federation pull | REST | `capsule-server::federation` | [Federation](/design/federation/) |

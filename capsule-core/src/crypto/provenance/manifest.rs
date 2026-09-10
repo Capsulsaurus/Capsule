@@ -126,9 +126,26 @@ pub struct ManifestCore {
     /// `delete | derivative-* | trash-restore`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata_blob_hash: Option<Hash32>,
-    /// User who produced the asset.
+    /// The account whose device signed **this record**.
+    ///
+    /// Per-record, not per-asset: a `delete` written by a second device — or by a member of a
+    /// shared album — names that writer, not the account that created the asset. The asset's
+    /// original creator is recoverable from the `create` record at the head of the append-only
+    /// provenance chain, which is where it belongs.
+    ///
+    /// The pairing with [`Self::created_by_device`] is load-bearing rather than descriptive:
+    /// [`verify_asset`](crate::crypto::verify_asset::verify_asset) resolves the device *inside
+    /// this account's* published directory (step 6) and verifies [`AssetManifest::device_sig`]
+    /// under that entry's key (step 8), so a record naming anyone but its own signer cannot
+    /// verify. Album write authority is decided separately, by `write_sig` at step 10.
     pub created_by_user: Uuid,
-    /// Device that produced the asset (resolved in the device directory).
+    /// The device that signed **this record**, resolved in [`Self::created_by_user`]'s directory.
+    ///
+    /// Per-record for the same reason and with the same consequence: it must be the device whose
+    /// DSK produced [`AssetManifest::device_sig`], or step 8 of
+    /// [`verify_asset`](crate::crypto::verify_asset::verify_asset) rejects the manifest. The
+    /// server mirrors the resolvable half key-free as invariant 7 — the device must be in the
+    /// *calling* account's published directory, with `added_at` before the manifest's timestamp.
     pub created_by_device: Uuid,
     /// Producing client version string.
     pub client_version: String,

@@ -71,6 +71,10 @@ use capsule_server::index::{
     AssetIndex, AssetRow, BlobOutcome, BlobRecord, FeedEntry, HoldOutcome, IndexFuture,
     LifecycleOp, OpOutcome, PendingAsset, Reservation, ServingHold,
 };
+use capsule_server::membership::{
+    InMemoryMembership, MemberRole, Membership, MembershipContext, MembershipStore, RosterOutcome,
+    RosterRecord,
+};
 use capsule_server::moderation::{
     InMemoryModeration, ModerationContext, ModerationEvent, ModerationStore, Standing,
 };
@@ -97,7 +101,7 @@ use capsule_server::sync::{CURSOR_KEY_LEN, CursorCodec, SyncContext};
 use capsule_server::upload::authority::{
     AlbumWriteAccess, AuthorityError, AuthorityFuture, WriteAuthority,
 };
-use capsule_server::upload::{UploadContext, UploadPolicy};
+use capsule_server::upload::{UploadContext, UploadPolicy, WriteRole};
 use capsule_server::verify::VerifyContext;
 use jiff::{SignedDuration, Timestamp};
 use kynos::test::{TestClient, TestRequest};
@@ -2000,7 +2004,10 @@ impl BlobStore for SwallowingBlobs {
 /// would, rather than by flipping a flag the port does not have.
 #[derive(Debug, Default)]
 pub(crate) struct TestAuthority {
-    albums: Mutex<BTreeMap<(String, String), String>>,
+    /// Each album's owner and protocol pin.
+    albums: Mutex<BTreeMap<String, (String, String)>>,
+    /// Each `(album, member)`'s role on the roster (`S-C51`).
+    shares: Mutex<BTreeMap<(String, String), MemberRole>>,
     upgrades: Mutex<BTreeMap<(String, String), Uuid>>,
     devices: Mutex<BTreeMap<(String, Uuid), Timestamp>>,
     unavailable: AtomicBool,
@@ -2015,12 +2022,25 @@ impl TestAuthority {
     /// Record `album` as writable by `owner`, pinned to `protocol_pin`.
     pub(crate) fn allow_album(&self, owner: &OwnerId, album: &AlbumId, protocol_pin: &str) {
         self.albums().insert(
-            (owner.as_str().to_owned(), album.as_str().to_owned()),
-            protocol_pin.to_owned(),
+            album.as_str().to_owned(),
+            (owner.as_str().to_owned(), protocol_pin.to_owned()),
         );
     }
 
-    /// Forget an album, as a closed or unshared one would be.
+    /// Put `member` on `album`'s roster with `role` (`S-C51`).
+    pub(crate) fn share(&self, album: &AlbumId, member: &UserId, role: MemberRole) {
+        self.shares().insert(
+            (album.as_str().to_owned(), member.as_str().to_owned()),
+            role,
+        );
+    }
+
+    /// Take `member` off `album`'s roster.
+    pub(crate) fn unshare(&self, album: &AlbumId, member: &UserId) {
+        self.shares()
+            .remove(&(album.as_str().to_owned(), member.as_str().to_owned()));
+    }
+
     /// Put an album into upgrade quiescence under `intent` (`S-C24`).
     ///
     /// The double carries the fact the production authority reads off the album record, so a
@@ -2045,9 +2065,21 @@ impl TestAuthority {
             .copied()
     }
 
+    /// Forget an album, as a closed one would be.
+    ///
+    /// `owner` is asserted rather than looked up: the map is album-keyed, and a case that closes
+    /// the wrong owner's album would otherwise pass vacuously.
     pub(crate) fn close_album(&self, owner: &OwnerId, album: &AlbumId) {
-        self.albums()
-            .remove(&(owner.as_str().to_owned(), album.as_str().to_owned()));
+        let mut albums = self.albums();
+        assert!(
+            albums
+                .get(album.as_str())
+                .is_some_and(|(held, _)| held == owner.as_str()),
+            "close_album: {album} is not {owner}'s"
+        );
+        {
+            albums.remove(album.as_str());
+        }
     }
 
     /// Record `device` as entering `user`'s directory at `added_at`.
@@ -2066,8 +2098,12 @@ impl TestAuthority {
         self.unavailable.store(unavailable, Ordering::SeqCst);
     }
 
-    fn albums(&self) -> MutexGuard<'_, BTreeMap<(String, String), String>> {
+    fn albums(&self) -> MutexGuard<'_, BTreeMap<String, (String, String)>> {
         self.albums.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn shares(&self) -> MutexGuard<'_, BTreeMap<(String, String), MemberRole>> {
+        self.shares.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn devices(&self) -> MutexGuard<'_, BTreeMap<(String, Uuid), Timestamp>> {
@@ -2082,20 +2118,34 @@ impl TestAuthority {
 impl WriteAuthority for TestAuthority {
     fn album_write_access<'a>(
         &'a self,
-        owner: &'a OwnerId,
+        caller: &'a UserId,
         album: &'a AlbumId,
     ) -> AuthorityFuture<'a, AlbumWriteAccess> {
         Box::pin(async move {
             if self.is_down() {
                 return Err(AuthorityError::unavailable(REFUSAL));
             }
-            Ok(self
-                .albums()
-                .get(&(owner.as_str().to_owned(), album.as_str().to_owned()))
-                .map_or(AlbumWriteAccess::Denied, |pin| AlbumWriteAccess::Writable {
-                    protocol_pin: pin.clone(),
-                    quiescing_under: self.quiescing_under(owner, album),
-                }))
+            let Some((owner, pin)) = self.albums().get(album.as_str()).cloned() else {
+                return Ok(AlbumWriteAccess::Denied);
+            };
+            let role = if owner == caller.as_str() {
+                WriteRole::Owner
+            } else {
+                match self
+                    .shares()
+                    .get(&(album.as_str().to_owned(), caller.as_str().to_owned()))
+                {
+                    Some(MemberRole::Writer) => WriteRole::Member,
+                    _ => return Ok(AlbumWriteAccess::Denied),
+                }
+            };
+            let owner_id = OwnerId::new(owner);
+            Ok(AlbumWriteAccess::Writable {
+                protocol_pin: pin,
+                quiescing_under: self.quiescing_under(&owner_id, album),
+                owner_id,
+                role,
+            })
         })
     }
 
@@ -2202,6 +2252,67 @@ impl QuotaStore for SwitchableQuota {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.release_attribution(address)
+    }
+}
+
+/// A membership store that can be made to fail on demand.
+#[derive(Debug, Default)]
+pub(crate) struct SwitchableMembership {
+    inner: InMemoryMembership,
+    unavailable: AtomicBool,
+}
+
+impl SwitchableMembership {
+    /// A working store.
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Make every subsequent operation fail, or stop.
+    pub(crate) fn set_unavailable(&self, unavailable: bool) {
+        self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    fn refuse<T>() -> Result<T, StoreError> {
+        Err(StoreError::Unavailable {
+            store: "membership",
+            detail: REFUSAL.to_owned(),
+        })
+    }
+
+    fn is_down(&self) -> bool {
+        self.unavailable.load(Ordering::SeqCst)
+    }
+}
+
+impl MembershipStore for SwitchableMembership {
+    fn apply_roster(
+        &self,
+        roster: RosterRecord,
+        members: Vec<(UserId, MemberRole)>,
+    ) -> StoreFuture<'_, RosterOutcome> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.apply_roster(roster, members)
+    }
+
+    fn membership<'a>(
+        &'a self,
+        album: &'a AlbumId,
+        user: &'a UserId,
+    ) -> StoreFuture<'a, Membership> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.membership(album, user)
+    }
+
+    fn current_roster<'a>(&'a self, album: &'a AlbumId) -> StoreFuture<'a, Option<RosterRecord>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.current_roster(album)
     }
 }
 
@@ -2531,6 +2642,30 @@ impl AssetIndex for SwitchableIndex {
         }
         self.inner.head_seq(owner)
     }
+
+    fn album_feed_page<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        album: &'a AlbumId,
+        after: u64,
+        limit: usize,
+    ) -> IndexFuture<'a, Vec<FeedEntry>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.album_feed_page(owner, album, after, limit)
+    }
+
+    fn album_head_seq<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        album: &'a AlbumId,
+    ) -> IndexFuture<'a, u64> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.album_head_seq(owner, album)
+    }
 }
 
 /// The fixture's client: Kynos's in-process `TestClient`, sending the protocol handshake.
@@ -2642,6 +2777,8 @@ pub(crate) struct Fixture {
     pub(crate) directories: Arc<SwitchableDirectories>,
     /// The albums the server has provisioned.
     pub(crate) albums: Arc<SwitchableAlbums>,
+    /// The album rosters the server holds, and who they make a member (`S-C51`).
+    pub(crate) members: Arc<SwitchableMembership>,
     /// The quota ledger the server charges against.
     pub(crate) quotas: Arc<SwitchableQuota>,
     /// The collector's marks, which is where `retrievable` diverges from `stored`.
@@ -2740,6 +2877,7 @@ impl Fixture {
         let cursors = Arc::new(CursorCodec::new(&CURSOR_KEY));
         let directories = Arc::new(SwitchableDirectories::new());
         let albums = Arc::new(SwitchableAlbums::new());
+        let members = Arc::new(SwitchableMembership::new());
         let quotas = Arc::new(SwitchableQuota::new());
         let marks = Arc::new(InMemoryCollection::new());
         let receipts = Arc::new(InMemoryReceipts::new());
@@ -2794,13 +2932,19 @@ impl Fixture {
                 clock.clone(),
                 UploadPolicy::default(),
             ),
-            sync: SyncContext::new(index_fault.clone(), blobs.clone(), cursors.clone()),
+            sync: SyncContext::new(
+                index_fault.clone(),
+                blobs.clone(),
+                cursors.clone(),
+                albums.clone(),
+                members.clone(),
+            ),
             serve: ServeContext::new(
                 index_fault.clone(),
                 blobs.clone(),
                 marks.clone(),
                 uploads.clone(),
-                capsule_server::serve::owned_assets(),
+                capsule_server::serve::membership_reads(members.clone()),
             ),
             verify: VerifyContext::new(
                 index_fault.clone(),
@@ -2810,6 +2954,7 @@ impl Fixture {
             ),
             directories: DeviceDirectoryContext::new(directories.clone(), clock.clone()),
             albums: AlbumContext::new(albums.clone(), clock.clone()),
+            membership: MembershipContext::new(members.clone(), clock.clone()),
             quota: QuotaContext::new(quotas.clone(), clock.clone(), quota_limits),
             attestation: AttestationContext::new(
                 receipts.clone(),
@@ -2858,6 +3003,7 @@ impl Fixture {
             cursors,
             directories,
             albums,
+            members,
             quotas,
             marks,
             receipts,
@@ -2906,6 +3052,8 @@ impl Fixture {
 
         let blobs = Arc::new(SwallowingBlobs::new());
         let index = Arc::new(SwitchableIndex::new());
+        let members = Arc::new(InMemoryMembership::new());
+        let albums = Arc::new(SwitchableAlbums::new());
         let tokens = Arc::new(signer(clock.clone()));
         let app = App::new(Modules {
             auth: AuthContext::new(AuthCollaborators {
@@ -2931,13 +3079,15 @@ impl Fixture {
                 index.clone(),
                 blobs.clone(),
                 Arc::new(CursorCodec::new(&CURSOR_KEY)),
+                albums.clone(),
+                members.clone(),
             ),
             serve: ServeContext::new(
                 index.clone(),
                 blobs.clone(),
                 Arc::new(InMemoryCollection::new()),
                 Arc::new(SwitchableUploads::new(clock.clone())),
-                capsule_server::serve::owned_assets(),
+                capsule_server::serve::membership_reads(members.clone()),
             ),
             verify: VerifyContext::new(
                 index,
@@ -2949,7 +3099,8 @@ impl Fixture {
                 Arc::new(SwitchableDirectories::new()),
                 clock.clone(),
             ),
-            albums: AlbumContext::new(Arc::new(SwitchableAlbums::new()), clock.clone()),
+            albums: AlbumContext::new(albums.clone(), clock.clone()),
+            membership: MembershipContext::new(members, clock.clone()),
             quota: QuotaContext::new(
                 Arc::new(SwitchableQuota::new()),
                 clock.clone(),
@@ -3299,6 +3450,44 @@ pub(crate) fn signed_directory_with_device(
     }
     .sign(ik);
     capsule_core::cbor::to_canonical_vec(&directory).expect("a directory serializes")
+}
+
+/// A signed album roster, base64-encoded as `PUT /v1/albums/{album_id}/roster` carries it
+/// (`S-C51`).
+///
+/// Attested by the seeded account through `capsule_core::crypto::membership` — the same types
+/// the server verifies with — so a fixture cannot pass while the two ends disagree about what
+/// was signed.
+pub(crate) fn signed_roster(
+    dsk: &HybridSigningKey,
+    device_id: Uuid,
+    album: &AlbumId,
+    roster_version: u64,
+    amk_epoch: u32,
+    members: &[(&str, MemberRole)],
+) -> String {
+    use capsule_core::crypto::keys::AmkVersion;
+    use capsule_core::crypto::membership::{AlbumRoster, RosterMember, SignedAlbumRoster};
+
+    let roster = AlbumRoster {
+        album_id: Uuid::parse_str(album.as_str()).expect("an album id is a uuid"),
+        roster_version,
+        amk_epoch: AmkVersion(amk_epoch),
+        attested_by_user: Uuid::parse_str(user().as_str())
+            .expect("the seeded account id is a uuid"),
+        attested_by_device: device_id,
+        attested_at: "2026-09-02T00:00:00Z".to_owned(),
+        members: members
+            .iter()
+            .map(|(user_id, role)| RosterMember {
+                user_id: Uuid::parse_str(user_id).expect("a member id is a uuid"),
+                role: *role,
+            })
+            .collect(),
+    };
+    let signed = SignedAlbumRoster::sign(roster, dsk).expect("a roster signs");
+    base64::engine::general_purpose::STANDARD
+        .encode(capsule_core::cbor::to_canonical_vec(&signed).expect("a signed roster serializes"))
 }
 
 /// A signed upgrade intent, as the proposing admin device's client would produce it (`S-C24`).

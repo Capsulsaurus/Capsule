@@ -93,6 +93,20 @@ pub enum BlobRejection {
         code: &'static str,
     },
 
+    /// The caller was a member of the album that holds these bytes and has been removed from
+    /// its roster (`S-C51`). An authorization change, not a durability loss: the client re-syncs
+    /// its album membership before retrying, and only then degrades.
+    ///
+    /// Only a former member ever sees this. Everyone else gets [`Self::NotFound`], byte-identical
+    /// to an unknown address, because a `403` confirms the address is referenced by somebody.
+    #[error("you no longer have access to this album")]
+    #[problem(status = 403, title = "Access revoked")]
+    Forbidden {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
     /// Referenced, but not retrievable per policy. Permanent.
     #[error("this blob is no longer available")]
     #[problem(status = 410, title = "Gone")]
@@ -113,6 +127,13 @@ pub enum BlobRejection {
 }
 
 impl BlobRejection {
+    /// A former member of the album that holds the bytes (`S-C51`).
+    fn forbidden() -> Self {
+        Self::Forbidden {
+            code: error_codes::BLOB_ACCESS_REVOKED,
+        }
+    }
+
     /// No live reference, or a malformed address.
     fn not_found() -> Self {
         Self::NotFound {
@@ -144,10 +165,10 @@ impl BlobRejection {
 
 /// Fetch a ciphertext blob by its content address, ranged.
 ///
-/// Opaque octets: the server holds no key and this route never learns what it is serving. Any
-/// authenticated account may fetch any live address — see [`crate::serve`] for why that is a
-/// capability model rather than a hole, and for the `403` the contract describes and nothing
-/// implements.
+/// Opaque octets: the server holds no key and this route never learns what it is serving. An
+/// account fetches the blobs of its own assets and of the albums it is currently a member of; a
+/// former member is told `403`, and everyone else is told what an unknown address is told —
+/// see [`crate::serve`] for the boundary and its reasons.
 ///
 /// The one answer that *is* account-scoped is the transient `409`: it reports the caller's own
 /// in-flight upload and nobody else's (`S-C40`).
@@ -174,6 +195,7 @@ pub async fn get_blob(
         ServeResolution::Serve { address, size } => (address, size),
         ServeResolution::AwaitingUpload { .. } => return Err(BlobRejection::pending()),
         ServeResolution::NotFound => return Err(BlobRejection::not_found()),
+        ServeResolution::Forbidden => return Err(BlobRejection::forbidden()),
         ServeResolution::Gone => return Err(BlobRejection::gone()),
     };
 
