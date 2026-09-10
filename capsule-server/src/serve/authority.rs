@@ -50,8 +50,11 @@
 //! [`BlobReadAccess::Revoked`]: the peer held the grant, so the change is a disclosure it is
 //! owed), was that member ever on it at all (`404`), and finally does the grant's scope cover
 //! this blob's **role** — a `read-derivative-only` capability is refused an `original` with
-//! [`BlobReadAccess::ScopeInsufficient`], and a `backup` is refused under every scope because a
-//! backup is the owner's durability artefact rather than part of what was shared.
+//! [`BlobReadAccess::ScopeInsufficient`]. A **backup** is refused under every scope and is
+//! refused as [`BlobReadAccess::Unrelated`] rather than as a scope failure: it is the owner's own
+//! durability artefact rather than part of what was shared, the feed never names one, and the
+//! `403`'s justification — the peer already knows the asset is there — does not hold for a blob
+//! it was never told about.
 //!
 //! Whether the grant is still *live* — unrevoked, unexpired — is not asked here: it has no
 //! clock, and the route admits the capability through
@@ -292,17 +295,30 @@ impl MembershipAuthority {
                 // enforced against the blob's server-visible **role**, so a derivative-only
                 // capability cannot fetch an original whatever the peer says it is fetching.
                 if record.scope.permits(reference.role) {
-                    Ok(BlobReadAccess::Granted)
-                } else {
+                    return Ok(BlobReadAccess::Granted);
+                }
+                // A **backup** is not part of what was shared at all — it is the owner's own
+                // durability artefact — so no capability over the album covers it and a peer has
+                // no relationship to it to be told about. `404`, as a stranger gets, and *not*
+                // the `403` below: that answer's whole justification is that the feed already
+                // told the peer the asset is there, which is true of an original under a
+                // derivative-only grant and false of a backup, which the feed never names.
+                if reference.role == crate::store::BlobRole::Backup {
                     tracing::info!(
                         peer = %record.peer_id,
                         asset = %reference.asset_id,
-                        role = reference.role.as_str(),
-                        scope = record.scope.as_str(),
-                        "a peer's capability does not cover this blob's role"
+                        "a peer named a backup, which no capability covers"
                     );
-                    Ok(BlobReadAccess::ScopeInsufficient)
+                    return Ok(BlobReadAccess::Unrelated);
                 }
+                tracing::info!(
+                    peer = %record.peer_id,
+                    asset = %reference.asset_id,
+                    role = reference.role.as_str(),
+                    scope = record.scope.as_str(),
+                    "a peer's capability does not cover this blob's role"
+                );
+                Ok(BlobReadAccess::ScopeInsufficient)
             }
             // The member was never on this roster at all. Not the peer's business that the
             // album exists, so it is told what a stranger is told.
@@ -665,12 +681,14 @@ mod tests {
             );
         }
 
+        // A backup is refused as a *stranger's* blob, not as a scope failure: the feed never
+        // names one, so the peer holds no fact about it and the `403`'s premise does not apply.
         let mut backup = reference("alice");
         backup.role = BlobRole::Backup;
         for scope in [Scope::Read, Scope::ReadDerivativeOnly] {
             assert_eq!(
                 decide_peer(&authority, &capability("bob", 1, scope), &backup).await,
-                BlobReadAccess::ScopeInsufficient,
+                BlobReadAccess::Unrelated,
                 "a backup is the owner's durability artefact, not part of what was shared"
             );
         }

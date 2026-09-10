@@ -114,6 +114,16 @@ Signed under the home server's signing key — classical Ed25519 only, per the [
 4. **Revocation.** Revocation is a short TTL (`exp ≤ 24h`) plus a published **revocation list** at `/.well-known/capsule/revoked-jti`. Peers fetch and cache the list with a **maximum staleness of 15 minutes**. A peer holding a revoked-but-not-yet-expired token will still be honored for up to 15 minutes after revocation — this is the deliberate trade-off between revocation latency and revocation-list polling overhead. **List unavailability fails closed:** a verifier that relies on a *cached* copy of an issuer's revocation list and cannot refresh it must reject, past the 15-minute bound, any token whose `jti` it can no longer confirm against a current list — it never honors tokens indefinitely on a stale list. The `exp ≤ 24h` ceiling caps the worst case regardless, but the explicit rule means revocation cannot be outlived by making the list unreachable. (A server verifying its *own* tokens checks its own always-fresh list and is never stale.) Revoked `jti`s are **pruned** from the published list once their `exp` passes — an expired token is rejected unconditionally anyway — so the list stays bounded by at most 24 hours of revocations.
 5. **Expiry.** A token past `exp` is rejected unconditionally; the verifier returns `401` and the peer must obtain a fresh token before continuing.
 
+### What a scope hides, and what it does not
+
+`read-derivative-only` is a **transport** control, exactly as the capability itself is: it decides which bytes this server hands over, not which identifiers a peer learns. A peer holding one receives every asset's full sync entry — including the `role`, `hash` and `size` of the original it may not fetch — and is refused only at `GET /v1/blob/{hash}`, with `403 error.federation.scope_insufficient`.
+
+That is deliberate, and the alternative is theatre. Every sync entry carries the asset's **signed manifest, as the exact bytes the client uploaded**, and the manifest's `ciphertext_hash` *is* the original's content address. A peer must receive that manifest to verify anything at all, and the server cannot rewrite it — a re-serialized manifest is one detached from its signatures, which is a manifest nobody can verify ([Download & Sync](/design/import/download-sync/#discovering-what-changed)). So filtering the entry's `blobs` array would remove an address that is still present, unfilterable, two fields away, while making the feed inconsistent with the manifest beside it. A control that hides nothing and costs consistency is worse than an honest boundary.
+
+What a derivative-only grant therefore does **not** promise: that the peer cannot learn an original exists, or its address, or its size. What it does promise, and enforces: the bytes are never served. Anyone needing the stronger property wants a separate album, not a narrower scope — the confidentiality boundary in Capsule is the MLS album key, and it always was.
+
+A **backup** is outside every scope and is answered `404`, not `403`: it is the owner's own durability artefact rather than part of what was shared, and the feed never names one, so a peer holds no fact about it that a `403` would be acknowledging.
+
 ### Status note (2026-09-09)
 
 The **serving** half of everything above ships (`S-E2`, `S-E5`, `S-C49`).
