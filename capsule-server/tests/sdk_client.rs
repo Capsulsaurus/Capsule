@@ -630,14 +630,23 @@ async fn a_pushed_asset_reaches_the_feed_and_the_entry_decodes_and_verifies() {
             .map(jiff::SignedDuration::from_secs)
             .expect("the current second is representable"),
     );
+    // #405 refuses an upload whose `created_by_user` is not the authenticated caller — a writer
+    // member must not file an asset into somebody else's album attributed to a third account.
+    // This case pushes from a *real* `Workspace`, which mints its own account id at creation and
+    // exposes no setter, so the identity that has to move is the server's: the seeded
+    // credentials are re-pointed at the library's own user, and the album owner and the
+    // directory device follow it. Using `support::user()` here would assert that the ladder
+    // works while signing as somebody else, which is the thing #405 exists to refuse.
+    let library_user = UserId::new(workspace.user_id().to_string());
+    fixture.accounts.insert(EMAIL, PASSWORD, &library_user);
     fixture.authority.allow_album(
-        &support::owner(),
+        &capsule_server::store::OwnerId::new(library_user.as_str()),
         &AlbumId::new(album_id.to_string()),
         PROTOCOL_VERSION,
     );
     // Admitted at the epoch, so the device predates every manifest this library writes.
     fixture.authority.add_device(
-        &UserId::new(support::user().as_str()),
+        &library_user,
         bundle.created_by_device,
         Timestamp::UNIX_EPOCH,
     );
