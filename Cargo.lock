@@ -791,6 +791,7 @@ dependencies = [
 name = "capsule-server"
 version = "0.1.0"
 dependencies = [
+ "argon2",
  "base64",
  "bytes",
  "capsule-core",
@@ -812,6 +813,7 @@ dependencies = [
  "tokio",
  "totp-rs",
  "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 

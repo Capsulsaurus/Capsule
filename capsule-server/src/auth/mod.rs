@@ -28,14 +28,26 @@
 //! constructor that will eventually be got wrong positionally, and two `Arc<dyn …>` swapped at a
 //! call site is a compile error only by luck.
 //!
-//! # Adapters this slice does not write
+//! # Adapters, and the one that is still owed
 //!
-//! There is no [`AccountDirectory`] implementation in `src/`, and that is deliberate rather than
-//! unfinished: the real one is Postgres, the test one is a double, and a double in `src/` is a
-//! fake credential directory shipped inside the server binary. The suite's doubles live in
-//! `tests/support/`. Same reasoning, one step further than `S-C29` took it for the session
-//! store, and it is why [`SessionTokens`] is not a trait at all.
+//! [`InMemoryAccounts`] implements all four account ports over a map, verifying with the
+//! [`credential`] helper's Argon2id — so the development profile can register an account and
+//! sign in to it — and [`InMemoryTotp`] implements the second factor's. Neither is durable, and
+//! neither is reachable without `--memory`
+//! ([`Backends::Memory`](crate::config::Backends)), which is an explicit operator act.
+//!
+//! What is deliberately **not** here is a permissive one. `tests/support/mod.rs` holds a
+//! credential directory that "accepts whatever password it was told to accept", and its own docs
+//! say why that "belongs in a test binary and nowhere a server could link it". The distinction
+//! the port modules were drawing is between a double and an implementation, not between
+//! Postgres and everything else.
+//!
+//! The Postgres adapters are owed (#402), and they are written against these ports and the
+//! suites over them. [`SessionTokens`] is not a trait at all, for the reason `credential`
+//! records: it is a pure function of a key and a clock.
 
+pub mod accounts_memory;
+pub mod credential;
 pub mod directory;
 pub mod profile;
 pub mod registry;
@@ -45,6 +57,8 @@ pub mod totp;
 
 use std::sync::Arc;
 
+pub use self::accounts_memory::InMemoryAccounts;
+pub use self::credential::{CredentialError, Credentials};
 pub use self::directory::{AccountDirectory, Authentication, DirectoryError, DirectoryFuture};
 pub use self::profile::{
     AccountProfiles, MAX_DISPLAY_NAME_CHARS, MalformedProfile, PasswordChange, PasswordChanged,
@@ -57,8 +71,8 @@ pub use self::tokens::{
     TokenError, TokenKind, VerifiedChallenge, VerifiedToken,
 };
 pub use self::totp::{
-    ActivateOutcome, BeginOutcome, CHALLENGE_TTL, ConsumeOutcome, EnrollmentState, TotpCodes,
-    TotpContext, TotpEnrollment, TotpSecret, TotpStore, UnusableSecret,
+    ActivateOutcome, BeginOutcome, CHALLENGE_TTL, ConsumeOutcome, EnrollmentState, InMemoryTotp,
+    TotpCodes, TotpContext, TotpEnrollment, TotpSecret, TotpStore, UnusableSecret,
 };
 use crate::store::{AuthStateStore, Clock};
 
