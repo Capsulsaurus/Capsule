@@ -1,7 +1,7 @@
 //! The portable backup artifact and recovery mechanisms (SSoT: [Backup and Recovery]).
 //!
 //! Two distinct things are kept separate:
-//! - the **[backup artifact](artifact)** — a deterministic, self-describing, signed tar of a
+//! - the **backup artifact** — a deterministic, self-describing, signed tar of a
 //!   library's encrypted blobs, metadata blobs, provenance chains, and the AMK ledger needed
 //!   to decrypt them;
 //! - the **[master-key escrow](escrow_master_key)** — a small passphrase-wrapped blob that

@@ -2,7 +2,7 @@
 //! (SSoT: [Threat Model — Validation Invariants]).
 //!
 //! These are **pure, key-less** structural checks: the protocol/capability handshake
-//! ([`protocol`]) and the server-side manifest envelope ([`structural`]). They mirror the
+//! (`protocol`) and the server-side manifest envelope (`structural`). They mirror the
 //! client-side checks in [`verify_asset`](fn@crate::crypto::verify_asset), and the server
 //! write paths consume them today — the envelope gate, the ops surface, the feed,
 //! federation pull, and the drop routes all validate through here. This module used to describe those consumers as

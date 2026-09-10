@@ -1,9 +1,9 @@
 //! Signed manifests and append-only provenance chains (SSoT: [Cryptography — Provenance]).
 //!
-//! - [`action`] — the closed lifecycle-action and derivative-role enums.
-//! - [`manifest`] — [`AssetManifest`] / [`DerivativeManifest`] with their canonical signing
+//! - `action` — the closed lifecycle-action and derivative-role enums.
+//! - `manifest` — [`AssetManifest`] / [`DerivativeManifest`] with their canonical signing
 //!   bytes and two hybrid signatures.
-//! - [`record`] — [`ProvenanceRecord`] and the hash-chained [`ProvenanceChain`].
+//! - `record` — [`ProvenanceRecord`] and the hash-chained [`ProvenanceChain`].
 //!
 //! Verification of all of this flows through the single [`verify_asset`] chokepoint.
 //!

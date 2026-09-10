@@ -1,12 +1,12 @@
 //! Asset and metadata encryption — the only place AES-256-GCM is invoked for user data.
 //!
 //! Three constructions (SSoT: [Cryptography — Encryption]):
-//! - [`stream`] — AES-256-GCM STREAM for asset bytes (originals + derivatives), supporting
+//! - `stream` — AES-256-GCM STREAM for asset bytes (originals + derivatives), supporting
 //!   streaming, ranged reads, and per-chunk authentication.
-//! - [`blob`] — standalone AES-256-GCM with a fixed wire format for small metadata blobs.
-//! - [`keywrap`] — `asset-keywrap/v1` seal/unseal for an externally-chosen file key carried
+//! - `blob` — standalone AES-256-GCM with a fixed wire format for small metadata blobs.
+//! - `keywrap` — `asset-keywrap/v1` seal/unseal for an externally-chosen file key carried
 //!   under `key_mode = wrapped` (an adopted web-upload drop).
-//! - [`rekey`] — the re-keying writers that fold a fresh nonce into the key salt and refuse
+//! - `rekey` — the re-keying writers that fold a fresh nonce into the key salt and refuse
 //!   to reuse the nonce they supersede (a same-epoch `replace` / `metadata-update`).
 //!
 //! [Cryptography — Encryption]: https://docs/design/cryptography/encryption/
