@@ -980,20 +980,6 @@ pub enum ReportRejection {
         code: &'static str,
     },
 
-    /// `reported_user` names no account this server hosts.
-    ///
-    /// The peer is reporting to the wrong home server: these operators cannot act on that
-    /// account, and a filed row would sit in the queue forever. Reachable only after the
-    /// signature verified, so it discloses account existence to a peer the operator already
-    /// chose to federate with and to nobody else.
-    #[error("that account is not on this server")]
-    #[problem(status = 404, title = "Unknown account")]
-    UnknownUser {
-        /// The stable catalog code.
-        #[problem(extension)]
-        code: &'static str,
-    },
-
     /// Too many reports from this peer about this account.
     #[error("too many reports from this server about this account")]
     #[problem(status = 429, title = "Report rate limited")]
@@ -1082,6 +1068,24 @@ impl ReportRejection {
 /// else**. A peer's report is an input to a decision, never a decision: no standing changes, no
 /// serving hold appears, and the reported account sees nothing — because nothing has been done
 /// to them.
+///
+/// # `202` whether or not the account exists
+///
+/// A report naming an account this server does not host is **accepted on the wire and dropped**,
+/// with a `warn` for the operator. It is not filed: an unresolvable report is a permanent orphan
+/// row that nobody can act on, which is the reason the check exists at all.
+///
+/// The answer is deliberately the same one a filed report gets. An earlier version refused with a
+/// distinct coded `404`, and that manufactured an account-enumeration oracle out of a check that
+/// did not need one: a pinned peer could walk identifiers and read existence off the status line.
+/// "Pinned" is not "trusted with enumeration" — a peer key can be compromised, and a peer can be
+/// adversarial toward its own users while remaining an operator's legitimate partner — and this
+/// codebase treats exists-versus-does-not as a first-order defect nearly everywhere else
+/// ([`crate::routes::enroll`]'s indistinguishable code refusal, the album ceremonies' "not yours
+/// is not found", [`crate::serve::authority`]'s `404`/`403` boundary).
+///
+/// Probing is not free even so: every budget above is charged before this point is reached, so a
+/// peer sweeping identifiers spends its allowance doing it and an operator sees the `warn`.
 #[kynos::post(
     "/v1/federation/reports",
     operation_id = "submit_federated_report",
@@ -1223,24 +1227,19 @@ pub async fn submit_federated_report(
             crate::federation::ReportError::Unencodable => ReportRejection::unavailable(),
         })?;
 
-    // The account must be one this server hosts. Otherwise these operators are not the party
-    // that can act on the report and the row would sit in the queue forever — and, less kindly,
-    // `reported_user` is a string the peer chose, so without this the queue and the per-account
-    // budget below are both keyed on something nothing ever validates.
+    // Does the account exist here? The answer decides whether a row is written and **never what
+    // the peer is told** — see the module docs. A report naming an account this server does not
+    // host is accepted on the wire and dropped with a `warn`, which is the pattern
+    // [`crate::routes::enroll`] uses for unknown-versus-spent-versus-expired codes: log so an
+    // operator can act, never tell the asker.
     let reported_user = UserId::new(&claim.reported_user);
-    if crate::auth::AccountProfiles::read(auth.profiles(), &reported_user)
+    let hosted = crate::auth::AccountProfiles::read(auth.profiles(), &reported_user)
         .await
         .map_err(|error| {
             tracing::error!(%error, %peer, "the account directory could not answer a report intake");
             ReportRejection::unavailable()
         })?
-        .is_none()
-    {
-        tracing::info!(%peer, "a report named an account this server does not host");
-        return Err(ReportRejection::UnknownUser {
-            code: error_codes::MODERATION_REPORT_UNKNOWN_USER,
-        });
-    }
+        .is_some();
 
     // Only now are the *policy* budgets charged: a spoofed `reporting_server` must not be able
     // to spend a real peer's allowance. Two of them — the contract bounds reports per
@@ -1260,6 +1259,22 @@ pub async fn submit_federated_report(
     .await?;
 
     let received_at = federation.clock().now();
+    if !hosted {
+        // Logged at `warn` rather than `info`: a peer repeatedly reporting accounts this server
+        // does not host is either misrouting or probing, and both are things an operator wants
+        // to see. The budgets above were charged either way, so probing is not free.
+        tracing::warn!(
+            %peer,
+            "a federated report named an account this server does not host; accepted and dropped"
+        );
+        return Ok(ReportReply::Accepted(FederatedReportResponse {
+            // A fresh identifier, as an accepted report gets. It names nothing this server
+            // stored, and that is the point: the answer must not vary with what exists.
+            report_id: uuid::Uuid::now_v7().to_string(),
+            received_at: received_at.to_string(),
+        }));
+    }
+
     let report = FederatedReport {
         report_id: uuid::Uuid::now_v7().to_string(),
         reporting_server: peer.as_str().to_owned(),

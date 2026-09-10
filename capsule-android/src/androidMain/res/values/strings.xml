@@ -1898,7 +1898,6 @@
     <string name="error_moderation_account_suspended">Your account is suspended. You can\'t upload or share until it\'s reinstated.</string>
     <string name="error_moderation_report_malformed">That report isn\'t valid.</string>
     <string name="error_moderation_report_rate_limited">Too many reports from this source. Please wait and try again.</string>
-    <string name="error_moderation_report_unknown_user">That account isn\'t on this server.</string>
     <string name="error_moderation_report_unsigned">The moderation report could not be verified.</string>
     <string name="error_moderation_server_blocked">This server is blocked from federating with us.</string>
     <string name="error_moderation_unavailable">Capsule couldn\'t reach your account record. Please try again.</string>

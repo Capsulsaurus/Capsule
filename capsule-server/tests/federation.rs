@@ -1945,3 +1945,91 @@ async fn a_capability_is_refused_on_every_surface_that_is_not_a_federated_read()
         .await
         .assert_status(StatusCode::OK);
 }
+
+#[tokio::test]
+async fn a_report_about_an_account_this_server_does_not_host_is_accepted_and_dropped() {
+    // The intake must not become an account-enumeration oracle. An unresolvable report is a
+    // permanent orphan row nobody can act on, so it is *not filed* — but the peer is told the
+    // same thing either way, because a distinct status is exactly what a peer would sweep
+    // identifiers against. "Pinned" is not "trusted with enumeration".
+    let (fixture, _) = shared().await;
+    let (signer, public) = support::peer_keypair();
+    pin(&fixture, public).await;
+    let hash = support::checksum(b"the reported bytes");
+
+    let hosted = file(&fixture, report(&signer, &hash, Some("csam"))).await;
+    let hosted_status = hosted.status();
+    let hosted: Value = hosted.json();
+
+    let stranger = file(
+        &fixture,
+        support::signed_report(
+            &signer,
+            PEER,
+            "01937b7c-0000-7000-8000-0000000000dd",
+            &hash,
+            &album(),
+            Some("csam"),
+            "2026-09-02T00:00:00Z",
+        ),
+    )
+    .await;
+    assert_eq!(
+        stranger.status(),
+        hosted_status,
+        "the status must not vary with whether the account exists"
+    );
+    let stranger: Value = stranger.json();
+
+    // The bodies must be the same *shape*, differing only in the identifier every accepted
+    // report gets a fresh one of — a body that were empty, or missing a field, would be the
+    // oracle back again one field along.
+    assert_eq!(
+        stranger
+            .as_object()
+            .expect("an object")
+            .keys()
+            .collect::<Vec<_>>(),
+        hosted
+            .as_object()
+            .expect("an object")
+            .keys()
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        stranger["report_id"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty())
+    );
+    assert_ne!(stranger["report_id"], hosted["report_id"]);
+
+    // Only the resolvable one reached the queue.
+    let pending = fixture
+        .moderation
+        .pending_reports()
+        .await
+        .expect("the store answers");
+    assert_eq!(pending.len(), 1, "an unresolvable report is not filed");
+    assert_eq!(pending[0].reported_user, UserId::new(reported()));
+    assert_eq!(
+        pending[0].report_id,
+        hosted["report_id"].as_str().expect("a report id")
+    );
+
+    // And probing is not free: both requests were charged before the account was looked at.
+    assert_eq!(
+        fixture
+            .counters
+            .peek(
+                &CounterKey::PeerReports(PEER.to_owned()),
+                budgets::PEER_REPORTS,
+                fixture.clock.now(),
+            )
+            .await
+            .expect("the counter answers"),
+        capsule_server::counter::Verdict::Admitted {
+            remaining: budgets::PEER_REPORTS.limit - 2
+        },
+        "a swept identifier costs the peer its allowance"
+    );
+}

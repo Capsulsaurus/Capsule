@@ -1482,21 +1482,6 @@ async fn every_declared_response_is_exercised() {
         .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
     fixture.moderation.set_unavailable(false);
 
-    // 404: an account this server does not host. After the signature check, so it discloses
-    // account existence only to a peer whose key an operator pinned.
-    report(support::signed_report(
-        &peer_signer,
-        "other.test",
-        "01937b7c-0000-7000-8000-0000000000dd",
-        &checksum(b"reported bytes"),
-        &support::album(),
-        None,
-        "2026-09-02T00:00:00Z",
-    ))
-    .send()
-    .await
-    .assert_status(StatusCode::NOT_FOUND);
-
     // 429: this peer has said enough about this account for one hour.
     for _ in 0..capsule_server::counter::budgets::FEDERATED_REPORTS.limit {
         fixture

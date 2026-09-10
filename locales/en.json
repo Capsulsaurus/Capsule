@@ -7631,10 +7631,6 @@
     "message": "Too many reports from this source. Please wait and try again.",
     "context": "HTTP 429 on federated report intake (slice S-C8, threat-model invariant 24): the per-(reporting_server, reported_user) report budget for the current window is exhausted. Backpressure defeats the false-flag / mass-report abuse vector rather than amplifying it."
   },
-  "error.moderation.report_unknown_user": {
-    "message": "That account isn't on this server.",
-    "context": "HTTP 404 on POST /v1/federation/reports (slice S-C49): the report's reported_user names no account this server hosts, so its operators are not the party that can act on it and a row would sit in the queue forever. Reachable only by a peer whose signature already verified under its pinned key, so it is not an existence oracle for anyone the operator has not already chosen to federate with."
-  },
   "error.moderation.report_unsigned": {
     "message": "The moderation report could not be verified.",
     "context": "Federated report intake (slice S-C8, threat-model invariant 24): the report's Ed25519 signature did not verify against a known peer key — unsigned, tampered, or from an unregistered peer — or the report was structurally malformed. It is dropped before the admin queue, never surfaced."
