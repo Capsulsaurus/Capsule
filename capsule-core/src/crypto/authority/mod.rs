@@ -25,7 +25,7 @@
 //!
 //! [Keys — Write Authorization]: https://docs/design/cryptography/keys/#write-authorization
 
-pub mod reference;
+mod reference;
 
 #[cfg(feature = "mls")]
 mod openmls_authority;
@@ -39,7 +39,7 @@ pub use openmls_authority::{
     SignedUpgradeIntent, TombstoneOutcome, UpgradeIntent, UpgradeLineage, UpgradeProposal,
     WriteTierDistribution,
 };
-pub use reference::ReferenceAuthority;
+pub use reference::{LedgerEntry, ReferenceAuthority, SignedEpochLedger};
 use uuid::Uuid;
 
 use crate::crypto::keys::{AmkVersion, HybridVerifyingKey};

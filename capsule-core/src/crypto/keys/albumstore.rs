@@ -53,7 +53,7 @@ use super::hybrid_sig::HybridSigningKey;
 use super::master::MasterKey;
 use crate::cbor;
 use crate::crypto::CryptoError;
-use crate::crypto::authority::reference::SignedEpochLedger;
+use crate::crypto::authority::SignedEpochLedger;
 use crate::crypto::authority::{AlbumAuthority, Authority, ReferenceAuthority};
 use crate::utils::paths::tmp_path;
 
