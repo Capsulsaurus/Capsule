@@ -27,8 +27,8 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::db::{DatabaseDriver, EmbeddingInsert, VectorIndexError};
-use crate::ml::orchestrator::AssetSource;
-use crate::ml::runner::{Frame, ModelRunner};
+use crate::ml::AssetSource;
+use crate::ml::{Frame, ModelRunner};
 use crate::ml::{ModelId, ModelVersion, Registry, TaskKind};
 
 /// The embedder seam the regeneration loop drives: "produce the canonical embedding for an asset

@@ -28,7 +28,7 @@
 use crate::db::vector::{EmbeddingProvenance, VectorTableSpec};
 // The identity vocabulary these rows are written in lives in the `domain` leaf — `db` names its
 // `vec0` columns with the same types, and importing them from `ml` closed a `db -> ml -> db`
-// cycle. Re-exported so `crate::ml::registry::TaskKind` (and every other spelling) still resolves.
+// cycle. Re-exported so `crate::ml::TaskKind` (and every other spelling) still resolves.
 pub use crate::domain::model_identity::{
     DistanceMetric, EmbeddingDim, ModelId, ModelVersion, RegistryError, TaskKind,
 };
@@ -177,7 +177,7 @@ impl Registry {
 
     /// Record a model swap for `task` — a one-row edit setting its canonical version. Embeddings
     /// stored at the prior version become [stale](Self::is_stale) and are excluded from queries
-    /// until [regenerated](crate::ml::regen::regenerate_stale) from the originals.
+    /// until [regenerated](crate::ml::regenerate_stale) from the originals.
     pub fn set_canonical_version(&mut self, task: TaskKind, version: ModelVersion) {
         if let Some(row) = self.rows.iter_mut().find(|r| r.task == task) {
             row.canonical_version = version;
@@ -189,7 +189,7 @@ impl Registry {
     /// A numeric version is treated as an integer generation and advanced by one; a non-numeric
     /// version gets a `+1` suffix so the tuple still changes. Returns the new canonical version, or
     /// `None` if `task` has no row. This is the swap half of the version-bump regeneration loop —
-    /// its regeneration half is [`regen::regenerate_stale`](crate::ml::regen::regenerate_stale),
+    /// its regeneration half is [`regen::regenerate_stale`](crate::ml::regenerate_stale),
     /// which walks the now-stale entries [`stale_embedding_assets`](crate::db::DatabaseDriver::stale_embedding_assets)
     /// reports and replaces each per-asset.
     ///

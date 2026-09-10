@@ -42,15 +42,15 @@
 //!
 //! [AI/ML Integrations]: https://docs/design/ai/
 
-pub mod orchestrator;
-pub mod regen;
-pub mod registry;
-pub mod runner;
+mod orchestrator;
+mod regen;
+mod registry;
+mod runner;
 
 pub use orchestrator::{
-    AiTagSink, AssetSource, BatchMode, CANONICAL_PARTITION, KnownAnswer, OrchestratorError,
-    StoreError, auto_tag, choose_batch_mode, embed_and_store, micro_batch_size, resolve_partition,
-    semantic_search, should_pause_for_heat,
+    AiTagSink, AssetSource, BatchMode, CANONICAL_PARTITION, KnownAnswer, MICRO_BATCH_SIZES,
+    OrchestratorError, StoreError, auto_tag, choose_batch_mode, embed_and_store, micro_batch_size,
+    resolve_partition, semantic_search, should_pause_for_heat,
 };
 pub use regen::{
     DeterministicEmbedder, EmbedError, Embedder, RegenError, RegenReport, RunnerEmbedder,
