@@ -1062,11 +1062,26 @@ impl ReportRejection {
 ///
 /// # The order the checks run in
 ///
-/// Who is speaking, then whether they are welcome, then whether they really said it, then
-/// whether they have said it too often. The signature is verified **before** the budget is
-/// charged, so a third party spoofing `reporting_server` cannot spend a real peer's allowance;
-/// the cost of that ordering is one Ed25519 verification per unsigned request, which the
-/// router's body-size limit already bounds.
+/// Bounds, then how much may be asked for at all, then who is speaking, then whether they are
+/// welcome, then whether they really said it, then whose account it is, then whether they have
+/// said it too often.
+///
+/// Every field is length-capped first, before a store is read or a byte is keyed on. Then
+/// [`CounterKey::FederatedIntake`](crate::counter::CounterKey::FederatedIntake) — keyed on the
+/// *claimed* origin, so it bounds one origin looping rather than a caller cycling origins, which
+/// is the most this server can do without a trusted client address. Everything after it is a
+/// store read and an Ed25519 verification, and this is the only place a bound on that work can
+/// sit.
+///
+/// The **policy** budgets are charged last, after the signature verifies, so a third party
+/// spoofing `reporting_server` cannot spend a real peer's allowance. Two of them: the contract's
+/// per-`(server, account)` limit, and a per-peer ceiling that ignores the account, because
+/// `reported_user` is a string the peer chooses and a peer cycling accounts would otherwise mint
+/// itself a fresh allowance each time.
+///
+/// What is *not* bounded is bytes parsed per request: a per-operation body cap cannot be
+/// expressed against this framework, and the reason is recorded on
+/// [`MAX_FEDERATION_BODY_BYTES`](crate::limits::MAX_FEDERATION_BODY_BYTES) (issue #478).
 ///
 /// # What accepting one does
 ///
