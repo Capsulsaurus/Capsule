@@ -10,10 +10,10 @@
 //!
 //! [Metadata — Collaborative Metadata]: https://docs/design/metadata/#collaborative-metadata
 
-pub mod counter;
-pub mod lww;
-pub mod or_set;
+mod counter;
+mod lww;
+mod or_set;
 
 pub use counter::Counter;
-pub use lww::{Lww, Stamped};
+pub use lww::{Lww, SUPERSEDED_CAP, Stamped};
 pub use or_set::{AddId, OrSet, UnobservedRemove};
