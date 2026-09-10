@@ -267,10 +267,46 @@ Do the same for the **exporter-supplied** metadata, since that is what
 `--provider takeout` adds: pick a few photos you know are in an album, are
 favorited, or carry a typed caption in Google Photos, and note them down.
 
-The current CLI has no command that prints an imported asset's caption, rating,
-or tags back to you, so this sample is a record to reconcile later rather than
-something you can diff today. That is exactly why the guide keeps insisting you
-retain the Takeout archive and keep Google Photos alive through the cutover.
+Then read each one back out of the library. `capsule show` prints what the
+imported asset's **signed sidecar** records, and it takes the SHA-256 you already
+have from the spot-hash step — Capsule imports bytes unchanged, so the source
+file's hash is the asset's hash. A prefix of eight or more hex characters is
+enough; if it happens to match more than one asset, the command refuses and asks
+for more of the hash rather than guessing:
+
+```sh
+capsule show --library ./my-library 3b2f9c1e
+```
+
+```text
+Asset 019a2d3c-…
+  Album:           …
+  Content type:    image/jpeg
+  SHA-256:         3b2f9c1e…
+  Dimensions:      4032×3024
+  Captured:        2021-07-04T18:22:09Z
+  Imported:        2026-09-02T10:15:42Z
+  Caption:         Grandma's 80th
+  Rating:          5/5
+  User tags:       Family reunion 2021
+  AI tags:         (unset)
+  GPS:             37.774900, -122.419400 (WGS-84, manual)
+  Cull flag:       neutral
+  …
+```
+
+Check the rows against your notes using the mapping table above: the caption is
+the Google description, a favorite reads as `5/5`, each album the photo was in is
+a user tag, and a GPS fix that came from the Takeout JSON rather than the file's
+own EXIF is marked `manual` (a fix is always printed with its datum, so a GCJ-02
+coordinate stored verbatim is never mistaken for WGS-84). A field the export did not carry prints as
+`(unset)` rather than being omitted, so a missing caption is something you can
+see. A mapping you disagree with is worth catching here: the values live in a
+signed sidecar, and changing one later is a signed metadata update per asset.
+
+Retain the Takeout archive and keep Google Photos alive through the cutover all
+the same — the sample tells you the mapping is right, not that every one of tens
+of thousands of assets is.
 
 ## After you've verified
 

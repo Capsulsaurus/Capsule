@@ -6911,6 +6911,282 @@
     "message": "Cull view: {pick} pick, {neutral} neutral, {reject} reject.",
     "context": "CLI summary line from `capsule cull` counting the live (non-trashed) assets carrying each culling flag."
   },
+  "cli.help.auth.about": {
+    "message": "Authentication commands",
+    "context": "clap --help: the one-line description of `capsule auth`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.auth.login.about": {
+    "message": "Login to Capsule",
+    "context": "clap --help: the one-line description of `capsule auth login`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.auth.login.arg.email": {
+    "message": "Account email (prompted when omitted)",
+    "context": "clap --help: help for the `--email` option of `capsule auth login`."
+  },
+  "cli.help.auth.login.arg.password_stdin": {
+    "message": "Read the password from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+    "context": "clap --help: help for the `--password-stdin` flag of `capsule auth login`."
+  },
+  "cli.help.auth.logout.about": {
+    "message": "Logout from Capsule",
+    "context": "clap --help: the one-line description of `capsule auth logout`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.auth.register.about": {
+    "message": "Create a Capsule account and sign in",
+    "context": "clap --help: the one-line description of `capsule auth register`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.auth.register.arg.email": {
+    "message": "Account email (prompted when omitted)",
+    "context": "clap --help: help for the `--email` option of `capsule auth register`."
+  },
+  "cli.help.auth.register.arg.password_stdin": {
+    "message": "Read the password from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+    "context": "clap --help: help for the `--password-stdin` flag of `capsule auth register`."
+  },
+  "cli.help.auth.status.about": {
+    "message": "Show authentication status",
+    "context": "clap --help: the one-line description of `capsule auth status`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.cull.about": {
+    "message": "Review a local library: flag assets, filter by flag, sweep rejects to trash",
+    "context": "clap --help: the one-line description of `capsule cull`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.cull.arg.filter": {
+    "message": "List the assets carrying one flag instead of only counting them",
+    "context": "clap --help: help for the `--filter` option of `capsule cull`."
+  },
+  "cli.help.cull.arg.library": {
+    "message": "Path to the Capsule library",
+    "context": "clap --help: help for the `--library` option of `capsule cull`."
+  },
+  "cli.help.cull.arg.neutral": {
+    "message": "Clear an asset's flag back to the never-flagged default (repeatable)",
+    "context": "clap --help: help for the `--neutral` option of `capsule cull`."
+  },
+  "cli.help.cull.arg.passphrase_stdin": {
+    "message": "Read the library passphrase from stdin instead of prompting, so culling works in scripts and CI where there is no terminal",
+    "context": "clap --help: help for the `--passphrase-stdin` flag of `capsule cull`."
+  },
+  "cli.help.cull.arg.pick": {
+    "message": "Flag an asset as a keeper (repeatable)",
+    "context": "clap --help: help for the `--pick` option of `capsule cull`."
+  },
+  "cli.help.cull.arg.reject": {
+    "message": "Flag an asset for rejection (repeatable)",
+    "context": "clap --help: help for the `--reject` option of `capsule cull`."
+  },
+  "cli.help.cull.arg.retain_days": {
+    "message": "Retention window, in days, the sweep's soft delete stamps",
+    "context": "clap --help: help for the `--retain-days` option of `capsule cull`."
+  },
+  "cli.help.cull.arg.sweep": {
+    "message": "Move every rejected asset to trash. The only destructive step, and soft per retention — swept assets stay restorable until the window elapses",
+    "context": "clap --help: help for the `--sweep` flag of `capsule cull`."
+  },
+  "cli.help.demo.about": {
+    "message": "Run the offline end-to-end data-plane showcase (real cryptography, no network)",
+    "context": "clap --help: the one-line description of `capsule demo`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.demo.arg.image": {
+    "message": "A real image/file to import (a small synthetic file is used if omitted)",
+    "context": "clap --help: help for the `--image` option of `capsule demo`."
+  },
+  "cli.help.demo.arg.workdir": {
+    "message": "Working directory for the demo libraries (a temp dir is used if omitted)",
+    "context": "clap --help: help for the `--workdir` option of `capsule demo`."
+  },
+  "cli.help.import.about": {
+    "message": "Import files into a local Capsule library",
+    "context": "clap --help: the one-line description of `capsule import`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.import.arg.force": {
+    "message": "Re-import files even if they already exist (duplicate override)",
+    "context": "clap --help: help for the `--force` flag of `capsule import`."
+  },
+  "cli.help.import.arg.library": {
+    "message": "Path to the Capsule library",
+    "context": "clap --help: help for the `--library` option of `capsule import`."
+  },
+  "cli.help.import.arg.move": {
+    "message": "Move files instead of copying them",
+    "context": "clap --help: help for the `--move` flag of `capsule import`."
+  },
+  "cli.help.import.arg.passphrase_stdin": {
+    "message": "Read the library passphrase from stdin instead of prompting, so imports work in scripts and CI where there is no terminal",
+    "context": "clap --help: help for the `--passphrase-stdin` flag of `capsule import`."
+  },
+  "cli.help.import.arg.paths": {
+    "message": "Source file or directory to import. Repeatable: a split Takeout export extracted into several folders is imported by naming every part in one run, so a media file and a sidecar that landed in different parts are still paired",
+    "context": "clap --help: help for the `<PATH>` positional of `capsule import`."
+  },
+  "cli.help.import.arg.provider": {
+    "message": "Read the source as an export from this service instead of as a plain directory tree, so its out-of-band metadata (capture time, GPS, captions, favorites, album membership) is folded into the imported assets",
+    "context": "clap --help: help for the `--provider` option of `capsule import`."
+  },
+  "cli.help.import.arg.push": {
+    "message": "Push the library to the server after importing — sugar for a `capsule push` run over the same library. The import itself stays offline",
+    "context": "clap --help: help for the `--push` flag of `capsule import`."
+  },
+  "cli.help.import.arg.staged": {
+    "message": "Stage the follow-on push (`--push`) in tier order, gating the preview and original tiers on the connection class",
+    "context": "clap --help: help for the `--staged` flag of `capsule import`."
+  },
+  "cli.help.library.about": {
+    "message": "Manage the local library",
+    "context": "clap --help: the one-line description of `capsule library`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.library.info.about": {
+    "message": "Show library information",
+    "context": "clap --help: the one-line description of `capsule library info`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.library.info.arg.path": {
+    "message": "Path to the library",
+    "context": "clap --help: help for the `<PATH>` positional of `capsule library info`."
+  },
+  "cli.help.library.init.about": {
+    "message": "Create a new Capsule library",
+    "context": "clap --help: the one-line description of `capsule library init`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.library.init.arg.name": {
+    "message": "Human-readable library name",
+    "context": "clap --help: help for the `--name` option of `capsule library init`."
+  },
+  "cli.help.library.init.arg.path": {
+    "message": "Directory for the new library",
+    "context": "clap --help: help for the `<PATH>` positional of `capsule library init`."
+  },
+  "cli.help.library.rebuild.about": {
+    "message": "Rebuild the SQLite index from sidecar files",
+    "context": "clap --help: the one-line description of `capsule library rebuild`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.library.rebuild.arg.path": {
+    "message": "Path to the library",
+    "context": "clap --help: help for the `<PATH>` positional of `capsule library rebuild`."
+  },
+  "cli.help.list.about": {
+    "message": "List the assets the sync feed has delivered",
+    "context": "clap --help: the one-line description of `capsule list`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.list.arg.include_deleted": {
+    "message": "Include assets the server has tombstoned (deleted) as well as live ones",
+    "context": "clap --help: help for the `--include-deleted` flag of `capsule list`."
+  },
+  "cli.help.match.about": {
+    "message": "Match metadata for current file",
+    "context": "clap --help: the one-line description of `capsule match`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.match.arg.path": {
+    "message": "Path to the file to match metadata for",
+    "context": "clap --help: help for the `<PATH>` positional of `capsule match`."
+  },
+  "cli.help.push.about": {
+    "message": "Upload a local Capsule library to the server",
+    "context": "clap --help: the one-line description of `capsule push`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.push.arg.dry_run": {
+    "message": "Report what would be uploaded without opening a single upload session",
+    "context": "clap --help: help for the `--dry-run` flag of `capsule push`."
+  },
+  "cli.help.push.arg.force": {
+    "message": "Re-drive every blob regardless of what the server already holds",
+    "context": "clap --help: help for the `--force` flag of `capsule push`."
+  },
+  "cli.help.push.arg.library": {
+    "message": "Path to the Capsule library to push",
+    "context": "clap --help: help for the `--library` option of `capsule push`."
+  },
+  "cli.help.push.arg.passphrase_stdin": {
+    "message": "Read the library passphrase from stdin instead of prompting, so pushes work in scripts and CI where there is no terminal",
+    "context": "clap --help: help for the `--passphrase-stdin` flag of `capsule push`."
+  },
+  "cli.help.push.arg.staged": {
+    "message": "Open the tier sessions in ladder order (index → preview → original), gating the above-index tiers on the connection class, instead of opening all eagerly",
+    "context": "clap --help: help for the `--staged` flag of `capsule push`."
+  },
+  "cli.help.repair.about": {
+    "message": "Repair a local library in place, one signed correction per affected asset",
+    "context": "clap --help: the one-line description of `capsule repair`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.repair.capture-time.about": {
+    "message": "Re-read each original's EXIF capture time and report every asset whose signed capture timestamp disagrees with it; with --apply, correct each one as a signed metadata update",
+    "context": "clap --help: the one-line description of `capsule repair capture-time`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.repair.capture-time.arg.apply": {
+    "message": "Write the corrections. Without this flag the pass only reports what it would change; each correction is an irreversible signed record on the asset's chain",
+    "context": "clap --help: help for the `--apply` flag of `capsule repair capture-time`."
+  },
+  "cli.help.repair.capture-time.arg.library": {
+    "message": "Path to the Capsule library",
+    "context": "clap --help: help for the `--library` option of `capsule repair capture-time`."
+  },
+  "cli.help.repair.capture-time.arg.limit": {
+    "message": "Correct at most this many affected assets in one --apply run (the report still covers the whole library); only meaningful with --apply",
+    "context": "clap --help: help for the `--limit` option of `capsule repair capture-time`."
+  },
+  "cli.help.repair.capture-time.arg.passphrase_stdin": {
+    "message": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+    "context": "clap --help: help for the `--passphrase-stdin` flag of `capsule repair capture-time`."
+  },
+  "cli.help.reset.about": {
+    "message": "Reset all local CLI data",
+    "context": "clap --help: the one-line description of `capsule reset`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.reset.arg.all": {
+    "message": "Reset all data",
+    "context": "clap --help: help for the `--all` flag of `capsule reset`."
+  },
+  "cli.help.reset.arg.cache": {
+    "message": "Reset cache directory",
+    "context": "clap --help: help for the `--cache` flag of `capsule reset`."
+  },
+  "cli.help.reset.arg.config": {
+    "message": "Reset configuration",
+    "context": "clap --help: help for the `--config` flag of `capsule reset`."
+  },
+  "cli.help.reset.arg.data": {
+    "message": "Reset data directory",
+    "context": "clap --help: help for the `--data` flag of `capsule reset`."
+  },
+  "cli.help.root.about": {
+    "message": "A command line interface for Capsule - the photo management platform",
+    "context": "clap --help: the one-line description of `capsule` (the root command). Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.root.long_about": {
+    "message": "Capsule CLI provides tools for managing your photos and albums:\n\n- Authentication management\n- Sync local and remote data\n- Check status and list files\n- Manage albums and collections",
+    "context": "clap --help: the long description of `capsule`, shown at the top of `capsule --help` instead of the one-line form. Keep the Markdown list markers: the documentation site renders this text as prose."
+  },
+  "cli.help.show.about": {
+    "message": "Show what an imported asset's signed sidecar records: caption, rating, tags, GPS, timestamps",
+    "context": "clap --help: the one-line description of `capsule show`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.show.arg.asset": {
+    "message": "The asset to show: its id, or a prefix of at least 8 hex characters of its SHA-256 content hash — the same digest `shasum -a 256` prints for the source file",
+    "context": "clap --help: help for the `<ASSET>` positional of `capsule show`."
+  },
+  "cli.help.show.arg.library": {
+    "message": "Path to the Capsule library",
+    "context": "clap --help: help for the `--library` option of `capsule show`."
+  },
+  "cli.help.show.arg.passphrase_stdin": {
+    "message": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+    "context": "clap --help: help for the `--passphrase-stdin` flag of `capsule show`."
+  },
+  "cli.help.status.about": {
+    "message": "Show current status",
+    "context": "clap --help: the one-line description of `capsule status`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.sync.about": {
+    "message": "Sync local and remote data",
+    "context": "clap --help: the one-line description of `capsule sync`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.sync.arg.dry_run": {
+    "message": "Perform a dry run without making changes",
+    "context": "clap --help: help for the `--dry-run` flag of `capsule sync`."
+  },
+  "cli.help.sync.arg.force": {
+    "message": "Discard the saved cursor and re-drain the feed from the start. The per-album anti-rewind floor still applies, so this cannot resurrect stale entries",
+    "context": "clap --help: help for the `--force` flag of `capsule sync`."
+  },
   "cli.import.candidates_found": {
     "message": "Found {candidates} candidate(s) ({files} file(s) total).",
     "context": "CLI summary after `capsule import` finishes scanning. {candidates} is the number of importable items found; {files} is the total number of files seen, including sidecars and non-media files. Both are counts."
@@ -7026,6 +7302,218 @@
   "cli.push.up_to_date": {
     "message": "Everything in this library is already on the server.",
     "context": "CLI line when `capsule push` finds every blob already held server-side."
+  },
+  "cli.repair.capture_time.checked": {
+    "message": "Checked {count} asset(s) against the EXIF capture time of their originals.",
+    "context": "CLI status line from `capsule repair capture-time` after every asset's original has been re-read. {count} is the number of assets examined."
+  },
+  "cli.repair.capture_time.corrected": {
+    "message": "  {asset_id}: corrected",
+    "context": "CLI one-line confirmation in `capsule repair capture-time --apply` that the asset's capture timestamp was rewritten as a signed metadata update."
+  },
+  "cli.repair.capture_time.drift_notice": {
+    "message": "Corrected assets stay in the month directory they were imported into; that drift between directory and capture date is expected after a correction and is not a fault.",
+    "context": "CLI note printed after `capsule repair capture-time --apply` corrected at least one asset: the media files are not moved to a new date directory."
+  },
+  "cli.repair.capture_time.dry_run_notice": {
+    "message": "Dry run: nothing was written. Re-run with --apply to correct the affected sidecars.",
+    "context": "CLI notice from `capsule repair capture-time` when run without --apply (the default). `--apply` is a command-line flag, shown verbatim."
+  },
+  "cli.repair.capture_time.failed_asset": {
+    "message": "Correcting {asset_id} failed: {reason}. Assets corrected before it stay corrected; nothing after it was touched.",
+    "context": "CLI failure detail from `capsule repair capture-time --apply` when the library refuses a correction. {reason} is an English error detail."
+  },
+  "cli.repair.capture_time.limit_notice": {
+    "message": "Stopped after {corrected} correction(s) because of --limit; re-run to continue.",
+    "context": "CLI notice from `capsule repair capture-time --apply --limit N` when affected assets remain after N corrections. `--limit` is a command-line flag, shown verbatim."
+  },
+  "cli.repair.capture_time.limit_requires_apply": {
+    "message": "--limit only bounds what --apply writes; give --apply as well, or drop --limit.",
+    "context": "CLI failure line when `capsule repair capture-time --limit` is given without `--apply`. Both are command-line flags, shown verbatim."
+  },
+  "cli.repair.capture_time.nothing": {
+    "message": "Every capture timestamp agrees with its original's EXIF; nothing to repair.",
+    "context": "CLI line from `capsule repair capture-time` when no asset is affected and every original was readable."
+  },
+  "cli.repair.capture_time.row": {
+    "message": "  {asset_id}: recorded {recorded}, EXIF says {recovered} (off by {delta} s)",
+    "context": "CLI one-line report of one affected asset in `capsule repair capture-time`. {recorded} is the capture timestamp the signed sidecar holds, {recovered} the instant its original's EXIF resolves to, {delta} the difference in seconds (recovered minus recorded, may be negative)."
+  },
+  "cli.repair.capture_time.row_unparseable": {
+    "message": "  {asset_id}: recorded {recorded} (not a timestamp), EXIF says {recovered}",
+    "context": "CLI one-line report of one affected asset in `capsule repair capture-time` whose recorded capture timestamp does not parse, so no difference can be computed."
+  },
+  "cli.repair.capture_time.summary": {
+    "message": "Capture-time repair: {affected} affected, {corrected} corrected, {agrees} already correct, {no_instant} without a recoverable EXIF instant, {unreadable} unreadable, {trashed} in trash.",
+    "context": "CLI summary line of `capsule repair capture-time`. All placeholders are asset counts; {trashed} counts assets skipped because they are in trash."
+  },
+  "cli.repair.capture_time.trashed": {
+    "message": "  Skipped {count} asset(s) in trash; restore an asset first if it should be repaired.",
+    "context": "CLI notice from `capsule repair capture-time` counting the trashed assets it left alone. {count} is an asset count."
+  },
+  "cli.repair.capture_time.unreadable": {
+    "message": "  {asset_id}: original could not be read ({reason}); skipped",
+    "context": "CLI one-line report in `capsule repair capture-time` for an asset whose original file could not be opened. {reason} is an English I/O error detail. Distinct from an original that merely carries no EXIF, which is counted, not listed."
+  },
+  "cli.repair.failed": {
+    "message": "Repair failed: {reason}",
+    "context": "CLI failure line for `capsule repair`. {reason} is a localized or English error detail."
+  },
+  "cli.show.album": {
+    "message": "  Album:           {value}",
+    "context": "CLI field row of `capsule show`: the owning album's UUID. Keep the label padded so values align in a monospace terminal."
+  },
+  "cli.show.ambiguous": {
+    "message": "{selector} matches {count} assets; give more of the hash, or the full asset id.",
+    "context": "CLI failure detail when a `capsule show` hash prefix matches several assets. {count} is the number of matches."
+  },
+  "cli.show.caption": {
+    "message": "  Caption:         {value}",
+    "context": "CLI field row of `capsule show`: the caption text, or the unset marker."
+  },
+  "cli.show.captured": {
+    "message": "  Captured:        {value}",
+    "context": "CLI field row of `capsule show`: the signed capture timestamp (RFC 3339, UTC)."
+  },
+  "cli.show.content_type": {
+    "message": "  Content type:    {value}",
+    "context": "CLI field row of `capsule show`: the asset's content type, e.g. image/jpeg."
+  },
+  "cli.show.cull": {
+    "message": "  Cull flag:       {value}",
+    "context": "CLI field row of `capsule show`: the culling flag (a localized pick/neutral/reject name)."
+  },
+  "cli.show.dimensions": {
+    "message": "  Dimensions:      {value}",
+    "context": "CLI field row of `capsule show`: pixel dimensions, or the unset marker."
+  },
+  "cli.show.failed": {
+    "message": "Show failed: {reason}",
+    "context": "CLI failure line for `capsule show`. {reason} is a localized or English error detail."
+  },
+  "cli.show.gps": {
+    "message": "  GPS:             {value}",
+    "context": "CLI field row of `capsule show`: the location fix with its source, or the unset marker."
+  },
+  "cli.show.gps_datum.gcj02": {
+    "message": "GCJ-02",
+    "context": "GPS datum name in `capsule show`: China's obfuscated datum, stored verbatim and never converted. A standard's name, shown verbatim."
+  },
+  "cli.show.gps_datum.wgs84": {
+    "message": "WGS-84",
+    "context": "GPS datum name in `capsule show`: the near-universal camera datum. A standard's name, shown verbatim."
+  },
+  "cli.show.gps_source.derived": {
+    "message": "derived",
+    "context": "GPS fix source name in `capsule show`: inferred, e.g. from a nearby asset."
+  },
+  "cli.show.gps_source.exif": {
+    "message": "EXIF",
+    "context": "GPS fix source name in `capsule show`: read from the file's own EXIF. EXIF is a standard's name, shown verbatim."
+  },
+  "cli.show.gps_source.manual": {
+    "message": "manual",
+    "context": "GPS fix source name in `capsule show`: entered by a user or supplied by an exporter's record rather than the file's EXIF."
+  },
+  "cli.show.hash": {
+    "message": "  SHA-256:         {value}",
+    "context": "CLI field row of `capsule show`: the original file's SHA-256 content hash in hex. SHA-256 is an algorithm name, shown verbatim."
+  },
+  "cli.show.header": {
+    "message": "Asset {asset_id}",
+    "context": "CLI heading line of `capsule show`, above the field rows. {asset_id} is the asset's UUID."
+  },
+  "cli.show.hidden": {
+    "message": "  Hidden:          {value}",
+    "context": "CLI field row of `capsule show`: whether the asset is hidden from default views (a localized yes/no)."
+  },
+  "cli.show.imported": {
+    "message": "  Imported:        {value}",
+    "context": "CLI field row of `capsule show`: the signed import timestamp (RFC 3339, UTC)."
+  },
+  "cli.show.in_trash": {
+    "message": "  In trash:        {value}",
+    "context": "CLI field row of `capsule show`: whether the asset is currently in trash (a localized yes/no)."
+  },
+  "cli.show.invalid_selector": {
+    "message": "{selector} is neither an asset id nor a hex prefix of at least {min} characters of a content hash.",
+    "context": "CLI failure detail when the `capsule show` selector is malformed. {min} is the minimum prefix length."
+  },
+  "cli.show.lqip": {
+    "message": "  Placeholder:     {value}",
+    "context": "CLI field row of `capsule show`: whether a low-quality display placeholder (LQIP) is stored — a localized present marker, or the unset marker."
+  },
+  "cli.show.provenance_records": {
+    "message": "  Provenance:      {value} signed record(s)",
+    "context": "CLI field row of `capsule show`: how many signed records the asset's provenance chain holds — the create plus every lifecycle write since (metadata edits, repairs, derivative writes, trash moves)."
+  },
+  "cli.show.rating": {
+    "message": "  Rating:          {value}",
+    "context": "CLI field row of `capsule show`: the star rating, or the unset marker."
+  },
+  "cli.show.stack": {
+    "message": "  Stack:           {value}",
+    "context": "CLI field row of `capsule show`: the asset's stack placement (RAW+JPEG, Live Photo, edited pair), or the unset marker."
+  },
+  "cli.show.stack_role.member": {
+    "message": "member",
+    "context": "Stack role name in `capsule show`: an ordinary stack member."
+  },
+  "cli.show.stack_role.primary": {
+    "message": "primary",
+    "context": "Stack role name in `capsule show`: the stack's representative asset."
+  },
+  "cli.show.stack_role.proxy": {
+    "message": "proxy",
+    "context": "Stack role name in `capsule show`: a proxy or optimized variant."
+  },
+  "cli.show.tags_ai": {
+    "message": "  AI tags:         {value}",
+    "context": "CLI field row of `capsule show`: the AI-suggested tags, comma-separated, or the unset marker."
+  },
+  "cli.show.tags_user": {
+    "message": "  User tags:       {value}",
+    "context": "CLI field row of `capsule show`: the user-authored tags, comma-separated, or the unset marker."
+  },
+  "cli.show.unknown_asset": {
+    "message": "No asset in this library matches {selector}.",
+    "context": "CLI failure detail when the `capsule show` selector (an asset id or a content-hash prefix) matches nothing."
+  },
+  "cli.show.value.dimensions": {
+    "message": "{width}×{height}",
+    "context": "CLI value in the `capsule show` dimensions row. {width} and {height} are pixel counts."
+  },
+  "cli.show.value.gps": {
+    "message": "{lat}, {lon} ({datum}, {source})",
+    "context": "CLI value in the `capsule show` GPS row. {lat}/{lon} are decimal degrees in {datum}, a localized datum name (WGS-84/GCJ-02); {source} is a localized fix source (EXIF/manual/derived)."
+  },
+  "cli.show.value.list_separator": {
+    "message": ", ",
+    "context": "CLI separator `capsule show` puts between list items (tags). Locales with their own enumeration comma (e.g. CJK 、) translate it."
+  },
+  "cli.show.value.no": {
+    "message": "no",
+    "context": "CLI boolean value in `capsule show` rows (hidden, in trash)."
+  },
+  "cli.show.value.present": {
+    "message": "present",
+    "context": "CLI value in the `capsule show` placeholder row when a display placeholder is stored."
+  },
+  "cli.show.value.rating": {
+    "message": "{stars}/5",
+    "context": "CLI value in the `capsule show` rating row. {stars} is 0–5."
+  },
+  "cli.show.value.stack": {
+    "message": "{stack_id} ({role})",
+    "context": "CLI value in the `capsule show` stack row. {stack_id} is the stack's UUID; {role} is a localized role name (primary/member/proxy)."
+  },
+  "cli.show.value.unset": {
+    "message": "(unset)",
+    "context": "CLI marker `capsule show` prints in place of a value the sidecar does not carry."
+  },
+  "cli.show.value.yes": {
+    "message": "yes",
+    "context": "CLI boolean value in `capsule show` rows (hidden, in trash)."
   },
   "cli.sync.complete": {
     "message": "Sync complete: applied {applied} change(s) across {albums} album(s) in {pages} page(s).",

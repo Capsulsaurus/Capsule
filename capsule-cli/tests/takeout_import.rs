@@ -38,6 +38,8 @@
 //! - `without_the_provider_flag_the_exporter_metadata_is_not_applied` — the flag is what turns
 //!   the adapter on: the same tree imported as a plain directory keeps the bytes and loses the
 //!   exporter's record, which is what makes `--provider` observable rather than cosmetic.
+//! - `the_guides_metadata_sampling_step_is_executable_with_show` — slice `S-B18`: the guide's
+//!   sampling step, run as written, over the hash a user computed on the source file.
 //!
 //! [Google Photos migration guide]: ../../capsule-docs/src/content/docs/guides/google-photos-migration.md
 
@@ -633,5 +635,63 @@ fn the_import_arm_prints_catalog_messages_not_hardcoded_english() {
     assert!(
         !plain.contains(&notice),
         "a plain import must not announce an export adapter\nstdout:\n{plain}"
+    );
+}
+
+/// Slice `S-B18`: the migration guide's metadata-sampling step, executed as written. The user
+/// holds the source file's SHA-256 from the guide's spot-hash step; `capsule show` takes a
+/// prefix of it and prints the exporter-authoritative values the import folded into the
+/// signed sidecar — the caption, the favourite as five stars, the album as a user tag — and
+/// the file's own EXIF fix, which beat the exporter's.
+#[test]
+fn the_guides_metadata_sampling_step_is_executable_with_show() {
+    let fx = fixture();
+    let library = fx.library();
+    fx.import(&library, true);
+
+    // `shasum -a 256 beach.jpg`, as the guide instructs, and its first eight hex digits.
+    let hex = capsule_core::crypto::hash::hash_bytes(&fx.media.beach).to_hex();
+    let page = capsule(
+        &fx.home,
+        &[
+            "show",
+            &hex[..8],
+            "--library",
+            path(&library),
+            "--passphrase-stdin",
+        ],
+    );
+
+    for expected in [
+        hex.as_str(),
+        "On the beach",
+        "5/5",
+        "Vacation 2021",
+        "10.000000, 20.000000 (WGS-84, EXIF)",
+        BEACH_EXIF_CIVIL,
+    ] {
+        assert!(page.contains(expected), "missing {expected:?} in:\n{page}");
+    }
+
+    // The exporter-filled fix is labelled as such, so a user can tell it apart from EXIF.
+    let plain_hex = capsule_core::crypto::hash::hash_bytes(&fx.media.plain).to_hex();
+    let plain = capsule(
+        &fx.home,
+        &[
+            "show",
+            &plain_hex[..8],
+            "--library",
+            path(&library),
+            "--passphrase-stdin",
+        ],
+    );
+    assert!(
+        plain.contains("21.300000, -157.800000 (WGS-84, manual)"),
+        "{plain}"
+    );
+    assert!(plain.contains("Snowy morning"), "{plain}");
+    assert!(
+        plain.contains("Rating:          (unset)"),
+        "an unstarred photo's rating is spelled out as unset:\n{plain}"
     );
 }
