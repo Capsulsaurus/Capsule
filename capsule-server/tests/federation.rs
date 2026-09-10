@@ -1850,3 +1850,98 @@ async fn an_anonymous_caller_is_bounded_before_the_peer_store_is_read() {
     // first and never this one.
     assert!(budgets::FEDERATED_INTAKE.limit > budgets::PEER_REPORTS.limit);
 }
+
+#[tokio::test]
+async fn a_capability_is_refused_on_every_surface_that_is_not_a_federated_read() {
+    // The codec proves a capability is unreadable to the session verifier; this proves the
+    // *routing*. Only three operations take `ReadBearer` — the two reads and the refresh — and
+    // every other secured operation takes `Auth<AccessToken>`, so a capability presented there
+    // must be refused by the scheme rather than admitted as some default principal. Asserted on
+    // the wire, because "which scheme is mounted where" is a property of the router.
+    let (fixture, _) = shared().await;
+    let (capability, _) = capability(&fixture, PEER, Scope::Read, 1).await;
+
+    // A write on the album the capability is *for*, so nothing here is refused merely for
+    // naming the wrong album.
+    let roster = format!("/v1/albums/{}/roster", album());
+    let capabilities = format!("/v1/albums/{}/capabilities", album());
+    for (name, response) in [
+        (
+            "POST /v1/albums",
+            fixture
+                .client
+                .post("/v1/albums")
+                .header("authorization", &capability)
+                .header("x-capsule-protocol", PROTOCOL_VERSION)
+                .json(&serde_json::json!({ "album_id": second_album().as_str() }))
+                .send()
+                .await,
+        ),
+        (
+            "PUT /v1/albums/{album_id}/roster",
+            fixture
+                .client
+                .put(&roster)
+                .header("authorization", &capability)
+                .header("x-capsule-protocol", PROTOCOL_VERSION)
+                .json(&serde_json::json!({ "roster_cbor": "" }))
+                .send()
+                .await,
+        ),
+        (
+            "POST /v1/albums/{album_id}/capabilities",
+            fixture
+                .client
+                .post(&capabilities)
+                .header("authorization", &capability)
+                .header("x-capsule-protocol", PROTOCOL_VERSION)
+                .json(&mint_body("read"))
+                .send()
+                .await,
+        ),
+        (
+            "POST /v1/upload",
+            fixture
+                .client
+                .post("/v1/upload")
+                .header("authorization", &capability)
+                .header("x-capsule-protocol", PROTOCOL_VERSION)
+                .json(&serde_json::json!({ "album_id": album().as_str() }))
+                .send()
+                .await,
+        ),
+        (
+            "GET /v1/quota",
+            fixture
+                .client
+                .get("/v1/quota")
+                .header("authorization", &capability)
+                .header("x-capsule-protocol", PROTOCOL_VERSION)
+                .send()
+                .await,
+        ),
+        (
+            "GET /v1/moderation/record",
+            fixture
+                .client
+                .get("/v1/moderation/record")
+                .header("authorization", &capability)
+                .header("x-capsule-protocol", PROTOCOL_VERSION)
+                .send()
+                .await,
+        ),
+    ] {
+        assert_eq!(
+            response.status(),
+            StatusCode::UNAUTHORIZED,
+            "{name} admitted a federation capability, or refused it as something other than \
+             an unreadable credential"
+        );
+    }
+
+    // And the same token is admitted on the one read it is for, so the cases above are refusing
+    // the *surface* and not a token that had gone bad.
+    page(&fixture, &capability, &album_query())
+        .await
+        .assert_status(StatusCode::OK);
+}

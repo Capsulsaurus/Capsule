@@ -343,6 +343,19 @@ pub async fn on_roster_applied(
 /// record every peer polls rather than only from a refusal, and an operator who later unblocks
 /// the peer does not silently restore access the block was meant to end.
 ///
+/// # It is owed a caller
+///
+/// **Nothing in production calls this.** A block is written by an operator command, and there is
+/// none: `boot::assemble` refuses the durable backend until #403 lands its adapters, so a
+/// command that blocked a peer could only run against `serve --memory` and would forget the
+/// moment it exited. The command is owed with #476, and this function is what it will call.
+///
+/// Said here the way [`crate::boot`] names what #403 owes, so a reader does not take the cascade
+/// for something that happens automatically. What *is* automatic is the refusal: `blocked_at` is
+/// consulted at mint, at every presentation, at refresh and at report intake, so a block
+/// enforces itself the moment it is written. This adds only **publication** — the peer's `jti`s
+/// reach the list every peer polls — which is why it is a separate step at all.
+///
 /// # Errors
 ///
 /// Returns the store error. The caller — an operator command — reports it; the block itself has
