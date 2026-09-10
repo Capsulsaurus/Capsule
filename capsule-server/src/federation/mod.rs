@@ -52,7 +52,8 @@ pub use self::peers::{BlockOutcome, PeerRecord, PeerStore, UnblockOutcome};
 pub use self::report::{ReportClaim, ReportError, verify_signed_report};
 pub use self::scheme::{Principal, ReadBearer, VerifiedCapability};
 pub use self::store::{
-    CapabilityFilter, CapabilityRecord, CapabilityStore, RefreshOutcome, RevokeOutcome,
+    CapabilityFilter, CapabilityRecord, CapabilityStore, MAX_GRANT_LIFETIME, RefreshOutcome,
+    RevokeOutcome,
 };
 use crate::counter::{CounterContext, CounterKey, budgets};
 use crate::store::Clock;

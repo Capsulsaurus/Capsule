@@ -39,7 +39,7 @@
 
 use std::fmt;
 
-use jiff::Timestamp;
+use jiff::{SignedDuration, Timestamp};
 
 use super::PeerId;
 use super::capability::{CapabilityGrant, Scope};
@@ -121,6 +121,18 @@ impl CapabilityRecord {
     }
 }
 
+/// The furthest out a grant's absolute deadline may sit from the mint that fixed it.
+///
+/// Ninety days. Not a security boundary — the owner chose the date and can revoke it — but a
+/// mistyped year is the one input on this surface whose blast radius is measured in years, and a
+/// cap turns that into a refusal the client sees rather than a grant nobody remembers making.
+///
+/// Here rather than on the route that parses `renewable_until`, and that is the whole point: the
+/// route is the only caller of [`CapabilityStore::issue`] **today**, and #476's operator tooling
+/// is exactly the second one. A ceiling enforced by whichever caller happens to remember it is a
+/// ceiling the next caller does not have.
+pub const MAX_GRANT_LIFETIME: SignedDuration = SignedDuration::from_hours(24 * 90);
+
 /// Refuse a record whose lifetime the published list could not stay bounded under.
 ///
 /// Shared by every adapter rather than re-derived in each: the 24 h ceiling and the absolute
@@ -130,8 +142,9 @@ impl CapabilityRecord {
 /// # Errors
 ///
 /// Returns [`StoreError::Rejected`](crate::store::StoreError::Rejected) when the token's own
-/// window is past [`MAX_TOKEN_TTL`], when it runs past the grant's absolute deadline, or when
-/// its `granted_epoch` is wider than every adapter can hold.
+/// window is past [`MAX_TOKEN_TTL`], when it runs past the grant's absolute deadline, when that
+/// deadline is further out than [`MAX_GRANT_LIFETIME`], or when its `granted_epoch` is wider
+/// than every adapter can hold.
 pub fn admissible(record: &CapabilityRecord) -> Result<(), StoreError> {
     // The port says `u64` and the durable column is a `BIGINT`, so an epoch above `i64::MAX` is
     // representable to a caller and not to one adapter. Refused here, for every adapter at once,
@@ -162,6 +175,20 @@ pub fn admissible(record: &CapabilityRecord) -> Result<(), StoreError> {
             detail: format!(
                 "capability {} expires at {}, past its grant's deadline of {}",
                 record.jti, record.expires_at, record.not_after
+            ),
+        });
+    }
+    // The ceiling on the deadline itself. The route that parses `renewable_until` refuses one
+    // further out than this, and that is not enough: a grant is only as bounded as its *least*
+    // careful caller, and the whole reason these checks live in the store is that an adapter —
+    // or a second caller — cannot re-derive them differently.
+    if record.not_after.duration_since(record.issued_at) > MAX_GRANT_LIFETIME {
+        return Err(StoreError::Rejected {
+            store: "capabilities",
+            detail: format!(
+                "capability {}'s grant would run to {}, past the {MAX_GRANT_LIFETIME} ceiling \
+                 from its mint at {}",
+                record.jti, record.not_after, record.issued_at
             ),
         });
     }

@@ -23,7 +23,8 @@ use super::PeerId;
 use super::capability::Scope;
 use super::peers::{BlockOutcome, PeerStore, UnblockOutcome};
 use super::store::{
-    CapabilityFilter, CapabilityRecord, CapabilityStore, RefreshOutcome, RevokeOutcome,
+    CapabilityFilter, CapabilityRecord, CapabilityStore, MAX_GRANT_LIFETIME, RefreshOutcome,
+    RevokeOutcome,
 };
 use crate::discovery::revocation::{RevokeError, RevokedToken};
 use crate::store::memory::ManualClock;
@@ -461,6 +462,64 @@ pub async fn a_successor_may_not_move_the_grants_deadline(h: &dyn Harness) {
     }
 }
 
+/// A grant whose deadline runs past the ninety-day ceiling is refused by the **store**, not only
+/// by the route that parses `renewable_until`.
+///
+/// Issued here **directly through the port**, bypassing `mint_capability` entirely, because that
+/// is the whole property: the route is the only caller of [`CapabilityStore::issue`] today and
+/// #476's operator tooling is exactly the second one. A ceiling enforced by whichever caller
+/// remembers it is a ceiling the next caller does not have.
+///
+/// Distinct from the two cases beside it: [`a_record_past_the_ceiling_is_refused`] bounds one
+/// *token*'s life against `MAX_TOKEN_TTL`, and
+/// [`a_successor_may_not_move_the_grants_deadline`] bounds a successor against its predecessor.
+/// Neither says anything about how far out the original deadline may be.
+pub async fn a_grant_past_the_lifetime_ceiling_is_refused_by_the_store(h: &dyn Harness) {
+    let case = "lifetime";
+    let now = h.clock().now();
+
+    // Ninety days and an hour: a mistyped year is the input this exists for, and one hour past
+    // is the boundary that proves the comparison is the ceiling and not a rounding of it.
+    let mut past = record(h, case, "past", 6);
+    past.not_after =
+        crate::store::deadline(now, MAX_GRANT_LIFETIME + SignedDuration::from_hours(1));
+    let error = h
+        .capabilities()
+        .issue(past.clone())
+        .await
+        .expect_err("a grant past the lifetime ceiling is a rejection");
+    assert!(matches!(error, StoreError::Rejected { .. }), "{error:?}");
+    assert_eq!(
+        find(h, &past.jti).await,
+        None,
+        "a refused grant records nothing"
+    );
+
+    // Exactly at the ceiling is admissible: the bound is inclusive, and a deployment sharing for
+    // precisely ninety days is not the mistake being guarded against.
+    let mut edge = record(h, case, "edge", 6);
+    edge.not_after = crate::store::deadline(now, MAX_GRANT_LIFETIME);
+    issue(h, edge.clone()).await;
+    assert_eq!(
+        find(h, &edge.jti).await.expect("recorded").not_after,
+        edge.not_after
+    );
+
+    // And a refresh cannot be used to walk past it either: the successor carries the deadline
+    // unchanged, so the ceiling is fixed at the original mint rather than re-measured per token.
+    let successor = CapabilityRecord {
+        not_after: edge.not_after,
+        ..record(h, case, "successor", 6)
+    };
+    match ok(
+        h.capabilities().refresh(&edge.jti, successor, now).await,
+        "refresh a grant sitting at the ceiling",
+    ) {
+        RefreshOutcome::Issued(issued) => assert_eq!(issued.not_after, edge.not_after),
+        other => panic!("a live grant at the ceiling must refresh, got {other:?}"),
+    }
+}
+
 /// Every adapter accepts the widest `granted_epoch` the port's type allows, and refuses the
 /// first one it does not — identically.
 ///
@@ -731,6 +790,7 @@ pub async fn run_all(h: &dyn Harness) {
     a_successor_must_carry_the_predecessors_peer_album_and_member(h).await;
     a_successor_may_not_move_the_grants_deadline(h).await;
     the_widest_epoch_every_adapter_accepts_is_the_same_one(h).await;
+    a_grant_past_the_lifetime_ceiling_is_refused_by_the_store(h).await;
     the_published_list_prunes_expired_entries_and_orders_by_expiry(h).await;
     a_refresh_is_one_operation_and_a_replay_answers_the_same_successor(h).await;
     a_revoked_or_unknown_predecessor_is_not_refreshed(h).await;

@@ -114,8 +114,8 @@ use crate::album::AlbumContext;
 use crate::auth::AccessToken;
 use crate::counter::{CounterContext, CounterKey, budgets};
 use crate::federation::{
-    self, CapabilityRecord, FederationContext, MintRequest, PeerId, Presentation, Principal,
-    ReadBearer, Refusal, ReportClaim, Scope,
+    self, CapabilityRecord, FederationContext, MAX_GRANT_LIFETIME, MintRequest, PeerId,
+    Presentation, Principal, ReadBearer, Refusal, ReportClaim, Scope,
 };
 use crate::membership::{Membership, MembershipContext};
 use crate::moderation::{FederatedReport, ModerationContext};
@@ -135,13 +135,6 @@ pub struct FederationTag;
 /// short enough that a grant nobody revokes is not a day-long hole. The ceiling is the
 /// contract's 24 hours and the codec clamps to it whatever is asked for.
 pub const DEFAULT_TTL: SignedDuration = SignedDuration::from_hours(6);
-
-/// The furthest out an owner may put a grant's absolute deadline.
-///
-/// Ninety days. Not a security boundary — the owner chose the date and can revoke — but a
-/// mistyped year is the one input here whose blast radius is measured in years, and a cap turns
-/// that into a `400` the client sees rather than a grant nobody remembers making.
-pub const MAX_GRANT_LIFETIME: SignedDuration = SignedDuration::from_hours(24 * 90);
 
 /// What a capability permits, on the wire.
 ///
