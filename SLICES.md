@@ -442,17 +442,27 @@ lives.
 
 **Row counts.** 205 rows — the 129 from the v1 campaign and wave 2, the 51 the
 server rebuild added, the 23 of lane U, and the 2 of the notification lane. By
-area: **87 ACTIVE / 75 RETIRED / 43 MIXED**. By status:
-**95 done / 60 done\* / 28 ready / 9 part / 9 blocked / 4 post-v1**
-(`S-C8`, `S-C27`, `S-C39`, and `S-U9`–`S-U14` — the table spells these `part`
+area: **90 ACTIVE / 71 RETIRED / 44 MIXED**. By status:
+**111 done / 62 done\* / 16 ready / 9 part / 3 blocked / 4 post-v1**
+(`S-C8`, `S-E2`, `S-N2`, and `S-U9`–`S-U14` — the table spells these `part`
 and `part 1 done`; they are counted together).
 
+These numbers are **counted from the table below**, not accumulated from the
+lanes that changed it. The distinction earned its keep: the twenty lanes of the
+2026-09 programme each recorded a row delta of zero and were right to — no lane
+added or removed a row — yet every area and status figure above moved, because
+what those lanes changed was the state of rows that already existed. A total
+that still reconciles is not evidence that a breakdown does.
+
 Lanes are independent by construction; within a lane, "Depends on" is the only
-ordering. Six rows read `blocked`, and only two of them are waiting on code:
-`S-N2` behind `S-N1`, and `S-P4` behind `S-P2`/`S-P3`. The rest are waiting on a
-decision rather than on an implementation — `S-C47` is a legal question, `S-C49`
-and `S-C51` each need a fact the slice that found them could not settle, and
-`S-D24` needs a design decision. `S-P1` landing freed the rest of lane P and `S-U19` with it;
+ordering. Three rows read `blocked`, and only one is waiting on code: `S-P4`
+behind `S-P2`/`S-P3`. The other two are waiting on a decision rather than on an
+implementation — `S-C47` is a legal question, and `S-C49` needs a fact the slice
+that found it could not settle. Six rows left this list in one programme:
+`S-B1`, `S-B5` and `S-B13` on `rawshift-image` reaching crates.io, `S-C51` and
+`S-D24` on the facts their slices were owed, and `S-N2` on `S-N1` landing its
+server half — it now reads `part`, not `blocked`, because the SDK leg shipped
+with it. `S-P1` landing freed the rest of lane P and `S-U19` with it;
 lane U was built so the other twenty-two Apple-client slices never waited on that
 chain in the first place. Everything else that once read `blocked`
 is startable: `S-A10` and `S-P7` are done (freeing `S-B10`, `S-D16`, `S-P1`, `S-Q5` — of
@@ -496,7 +506,7 @@ when" cannot fully pass until the gate lifts.
 | `openmls` 0.8.x | adopted (X-Wing `0x004D`) | The X-Wing codepoint **exists** (`0x004D`) and OpenMLS ships it via libcrux, so `S-X1`–`S-X3` are not blocked and are done. Key serialization surfaces are `test-utils`-gated — persistence rides public fields + ungated codecs; fragile if upstream privatizes (upstream ask filed against openmls). Version pairing is load-bearing (0.8.x ↔ traits/storage 0.5.x ↔ libcrux-crypto 0.3.x). |
 | `libcrux` provider | no wasm32 target | `mls` feature is host-only; a browser MLS surface would need another provider. |
 | BD-09 datum fold | **no crate adopted** | Decision 2026-08-21: `S-A8` implements the error-bounded refined BD-09→GCJ-02 inverse **in-house** (~40 LOC, deterministic, unit-testable) rather than taking a dependency for one function. `geocoordinates-rs` is **not** a gate on `S-A7`/`S-A8` and is not planned; the earlier "exact fold from `geocoordinates-rs`" wording is superseded. Display-side lossy conversions remain unscheduled and are not part of either slice. |
-| `rawshift` (in-house RAW decode) | stabilizing, unconsumed | Full RAW support in thumbnails/import; `media::image::formats::raw` is the integration stub. Also the target the `RETIRED` media slices (`S-B1`, `S-B5`, `S-B13`) rebuild onto. |
+| [`rawshift-image`](https://crates.io/crates/rawshift-image) 0.1.1 | adopted; **published, consumed from crates.io** | Consumed 2026-09-02 by `S-B1`/`S-B13` (#436) as a registry dependency behind `capsule-core`'s `media` feature — not the pinned submodule, which is what this row used to gate on. That closed the gate for the still half: `S-B1` and `S-B13` are `ACTIVE`/`done` and `S-B5` is `ACTIVE`/`ready`. **Three sub-gates remain, and each is a dependency decision rather than this crate stabilizing.** `rawshift-video` is unpublished, so the video half (`S-B5`, first-frame still and the H.264 preview) cannot start — #438. A *lossy* JXL master needs C libjxl, AVIF encode needs `nasm` on every x86_64 build host, and HEIC/AVIF decode need system libheif/libdav1d — #437; every enabled codec today is pure Rust, which is what keeps the mobile cross-builds linking. WebP is recognised but undecodable here: `rawshift-image`'s WebP module passes `*const i8` where `libwebp-sys` 0.14.4 declares `*const c_char`, an E0308 on every aarch64 target — #444. All three are visible as typed `MediaError::UnsupportedFormat` or as per-`(tier, format)` deferrals counted by `ImportExecutionSummary::deferred_format_count()`, never as silent absence. |
 | `ptpip-rs` (in-house PTP/IP) | repo not created | `S-B9` (post-v1). |
 | Self-hosted device runners | unprovisioned | The `strongbox-device`/`secure-enclave` CI lanes exist, manual-trigger, inert. Owed-CI items park here: `S-F2` Kotlin run, `S-F3` first Android/iOS CI runs + device lanes, `S-F4` Windows ffi build + clippy + real-TPM smoke, `S-F5` Kotlin ECDH adapter, `S-D9` Kotlin harness. |
 | swiftformat 0.55 (mise) | **resolved 2026-08-22** | The install was a corrupt app-bundle extraction whose `Info.plist` no longer matched its signature, so the hardened runtime SIGKILLed it (exit 137). `mise uninstall swiftformat@0.55 && mise install` yields a plain 0.55.6 binary that runs. Running it for the first time surfaced a real config conflict — swiftformat's `wrapMultilineStatementBraces` versus swiftlint's `opening_brace` — now resolved by disabling the swiftformat rule. |
