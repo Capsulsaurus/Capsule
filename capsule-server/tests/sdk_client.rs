@@ -442,7 +442,7 @@ async fn a_token_the_server_stopped_honouring_is_refreshed_and_the_call_replayed
     // A generated operation, called straight through the Deref — nothing about this call site
     // knows a retry layer exists, which is the point of putting it at the transport seam.
     let quota = client
-        .get_quota()
+        .get_quota(capsule_core::crypto::primitives::PROTOCOL_VERSION, None)
         .await
         .expect("the 401 is recovered and the call replayed")
         .into_inner();

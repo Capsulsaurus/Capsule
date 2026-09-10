@@ -99,6 +99,9 @@ impl AlbumTransport {
 
     /// Build a transport over a fixed bearer token (tests; callers holding a live token).
     /// Same URL layout as [`Self::with_session`].
+    ///
+    /// `http` **must** come from [`crate::net::http_builder`] or [`crate::net::http_client`]: a
+    /// client built any other way sends no protocol handshake, and every gated route refuses it.
     pub fn with_static_token(
         http: reqwest::Client,
         base_url: impl Into<String>,

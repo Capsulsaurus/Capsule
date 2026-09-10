@@ -337,7 +337,7 @@ impl RecoveryClient {
     pub async fn fetch_escrow(&self) -> Result<EscrowCache, RecoveryError> {
         let bytes = self
             .client
-            .fetch_escrow()
+            .fetch_escrow(capsule_core::crypto::primitives::PROTOCOL_VERSION, None)
             .await
             .map_err(fetch_escrow_error)?
             .into_inner();
@@ -357,7 +357,11 @@ impl RecoveryClient {
             .map_err(|e| RecoveryError::Codec(e.to_string()))?;
         let stored = self
             .client
-            .store_escrow(&rest::types::RequestBody::from(body))
+            .store_escrow(
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+                None,
+                &rest::types::RequestBody::from(body),
+            )
             .await
             .map_err(store_escrow_error)?
             .into_inner();
@@ -477,6 +481,15 @@ fn fetch_escrow_error(error: rest::Error<rest::FetchEscrowError>) -> RecoveryErr
             rest::FetchEscrowError::Status401(problem)
             | rest::FetchEscrowError::Status403(problem) => refused(&problem),
             rest::FetchEscrowError::Status500(problem) => unavailable(&problem),
+            // The protocol gate's malformed-handshake answer (#404), which arrived on every
+            // operation when the handshake became a typed header. `Malformed` rather than a new
+            // variant: this is a `GET`, so there are no escrow bytes to be wrong — what is wrong
+            // is the request, and the variant's contract is exactly "resending this unchanged
+            // will not help". The server's stable code rides along for a caller that localizes.
+            rest::FetchEscrowError::Status400(problem) => RecoveryError::Malformed {
+                code: Some(problem.code.clone()),
+                detail: detail(&problem),
+            },
             // Declared by the transport backstop and unreachable on a body-less `GET`; kept
             // honest rather than folded into a class it does not belong to.
             rest::FetchEscrowError::Status413 => RecoveryError::Unexpected { status: 413 },
@@ -499,6 +512,16 @@ fn store_escrow_error(error: rest::Error<rest::StoreEscrowError>) -> RecoveryErr
             rest::StoreEscrowError::Status401(problem)
             | rest::StoreEscrowError::Status403(problem) => refused(&problem),
             rest::StoreEscrowError::Status500(problem) => unavailable(&problem),
+            // Storing an escrow is a *write*, and #404 refuses a write whose protocol date is
+            // outside the server's published window with 426. Not `Unavailable`, which promises
+            // the caller's cadence that retrying will eventually work — this one never succeeds
+            // until the client is upgraded or the server widens its window. `Malformed` carries
+            // the server's `error.protocol.version_unsupported` code, which is the thing a
+            // caller can actually act on, and says "do not resend this unchanged".
+            rest::StoreEscrowError::Status426(problem) => RecoveryError::Malformed {
+                code: Some(problem.code.clone()),
+                detail: detail(&problem),
+            },
             // The body-size backstop carries no problem body at all, so there is no code to
             // carry and this client does not invent one. Every other code in this module is
             // the server's own, and a code minted here would assert that the server said
