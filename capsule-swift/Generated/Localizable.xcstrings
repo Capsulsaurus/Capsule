@@ -39819,6 +39819,16 @@
         }
       }
     },
+    "error.federation.album_not_found": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That album couldn't be found."
+          }
+        }
+      }
+    },
     "error.federation.audience_mismatch": {
       "localizations": {
         "ar": {
@@ -40065,6 +40075,16 @@
         }
       }
     },
+    "error.federation.capability_malformed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That sharing request isn't valid."
+          }
+        }
+      }
+    },
     "error.federation.capability_revoked": {
       "localizations": {
         "ar": {
@@ -40225,6 +40245,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "此來源在多次出錯後暫時被退避處理。"
+          }
+        }
+      }
+    },
+    "error.federation.member_not_on_roster": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That person isn't on this album's member list."
+          }
+        }
+      }
+    },
+    "error.federation.not_configured": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This server doesn't share albums with other servers."
+          }
+        }
+      }
+    },
+    "error.federation.peer_unknown": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That server isn't one this server knows."
           }
         }
       }
@@ -40403,6 +40453,16 @@
         }
       }
     },
+    "error.federation.unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule couldn't reach the federation records. Please try again."
+          }
+        }
+      }
+    },
     "error.moderation.account_suspended": {
       "localizations": {
         "ar": {
@@ -40481,6 +40541,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "您的帳戶已被停用。在恢復之前，您無法上傳或分享。"
+          }
+        }
+      }
+    },
+    "error.moderation.report_malformed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That report isn't valid."
           }
         }
       }

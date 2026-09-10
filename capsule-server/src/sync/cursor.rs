@@ -27,17 +27,18 @@
 //! identifier out of a token clients hand around, and still makes a foreign cursor fail
 //! verification rather than decode into a position.
 //!
-//! # Scope (`S-C51`)
+//! # Scope (`S-C51`, `S-E5`)
 //!
-//! A cursor is issued for one of two shapes — the caller's own feed, or one album's page read
-//! by the caller as its owner or a member — and both carry the owner's sequence numbers, so a
-//! cursor that crossed between them would skip unseen entries exactly as a foreign one would.
-//! The shape is therefore MAC input too: the tag is taken over
-//! `payload || len(caller) as u32 BE || caller || 0x00`, or `… || 0x01 || album` for an album
-//! page. The caller is length-prefixed because a variable-length field follows it. The version
-//! byte was **not** bumped: the wire layout below is unchanged, and a cursor minted before the
-//! scope entered the MAC fails as `NotAuthentic` — a one-time full resync, the same event a key
-//! rotation is, and indistinguishable from it to a client.
+//! A cursor is issued for one of three shapes — the caller's own feed, one album's page read by
+//! the caller as its owner or a member, or one album's page pulled by a federated peer — and all
+//! three carry the owner's sequence numbers, so a cursor that crossed between them would skip
+//! unseen entries exactly as a foreign one would. The shape is therefore MAC input too: the tag
+//! is taken over `payload || len(reader) as u32 BE || reader || 0x00`, `… || 0x01 || album` for
+//! an album page, or `… || 0x02 || album` for a peer's page, where the reader is the account or
+//! the peer server. The reader is length-prefixed because a variable-length field follows it.
+//! The version byte was **not** bumped: the wire layout below is unchanged, and a cursor minted
+//! before the scope entered the MAC fails as `NotAuthentic` — a one-time full resync, the same
+//! event a key rotation is, and indistinguishable from it to a client.
 //!
 //! # Layout
 //!
@@ -49,6 +50,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ring::hmac;
 
+use crate::federation::PeerId;
 use crate::store::{AlbumId, OwnerId};
 
 /// Cursor wire-format version. Bumped only on an incompatible layout change; an unknown
@@ -85,35 +87,62 @@ pub enum CursorError {
     NotAuthentic,
 }
 
-/// What a cursor is issued for: a caller's own feed, or one album's page (`S-C51`).
+/// What a cursor is issued for: a caller's own feed, one album's page, or one album's page as a
+/// federated peer pulls it (`S-C51`, `S-E5`).
 ///
-/// Part of the MAC input, so a cursor minted for the album page cannot be presented on the
-/// owner feed or on another album's page: positions are the owner's sequence numbers in both
-/// shapes, and a cursor that crossed between them would skip a member's unseen entries.
+/// Part of the MAC input, so a cursor minted for one shape cannot be presented on another:
+/// positions are the owner's sequence numbers in every shape, and a cursor that crossed between
+/// them would skip a reader's unseen entries. A peer is its own shape rather than an account
+/// reading an album, because a peer id and an account id are different identifiers that could
+/// spell the same string, and one scope byte is what keeps them structurally apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CursorScope<'a> {
-    /// The account the cursor was issued to.
-    pub caller: &'a OwnerId,
-    /// The album whose page it resumes, or `None` for the caller's own feed.
-    pub album: Option<&'a AlbumId>,
+pub enum CursorScope<'a> {
+    /// An account's own feed.
+    Feed {
+        /// The account the cursor was issued to.
+        caller: &'a OwnerId,
+    },
+    /// One album's page, read by an account as its owner or a member.
+    Album {
+        /// The account the cursor was issued to.
+        caller: &'a OwnerId,
+        /// The album whose page it resumes.
+        album: &'a AlbumId,
+    },
+    /// One album's page, pulled by a peer server under a capability.
+    Peer {
+        /// The peer the cursor was issued to.
+        peer: &'a PeerId,
+        /// The album whose page it resumes.
+        album: &'a AlbumId,
+    },
 }
 
 impl<'a> CursorScope<'a> {
     /// `caller`'s own feed.
     #[must_use]
     pub fn feed(caller: &'a OwnerId) -> Self {
-        Self {
-            caller,
-            album: None,
-        }
+        Self::Feed { caller }
     }
 
     /// `album`'s page, as read by `caller`.
     #[must_use]
     pub fn album(caller: &'a OwnerId, album: &'a AlbumId) -> Self {
-        Self {
-            caller,
-            album: Some(album),
+        Self::Album { caller, album }
+    }
+
+    /// `album`'s page, as pulled by `peer`.
+    #[must_use]
+    pub fn peer(peer: &'a PeerId, album: &'a AlbumId) -> Self {
+        Self::Peer { peer, album }
+    }
+
+    /// The identifier the cursor is bound to, and the scope byte and album that follow it.
+    fn parts(&self) -> (&'a [u8], u8, Option<&'a AlbumId>) {
+        match *self {
+            Self::Feed { caller } => (caller.as_str().as_bytes(), 0, None),
+            Self::Album { caller, album } => (caller.as_str().as_bytes(), 1, Some(album)),
+            Self::Peer { peer, album } => (peer.as_str().as_bytes(), 2, Some(album)),
         }
     }
 }
@@ -145,28 +174,26 @@ impl CursorCodec {
         }
     }
 
-    /// The bytes the tag is taken over: the payload, the length-prefixed caller, then the
+    /// The bytes the tag is taken over: the payload, the length-prefixed reader, then the
     /// scope byte and the album when there is one.
     ///
-    /// The caller is length-prefixed because a second variable-length field now follows it:
+    /// The reader is length-prefixed because a second variable-length field follows it:
     /// without the prefix `("ab", album "c")` and `("a", album "bc")` would share a MAC input.
-    /// The scope byte keeps a feed cursor and an album cursor for one caller apart.
+    /// The scope byte keeps a feed cursor, an album cursor and a peer cursor apart even when
+    /// the reader's bytes are the same.
     fn signed_bytes(payload: &[u8], scope: &CursorScope<'_>) -> Vec<u8> {
-        let caller = scope.caller.as_str().as_bytes();
-        let mut bytes = Vec::with_capacity(payload.len() + 4 + caller.len() + SCOPE_ESTIMATE);
+        let (reader, kind, album) = scope.parts();
+        let mut bytes = Vec::with_capacity(payload.len() + 4 + reader.len() + SCOPE_ESTIMATE);
         bytes.extend_from_slice(payload);
         bytes.extend_from_slice(
-            &u32::try_from(caller.len())
+            &u32::try_from(reader.len())
                 .unwrap_or(u32::MAX)
                 .to_be_bytes(),
         );
-        bytes.extend_from_slice(caller);
-        match scope.album {
-            None => bytes.push(0),
-            Some(album) => {
-                bytes.push(1);
-                bytes.extend_from_slice(album.as_str().as_bytes());
-            }
+        bytes.extend_from_slice(reader);
+        bytes.push(kind);
+        if let Some(album) = album {
+            bytes.extend_from_slice(album.as_str().as_bytes());
         }
         bytes
     }
@@ -332,6 +359,59 @@ mod tests {
                 &CursorScope::album(&OwnerId::new("a"), &AlbumId::new("bc")),
                 Some(&ab)
             ),
+            Err(CursorError::NotAuthentic)
+        );
+    }
+
+    #[test]
+    fn the_account_shapes_mac_input_is_the_one_issued_cursors_were_minted_under() {
+        // Pinned as literals minted before the scope became an enum: the version byte was not
+        // bumped, so every account cursor a client holds must still decode. A re-ordering of
+        // the scope bytes would fail here rather than as a silent fleet-wide resync.
+        let codec = codec(1);
+        let owner = OwnerId::new("owner-1");
+        let album = AlbumId::new("album-1");
+        assert_eq!(
+            codec.encode(&CursorScope::feed(&owner), 42),
+            "AQAAAAAAAAAq0bh6pMbAFpAT3Awj06WzfE_5-4xMYAo6dRjCneIlXvw"
+        );
+        assert_eq!(
+            codec.encode(&CursorScope::album(&owner, &album), 42),
+            "AQAAAAAAAAAqHUJ3cwdgPp9A4G9QbArkodTHyoCrzQ1H8tItJ1yio2M"
+        );
+    }
+
+    #[test]
+    fn a_peers_cursor_does_not_cross_into_an_accounts_even_under_the_same_bytes() {
+        // A peer id and an account id could spell the same string; the scope byte is what keeps
+        // the two cursors apart, and one peer's cursor is not another peer's.
+        let codec = codec(1);
+        let album = AlbumId::new("album-1");
+        let peer = PeerId::new("same-bytes");
+        let account = OwnerId::new("same-bytes");
+        let on_peer = codec.encode(&CursorScope::peer(&peer, &album), 5);
+        assert_eq!(
+            codec.decode(&CursorScope::peer(&peer, &album), Some(&on_peer)),
+            Ok(5)
+        );
+        assert_eq!(
+            codec.decode(&CursorScope::album(&account, &album), Some(&on_peer)),
+            Err(CursorError::NotAuthentic)
+        );
+        assert_eq!(
+            codec.decode(&CursorScope::feed(&account), Some(&on_peer)),
+            Err(CursorError::NotAuthentic)
+        );
+        assert_eq!(
+            codec.decode(
+                &CursorScope::peer(&PeerId::new("other.peer"), &album),
+                Some(&on_peer)
+            ),
+            Err(CursorError::NotAuthentic)
+        );
+        let on_album = codec.encode(&CursorScope::album(&account, &album), 5);
+        assert_eq!(
+            codec.decode(&CursorScope::peer(&peer, &album), Some(&on_album)),
             Err(CursorError::NotAuthentic)
         );
     }

@@ -65,11 +65,14 @@ use crate::blob::FilesystemBlobStore;
 use crate::config::{Backends, Config};
 use crate::counter::{CounterContext, InMemoryCounters};
 use crate::directory::{DeviceDirectoryContext, InMemoryDeviceDirectory};
-use crate::discovery::revocation::InMemoryRevocations;
 use crate::discovery::{DiscoveryContext, ProtocolWindow, ServerInfo};
 use crate::drop::{DropContext, InMemoryDrops};
 use crate::enrollment::EnrollmentContext;
 use crate::escrow::{EscrowContext, InMemoryEscrow};
+use crate::federation::{
+    CapabilityCodec, FederationCollaborators, FederationContext, InMemoryCapabilities,
+    InMemoryPeers,
+};
 use crate::gc::CollectionContext;
 use crate::gc::memory::InMemoryCollection;
 use crate::index::memory::InMemoryAssetIndex;
@@ -470,7 +473,22 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
         capsule_core::crypto::keys::HybridSigningKey::from_seed64(&seed),
     ));
 
-    let server_info = Arc::new(ServerInfo::new(
+    // The capability codec signs with the **same** key: a peer verifies a capability against
+    // the key `server-info` publishes, and that key is read out of the session signer. Built
+    // from the same bytes rather than handed the signer, so the two stay one key by
+    // construction; `tests::the_capability_codec_signs_under_the_published_key` asserts it.
+    let capabilities = Arc::new(
+        CapabilityCodec::from_pkcs8(der.expose(), config.server_domain.clone(), clock.clone())
+            .map_err(|error| BootError::SigningKey {
+                detail: error.detail,
+            })?,
+    );
+    // The capability store **is** the revocation list `revoked-jti` serves: one object, handed
+    // to discovery as the list and to federation as the store (design/federation.md).
+    let issued = Arc::new(InMemoryCapabilities::new(clock.clone()));
+    let peers = Arc::new(InMemoryPeers::new());
+
+    let mut server_info = ServerInfo::new(
         config.server_domain.clone(),
         config.api_base_url.clone(),
         ProtocolWindow {
@@ -478,7 +496,11 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
             max: config.protocol_max.clone(),
         },
         tokens.public_key().to_vec(),
-    ));
+    );
+    if let Some(url) = &config.federation_url {
+        server_info = server_info.with_federation(url.clone());
+    }
+    let server_info = Arc::new(server_info);
 
     let app = App::new(Modules {
         auth: AuthContext::new(AuthCollaborators {
@@ -540,11 +562,15 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
             // Publishing a rotation history is `ATTESTATION_KEY_HISTORY`'s job and nobody's yet.
             Timestamp::UNIX_EPOCH,
         ),
-        discovery: DiscoveryContext::new(
-            server_info,
-            Arc::new(InMemoryRevocations::new(clock.clone())),
-        ),
+        discovery: DiscoveryContext::new(server_info, issued.clone()),
         escrow: EscrowContext::new(Arc::new(InMemoryEscrow::new()), clock.clone()),
+        federation: FederationContext::new(FederationCollaborators {
+            codec: capabilities,
+            capabilities: issued,
+            peers,
+            clock: clock.clone(),
+            federation_url: config.federation_url.clone(),
+        }),
         enrollment: EnrollmentContext::new(
             Arc::new(InMemoryEnrollments::with_default_ttl(clock.clone())),
             Arc::new(InMemoryChannels::with_default_ttl(clock.clone())),
@@ -746,6 +772,7 @@ mod tests {
             BTreeMap, BootError, Config, Demands, Overrides, assemble, durable_environment,
         };
         use crate::auth::{Credentials, PostgresAccounts};
+        use crate::federation::postgres::{PostgresCapabilities, PostgresPeers};
         use crate::index::postgres::PostgresAssetIndex;
         use crate::membership::PostgresMembership;
         use crate::postgres::testing;
@@ -813,7 +840,7 @@ mod tests {
             );
         }
 
-        /// The five Postgres adapters compose out of exactly what the boot path has.
+        /// The seven Postgres adapters compose out of exactly what the boot path has.
         ///
         /// Asserted here rather than by constructing them in `assemble` and throwing them away:
         /// production code that builds something it cannot use is theatre, and what #403 needs
@@ -846,7 +873,12 @@ mod tests {
             let quotas: Arc<dyn crate::quota::QuotaStore> =
                 Arc::new(PostgresQuota::new(connection.clone()));
             let members: Arc<dyn crate::membership::MembershipStore> =
-                Arc::new(PostgresMembership::new(connection));
+                Arc::new(PostgresMembership::new(connection.clone()));
+            let capabilities: Arc<dyn crate::federation::CapabilityStore> = Arc::new(
+                PostgresCapabilities::new(connection.clone(), Arc::new(SystemClock)),
+            );
+            let peers: Arc<dyn crate::federation::PeerStore> =
+                Arc::new(PostgresPeers::new(connection));
 
             // Each one answers through its port, which is what makes this a boot check rather
             // than a compile check: the schema the migration applied is the schema the adapters
@@ -878,6 +910,20 @@ mod tests {
                     .await
                     .expect("the membership store answers"),
                 crate::membership::Membership::Never
+            );
+            assert!(
+                capabilities
+                    .find("boot-probe-jti")
+                    .await
+                    .expect("the capability store answers")
+                    .is_none()
+            );
+            assert!(
+                peers
+                    .read(&crate::federation::PeerId::new("boot-probe.test"))
+                    .await
+                    .expect("the peer store answers")
+                    .is_none()
             );
         }
     }
@@ -918,6 +964,67 @@ mod tests {
             published,
             base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &expected)
         );
+    }
+
+    #[tokio::test]
+    async fn the_capability_codec_signs_under_the_published_key() {
+        // A peer verifies a capability against `server-info`'s `signing_key`. The codec is
+        // built from the same DER as the session signer, so the two are one key — asserted
+        // through the surface and through the codec, rather than assumed from the wiring.
+        let root = tempfile::tempdir().expect("a scratch directory");
+        let config = memory_config(root.path());
+        let assembled = assemble(&config).await.expect("it assembles");
+        let client = kynos::test::TestClient::new(assembled.service().expect("the router builds"));
+        let body: serde_json::Value = client
+            .get("/.well-known/capsule/server-info")
+            .header("accept", "application/json")
+            .send()
+            .await
+            .assert_status(kynos::http::StatusCode::OK)
+            .json();
+        let published = body["signing_key"].as_str().expect("it is published");
+        let codec = crate::federation::CapabilityCodec::from_pkcs8(
+            config
+                .signing_key_der
+                .as_ref()
+                .expect("the key is configured")
+                .expose(),
+            config.server_domain.clone(),
+            std::sync::Arc::new(crate::store::SystemClock),
+        )
+        .expect("the key parses");
+        assert_eq!(
+            published,
+            base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                codec.public_key()
+            )
+        );
+        assert_eq!(codec.server_id(), config.server_domain);
+        assert!(
+            body.get("federation_url").is_none(),
+            "a deployment without FEDERATION_URL publishes no federation endpoint"
+        );
+    }
+
+    #[tokio::test]
+    async fn federation_url_is_published_when_configured() {
+        // Opt-in by one variable, and the record is the only way a peer learns it.
+        let root = tempfile::tempdir().expect("a scratch directory");
+        let config = memory_config_with(
+            root.path(),
+            &[("FEDERATION_URL", "https://capsule.example/v1")],
+        );
+        let assembled = assemble(&config).await.expect("it assembles");
+        let client = kynos::test::TestClient::new(assembled.service().expect("the router builds"));
+        let body: serde_json::Value = client
+            .get("/.well-known/capsule/server-info")
+            .header("accept", "application/json")
+            .send()
+            .await
+            .assert_status(kynos::http::StatusCode::OK)
+            .json();
+        assert_eq!(body["federation_url"], "https://capsule.example/v1");
     }
 
     #[tokio::test]

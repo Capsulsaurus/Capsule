@@ -66,3 +66,35 @@ pub const SECOND_FACTOR: Budget = Budget::new(5, SignedDuration::from_mins(5));
 /// re-hashes every declared blob, so an unbounded one is an I/O-amplification attack costing the
 /// attacker one small JSON body.
 pub const DEEP_VERIFY: Budget = Budget::new(4, SignedDuration::from_hours(1));
+
+/// Requests from one federated peer, across the sync and blob reads (invariant 21).
+///
+/// Ten thousand an hour — the retired server's established-tier default. A peer pulling a
+/// shared album makes one sync page and a few blob fetches per asset; ten thousand is an
+/// evening of photos from one household of peers, and a hostile peer enumerating addresses
+/// gets fewer than three a second. A fixed window, so a peer that spends it waits for the
+/// hour to turn rather than trickling back in.
+pub const PEER_REQUESTS: Budget = Budget::new(10_000, SignedDuration::from_hours(1));
+
+/// Federated moderation reports from one peer against one account (invariant 24).
+///
+/// Twenty an hour per `(reporting_server, reported_user)`. A real report is one message; a
+/// flood against one user is the false-flag vector the contract names, and backpressure at
+/// twenty bounds it without silencing a peer that has two things to say.
+pub const FEDERATED_REPORTS: Budget = Budget::new(20, SignedDuration::from_hours(1));
+
+/// Federated moderation reports from one peer against **every** account (`S-C49`).
+///
+/// Two hundred an hour. Ten times the per-account allowance, so a peer with a genuinely bad hour
+/// — a spam wave it is reporting honestly — is not silenced, while a peer cycling `reported_user`
+/// to mint itself a fresh per-account budget each time runs into a ceiling that does not care
+/// which account it named.
+pub const PEER_REPORTS: Budget = Budget::new(200, SignedDuration::from_hours(1));
+
+/// Attempts at `POST /v1/federation/reports` from one **claimed** origin (`S-C49`).
+///
+/// Three hundred an hour, charged before the peer is looked up. Deliberately above
+/// [`PEER_REPORTS`], because it is not a policy on reporting — it is the bound on how much work
+/// an anonymous caller can ask for on the server's one unauthenticated write, and a real peer
+/// must never meet it before meeting the budget that *is* the policy.
+pub const FEDERATED_INTAKE: Budget = Budget::new(300, SignedDuration::from_hours(1));

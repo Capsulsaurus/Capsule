@@ -321,10 +321,10 @@ row's remainder now lives.
 | S-D29 | Local alert surface (`capsule-core::notify` + native delivery) | sdk/clients | S-Z11 | M | ACTIVE | ready | |
 | S-D20 | CLI truthfulness pass (status/register/endpoints/flags) | sdk/clients | — | M | MIXED | done | |
 | S-E1 | Share-link end-to-end serving | fed/sharing | S-C4 | M | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
-| S-E2 | Federation capabilities + pulls | fed/sharing | S-C2, S-A3 | L | RETIRED | ready | capability gate on the live read method → `S-E5` |
+| S-E2 | Federation capabilities + pulls | fed/sharing | S-C2, S-A3 | L | RETIRED | part | the serving half ships: mint/refresh/revoke, the capability arm on `GET /v1/sync?album_id=` and `GET /v1/blob/{hash}`, per-peer events budget, Postgres ordinal 6; the receiving half (egress worker, re-validation, rejected-hash table) → #476 |
 | S-E3 | LAN peering | fed/sharing | S-D2, S-C7 | L | RETIRED | ready | live mDNS → post-v1 (peering.md note) |
 | S-E4 | Aggregated federated albums (album-group view) | fed/sharing | S-E2, S-D2 | L | MIXED | done | cover override rides post-v1 settings doc |
-| S-E5 | Federation capability gate on the REST sync surface | fed/sharing | — | M-L | RETIRED | ready | |
+| S-E5 | Federation capability gate on the REST sync surface | fed/sharing | — | M-L | RETIRED | done | one `bearer` component, two principals; the peer arm is bound to the capability's album and its member's granted epoch |
 | S-F1 | uniffi consolidation (0.29 catalog vs 0.31 core) | platform/FFI | — | M | ACTIVE | done | |
 | S-F2 | Secure Enclave / StrongBox hybrid composition | platform/FFI | S-A4, S-F1 | L | ACTIVE | done\* | Kotlin run → owed-CI |
 | S-F3 | Xcode/Gradle binding wiring + on-device CI | platform/FFI | S-F2 | L | ACTIVE | done\* | first CI runs + device lanes → owed-CI |
@@ -3838,6 +3838,23 @@ them was incidental:
   discovery and pinning, signed report intake with `S-C32`'s rate limit, the blocklist and its
   enforcement point, and whatever admin authentication the above needs.
 - **Blocked on:** the federation layer (`S-E2`'s territory) and `S-C32`. **Tier:** Unit + Smoke.
+- **Status note (2026-09-09): both halves ship, one question stays open.** The
+  federation-capability layer landed with `S-E2`, and both of this slice's blocked deliverables
+  followed. **Report intake** is `POST /v1/federation/reports`: the report carries its own
+  Ed25519 signature over the canonical CBOR of its other fields, verified against the peer's
+  key, and the signature is verified **before** the `(reporting_server, reported_user)` budget
+  is charged, so a third party spoofing `reporting_server` cannot spend a real peer's allowance.
+  A report nobody signed for is dropped and never queued; an accepted one writes a row an
+  operator reads through `ModerationStore::pending_reports` and changes nothing about the
+  reported account. **The blocklist** is `blocked_at` on the peer row and is consulted at mint,
+  at every presentation, at refresh and at intake; blocking also cuts and publishes every live
+  grant the peer holds.
+- **Still owed here.** Peer keys are **operator-pinned**: this server has no outbound HTTP
+  client, so nothing fetches or TOFU-pins another server's `server-info`, and the operator
+  command that would do the pinning cannot be written until the durable boot arm exists (`serve
+  --memory` forgets what it pinned). The **admin authentication model** this slice names first
+  is untouched: `pending_reports` is the queue, and reading it over HTTP is what waits.
+  Blocklist *exchange* stays v2 by the contract. Filed as #476.
 
 ### S-C50 — the share-link privacy strip is specified where it cannot run
 
@@ -4522,7 +4539,21 @@ Kynos server, which cannot be written until `S-C53` gives the server a way to cr
   bullets pass; E2E case 4 lives. **Tier:** Unit + Smoke + E2E case 4.
 - **Landed in retired code:** capabilities, budgets, and revocation state ship on the
   Salvo server. **Re-scoped onto Kynos.**
-- **Owed:** capability gate on the live method → `S-E5`.
+- **Status note (2026-09-09).** The **serving half** ships on Kynos. `capsule-server::federation`
+  mints an EdDSA-JWT capability under the server's own operational key (the one `server-info`
+  publishes), records it, refreshes it idempotently on `(peer, jti)`, and revokes it — and the
+  store **is** the revocation list, so `/.well-known/capsule/revoked-jti` and "is this `jti`
+  revoked" have one answer. The pull is the existing reads: `GET /v1/sync?album_id=` and
+  `GET /v1/blob/{hash}` take the capability on the same `bearer` component a session token
+  rides (`S-E5`). Scope is enforced against the blob's server-visible role, the per-peer
+  events-per-hour budget rides `CounterStore`, and both stores have in-memory and Postgres
+  adapters passing one conformance suite (migration ordinal 6). `capsule-sdk::federation`
+  orchestrates a pull over generated calls only.
+- **Owed:** the **receiving** half — the egress worker that fetches on a schedule, invariant-20
+  re-validation of what it pulls, per-`(receiving_user, source_peer)` quota, the breadcrumb
+  index and the soft-fail rejected-hash table — plus bytes/hour and CPU/hour budgets, the error
+  budget, the circuit breaker and the probation tier, which need a weighted counter this port
+  does not have. Filed as #476. `error.federation.circuit_open` stays unused until it lands.
 
 ### S-E3 — LAN peering
 
@@ -4576,6 +4607,17 @@ Kynos server, which cannot be written until `S-C53` gives the server a way to cr
 - **Note:** the verifier itself (`federation::pull::authorize`) is `ACTIVE` core and does
   not change — this slice is purely about giving it a production caller on the new
   transport.
+- **Status note (2026-09-09): done.** The verifier was rebuilt on Kynos rather than called
+  from the retired tree, because the retired one has no store behind it. `federation::scheme`
+  registers a second security scheme under the **same** `bearer` component name and description
+  as the session scheme — one entry in the document, one credential key in the generated SDK —
+  and hands the handler a `Principal::{Session, Peer}`. The authenticator asks the session
+  module first and only then the capability codec, so every existing bearer path is byte-for-byte
+  what it was; a capability that verifies must also be one this server **recorded**. Coded
+  refusals are the route's, from the admitted credential: revoked, wrong album, insufficient
+  scope, blocked peer, over budget. Peer identity is grounded in `federation_peers`, closing
+  `S-C8`'s note. E2E case 4's server half runs in `capsule-server/tests/federation.rs`, and its
+  SDK-over-a-socket half in `capsule-server/tests/sdk_client.rs`.
 
 ## Lane F — platform / FFI
 
