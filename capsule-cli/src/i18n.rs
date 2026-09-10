@@ -10,9 +10,17 @@
 //! operator telemetry and stays English. Commands migrated so far: the networked ones
 //! (`auth`, `sync`, `list`, `push` — `S-D5`), `cull` (`S-D16`), and `import` (`S-I5`);
 //! the rest are carried as visible debt in `locales/i18n-guard-allowlist.txt`.
+//!
+//! `--help` is user-facing too, and is rendered from the [`HELP_NAMESPACE`] keys by
+//! [`crate::cli::help`] (`S-I8`) rather than from a key constant per string: its keys are
+//! derived from the command tree, so a new subcommand's help is a catalog entry the
+//! invariant test in that module demands, not a constant somebody has to remember to add.
 
 pub use capsule_i18n::{Bundle, Value, error_codes};
 use capsule_i18n::{negotiate, supported_locales};
+
+/// The namespace `--help` text lives under; the key grammar is [`crate::cli::help`]'s.
+pub const HELP_NAMESPACE: &str = "cli.help";
 
 /// Build the CLI's message bundle from the POSIX locale environment, falling back
 /// to the source locale. `LC_ALL` wins, then `LC_MESSAGES`, then `LANG`.
@@ -96,4 +104,62 @@ pub mod keys {
     pub const CULL_FLAG_PICK: &str = "cli.cull.flag.pick";
     pub const CULL_FLAG_NEUTRAL: &str = "cli.cull.flag.neutral";
     pub const CULL_FLAG_REJECT: &str = "cli.cull.flag.reject";
+    // `capsule show` — the signed-sidecar read surface (slice `S-B18`). One row key per
+    // field, each taking the rendered `{value}`; the `value.*` keys spell the composite and
+    // absent values that go into a row.
+    pub const SHOW_HEADER: &str = "cli.show.header";
+    pub const SHOW_ALBUM: &str = "cli.show.album";
+    pub const SHOW_CONTENT_TYPE: &str = "cli.show.content_type";
+    pub const SHOW_HASH: &str = "cli.show.hash";
+    pub const SHOW_DIMENSIONS: &str = "cli.show.dimensions";
+    pub const SHOW_CAPTURED: &str = "cli.show.captured";
+    pub const SHOW_IMPORTED: &str = "cli.show.imported";
+    pub const SHOW_CAPTION: &str = "cli.show.caption";
+    pub const SHOW_RATING: &str = "cli.show.rating";
+    pub const SHOW_TAGS_USER: &str = "cli.show.tags_user";
+    pub const SHOW_TAGS_AI: &str = "cli.show.tags_ai";
+    pub const SHOW_GPS: &str = "cli.show.gps";
+    pub const SHOW_CULL: &str = "cli.show.cull";
+    pub const SHOW_HIDDEN: &str = "cli.show.hidden";
+    pub const SHOW_IN_TRASH: &str = "cli.show.in_trash";
+    pub const SHOW_STACK: &str = "cli.show.stack";
+    pub const SHOW_LQIP: &str = "cli.show.lqip";
+    pub const SHOW_PROVENANCE_RECORDS: &str = "cli.show.provenance_records";
+    pub const SHOW_VALUE_UNSET: &str = "cli.show.value.unset";
+    pub const SHOW_VALUE_YES: &str = "cli.show.value.yes";
+    pub const SHOW_VALUE_NO: &str = "cli.show.value.no";
+    pub const SHOW_VALUE_PRESENT: &str = "cli.show.value.present";
+    pub const SHOW_VALUE_LIST_SEPARATOR: &str = "cli.show.value.list_separator";
+    pub const SHOW_GPS_DATUM_WGS84: &str = "cli.show.gps_datum.wgs84";
+    pub const SHOW_GPS_DATUM_GCJ02: &str = "cli.show.gps_datum.gcj02";
+    pub const SHOW_VALUE_DIMENSIONS: &str = "cli.show.value.dimensions";
+    pub const SHOW_VALUE_RATING: &str = "cli.show.value.rating";
+    pub const SHOW_VALUE_GPS: &str = "cli.show.value.gps";
+    pub const SHOW_VALUE_STACK: &str = "cli.show.value.stack";
+    pub const SHOW_GPS_SOURCE_EXIF: &str = "cli.show.gps_source.exif";
+    pub const SHOW_GPS_SOURCE_MANUAL: &str = "cli.show.gps_source.manual";
+    pub const SHOW_GPS_SOURCE_DERIVED: &str = "cli.show.gps_source.derived";
+    pub const SHOW_STACK_ROLE_PRIMARY: &str = "cli.show.stack_role.primary";
+    pub const SHOW_STACK_ROLE_MEMBER: &str = "cli.show.stack_role.member";
+    pub const SHOW_STACK_ROLE_PROXY: &str = "cli.show.stack_role.proxy";
+    pub const SHOW_UNKNOWN_ASSET: &str = "cli.show.unknown_asset";
+    pub const SHOW_AMBIGUOUS: &str = "cli.show.ambiguous";
+    pub const SHOW_INVALID_SELECTOR: &str = "cli.show.invalid_selector";
+    pub const SHOW_FAILED: &str = "cli.show.failed";
+    // `capsule repair capture-time` — the capture-timestamp repair pass (slice `S-B17`).
+    pub const REPAIR_CAPTURE_TIME_CHECKED: &str = "cli.repair.capture_time.checked";
+    pub const REPAIR_CAPTURE_TIME_DRY_RUN_NOTICE: &str = "cli.repair.capture_time.dry_run_notice";
+    pub const REPAIR_CAPTURE_TIME_ROW: &str = "cli.repair.capture_time.row";
+    pub const REPAIR_CAPTURE_TIME_ROW_UNPARSEABLE: &str = "cli.repair.capture_time.row_unparseable";
+    pub const REPAIR_CAPTURE_TIME_UNREADABLE: &str = "cli.repair.capture_time.unreadable";
+    pub const REPAIR_CAPTURE_TIME_CORRECTED: &str = "cli.repair.capture_time.corrected";
+    pub const REPAIR_CAPTURE_TIME_LIMIT_NOTICE: &str = "cli.repair.capture_time.limit_notice";
+    pub const REPAIR_CAPTURE_TIME_SUMMARY: &str = "cli.repair.capture_time.summary";
+    pub const REPAIR_CAPTURE_TIME_NOTHING: &str = "cli.repair.capture_time.nothing";
+    pub const REPAIR_CAPTURE_TIME_DRIFT_NOTICE: &str = "cli.repair.capture_time.drift_notice";
+    pub const REPAIR_CAPTURE_TIME_FAILED_ASSET: &str = "cli.repair.capture_time.failed_asset";
+    pub const REPAIR_CAPTURE_TIME_TRASHED: &str = "cli.repair.capture_time.trashed";
+    pub const REPAIR_CAPTURE_TIME_LIMIT_REQUIRES_APPLY: &str =
+        "cli.repair.capture_time.limit_requires_apply";
+    pub const REPAIR_FAILED: &str = "cli.repair.failed";
 }

@@ -21,6 +21,19 @@ pub enum LibraryError {
     #[error("version mismatch: found {found}, expected {expected}")]
     VersionMismatch { found: u8, expected: u8 },
 
+    /// The catalog (`index/library.sqlite`) was stamped by a newer build than this one.
+    ///
+    /// A refusal, not a downgrade: the catalog is left byte-for-byte untouched and the lock
+    /// is released, because an older binary cannot know what invariants the newer schema
+    /// added. The recovery is to update Capsule (SSoT: Versioning — Client Catalog
+    /// Migration). Typed here rather than flattened into [`Db`](Self::Db) so a client can
+    /// tell the user *which* two versions disagree (slice `S-D23`).
+    #[error(
+        "catalog schema v{found} is newer than this build supports (v{supported}); \
+         update Capsule to open this library"
+    )]
+    CatalogTooNew { found: u32, supported: u32 },
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 

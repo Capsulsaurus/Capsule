@@ -24,6 +24,11 @@
  * toolchain: that rule governs regenerating an artifact, and these checks
  * cross-reference committed text against committed text.
  *
+ * That last claim is what excludes the generated `/reference/` pages, which
+ * `scripts/lib/walk.mjs` prunes by path: they are gitignored build output, so
+ * they exist on a machine that has built the site and on no CI runner, and a
+ * check that read them would answer differently in the two places.
+ *
  * Usage: `bun capsule-docs/scripts/docs-truth.mjs` from the repository root,
  * or `mise run check-docs-truth`.
  */
@@ -33,9 +38,15 @@ import { fileURLToPath } from 'node:url';
 import { crossLinksCheck } from './check-cross-links.mjs';
 import { endpointCensusCheck } from './check-endpoint-census.mjs';
 import { modulePathsCheck } from './check-module-paths.mjs';
+import { roadmapCheck } from './check-roadmap.mjs';
 
 /** Registered checks, run in order. Adding one is a single entry here. */
-const CHECKS = [crossLinksCheck, endpointCensusCheck, modulePathsCheck];
+const CHECKS = [
+    crossLinksCheck,
+    endpointCensusCheck,
+    modulePathsCheck,
+    roadmapCheck,
+];
 
 function main() {
     // scripts/ -> capsule-docs/ -> repo root

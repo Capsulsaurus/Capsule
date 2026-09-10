@@ -609,12 +609,19 @@ async fn revalidate(
         ));
     };
 
+    // Asked for the **uploader**, as creation asked: a member whose write access was withdrawn
+    // between creation and finalization is refused here, exactly as a closed album is.
     let access = context
         .authority()
-        .album_write_access(&record.owner_id, album)
+        .album_write_access(&record.upload_user_id, album)
         .await
         .map_err(|error| FinalizeFailure::Unavailable(error.to_string()))?;
-    let AlbumWriteAccess::Writable { protocol_pin, .. } = access else {
+    let AlbumWriteAccess::Writable {
+        owner_id,
+        protocol_pin,
+        ..
+    } = access
+    else {
         // The album closed, or write capability was withdrawn, since creation. The taxonomy
         // answers a finalization-time envelope failure with one code, so this is not a second
         // `album_access_denied`.
@@ -622,6 +629,14 @@ async fn revalidate(
             GateReject::AlbumPinMismatch,
         ));
     };
+    if owner_id != record.owner_id {
+        // The album changed hands since the session was opened. Not a state this server can
+        // produce today, and refused rather than re-filed because the session's namespace is
+        // what its reserved asset row was minted under.
+        return Err(FinalizeFailure::EnvelopeRejected(
+            GateReject::AlbumPinMismatch,
+        ));
+    }
 
     let device =
         super::envelope::created_by_device(&envelope).map_err(FinalizeFailure::EnvelopeRejected)?;

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub const CURRENT_LIBRARY_VERSION: u8 = 1;
+pub(crate) const CURRENT_LIBRARY_VERSION: u8 = 1;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LibraryVersionCbor {

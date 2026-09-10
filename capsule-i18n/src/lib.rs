@@ -2,8 +2,8 @@
 //!
 //! User-facing strings are authored once in the repo-root `locales/` directory as
 //! [ICU MessageFormat](https://unicode-org.github.io/icu/userguide/format_parse/messages/)
-//! JSON, then compiled into this crate by `cargo run -p xtask -- i18n` (see
-//! [`generated`]). The same source compiles to the web, iOS, and Android catalogs,
+//! JSON, then compiled into this crate by `cargo run -p xtask -- i18n`, which writes the
+//! private `generated` module. The same source compiles to the web, iOS, and Android catalogs,
 //! so a message is written exactly once.
 //!
 //! Typical use on the server: negotiate the request's locale, build a [`Bundle`],
@@ -25,8 +25,9 @@ mod catalog;
 mod format;
 mod generated;
 mod negotiate;
+pub mod plural;
 
 pub use catalog::{Bundle, supported_locales};
-pub use format::{Value, format_message};
+pub use format::{Value, format_message, format_message_in};
 pub use generated::error_codes;
 pub use negotiate::negotiate;

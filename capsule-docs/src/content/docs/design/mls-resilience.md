@@ -49,7 +49,7 @@ Across the failure modes above, Capsule's recovery posture is consistent:
 Reconciliation is a **single entry-point**, not per-failure-mode calls: the caller asks "bring me current" and the outcome enum reports what happened, including the two cases that escalate to user action or re-bootstrap.
 
 ```rust
-// in capsule-core::crypto::mls
+// in capsule-core::crypto::authority (OpenMlsAuthority)
 enum ReconcileOutcome {
     UpToDate,
     Reconciled { applied_commits: Vec<CommitHash> },
@@ -57,8 +57,8 @@ enum ReconcileOutcome {
     Unrecoverable,  // requires re-bootstrap
 }
 
-fn reconcile_with_server(group: GroupId) -> Result<ReconcileOutcome, MlsError>;
-fn rekey_group(group: GroupId, reason: RekeyReason) -> Result<(), MlsError>;
+fn reconcile_with_server(&mut self, view: ServerChainView) -> Result<ReconcileOutcome>;
+fn rekey_group(&mut self, reason: RekeyReason) -> Result<RekeyOutcome>;
 ```
 
 ## Validation

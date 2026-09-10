@@ -260,7 +260,9 @@ impl Workspace {
     /// under (`amk_version`), never assuming the album's current epoch — so an asset imported
     /// before a rotation still derives the key it was encrypted with. Because the fresh
     /// `nonce_prefix` is folded into the salt, this is the read/regenerate path; a *fresh*
-    /// write goes through [`encrypt_asset_rekey`], which draws the nonce and derives together.
+    /// write goes through
+    /// [`encrypt_asset_rekey`](crate::crypto::encryption::encrypt_asset_rekey), which draws the
+    /// nonce and derives together.
     pub(super) fn file_key(
         &self,
         album: &AlbumKeys,
@@ -279,7 +281,7 @@ mod tests {
 
     use tempfile::TempDir;
 
-    use super::super::fast_workspace;
+    use super::super::{FAST_PARAMS, fast_workspace};
     use super::*;
     use crate::crypto::verify_asset::VerifyOutcome;
 
@@ -317,7 +319,8 @@ mod tests {
         // A cross-epoch backup escrows each asset's own-epoch AMK; restore into a fresh library
         // is byte-equal for both (guards the export file-key / blob-key / escrow-value epochs).
         let backup_path = src.path().join("backup.tar");
-        ws.export_backup(&backup_path, b"recovery-pass").unwrap();
+        ws.export_backup_with_params(&backup_path, b"recovery-pass", FAST_PARAMS)
+            .unwrap();
         let exporter_pub = ws.exporter_verifying_key();
 
         let fresh = TempDir::new().unwrap();

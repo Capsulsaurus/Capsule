@@ -6,8 +6,9 @@
 //!
 //! # The status audit (`S-C28`)
 //!
-//! `S-C28` found thirteen response variants across the Salvo surface that render a status
-//! `capsule-sdk/openapi.json` never declares — `LoginResponses::undocumented()` returns
+//! `S-C28` found thirteen response variants across the Salvo surface that render a status the
+//! Salvo document never declared (it was committed as `capsule-sdk/openapi.json`, deleted with
+//! the tree it described in `S-C59`) — `LoginResponses::undocumented()` returns
 //! `[423, 429]`. Kynos makes that class of defect unrepresentable, because the status *is* the
 //! return type and there is only one declaration. So each status was audited as its operation
 //! was ported, and the verdict lives in the type:
@@ -642,9 +643,17 @@ pub async fn login_user(
 
 /// Open a session for `user` and mint its pair.
 ///
-/// Shared by the password-only sign-in above and by the second factor's completing request
-/// (`S-C55`), which is the point: a session opened down one path and not the other is how a TOTP
-/// sign-in ends up in the devices view as an unknown, ungrouped device.
+/// Shared by the password-only sign-in above, by the second factor's completing request
+/// (`S-C55`) and by the OIDC callback (`S-N1`), which is the point: a session opened down one
+/// path and not the other is how a TOTP sign-in ends up in the devices view as an unknown,
+/// ungrouped device.
+///
+/// **The OIDC door does not consult the password lockout**, and that is a decision rather than
+/// an omission. The lockout counts failed *credential presentations* against the local
+/// directory, and a federated sign-in presents none: the identity provider already
+/// authenticated the person. Refusing here on a locked local account would let anyone who can
+/// guess passwords at `/v1/auth/login` lock a person out of single sign-on too — turning a
+/// throttle on one door into a denial of service on the other.
 ///
 /// # Errors
 ///

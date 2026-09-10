@@ -19,7 +19,7 @@ use jiff::Timestamp;
 use super::{
     AssetIndex, AssetRow, AssetState, BlobOutcome, BlobRecord, BlobRef, FeedEntry, HoldOutcome,
     IndexFuture, LifecycleOp, OpAction, OpOutcome, PendingAsset, Reservation, ServingHold,
-    entry_for,
+    entry_for, is_singular, set_singular,
 };
 use crate::blob::ContentAddress;
 use crate::store::{AlbumId, AssetId, BlobRole, OwnerId};
@@ -28,47 +28,6 @@ use crate::store::{AlbumId, AssetId, BlobRole, OwnerId};
 /// [`crate::store::memory`], which does the same for the same reason.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-/// The roles an asset may hold exactly one of.
-///
-/// The manifest, the metadata blob and the original are each named by the signed manifest, so
-/// a second address under one of these roles is a contradiction rather than an addition.
-/// Derivatives and backups are plural by nature — an asset has a thumbnail *and* a preview.
-fn is_singular(role: BlobRole) -> bool {
-    matches!(
-        role,
-        BlobRole::Original | BlobRole::Metadata | BlobRole::Provenance
-    )
-}
-
-/// Point `role` at `address`, replacing whatever it held.
-///
-/// The one place a singular role legitimately moves. [`AssetIndex::record_blob`] refuses to
-/// re-point one because an upload doing so would swap bytes under a signature that still
-/// verifies against the old ones; a lifecycle op is the *authorized* form of the same change,
-/// and it arrives with a manifest chaining onto the one it supersedes.
-fn set_singular(row: &mut AssetRow, role: BlobRole, address: &ContentAddress) {
-    // `S-C52`: a superseded *manifest* is kept referenced rather than dropped. Only the
-    // provenance role — the other singular roles are ciphertext, and the old bytes of a replaced
-    // original are exactly what the collector is for.
-    if role == BlobRole::Provenance
-        && let Some(previous) = row.address_for(BlobRole::Provenance).cloned()
-        && &previous != address
-        && !row.superseded.contains(&previous)
-    {
-        row.superseded.push(previous);
-    }
-    row.blobs.retain(|blob| blob.role != role);
-    row.blobs.push(BlobRef {
-        role,
-        address: address.clone(),
-        // Size is not a fact this path learns: the bytes were stored by whoever put them in the
-        // blob store, and re-`stat`ing here would make the index depend on the store.
-        size: 0,
-    });
-    row.blobs
-        .sort_by(|a, b| (a.role, a.address.as_str()).cmp(&(b.role, b.address.as_str())));
 }
 
 /// Everything the double holds, behind one lock.
@@ -309,6 +268,7 @@ impl AssetIndex for InMemoryAssetIndex {
             let holds = |row: &&AssetRow| row.blobs.iter().any(|blob| &blob.address == address);
             let reference = |row: &AssetRow| super::BlobReference {
                 asset_id: row.asset_id.clone(),
+                album_id: row.album_id.clone(),
                 owner_id: row.owner_id.clone(),
                 role: row
                     .blobs
@@ -581,5 +541,43 @@ impl AssetIndex for InMemoryAssetIndex {
 
     fn head_seq<'a>(&'a self, owner: &'a OwnerId) -> IndexFuture<'a, u64> {
         Box::pin(async move { Ok(lock(&self.inner).minted.get(owner).copied().unwrap_or(0)) })
+    }
+
+    fn album_feed_page<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        album: &'a AlbumId,
+        after: u64,
+        limit: usize,
+    ) -> IndexFuture<'a, Vec<FeedEntry>> {
+        Box::pin(async move {
+            let inner = lock(&self.inner);
+            let mut page: Vec<FeedEntry> = inner
+                .rows
+                .values()
+                .filter(|row| &row.owner_id == owner && &row.album_id == album)
+                .filter(|row| row.sync_seq.is_some_and(|seq| seq > after))
+                .filter_map(|row| entry_for(row, after))
+                .collect();
+            page.sort_by_key(|entry| entry.sync_seq);
+            page.truncate(limit);
+            Ok(page)
+        })
+    }
+
+    fn album_head_seq<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        album: &'a AlbumId,
+    ) -> IndexFuture<'a, u64> {
+        Box::pin(async move {
+            Ok(lock(&self.inner)
+                .rows
+                .values()
+                .filter(|row| &row.owner_id == owner && &row.album_id == album)
+                .filter_map(|row| row.sync_seq)
+                .max()
+                .unwrap_or(0))
+        })
     }
 }

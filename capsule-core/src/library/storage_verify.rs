@@ -183,7 +183,7 @@ impl<'a, V: StorageVerifier + ?Sized> ReleaseGate<'a, V> {
 // ─── The three destructive paths, gated ───────────────────────────────────────
 
 /// **Device-owned-original release** (the cache-eviction sweep's counterpart for owned
-/// originals, which [`cache_sweep`](crate::library::cache::cache_sweep) never touches
+/// originals, which [`cache_sweep`](crate::library::cache_sweep) never touches
 /// automatically). An original the device itself uploaded is the source of truth until the
 /// server durably holds it; it is released — its local file deleted and its owned-original
 /// representation row dropped, after which it becomes an ordinary server-only, re-fetchable

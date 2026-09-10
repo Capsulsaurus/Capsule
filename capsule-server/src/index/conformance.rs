@@ -916,6 +916,74 @@ pub async fn re_applying_a_manifest_is_a_replay(index: &dyn AssetIndex) {
     );
 }
 
+/// Two identical submissions racing produce one application and one replay.
+///
+/// The window this closes is not hypothetical: an adapter that checks its idempotency store,
+/// then takes the asset's lock, has read *before* the lock and decided *after* it. Two clients
+/// retrying the same manifest — or one client whose first attempt is still in flight when its
+/// retry timer fires — both find nothing, and the loser then serializes behind a winner that has
+/// meanwhile applied the very manifest it looked for.
+///
+/// Answering that loser from what it read before the lock is wrong twice over. It would fail
+/// invariant 17 against a chain head the winner has just advanced, and report `StaleChain` to a
+/// client whose manifest *was* applied — moments ago, by the winner — which is precisely the
+/// answer `re_applying_a_manifest_is_a_replay` exists to forbid in the sequential case.
+///
+/// A single-process suite cannot force a particular interleaving, so this asserts the property
+/// that holds under *every* interleaving: one `Applied`, one `Replayed`, the same sequence
+/// number in both, and exactly one number minted.
+pub async fn racing_identical_submissions_apply_once_and_replay_once(index: &dyn AssetIndex) {
+    let (asset, _) = publish(index, "op-race", 1).await;
+    let created = head_of(index, &asset).await;
+    // A seed of its own. `applied_manifests` is keyed on the hash **globally**, not per asset —
+    // which is the point of it — so a case that reused another case's manifest would be told
+    // `Replayed` for a submission it had never made, and would take that for its own answer.
+    let hash = manifest(41);
+    let owner = OwnerId::new("op-race-owner");
+    let before = ok(index.head_seq(&owner).await, "head");
+
+    let (first, second) = tokio::join!(
+        index.apply_op(op("op-race", 1, OpAction::Delete, created, hash)),
+        index.apply_op(op("op-race", 1, OpAction::Delete, created, hash)),
+    );
+    let outcomes = [ok(first, "apply"), ok(second, "apply")];
+
+    let applied: Vec<u64> = outcomes
+        .iter()
+        .filter_map(|outcome| match outcome {
+            OpOutcome::Applied { sync_seq, .. } => Some(*sync_seq),
+            _ => None,
+        })
+        .collect();
+    let replayed: Vec<u64> = outcomes
+        .iter()
+        .filter_map(|outcome| match outcome {
+            OpOutcome::Replayed { sync_seq } => Some(*sync_seq),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        applied.len(),
+        1,
+        "exactly one of two identical submissions applies, got {outcomes:?}"
+    );
+    assert_eq!(
+        replayed.len(),
+        1,
+        "the other is a replay and never a stale chain, got {outcomes:?}"
+    );
+    assert_eq!(
+        applied[0], replayed[0],
+        "a replay reports the number the application minted"
+    );
+
+    assert_eq!(
+        ok(index.head_seq(&owner).await, "head"),
+        before.saturating_add(1),
+        "two identical submissions cost one sequence number, not two"
+    );
+}
+
 /// A delete tombstones, a restore un-tombstones, and both reach the feed.
 pub async fn delete_and_restore_are_both_publishable_changes(index: &dyn AssetIndex) {
     let (asset, _) = publish(index, "op-cycle", 1).await;
@@ -1474,6 +1542,254 @@ pub async fn holding_an_unknown_asset_is_not_found(index: &dyn AssetIndex) {
     );
 }
 
+// ---------------------------------------------------------------------------------------
+// The scrub's walk
+// ---------------------------------------------------------------------------------------
+
+/// Every row is walked, whatever its state, and the walk resumes where it stopped.
+///
+/// The scrub's input, and it was uncovered until the Postgres adapter arrived — which is
+/// exactly the shape of gap a shared suite exists to close. Two properties, and both are the
+/// port's own words:
+///
+/// - *"Every row, whatever its state. A scrub that skipped pending or tombstoned rows would
+///   skip exactly the rows a half-finished write leaves behind."*
+/// - *"an interrupted pass resumes where it stopped rather than starting over — which for a
+///   store worth scrubbing is the difference between a check that finishes and one that never
+///   does."*
+pub async fn the_row_walk_covers_every_state_and_resumes(index: &dyn AssetIndex) {
+    // One row in each state, so a filter on state would drop one of them.
+    let pending_only = pending("walk", 1);
+    let unseen = pending_only.asset_id.clone();
+    ok(index.reserve(pending_only).await, "reserve a pending row");
+    let (visible, _) = publish(index, "walk", 2).await;
+    let (deleted, _) = publish(index, "walk", 3).await;
+    ok(
+        index.tombstone(&deleted, Timestamp::UNIX_EPOCH).await,
+        "tombstone a row",
+    );
+
+    for page_size in [1_usize, 2, 50] {
+        let mut cursor: Option<AssetId> = None;
+        let mut seen: Vec<AssetId> = Vec::new();
+        loop {
+            let page = ok(
+                index.rows(cursor.as_ref(), page_size).await,
+                "walk the asset rows",
+            );
+            if page.is_empty() {
+                break;
+            }
+            assert!(
+                page.len() <= page_size,
+                "a page of {} exceeded the requested {page_size}",
+                page.len()
+            );
+            for row in &page {
+                if let Some(previous) = seen.last() {
+                    assert!(
+                        &row.asset_id > previous,
+                        "the walk went backwards: {} came after {previous}",
+                        row.asset_id
+                    );
+                }
+                seen.push(row.asset_id.clone());
+            }
+            cursor = page.last().map(|row| row.asset_id.clone());
+        }
+
+        for expected in [&unseen, &visible, &deleted] {
+            assert!(
+                seen.contains(expected),
+                "the walk at page size {page_size} missed {expected}; a scrub that skips a \
+                 pending or tombstoned row skips exactly the rows a half-finished write leaves \
+                 behind"
+            );
+        }
+        let mut unique = seen.clone();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            seen.len(),
+            "the walk at page size {page_size} returned a row twice"
+        );
+    }
+}
+
+/// The walk's order is the identifier's own byte order, not a locale's.
+///
+/// Asset ids are the manifest's client-chosen `file_id`, so they are full of punctuation and are
+/// not a shape the suite gets to pick. A backend ordering them under a locale collation — which
+/// is what `en_US.utf8` does, ignoring `-` at the primary level — walks them in a different
+/// order from the deterministic double, and a cursor handed between the two skips rows. The
+/// three ids below are the smallest set where byte order and a punctuation-ignoring collation
+/// disagree.
+pub async fn the_row_walk_orders_by_the_identifiers_own_bytes(index: &dyn AssetIndex) {
+    let ids = ["walkord-a-b", "walkord-ab", "walkord-a-c"];
+    for id in ids {
+        let mut row = pending("walkord", 0);
+        row.asset_id = AssetId::new(id);
+        ok(index.reserve(row).await, "reserve a row");
+    }
+
+    let walked: Vec<String> = ok(index.rows(None, 100).await, "walk the asset rows")
+        .into_iter()
+        .filter(|row| row.asset_id.as_str().starts_with("walkord-"))
+        .map(|row| row.asset_id.as_str().to_owned())
+        .collect();
+    let mut expected: Vec<String> = ids.iter().map(|id| (*id).to_owned()).collect();
+    expected.sort();
+    assert_eq!(
+        walked, expected,
+        "the walk must order asset ids by their bytes, so a cursor means the same thing to \
+         every adapter"
+    );
+}
+
+/// An album page is the owner's sequence filtered to one album, with its own head (`S-C51`).
+///
+/// Positions are the owner's numbers, so a member's per-album anti-rewind mark is the same value
+/// the owner's feed carries; gaps are the other albums' entries. The head is the album's last
+/// entry, not the owner's allocator: a member who has seen it is caught up whatever the owner
+/// minted elsewhere since.
+pub async fn an_album_page_is_the_owners_sequence_filtered_to_one_album(index: &dyn AssetIndex) {
+    let owner = OwnerId::new("albumpage-owner");
+    let shared = AlbumId::new("albumpage-shared");
+    let private = AlbumId::new("albumpage-private");
+    let mut in_shared = Vec::new();
+    for (n, album) in [(1_u32, &shared), (2, &private), (3, &shared), (4, &private)] {
+        let row = PendingAsset {
+            asset_id: AssetId::new(format!("albumpage-asset-{n}")),
+            owner_id: owner.clone(),
+            album_id: album.clone(),
+            protocol_version: "2026-01-01".to_owned(),
+            crypto_suite_id: 1,
+            created_at: Timestamp::UNIX_EPOCH,
+        };
+        let asset = row.asset_id.clone();
+        ok(index.reserve(row).await, "reserve a row");
+        record(
+            index,
+            &asset,
+            blob(BlobRole::Provenance, &format!("albumpage-p{n}")),
+        )
+        .await;
+        let seq = record(
+            index,
+            &asset,
+            blob(BlobRole::Metadata, &format!("albumpage-m{n}")),
+        )
+        .await
+        .expect("landing the index tier publishes");
+        if album == &shared {
+            in_shared.push(seq);
+        }
+    }
+
+    let page = ok(
+        index.album_feed_page(&owner, &shared, 0, 10).await,
+        "page an album",
+    );
+    assert_eq!(
+        page.iter().map(|entry| entry.sync_seq).collect::<Vec<_>>(),
+        in_shared,
+        "the album page is the owner's sequence, filtered, in order"
+    );
+    assert!(page.iter().all(|entry| entry.album_id == shared));
+    assert_eq!(
+        ok(
+            index.album_head_seq(&owner, &shared).await,
+            "read an album head"
+        ),
+        in_shared[1],
+        "the head is the album's last entry, not the owner's allocator"
+    );
+    assert!(
+        ok(
+            index.album_head_seq(&owner, &shared).await,
+            "read an album head"
+        ) < ok(index.head_seq(&owner).await, "read the owner's head"),
+        "the owner minted more in another album since"
+    );
+
+    // Resuming past the first shared entry yields exactly the second.
+    let resumed = ok(
+        index
+            .album_feed_page(&owner, &shared, in_shared[0], 10)
+            .await,
+        "resume an album page",
+    );
+    assert_eq!(resumed.len(), 1);
+    assert_eq!(resumed[0].sync_seq, in_shared[1]);
+    // And a bounded page is bounded.
+    assert_eq!(
+        ok(
+            index.album_feed_page(&owner, &shared, 0, 1).await,
+            "page one"
+        )
+        .len(),
+        1
+    );
+
+    // A row another account filed under the *same* album id is not this album's: the page is
+    // bound to the owner the album record names, which is what the index is keyed on.
+    let squatter = OwnerId::new("albumpage-squatter");
+    let row = PendingAsset {
+        asset_id: AssetId::new("albumpage-asset-squat"),
+        owner_id: squatter.clone(),
+        album_id: shared.clone(),
+        protocol_version: "2026-01-01".to_owned(),
+        crypto_suite_id: 1,
+        created_at: Timestamp::UNIX_EPOCH,
+    };
+    ok(index.reserve(row).await, "reserve a row");
+    record(
+        index,
+        &AssetId::new("albumpage-asset-squat"),
+        blob(BlobRole::Provenance, "albumpage-ps"),
+    )
+    .await;
+    record(
+        index,
+        &AssetId::new("albumpage-asset-squat"),
+        blob(BlobRole::Metadata, "albumpage-ms"),
+    )
+    .await;
+    assert_eq!(
+        ok(
+            index.album_feed_page(&owner, &shared, 0, 10).await,
+            "page an album"
+        )
+        .len(),
+        2,
+        "another owner's row under the same album id is not on this owner's album page"
+    );
+    assert_eq!(
+        ok(
+            index.album_head_seq(&owner, &shared).await,
+            "read an album head"
+        ),
+        in_shared[1]
+    );
+
+    // An album nothing was filed into: empty, head zero — not an error.
+    let unknown = AlbumId::new("albumpage-unknown");
+    assert!(
+        ok(
+            index.album_feed_page(&owner, &unknown, 0, 10).await,
+            "page an unknown album"
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        ok(
+            index.album_head_seq(&owner, &unknown).await,
+            "head of an unknown album"
+        ),
+        0
+    );
+}
+
 pub async fn run_all(index: &dyn AssetIndex) {
     reserving_twice_joins_the_same_row(index).await;
     a_disagreeing_reservation_is_refused_without_disclosure(index).await;
@@ -1486,6 +1802,7 @@ pub async fn run_all(index: &dyn AssetIndex) {
     the_change_kind_is_relative_to_the_reader(index).await;
     paging_is_ordered_bounded_and_resumable(index).await;
     every_minted_number_is_reachable(index).await;
+    an_album_page_is_the_owners_sequence_filtered_to_one_album(index).await;
     an_albums_numbers_are_monotonic_with_gaps(index).await;
     a_tombstone_reaches_every_reader(index).await;
     tombstoning_a_pending_row_publishes_nothing(index).await;
@@ -1496,6 +1813,7 @@ pub async fn run_all(index: &dyn AssetIndex) {
     a_live_holder_outranks_a_deleted_one(index).await;
     a_lifecycle_write_extends_the_chain(index).await;
     re_applying_a_manifest_is_a_replay(index).await;
+    racing_identical_submissions_apply_once_and_replay_once(index).await;
     delete_and_restore_are_both_publishable_changes(index).await;
     an_epoch_that_regresses_the_album_is_refused(index).await;
     an_op_on_an_asset_that_is_not_the_callers_is_not_found(index).await;
@@ -1507,6 +1825,8 @@ pub async fn run_all(index: &dyn AssetIndex) {
     a_restore_clears_the_retention_floor(index).await;
     a_serving_hold_is_placed_reported_and_lifted(index).await;
     holding_an_unknown_asset_is_not_found(index).await;
+    the_row_walk_covers_every_state_and_resumes(index).await;
+    the_row_walk_orders_by_the_identifiers_own_bytes(index).await;
 }
 
 #[cfg(test)]

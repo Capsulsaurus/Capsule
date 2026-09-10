@@ -23,6 +23,10 @@
 ## Do not reuse
 
 - Salvo handlers, response writers, OpenAPI registration, or configuration projections.
+- `wire/`'s `salvo_responses!` macro and the `WireResponses` taxonomy it expands. It was the
+  workspace crate `capsule-wire` until the Kynos port; `capsule-server`'s `problem`, `limits` and
+  `body` modules are the live response taxonomy, and Kynos makes the status part of the return
+  type, which is the defect the taxonomy was extracted to prevent.
 - Server-side media decoding or metadata extraction. Those files were deleted during quarantine.
 - The plaintext asset schema, transformation endpoints, filename-based storage layout, or upload
   finalization that marks an asset visible before the complete encrypted bundle is durable.

@@ -4,8 +4,7 @@
 //! document — check it verifies under the account's identity anchor, compare one projected
 //! field, and hand the bytes back unchanged.
 
-use capsule_core::crypto::keys::hybrid_sig::HybridSigningKey;
-use capsule_core::crypto::keys::{DeviceDirectory, DirectoryCore};
+use capsule_core::crypto::keys::{DeviceDirectory, DirectoryCore, HybridSigningKey};
 use uuid::Uuid;
 
 use super::*;

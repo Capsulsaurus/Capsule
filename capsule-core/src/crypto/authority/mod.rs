@@ -20,7 +20,7 @@
 //! Because `verify_asset` consumes only `&dyn AlbumAuthority`, the two are interchangeable; the
 //! [`Authority`] enum lets a caller store either without naming a concrete backend.
 //!
-//! [`verify_asset`]: crate::crypto::verify_asset
+//! [`verify_asset`]: fn@crate::crypto::verify_asset
 //! SSoT for the rules this seam encodes: [Keys — Write Authorization].
 //!
 //! [Keys — Write Authorization]: https://docs/design/cryptography/keys/#write-authorization

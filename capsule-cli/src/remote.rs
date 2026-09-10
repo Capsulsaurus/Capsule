@@ -10,7 +10,7 @@
 
 use std::collections::HashSet;
 
-use capsule_core::import::upload::UploadPolicy;
+use capsule_core::import::UploadPolicy;
 use capsule_core::lifecycle::{LifecycleError, Workspace};
 use capsule_sdk::albums::{AlbumClient, AlbumTransport};
 use capsule_sdk::auth::{AuthClient, AuthError, LoginOutcome, Session};
@@ -53,7 +53,7 @@ pub struct RemoteConfig {
     pub protocol_version: String,
 }
 
-/// The default server origin — one host, one port, matching `mise run serve-api`.
+/// The default server origin — one host, one port, matching `mise run serve-memory`.
 pub const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:3000";
 
 impl RemoteConfig {

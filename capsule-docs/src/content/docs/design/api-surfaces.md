@@ -21,9 +21,11 @@ the gate that keeps it current — is [Developer Documentation](/design/develope
 | Authentication (sessions, TOTP, OIDC) | REST | `capsule-server::auth` | [Authentication](/design/authentication/) |
 | Resumable upload (`POST /v1/upload`, then `HEAD/PATCH /v1/upload/{id}`) | REST | `capsule-server::upload` | [Upload Protocol](/design/import/upload-protocol/) |
 | Lifecycle writes (`POST /v1/albums/{album_id}/ops`) | REST | `capsule-server::routes::ops` | [Authorization](/design/authorization/#the-lifecycle-write-surface) |
+| Album roster publish (`PUT /v1/albums/{album_id}/roster`) | REST | `capsule-server::membership` | [Threat Model — Validation](/design/threat-model/validation/) (invariant 33) |
 | Blob fetch (`GET /v1/blob/{hash}`, HTTP `Range`) | REST | `capsule-server::blob` | [Download & Sync](/design/import/download-sync/) |
 | Sync feed (change discovery after a cursor) | REST | `capsule-server::sync` | [Download & Sync](/design/import/download-sync/) |
-| Federation pull | REST | `capsule-server::federation` | [Federation](/design/federation/) |
+| Federation capability lifecycle (`POST /v1/albums/{album_id}/capabilities`, `DELETE /v1/albums/{album_id}/capabilities/{jti}`, `POST /v1/federation/capabilities/refresh`) and signed report intake (`POST /v1/federation/reports`) | REST | `capsule-server::federation` | [Federation](/design/federation/) |
+| Federation **pull** — no route of its own: a peer reads `GET /v1/sync?album_id=` and `GET /v1/blob/{hash}` with a capability in the `bearer` slot | REST | `capsule-server::federation` (the credential and its admission) over `::sync` / `::serve` | [Federation](/design/federation/) |
 | Share serving (`/s/{opaque_id}`) | REST | `capsule-server::share` | [Share Links](/design/share-links/) |
 | Guest drops (`POST /d/{opaque_id}`, inbox, adoption) | REST | `capsule-server::drop` | [Web Upload](/design/web-upload/) |
 | Storage verification (`POST /v1/storage/verify`) | REST | `capsule-server::verify` | [Storage Verification](/design/import/storage-verification/) |
@@ -123,16 +125,56 @@ Every public route applies the same headers:
 
 | Header | Direction |
 | --- | --- |
-| `X-Capsule-Protocol` | request |
-| `X-Capsule-Crypto-Suite` | request for writes |
-| `X-Capsule-Sidecar-Schema` | request |
-| `X-Capsule-Protocol-Min` | response |
-| `X-Capsule-Protocol-Max` | response |
-| `X-Capsule-Min-Client-Build` | response |
+| `X-Capsule-Protocol` | request, required on every gated route |
+| `X-Capsule-Crypto-Suite` | request for writes; validated when present |
+| `X-Capsule-Sidecar-Schema` | request on metadata updates; validated when present |
+| `X-Capsule-Protocol-Min` | response, on every response of every operation |
+| `X-Capsule-Protocol-Max` | response, on every response of every operation |
+| `X-Capsule-Min-Client-Build` | response, on every response of every operation; advisory (`0.0.0` = no cutoff) |
+
+The carriage is two Kynos interceptors in `capsule-server/src/negotiation.rs`, and the split
+is the point: `Negotiation` is mounted on the whole router, outside everything that can refuse,
+so the three response headers ride a `413`, a `401` and a `426` exactly as they ride a `200`
+(an unrouted `404`/`405` is the router's own and carries none — Kynos runs interceptors per
+operation, after routing);
+the gate is two `Group`s — `ProtocolGate` holding every non-safe operation and
+`ProtocolReadGate` every gated `GET`/`HEAD` — so an operation is gated by being mounted inside
+one and exempt by being mounted outside both. The two gates are the two halves of the
+fail-closed rules: a **write** with a grammatical `X-Capsule-Protocol` outside `[Min, Max]` is
+`426`; a **read** with the same header is admitted ("reads of any past version succeed" — and a
+future date on a read is admitted too, since the rule is the grammar and nothing else), and a
+missing or malformed header is `400 error.request.malformed` on every gated operation. All
+three read one protocol window — the upload policy's, built from `PROTOCOL_MIN`/`PROTOCOL_MAX`
+at boot — so the window a client is told and the window it is held to cannot be two numbers. A
+`426` carries the window on the headers and the stable `error.protocol.version_unsupported` code
+in the body; nothing restates the window as a body member.
+
+**Exempt from the request gate** (and still carrying the response headers), ten operations:
+
+- `GET /v1/version` — the reachability probe a client hits before it knows the window.
+- `GET /.well-known/capsule/attestation-keys`, `GET /.well-known/capsule/server-info`,
+  `GET /.well-known/capsule/deprecation`, `GET /.well-known/capsule/revoked-jti` — public
+  discovery, read before any handshake.
+- `GET /s/{opaque_id}`, `GET /s/{opaque_id}/wrapped-secret`, `GET /s/{opaque_id}/blob/{hash}` —
+  [Share Links](/design/share-links/) requires an indistinguishable `404` there, and a `426`
+  would be a probing oracle.
+- `POST /d/{opaque_id}`, `PATCH /d/{opaque_id}/{upload_id}` — the link record pins
+  `protocol_version` and `crypto_suite_id` at issuance ([Web Upload](/design/web-upload/)), so a
+  browser guest has nothing to assert.
+
+`capsule-server/tests/conformance.rs` pins both the gated set and this exempt set against the
+emitted document, and walks every operation on the wire, so a route cannot join or leave the
+gate by accident.
 
 Credentials use `Authorization: Bearer`. Session access tokens and federation capabilities are
 different token types verified by their owning modules, even though both use the standard HTTP
-carriage.
+carriage. **The document carries one `bearer` component for both.** The two read primitives a peer
+pulls through — `GET /v1/sync` and `GET /v1/blob/{hash}` — register a second Kynos security scheme
+under the same component name and a byte-identical description, so every operation's `security` is
+the one requirement it always was and the generated client attaches either token type under the one
+credential key it knows. A second key would have split one carriage into two for a difference the
+wire does not have. `capsule-server/tests/conformance.rs` pins the component set at exactly one
+entry.
 
 ## Rejection Mapping
 

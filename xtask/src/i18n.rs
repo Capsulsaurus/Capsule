@@ -29,6 +29,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use capsule_i18n::plural;
 use eyre::{Context, ContextCompat, Result, bail};
 use serde_json::{Map, Value};
 
@@ -387,33 +388,6 @@ const INFO_PLIST_KEYS: &[(&str, &str)] = &[
 /// vocabulary, so a category outside it (`=0`, a typo) fails the generator rather than
 /// reaching a file.
 const PLURAL_CATEGORIES: &[&str] = &["zero", "one", "two", "few", "many", "other"];
-
-/// The CLDR cardinal categories each language can actually *select*, by language subtag.
-///
-/// The vocabulary above is universal; the rules are not. English never selects `few`,
-/// Japanese never selects anything but `other`, Arabic selects all six. Android resolves
-/// `<item quantity=…>` with the platform's own CLDR rules, so an arm the language cannot
-/// select is unreachable — [`android_plural_arms`] drops it rather than emitting a dead
-/// resource the platform's `UnusedQuantity` lint flags. `other` is selectable everywhere
-/// and [`IcuPlural::parse`] already requires it, so dropping is always lossless.
-///
-/// Adding a locale to `locales/config.json` means adding its row here: an unknown
-/// language fails the generator the first time it carries a plural rather than guessing
-/// a rule set.
-const PLURAL_RULES: &[(&str, &[&str])] = &[
-    ("ar", &["zero", "one", "two", "few", "many", "other"]),
-    ("de", &["one", "other"]),
-    ("en", &["one", "other"]),
-    ("es", &["one", "many", "other"]),
-    ("fr", &["one", "many", "other"]),
-    ("hi", &["one", "other"]),
-    ("it", &["one", "many", "other"]),
-    ("ja", &["other"]),
-    ("ko", &["other"]),
-    ("pt", &["one", "many", "other"]),
-    ("ru", &["one", "few", "many", "other"]),
-    ("zh", &["other"]),
-];
 
 /// What an ICU argument holds, which decides its conversion in a format string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -874,24 +848,25 @@ fn android_name(key: &str) -> String {
 /// a `one` in Japanese changes nothing a user sees and trips the platform's
 /// `UnusedQuantity` lint. `other` is selectable in every language and required by
 /// [`IcuPlural::parse`], so what is left is always a complete resource.
+///
+/// The rules come from [`capsule_i18n::plural`], which is also what the Rust runtime
+/// selects with. They used to be a second table in this file; `S-I7` gave the runtime
+/// plural evaluation and the two immediately had to agree, so there is one table. A
+/// language with no row there fails the generator rather than guessing a rule set.
 fn android_plural_arms<'a>(
     locale: &str,
     categories: &'a BTreeMap<String, String>,
 ) -> Result<Vec<(&'static str, &'a str)>> {
     let language = locale.split('-').next().unwrap_or(locale);
-    let selectable = PLURAL_RULES
-        .iter()
-        .find(|(lang, _)| *lang == language)
-        .map(|(_, cats)| *cats)
-        .with_context(|| {
-            format!(
-                "no CLDR plural rules for language `{language}`: add a `PLURAL_RULES` row \
-                 before a `{locale}` message uses a plural"
-            )
-        })?;
+    let selectable = plural::selectable(locale).with_context(|| {
+        format!(
+            "no CLDR plural rules for language `{language}`: add a row to \
+             `capsule_i18n::plural` before a `{locale}` message uses a plural"
+        )
+    })?;
     let arms: Vec<(&'static str, &str)> = PLURAL_CATEGORIES
         .iter()
-        .filter(|category| selectable.contains(*category))
+        .filter(|category| selectable.iter().any(|c| c.as_str() == **category))
         .filter_map(|category| Some((*category, categories.get(*category)?.as_str())))
         .collect();
     if !arms.iter().any(|(category, _)| *category == "other") {
@@ -1243,7 +1218,7 @@ mod tests {
     //  6. a literal `%` is escaped in a formatted value, left alone in a bare one
     //  7. an arm the locale cannot select is dropped (`one` in Japanese)
     //  8. ... and likewise `few` authored for English
-    //  9. a locale with no `PLURAL_RULES` row fails rather than guessing
+    //  9. a locale with no `capsule_i18n::plural` row fails rather than guessing
     // 10. embedded plural, `select`, and `offset:` fail the renderer
     // 11. Android quoting: apostrophe, quote, backslash, XML, a leading `@`/`?`
     // 12. end to end: no committed Android value contains ICU syntax
@@ -1417,7 +1392,10 @@ mod tests {
         let err = catalogs
             .android_xml("xx", map)
             .expect_err("an unknown language has no rules to filter by");
-        assert!(format!("{err:#}").contains("PLURAL_RULES"), "{err:#}");
+        assert!(
+            format!("{err:#}").contains("capsule_i18n::plural"),
+            "{err:#}"
+        );
     }
 
     #[test]
@@ -1519,35 +1497,120 @@ mod tests {
         }
     }
 
-    #[test]
-    fn every_emitted_quantity_is_selectable_in_its_locale() {
-        let source = "en".to_string();
-        for (path, xml) in &rendered_android() {
-            // `values/` is the source locale; `values-<qualifier>/` names its own.
-            let dir = path
-                .parent()
-                .and_then(Path::file_name)
-                .map(|d| d.to_string_lossy().into_owned())
-                .expect("a values directory");
-            let locale = dir
-                .strip_prefix("values-")
-                .map_or_else(|| source.clone(), android_locale);
-            let language = locale.split('-').next().unwrap_or(&locale);
-            let selectable = PLURAL_RULES
-                .iter()
-                .find(|(lang, _)| *lang == language)
-                .map_or_else(
-                    || panic!("{}: no PLURAL_RULES row", path.display()),
-                    |(_, cats)| *cats,
-                );
-            for line in xml.lines().filter(|l| l.contains("<item quantity=")) {
-                let quantity = line
-                    .split("quantity=\"")
+    /// The `quantity` attribute of every `<item>` in one rendered `strings.xml`.
+    fn android_quantities(xml: &str) -> Vec<&str> {
+        xml.lines()
+            .filter(|line| line.contains("<item quantity="))
+            .map(|line| {
+                line.split("quantity=\"")
                     .nth(1)
                     .and_then(|rest| rest.split('"').next())
-                    .expect("a quantity attribute");
+                    .expect("a quantity attribute")
+            })
+            .collect()
+    }
+
+    /// The locale a rendered Android resource path belongs to.
+    fn android_path_locale(path: &Path) -> String {
+        let dir = path
+            .parent()
+            .and_then(Path::file_name)
+            .map(|d| d.to_string_lossy().into_owned())
+            .expect("a values directory");
+        // `values/` is the source locale; `values-<qualifier>/` names its own.
+        dir.strip_prefix("values-")
+            .map_or_else(|| "en".to_string(), android_locale)
+    }
+
+    /// The `<item quantity=…>` arms of one `<plurals name=…>` block in a rendered
+    /// `strings.xml`, keyed by quantity.
+    fn android_plural_block(xml: &str, name: &str) -> BTreeMap<String, String> {
+        let mut arms = BTreeMap::new();
+        let open = format!("<plurals name=\"{name}\">");
+        let Some(start) = xml.find(&open) else {
+            return arms;
+        };
+        for line in xml[start..].lines().skip(1) {
+            if line.contains("</plurals>") {
+                break;
+            }
+            let Some((quantity, rest)) = line
+                .split_once("quantity=\"")
+                .and_then(|(_, rest)| rest.split_once("\">"))
+            else {
+                continue;
+            };
+            let body = rest.trim_end().trim_end_matches("</item>");
+            arms.insert(quantity.to_string(), body.to_string());
+        }
+        arms
+    }
+
+    /// The Rust runtime renders exactly the string the Android resource carries.
+    ///
+    /// The agreement that matters, and the one nothing checked before: the generator
+    /// lowers an ICU arm into a `%d` format string ahead of time, the runtime substitutes
+    /// `#` at display time, and the two are supposed to produce the same sentence. Run
+    /// over the **real** catalogs, in every locale, at the CLDR boundary counts, with the
+    /// arm picked by the same rules Android will pick it with — so a divergence in either
+    /// the lowering or the runtime's substitution fails here.
+    ///
+    /// Compared in Android's escaped spelling rather than un-escaping the resource:
+    /// `android_escape` is the function under test on that side, so applying it to the
+    /// runtime's output compares like with like.
+    #[test]
+    fn the_runtime_renders_what_the_android_resource_carries() {
+        let catalogs = Catalogs::load(&repo_root()).expect("the real catalogs load");
+        let rendered: BTreeMap<String, String> = rendered_android()
+            .into_iter()
+            .map(|(path, xml)| (android_path_locale(&path), xml))
+            .collect();
+        let counts: [i64; 8] = [0, 1, 2, 3, 5, 11, 21, 101];
+        let mut compared = 0usize;
+
+        for (locale, messages) in &catalogs.messages {
+            let xml = rendered.get(locale).expect("every locale renders");
+            let bundle = capsule_i18n::Bundle::for_locale(locale);
+            for (key, message) in messages {
+                if !message.contains("plural,") {
+                    continue;
+                }
+                let arms = android_plural_block(xml, &android_name(key));
+                assert!(!arms.is_empty(), "{locale}/{key}: no <plurals> block");
+                for n in counts {
+                    let category = plural::category(locale, n).as_str();
+                    let arm = arms
+                        .get(category)
+                        .or_else(|| arms.get("other"))
+                        .expect("every plural resource carries `other`");
+                    // Single-argument plurals use the unnumbered specifier; a message with
+                    // more arguments numbers them. `%%` is Android's escaped literal `%`.
+                    let expected = arm
+                        .replacen("%1$d", &n.to_string(), 1)
+                        .replacen("%d", &n.to_string(), 1)
+                        .replace("%%", "%");
+                    let runtime = bundle.format(key, &[("count", capsule_i18n::Value::Int(n))]);
+                    assert_eq!(
+                        android_escape(&runtime),
+                        expected,
+                        "{locale}/{key} at n={n}: the runtime and `strings.xml` disagree"
+                    );
+                    compared += 1;
+                }
+            }
+        }
+        assert!(compared > 1000, "only {compared} renderings were compared");
+    }
+
+    #[test]
+    fn every_emitted_quantity_is_selectable_in_its_locale() {
+        for (path, xml) in &rendered_android() {
+            let locale = android_path_locale(path);
+            let selectable = plural::selectable(&locale)
+                .unwrap_or_else(|| panic!("{}: no `capsule_i18n::plural` row", path.display()));
+            for quantity in android_quantities(xml) {
                 assert!(
-                    selectable.contains(&quantity),
+                    selectable.iter().any(|c| c.as_str() == quantity),
                     "{}: `{quantity}` is not selectable in `{locale}`",
                     path.display(),
                 );

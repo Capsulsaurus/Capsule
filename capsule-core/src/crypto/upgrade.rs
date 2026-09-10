@@ -24,7 +24,7 @@
 //! # What the server can decide from here, and what it cannot
 //!
 //! It can verify [`SignedUpgradeIntent`] against the account's published
-//! [`DeviceDirectory`](crate::crypto::keys::DeviceDirectory) — the same trust anchor `S-C42`
+//! [`DeviceDirectory`] — the same trust anchor `S-C42`
 //! established — so a quiescence it records is one an admin device really asked for. It can
 //! evaluate [`UpgradeIntent::is_expired`] against its own clock, which is the whole point of the
 //! deadline being a *duration*: a skewed member clock can neither extend nor shorten the window.
@@ -104,7 +104,7 @@ impl UpgradeIntent {
 }
 
 /// An [`UpgradeIntent`] plus the proposing admin device's DSK **hybrid** signature over it. Rides
-/// the group's application-message channel (self-describing as [`MlsAppPayload::Upgrade`]).
+/// the group's application-message channel (self-describing as the `MlsAppPayload::Upgrade` variant).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignedUpgradeIntent {
     /// The proposed upgrade.

@@ -23,18 +23,24 @@
     reason = "each test binary uses a different part of the fixture"
 )]
 
+pub(crate) mod fault;
+
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use base64::Engine as _;
-use capsule_core::crypto::keys::hybrid_sig::HybridSigningKey;
+use capsule_core::crypto::keys::HybridSigningKey;
 use capsule_server::App;
 use capsule_server::album::{
     AlbumContext, AlbumRecord, AlbumStore, InMemoryAlbums, ProvisionOutcome,
 };
 use capsule_server::app::Modules;
 use capsule_server::attestation::{AttestationContext, InMemoryReceipts, LocalAttestationKey};
+use capsule_server::auth::oidc::{
+    AuthorizationRequest, FederatedAccounts, FederatedLink, IdentityProvider, OidcCollaborators,
+    OidcContext, ProviderError, ProviderFuture, Redemption, VerifiedIdentity,
+};
 use capsule_server::auth::{
     AccountDirectory, AccountProfiles, ActivateOutcome, AuthCollaborators, AuthContext,
     Authentication, BeginOutcome, ConsumeOutcome, DirectoryError, DirectoryFuture, EnrollmentState,
@@ -51,7 +57,7 @@ use capsule_server::directory::{
     PublishedDirectory,
 };
 use capsule_server::discovery::revocation::{
-    InMemoryRevocations, PublishedRevocations, RevocationList, RevokeFuture, RevokedToken,
+    PublishedRevocations, RevocationList, RevokeFuture, RevokedToken,
 };
 use capsule_server::discovery::{DiscoveryContext, ProtocolWindow, ServerInfo};
 use capsule_server::drop::{
@@ -59,14 +65,24 @@ use capsule_server::drop::{
 };
 use capsule_server::enrollment::EnrollmentContext;
 use capsule_server::escrow::{EscrowContext, EscrowRecord, EscrowStore, InMemoryEscrow, Replaced};
+use capsule_server::federation::{
+    CapabilityCodec, CapabilityFilter, CapabilityRecord, CapabilityStore, FederationCollaborators,
+    FederationContext, InMemoryCapabilities, InMemoryPeers, RefreshOutcome, ReportClaim,
+    RevokeOutcome,
+};
 use capsule_server::gc::memory::InMemoryCollection;
 use capsule_server::index::memory::InMemoryAssetIndex;
 use capsule_server::index::{
     AssetIndex, AssetRow, BlobOutcome, BlobRecord, FeedEntry, HoldOutcome, IndexFuture,
     LifecycleOp, OpOutcome, PendingAsset, Reservation, ServingHold,
 };
+use capsule_server::membership::{
+    InMemoryMembership, MemberRole, Membership, MembershipContext, MembershipStore, RosterOutcome,
+    RosterRecord,
+};
 use capsule_server::moderation::{
-    InMemoryModeration, ModerationContext, ModerationEvent, ModerationStore, Standing,
+    FederatedReport, InMemoryModeration, ModerationContext, ModerationEvent, ModerationStore,
+    Standing,
 };
 use capsule_server::quota::{
     ChargeOutcome, InMemoryQuota, QuotaContext, QuotaLimits, QuotaStore, StoredUsage,
@@ -75,21 +91,23 @@ use capsule_server::serve::ServeContext;
 use capsule_server::share::{InMemoryShares, ShareContext, ShareRecord, ShareStore};
 use capsule_server::store::memory::{
     InMemoryAuthState, InMemoryChallenges, InMemoryChannels, InMemoryCohorts, InMemoryEnrollments,
-    InMemoryUploadSessions, ManualClock,
+    InMemoryOidcAuthorizations, InMemoryUploadSessions, ManualClock,
 };
 use capsule_server::store::{
     AcceptedChunk, AlbumId, AssetId, AuthStateStore, ChallengeStore, ChallengeToken, ChannelId,
     ChannelStore, Clock, CohortRecord, CohortStore, Direction, DrainOutcome, ENROLLMENT_CODE_TTL,
-    EnrollmentCode, EnrollmentStore, FinalizeClaim, OwnerId, PendingEnrollment, RELAY_CHANNEL_TTL,
-    RelayChannel, RelayOutcome, RelayPayload, RevokeAllChallenge, SessionId, SessionRecord,
-    StoreError, StoreFuture, UploadId, UploadSessionRecord, UploadSessionStatus,
-    UploadSessionStore, UserId,
+    EnrollmentCode, EnrollmentStore, FinalizeClaim, OidcAuthorizationStore, OidcState, OwnerId,
+    PendingAuthorization, PendingEnrollment, RELAY_CHANNEL_TTL, RelayChannel, RelayOutcome,
+    RelayPayload, RevokeAllChallenge, SessionId, SessionRecord, StoreError, StoreFuture, UploadId,
+    UploadSessionRecord, UploadSessionStatus, UploadSessionStore, UserId,
 };
+
+pub(crate) mod idp;
 use capsule_server::sync::{CURSOR_KEY_LEN, CursorCodec, SyncContext};
 use capsule_server::upload::authority::{
     AlbumWriteAccess, AuthorityError, AuthorityFuture, WriteAuthority,
 };
-use capsule_server::upload::{UploadContext, UploadPolicy};
+use capsule_server::upload::{UploadContext, UploadPolicy, WriteRole};
 use capsule_server::verify::VerifyContext;
 use jiff::{SignedDuration, Timestamp};
 use kynos::test::{TestClient, TestRequest};
@@ -190,6 +208,9 @@ pub(crate) fn identity_header(ik: &HybridSigningKey) -> String {
 /// asserting about one fact rather than two matching literals.
 pub(crate) const SERVER_ORIGIN: &str = "capsule.test";
 
+/// Where peers pull from, in every fixture that federates. The API base, as the design has it.
+pub(crate) const FEDERATION_URL: &str = "https://capsule.test/v1";
+
 /// The account [`Fixture::working`] seeds.
 pub(crate) const EMAIL: &str = "somebody@example.test";
 
@@ -207,6 +228,239 @@ const REFUSAL: &str = "the double refuses on purpose";
 pub(crate) const CURSOR_KEY: [u8; CURSOR_KEY_LEN] = [0x5C; CURSOR_KEY_LEN];
 
 // ===========================================================================================
+// Identity provider double (`S-N1`)
+// ===========================================================================================
+
+/// The authorization code the double redeems; every other code is `invalid_grant`.
+pub(crate) const GOOD_CODE: &str = "good-code";
+
+/// An identity provider that answers whatever the test told it to.
+///
+/// The routes are tested against this; the real [`HttpIdentityProvider`] is tested against the
+/// in-process mock provider in [`idp`], which speaks the real wire. Every refusal the port can
+/// make is a switch here, so the conformance walk can produce each declared response.
+#[derive(Debug)]
+pub(crate) struct SwitchableIdentityProvider {
+    configured: AtomicBool,
+    unavailable: AtomicBool,
+    identity: Mutex<VerifiedIdentity>,
+    token_rejected: AtomicBool,
+    /// Every authorization request the server built, for a case that reads the ceremony back.
+    requests: Mutex<Vec<RecordedAuthorization>>,
+}
+
+/// One authorization request as the double saw it.
+#[derive(Debug, Clone)]
+pub(crate) struct RecordedAuthorization {
+    pub(crate) redirect_uri: String,
+    pub(crate) state: String,
+    pub(crate) nonce: String,
+    pub(crate) code_challenge: String,
+}
+
+impl SwitchableIdentityProvider {
+    pub(crate) fn new() -> Self {
+        Self {
+            configured: AtomicBool::new(true),
+            unavailable: AtomicBool::new(false),
+            identity: Mutex::new(VerifiedIdentity {
+                issuer: "https://idp.test".to_owned(),
+                subject: "subject-1".to_owned(),
+                email: Some("federated@example.test".to_owned()),
+                email_verified: true,
+            }),
+            token_rejected: AtomicBool::new(false),
+            requests: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Whether the deployment has a provider at all.
+    pub(crate) fn set_configured(&self, configured: bool) {
+        self.configured.store(configured, Ordering::SeqCst);
+    }
+
+    /// Make every operation fail as an unreachable provider, or stop.
+    pub(crate) fn set_unavailable(&self, unavailable: bool) {
+        self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    /// Make the next redemptions fail as a refused ID token, or stop.
+    pub(crate) fn set_token_rejected(&self, rejected: bool) {
+        self.token_rejected.store(rejected, Ordering::SeqCst);
+    }
+
+    /// The identity every successful redemption yields.
+    pub(crate) fn set_identity(&self, identity: VerifiedIdentity) {
+        *self.identity.lock().unwrap_or_else(PoisonError::into_inner) = identity;
+    }
+
+    /// The authorization requests the server has built so far.
+    pub(crate) fn requests(&self) -> Vec<RecordedAuthorization> {
+        self.requests
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl SwitchableIdentityProvider {
+    /// The real policy, so the double's redirect decision is the adapter's decision.
+    ///
+    /// One function for both `admits_redirect` and `authorization_url`: a double that answered
+    /// the look-ahead and the enforcement differently would let the route's counter-key choice
+    /// pass a test the shipped adapter fails.
+    fn policy() -> capsule_server::auth::oidc::RedirectPolicy {
+        capsule_server::auth::oidc::RedirectPolicy::new(
+            Some("https://app.test/oidc/callback".to_owned()),
+            true,
+        )
+    }
+}
+
+impl IdentityProvider for SwitchableIdentityProvider {
+    fn admits_redirect(&self, redirect_uri: &str) -> bool {
+        self.configured.load(Ordering::SeqCst) && Self::policy().admits(redirect_uri)
+    }
+
+    fn authorization_url<'a>(
+        &'a self,
+        request: &'a AuthorizationRequest<'a>,
+    ) -> ProviderFuture<'a, String> {
+        Box::pin(async move {
+            if !self.configured.load(Ordering::SeqCst) {
+                return Err(ProviderError::NotConfigured);
+            }
+            if !Self::policy().admits(request.redirect_uri) {
+                return Err(ProviderError::RedirectRefused {
+                    redirect_uri: request.redirect_uri.to_owned(),
+                });
+            }
+            if self.unavailable.load(Ordering::SeqCst) {
+                return Err(ProviderError::Unavailable {
+                    detail: REFUSAL.to_owned(),
+                });
+            }
+            self.requests
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(RecordedAuthorization {
+                    redirect_uri: request.redirect_uri.to_owned(),
+                    state: request.state.as_str().to_owned(),
+                    nonce: request.nonce.as_str().to_owned(),
+                    code_challenge: request.code_challenge.to_owned(),
+                });
+            Ok(format!(
+                "https://idp.test/authorize?state={}&nonce={}&code_challenge={}",
+                request.state.as_str(),
+                request.nonce.as_str(),
+                request.code_challenge
+            ))
+        })
+    }
+
+    fn redeem<'a>(
+        &'a self,
+        redemption: &'a Redemption<'a>,
+    ) -> ProviderFuture<'a, VerifiedIdentity> {
+        Box::pin(async move {
+            if !self.configured.load(Ordering::SeqCst) {
+                return Err(ProviderError::NotConfigured);
+            }
+            if self.unavailable.load(Ordering::SeqCst) {
+                return Err(ProviderError::Unavailable {
+                    detail: REFUSAL.to_owned(),
+                });
+            }
+            if redemption.code.as_str() != GOOD_CODE {
+                return Err(ProviderError::ExchangeRefused {
+                    detail: "invalid_grant".to_owned(),
+                });
+            }
+            if self.token_rejected.load(Ordering::SeqCst) {
+                return Err(ProviderError::TokenRejected(
+                    capsule_server::auth::oidc::ClaimRejection::Nonce,
+                ));
+            }
+            Ok(self
+                .identity
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone())
+        })
+    }
+}
+
+/// The OIDC ceremony store, with two switches: unreachable, and full.
+#[derive(Debug)]
+pub(crate) struct SwitchableOidcAuthorizations {
+    inner: InMemoryOidcAuthorizations,
+    unavailable: AtomicBool,
+    full: AtomicBool,
+}
+
+impl SwitchableOidcAuthorizations {
+    pub(crate) fn new(clock: Arc<ManualClock>) -> Self {
+        Self {
+            inner: InMemoryOidcAuthorizations::with_default_ttl(clock),
+            unavailable: AtomicBool::new(false),
+            full: AtomicBool::new(false),
+        }
+    }
+
+    pub(crate) fn set_unavailable(&self, unavailable: bool) {
+        self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    /// Make every `begin` answer as a store at its ceiling, or stop.
+    pub(crate) fn set_full(&self, full: bool) {
+        self.full.store(full, Ordering::SeqCst);
+    }
+
+    fn refuse(&self) -> Result<(), StoreError> {
+        if self.unavailable.load(Ordering::SeqCst) {
+            return Err(StoreError::Unavailable {
+                store: "oidc authorizations",
+                detail: REFUSAL.to_owned(),
+            });
+        }
+        Ok(())
+    }
+}
+
+impl OidcAuthorizationStore for SwitchableOidcAuthorizations {
+    fn ttl(&self) -> SignedDuration {
+        self.inner.ttl()
+    }
+
+    fn begin<'a>(
+        &'a self,
+        state: &'a OidcState,
+        record: PendingAuthorization,
+    ) -> StoreFuture<'a, ()> {
+        Box::pin(async move {
+            self.refuse()?;
+            if self.full.load(Ordering::SeqCst) {
+                return Err(StoreError::Rejected {
+                    store: "oidc authorizations",
+                    detail: REFUSAL.to_owned(),
+                });
+            }
+            self.inner.begin(state, record).await
+        })
+    }
+
+    fn consume<'a>(
+        &'a self,
+        state: &'a OidcState,
+    ) -> StoreFuture<'a, Option<PendingAuthorization>> {
+        Box::pin(async move {
+            self.refuse()?;
+            self.inner.consume(state).await
+        })
+    }
+}
+
+// ===========================================================================================
 // Account directory double
 // ===========================================================================================
 
@@ -219,6 +473,8 @@ pub(crate) const CURSOR_KEY: [u8; CURSOR_KEY_LEN] = [0x5C; CURSOR_KEY_LEN];
 #[derive(Debug, Default)]
 pub(crate) struct InMemoryAccounts {
     accounts: Mutex<BTreeMap<String, Account>>,
+    /// `(issuer, subject)` → the account a federated sign-in resolved to (`S-N1`).
+    federated: Mutex<BTreeMap<(String, String), UserId>>,
     unavailable: AtomicBool,
     forget_after_authentication: AtomicBool,
 }
@@ -299,6 +555,47 @@ impl InMemoryAccounts {
 
     fn accounts(&self) -> MutexGuard<'_, BTreeMap<String, Account>> {
         self.accounts.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl FederatedAccounts for InMemoryAccounts {
+    /// Shares the password directory's rows, as the Postgres adapter will: an asserted address a
+    /// password account holds is `AddressTaken`, and a created federated account is one nothing
+    /// can sign into with a password, because no password row exists for it.
+    ///
+    /// This double encodes the contract #460 owes — one account table, the cross-directory
+    /// `409`, a null credential `authenticate` refuses — and not behaviour the server ships:
+    /// the development profile's `InMemoryFederatedAccounts` holds rows of its own. Only a
+    /// **verified** address is compared, as the shipped adapter does.
+    fn resolve_or_create<'a>(
+        &'a self,
+        identity: &'a VerifiedIdentity,
+        user: &'a UserId,
+        _at: Timestamp,
+    ) -> DirectoryFuture<'a, FederatedLink> {
+        Box::pin(async move {
+            if self.unavailable.load(Ordering::SeqCst) {
+                return Err(DirectoryError::Unavailable {
+                    detail: REFUSAL.to_owned(),
+                });
+            }
+            let mut federated = self
+                .federated
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let key = (identity.issuer.clone(), identity.subject.clone());
+            if let Some(existing) = federated.get(&key) {
+                return Ok(FederatedLink::Linked(existing.clone()));
+            }
+            if let Some(email) = &identity.email
+                && identity.email_verified
+                && self.accounts().contains_key(email)
+            {
+                return Ok(FederatedLink::AddressTaken);
+            }
+            federated.insert(key, user.clone());
+            Ok(FederatedLink::Created(user.clone()))
+        })
     }
 }
 
@@ -937,6 +1234,20 @@ impl ModerationStore for SwitchableModeration {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.events_for_user(user)
+    }
+
+    fn file_report(&self, report: FederatedReport) -> StoreFuture<'_, ()> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.file_report(report)
+    }
+
+    fn pending_reports(&self) -> StoreFuture<'_, Vec<FederatedReport>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.pending_reports()
     }
 }
 
@@ -1716,7 +2027,10 @@ impl BlobStore for SwallowingBlobs {
 /// would, rather than by flipping a flag the port does not have.
 #[derive(Debug, Default)]
 pub(crate) struct TestAuthority {
-    albums: Mutex<BTreeMap<(String, String), String>>,
+    /// Each album's owner and protocol pin.
+    albums: Mutex<BTreeMap<String, (String, String)>>,
+    /// Each `(album, member)`'s role on the roster (`S-C51`).
+    shares: Mutex<BTreeMap<(String, String), MemberRole>>,
     upgrades: Mutex<BTreeMap<(String, String), Uuid>>,
     devices: Mutex<BTreeMap<(String, Uuid), Timestamp>>,
     unavailable: AtomicBool,
@@ -1731,12 +2045,25 @@ impl TestAuthority {
     /// Record `album` as writable by `owner`, pinned to `protocol_pin`.
     pub(crate) fn allow_album(&self, owner: &OwnerId, album: &AlbumId, protocol_pin: &str) {
         self.albums().insert(
-            (owner.as_str().to_owned(), album.as_str().to_owned()),
-            protocol_pin.to_owned(),
+            album.as_str().to_owned(),
+            (owner.as_str().to_owned(), protocol_pin.to_owned()),
         );
     }
 
-    /// Forget an album, as a closed or unshared one would be.
+    /// Put `member` on `album`'s roster with `role` (`S-C51`).
+    pub(crate) fn share(&self, album: &AlbumId, member: &UserId, role: MemberRole) {
+        self.shares().insert(
+            (album.as_str().to_owned(), member.as_str().to_owned()),
+            role,
+        );
+    }
+
+    /// Take `member` off `album`'s roster.
+    pub(crate) fn unshare(&self, album: &AlbumId, member: &UserId) {
+        self.shares()
+            .remove(&(album.as_str().to_owned(), member.as_str().to_owned()));
+    }
+
     /// Put an album into upgrade quiescence under `intent` (`S-C24`).
     ///
     /// The double carries the fact the production authority reads off the album record, so a
@@ -1761,9 +2088,21 @@ impl TestAuthority {
             .copied()
     }
 
+    /// Forget an album, as a closed one would be.
+    ///
+    /// `owner` is asserted rather than looked up: the map is album-keyed, and a case that closes
+    /// the wrong owner's album would otherwise pass vacuously.
     pub(crate) fn close_album(&self, owner: &OwnerId, album: &AlbumId) {
-        self.albums()
-            .remove(&(owner.as_str().to_owned(), album.as_str().to_owned()));
+        let mut albums = self.albums();
+        assert!(
+            albums
+                .get(album.as_str())
+                .is_some_and(|(held, _)| held == owner.as_str()),
+            "close_album: {album} is not {owner}'s"
+        );
+        {
+            albums.remove(album.as_str());
+        }
     }
 
     /// Record `device` as entering `user`'s directory at `added_at`.
@@ -1782,8 +2121,12 @@ impl TestAuthority {
         self.unavailable.store(unavailable, Ordering::SeqCst);
     }
 
-    fn albums(&self) -> MutexGuard<'_, BTreeMap<(String, String), String>> {
+    fn albums(&self) -> MutexGuard<'_, BTreeMap<String, (String, String)>> {
         self.albums.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn shares(&self) -> MutexGuard<'_, BTreeMap<(String, String), MemberRole>> {
+        self.shares.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn devices(&self) -> MutexGuard<'_, BTreeMap<(String, Uuid), Timestamp>> {
@@ -1798,20 +2141,34 @@ impl TestAuthority {
 impl WriteAuthority for TestAuthority {
     fn album_write_access<'a>(
         &'a self,
-        owner: &'a OwnerId,
+        caller: &'a UserId,
         album: &'a AlbumId,
     ) -> AuthorityFuture<'a, AlbumWriteAccess> {
         Box::pin(async move {
             if self.is_down() {
                 return Err(AuthorityError::unavailable(REFUSAL));
             }
-            Ok(self
-                .albums()
-                .get(&(owner.as_str().to_owned(), album.as_str().to_owned()))
-                .map_or(AlbumWriteAccess::Denied, |pin| AlbumWriteAccess::Writable {
-                    protocol_pin: pin.clone(),
-                    quiescing_under: self.quiescing_under(owner, album),
-                }))
+            let Some((owner, pin)) = self.albums().get(album.as_str()).cloned() else {
+                return Ok(AlbumWriteAccess::Denied);
+            };
+            let role = if owner == caller.as_str() {
+                WriteRole::Owner
+            } else {
+                match self
+                    .shares()
+                    .get(&(album.as_str().to_owned(), caller.as_str().to_owned()))
+                {
+                    Some(MemberRole::Writer) => WriteRole::Member,
+                    _ => return Ok(AlbumWriteAccess::Denied),
+                }
+            };
+            let owner_id = OwnerId::new(owner);
+            Ok(AlbumWriteAccess::Writable {
+                protocol_pin: pin,
+                quiescing_under: self.quiescing_under(&owner_id, album),
+                owner_id,
+                role,
+            })
         })
     }
 
@@ -1921,6 +2278,67 @@ impl QuotaStore for SwitchableQuota {
     }
 }
 
+/// A membership store that can be made to fail on demand.
+#[derive(Debug, Default)]
+pub(crate) struct SwitchableMembership {
+    inner: InMemoryMembership,
+    unavailable: AtomicBool,
+}
+
+impl SwitchableMembership {
+    /// A working store.
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Make every subsequent operation fail, or stop.
+    pub(crate) fn set_unavailable(&self, unavailable: bool) {
+        self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    fn refuse<T>() -> Result<T, StoreError> {
+        Err(StoreError::Unavailable {
+            store: "membership",
+            detail: REFUSAL.to_owned(),
+        })
+    }
+
+    fn is_down(&self) -> bool {
+        self.unavailable.load(Ordering::SeqCst)
+    }
+}
+
+impl MembershipStore for SwitchableMembership {
+    fn apply_roster(
+        &self,
+        roster: RosterRecord,
+        members: Vec<(UserId, MemberRole)>,
+    ) -> StoreFuture<'_, RosterOutcome> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.apply_roster(roster, members)
+    }
+
+    fn membership<'a>(
+        &'a self,
+        album: &'a AlbumId,
+        user: &'a UserId,
+    ) -> StoreFuture<'a, Membership> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.membership(album, user)
+    }
+
+    fn current_roster<'a>(&'a self, album: &'a AlbumId) -> StoreFuture<'a, Option<RosterRecord>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.current_roster(album)
+    }
+}
+
 /// An album store that can be made to fail on demand.
 #[derive(Debug, Default)]
 pub(crate) struct SwitchableAlbums {
@@ -1993,31 +2411,47 @@ impl AlbumStore for SwitchableAlbums {
     }
 }
 
-/// A revocation list that can be made to fail on demand.
+/// A capability store — and therefore a revocation list — that can be made to fail on demand.
 ///
-/// Delegates to a real in-memory list, so the failing case and the working case differ in
+/// Delegates to the real in-memory store, so the failing case and the working case differ in
 /// exactly one thing. It exists because `503` on the published record is a *claim*: the
 /// endpoint refuses to serve an empty list on a storage failure, since an empty list is the
 /// strongest statement the record can make and serving it during an outage would silently
 /// un-revoke every token a peer holds. A status nothing can reach is a status nothing proves.
+///
+/// One object behind two ports, exactly as `boot` wires it: discovery reads it as the list and
+/// federation writes it as the store, so a revocation the federation layer records is the one
+/// `revoked-jti` publishes.
 #[derive(Debug)]
 pub(crate) struct SwitchableRevocations {
-    inner: InMemoryRevocations,
+    inner: InMemoryCapabilities,
     unavailable: AtomicBool,
+    writes_unavailable: AtomicBool,
 }
 
 impl SwitchableRevocations {
-    /// A working list reading `clock` for pruning.
+    /// A working store reading `clock` for pruning.
     pub(crate) fn new(clock: Arc<ManualClock>) -> Self {
         Self {
-            inner: InMemoryRevocations::new(clock),
+            inner: InMemoryCapabilities::new(clock),
             unavailable: AtomicBool::new(false),
+            writes_unavailable: AtomicBool::new(false),
         }
     }
 
     /// Make every subsequent operation fail, or stop.
     pub(crate) fn set_unavailable(&self, unavailable: bool) {
         self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    /// Make every subsequent *write* fail while reads keep answering, or stop.
+    ///
+    /// The one seam a route-level `500` can be reached through: a store that cannot be **read**
+    /// refuses the credential in the authenticator, which can render only `401`, so a whole
+    /// outage never reaches a handler. A store that answers `find` and refuses `refresh` is the
+    /// partial failure the coded `500` exists for.
+    pub(crate) fn set_writes_unavailable(&self, unavailable: bool) {
+        self.writes_unavailable.store(unavailable, Ordering::SeqCst);
     }
 
     fn refuse<T>() -> Result<T, StoreError> {
@@ -2030,11 +2464,15 @@ impl SwitchableRevocations {
     fn is_down(&self) -> bool {
         self.unavailable.load(Ordering::SeqCst)
     }
+
+    fn writes_down(&self) -> bool {
+        self.is_down() || self.writes_unavailable.load(Ordering::SeqCst)
+    }
 }
 
 impl RevocationList for SwitchableRevocations {
     fn revoke(&self, token: RevokedToken) -> RevokeFuture<'_> {
-        if self.is_down() {
+        if self.writes_down() {
             return Box::pin(async { Self::refuse().map_err(Into::into) });
         }
         self.inner.revoke(token)
@@ -2045,6 +2483,52 @@ impl RevocationList for SwitchableRevocations {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.published()
+    }
+}
+
+impl CapabilityStore for SwitchableRevocations {
+    fn issue(&self, record: CapabilityRecord) -> StoreFuture<'_, ()> {
+        if self.writes_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.issue(record)
+    }
+
+    fn find<'a>(&'a self, jti: &'a str) -> StoreFuture<'a, Option<CapabilityRecord>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.find(jti)
+    }
+
+    fn live<'a>(
+        &'a self,
+        filter: &'a CapabilityFilter,
+        now: Timestamp,
+    ) -> StoreFuture<'a, Vec<CapabilityRecord>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.live(filter, now)
+    }
+
+    fn revoke_issued<'a>(&'a self, jti: &'a str, at: Timestamp) -> StoreFuture<'a, RevokeOutcome> {
+        if self.writes_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.revoke_issued(jti, at)
+    }
+
+    fn refresh<'a>(
+        &'a self,
+        predecessor: &'a str,
+        successor: CapabilityRecord,
+        at: Timestamp,
+    ) -> StoreFuture<'a, RefreshOutcome> {
+        if self.writes_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.refresh(predecessor, successor, at)
     }
 }
 
@@ -2247,6 +2731,100 @@ impl AssetIndex for SwitchableIndex {
         }
         self.inner.head_seq(owner)
     }
+
+    fn album_feed_page<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        album: &'a AlbumId,
+        after: u64,
+        limit: usize,
+    ) -> IndexFuture<'a, Vec<FeedEntry>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.album_feed_page(owner, album, after, limit)
+    }
+
+    fn album_head_seq<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        album: &'a AlbumId,
+    ) -> IndexFuture<'a, u64> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.album_head_seq(owner, album)
+    }
+}
+
+/// The fixture's client: Kynos's in-process `TestClient`, sending the protocol handshake.
+///
+/// Every request a real client makes carries `X-Capsule-Protocol` — the SDK sets it as a
+/// default header on its transport — so the fixture does the same, once, here, rather than at
+/// every one of the suite's several hundred request sites. A case about the handshake itself
+/// overrides the header (a later `header` call replaces an earlier one) or reaches for
+/// [`Client::raw`] to send none at all; the two are the only ways a request leaves without it,
+/// which is what keeps "the gate refused this" a deliberate assertion rather than a fixture
+/// accident.
+///
+/// Deliberately not `Deref` to the inner client: a function taking `&TestClient<App>` would
+/// then accept this and silently drive the router without the handshake.
+pub(crate) struct Client {
+    inner: TestClient<App>,
+}
+
+impl Client {
+    pub(crate) fn new(inner: TestClient<App>) -> Self {
+        Self { inner }
+    }
+
+    /// The bare client, for a request that must **not** carry the handshake.
+    pub(crate) fn raw(&self) -> &TestClient<App> {
+        &self.inner
+    }
+
+    fn handshake<'a>(request: TestRequest<'a, App>) -> TestRequest<'a, App> {
+        request.header("x-capsule-protocol", PROTOCOL_VERSION)
+    }
+
+    pub(crate) fn get(&self, path: &str) -> TestRequest<'_, App> {
+        Self::handshake(self.inner.get(path))
+    }
+
+    pub(crate) fn post(&self, path: &str) -> TestRequest<'_, App> {
+        Self::handshake(self.inner.post(path))
+    }
+
+    pub(crate) fn put(&self, path: &str) -> TestRequest<'_, App> {
+        Self::handshake(self.inner.put(path))
+    }
+
+    pub(crate) fn patch(&self, path: &str) -> TestRequest<'_, App> {
+        Self::handshake(self.inner.patch(path))
+    }
+
+    pub(crate) fn delete(&self, path: &str) -> TestRequest<'_, App> {
+        Self::handshake(self.inner.delete(path))
+    }
+
+    pub(crate) fn head(&self, path: &str) -> TestRequest<'_, App> {
+        Self::handshake(self.inner.head(path))
+    }
+
+    /// A request with any method, for a walk driven by the document rather than by a verb.
+    pub(crate) fn method(&self, method: kynos::http::Method, path: &str) -> TestRequest<'_, App> {
+        Self::handshake(self.inner.method(method, path))
+    }
+
+    /// Every response this client observed was one the description predicts.
+    pub(crate) fn assert_conformance(&self) {
+        self.inner.assert_conformance();
+    }
+
+    /// Every response the description predicts was produced through this client.
+    pub(crate) fn assert_declared_responses_covered(&self) {
+        self.inner.assert_declared_responses_covered();
+    }
 }
 
 /// A built server, plus handles on everything behind it.
@@ -2254,8 +2832,8 @@ impl AssetIndex for SwitchableIndex {
 /// The handles matter: an assertion about a session is made against the store the server just
 /// wrote to, not against a second reading of the response body.
 pub(crate) struct Fixture {
-    /// The in-process client. No socket, no port, no runtime flavour.
-    pub(crate) client: TestClient<App>,
+    /// The in-process client, sending the handshake on every request. No socket, no port.
+    pub(crate) client: Client,
     /// The context the client drives, for the one case that has to serve it on a socket.
     app: App,
     /// The store the server opened its sessions in.
@@ -2275,6 +2853,12 @@ pub(crate) struct Fixture {
     pub(crate) authority: Arc<TestAuthority>,
     /// The durable asset index the feed reads from.
     pub(crate) index: Arc<SwitchableIndex>,
+    /// The crash seam wrapped around it, disarmed unless a case arms it (E2E case 11).
+    ///
+    /// Always in the chain rather than swapped in by a second constructor: a decorator that only
+    /// some fixtures carried would be a second wiring for the tests that carry it, and this one
+    /// delegates every call it is not armed for.
+    pub(crate) index_fault: Arc<fault::CrashBeforeCommit>,
     /// The cursor codec the server mints with — the *same* one, so a test can mint a cursor
     /// the server will accept, or one it must not.
     pub(crate) cursors: Arc<CursorCodec>,
@@ -2282,6 +2866,8 @@ pub(crate) struct Fixture {
     pub(crate) directories: Arc<SwitchableDirectories>,
     /// The albums the server has provisioned.
     pub(crate) albums: Arc<SwitchableAlbums>,
+    /// The album rosters the server holds, and who they make a member (`S-C51`).
+    pub(crate) members: Arc<SwitchableMembership>,
     /// The quota ledger the server charges against.
     pub(crate) quotas: Arc<SwitchableQuota>,
     /// The collector's marks, which is where `retrievable` diverges from `stored`.
@@ -2291,8 +2877,13 @@ pub(crate) struct Fixture {
     /// The attestation key the server signs receipts with — the *same* one, so a test can
     /// verify a fetched receipt the way a client would.
     pub(crate) attestation_key: Arc<LocalAttestationKey>,
-    /// The federation capability revocations this server publishes.
+    /// The federation capabilities this server issued, and the revocations it publishes.
     pub(crate) revocations: Arc<SwitchableRevocations>,
+    /// The peers this server has pinned or blocked.
+    pub(crate) peers: Arc<InMemoryPeers>,
+    /// The capability codec the server mints with — the *same* one, over the *same* key as
+    /// `tokens`, so a test can mint a capability the server will accept, or one it must not.
+    pub(crate) codec: Arc<CapabilityCodec>,
     /// The single-use revoke-all challenges.
     pub(crate) challenges: Arc<SwitchableChallenges>,
     /// The account's wrapped master key.
@@ -2316,6 +2907,10 @@ pub(crate) struct Fixture {
     /// The code generator the server verifies with — the *same* one, so a case can compute the
     /// code an authenticator app would be showing rather than guessing at one.
     pub(crate) codes: Arc<TotpCodes>,
+    /// The identity provider double (`S-N1`), when the fixture was built with one.
+    pub(crate) idp: Arc<SwitchableIdentityProvider>,
+    /// The pending OIDC ceremonies.
+    pub(crate) oidc_authorizations: Arc<SwitchableOidcAuthorizations>,
 }
 
 impl Fixture {
@@ -2329,11 +2924,64 @@ impl Fixture {
 
     /// The same server, with a deployment's quota thresholds.
     pub(crate) fn with_quota(quota_limits: QuotaLimits) -> Self {
+        Self::build(quota_limits, None, None, Some(FEDERATION_URL.to_owned()))
+    }
+
+    /// The working server over a **real** identity provider adapter, for the cases that drive
+    /// the wire against the mock provider in [`idp`]. `fixture.idp` is present but unused.
+    pub(crate) fn with_identity_provider(provider: Arc<dyn IdentityProvider>) -> Self {
+        Self::build(
+            QuotaLimits::unlimited(),
+            Some(provider),
+            None,
+            Some(FEDERATION_URL.to_owned()),
+        )
+    }
+
+    /// The working server whose rate-limit counters hold at most `ceiling` keys **per
+    /// partition**.
+    ///
+    /// The shipped ceilings are twenty thousand keys wide, which is the right number for a
+    /// deployment and the wrong number for a wire test: saturating one over HTTP would be twenty
+    /// thousand requests. The property a saturated partition has to have — `429` with the
+    /// at-capacity code rather than a `500` that impersonates an outage — does not depend on how
+    /// wide it is, so the tests that assert it shrink the partitions and spend two requests.
+    pub(crate) fn with_counter_ceiling(ceiling: usize) -> Self {
+        Self::build(
+            QuotaLimits::unlimited(),
+            None,
+            Some(ceiling),
+            Some(FEDERATION_URL.to_owned()),
+        )
+    }
+
+    /// The same server on a deployment that does **not** federate: `FEDERATION_URL` unset.
+    ///
+    /// Its own constructor rather than a switch on the built fixture, because the setting is
+    /// read once at boot and a server that changed its mind at runtime would be testing a
+    /// deployment nobody runs.
+    pub(crate) fn without_federation() -> Self {
+        Self::build(QuotaLimits::unlimited(), None, None, None)
+    }
+
+    fn build(
+        quota_limits: QuotaLimits,
+        provider: Option<Arc<dyn IdentityProvider>>,
+        counter_ceiling: Option<usize>,
+        federation_url: Option<String>,
+    ) -> Self {
         let clock = Arc::new(ManualClock::default());
         let sessions = Arc::new(SwitchableSessions::new(clock.clone()));
         let accounts = Arc::new(InMemoryAccounts::new());
         accounts.insert(EMAIL, PASSWORD, &user());
-        let tokens = Arc::new(signer(clock.clone()));
+        // One key pair for both token types, as `boot` wires it: the capability a peer verifies
+        // against `server-info`'s key is signed by the key that signs sessions.
+        let der = signing_key_der();
+        let tokens = Arc::new(signer_from(&der, clock.clone()));
+        let codec = Arc::new(
+            CapabilityCodec::from_pkcs8(&der, SERVER_ORIGIN, clock.clone())
+                .expect("a key just generated parses"),
+        );
 
         let uploads = Arc::new(SwitchableUploads::new(clock.clone()));
         let blobs = Arc::new(SwallowingBlobs::new());
@@ -2346,9 +2994,11 @@ impl Fixture {
         authority.add_device(&user(), device(), clock.now());
 
         let index = Arc::new(SwitchableIndex::new());
+        let index_fault = Arc::new(fault::CrashBeforeCommit::new(index.clone()));
         let cursors = Arc::new(CursorCodec::new(&CURSOR_KEY));
         let directories = Arc::new(SwitchableDirectories::new());
         let albums = Arc::new(SwitchableAlbums::new());
+        let members = Arc::new(SwitchableMembership::new());
         let quotas = Arc::new(SwitchableQuota::new());
         let marks = Arc::new(InMemoryCollection::new());
         let receipts = Arc::new(InMemoryReceipts::new());
@@ -2357,9 +3007,10 @@ impl Fixture {
         // anything holding that key manufacture custody evidence.
         let attestation_key = Arc::new(LocalAttestationKey::new(
             SERVER_ORIGIN,
-            capsule_core::crypto::keys::hybrid_sig::HybridSigningKey::generate(),
+            capsule_core::crypto::keys::HybridSigningKey::generate(),
         ));
         let revocations = Arc::new(SwitchableRevocations::new(clock.clone()));
+        let peers = Arc::new(InMemoryPeers::new());
         let challenges = Arc::new(SwitchableChallenges::new(clock.clone()));
         let escrows = Arc::new(SwitchableEscrow::new());
         let cohorts = Arc::new(SwitchableCohorts::new());
@@ -2368,9 +3019,15 @@ impl Fixture {
         let moderation = Arc::new(SwitchableModeration::new());
         let shares = Arc::new(SwitchableShares::new());
         let dropstore = Arc::new(SwitchableDrops::new());
-        let counters = Arc::new(InMemoryCounters::new());
+        let counters = Arc::new(match counter_ceiling {
+            Some(ceiling) => InMemoryCounters::new().with_ceiling(ceiling),
+            None => InMemoryCounters::new(),
+        });
         let totp = Arc::new(InMemoryTotp::new());
         let codes = Arc::new(TotpCodes::new("Capsule"));
+        let idp = Arc::new(SwitchableIdentityProvider::new());
+        let oidc_authorizations = Arc::new(SwitchableOidcAuthorizations::new(clock.clone()));
+        let provider: Arc<dyn IdentityProvider> = provider.unwrap_or_else(|| idp.clone());
 
         // One index behind both modules, which is what makes "upload it, then read it back off
         // the feed" a test of the server rather than of two disconnected doubles.
@@ -2386,25 +3043,40 @@ impl Fixture {
                 tokens: tokens.clone(),
                 clock: clock.clone(),
             }),
+            // Every module reads the index **through** the crash seam, so an armed fault is a
+            // property of the server rather than of one module's wiring — and a disarmed one is
+            // a delegating pass-through, which is what every other case sees.
             upload: UploadContext::new(
                 uploads.clone(),
                 blobs.clone(),
-                index.clone(),
+                index_fault.clone(),
                 authority.clone(),
                 clock.clone(),
                 UploadPolicy::default(),
             ),
-            sync: SyncContext::new(index.clone(), blobs.clone(), cursors.clone()),
+            sync: SyncContext::new(
+                index_fault.clone(),
+                blobs.clone(),
+                cursors.clone(),
+                albums.clone(),
+                members.clone(),
+            ),
             serve: ServeContext::new(
-                index.clone(),
+                index_fault.clone(),
                 blobs.clone(),
                 marks.clone(),
                 uploads.clone(),
-                capsule_server::serve::owned_assets(),
+                capsule_server::serve::membership_reads(members.clone()),
             ),
-            verify: VerifyContext::new(index.clone(), blobs.clone(), marks.clone(), clock.clone()),
+            verify: VerifyContext::new(
+                index_fault.clone(),
+                blobs.clone(),
+                marks.clone(),
+                clock.clone(),
+            ),
             directories: DeviceDirectoryContext::new(directories.clone(), clock.clone()),
             albums: AlbumContext::new(albums.clone(), clock.clone()),
+            membership: MembershipContext::new(members.clone(), clock.clone()),
             quota: QuotaContext::new(quotas.clone(), clock.clone(), quota_limits),
             attestation: AttestationContext::new(
                 receipts.clone(),
@@ -2413,6 +3085,14 @@ impl Fixture {
             ),
             discovery: DiscoveryContext::new(Arc::new(server_info(&tokens)), revocations.clone()),
             escrow: EscrowContext::new(escrows.clone(), clock.clone()),
+            // Configured unless the case asked otherwise ([`Fixture::without_federation`]).
+            federation: FederationContext::new(FederationCollaborators {
+                codec: codec.clone(),
+                capabilities: revocations.clone(),
+                peers: peers.clone(),
+                clock: clock.clone(),
+                federation_url,
+            }),
             enrollment: EnrollmentContext::new(
                 enrollments.clone(),
                 channels.clone(),
@@ -2428,12 +3108,18 @@ impl Fixture {
             ),
             counters: CounterContext::new(counters.clone(), clock.clone()),
             totp: TotpContext::new(totp.clone(), codes.clone()),
+            oidc: OidcContext::new(OidcCollaborators {
+                provider,
+                authorizations: oidc_authorizations.clone(),
+                accounts: accounts.clone(),
+                clock: clock.clone(),
+            }),
         });
 
         Self {
-            client: TestClient::new(
+            client: Client::new(TestClient::new(
                 capsule_server::service(app.clone()).expect("the router builds"),
-            ),
+            )),
             app,
             sessions,
             accounts,
@@ -2443,14 +3129,18 @@ impl Fixture {
             blobs,
             authority,
             index,
+            index_fault,
             cursors,
             directories,
             albums,
+            members,
             quotas,
             marks,
             receipts,
             attestation_key,
             revocations,
+            peers,
+            codec,
             challenges,
             escrows,
             cohorts,
@@ -2462,6 +3152,8 @@ impl Fixture {
             counters,
             totp,
             codes,
+            idp,
+            oidc_authorizations,
         }
     }
 
@@ -2492,7 +3184,11 @@ impl Fixture {
 
         let blobs = Arc::new(SwallowingBlobs::new());
         let index = Arc::new(SwitchableIndex::new());
-        let tokens = Arc::new(signer(clock.clone()));
+        let members = Arc::new(InMemoryMembership::new());
+        let albums = Arc::new(SwitchableAlbums::new());
+        let der = signing_key_der();
+        let tokens = Arc::new(signer_from(&der, clock.clone()));
+        let issued = Arc::new(SwitchableRevocations::new(clock.clone()));
         let app = App::new(Modules {
             auth: AuthContext::new(AuthCollaborators {
                 sessions: Arc::new(SwitchableSessions::new(clock.clone())),
@@ -2517,13 +3213,15 @@ impl Fixture {
                 index.clone(),
                 blobs.clone(),
                 Arc::new(CursorCodec::new(&CURSOR_KEY)),
+                albums.clone(),
+                members.clone(),
             ),
             serve: ServeContext::new(
                 index.clone(),
                 blobs.clone(),
                 Arc::new(InMemoryCollection::new()),
                 Arc::new(SwitchableUploads::new(clock.clone())),
-                capsule_server::serve::owned_assets(),
+                capsule_server::serve::membership_reads(members.clone()),
             ),
             verify: VerifyContext::new(
                 index,
@@ -2535,7 +3233,8 @@ impl Fixture {
                 Arc::new(SwitchableDirectories::new()),
                 clock.clone(),
             ),
-            albums: AlbumContext::new(Arc::new(SwitchableAlbums::new()), clock.clone()),
+            albums: AlbumContext::new(albums.clone(), clock.clone()),
+            membership: MembershipContext::new(members, clock.clone()),
             quota: QuotaContext::new(
                 Arc::new(SwitchableQuota::new()),
                 clock.clone(),
@@ -2545,15 +3244,22 @@ impl Fixture {
                 Arc::new(InMemoryReceipts::new()),
                 Arc::new(LocalAttestationKey::new(
                     SERVER_ORIGIN,
-                    capsule_core::crypto::keys::hybrid_sig::HybridSigningKey::generate(),
+                    capsule_core::crypto::keys::HybridSigningKey::generate(),
                 )),
                 Timestamp::UNIX_EPOCH,
             ),
-            discovery: DiscoveryContext::new(
-                Arc::new(server_info(&tokens)),
-                Arc::new(SwitchableRevocations::new(clock.clone())),
-            ),
+            discovery: DiscoveryContext::new(Arc::new(server_info(&tokens)), issued.clone()),
             escrow: EscrowContext::new(Arc::new(SwitchableEscrow::new()), clock.clone()),
+            federation: FederationContext::new(FederationCollaborators {
+                codec: Arc::new(
+                    CapabilityCodec::from_pkcs8(&der, SERVER_ORIGIN, clock.clone())
+                        .expect("a key just generated parses"),
+                ),
+                capabilities: issued,
+                peers: Arc::new(InMemoryPeers::new()),
+                clock: clock.clone(),
+                federation_url: Some(FEDERATION_URL.to_owned()),
+            }),
             enrollment: EnrollmentContext::new(
                 Arc::new(InMemoryEnrollments::new(clock.clone(), ENROLLMENT_CODE_TTL)),
                 Arc::new(InMemoryChannels::new(clock.clone(), RELAY_CHANNEL_TTL)),
@@ -2576,6 +3282,7 @@ impl Fixture {
                 Arc::new(InMemoryTotp::new()),
                 Arc::new(TotpCodes::new("Capsule")),
             ),
+            oidc: OidcContext::disabled(clock.clone()),
         });
         (app, clock)
     }
@@ -2653,7 +3360,6 @@ impl Fixture {
             .client
             .post("/v1/upload")
             .header("authorization", bearer)
-            .header("x-capsule-protocol", PROTOCOL_VERSION)
             .json(request)
             .send()
             .await
@@ -2664,8 +3370,8 @@ impl Fixture {
 
     /// A well-formed `PATCH` of `payload` at `offset`.
     ///
-    /// Every header the protocol requires is set, so a test that wants one wrong overrides it
-    /// — the later `header` call wins.
+    /// Every header the protocol requires is set — the handshake by the client, the rest here —
+    /// so a test that wants one wrong overrides it: the later `header` call wins.
     pub(crate) fn chunk<'a>(
         &'a self,
         id: &str,
@@ -2676,11 +3382,71 @@ impl Fixture {
         self.client
             .patch(&format!("/v1/upload/{id}"))
             .header("authorization", bearer)
-            .header("x-capsule-protocol", PROTOCOL_VERSION)
             .header("x-capsule-offset", &offset.to_string())
             .header("x-capsule-checksum", &checksum(payload))
             .body("application/octet-stream", payload.to_vec())
     }
+}
+
+/// A peer server's operational key pair: the signer, and the raw thirty-two public bytes an
+/// operator pins with `PeerStore::pin`.
+///
+/// Generated per call rather than fixed, so a case that means "a *different* peer's key" gets
+/// one by asking again.
+pub(crate) fn peer_keypair() -> (ring::signature::Ed25519KeyPair, [u8; 32]) {
+    use ring::signature::KeyPair as _;
+
+    let der = ring::signature::Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
+        .expect("a key generates");
+    let pair = ring::signature::Ed25519KeyPair::from_pkcs8(der.as_ref()).expect("it parses");
+    let public = pair
+        .public_key()
+        .as_ref()
+        .try_into()
+        .expect("an Ed25519 public key is thirty-two bytes");
+    (pair, public)
+}
+
+/// A federated moderation report body, signed by `pair` exactly as a peer signs one.
+///
+/// Built through [`ReportClaim::signing_bytes`] rather than by re-encoding the JSON, so the
+/// suite signs the same bytes the server verifies and a change to the signing contract fails as
+/// a verification failure rather than as a silently-different test.
+pub(crate) fn signed_report(
+    pair: &ring::signature::Ed25519KeyPair,
+    reporting_server: &str,
+    reported_user: &str,
+    asset_hash: &str,
+    album: &AlbumId,
+    reason: Option<&str>,
+    reported_at: &str,
+) -> serde_json::Value {
+    let claim = ReportClaim {
+        reporting_server: reporting_server.to_owned(),
+        reported_user: reported_user.to_owned(),
+        asset_hash: asset_hash.to_owned(),
+        album_id: album.as_str().to_owned(),
+        reason: reason.map(str::to_owned),
+        reported_at: reported_at.to_owned(),
+    };
+    let signature = pair.sign(&claim.signing_bytes().expect("a claim encodes"));
+    serde_json::json!({
+        "reporting_server": claim.reporting_server,
+        "reported_user": claim.reported_user,
+        "asset_hash": claim.asset_hash,
+        "album_id": claim.album_id,
+        "reason": claim.reason,
+        "reported_at": claim.reported_at,
+        "signature": base64::engine::general_purpose::STANDARD.encode(signature.as_ref()),
+    })
+}
+
+/// `hours` from the fixture's own clock, as an RFC 3339 instant.
+///
+/// The suite's clock starts at the Unix epoch, so a wall-clock literal in a request body is
+/// decades out and refused; every deadline a case names is relative to this.
+pub(crate) fn deadline(fixture: &Fixture, hours: i64) -> jiff::Timestamp {
+    fixture.clock.now() + jiff::SignedDuration::from_hours(hours)
 }
 
 /// The protocol version the suite's manifests and sessions are written under.
@@ -2824,13 +3590,29 @@ pub(crate) fn server_info(tokens: &SessionTokens) -> ServerInfo {
         },
         tokens.public_key().to_vec(),
     )
+    // The fixture's provider double is configured, so the record says so — and a case can post
+    // to the *published* OIDC endpoints as it does to the published login.
+    .with_oidc()
 }
 
 pub(crate) fn signer(clock: Arc<ManualClock>) -> SessionTokens {
-    let der = ring::signature::Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
-        .expect("the platform can generate an Ed25519 key");
+    signer_from(&signing_key_der(), clock)
+}
 
-    SessionTokens::from_pkcs8(der.as_ref(), clock).expect("a key just generated parses")
+/// A freshly generated PKCS#8 Ed25519 private key.
+///
+/// One of these backs both the session signer and the capability codec of a fixture, because
+/// that is the one-key invariant `boot` holds: the key `server-info` publishes signs both.
+pub(crate) fn signing_key_der() -> Vec<u8> {
+    ring::signature::Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
+        .expect("the platform can generate an Ed25519 key")
+        .as_ref()
+        .to_vec()
+}
+
+/// The session signer over `der`.
+pub(crate) fn signer_from(der: &[u8], clock: Arc<ManualClock>) -> SessionTokens {
+    SessionTokens::from_pkcs8(der, clock).expect("a key just generated parses")
 }
 
 /// A `POST /v1/upload` body for one member of a **replace** bundle (`S-C43`).
@@ -2883,6 +3665,44 @@ pub(crate) fn signed_directory_with_device(
     }
     .sign(ik);
     capsule_core::cbor::to_canonical_vec(&directory).expect("a directory serializes")
+}
+
+/// A signed album roster, base64-encoded as `PUT /v1/albums/{album_id}/roster` carries it
+/// (`S-C51`).
+///
+/// Attested by the seeded account through `capsule_core::crypto::membership` — the same types
+/// the server verifies with — so a fixture cannot pass while the two ends disagree about what
+/// was signed.
+pub(crate) fn signed_roster(
+    dsk: &HybridSigningKey,
+    device_id: Uuid,
+    album: &AlbumId,
+    roster_version: u64,
+    amk_epoch: u32,
+    members: &[(&str, MemberRole)],
+) -> String {
+    use capsule_core::crypto::keys::AmkVersion;
+    use capsule_core::crypto::membership::{AlbumRoster, RosterMember, SignedAlbumRoster};
+
+    let roster = AlbumRoster {
+        album_id: Uuid::parse_str(album.as_str()).expect("an album id is a uuid"),
+        roster_version,
+        amk_epoch: AmkVersion(amk_epoch),
+        attested_by_user: Uuid::parse_str(user().as_str())
+            .expect("the seeded account id is a uuid"),
+        attested_by_device: device_id,
+        attested_at: "2026-09-02T00:00:00Z".to_owned(),
+        members: members
+            .iter()
+            .map(|(user_id, role)| RosterMember {
+                user_id: Uuid::parse_str(user_id).expect("a member id is a uuid"),
+                role: *role,
+            })
+            .collect(),
+    };
+    let signed = SignedAlbumRoster::sign(roster, dsk).expect("a roster signs");
+    base64::engine::general_purpose::STANDARD
+        .encode(capsule_core::cbor::to_canonical_vec(&signed).expect("a signed roster serializes"))
 }
 
 /// A signed upgrade intent, as the proposing admin device's client would produce it (`S-C24`).

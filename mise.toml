@@ -86,9 +86,11 @@ description = "Rust CI gate"
 run = [
   "mise run format-check-rust",
   "mise run lint-check-rust",
+  "mise run doc-check-rust",
   "mise run i18n-check",
   "mise run i18n-guard",
   "mise run openapi-check-kynos",
+  "mise run cli-surface-check",
   "mise run architecture-check",
   "mise run license-check",
   "mise run translate-readme-check",
@@ -134,8 +136,27 @@ run = "cargo clippy --workspace --fix --allow-dirty -- $CLIPPY_FLAGS"
 [tasks.lint-check-rust]
 run = "cargo clippy --workspace -- $CLIPPY_FLAGS"
 
+# The rustdoc gate for the frozen crates (issue #399): a broken intra-doc link or an ambiguous
+# one is an error, not a warning. Scoped to the four crates whose public API is frozen; the rest
+# of the workspace is widened in a follow-up.
+#
+# `--document-private-items` is load-bearing, not thoroughness for its own sake. #399 turned 59
+# submodules of `library`, `import`, `db`, `crypto::keys`, `sidecar` and `domain` into
+# `pub(crate) mod`. A public-only `cargo doc` stops reading their `//!` headers and their items'
+# docs the moment they stop being public — so the gate would have gone blind to exactly the
+# modules the same change touched, and 11 pre-existing broken links in them would have been
+# hidden rather than fixed. With the flag every item in these four crates is linted.
+#
+# `--no-deps` so a dependency's own doc warnings cannot fail our build.
+[tasks.doc-check-rust]
+description = "Rustdoc gate for the frozen crates (intra-doc links, over all items)"
+env = { RUSTDOCFLAGS = "-D warnings" }
+run = "cargo doc --no-deps --document-private-items -p capsule-core -p capsule-core-ffi -p capsule-wasm -p capsule-i18n"
+
 # nextest: cross-binary parallel scheduling + process-per-test isolation. Two
 # invocations — the workspace (default features), then capsule-core's FFI surface.
+# The workspace run includes `capsule-e2e`, the bounded E2E cases over the real SDK,
+# library and server composition root (no container, no env gate; issue #409).
 # nextest does not run doctests; the workspace has none (if you add one, also add a
 # `cargo test --doc` step). CI selects the `ci` profile via NEXTEST_PROFILE=ci.
 [tasks.test-rust]
@@ -144,6 +165,24 @@ run = [
   "cargo nextest run -p capsule-core --features ffi",
   "cargo nextest run -p capsule-sdk --features ffi",
 ]
+
+# Nothing else in this file or in ci.yml builds tests under the release profile, so every
+# `#[cfg(not(debug_assertions))]` test is dead code that no gate ever compiles, let alone runs
+# (`#428`). capsule-i18n is the only crate carrying one today
+# (capsule-i18n/src/format.rs:157, pinning that a release build passes an unrenderable ICU
+# construct through instead of tripping the `debug_assert!` a debug build trips); widen the
+# `-p` list when a second crate adds one. Narrow on purpose: building the whole workspace
+# twice would double the test job for a handful of tests.
+#
+# NOT yet wired into `test-rust`, and that is a defect this task exists to expose rather than
+# an oversight. `format.rs:144` — `an_unrenderable_icu_construct_is_refused_in_debug_builds`,
+# `#[should_panic]`, named for debug builds but missing `#[cfg(debug_assertions)]` — cannot
+# pass under release, because `debug_assert!` compiles out and the panic it expects never
+# happens. Adding the attribute is a one-line change in a file this lane does not own; until
+# it lands, run this task directly. See `#429`.
+[tasks.test-rust-release]
+description = "Run the tests that only exist in release builds (cfg(not(debug_assertions)))"
+run = "cargo nextest run -p capsule-i18n --cargo-profile release"
 
 [tasks.test-coverage-rust]
 run = "cargo llvm-cov nextest --workspace --fail-under-lines 0"
@@ -215,11 +254,64 @@ run = "cargo deny --all-features check licenses"
 # to point at each stage. `S-C59` retired the Salvo one; this is now the contract, singular.
 [tasks.openapi-kynos]
 description = "Dump the Kynos OpenAPI 3.2 document to capsule-server/openapi.json"
-run = "cargo run -q -p capsule-server --bin gen_openapi"
+run = "cargo run -q -p capsule-server -- gen-openapi"
 
 [tasks.openapi-check-kynos]
 description = "Verify the committed Kynos OpenAPI 3.2 document matches the server"
-run = "cargo run -q -p capsule-server --bin gen_openapi -- --check"
+run = "cargo run -q -p capsule-server -- gen-openapi --check"
+
+# ── Running a server locally ─────────────────────────────────────────────────
+#
+# `serve-deps` and `serve` are deliberately separate: a task that silently starts containers is
+# a task that leaks them. Bring the services down with
+# `podman compose -f capsule-server/compose.yaml down`.
+
+[tasks.serve-deps]
+description = "Start Postgres 18 + Valkey 9 for the server (podman compose)"
+# `podman compose` shells out to the compose provider; `docker compose -f …` accepts the same
+# file. The Valkey adapters (#403) read the Valkey service; the Postgres adapters (#402) are not
+# written yet, so this is for their development and for dependabot to have a live file to track.
+run = "podman compose -f capsule-server/compose.yaml up -d"
+
+[tasks.serve]
+description = "Run the Kynos server (needs the capsule-server/.env.example environment)"
+# No environment is supplied on purpose. `serve` without `VALKEY_URL` and without `--memory`
+# refuses to boot and names the variable — the refusal `capsule-server/src/store/mod.rs` has
+# documented since `S-C29` — and with `VALKEY_URL` set it connects to Valkey and then refuses
+# naming `DATABASE_URL` and #402 until the Postgres adapters land. Copy
+# `capsule-server/.env.example` and export it, or use `serve-memory` below.
+run = "cargo run -p capsule-server -- serve"
+
+[tasks.serve-memory]
+description = "Run the server on the in-memory adapters (development only)"
+# A server you can point a client at: register, sign in, upload, sync. The blob store is real
+# and lives under `target/`; everything else is lost when the process exits.
+#
+# Loopback, not the `0.0.0.0` default. That default is right for a deployment behind an ingress
+# and wrong here: the fallback key below is the **published** example from
+# capsule-server/.env.example, so every token this mints is forgeable by anyone who has read this
+# repository — and a forgeable server reachable from the office network is a different thing from
+# one reachable only from your own machine. That is also why this task is `serve-memory` and not
+# `serve`; set `JWT_ED25519_DER` yourself and it is used instead.
+run = """
+JWT_ED25519_DER=${JWT_ED25519_DER:-MC4CAQAwBQYDK2VwBCIEIN6eTvXEL7xMZWHY8rTk7VbQSGSuRkle5MVfiiYUStLF} \
+BLOB_ROOT=${BLOB_ROOT:-./target/capsule-server-blobs} \
+cargo run -p capsule-server -- serve --memory --listen 127.0.0.1:3000
+"""
+
+# Dump the `capsule` command tree to the committed capsule-cli/cli-surface.json that the
+# documentation build renders into `/reference/cli/` (slice `S-Z8`). The same shape as the
+# OpenAPI pair above, and for the same reason: the docs job installs bun and nothing else, so
+# it reads a committed artifact rather than asking cargo what the CLI looks like. State-free
+# and deterministic — `command_tree()` walks compile-time clap attributes. Re-run and commit
+# after any change to the argument surface.
+[tasks.cli-surface]
+description = "Dump the capsule command tree to capsule-cli/cli-surface.json"
+run = "cargo run -q -p capsule-cli --bin gen_cli_surface"
+
+[tasks.cli-surface-check]
+description = "Verify the committed capsule command tree matches the CLI"
+run = "cargo run -q -p capsule-cli --bin gen_cli_surface -- --check"
 
 # Regenerate the translated README.<lang>.md files from README.md and the committed
 # per-locale translation data (xtask/translations/readme/). See xtask/src/translate_readme.rs.
@@ -349,10 +441,14 @@ run = "cargo run -q -p xtask -- drop-kat"
 # test-web loads the wasm module + both KAT fixtures. Naming `drop-kat` alone is enough: it
 # pulls in `share-kat`, which pulls in `build-wasm`. Listing all three would say nothing extra
 # and would invite someone to "parallelise" them again — see the note on `share-kat`.
+#
+# No `--pass-with-no-tests`: suites exist under capsule-web/src/**, so bare `bun test` is green
+# today and red the moment discovery stops finding them. The flag turned exactly that regression
+# — a moved directory, a changed default glob, a broken `dir` — into a passing gate.
 [tasks.test-web]
 dir = "capsule-web"
 depends = ["drop-kat"]
-run = "bun test --pass-with-no-tests"
+run = "bun test"
 
 # build-web bundles the guest share viewer, which imports the generated wasm glue.
 [tasks.build-web]

@@ -38,6 +38,21 @@ pub mod error_codes {
     /// `error.album.not_available`
     pub const ALBUM_NOT_AVAILABLE: &str = "error.album.not_available";
 
+    /// `error.album.roster_attester`
+    pub const ALBUM_ROSTER_ATTESTER: &str = "error.album.roster_attester";
+
+    /// `error.album.roster_malformed`
+    pub const ALBUM_ROSTER_MALFORMED: &str = "error.album.roster_malformed";
+
+    /// `error.album.roster_not_found`
+    pub const ALBUM_ROSTER_NOT_FOUND: &str = "error.album.roster_not_found";
+
+    /// `error.album.roster_stale`
+    pub const ALBUM_ROSTER_STALE: &str = "error.album.roster_stale";
+
+    /// `error.album.roster_version_leap`
+    pub const ALBUM_ROSTER_VERSION_LEAP: &str = "error.album.roster_version_leap";
+
     /// `error.album.unavailable`
     pub const ALBUM_UNAVAILABLE: &str = "error.album.unavailable";
 
@@ -61,6 +76,30 @@ pub mod error_codes {
 
     /// `error.auth.invalid_credentials`
     pub const AUTH_INVALID_CREDENTIALS: &str = "error.auth.invalid_credentials";
+
+    /// `error.auth.oidc_address_taken`
+    pub const AUTH_OIDC_ADDRESS_TAKEN: &str = "error.auth.oidc_address_taken";
+
+    /// `error.auth.oidc_at_capacity`
+    pub const AUTH_OIDC_AT_CAPACITY: &str = "error.auth.oidc_at_capacity";
+
+    /// `error.auth.oidc_exchange_failed`
+    pub const AUTH_OIDC_EXCHANGE_FAILED: &str = "error.auth.oidc_exchange_failed";
+
+    /// `error.auth.oidc_not_configured`
+    pub const AUTH_OIDC_NOT_CONFIGURED: &str = "error.auth.oidc_not_configured";
+
+    /// `error.auth.oidc_redirect_invalid`
+    pub const AUTH_OIDC_REDIRECT_INVALID: &str = "error.auth.oidc_redirect_invalid";
+
+    /// `error.auth.oidc_state_invalid`
+    pub const AUTH_OIDC_STATE_INVALID: &str = "error.auth.oidc_state_invalid";
+
+    /// `error.auth.oidc_token_invalid`
+    pub const AUTH_OIDC_TOKEN_INVALID: &str = "error.auth.oidc_token_invalid";
+
+    /// `error.auth.oidc_unavailable`
+    pub const AUTH_OIDC_UNAVAILABLE: &str = "error.auth.oidc_unavailable";
 
     /// `error.auth.password_invalid`
     pub const AUTH_PASSWORD_INVALID: &str = "error.auth.password_invalid";
@@ -110,6 +149,9 @@ pub mod error_codes {
     /// `error.auth.user_already_exists`
     pub const AUTH_USER_ALREADY_EXISTS: &str = "error.auth.user_already_exists";
 
+    /// `error.blob.access_revoked`
+    pub const BLOB_ACCESS_REVOKED: &str = "error.blob.access_revoked";
+
     /// `error.blob.gone`
     pub const BLOB_GONE: &str = "error.blob.gone";
 
@@ -149,6 +191,9 @@ pub mod error_codes {
     /// `error.drop.adoption_refused`
     pub const DROP_ADOPTION_REFUSED: &str = "error.drop.adoption_refused";
 
+    /// `error.drop.at_capacity`
+    pub const DROP_AT_CAPACITY: &str = "error.drop.at_capacity";
+
     /// `error.drop.cap_exceeded`
     pub const DROP_CAP_EXCEEDED: &str = "error.drop.cap_exceeded";
 
@@ -182,6 +227,9 @@ pub mod error_codes {
     /// `error.drop.unavailable`
     pub const DROP_UNAVAILABLE: &str = "error.drop.unavailable";
 
+    /// `error.enrollment.at_capacity`
+    pub const ENROLLMENT_AT_CAPACITY: &str = "error.enrollment.at_capacity";
+
     /// `error.enrollment.channel_not_found`
     pub const ENROLLMENT_CHANNEL_NOT_FOUND: &str = "error.enrollment.channel_not_found";
 
@@ -206,6 +254,9 @@ pub mod error_codes {
     /// `error.escrow.unavailable`
     pub const ESCROW_UNAVAILABLE: &str = "error.escrow.unavailable";
 
+    /// `error.federation.album_not_found`
+    pub const FEDERATION_ALBUM_NOT_FOUND: &str = "error.federation.album_not_found";
+
     /// `error.federation.audience_mismatch`
     pub const FEDERATION_AUDIENCE_MISMATCH: &str = "error.federation.audience_mismatch";
 
@@ -215,11 +266,23 @@ pub mod error_codes {
     /// `error.federation.capability_invalid`
     pub const FEDERATION_CAPABILITY_INVALID: &str = "error.federation.capability_invalid";
 
+    /// `error.federation.capability_malformed`
+    pub const FEDERATION_CAPABILITY_MALFORMED: &str = "error.federation.capability_malformed";
+
     /// `error.federation.capability_revoked`
     pub const FEDERATION_CAPABILITY_REVOKED: &str = "error.federation.capability_revoked";
 
     /// `error.federation.circuit_open`
     pub const FEDERATION_CIRCUIT_OPEN: &str = "error.federation.circuit_open";
+
+    /// `error.federation.member_not_on_roster`
+    pub const FEDERATION_MEMBER_NOT_ON_ROSTER: &str = "error.federation.member_not_on_roster";
+
+    /// `error.federation.not_configured`
+    pub const FEDERATION_NOT_CONFIGURED: &str = "error.federation.not_configured";
+
+    /// `error.federation.peer_unknown`
+    pub const FEDERATION_PEER_UNKNOWN: &str = "error.federation.peer_unknown";
 
     /// `error.federation.rate_budget_exceeded`
     pub const FEDERATION_RATE_BUDGET_EXCEEDED: &str = "error.federation.rate_budget_exceeded";
@@ -230,8 +293,14 @@ pub mod error_codes {
     /// `error.federation.scope_insufficient`
     pub const FEDERATION_SCOPE_INSUFFICIENT: &str = "error.federation.scope_insufficient";
 
+    /// `error.federation.unavailable`
+    pub const FEDERATION_UNAVAILABLE: &str = "error.federation.unavailable";
+
     /// `error.moderation.account_suspended`
     pub const MODERATION_ACCOUNT_SUSPENDED: &str = "error.moderation.account_suspended";
+
+    /// `error.moderation.report_malformed`
+    pub const MODERATION_REPORT_MALFORMED: &str = "error.moderation.report_malformed";
 
     /// `error.moderation.report_rate_limited`
     pub const MODERATION_REPORT_RATE_LIMITED: &str = "error.moderation.report_rate_limited";
@@ -287,6 +356,9 @@ pub mod error_codes {
     /// `error.request.unsupported_media_type`
     pub const REQUEST_UNSUPPORTED_MEDIA_TYPE: &str = "error.request.unsupported_media_type";
 
+    /// `error.share.at_capacity`
+    pub const SHARE_AT_CAPACITY: &str = "error.share.at_capacity";
+
     /// `error.share.malformed`
     pub const SHARE_MALFORMED: &str = "error.share.malformed";
 
@@ -307,6 +379,9 @@ pub mod error_codes {
 
     /// `error.storage.unavailable`
     pub const STORAGE_UNAVAILABLE: &str = "error.storage.unavailable";
+
+    /// `error.sync.album_access_denied`
+    pub const SYNC_ALBUM_ACCESS_DENIED: &str = "error.sync.album_access_denied";
 
     /// `error.sync.cursor_invalid`
     pub const SYNC_CURSOR_INVALID: &str = "error.sync.cursor_invalid";

@@ -1,10 +1,10 @@
-pub mod capture_tz_source;
-pub mod detection_method;
-pub mod gps_datum;
-pub mod import_mode;
-pub mod member_role;
-pub mod model_identity;
-pub mod stack_type;
+pub(crate) mod capture_tz_source;
+pub(crate) mod detection_method;
+pub(crate) mod gps_datum;
+pub(crate) mod import_mode;
+pub(crate) mod member_role;
+pub(crate) mod model_identity;
+pub(crate) mod stack_type;
 
 pub use capture_tz_source::CaptureTzSource;
 pub use detection_method::DetectionMethod;

@@ -2,7 +2,7 @@
 //! `S-B3` in the repo-root `SLICES.md`; SSoT:
 //! [Import — Pipeline: Import-Upload Streaming Mode](https://docs/design/import/pipeline/#import-upload-streaming-mode)).
 //!
-//! The default [`execute`](crate::import::executor::execute) imports every file into the local
+//! The default [`execute`](crate::import::execute) imports every file into the local
 //! library *before* upload, so the device temporarily holds the whole import on disk — impossible
 //! on a storage-constrained device. Streaming mode removes that requirement by running a bounded
 //! **sliding window** of one asset at a time:
@@ -10,8 +10,8 @@
 //! 1. Import the next file onto the signed path — with source release *deferred*
 //!    ([`Workspace::import_asset_streaming`](crate::lifecycle::Workspace::import_asset_streaming)).
 //! 2. Upload its bundle via the injected [`AssetUploader`] seam.
-//! 3. Confirm durability + custody through the `S-D4` [`ReleaseGate`](crate::library::ReleaseGate)
-//!    over the injected [`StorageVerifier`](crate::library::StorageVerifier) seam.
+//! 3. Confirm durability + custody through the `S-D4` [`ReleaseGate`] over the injected
+//!    [`StorageVerifier`] seam.
 //! 4. **Release** the local original (and delete the Move-mode source) *only* on the `durable`
 //!    verdict, so the device never drops the only copy of bytes the server has not confirmed.
 //! 5. Advance the window.
@@ -97,7 +97,7 @@ pub enum StreamingError {
     #[error("free-space probe: {0}")]
     Probe(#[from] crate::library::LibraryError),
 
-    /// The run was configured with a [`UploadPolicy::Staged`](crate::import::upload::UploadPolicy)
+    /// The run was configured with a [`UploadPolicy::Staged`](crate::import::UploadPolicy)
     /// policy, which is mutually exclusive with streaming import (staged uploads,
     /// slice `S-B4`). Streaming releases local bytes quickly; staged defers exactly
     /// the T2 upload release depends on — so a staged policy can never enter the
@@ -228,88 +228,80 @@ pub enum StreamingEvent {
 
 // ── The window executor ────────────────────────────────────────────────────────
 
+/// Everything the streaming window needs beyond the plan, the workspace, and the event sink.
+///
+/// One struct rather than six positionals: the two entry points this replaced differed only in
+/// `source` and carried eight and nine arguments respectively, both behind a
+/// `#[allow(clippy::too_many_arguments)]`. A caller that wants no source-adapter enrichment
+/// passes `&SourceMetadataIndex::empty()`, which is exactly what the thinner of the two
+/// entry points did for it.
+pub struct StreamingOptions<'a, U: AssetUploader, V: StorageVerifier> {
+    /// The planner configuration the run was confirmed against.
+    pub config: &'a ImportConfig,
+    /// Folded metadata a third-party [source adapter](crate::import::SourceAdapter) extracted,
+    /// attached to each file it covers. [`SourceMetadataIndex::empty`] for a plain filesystem
+    /// drive; files the index does not cover import identically either way.
+    pub source: &'a SourceMetadataIndex,
+    /// The injected upload seam. `capsule-core` performs no network I/O of its own.
+    pub uploader: &'a U,
+    /// The injected durability/custody seam behind the `S-D4` release gate.
+    pub verifier: &'a V,
+    /// The free-space cushion the minimum-headroom check and the implicit recommendation apply.
+    pub headroom_margin: u64,
+    /// Honored at every window boundary.
+    pub cancel: &'a CancellationToken,
+}
+
 /// Drive a streaming import: the bounded per-asset import → upload → verify → release window over
-/// `plan`. `headroom_margin` is the free-space cushion the minimum-headroom check and the
-/// implicit recommendation apply. `uploader` and `verifier` are the injected network seams; the
-/// executor itself performs no network I/O. Honors `cancel` at every window boundary.
+/// `plan`, under `opts`.
+///
+/// The enrichment in [`StreamingOptions::source`] is written *inside the signed sidecar*, at the
+/// same single write path the bulk executor drives, so the drive mode a user picks never changes
+/// what a migrated library keeps: a storage-constrained device streaming a Takeout export lands
+/// the exporter's capture time, GPS, caption, favorite, and album membership exactly as an
+/// unconstrained one does (slice `S-B11`, closing the gap `S-B10` left open). This is the
+/// streaming twin of
+/// [`execute_with_source_metadata`](crate::import::execute_with_source_metadata).
 ///
 /// Returns a [`StreamingReport`]; a hard failure to *start* (insufficient headroom, a failed
 /// probe) is a [`StreamingError`]. Per-asset upload pauses and gate retentions are outcomes, not
 /// errors: on a pause the window halts (`report.halted` set) with no further files admitted, and
 /// the run can be re-invoked after reconnect — the deterministic planner re-derives the remaining
 /// work and skips already-completed assets.
-#[allow(clippy::too_many_arguments)]
-pub fn execute_streaming<U, V>(
-    plan: &ImportActionPlan,
-    workspace: &mut Workspace,
-    config: &ImportConfig,
-    uploader: &U,
-    verifier: &V,
-    headroom_margin: u64,
-    on_event: impl Fn(StreamingEvent),
-    cancel: &CancellationToken,
-) -> Result<StreamingReport, StreamingError>
-where
-    U: AssetUploader,
-    V: StorageVerifier,
-{
-    execute_streaming_with_source_metadata(
-        plan,
-        workspace,
-        config,
-        &SourceMetadataIndex::empty(),
-        uploader,
-        verifier,
-        headroom_margin,
-        on_event,
-        cancel,
-    )
-}
-
-/// [`execute_streaming`], with the folded metadata a third-party [source adapter] extracted
-/// attached to each file it covers — the streaming twin of
-/// [`execute_with_source_metadata`](crate::import::executor::execute_with_source_metadata)
-/// (slice `S-B11`, closing the gap `S-B10` left open).
-///
-/// The enrichment is written *inside the signed sidecar*, at the same single write path the bulk
-/// executor drives, so the drive mode a user picks never changes what a migrated library keeps:
-/// a storage-constrained device streaming a Takeout export lands the exporter's capture time,
-/// GPS, caption, favorite, and album membership exactly as an unconstrained one does. Files the
-/// index does not cover import exactly as they do through [`execute_streaming`].
-///
-/// [source adapter]: crate::import::importers
 #[tracing::instrument(
     skip_all,
     fields(
         candidates = plan.actions.len(),
-        mode = ?config.import_mode,
-        headroom = headroom_margin,
-        source_metadata = source.len(),
+        mode = ?opts.config.import_mode,
+        headroom = opts.headroom_margin,
+        source_metadata = opts.source.len(),
     )
 )]
-#[allow(clippy::too_many_arguments)]
-pub fn execute_streaming_with_source_metadata<U, V>(
+pub fn execute_streaming<U, V>(
     plan: &ImportActionPlan,
     workspace: &mut Workspace,
-    config: &ImportConfig,
-    source: &SourceMetadataIndex,
-    uploader: &U,
-    verifier: &V,
-    headroom_margin: u64,
+    opts: StreamingOptions<'_, U, V>,
     on_event: impl Fn(StreamingEvent),
-    cancel: &CancellationToken,
 ) -> Result<StreamingReport, StreamingError>
 where
     U: AssetUploader,
     V: StorageVerifier,
 {
+    // Every field is a shared reference or a `u64`, so this copies out of `opts` rather than
+    // moving it; the struct is handed to `stream_candidate` whole below.
+    let StreamingOptions {
+        config,
+        headroom_margin,
+        cancel,
+        ..
+    } = opts;
     // ── Exclusion: a staged upload policy can never enter the streaming window ───
     // Streaming exists to release local bytes as fast as possible; staged uploads
     // defer exactly the T2 (original) upload that release depends on. The planner
     // rejects the combination at confirmation; this is the by-construction backstop
     // so a staged policy cannot reach `execute_streaming` even if a caller skips
     // confirmation. Surfaces before any file is imported (staged uploads, S-B4).
-    crate::import::upload::ensure_streaming_compatible(config.upload_policy, true)?;
+    crate::import::ensure_streaming_compatible(config.upload_policy, true)?;
 
     // Same single resolution the executor runs: bind the library's derived de facto album
     // (rule 3), then apply the order (SSoT: organization § The Default Album).
@@ -364,9 +356,7 @@ where
         }
         match decision {
             ImportDecision::Import => {
-                match stream_candidate(
-                    workspace, config, album_id, candidate, source, uploader, verifier, &on_event,
-                )? {
+                match stream_candidate(workspace, album_id, candidate, &opts, &on_event)? {
                     CandidateFlow::Done(outs) => report.outcomes.extend(outs),
                     CandidateFlow::Halt(reason, outs) => {
                         report.outcomes.extend(outs);
@@ -414,21 +404,24 @@ enum CandidateFlow {
 /// (RAW+JPEG, Live Photo) mints one stack id and hides its non-primary members, exactly as the
 /// bulk executor does; the stack row is persisted once its members exist in the index — released
 /// originals keep their queryable asset rows, so grouping survives release.
-#[allow(clippy::too_many_arguments)]
 fn stream_candidate<U, V>(
     workspace: &mut Workspace,
-    config: &ImportConfig,
     album_id: Uuid,
     candidate: &ImportCandidate,
-    source: &SourceMetadataIndex,
-    uploader: &U,
-    verifier: &V,
+    opts: &StreamingOptions<'_, U, V>,
     on_event: &impl Fn(StreamingEvent),
 ) -> Result<CandidateFlow, StreamingError>
 where
     U: AssetUploader,
     V: StorageVerifier,
 {
+    let StreamingOptions {
+        config,
+        source,
+        uploader,
+        verifier,
+        ..
+    } = *opts;
     let move_source = matches!(config.import_mode, ImportMode::Move);
     let stack = candidate.stack_type.map(|st| (Uuid::now_v7(), st));
 
@@ -712,12 +705,15 @@ mod tests {
             let report = execute_streaming(
                 &plan,
                 &mut ws,
-                &ImportConfig::default(),
-                &OkUploader,
-                &verifier,
-                0,
+                StreamingOptions {
+                    config: &ImportConfig::default(),
+                    source: &SourceMetadataIndex::empty(),
+                    uploader: &OkUploader,
+                    verifier: &verifier,
+                    headroom_margin: 0,
+                    cancel: &CancellationToken::new(),
+                },
                 noop_event,
-                &CancellationToken::new(),
             )
             .unwrap();
 
@@ -756,12 +752,15 @@ mod tests {
             let report = execute_streaming(
                 &plan,
                 &mut ws,
-                &ImportConfig::default(),
-                &OkUploader,
-                &verifier,
-                0,
+                StreamingOptions {
+                    config: &ImportConfig::default(),
+                    source: &SourceMetadataIndex::empty(),
+                    uploader: &OkUploader,
+                    verifier: &verifier,
+                    headroom_margin: 0,
+                    cancel: &CancellationToken::new(),
+                },
                 noop_event,
-                &CancellationToken::new(),
             )
             .unwrap();
 
@@ -808,15 +807,18 @@ mod tests {
         let report = execute_streaming(
             &plan_a,
             &mut ws,
-            &config,
-            &OkUploader,
-            &MockVerifier {
-                durable: true,
-                receipt: true,
+            StreamingOptions {
+                config: &config,
+                source: &SourceMetadataIndex::empty(),
+                uploader: &OkUploader,
+                verifier: &MockVerifier {
+                    durable: true,
+                    receipt: true,
+                },
+                headroom_margin: 0,
+                cancel: &CancellationToken::new(),
             },
-            0,
             noop_event,
-            &CancellationToken::new(),
         )
         .unwrap();
         assert_eq!(report.released_count(), 1);
@@ -839,15 +841,18 @@ mod tests {
         execute_streaming(
             &plan2,
             &mut ws2,
-            &config,
-            &OkUploader,
-            &MockVerifier {
-                durable: false,
-                receipt: true,
+            StreamingOptions {
+                config: &config,
+                source: &SourceMetadataIndex::empty(),
+                uploader: &OkUploader,
+                verifier: &MockVerifier {
+                    durable: false,
+                    receipt: true,
+                },
+                headroom_margin: 0,
+                cancel: &CancellationToken::new(),
             },
-            0,
             noop_event,
-            &CancellationToken::new(),
         )
         .unwrap();
         assert!(
@@ -884,15 +889,18 @@ mod tests {
         let report = execute_streaming(
             &plan1,
             &mut ws,
-            &config,
-            &uploader,
-            &MockVerifier {
-                durable: true,
-                receipt: true,
+            StreamingOptions {
+                config: &config,
+                source: &SourceMetadataIndex::empty(),
+                uploader: &uploader,
+                verifier: &MockVerifier {
+                    durable: true,
+                    receipt: true,
+                },
+                headroom_margin: 0,
+                cancel: &CancellationToken::new(),
             },
-            0,
             noop_event,
-            &CancellationToken::new(),
         )
         .unwrap();
 
@@ -940,15 +948,18 @@ mod tests {
         let report2 = execute_streaming(
             &plan2,
             &mut ws,
-            &config,
-            &OkUploader,
-            &MockVerifier {
-                durable: true,
-                receipt: true,
+            StreamingOptions {
+                config: &config,
+                source: &SourceMetadataIndex::empty(),
+                uploader: &OkUploader,
+                verifier: &MockVerifier {
+                    durable: true,
+                    receipt: true,
+                },
+                headroom_margin: 0,
+                cancel: &CancellationToken::new(),
             },
-            0,
             noop_event,
-            &CancellationToken::new(),
         )
         .unwrap();
         assert!(!report2.is_halted());
@@ -978,15 +989,18 @@ mod tests {
         let err = execute_streaming(
             &plan,
             &mut ws,
-            &config,
-            &OkUploader,
-            &MockVerifier {
-                durable: true,
-                receipt: true,
+            StreamingOptions {
+                config: &config,
+                source: &SourceMetadataIndex::empty(),
+                uploader: &OkUploader,
+                verifier: &MockVerifier {
+                    durable: true,
+                    receipt: true,
+                },
+                headroom_margin: u64::MAX,
+                cancel: &CancellationToken::new(),
             },
-            u64::MAX,
             noop_event,
-            &CancellationToken::new(),
         )
         .unwrap_err();
 
@@ -1003,7 +1017,7 @@ mod tests {
     }
 
     /// **Staged × streaming exclusion (by construction).** A run configured with the
-    /// [`UploadPolicy::Staged`](crate::import::upload::UploadPolicy) policy can never
+    /// [`UploadPolicy::Staged`](crate::import::UploadPolicy) policy can never
     /// enter the streaming window: `execute_streaming` refuses it *before* any file
     /// is imported, mirroring the planner's confirmation-time rejection. (SSoT:
     /// download-sync doc — staged uploads are mutually exclusive with streaming.)
@@ -1029,15 +1043,18 @@ mod tests {
         let err = execute_streaming(
             &plan,
             &mut ws,
-            &config,
-            &OkUploader,
-            &MockVerifier {
-                durable: true,
-                receipt: true,
+            StreamingOptions {
+                config: &config,
+                source: &SourceMetadataIndex::empty(),
+                uploader: &OkUploader,
+                verifier: &MockVerifier {
+                    durable: true,
+                    receipt: true,
+                },
+                headroom_margin: 0,
+                cancel: &CancellationToken::new(),
             },
-            0,
             noop_event,
-            &CancellationToken::new(),
         )
         .unwrap_err();
 
@@ -1105,19 +1122,21 @@ mod tests {
     fn stream_with(index: &SourceMetadataIndex, src: &Path, ws: &mut Workspace) -> StreamingReport {
         let config = ImportConfig::default();
         let plan = plan(&scan(&[src.to_path_buf()]).unwrap(), ws.db(), &config).unwrap();
-        execute_streaming_with_source_metadata(
+        execute_streaming(
             &plan,
             ws,
-            &config,
-            index,
-            &OkUploader,
-            &MockVerifier {
-                durable: false,
-                receipt: true,
+            StreamingOptions {
+                config: &config,
+                source: index,
+                uploader: &OkUploader,
+                verifier: &MockVerifier {
+                    durable: false,
+                    receipt: true,
+                },
+                headroom_margin: 0,
+                cancel: &CancellationToken::new(),
             },
-            0,
             noop_event,
-            &CancellationToken::new(),
         )
         .unwrap()
     }
@@ -1187,15 +1206,18 @@ mod tests {
         execute_streaming(
             &plan,
             &mut ws,
-            &ImportConfig::default(),
-            &OkUploader,
-            &MockVerifier {
-                durable: true,
-                receipt: true,
+            StreamingOptions {
+                config: &ImportConfig::default(),
+                source: &SourceMetadataIndex::empty(),
+                uploader: &OkUploader,
+                verifier: &MockVerifier {
+                    durable: true,
+                    receipt: true,
+                },
+                headroom_margin: 0,
+                cancel: &CancellationToken::new(),
             },
-            0,
             noop_event,
-            &CancellationToken::new(),
         )
         .unwrap();
 

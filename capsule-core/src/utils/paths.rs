@@ -1,11 +1,28 @@
 //! Path helpers with no knowledge of the library layout.
 //!
-//! [`tmp_path`] lives here rather than in [`crate::library::paths`] because it encodes no
-//! layout at all — it appends `.tmp` to whatever it is given. Keeping it here lets
+//! [`tmp_path`] lives here rather than beside the library's own path helpers because it encodes
+//! no layout at all — it appends `.tmp` to whatever it is given. Keeping it here lets
 //! [`crate::sidecar`] do atomic writes without importing `library`, which was the one real
 //! `sidecar -> library` edge (the rest of that pair is rustdoc links).
 
 use std::path::{Path, PathBuf};
+
+/// Make a directory entry durable: `fsync` the directory so a `rename`, `mkdir`, or newly
+/// created file inside it survives a crash that happens after the call returned. The partner
+/// of [`tmp_path`]'s write-then-rename.
+///
+/// A Unix primitive: on other platforms this is a documented no-op rather than a failure (a
+/// directory cannot be opened as a file there), mirroring `capsule-server`'s blob store.
+#[cfg(unix)]
+pub(crate) fn sync_dir(path: &Path) -> std::io::Result<()> {
+    std::fs::File::open(path)?.sync_all()
+}
+
+/// No-op: fsyncing a directory is a Unix primitive. See the Unix variant.
+#[cfg(not(unix))]
+pub(crate) fn sync_dir(_path: &Path) -> std::io::Result<()> {
+    Ok(())
+}
 
 /// Appends `.tmp` to any path.
 ///

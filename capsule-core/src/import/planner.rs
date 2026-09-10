@@ -71,7 +71,7 @@ pub struct ImportActionPlan {
     /// [`attach_streaming_recommendation`](Self::attach_streaming_recommendation) — never by the
     /// pure planner (the probe is I/O). `None` until attached; `Some(true)` means the library
     /// volume is near/over full for this plan's `total_size` and the user should confirm a
-    /// [streaming import](crate::import::streaming). Recording it on the plan (like the resolved
+    /// [streaming import](crate::import::execute_streaming). Recording it on the plan (like the resolved
     /// destination `album_id`) keeps the planner deterministic.
     pub streaming_recommended: Option<bool>,
     /// The destination album and **which resolution rule chose it** (SSoT: organization
@@ -140,8 +140,7 @@ impl ImportActionPlan {
     /// planner's single rejection point — call it at confirmation with the run's
     /// `policy` and whether a streaming import was chosen (`use_streaming`); a
     /// conflicting combination returns [`StagedStreamingConflict`] instead of ever
-    /// entering the executor. Delegates to the pure
-    /// [`ensure_streaming_compatible`](crate::import::upload::ensure_streaming_compatible)
+    /// entering the executor. Delegates to the pure [`ensure_streaming_compatible`]
     /// invariant so the rule lives in one place.
     pub fn confirm_upload_policy(
         &self,
@@ -234,7 +233,7 @@ fn decide(
 }
 
 fn hash_file(path: &Path) -> Result<String, std::io::Error> {
-    crate::utils::hash::get_file_hash(path)
+    Ok(crate::crypto::hash::hash_file(path)?.to_hex())
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -281,7 +280,7 @@ mod tests {
         // Write a file and pre-insert its hash
         let content = b"unique_photo_content";
         fs::write(tmp.path().join("photo.jpg"), content).unwrap();
-        let hash = crate::utils::hash::hash_bytes(content);
+        let hash = crate::crypto::hash::hash_bytes(content).to_hex();
 
         let row = crate::db::rows::AssetRow {
             uuid: "existing-uuid".to_string(),
@@ -327,7 +326,7 @@ mod tests {
         fs::write(tmp.path().join("b.jpg"), vec![0u8; 25]).unwrap();
         let dup_content = vec![7u8; 99];
         fs::write(tmp.path().join("dup.jpg"), &dup_content).unwrap();
-        let dup_hash = crate::utils::hash::hash_bytes(&dup_content);
+        let dup_hash = crate::crypto::hash::hash_bytes(&dup_content).to_hex();
         let row = crate::db::rows::AssetRow {
             uuid: "dup-uuid".to_string(),
             asset_type: "photo".to_string(),
@@ -474,7 +473,7 @@ mod tests {
 
         let content = b"reimport_me";
         fs::write(tmp.path().join("photo.jpg"), content).unwrap();
-        let hash = crate::utils::hash::hash_bytes(content);
+        let hash = crate::crypto::hash::hash_bytes(content).to_hex();
 
         let row = crate::db::rows::AssetRow {
             uuid: "existing-uuid2".to_string(),

@@ -107,6 +107,14 @@ Verification is **local-only**: the client keeps a cached copy of the escrow blo
 - **Re-arm triggers** (reset to the 7-day step): a new device enrolls (the prompt lands on the *new* device — it has never seen the passphrase); the recovery secret rotates; a restore-from-escrow completes.
 - Snooze steps are 24 h or 7 d, at most 3 consecutive. This is the `recovery_check_due` [alert class](/design/notifications/#alert-classes): the bounded-snooze-then-badge mechanic, and the rule that no alert blocks a critical flow, are owned by [Notifications](/design/notifications/); the cadence and re-arm triggers above are owned here. Because each step is a deadline the device can compute, the prompt is **pre-armed** ([pre-arm rule](/design/notifications/#the-pre-arm-rule)) rather than evaluated at launch.
 
+**How the escalation reaches the alert.** The class set is closed, so `recovery_check_due` is the
+only class that can report a due re-wrap as well as a due check. The scheduler therefore projects
+into the shared predicate (`RecoveryCadence::notify_facts`) with the re-wrap state reported as
+due **now** — whatever the ladder's next step says, since an explicit "I lost it" is not a
+scheduled check — and carries which it is in the alert's `recovery` parameter (`check` or
+`rewrap`). A client routes on that parameter: `rewrap` goes to the guided flow below, `check` to
+an ordinary verification prompt.
+
 ### On Repeated Failure: Guided Re-Wrap
 
 After 3 failures across ≥ 2 app sessions — or an explicit "I lost it" — the client runs the guided rotation flow: mint a fresh ≥128-bit recovery secret, **re-wrap the same master key**, replace the server escrow (a single active escrow; the old blob is deleted, so the lost secret unwraps nothing), re-run the setup-style type-back gate, re-issue Shamir shares if enrolled (old shares explicitly invalidated and surfaced as such), and surface the old-backup-artifact guidance from the [single-root invariant](#single-root-invariant).

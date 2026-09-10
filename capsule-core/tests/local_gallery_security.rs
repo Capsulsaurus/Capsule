@@ -18,7 +18,10 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use capsule_core::library::paths;
+use capsule_core::library::{
+    ThumbnailSize, media_dir, media_path, meta_cache_path, receipts_path, sidecar_path,
+    thumbnail_path, tmp_path, transcode_h264_path, transcode_live_path, trash_path,
+};
 use uuid::Uuid;
 
 /// Walk to the workspace root (the nearest ancestor holding `Cargo.lock`).
@@ -59,20 +62,20 @@ fn every_paths_module_output_stays_under_the_library_root() {
     let capture = Some(1_721_001_600_i64);
 
     let mut candidates = vec![
-        paths::media_dir(root, 2024, 7),
-        paths::media_path(root, &uuid, "arw", capture),
-        paths::media_path(root, &uuid, "jpg", None),
-        paths::sidecar_path(root, &uuid, "jpg", capture),
-        paths::receipts_path(root, &uuid, capture),
-        paths::meta_cache_path(root, &uuid),
-        paths::transcode_h264_path(root, &uuid),
-        paths::transcode_live_path(root, &uuid),
-        paths::trash_path(root, &uuid, "jpg"),
-        paths::thumbnail_path(root, &uuid, paths::ThumbnailSize::Xl),
+        media_dir(root, 2024, 7),
+        media_path(root, &uuid, "arw", capture),
+        media_path(root, &uuid, "jpg", None),
+        sidecar_path(root, &uuid, "jpg", capture),
+        receipts_path(root, &uuid, capture),
+        meta_cache_path(root, &uuid),
+        transcode_h264_path(root, &uuid),
+        transcode_live_path(root, &uuid),
+        trash_path(root, &uuid, "jpg"),
+        thumbnail_path(root, &uuid, ThumbnailSize::Xl),
     ];
     // The staging path for atomic writes is derived from an under-root path; it must stay under it.
-    let media = paths::media_path(root, &uuid, "jpg", capture);
-    candidates.push(paths::tmp_path(&media));
+    let media = media_path(root, &uuid, "jpg", capture);
+    candidates.push(tmp_path(&media));
 
     for path in candidates {
         assert!(

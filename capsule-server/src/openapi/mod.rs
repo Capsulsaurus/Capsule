@@ -46,8 +46,8 @@
 //! new `#[problem(extension)]` field that is not `code` will not appear in the document until
 //! somebody adds a row, and nothing here fails when they forget.
 //!
-//! Three things bound that. The table is small — nine rows against sixteen non-`code` fields
-//! across six enums — and `every_row_names_a_response_that_exists` fails on a row that has gone
+//! Three things bound that. The table is small — six rows against the non-`code` fields
+//! across the rejection enums — and `every_row_names_a_response_that_exists` fails on a row that has gone
 //! stale, so it cannot rot in the other direction. The `code` member, which is the one the i18n
 //! contract turns on and 104 of the 120 extension fields on this surface, needs no table at all.
 //! And the real fix is upstream: `#[problem(extension)]` should carry a schema, which is the
@@ -88,6 +88,22 @@ struct Member {
     name: &'static str,
     /// Its JSON Schema type.
     json_type: &'static str,
+    /// Its JSON Schema `format`, when the type alone would lose the Rust one.
+    ///
+    /// Kynos gives the *body* schemas their `format` from the Rust type; this table is
+    /// hand-written, so a member that is a `u64` on the wire has to say so here, or the
+    /// document describes it as a bare integer and the contract is less true than the code.
+    ///
+    /// **It buys truthfulness, not safety.** spargen lowers every integer in this document as
+    /// `i64` and emits no `u64` at all — `RosterResponse.roster_version` carries
+    /// `format: uint64` *and* `minimum: 0` and is still generated as `i64`. So a member whose
+    /// value can exceed `i64::MAX` breaks the generated client's *decode*, which is not a typed
+    /// API error: the `code` and every recovery hint are discarded and the caller cannot tell
+    /// the refusal from a network fault. The defence is therefore not this field but the
+    /// bound on the value: every integer member in this table is one the server cannot emit
+    /// above `i64::MAX` (see `MAX_ROSTER_VERSION` for the roster counters), and a number that
+    /// cannot be bounded belongs in the English `detail`, not in an extension.
+    format: Option<&'static str>,
     /// What it means, for the client that has to act on it.
     description: &'static str,
     /// Whether the member may be `null` — the shape a `Option<String>` extension renders as.
@@ -112,30 +128,6 @@ struct Extra {
 const EXTRAS: &[Extra] = &[
     Extra {
         component: "ProtocolRangeProblem",
-        operation: "create_upload",
-        status: 426,
-        members: PROTOCOL_RANGE,
-    },
-    Extra {
-        component: "ProtocolRangeProblem",
-        operation: "append_chunk",
-        status: 426,
-        members: PROTOCOL_RANGE,
-    },
-    Extra {
-        component: "ProtocolRangeProblem",
-        operation: "head_upload",
-        status: 426,
-        members: PROTOCOL_RANGE,
-    },
-    Extra {
-        component: "ProtocolRangeProblem",
-        operation: "cancel_upload",
-        status: 426,
-        members: PROTOCOL_RANGE,
-    },
-    Extra {
-        component: "ProtocolRangeProblem",
         operation: "album_lifecycle_op",
         status: 426,
         members: PROTOCOL_RANGE,
@@ -147,6 +139,7 @@ const EXTRAS: &[Extra] = &[
         members: &[Member {
             name: "existing_asset",
             json_type: "string",
+            format: None,
             description: "The asset already holding these exact bytes in the same album. \
                           Structured so a client merges rather than re-parsing a sentence \
                           (slice `S-C22`).",
@@ -160,6 +153,7 @@ const EXTRAS: &[Extra] = &[
         members: &[Member {
             name: "offset",
             json_type: "integer",
+            format: None,
             description: "The offset the server is actually at, so a client resumes from it \
                           instead of asking again.",
             nullable: false,
@@ -173,16 +167,53 @@ const EXTRAS: &[Extra] = &[
             Member {
                 name: "submitted",
                 json_type: "integer",
+                format: None,
                 description: "The directory version the request carried.",
                 nullable: false,
             },
             Member {
                 name: "stored",
                 json_type: "integer",
+                format: None,
                 description: "The version the server holds. A client re-signs above this one.",
                 nullable: false,
             },
         ],
+    },
+    Extra {
+        component: "RosterVersionLeapProblem",
+        operation: "publish_album_roster",
+        status: 400,
+        members: &[
+            Member {
+                name: "current_version",
+                json_type: "integer",
+                format: Some("uint64"),
+                description: "The roster version the server holds; `0` when it holds none.",
+                nullable: false,
+            },
+            Member {
+                name: "max_version",
+                json_type: "integer",
+                format: Some("uint64"),
+                description: "The highest version this album would have accepted. A client \
+                              re-signs the same roster at `current_version + 1`; a version \
+                              nothing could supersede would freeze the album's membership.",
+                nullable: false,
+            },
+        ],
+    },
+    Extra {
+        component: "RosterStaleProblem",
+        operation: "publish_album_roster",
+        status: 409,
+        members: &[Member {
+            name: "current_version",
+            json_type: "integer",
+            format: Some("uint64"),
+            description: "The roster version the server holds. A client re-syncs and republishes above it.",
+            nullable: false,
+        }],
     },
     Extra {
         component: "StaleRevivalProblem",
@@ -191,6 +222,7 @@ const EXTRAS: &[Extra] = &[
         members: &[Member {
             name: "chain_head",
             json_type: "string",
+            format: None,
             description: "The manifest hash the asset's chain is actually at. Absent when the \
                           conflict is not a chain conflict, which is why it is nullable.",
             nullable: true,
@@ -203,23 +235,81 @@ const EXTRAS: &[Extra] = &[
         members: &[Member {
             name: "limit",
             json_type: "integer",
+            format: None,
             description: "The largest file this drop link accepts, in bytes.",
             nullable: false,
         }],
     },
+    Extra {
+        component: "DropRateLimitedProblem",
+        operation: "create_drop",
+        status: 429,
+        members: RETRY_AFTER,
+    },
+    Extra {
+        component: "EnrollmentRateLimitedProblem",
+        operation: "redeem_enrollment_code",
+        status: 429,
+        members: RETRY_AFTER,
+    },
+    Extra {
+        component: "ShareMetadataRateLimitedProblem",
+        operation: "share_metadata",
+        status: 429,
+        members: RETRY_AFTER,
+    },
+    Extra {
+        component: "ShareSecretRateLimitedProblem",
+        operation: "share_wrapped_secret",
+        status: 429,
+        members: RETRY_AFTER,
+    },
+    Extra {
+        component: "ShareBlobRateLimitedProblem",
+        operation: "share_blob",
+        status: 429,
+        members: RETRY_AFTER,
+    },
 ];
 
-/// The protocol window a `426` publishes, shared by every operation that pins one.
+/// The retry hint every throttled response carries (`S-C32`).
+///
+/// One `429` reaches a caller from two causes — the key's own budget spent, or the limiter's
+/// partition full — and the `code` tells them apart. `retry_after` is what a client acts on
+/// either way, which is why it is not nullable: both causes set it.
+const RETRY_AFTER: &[Member] = &[Member {
+    name: "retry_after",
+    json_type: "integer",
+    // `counter::unix_seconds` returns a `u64`, so the document says so. It is bounded well under
+    // `i64::MAX` by construction — it is a wall-clock second derived from a live budget window —
+    // which is the property that matters, per this field's own documentation.
+    format: Some("uint64"),
+    description: "When the caller may retry, as Unix seconds. From the limiter's own window \
+                  when a budget is spent, and an upper bound of one window when the limiter \
+                  is at capacity (slice `S-C32`).",
+    nullable: false,
+}];
+
+/// The protocol window a **body-level** `426` publishes as extension members.
+///
+/// One row is left: `album_lifecycle_op` refuses a manifest envelope pinned outside the window
+/// and still renders the range in the body. The four upload operations no longer do — since
+/// issue #404 the window rides `X-Capsule-Protocol-Min`/`-Max` on every response, header-gated
+/// and body-gated `426`s alike, which is where the SDK reads it; a second spelling in the body
+/// is the drift the census exists to prevent. The remaining row goes when `routes/ops.rs`
+/// drops its members.
 const PROTOCOL_RANGE: &[Member] = &[
     Member {
         name: "protocol_min",
         json_type: "string",
+        format: None,
         description: "The oldest protocol date this server still speaks (`YYYY-MM-DD`).",
         nullable: false,
     },
     Member {
         name: "protocol_max",
         json_type: "string",
+        format: None,
         description: "The newest protocol date this server speaks (`YYYY-MM-DD`).",
         nullable: false,
     },
@@ -308,6 +398,60 @@ fn fill_binary(schema: &mut Option<Schema>) {
     );
 }
 
+/// Files the protocol window's three response headers under every response (issue #404).
+///
+/// [`crate::negotiation::Negotiation`] attaches `X-Capsule-Protocol-Min`, `-Max` and
+/// `X-Capsule-Min-Client-Build` to **every** response it forwards, and it forwards everything —
+/// a short-circuit from an inner interceptor, an extractor's rejection, a handler's answer.
+/// Kynos describes an interceptor's `Adds` at `StatusPattern::Success` only
+/// (`kynos/src/middleware/erased.rs`), so without this the document would promise the headers
+/// on a `200` and stay silent on the `426` where a client most needs them.
+///
+/// The declarations come from [`crate::negotiation::response_header_declarations`] — the same
+/// source the interceptor's own description uses — and a response that already declares a
+/// header under one of these names is left exactly as the router emitted it, so this can never
+/// overwrite what Kynos said.
+pub(crate) fn describe_negotiation_headers(document: &mut Document) {
+    let declarations = crate::negotiation::response_header_declarations();
+    for item in document.paths.items.values_mut() {
+        let slots: Vec<&mut Option<Box<kynos::openapi::Operation>>> = vec![
+            &mut item.get,
+            &mut item.put,
+            &mut item.post,
+            &mut item.delete,
+            &mut item.options,
+            &mut item.head,
+            &mut item.patch,
+            &mut item.trace,
+            &mut item.query,
+        ];
+        for operation in slots.into_iter().filter_map(|slot| slot.as_deref_mut()) {
+            let responses = operation
+                .responses
+                .responses
+                .values_mut()
+                .chain(operation.responses.default_response.iter_mut());
+            for response in responses {
+                let kynos::openapi::RefOr::Item(response) = response else {
+                    continue;
+                };
+                for (name, header) in &declarations {
+                    let declared = response
+                        .headers
+                        .keys()
+                        .any(|existing| existing.eq_ignore_ascii_case(name));
+                    if !declared {
+                        response.headers.insert(
+                            (*name).to_owned(),
+                            kynos::openapi::RefOr::Item(header.clone()),
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub(crate) fn describe_problem_extensions(document: &mut Document) {
     let Some(base) = document.components.schemas.get(BASE).cloned() else {
         return;
@@ -391,6 +535,7 @@ fn extended(base: &Schema, title: &str, members: &[Member]) -> Schema {
         crate::problem::CODE_MEMBER.to_owned(),
         member_schema(
             "string",
+            None,
             false,
             "The stable `error.*` catalog code. The client localizes this; `detail` stays \
              English. Present on every problem this server renders.",
@@ -407,7 +552,12 @@ fn extended(base: &Schema, title: &str, members: &[Member]) -> Schema {
     for member in members {
         object.properties.insert(
             member.name.to_owned(),
-            member_schema(member.json_type, member.nullable, member.description),
+            member_schema(
+                member.json_type,
+                member.format,
+                member.nullable,
+                member.description,
+            ),
         );
     }
 
@@ -415,17 +565,25 @@ fn extended(base: &Schema, title: &str, members: &[Member]) -> Schema {
 }
 
 /// One member's schema.
-fn member_schema(json_type: &str, nullable: bool, description: &str) -> Schema {
+fn member_schema(
+    json_type: &str,
+    format: Option<&str>,
+    nullable: bool,
+    description: &str,
+) -> Schema {
     let types = if nullable {
         serde_json::json!([json_type, "null"])
     } else {
         serde_json::json!(json_type)
     };
-    serde_json::from_value(serde_json::json!({
+    let mut schema = serde_json::json!({
         "type": types,
         "description": description,
-    }))
-    .expect("a literal member schema is a schema")
+    });
+    if let Some(format) = format {
+        schema["format"] = serde_json::json!(format);
+    }
+    serde_json::from_value(schema).expect("a literal member schema is a schema")
 }
 
 #[cfg(test)]

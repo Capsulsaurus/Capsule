@@ -45,7 +45,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use capsule_core::crypto::hash::{Hash32, hash_bytes};
-use capsule_core::crypto::keys::hybrid_sig::{HybridSignature, HybridSigningKey};
+use capsule_core::crypto::keys::{HybridSignature, HybridSigningKey};
 use capsule_core::crypto::receipts::{CustodyReceipt, CustodyReceiptCore};
 use jiff::Timestamp;
 

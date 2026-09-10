@@ -13,6 +13,7 @@
 //! | [`ServeResolution::AwaitingUpload`] | `409` | nothing references the address **yet** — the caller's own device has an upload of exactly these bytes in flight. **Transient**, so the client waits |
 //! | [`ServeResolution::NotFound`] | `404` | no live reference names the address, or it is malformed |
 //! | [`ServeResolution::Gone`] | `410` | referenced but not retrievable per policy — **permanent**, so the client degrades to a lower representation |
+//! | [`ServeResolution::ScopeInsufficient`] | `403` | a peer's capability does not cover this blob's role (`S-E5`) |
 //!
 //! Three distinct facts collapse into that one `410` — a deleted asset, a blob awaiting
 //! collection, and a moderation hold — and they collapse deliberately. The client's action is
@@ -60,24 +61,38 @@
 //! arbitrary strings. A reference is looked up **before** the store is touched, so a fetch for
 //! an address nothing references never reaches the bytes. Only then is presence asked about.
 //!
-//! # What is disclosed, stated plainly (`S-C39`)
+//! # What is disclosed, stated plainly (`S-C39`, `S-C51`)
 //!
-//! **An account fetches its own assets' blobs and nothing else.** Until `S-C39` any
-//! authenticated account could fetch any live address it could name, defended as a capability
-//! model — a content address is the hash of ciphertext, so producing one without holding the
-//! bytes is producing a preimage. The defence is not wrong and it is not the contract, and it
-//! stacks badly besides: an address that leaks once is a permanent capability, because the
-//! address never changes.
+//! **An account fetches the blobs of its own assets and of the albums it is currently a member
+//! of, and nothing else.** Until `S-C39` any authenticated account could fetch any live address
+//! it could name, defended as a capability model — a content address is the hash of ciphertext,
+//! so producing one without holding the bytes is producing a preimage. The defence is not wrong
+//! and it is not the contract, and it stacks badly besides: an address that leaks once is a
+//! permanent capability, because the address never changes.
 //!
-//! The decision is [`ReadAuthority`]'s, and a stranger is told exactly what a caller naming an
-//! unknown address is told. See [`crate::serve::authority`] for why the `403`/`404` boundary is
-//! drawn there and not one step further out, and for why the `403` itself still has no
-//! production source: it is no longer a missing authority, it is a missing **membership fact**,
-//! and that fact is `S-C51`'s.
+//! The decision is [`ReadAuthority`]'s, asked from the reference the index returned and asked
+//! **first**. A former member of the album — an account the owner's roster once named and no
+//! longer does — is answered [`ServeResolution::Forbidden`], the `403` the download contract
+//! describes as an authorization change; everyone else with no relationship is told exactly
+//! what a caller naming an unknown address is told. See [`crate::serve::authority`] for why the
+//! `403`/`404` boundary is drawn there and not one step further out, and [`crate::membership`]
+//! for where the fact behind the `403` comes from.
 //!
-//! Non-owners are not locked out of shared content: `/s/{id}/blob/{hash}` serves exactly the
-//! addresses a share link enumerates, and the drop surface serves its own. Neither routes
-//! through here, which is what makes owner-scoping this path safe to do at all.
+//! # A peer reads through the same path (`S-E5`)
+//!
+//! A federated peer presenting a capability on `GET /v1/blob/{hash}` resolves here too, as
+//! [`ReadPrincipal::Peer`], and every rule above holds unchanged: the authority is asked first,
+//! so a takedown `410` is still only legible to a reader entitled to the bytes. Two things
+//! differ, and both are the principal's rather than the path's. The transient `409` is not
+//! offered to a peer — it reports the *caller's own device* still sending the bytes, and a peer
+//! has no device here — so a peer gets the `404` an unreferenced address gets and waits for the
+//! feed's `original_held` to flip. And the authority may answer a fourth way,
+//! [`ServeResolution::ScopeInsufficient`], when the grant's scope does not cover the blob's
+//! role.
+//!
+//! Non-accounts are not locked out of shared content either: `/s/{id}/blob/{hash}` serves
+//! exactly the addresses a share link enumerates, and the drop surface serves its own. Neither
+//! routes through here.
 //!
 //! # What is missing, and owned elsewhere
 //!
@@ -102,8 +117,8 @@ use bytes::Bytes;
 pub mod authority;
 
 pub use self::authority::{
-    BlobReadAccess, OwnedAssetAuthority, ReadAuthority, ReadAuthorityError, ReadAuthorityFuture,
-    owned_assets,
+    BlobReadAccess, MembershipAuthority, ReadAuthority, ReadAuthorityError, ReadAuthorityFuture,
+    ReadPrincipal, membership_reads,
 };
 use crate::blob::{BlobError, BlobStore, ContentAddress};
 use crate::index::{AssetIndex, AssetState};
@@ -198,6 +213,19 @@ pub enum ServeResolution {
     /// No live reference names the address, it is not an address at all, or the caller has no
     /// relationship to the asset that holds it.
     NotFound,
+    /// The caller once had access to the album that holds it and does not now (`S-C51`).
+    ///
+    /// The one refusal that discloses the address is live, and it discloses it only to an
+    /// account the server holds a revoked membership row for. Decided **before** every policy
+    /// refusal below, so a former member learns nothing about holds or deletions either.
+    Forbidden,
+    /// The reader is entitled to the album but its grant does not cover this blob's role
+    /// (`S-E5`).
+    ///
+    /// Only a peer under a capability reaches it. Decided in the same place as
+    /// [`Self::Forbidden`] and for the same reason: it is an authorization answer, and it is
+    /// given only to a reader that already knows the asset is there.
+    ScopeInsufficient,
     /// Referenced but not retrievable per policy: a deleted asset, or a dangling reference.
     Gone,
 }
@@ -213,10 +241,10 @@ pub struct ServeUnavailable(String);
 ///
 /// Returns [`ServeUnavailable`] when the index or the blob store could not answer — never for a
 /// blob that is simply absent, which is a decision rather than a failure.
-#[tracing::instrument(skip(context), fields(hash = %hash, owner = %owner))]
+#[tracing::instrument(skip(context), fields(hash = %hash, reader = %principal))]
 pub async fn resolve(
     context: &ServeContext,
-    owner: &crate::store::OwnerId,
+    principal: ReadPrincipal<'_>,
     hash: &str,
 ) -> Result<ServeResolution, ServeUnavailable> {
     // A string that is not a content address can address no committed blob. Answered as
@@ -239,15 +267,18 @@ pub async fn resolve(
         // Nothing references it. Before answering "unknown", ask whether the caller's own
         // account is in the middle of putting it there (`S-C40`) — the difference between
         // "never heard of it" and "your other device is still sending it" is the difference
-        // between a client degrading permanently and a client waiting.
-        if let Some(upload) = context
-            .uploads()
-            .pending_for_address(owner, hash)
-            .await
-            .map_err(|error| {
-                tracing::error!(%error, "the upload sessions could not be asked about an address");
-                ServeUnavailable("the upload sessions could not answer".to_owned())
-            })?
+        // between a client degrading permanently and a client waiting. Asked only for an
+        // account: a peer has no upload here, and offering it the answer would report on
+        // somebody else's transfer.
+        if let Some(owner) = principal.own_account()
+            && let Some(upload) = context
+                .uploads()
+                .pending_for_address(owner, hash)
+                .await
+                .map_err(|error| {
+                    tracing::error!(%error, "the upload sessions could not be asked about an address");
+                    ServeUnavailable("the upload sessions could not answer".to_owned())
+                })?
         {
             tracing::debug!(%upload, "the address is not referenced yet: an upload is in flight");
             return Ok(ServeResolution::AwaitingUpload { upload });
@@ -264,14 +295,16 @@ pub async fn resolve(
     // deletions.
     match context
         .authority()
-        .blob_read_access(owner, &reference)
+        .blob_read_access(principal, &reference)
         .await
         .map_err(|error| {
             tracing::error!(%error, "the read authority could not decide a blob fetch");
             ServeUnavailable("the read authority could not decide".to_owned())
         })? {
         BlobReadAccess::Granted => {}
+        BlobReadAccess::Revoked => return Ok(ServeResolution::Forbidden),
         BlobReadAccess::Unrelated => return Ok(ServeResolution::NotFound),
+        BlobReadAccess::ScopeInsufficient => return Ok(ServeResolution::ScopeInsufficient),
     }
 
     // Moderation takedown (`S-C17`). First among the refusals and **before any read**: a held

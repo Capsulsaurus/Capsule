@@ -474,8 +474,9 @@ private let appTarget: Target = .target(
         // reachable from the Security screen in either lane, so the key belongs in both.
         "NSFaceIDUsageDescription": // locales/: app.infoplist.face_id_usage
             "Capsule uses Face ID to unlock your Hidden and Recently Deleted photos.",
-        // Let the simulator reach a dev server on http://127.0.0.1:3000 (`mise run serve-api`,
-        // slice S-P7). `NSAllowsLocalNetworking` is scoped to loopback and .local — it does
+        // Let the simulator reach a dev server on http://127.0.0.1:3000
+        // (`mise run serve-memory`). `NSAllowsLocalNetworking` is scoped to loopback and .local
+        // — it does
         // NOT weaken ATS for real servers, unlike NSAllowsArbitraryLoads. Production
         // deployments are HTTPS and unaffected.
         "NSAppTransportSecurity": ["NSAllowsLocalNetworking": true],

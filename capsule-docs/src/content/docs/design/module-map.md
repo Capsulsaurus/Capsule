@@ -16,7 +16,6 @@ whether something exists today, find its slice: `rg 'S-C16' SLICES.md`.
 | `capsule-core` | Cryptography (including the MLS album authority), canonical CBOR, validation, CRDTs, sidecars, backup, lifecycle, client filesystem, local SQLite and vector index, import scan/plan/execute, culling, LQIP, share and drop crypto, aggregated federation views, ML orchestration |
 | `capsule-server` | The Kynos REST/OpenAPI application — see [Server Modules](#server-modules) |
 | `capsule-sdk` | The Spargen-generated REST client plus the orchestration over it Capsule owns: auth and session refresh, the resumable upload state machine, sync, recovery, protocol-version negotiation, LAN peering |
-| `capsule-wire` | The response taxonomy shared by server and SDK. Framework-free by construction: `serde` is its only dependency, so neither side's transport choices reach the other |
 | `capsule-wasm` | The browser sealing surface `capsule-web` loads — share-link open and guest-drop sealing over `capsule-core` with default features off. Built by `mise run build-wasm`; never committed |
 | `capsule-i18n` + `xtask::i18n` | Canonical ICU catalogs, runtime localization, generated platform catalogs |
 | `capsule-core-ffi` | UniFFI bindings for native Swift and Kotlin consumers, on one UniFFI version across both surfaces |
@@ -90,6 +89,7 @@ separate typed ports; no generic CAS, transfer, or TTL library is introduced.
 | --- | --- |
 | REST client | Spargen-generated Rust from a checked-in OpenAPI 3.2 document |
 | SDK workflows | Capsule-owned authentication, upload, sync, recovery, and protocol-version orchestration |
+| Namespaces an app links | Exactly two: `capsule_core_ffi` and `capsule_sdk`. `capsule-core-ffi` is the app umbrella staticlib and links `capsule-sdk`'s uniffi surface into itself, because two Rust staticlibs cannot share a binary — each bundles its own `std` — so any namespace an app needs must ride in that one. A third namespace exists, `capsule_core` behind `capsule-core/ffi`, and it never shares a binary with `capsule_sdk` (the `S-F1` invariant). Recorded as ADR-0005 in the repository's `adr/` directory |
 | Workspace verbs over FFI | The `capsule_sdk` UniFFI namespace exposes the workspace surface apps need — enroll/open (including a hardware-signer constructor), albums, seal and import, verify, sync-apply, master-key escrow, and device-directory publish. Orchestration and shape only: each verb is one call into `capsule-core`, which keeps every cryptographic step, and the `capsule_core` namespace never shares a binary with it |
 | Media | Rawshift performs detection, decode/encode, metadata normalization, derivatives, previews, and video work, consumed through `capsule-core::media` |
 | LQIP | Capsule imports Chromahash **0.7.1** directly; Rawshift has no Chromahash responsibility |
@@ -108,8 +108,8 @@ the named acceptance gaps are verified with contract fixtures or a minimal spike
 | Rawshift | Media detection, decoding/encoding, metadata normalization, derivatives, previews, and video processing | Required format/codec matrix; bounded memory and concurrency; cancellation/progress; malformed-input isolation; deterministic orientation/color/HDR behavior; normalized metadata provenance; mobile/desktop targets; no Chromahash API |
 | Chromahash **0.7.1** | LQIP encode/decode only, imported directly by Capsule | Deterministic output; wide-gamut/HDR fixtures; decoder fallback behavior; supported FFI targets. The pin and the retired ThumbHash decision are [Dependencies](/design/dependencies/#rust) |
 | OpenMLS | MLS protocol and cryptographic state transitions | Required cipher suites and credential model; deterministic persistence/restore; external signer integration; epoch/exporter behavior; cross-platform size/performance; Capsule-owned album policy and provenance stay outside it |
-| PostgreSQL driver/ORM | Durable server index and default implementations of the two typed state ports | Transactions needed for finalization, row locking, migration strategy, cancellation, typed error mapping, tracing, and adapter conformance. Select the narrowest mature stack after Kynos integration is proven |
-| `redis-rs` | Required Valkey adapters for `AuthStateStore` and `UploadSessionStore` | Atomic compare/update and expiry primitives required by each port; cluster behavior; cancellation/timeouts; tracing; behavioural parity with the PostgreSQL and in-memory adapters under one conformance suite — parity is what lets the in-memory double be trusted in tests, not a claim that Valkey is [substitutable](/design/filesystem/server/#required-services) |
+| PostgreSQL driver/ORM (`sea-orm`/`sqlx-postgres`) | The durable server records: the asset index, the account cluster, the device-cohort map, the quota ledger and the library's remaining rows. **Not** the two typed state ports — a Postgres-resident session table is [rejected](/design/filesystem/server/#required-services) as a second implementation of one contract | Transactions needed for finalization, row locking, migration strategy, cancellation, typed error mapping, tracing, and adapter conformance — all discharged for the first four adapters, whose suites run against the deterministic double and against a container under `CAPSULE_TEST_POSTGRES=1`. Migrations are applied by a separate binary and `serve` refuses to boot against a schema it was not built for |
+| `redis-rs` | Required Valkey adapters for `AuthStateStore`, `UploadSessionStore` and the ceremony stores — the volatile half, and the only production adapter any of them gets | Atomic compare/update and expiry primitives required by each port; cluster behavior; cancellation/timeouts; tracing; behavioural parity with the in-memory double under one conformance suite — parity is what lets that double be trusted in tests, not a claim that Valkey is [substitutable](/design/filesystem/server/#required-services). Parity with the PostgreSQL adapters is not a goal, because no port has both |
 | RustCrypto, `ciborium`, `rusqlite`, `sqlite-vec`, UniFFI, `wasm-bindgen` | Existing crypto primitives, canonical serialization, local catalog and vector index, native bindings, and the browser boundary | Continue vectors, canonical-byte tests, migration tests, and binding smoke tests; these libraries do not own Capsule protocols or schemas |
 
 Explicit non-dependencies: no generic CAS crate, `object_store`, resumable-transfer library, generic
@@ -132,7 +132,9 @@ covers (`rg "E2E case N"`), and slices in the repo-root `SLICES.md` reference th
 3. **Sync feed pickup.** Upload from device A → device B's feed advances → device B fetches the
    metadata blob and, per scope, the original.
 4. **Federation cross-server pull.** Alice on `home.tld` shares to Bob on `other.tld` → capability
-   token → Bob's server pulls metadata and blobs → Bob's client renders.
+   token → Bob's server pulls metadata and blobs → Bob's client renders. (The **server half** and
+   the SDK's pull over a socket land with `S-E2`/`S-E5`: `capsule-server/tests/federation.rs` and
+   `capsule-server/tests/sdk_client.rs`. Bob's client rendering is `capsule-e2e`'s.)
 5. **LAN peering A→B.** Two devices on one LAN; discovery → TLS handshake → delta-scoped artifact →
    restore on the receiver → byte-equal libraries.
 6. **Backup → restore on a fresh device.** Export a full backup → bootstrap a new device via
@@ -149,8 +151,18 @@ covers (`rg "E2E case N"`), and slices in the repo-root `SLICES.md` reference th
     results afterwards. Entirely within `capsule-core::ml` and the `capsule-core::db` vector index,
     so it is unaffected by the server rebuild.
 11. **Server crash mid-finalization.** Inject a crash between the blob rename and the Postgres
-    transaction commit; restart; assert the session moves to `FailedProcessing` cleanly, with no
-    orphaned blob and no zombie pending row.
+    transaction commit; assert the session moves to `FailedProcessing` cleanly, the asset row is
+    still `Pending` with no sequence number, and **nothing references the blob** — no dangling
+    reference, which is the one outcome the finalization order exists to forbid
+    ([Filesystem — Server](/design/filesystem/server/)). An **orphaned blob is permitted** and is
+    the safe half of that trade: the bytes are at their content address with a reference count of
+    zero, the collector marks them, and the client's retry re-references them because
+    `BlobStore::commit` is idempotent on identical ciphertext. This row previously asked for "no
+    orphaned blob", which contradicted the design it cites and the test that asserts it.
+    The crash is injected through the `AssetIndex` port, so no production code carries a test
+    hook; the **process-restart** variant — a real kill, and a second process over the same blob
+    root and database — is owed to the remaining durable adapters and belongs to the binary-smoke
+    tier.
 12. **Cross-device enrollment.** Device A authorizes new device B over a verified channel
     (enrollment code plus safety-code check) → B generates hardware keys → A cross-signs B into the
     device directory → B joins each album's MLS group → B's library matches A's. Includes one
@@ -159,3 +171,26 @@ covers (`rg "E2E case N"`), and slices in the repo-root `SLICES.md` reference th
     user's native client decapsulates, rewraps the key under the album AMK, and adopts it in place →
     the asset appears in the library and `verify_asset`-accepts on a second device. The only case
     exercising the web/WASM client and the wrapped-key path.
+
+### Status
+
+Every landed case is a named test (`rg "E2E case N"`); the server-side cases run in the
+`capsule-e2e` crate against the real composition root (`boot::assemble` under the memory
+profile, bound to an ephemeral port) with the real SDK and a real library, no container and no
+environment gate. "Blocked on" names the issue that holds the rest of the case's wording.
+
+| Case | Named test | Status | Blocked on |
+| --- | --- | --- | --- |
+| 1 | `capsule-e2e/tests/case_01_auth_sync_query.rs` | landed; the push runs the SDK's own ladder | — |
+| 2 | `capsule-e2e/tests/case_02_import_upload_finalize.rs` | landed; the push runs the SDK's own ladder | — |
+| 3 | server half `capsule-server/tests/sync.rs`; client half `capsule-e2e/tests/case_03_sync_pickup.rs` | landed; the push runs the SDK's own ladder | B's `verify_asset` needs the album keys (cases 6, 12) |
+| 4 | — | not started | federation (#406) |
+| 5 | `capsule-sdk/src/peering/tests.rs` | in-process shape | live two-host shape, post-v1 |
+| 6 | `capsule-e2e/tests/case_06_backup_restore.rs` | landed; the restored asset reads and its chain walks | #467 (open as the recovered account), #468 (verify: no authority in the artifact) |
+| 7 | `capsule-e2e/tests/case_07_lifecycle.rs` | landed; the push runs the SDK's own ladder | — |
+| 8 | server leg `capsule-e2e/tests/case_08_upgrade_ceremony.rs`; ceremony `capsule-core/src/crypto/authority/openmls_authority/tests.rs` | server leg landed, and its feed-visibility assertion runs the SDK's own ladder; ceremony in-process | a library cannot sign an intent (private DSK) |
+| 9 | `capsule-e2e/tests/protocol_contract.rs` | landed (the UI leg is out of scope) | — |
+| 10 | `capsule-core/tests/model_regen_e2e.rs` (`E2E case 10`) | landed | — |
+| 11 | | lands with #447 (an in-memory fault decorator on the index) | the process-restart variant (#447 defers it) |
+| 12 | server leg `capsule-e2e/tests/case_12_enrollment.rs` | server leg landed; verified-channel half unrepresented (#471) | #471, #467, #405 (MLS join) |
+| 13 | server leg `capsule-e2e/tests/case_13_web_drop_adopt.rs`; seal KAT `capsule-core/tests/drop_adopt_kat.rs` | server leg landed to the durable adopted original | #469 (adopt registers nothing to publish) |
