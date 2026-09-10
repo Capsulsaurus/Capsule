@@ -21,12 +21,43 @@
 //! the former member is indistinguishable from a stranger, and the authorization-change signal
 //! design/import/download-sync.md requires is gone.
 //!
+//! # Removing a member reclaims nothing, and that is observable
+//!
+//! A writer member's upload is filed under the album **owner**'s namespace and charged to the
+//! **uploader** (`routes/upload.rs`: `owner_id` is the namespace, `upload_user_id` is billed).
+//! Removing that member from a later roster changes neither fact. The asset stays in the
+//! owner's album, and its bytes stay against the removed member's quota — they are still stored,
+//! so the ledger is not wrong, but the account they are charged to can no longer reach them:
+//! a removed member may not write ops to that album, so they cannot delete their way back under
+//! quota. The only thing that ever releases the attribution is the refcount collector
+//! (`gc/mod.rs`, `QuotaStore::release_attribution`, `S-C44`), which runs when the last reference
+//! to the bytes goes — i.e. only if the *owner* deletes the asset.
+//!
+//! This is recorded rather than repaired: reclaiming on removal is a protocol question (does the
+//! owner inherit the bytes, does the member keep paying for what the owner still holds, is
+//! removal a deletion at all?) that no design document in this tree answers, and inventing an
+//! answer inside a storage port is how a quota becomes a way to delete somebody else's photos.
+//! Tracked as issue #473.
+//!
 //! # One critical section
 //!
 //! [`MembershipStore::apply_roster`] compares versions and replaces the roster in **one**
 //! operation, the way the device directory's `publish` does: two concurrent publishes cannot
 //! both read "version 1 is current" and both write version 2. The in-memory adapter holds one
 //! mutex; the Postgres adapter takes a per-album transaction lock.
+//!
+//! # The version is bounded above as well as below
+//!
+//! Monotonicity alone makes `roster_version` a one-way ratchet with no stop: a single publish at
+//! the top of the counter can never be superseded, and the album's membership is frozen for
+//! good. [`MAX_ROSTER_VERSION_STEP`] closes that — a roster is applied only inside a window
+//! above the held version — and the refusal ([`RosterOutcome::VersionLeap`]) names the held
+//! version, so the client re-signs at `held+1` and loses nothing: the roster is a full document,
+//! so the version is only ever an ordering, never a count of anything.
+//!
+//! The window is clamped by [`MAX_ROSTER_VERSION`] as well as by the step, which is what keeps
+//! the counter inside what a `BIGINT` holds and what the generated clients can decode, and what
+//! makes the degenerate case at the top of the type unreachable instead of merely improbable.
 
 use std::fmt;
 
@@ -63,6 +94,41 @@ pub fn role_from_token(token: &str) -> Option<MemberRole> {
         _ => None,
     }
 }
+
+/// How far above the held version a roster may declare itself, and still be applied.
+///
+/// `roster_version` is the client's counter, and without a ceiling it is also a **latch**: one
+/// publish at `u64::MAX` can never be superseded, because nothing can be strictly greater than
+/// it, and the album's membership is frozen for good. That is a wedge no recovery path in this
+/// design undoes — the store's comparison is the only ordering there is.
+///
+/// So a version is accepted only in the window `held+1 ..= held+16` (`held` reads as `0` for an
+/// album with no roster yet). Sixteen because the gap a *legitimate* client opens is the number
+/// of membership changes it made while it could not reach the server — a roster is a full
+/// document, so it publishes only its latest — and sixteen offline changes to one album's
+/// membership is already far past what the design describes. A client that does exceed it is
+/// not stuck: the refusal names the held version, and the roster it re-signs at `held+1` says
+/// exactly the same thing, because absence at a higher version *is* removal.
+pub const MAX_ROSTER_VERSION_STEP: u64 = 16;
+
+/// The widest `roster_version` any adapter will accept.
+///
+/// Two independent reasons, and they agree on the same number.
+///
+/// The durable adapter stores the counter in a `BIGINT`, so anything above `i64::MAX` is a
+/// version Postgres cannot hold — `counter_to_column` refuses it. Deciding that at the port
+/// instead means both adapters answer the same typed refusal rather than one answering a
+/// storage failure, which is the divergence the container suite already caught once.
+///
+/// And every integer this server puts in a problem body is lowered by spargen as `i64`
+/// (it emits no `u64` anywhere, `format: uint64` notwithstanding), so a counter above
+/// `i64::MAX` would be a number the generated client cannot decode — and a decode failure is
+/// not a typed API error, so the `code` and the recovery hint would be lost. Bounding the
+/// counter here makes "every version the server can hold or name is decodable" true by
+/// construction rather than by argument.
+///
+/// Reaching it legitimately would take ~9.2 × 10^18 publishes for one album.
+pub const MAX_ROSTER_VERSION: u64 = i64::MAX as u64;
 
 /// The roster the server currently holds for an album.
 #[derive(Clone, PartialEq, Eq)]
@@ -136,6 +202,15 @@ pub enum RosterOutcome {
     Stale {
         /// The version the server holds.
         current_version: u64,
+    },
+    /// A version more than [`MAX_ROSTER_VERSION_STEP`] above the held one. Not a roster that is
+    /// behind — one so far ahead that accepting it would put the counter out of reach of every
+    /// later publish.
+    VersionLeap {
+        /// The version the server holds (`0` when it holds no roster).
+        current_version: u64,
+        /// The highest version it would have accepted.
+        max_version: u64,
     },
     /// A newer version that carried a lower AMK epoch than the held one. An epoch never goes
     /// backwards, so this is a client that lost state, not a legitimate roster.
@@ -211,6 +286,26 @@ pub(crate) fn precheck(
     held: Option<&RosterRecord>,
     incoming: &RosterRecord,
 ) -> Option<RosterOutcome> {
+    // The ceiling first, and against a held version of `0` when there is no roster yet: a first
+    // publish at `u64::MAX` would wedge the album exactly as a later one would, and an album
+    // whose membership no publish can ever change is the one outcome this port must not be able
+    // to reach. `saturating_add` so the window itself cannot overflow into wrapping around.
+    let current_version = held.map_or(0, |held| held.roster_version);
+    // Clamped to the ceiling as well as to the step: `saturating_add` alone would let
+    // `max_version` sit above what an adapter can store and a client can decode, and — at the
+    // very top of the type — collapse to `max_version == current_version`, where every later
+    // publish is stale and the album is wedged after all. The clamp makes that unreachable
+    // rather than merely improbable: a version above the ceiling is never accepted, so a held
+    // version above it never exists.
+    let max_version = current_version
+        .saturating_add(MAX_ROSTER_VERSION_STEP)
+        .min(MAX_ROSTER_VERSION);
+    if incoming.roster_version > max_version {
+        return Some(RosterOutcome::VersionLeap {
+            current_version,
+            max_version,
+        });
+    }
     let held = held?;
     if incoming.roster_version == held.roster_version {
         return Some(if incoming.document == held.document {
@@ -292,6 +387,117 @@ mod tests {
         // Equal is fine: a roster may change without a key rotation.
         assert_eq!(precheck(Some(&held), &record(2, 3, b"b")), None);
         assert_eq!(precheck(Some(&held), &record(2, 4, b"b")), None);
+    }
+
+    #[test]
+    fn a_version_past_the_window_is_a_leap_whatever_it_holds() {
+        // The wedge: one publish at the ceiling of the type, which nothing could ever supersede.
+        let held = record(2, 1, b"a");
+        assert_eq!(
+            precheck(Some(&held), &record(u64::MAX, 1, b"b")),
+            Some(RosterOutcome::VersionLeap {
+                current_version: 2,
+                max_version: 2 + MAX_ROSTER_VERSION_STEP,
+            })
+        );
+        // The edge of the window is inside it; one past it is not.
+        assert_eq!(
+            precheck(Some(&held), &record(2 + MAX_ROSTER_VERSION_STEP, 1, b"b")),
+            None
+        );
+        assert_eq!(
+            precheck(Some(&held), &record(3 + MAX_ROSTER_VERSION_STEP, 1, b"b")),
+            Some(RosterOutcome::VersionLeap {
+                current_version: 2,
+                max_version: 2 + MAX_ROSTER_VERSION_STEP,
+            })
+        );
+    }
+
+    #[test]
+    fn the_window_binds_the_first_roster_too_against_a_held_version_of_zero() {
+        assert_eq!(
+            precheck(None, &record(MAX_ROSTER_VERSION_STEP, 0, b"a")),
+            None
+        );
+        assert_eq!(
+            precheck(None, &record(u64::MAX, 0, b"a")),
+            Some(RosterOutcome::VersionLeap {
+                current_version: 0,
+                max_version: MAX_ROSTER_VERSION_STEP,
+            })
+        );
+    }
+
+    #[test]
+    fn nothing_above_the_storable_ceiling_is_ever_accepted() {
+        // The ceiling is what a BIGINT holds and what a generated client can decode. It binds
+        // the first roster and every later one, and it is the reason a held version above it
+        // cannot exist.
+        assert_eq!(
+            precheck(None, &record(MAX_ROSTER_VERSION + 1, 0, b"a")),
+            Some(RosterOutcome::VersionLeap {
+                current_version: 0,
+                max_version: MAX_ROSTER_VERSION_STEP,
+            })
+        );
+        let held = record(MAX_ROSTER_VERSION - 1, 1, b"a");
+        assert_eq!(
+            precheck(Some(&held), &record(MAX_ROSTER_VERSION, 1, b"b")),
+            None
+        );
+        assert_eq!(
+            precheck(Some(&held), &record(MAX_ROSTER_VERSION + 1, 1, b"b")),
+            Some(RosterOutcome::VersionLeap {
+                current_version: MAX_ROSTER_VERSION - 1,
+                // Clamped: `held + 16` would be past what an adapter can store.
+                max_version: MAX_ROSTER_VERSION,
+            })
+        );
+    }
+
+    #[test]
+    fn the_window_never_names_a_ceiling_a_client_could_not_decode() {
+        // Every `max_version` the route can render is inside the range the generated clients
+        // lower integers into (`i64`), whatever the held version is — including the values that
+        // cannot occur, so the property does not depend on the ceiling being enforced elsewhere.
+        for held_version in [0, 1, MAX_ROSTER_VERSION - 1, MAX_ROSTER_VERSION, u64::MAX] {
+            let held = record(held_version, 1, b"a");
+            let Some(RosterOutcome::VersionLeap {
+                current_version,
+                max_version,
+            }) = precheck(Some(&held), &record(u64::MAX, 1, b"b"))
+            else {
+                continue;
+            };
+            assert!(max_version <= MAX_ROSTER_VERSION, "{max_version}");
+            assert!(i64::try_from(max_version).is_ok(), "{max_version}");
+            assert_eq!(current_version, held_version);
+        }
+    }
+
+    #[test]
+    fn a_held_version_at_the_top_of_the_type_is_unreachable_and_refuses_everything() {
+        // The degenerate case the clamp exists to make unreachable, pinned at the exact
+        // boundary rather than near it. A store that somehow held `u64::MAX` would refuse every
+        // publish — including `u64::MAX` itself, which is *not* treated as a replay, because the
+        // ceiling is decided before the version comparison. That state cannot arise: no roster
+        // above `MAX_ROSTER_VERSION` is ever applied (the case above), so no held record can
+        // carry one. The behaviour is stated here so it is a decision rather than an accident.
+        let held = record(u64::MAX, 1, b"a");
+        let refusal = Some(RosterOutcome::VersionLeap {
+            current_version: u64::MAX,
+            max_version: MAX_ROSTER_VERSION,
+        });
+        assert_eq!(precheck(Some(&held), &record(u64::MAX, 1, b"a")), refusal);
+        assert_eq!(precheck(Some(&held), &record(u64::MAX, 1, b"b")), refusal);
+        // And a version inside the storable range is stale against it, not a leap.
+        assert_eq!(
+            precheck(Some(&held), &record(5, 1, b"b")),
+            Some(RosterOutcome::Stale {
+                current_version: u64::MAX
+            })
+        );
     }
 
     #[test]

@@ -1823,6 +1823,7 @@
     <string name="error_album_roster_malformed">Capsule couldn\'t read that album roster.</string>
     <string name="error_album_roster_not_found">That album isn\'t yours, or doesn\'t exist.</string>
     <string name="error_album_roster_stale">The roster you sent is out of step with the one the server holds.</string>
+    <string name="error_album_roster_version_leap">That roster\'s version is too far ahead of the one the server holds.</string>
     <string name="error_album_unavailable">Capsule couldn\'t set up that album. Please try again.</string>
     <string name="error_album_upgrade_in_flight">This album is already being upgraded.</string>
     <string name="error_album_upgrade_malformed">Capsule couldn\'t read that album upgrade request.</string>

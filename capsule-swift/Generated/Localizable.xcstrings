@@ -36935,6 +36935,16 @@
         }
       }
     },
+    "error.album.roster_version_leap": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That roster's version is too far ahead of the one the server holds."
+          }
+        }
+      }
+    },
     "error.album.unavailable": {
       "localizations": {
         "en": {

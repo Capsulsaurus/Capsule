@@ -17,6 +17,19 @@
 //! serialises both cases with one statement, is released by the commit or rollback, and needs
 //! no row to exist. Every statement after it runs under the lock, so the read, the comparison
 //! and the writes are one operation.
+//!
+//! # The advisory keyspace is shared, and that costs only serialization
+//!
+//! `pg_advisory_xact_lock(hashtext($1))` takes a **single-argument** advisory lock, whose key
+//! space is the whole database's: `hashtext` is 32 bits, and any other advisory-lock user in
+//! the same database — another Capsule adapter, an operator's migration script, an unrelated
+//! application sharing the instance — can land on the same key for an entirely different
+//! reason. What that costs is *serialization*, never correctness: a collision makes two
+//! unrelated operations take turns. It cannot admit two concurrent publishes for one album,
+//! because equal album ids always hash equal, which is the only direction this lock is relied
+//! on for. If a deployment ever measures contention here, the repair is a two-argument
+//! `pg_advisory_xact_lock(classid, objid)` with a class id reserved for this port — not a
+//! wider lock and not a different concurrency story.
 
 use sea_orm::{
     ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbBackend, Statement,
@@ -123,12 +136,16 @@ impl MembershipStore for PostgresMembership {
         members: Vec<(UserId, MemberRole)>,
     ) -> StoreFuture<'_, RosterOutcome> {
         Box::pin(async move {
-            let roster_version = counter_to_column(roster.roster_version)?;
-            let amk_epoch = counter_to_column(roster.amk_epoch)?;
             let transaction = begin(&self.connection).await?;
 
             // The critical section starts here: everything below runs under the album's lock,
             // and the lock is released with the transaction.
+            //
+            // `hashtext` is 32 bits in a key space shared with every other advisory-lock user in
+            // this database, so an unrelated caller can collide with an album. The cost of a
+            // collision is serialization and nothing else — two unrelated operations take turns
+            // — because equal album ids always hash equal, which is the only guarantee this lock
+            // is asked for. See the module docs for the two-argument repair if it ever matters.
             transaction
                 .execute(Statement::from_sql_and_values(
                     DbBackend::Postgres,
@@ -143,6 +160,16 @@ impl MembershipStore for PostgresMembership {
                 // Nothing to write; the rollback releases the lock.
                 return Ok(outcome);
             }
+
+            // Column widths are decided **after** the port's own rule, never before it. A version
+            // past what a `BIGINT` holds is exactly the wedge `precheck`'s window refuses, and
+            // converting first would answer it as this adapter's storage failure — a `500` where
+            // the in-memory store answers a typed refusal, which is the divergence the shared
+            // conformance suite exists to catch. Anything that reaches here is inside the window
+            // above a version this column already held, so these conversions are a guard on an
+            // earlier check's promise rather than a decision.
+            let roster_version = counter_to_column(roster.roster_version)?;
+            let amk_epoch = counter_to_column(roster.amk_epoch)?;
 
             let roster = RosterRecord {
                 received_at: stored(roster.received_at),

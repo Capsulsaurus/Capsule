@@ -85,6 +85,11 @@ pub struct AlbumRoster {
     /// Strictly monotonic per album. A server refuses a version at or below the one it holds
     /// unless the bytes are identical (a replay), so a roster can neither be rolled back nor
     /// silently replaced.
+    ///
+    /// A server also bounds it **above**, by a small step over the version it holds: the field
+    /// is an ordering, not a count, and a version nothing could ever exceed would freeze the
+    /// album's membership permanently. A client that is refused for it re-signs the same
+    /// document one above the version the refusal names.
     pub roster_version: u64,
     /// The AMK epoch the group is at after the commit this roster reflects. Non-decreasing
     /// across versions; the server records the epoch at which a member was granted and the one

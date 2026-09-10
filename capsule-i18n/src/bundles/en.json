@@ -1832,6 +1832,7 @@
   "error.album.roster_malformed": "Capsule couldn't read that album roster.",
   "error.album.roster_not_found": "That album isn't yours, or doesn't exist.",
   "error.album.roster_stale": "The roster you sent is out of step with the one the server holds.",
+  "error.album.roster_version_leap": "That roster's version is too far ahead of the one the server holds.",
   "error.album.unavailable": "Capsule couldn't set up that album. Please try again.",
   "error.album.upgrade_in_flight": "This album is already being upgraded.",
   "error.album.upgrade_malformed": "Capsule couldn't read that album upgrade request.",

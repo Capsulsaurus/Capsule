@@ -790,6 +790,40 @@ pub async fn create_upload(
         });
     }
 
+    // Invariant 7's account half — and it belongs on **this** surface only.
+    //
+    // This endpoint admits exactly the two actions that move blob bytes, `create` and `replace`
+    // (the dispatch below; a write that moves bytes is an upload by definition). Both mint
+    // freshly authored ciphertext, and every client path that builds one sets the author to the
+    // signing account: `lifecycle/import.rs`, `lifecycle/drops.rs` and `drop/mod.rs` all write
+    // `created_by_user: self.account.user_id` — the last of them for an *adopted* web-upload
+    // drop, which design/web-upload.md is explicit about ("set `created_by_user`/
+    // `created_by_device` to the **adopter** (the cryptographic author)"). So on this surface
+    // the author is the caller, and a mismatch is a client contradicting itself.
+    //
+    // `POST /v1/albums/{album_id}/ops` deliberately does **not** make this comparison: every
+    // action it admits is a chain continuation whose author travels down from the creator, so
+    // the same check there would refuse a writer member's delete of the owner's asset. See that
+    // module's docs.
+    //
+    // Without this, a writer member could file a *new* asset into the owner's album attributed
+    // to a third account: the manifest is stored verbatim and served back as provenance, and
+    // nothing later re-derives who wrote it. A `400` with the envelope-mismatch code, like every
+    // other field that contradicts what the request itself establishes.
+    //
+    // `replace` has no client builder in this tree yet (no `Action::Replace` is constructed
+    // anywhere under `capsule-core/src/lifecycle/`), so whether a replace re-mints its
+    // attribution or inherits it is still open — #475. It is held to the same rule as `create`
+    // here because it authors new ciphertext under a fresh file key, which is what makes an
+    // author an author on this surface.
+    if request.manifest_envelope.created_by_user != uploader.as_str() {
+        tracing::info!(%uploader, "an upload was refused: created_by_user is not the caller");
+        return Err(CreateRejection::Invalid {
+            detail: "created_by_user is not the authenticated caller".to_owned(),
+            code: error_codes::UPLOAD_ENVELOPE_MISMATCH,
+        });
+    }
+
     // Invariant 7: the device the manifest names must be in the uploader's published
     // directory, and the battery compares the moment it was admitted against the manifest.
     let device = crate::upload::envelope::created_by_device(&request.manifest_envelope)

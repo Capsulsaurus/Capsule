@@ -85,6 +85,24 @@ async fn membership_of(fixture: &Fixture, user: &str) -> Membership {
         .expect("the store answers")
 }
 
+/// Assert every JSON number in `problem` is inside the range a spargen-generated client decodes.
+///
+/// The generator lowers every `integer` in the contract as `i64` — it emits no `u64` at all,
+/// `format: uint64` or not — so a member above `i64::MAX` is a member no generated client can
+/// read. This walks the whole body rather than the members a case happens to name, so a future
+/// extension that forgets the rule fails here.
+#[track_caller]
+fn assert_decodable(problem: &Value) {
+    for (name, value) in problem.as_object().expect("a problem object") {
+        if let Some(number) = value.as_u64() {
+            assert!(
+                i64::try_from(number).is_ok(),
+                "`{name}` is {number}, past what a generated client decodes"
+            );
+        }
+    }
+}
+
 // ===========================================================================================
 
 #[tokio::test]
@@ -185,6 +203,123 @@ async fn an_epoch_that_regresses_is_stale_too() {
         membership_of(&fixture, BOB).await,
         Membership::Member { .. }
     ));
+}
+
+/// **An absurd version cannot wedge the album.** `roster_version` is the client's own counter
+/// and the server's only ordering, so a publish at the top of it would be a roster nothing could
+/// ever supersede — membership frozen for good, with no recovery path in the design. The window
+/// above the held version is what denies it, and the case asserts the half that matters: after
+/// the refusal, the next legitimate roster is still accepted and still changes membership.
+#[tokio::test]
+async fn a_version_far_above_the_held_one_is_refused_and_the_next_roster_still_applies() {
+    let dsk = identity_key();
+    let (fixture, bearer) = ready(&dsk).await;
+    publish(
+        &fixture,
+        &bearer,
+        &album(),
+        &signed_roster(&dsk, device(), &album(), 1, 1, &[(BOB, MemberRole::Writer)]),
+    )
+    .await
+    .assert_status(StatusCode::OK);
+
+    let problem: Value = publish(
+        &fixture,
+        &bearer,
+        &album(),
+        &signed_roster(&dsk, device(), &album(), u64::MAX, 1, &[]),
+    )
+    .await
+    .assert_status(StatusCode::BAD_REQUEST)
+    .json();
+    assert_eq!(problem["code"], "error.album.roster_version_leap");
+    assert_eq!(problem["current_version"], 1);
+    assert_eq!(
+        problem["max_version"],
+        1 + capsule_server::membership::MAX_ROSTER_VERSION_STEP,
+        "the refusal names the ceiling, so the client knows what it may re-sign at"
+    );
+
+    // **Every number in this refusal must survive a generated client.** spargen lowers every
+    // integer in the contract as `i64` and emits no `u64` at all, so an out-of-range member
+    // would make the SDK fail to *decode* the problem — and a decode failure is not a typed API
+    // error, so the `code` and the recovery hint would be lost and the caller could not tell
+    // this refusal from a network fault. The declared version, the one number here the caller
+    // controls, rides the English `detail` for exactly that reason.
+    assert_decodable(&problem);
+    assert!(
+        problem["detail"]
+            .as_str()
+            .expect("a detail string")
+            .contains(&u64::MAX.to_string()),
+        "the declared version is still legible to a human: {}",
+        problem["detail"]
+    );
+    assert!(
+        problem.get("declared").is_none(),
+        "and it is not an extension member: {problem}"
+    );
+
+    // Nothing was written, and — the point of the bound — the album is not wedged.
+    assert!(matches!(
+        membership_of(&fixture, BOB).await,
+        Membership::Member { .. }
+    ));
+    let body: Value = publish(
+        &fixture,
+        &bearer,
+        &album(),
+        &signed_roster(&dsk, device(), &album(), 2, 2, &[]),
+    )
+    .await
+    .assert_status(StatusCode::OK)
+    .json();
+    assert_eq!(body["roster_version"], 2);
+    assert_eq!(
+        membership_of(&fixture, BOB).await,
+        Membership::Revoked(Revocation {
+            at_version: 2,
+            at_epoch: 2,
+        }),
+        "the legitimate roster after a leap is applied in full"
+    );
+}
+
+/// The window binds an album's **first** roster too: an album with no roster reads as version 0,
+/// so a first publish cannot latch the counter either.
+#[tokio::test]
+async fn a_first_roster_far_above_zero_is_refused() {
+    let dsk = identity_key();
+    let (fixture, bearer) = ready(&dsk).await;
+
+    let problem: Value = publish(
+        &fixture,
+        &bearer,
+        &album(),
+        &signed_roster(
+            &dsk,
+            device(),
+            &album(),
+            u64::from(u32::MAX),
+            1,
+            &[(BOB, MemberRole::Writer)],
+        ),
+    )
+    .await
+    .assert_status(StatusCode::BAD_REQUEST)
+    .json();
+    assert_eq!(problem["code"], "error.album.roster_version_leap");
+    assert_eq!(problem["current_version"], 0);
+    assert_eq!(membership_of(&fixture, BOB).await, Membership::Never);
+
+    publish(
+        &fixture,
+        &bearer,
+        &album(),
+        &signed_roster(&dsk, device(), &album(), 1, 1, &[(BOB, MemberRole::Writer)]),
+    )
+    .await
+    .assert_status(StatusCode::OK);
 }
 
 #[tokio::test]
