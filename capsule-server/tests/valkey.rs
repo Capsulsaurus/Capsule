@@ -349,9 +349,22 @@ async fn counter_hits_race_to_the_budget() {
     assert_eq!(admitted, 5);
 }
 
-/// The durable boot arm reaches Valkey first, and then names the half that is not written.
+/// A durable boot with Valkey configured and no `DATABASE_URL` refuses, and names it.
+///
+/// **This case proved more before #402 and #403 met.** #403 wrote it to show the durable arm
+/// reached Valkey *first* and then named the Postgres half as unwritten. Both halves exist now,
+/// and the arm demands `DATABASE_URL`, opens the pool and checks the schema before it dials
+/// Valkey at all — so with a live Valkey and no database this refuses on the configuration that
+/// is absent, one step earlier than #403 wrote it for. Proving "Valkey was reached" now needs
+/// *both* services up, which no single-container suite can arrange: `capsule_server::postgres`'s
+/// container helper is `pub(crate)` and out of reach from an integration test. The Postgres-side
+/// half of that proof is `boot::tests::postgres_conformance::
+/// the_durable_arm_clears_postgres_and_refuses_on_an_unreachable_valkey`.
+///
+/// What it still proves is the property both lanes cared about most: a durable backend refuses
+/// rather than silently falling back to the in-memory adapters.
 #[tokio::test]
-async fn the_durable_arm_reaches_valkey_and_then_names_the_postgres_half() {
+async fn a_durable_boot_without_a_database_url_refuses_and_names_it() {
     use std::collections::BTreeMap;
 
     use capsule_server::boot::{BootError, assemble};
@@ -382,16 +395,19 @@ async fn the_durable_arm_reaches_valkey_and_then_names_the_postgres_half() {
         .expect("it is well-formed");
     let error = assemble(&config)
         .await
-        .expect_err("the Postgres half is not written");
+        .expect_err("a durable backend with no database refuses");
     assert!(
         matches!(
             error,
-            BootError::AdapterUnavailable {
-                key: "DATABASE_URL",
-                ..
+            BootError::Missing {
+                key: "DATABASE_URL"
             }
         ),
         "{error:?}"
     );
-    assert!(format!("{error}").contains("#402"), "{error}");
+    assert!(format!("{error}").contains("DATABASE_URL"), "{error}");
+    assert!(
+        !format!("{error}").contains(&server.url),
+        "a startup error must never carry a connection URL: {error}"
+    );
 }

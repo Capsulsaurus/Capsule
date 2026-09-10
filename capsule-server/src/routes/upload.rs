@@ -801,10 +801,13 @@ pub async fn create_upload(
     // `created_by_device` to the **adopter** (the cryptographic author)"). So on this surface
     // the author is the caller, and a mismatch is a client contradicting itself.
     //
-    // `POST /v1/albums/{album_id}/ops` deliberately does **not** make this comparison: every
-    // action it admits is a chain continuation whose author travels down from the creator, so
-    // the same check there would refuse a writer member's delete of the owner's asset. See that
-    // module's docs.
+    // `POST /v1/albums/{album_id}/ops` makes the **same** comparison, for the same reason. It
+    // briefly did not: the check was removed there when a writer member's delete of the owner's
+    // asset was refused, on the reading that a continuation's author travels down from the
+    // creator. That was right about the symptom and wrong about the cause — `sign_lifecycle`
+    // re-mints `created_by_user` and `created_by_device` per record, so on a continuation as on
+    // a create the field names the signer of *this* record — and the check was restored once the
+    // client half was understood. See that module's docs.
     //
     // Without this, a writer member could file a *new* asset into the owner's album attributed
     // to a third account: the manifest is stored verbatim and served back as provenance, and

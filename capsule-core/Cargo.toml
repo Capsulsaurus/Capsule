@@ -52,6 +52,17 @@ mls = [
 # uniffi's CLI so the `uniffi-bindgen` bin can emit the bindings.
 ffi = ["native", "dep:uniffi"]
 ffi-bindgen = ["ffi", "uniffi/cli"]
+# `test-support` exposes the entry points that let a caller choose the backup artifact's Argon2id
+# wrap cost (`backup::export_with_params`, `backup::export_with_salt_and_params`,
+# `Workspace::export_backup_with_params`). **Never in `default`, and never in a shipping
+# manifest.** A weak cost there produces a brute-forceable backup and nothing downstream
+# re-checks it — `pwkdf::derive_wrap_key` accepts anything `argon2::Params::new` validates — so
+# the ability to ask for one is a compile-time capability a reviewer can see in a manifest diff,
+# not a documented convention. `capsule-core`'s own tests reach the same items through
+# `cfg(test)`; a downstream test crate enables this on a **dev**-dependency, which resolver 3
+# keeps out of every build that is not building tests. Enables no dependency and changes no
+# production code path.
+test-support = []
 # `tpm` builds the desktop (Linux/Windows) TPM 2.0 reference `HardwareSigner` (see
 # `crypto::keys::tpm`). Off by default and never built in CI: tss-esapi links the system
 # `libtss2` and exercising it needs a real TPM or a software TPM (swtpm). Compile on a

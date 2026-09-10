@@ -171,3 +171,26 @@ covers (`rg "E2E case N"`), and slices in the repo-root `SLICES.md` reference th
     user's native client decapsulates, rewraps the key under the album AMK, and adopts it in place →
     the asset appears in the library and `verify_asset`-accepts on a second device. The only case
     exercising the web/WASM client and the wrapped-key path.
+
+### Status
+
+Every landed case is a named test (`rg "E2E case N"`); the server-side cases run in the
+`capsule-e2e` crate against the real composition root (`boot::assemble` under the memory
+profile, bound to an ephemeral port) with the real SDK and a real library, no container and no
+environment gate. "Blocked on" names the issue that holds the rest of the case's wording.
+
+| Case | Named test | Status | Blocked on |
+| --- | --- | --- | --- |
+| 1 | `capsule-e2e/tests/case_01_auth_sync_query.rs` | landed; the push runs the SDK's own ladder | — |
+| 2 | `capsule-e2e/tests/case_02_import_upload_finalize.rs` | landed; the push runs the SDK's own ladder | — |
+| 3 | server half `capsule-server/tests/sync.rs`; client half `capsule-e2e/tests/case_03_sync_pickup.rs` | landed; the push runs the SDK's own ladder | B's `verify_asset` needs the album keys (cases 6, 12) |
+| 4 | — | not started | federation (#406) |
+| 5 | `capsule-sdk/src/peering/tests.rs` | in-process shape | live two-host shape, post-v1 |
+| 6 | `capsule-e2e/tests/case_06_backup_restore.rs` | landed; the restored asset reads and its chain walks | #467 (open as the recovered account), #468 (verify: no authority in the artifact) |
+| 7 | `capsule-e2e/tests/case_07_lifecycle.rs` | landed; the push runs the SDK's own ladder | — |
+| 8 | server leg `capsule-e2e/tests/case_08_upgrade_ceremony.rs`; ceremony `capsule-core/src/crypto/authority/openmls_authority/tests.rs` | server leg landed, and its feed-visibility assertion runs the SDK's own ladder; ceremony in-process | a library cannot sign an intent (private DSK) |
+| 9 | `capsule-e2e/tests/protocol_contract.rs` | landed (the UI leg is out of scope) | — |
+| 10 | `capsule-core/tests/model_regen_e2e.rs` (`E2E case 10`) | landed | — |
+| 11 | | lands with #447 (an in-memory fault decorator on the index) | the process-restart variant (#447 defers it) |
+| 12 | server leg `capsule-e2e/tests/case_12_enrollment.rs` | server leg landed; verified-channel half unrepresented (#471) | #471, #467, #405 (MLS join) |
+| 13 | server leg `capsule-e2e/tests/case_13_web_drop_adopt.rs`; seal KAT `capsule-core/tests/drop_adopt_kat.rs` | server leg landed to the durable adopted original | #469 (adopt registers nothing to publish) |

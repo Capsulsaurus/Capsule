@@ -644,18 +644,20 @@ impl Workspace {
     }
 }
 
+/// The trivially-fast Argon2id cost the `lifecycle` suite derives under. Named, rather than
+/// spelled out per call, because a test now hands it to explicit-parameter entry points
+/// (`Workspace::create_with_params`, `Workspace::export_backup_with_params`) instead of getting
+/// a cheap cost from a `#[cfg(test)]` fork inside the library.
+#[cfg(test)]
+const FAST_PARAMS: Argon2Params = Argon2Params {
+    mem_kib: 64,
+    t_cost: 1,
+    p_cost: 1,
+};
+
 /// A fast-Argon2 workspace over `dir` — the shared fixture every `lifecycle` test module
 /// builds on (the production cost would dominate the suite's runtime).
 #[cfg(test)]
 fn fast_workspace(dir: &Path) -> Workspace {
-    Workspace::create_with_params(
-        dir,
-        b"passphrase",
-        Argon2Params {
-            mem_kib: 64,
-            t_cost: 1,
-            p_cost: 1,
-        },
-    )
-    .unwrap()
+    Workspace::create_with_params(dir, b"passphrase", FAST_PARAMS).unwrap()
 }

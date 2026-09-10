@@ -198,12 +198,12 @@ capsule-server-migration = { path = "migration" }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["valkey"] }
 
-# `tests/binary.rs` gives the spawned server a blob root of its own, and deletes it afterwards,
-# and `tests/sdk_client.rs` pushes an asset a **real** `capsule_core::Workspace` sealed — the only
-# way to prove the upload ladder puts an asset on this server's feed is to have the ladder's own
-# input, and a hand-built bundle would agree with a wrong ladder. Already the workspace's
-# scratch-directory crate (`capsule-core`, `capsule-sdk`, `capsule-core-ffi` all dev-depend on
-# it) and already in the lock file. Test-only.
+# Throwaway directories on disk. `tests/binary.rs` gives the spawned server a blob root of its
+# own and deletes it afterwards; `tests/sdk_client.rs` puts a **real** `capsule_core::Workspace`
+# there, because the only way to prove the upload ladder puts an asset on this server's feed is
+# to push the ladder's own input — a hand-built bundle would agree with a wrong ladder.
+# Already the workspace's scratch-directory crate (`capsule-core`, `capsule-sdk`,
+# `capsule-core-ffi` all dev-depend on it) and already in the lock file.
 tempfile = "3"
 
 # `test-util` carries `kynos::test::TestClient`, which drives a built `Service` in-process —
