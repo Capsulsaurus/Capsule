@@ -15,7 +15,7 @@
 mod artifact;
 
 pub use artifact::{
-    BackupArtifact, BackupAsset, BackupInput, RestoreMode, RestoredAsset, RestoreReport,
+    BackupArtifact, BackupAsset, BackupInput, RestoreMode, RestoreReport, RestoredAsset,
     WRAP_PARAMS, export, export_with_salt,
 };
 /// The caller-chosen-cost export entry points. Gated identically to their definitions: a weak

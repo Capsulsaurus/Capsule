@@ -626,9 +626,7 @@ fn compare(
             committed.to_hex(),
         );
     }
-    if core.action.is_create()
-        || core.action == capsule_core::crypto::provenance::Action::Replace
-    {
+    if core.action.is_create() || core.action == capsule_core::crypto::provenance::Action::Replace {
         // The two actions that carry an original. A `create` whose original has not landed yet
         // is the staged-upload carve-out, and holds nothing to compare.
         if let Some(held) = row.address_for(BlobRole::Original) {

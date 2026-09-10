@@ -19,8 +19,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
-use capsule_core::backup::RestoredAsset;
-use capsule_core::backup::{BackupArtifact, BackupAsset, BackupInput, RestoreMode, export};
+use capsule_core::backup::{
+    BackupArtifact, BackupAsset, BackupInput, RestoreMode, RestoredAsset, export,
+};
 use capsule_core::crypto::hash::{Hash32, hash_bytes};
 use capsule_core::crypto::keys::{HybridVerifyingKey, Signer};
 use tracing::instrument;

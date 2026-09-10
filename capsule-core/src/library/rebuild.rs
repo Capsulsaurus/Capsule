@@ -52,8 +52,7 @@ use uuid::Uuid;
 use walkdir::WalkDir;
 
 use crate::cbor;
-use crate::crypto::provenance::ProvenanceRecord;
-use crate::crypto::provenance::Action;
+use crate::crypto::provenance::{Action, ProvenanceRecord};
 use crate::db::rows::{AssetRow, AssetStackRow, StackMemberRow};
 use crate::domain::StackType;
 use crate::library::error::LibraryError;

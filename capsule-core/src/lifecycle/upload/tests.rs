@@ -283,7 +283,8 @@ fn derivative_blobs_ship_ciphertext_that_decrypts_to_the_bytes_on_disk() {
         &core.nonce_prefix,
     );
     let recovered =
-        stream::decrypt_asset_vec(&file_key, &core.nonce_prefix, &blob.bytes).expect("it opens");
+        crate::crypto::encryption::decrypt_asset_vec(&file_key, &core.nonce_prefix, &blob.bytes)
+            .expect("it opens");
     assert_eq!(
         recovered, plaintext,
         "and it decrypts to exactly the derivative the client holds"
@@ -415,8 +416,11 @@ fn a_still_role_derivative_outside_the_closed_set_is_skipped() {
     let plaintext = fs::read(dir.join(format!("{}.thumbnail.jxl", asset_id.simple()))).unwrap();
     let album_keys = ws.album(&asset.album_id).unwrap();
     let file_key = ws.file_key(album_keys, 1, &asset_id, &[7, 6, 5, 4, 3, 2, 1]);
-    let (_, ciphertext) =
-        stream::encrypt_asset_vec_with_prefix(&file_key, [7, 6, 5, 4, 3, 2, 1], &plaintext);
+    let (_, ciphertext) = crate::crypto::encryption::encrypt_asset_vec_with_prefix(
+        &file_key,
+        [7, 6, 5, 4, 3, 2, 1],
+        &plaintext,
+    );
     let address = hash::hash_bytes(&ciphertext);
 
     // A recognised format ships...
@@ -580,7 +584,11 @@ fn two_formats_for_one_role_are_addressed_by_format_not_by_filename_order() {
     let album_keys = ws.album(&asset.album_id).unwrap();
     let address = |bytes: &[u8]| {
         let key = ws.file_key(album_keys, 1, &asset_id, &[7, 6, 5, 4, 3, 2, 1]);
-        let (_, ct) = stream::encrypt_asset_vec_with_prefix(&key, [7, 6, 5, 4, 3, 2, 1], bytes);
+        let (_, ct) = crate::crypto::encryption::encrypt_asset_vec_with_prefix(
+            &key,
+            [7, 6, 5, 4, 3, 2, 1],
+            bytes,
+        );
         hash::hash_bytes(&ct)
     };
     rewrite_bundle(

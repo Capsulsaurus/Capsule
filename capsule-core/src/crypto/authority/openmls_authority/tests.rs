@@ -18,8 +18,7 @@ use crate::crypto::hash;
 use crate::crypto::keys::directory::{DeviceEntry, DirectoryCore};
 use crate::crypto::keys::{DeviceDirectory, HybridSigningKey};
 use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
-use crate::crypto::provenance::Action;
-use crate::crypto::provenance::{ASSET_MANIFEST_VERSION, KeyMode, ManifestCore};
+use crate::crypto::provenance::{ASSET_MANIFEST_VERSION, Action, KeyMode, ManifestCore};
 use crate::crypto::verify_asset::{VerifyOutcome, verify_asset};
 
 const CIPHERTEXT: &[u8] = b"the asset ciphertext bytes";
@@ -811,10 +810,7 @@ fn signed_manifest(
     album: Uuid,
     epoch: AmkVersion,
     write_tier: &HybridSigningKey,
-) -> (
-    crate::crypto::provenance::AssetManifest,
-    DeviceDirectory,
-) {
+) -> (crate::crypto::provenance::AssetManifest, DeviceDirectory) {
     let device = HybridSigningKey::from_seed_bytes(&[1; 32], &[2; 32]);
     let user = Uuid::from_u128(0x05E2);
     let dev_id = Uuid::from_u128(0xD1);

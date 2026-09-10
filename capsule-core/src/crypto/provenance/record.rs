@@ -145,8 +145,7 @@ mod tests {
     use super::*;
     use crate::crypto::keys::{AmkVersion, HybridSigningKey};
     use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
-    use crate::crypto::provenance::Action;
-    use crate::crypto::provenance::{ASSET_MANIFEST_VERSION, KeyMode, ManifestCore};
+    use crate::crypto::provenance::{ASSET_MANIFEST_VERSION, Action, KeyMode, ManifestCore};
 
     const ASSET: u128 = 0xF11E;
 

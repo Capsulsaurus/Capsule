@@ -19,15 +19,14 @@ use crate::crypto::encryption::{blob_ciphertext_hash, encrypt_asset_rekey, seal_
 use crate::crypto::hash;
 use crate::crypto::keys::{Amk, AmkVersion};
 use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
-use crate::crypto::provenance::Action;
-use crate::crypto::provenance::{ASSET_MANIFEST_VERSION, KeyMode, ManifestCore};
-use crate::crypto::provenance::{ProvenanceChain, ProvenanceRecord};
+use crate::crypto::provenance::{
+    ASSET_MANIFEST_VERSION, Action, KeyMode, ManifestCore, ProvenanceChain, ProvenanceRecord,
+};
 use crate::crypto::verify_asset::{
     MetadataBinding, VerifyOutcome, verify_asset, verify_metadata_binding,
 };
 use crate::db::{AssetRow, CachedRepresentationRow};
-use crate::exif::extract_exif;
-use crate::exif::resolve_timezone;
+use crate::exif::{extract_exif, resolve_timezone};
 use crate::metadata::crdt::{Lww, OrSet};
 use crate::sidecar::sidecar_v1::{
     Gps, GpsSource, SIDECAR_SCHEMA_V1, SidecarV1, StackMembership, StackRole,

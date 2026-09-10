@@ -20,11 +20,9 @@ use uuid::Uuid;
 
 use super::{AlbumKeys, AssetState, LifecycleError, Result, Workspace, media_dir};
 use crate::cbor;
-use crate::crypto::encryption::stream;
+use crate::crypto::encryption::encrypt_asset_vec_with_prefix;
 use crate::crypto::hash::{self, Hash32};
-use crate::crypto::provenance::DerivativeManifest;
-use crate::crypto::provenance::{Action, DerivativeRole};
-use crate::crypto::provenance::KeyMode;
+use crate::crypto::provenance::{Action, DerivativeManifest, DerivativeRole, KeyMode};
 use crate::media::{DerivativeFormat, verify_still_format};
 
 /// One derivative blob of an asset bundle: the **ciphertext** plus the content address its
@@ -157,7 +155,7 @@ impl Workspace {
         let epoch = head.amk_version.0;
         let file_key = self.file_key(album, epoch, &head.file_id, &head.nonce_prefix);
         let (_, ciphertext) =
-            stream::encrypt_asset_vec_with_prefix(&file_key, head.nonce_prefix, &plaintext);
+            encrypt_asset_vec_with_prefix(&file_key, head.nonce_prefix, &plaintext);
 
         // The re-derivation is deterministic, so a mismatch means the library's bytes and its
         // own signed manifest disagree — never ship that.
@@ -343,7 +341,7 @@ impl Workspace {
             }
             let file_key = self.file_key(album, key_epoch, &asset.asset_id, &core.nonce_prefix);
             let (_, ciphertext) =
-                stream::encrypt_asset_vec_with_prefix(&file_key, core.nonce_prefix, &plaintext);
+                encrypt_asset_vec_with_prefix(&file_key, core.nonce_prefix, &plaintext);
 
             let observed = hash::hash_bytes(&ciphertext);
             if observed != core.ciphertext_hash {

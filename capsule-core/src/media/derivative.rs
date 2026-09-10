@@ -64,11 +64,12 @@ use super::error::MediaError;
 use super::resize::downscale_rgba8;
 use crate::cbor;
 use crate::crypto::CryptoError;
-use crate::crypto::encryption::stream::NONCE_PREFIX_LEN;
+use crate::crypto::encryption::NONCE_PREFIX_LEN;
 use crate::crypto::hash::{self, Hash32};
 use crate::crypto::keys::{AmkVersion, Signer};
-use crate::crypto::provenance::{DERIVATIVE_MANIFEST_VERSION, DerivativeCore};
-use crate::crypto::provenance::{DerivativeManifest, DerivativeRole};
+use crate::crypto::provenance::{
+    DERIVATIVE_MANIFEST_VERSION, DerivativeCore, DerivativeManifest, DerivativeRole,
+};
 use crate::derivative_format::DerivativeFormat;
 use crate::lqip::RgbaImage;
 

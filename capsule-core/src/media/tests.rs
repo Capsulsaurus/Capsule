@@ -40,8 +40,9 @@ use crate::crypto::encryption::encrypt_asset_rekey;
 use crate::crypto::hash::Hash32;
 use crate::crypto::keys::{Amk, AmkVersion, HybridSigningKey};
 use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
-use crate::crypto::provenance::{DERIVATIVE_MANIFEST_VERSION, DerivativeCore};
-use crate::crypto::provenance::{DerivativeManifest, DerivativeRole};
+use crate::crypto::provenance::{
+    DERIVATIVE_MANIFEST_VERSION, DerivativeCore, DerivativeManifest, DerivativeRole,
+};
 use crate::derivative_format::{DerivativeFormat, verify_still_format};
 use crate::lqip::{Gamut, Lqip, RgbaImage};
 
@@ -997,7 +998,7 @@ fn the_thumbnail_tier_encodes_jxl_and_defers_the_rest() {
     let file_key = seal
         .amk
         .derive_file_key(&Uuid::from_u128(0xB1), &thumb.manifest.core.nonce_prefix);
-    let (_, ciphertext) = crate::crypto::encryption::stream::encrypt_asset_vec_with_prefix(
+    let (_, ciphertext) = crate::crypto::encryption::encrypt_asset_vec_with_prefix(
         &file_key,
         thumb.manifest.core.nonce_prefix,
         &thumb.bytes,
@@ -1014,7 +1015,7 @@ fn the_thumbnail_tier_encodes_jxl_and_defers_the_rest() {
          private photo and does not cross the network in the clear"
     );
     assert_eq!(
-        crate::crypto::encryption::stream::decrypt_asset_vec(
+        crate::crypto::encryption::decrypt_asset_vec(
             &file_key,
             &thumb.manifest.core.nonce_prefix,
             &ciphertext

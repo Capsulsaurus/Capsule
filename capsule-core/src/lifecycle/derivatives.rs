@@ -28,8 +28,9 @@ use uuid::Uuid;
 
 use super::{AssetState, DerivativeStatus, LifecycleError, Result, Workspace, media_dir};
 use crate::cbor;
-use crate::crypto::encryption::rekey::encrypt_asset_rekey_with_prefix;
-use crate::crypto::encryption::stream::{AssetEncryption, NONCE_PREFIX_LEN};
+use crate::crypto::encryption::{
+    AssetEncryption, NONCE_PREFIX_LEN, encrypt_asset_rekey_with_prefix,
+};
 use crate::crypto::hash::{self, Hash32};
 use crate::crypto::keys::{Amk, AmkVersion};
 use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};

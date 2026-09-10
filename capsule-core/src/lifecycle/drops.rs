@@ -6,15 +6,14 @@ use std::collections::BTreeMap;
 use uuid::Uuid;
 
 use super::{Workspace, now_rfc3339};
-use crate::crypto::encryption::keywrap::seal_file_key;
-use crate::crypto::encryption::{blob_ciphertext_hash, seal_metadata_blob, stream};
+use crate::crypto::encryption::{
+    blob_ciphertext_hash, decrypt_asset_vec, seal_file_key, seal_metadata_blob,
+};
 use crate::crypto::hash;
 use crate::crypto::keys::{Amk, AmkVersion, DekKeypair};
 use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
-use crate::crypto::provenance::AssetManifest;
-use crate::crypto::provenance::Action;
 use crate::crypto::provenance::{
-    ASSET_MANIFEST_VERSION, KeyMode, ManifestCore, WrappedFileKey,
+    ASSET_MANIFEST_VERSION, Action, AssetManifest, KeyMode, ManifestCore, WrappedFileKey,
 };
 use crate::crypto::verify_asset::{
     MetadataBinding, VerifyOutcome, verify_asset, verify_metadata_binding,
@@ -245,7 +244,7 @@ impl crate::drop::DropAdopter for Workspace {
 
         // The adopter can decrypt the staged bytes (it now holds K) to author the sidecar's
         // plaintext hash and preview; the bulk ciphertext itself never moves.
-        let plaintext = stream::decrypt_asset_vec(&file_key, &descriptor.nonce_prefix, &ciphertext)
+        let plaintext = decrypt_asset_vec(&file_key, &descriptor.nonce_prefix, &ciphertext)
             .map_err(|_| DropError::Crypto("staged drop ciphertext failed to decrypt"))?;
 
         // Author + sign the sidecar. `created_by`/author is the adopter — the guest is never
@@ -371,7 +370,7 @@ mod tests {
     /// ciphertext. Also covers revocation, the passphrase verifier, and discard.
     #[test]
     fn upload_link_seal_stage_and_adopt() {
-        use crate::crypto::encryption::keywrap::unseal_file_key;
+        use crate::crypto::encryption::unseal_file_key;
         use crate::drop::{DropAdopter, UploadLinkIssuer, seal_drop};
 
         let lib = TempDir::new().unwrap();
@@ -427,7 +426,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            stream::decrypt_asset_vec(&k, &manifest.core.nonce_prefix, &ciphertext).unwrap(),
+            decrypt_asset_vec(&k, &manifest.core.nonce_prefix, &ciphertext).unwrap(),
             plaintext,
         );
 

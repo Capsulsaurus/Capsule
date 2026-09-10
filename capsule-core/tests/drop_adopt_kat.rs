@@ -14,16 +14,14 @@
 //! run is still owed (as for S-E1/S-D6). The fixed inputs below mirror `xtask/src/drop_kat.rs`.
 
 use capsule_core::crypto::authority::ReferenceAuthority;
-use capsule_core::crypto::encryption::keywrap::{seal_file_key, unseal_file_key};
-use capsule_core::crypto::encryption::stream::decrypt_asset_vec;
+use capsule_core::crypto::encryption::{decrypt_asset_vec, seal_file_key, unseal_file_key};
 use capsule_core::crypto::hash::hash_bytes;
 use capsule_core::crypto::keys::{
     Amk, AmkVersion, DekKeypair, DeviceDirectory, DeviceEntry, DirectoryCore, HybridSigningKey,
 };
 use capsule_core::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
-use capsule_core::crypto::provenance::Action;
 use capsule_core::crypto::provenance::{
-    ASSET_MANIFEST_VERSION, KeyMode, ManifestCore, WrappedFileKey,
+    ASSET_MANIFEST_VERSION, Action, KeyMode, ManifestCore, WrappedFileKey,
 };
 use capsule_core::crypto::verify_asset::{VerifyOutcome, verify_asset};
 use capsule_core::drop::{open_drop_key, seal_drop_derand};
