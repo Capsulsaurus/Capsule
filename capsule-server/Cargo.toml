@@ -138,6 +138,11 @@ base64 = { workspace = true }
 # reconstructs SHA-1/6 digits/30 seconds from the published constants is checking the interop
 # contract every authenticator app assumes rather than trusting one function to agree with itself.
 totp-rs = { workspace = true }
+# A throwaway library on disk. `tests/sdk_client.rs` pushes an asset a **real**
+# `capsule_core::Workspace` sealed — the only way to prove the upload ladder puts an asset on
+# this server's feed is to have the ladder's own input, and a hand-built bundle would agree
+# with a wrong ladder. Test-only.
+tempfile = "3"
 # Ed25519 key generation for the token tests: the suite mints a fresh key pair per signer
 # rather than reading a checked-in PEM, because a private key in the repository is a private
 # key somebody eventually reuses. `ring` is a normal dependency since `S-C2` (the cursor MAC);

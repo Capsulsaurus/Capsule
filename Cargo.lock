@@ -764,6 +764,7 @@ dependencies = [
  "serde",
  "serde_json",
  "subtle",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "totp-rs",
