@@ -94,6 +94,22 @@ pub enum CounterKey {
     /// Federated moderation reports from one peer against one account (`S-C49`, invariant
     /// 24), keyed on `"{reporting_server}:{reported_user}"` as the contract bounds them.
     FederatedReports(String),
+    /// Federated moderation reports from one peer against **every** account (`S-C49`).
+    ///
+    /// The ceiling the per-account budget cannot provide: `reported_user` is a string a peer
+    /// chooses, so a peer cycling accounts gets a fresh per-account allowance each time, and
+    /// only a key that ignores the account bounds the peer's total volume.
+    PeerReports(String),
+    /// Attempts at `POST /v1/federation/reports`, keyed on the **claimed** reporting origin.
+    ///
+    /// Charged before the peer is looked up, which is the only place a bound can sit on this
+    /// route: it is the server's one unauthenticated write, and everything after it — a store
+    /// read and an Ed25519 verification — is work an anonymous caller would otherwise get for
+    /// free. The key is attacker-chosen and that is stated rather than papered over: it bounds
+    /// one claimed origin looping, not a caller cycling origins, and this server has no trusted
+    /// client address to key on instead (see
+    /// [`CounterKey::RegistrationSource`], which waits on the same missing fact).
+    FederatedIntake(String),
 }
 
 impl CounterKey {
@@ -111,6 +127,8 @@ impl CounterKey {
             Self::RegistrationSource(_) => "registration_source",
             Self::PeerRequests(_) => "peer_requests",
             Self::FederatedReports(_) => "federated_reports",
+            Self::PeerReports(_) => "peer_reports",
+            Self::FederatedIntake(_) => "federated_intake",
         }
     }
 }

@@ -1258,12 +1258,21 @@ async fn file(fixture: &Fixture, body: Value) -> kynos::test::TestResponse {
         .await
 }
 
-/// A report from `PEER` about Bob's copy of `hash`, signed by `pair`.
+/// The account the suite's reports are about: the one the fixture actually seeded.
+///
+/// Not `BOB`, who is a roster member and not an account here. Intake refuses a `reported_user`
+/// this server does not host — these operators could not act on it — so a case that reported
+/// against a made-up id would be testing the `404` rather than what it meant to.
+fn reported() -> String {
+    support::user().as_str().to_owned()
+}
+
+/// A report from `PEER` about the seeded account's copy of `hash`, signed by `pair`.
 fn report(pair: &ring::signature::Ed25519KeyPair, hash: &str, reason: Option<&str>) -> Value {
     support::signed_report(
         pair,
         PEER,
-        BOB,
+        &reported(),
         hash,
         &album(),
         reason,
@@ -1293,7 +1302,7 @@ async fn a_signed_report_from_a_pinned_peer_is_filed_and_changes_nothing_about_t
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].report_id, report_id);
     assert_eq!(pending[0].reporting_server, PEER);
-    assert_eq!(pending[0].reported_user, UserId::new(BOB));
+    assert_eq!(pending[0].reported_user, UserId::new(reported()));
     assert_eq!(pending[0].asset_hash, hash);
     assert_eq!(pending[0].album_id, album());
     assert_eq!(pending[0].reason.as_deref(), Some("csam"));
@@ -1306,7 +1315,7 @@ async fn a_signed_report_from_a_pinned_peer_is_filed_and_changes_nothing_about_t
     assert_eq!(
         fixture
             .moderation
-            .standing(&UserId::new(BOB))
+            .standing(&UserId::new(reported()))
             .await
             .expect("the store answers"),
         capsule_server::moderation::Standing::Active
@@ -1314,7 +1323,7 @@ async fn a_signed_report_from_a_pinned_peer_is_filed_and_changes_nothing_about_t
     assert!(
         fixture
             .moderation
-            .events_for_user(&UserId::new(BOB))
+            .events_for_user(&UserId::new(reported()))
             .await
             .expect("the store answers")
             .is_empty(),
@@ -1338,7 +1347,7 @@ async fn a_filed_reports_signature_re_verifies_against_the_row_that_was_stored()
     let body = support::signed_report(
         &signer,
         "Other.Test.",
-        BOB,
+        &reported(),
         &hash,
         &album(),
         Some("csam"),
@@ -1461,7 +1470,7 @@ async fn a_peers_reports_about_one_account_are_bounded_and_another_account_is_it
         fixture
             .counters
             .hit(
-                &CounterKey::FederatedReports(format!("{PEER}:{BOB}")),
+                &CounterKey::FederatedReports(format!("{PEER}:{}", reported())),
                 budgets::FEDERATED_REPORTS,
                 fixture.clock.now(),
             )
@@ -1476,7 +1485,11 @@ async fn a_peers_reports_about_one_account_are_bounded_and_another_account_is_it
     let refused: Value = refused.json();
     assert_eq!(refused["code"], "error.moderation.report_rate_limited");
 
-    // Another account on this server is a different boundary.
+    // Another account on this server is a different boundary — and it has to be a *real* one,
+    // which is the point of the account check this case leans on.
+    fixture
+        .accounts
+        .insert("second@example.com", "pw", &UserId::new(OTHER_MEMBER));
     file(
         &fixture,
         support::signed_report(
@@ -1713,4 +1726,127 @@ async fn a_refresh_stops_once_the_member_leaves_the_roster() {
     refused.assert_status(StatusCode::CONFLICT);
     let refused: Value = refused.json();
     assert_eq!(refused["code"], "error.federation.member_not_on_roster");
+}
+
+#[tokio::test]
+async fn every_report_field_is_bounded_before_any_store_is_touched() {
+    // M1. Each of these ends up in a store row, a log line or a counter key, and none is bounded
+    // by anything but the route: `reported_user`, `asset_hash` and `album_id` are strings a peer
+    // chooses. Asserted with the peer *unpinned*, which is what pins the ordering — a `400` here
+    // rather than the `403` an unknown peer gets proves the bound ran before the peer lookup.
+    let (fixture, _) = shared().await;
+    let (signer, _) = support::peer_keypair();
+    let hash = support::checksum(b"the reported bytes");
+
+    for (name, mutate) in [
+        ("reporting_server", "reporting_server"),
+        ("reported_user", "reported_user"),
+        ("asset_hash", "asset_hash"),
+        ("album_id", "album_id"),
+        ("reason", "reason"),
+        ("reported_at", "reported_at"),
+        ("signature", "signature"),
+    ] {
+        let mut body = report(&signer, &hash, Some("csam"));
+        body[mutate] = Value::from("x".repeat(4096));
+        let refused = file(&fixture, body).await;
+        refused.assert_status(StatusCode::BAD_REQUEST);
+        let refused: Value = refused.json();
+        assert_eq!(
+            refused["code"], "error.moderation.report_malformed",
+            "an oversized {name} must be refused before the peer is looked up"
+        );
+    }
+
+    // An empty field is the same refusal, and so is one that is only padding.
+    for blank in ["", "   "] {
+        let mut body = report(&signer, &hash, Some("csam"));
+        body["asset_hash"] = Value::from(blank);
+        file(&fixture, body)
+            .await
+            .assert_status(StatusCode::BAD_REQUEST);
+    }
+}
+
+#[tokio::test]
+async fn a_peer_cycling_accounts_meets_a_ceiling_the_per_account_budget_cannot_give() {
+    // M1's other half. `reported_user` is a string the peer chooses, so a peer that names a new
+    // account each time mints itself a fresh per-account allowance; only a key that ignores the
+    // account bounds the peer's total volume.
+    let (fixture, _) = shared().await;
+    let (signer, public) = support::peer_keypair();
+    pin(&fixture, public).await;
+    let hash = support::checksum(b"the reported bytes");
+
+    // Spend the peer's whole ceiling through the port, leaving one.
+    for _ in 1..budgets::PEER_REPORTS.limit {
+        fixture
+            .counters
+            .hit(
+                &CounterKey::PeerReports(PEER.to_owned()),
+                budgets::PEER_REPORTS,
+                fixture.clock.now(),
+            )
+            .await
+            .expect("the counter answers");
+    }
+    file(&fixture, report(&signer, &hash, None))
+        .await
+        .assert_status(StatusCode::ACCEPTED);
+
+    // A different account — a fresh per-account budget — and still refused.
+    fixture
+        .accounts
+        .insert("third@example.com", "pw", &UserId::new(OTHER_MEMBER));
+    let refused = file(
+        &fixture,
+        support::signed_report(
+            &signer,
+            PEER,
+            OTHER_MEMBER,
+            &hash,
+            &album(),
+            None,
+            "2026-09-02T00:00:00Z",
+        ),
+    )
+    .await;
+    refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.moderation.report_rate_limited");
+}
+
+#[tokio::test]
+async fn an_anonymous_caller_is_bounded_before_the_peer_store_is_read() {
+    // M2's deliverable half. `POST /v1/federation/reports` is this server's only unauthenticated
+    // write; everything past the intake budget is a store read and an Ed25519 verification, and
+    // an anonymous caller would otherwise get both for free on every request.
+    let (fixture, _) = shared().await;
+    let (signer, _) = support::peer_keypair();
+    let hash = support::checksum(b"the reported bytes");
+
+    // Nobody pinned this peer, so a report is `403` — until the intake budget is spent, after
+    // which it is `429` and the peer store is never asked at all.
+    file(&fixture, report(&signer, &hash, None))
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    for _ in 1..budgets::FEDERATED_INTAKE.limit {
+        fixture
+            .counters
+            .hit(
+                &CounterKey::FederatedIntake(PEER.to_owned()),
+                budgets::FEDERATED_INTAKE,
+                fixture.clock.now(),
+            )
+            .await
+            .expect("the counter answers");
+    }
+    let refused = file(&fixture, report(&signer, &hash, None)).await;
+    refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    let refused: Value = refused.json();
+    assert_eq!(refused["code"], "error.moderation.report_rate_limited");
+
+    // The budget is above the policy one, so a real peer meets the budget that *is* the policy
+    // first and never this one.
+    assert!(budgets::FEDERATED_INTAKE.limit > budgets::PEER_REPORTS.limit);
 }

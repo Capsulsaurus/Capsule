@@ -272,6 +272,9 @@ pub mod error_codes {
     /// `error.moderation.report_rate_limited`
     pub const MODERATION_REPORT_RATE_LIMITED: &str = "error.moderation.report_rate_limited";
 
+    /// `error.moderation.report_unknown_user`
+    pub const MODERATION_REPORT_UNKNOWN_USER: &str = "error.moderation.report_unknown_user";
+
     /// `error.moderation.report_unsigned`
     pub const MODERATION_REPORT_UNSIGNED: &str = "error.moderation.report_unsigned";
 

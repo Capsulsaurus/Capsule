@@ -202,10 +202,18 @@ pub fn router() -> ServerRouter {
                     routes::drop::revoke_link,
                     routes::drop::adopt_drop,
                     routes::drop::discard_drop,
-                ])
-                // Federation's lifecycle: minting, revoking and refreshing the capability a
-                // peer pulls with. The pull itself is `sync_feed` and `get_blob` in the read
-                // group below — federation adds no new data protocol (design/federation.md).
+                ]),
+        )
+        // Federation's lifecycle: minting, revoking and refreshing the capability a peer pulls
+        // with, and the signed report intake. The pull itself is `sync_feed` and `get_blob` in
+        // the read group below — federation adds no new data protocol (design/federation.md).
+        //
+        // Its own group rather than a fifth `mount` on the one above, because these four are one
+        // surface and the sixteen-operation tuple ceiling is close. A **tighter body cap** was
+        // tried here and cannot be expressed: see [`crate::limits::MAX_FEDERATION_BODY_BYTES`].
+        .group(
+            Group::<App>::new("/")
+                .intercept(negotiation::ProtocolGate::new())
                 .mount(kynos::routes![
                     routes::federation::issue_capability,
                     routes::federation::revoke_capability,

@@ -1394,6 +1394,9 @@ async fn every_declared_response_is_exercised() {
     // The report carries its own signature and no bearer, so the peer must be *pinned* before
     // anything it says can be verified: a peer nobody pinned is `403`, which is also what a
     // pinned peer with no key gets.
+    // Reported against the account the fixture actually seeded: intake refuses a `reported_user`
+    // this server does not host, because these operators could not act on it.
+    let reported = support::user().as_str().to_owned();
     let (peer_signer, peer_public) = support::peer_keypair();
     let report = |body: serde_json::Value| {
         client
@@ -1405,7 +1408,7 @@ async fn every_declared_response_is_exercised() {
         support::signed_report(
             &peer_signer,
             "other.test",
-            FEDERATED_MEMBER,
+            &reported,
             &checksum(b"reported bytes"),
             &support::album(),
             reason,
@@ -1455,7 +1458,7 @@ async fn every_declared_response_is_exercised() {
     report(support::signed_report(
         &impostor,
         "other.test",
-        FEDERATED_MEMBER,
+        &reported,
         &checksum(b"reported bytes"),
         &support::album(),
         None,
@@ -1479,13 +1482,28 @@ async fn every_declared_response_is_exercised() {
         .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
     fixture.moderation.set_unavailable(false);
 
+    // 404: an account this server does not host. After the signature check, so it discloses
+    // account existence only to a peer whose key an operator pinned.
+    report(support::signed_report(
+        &peer_signer,
+        "other.test",
+        "01937b7c-0000-7000-8000-0000000000dd",
+        &checksum(b"reported bytes"),
+        &support::album(),
+        None,
+        "2026-09-02T00:00:00Z",
+    ))
+    .send()
+    .await
+    .assert_status(StatusCode::NOT_FOUND);
+
     // 429: this peer has said enough about this account for one hour.
     for _ in 0..capsule_server::counter::budgets::FEDERATED_REPORTS.limit {
         fixture
             .counters
             .hit(
                 &capsule_server::counter::CounterKey::FederatedReports(format!(
-                    "other.test:{FEDERATED_MEMBER}"
+                    "other.test:{reported}"
                 )),
                 capsule_server::counter::budgets::FEDERATED_REPORTS,
                 fixture.clock.now(),

@@ -40627,6 +40627,16 @@
         }
       }
     },
+    "error.moderation.report_unknown_user": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That account isn't on this server."
+          }
+        }
+      }
+    },
     "error.moderation.report_unsigned": {
       "localizations": {
         "ar": {

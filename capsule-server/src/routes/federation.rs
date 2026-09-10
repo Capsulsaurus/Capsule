@@ -882,6 +882,28 @@ pub async fn refresh_capability(
 // Federated moderation report intake (S-C49)
 // ===========================================================================================
 
+/// The most bytes any one field of a federated report may carry.
+///
+/// Every one of them ends up in a store row, a log line or a counter key, and none of them has a
+/// natural bound from the type system: `reported_user`, `asset_hash` and `album_id` are strings a
+/// peer chooses. The caps are generous against the real values — a DNS name is at most 253 bytes,
+/// a UUID is 36, a SHA-256 hex digest is 64 — and their point is that *some* bound exists before
+/// anything is stored or keyed on.
+mod report_bounds {
+    /// A peer's origin: RFC 1035's ceiling on a domain name.
+    pub(super) const ORIGIN: usize = 253;
+    /// An account or album identifier: a UUID with room to spare.
+    pub(super) const IDENTIFIER: usize = 64;
+    /// A content address: a SHA-256 digest as lowercase hex.
+    pub(super) const HASH: usize = 64;
+    /// The peer's short reason. A sentence, not a case file — the contract's "short reason".
+    pub(super) const REASON: usize = 256;
+    /// An RFC 3339 instant, with room for any offset spelling.
+    pub(super) const INSTANT: usize = 64;
+    /// A base64 Ed25519 signature is 88 bytes; this leaves room for padding variants.
+    pub(super) const SIGNATURE: usize = 128;
+}
+
 /// A moderation report one peer server files against an account on this one.
 ///
 /// Every field except `signature` is covered by the signature, in canonical CBOR — see
@@ -965,6 +987,20 @@ pub enum ReportRejection {
         code: &'static str,
     },
 
+    /// `reported_user` names no account this server hosts.
+    ///
+    /// The peer is reporting to the wrong home server: these operators cannot act on that
+    /// account, and a filed row would sit in the queue forever. Reachable only after the
+    /// signature verified, so it discloses account existence to a peer the operator already
+    /// chose to federate with and to nobody else.
+    #[error("that account is not on this server")]
+    #[problem(status = 404, title = "Unknown account")]
+    UnknownUser {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
     /// Too many reports from this peer about this account.
     #[error("too many reports from this server about this account")]
     #[problem(status = 429, title = "Report rate limited")]
@@ -1032,6 +1068,7 @@ impl ReportRejection {
 pub async fn submit_federated_report(
     Inject(federation): Inject<FederationContext>,
     Inject(moderation): Inject<ModerationContext>,
+    Inject(auth): Inject<crate::auth::AuthContext>,
     Inject(counters): Inject<CounterContext>,
     Json(request): Json<FederatedReportRequest>,
 ) -> Result<ReportReply, ReportRejection> {
@@ -1041,12 +1078,54 @@ pub async fn submit_federated_report(
             code: error_codes::FEDERATION_NOT_CONFIGURED,
         });
     }
+    // Structural bounds first, on every field, before a store is touched or a byte is keyed on.
+    // Each of these ends up in a row, a log line or a counter key, and none of them is bounded
+    // by anything but this: the body cap the federation group mounts stops a caller sending
+    // megabytes, and this stops one field of a legal body being all of them.
+    for (name, value, cap) in [
+        (
+            "reporting_server",
+            request.reporting_server.trim(),
+            report_bounds::ORIGIN,
+        ),
+        (
+            "reported_user",
+            request.reported_user.trim(),
+            report_bounds::IDENTIFIER,
+        ),
+        ("asset_hash", request.asset_hash.trim(), report_bounds::HASH),
+        (
+            "album_id",
+            request.album_id.trim(),
+            report_bounds::IDENTIFIER,
+        ),
+        (
+            "reported_at",
+            request.reported_at.trim(),
+            report_bounds::INSTANT,
+        ),
+        (
+            "signature",
+            request.signature.trim(),
+            report_bounds::SIGNATURE,
+        ),
+        (
+            "reason",
+            request.reason.as_deref().unwrap_or("x").trim(),
+            report_bounds::REASON,
+        ),
+    ] {
+        if value.is_empty() || value.len() > cap {
+            tracing::info!(
+                field = name,
+                length = value.len(),
+                "a federated report's field is out of bounds"
+            );
+            return Err(ReportRejection::malformed());
+        }
+    }
     let peer = PeerId::new(request.reporting_server.trim());
-    if peer.as_str().is_empty()
-        || request.reported_user.trim().is_empty()
-        || request.asset_hash.trim().is_empty()
-        || request.album_id.trim().is_empty()
-    {
+    if peer.as_str().is_empty() {
         return Err(ReportRejection::malformed());
     }
     let Ok(reported_at) = request.reported_at.parse::<jiff::Timestamp>() else {
@@ -1057,6 +1136,18 @@ pub async fn submit_federated_report(
         tracing::info!(%peer, "a federated report's signature is not base64");
         return Err(ReportRejection::malformed());
     };
+
+    // The bound on how much work an anonymous caller may ask for, charged **before** the peer
+    // is looked up — everything past this line is a store read and an Ed25519 verification. The
+    // key is the *claimed* origin, which is attacker-chosen: it bounds one origin looping and
+    // not a caller cycling origins, because this server has no trusted client address to key on
+    // instead. Stated here rather than left to look like more than it is.
+    charge(
+        &counters,
+        &CounterKey::FederatedIntake(peer.as_str().to_owned()),
+        budgets::FEDERATED_INTAKE,
+    )
+    .await?;
 
     // Who is speaking. A peer nobody pinned, and a peer pinned without a key, are the same
     // answer: there is nothing to verify against, so nothing is verified.
@@ -1110,30 +1201,47 @@ pub async fn submit_federated_report(
             crate::federation::ReportError::Unencodable => ReportRejection::unavailable(),
         })?;
 
-    // Only now is anything charged: a spoofed `reporting_server` must not be able to spend a
-    // real peer's allowance, and the budget the contract bounds is per `(server, account)`.
-    let key = CounterKey::FederatedReports(format!("{peer}:{}", claim.reported_user));
-    match counters
-        .hit(&key, budgets::FEDERATED_REPORTS)
+    // The account must be one this server hosts. Otherwise these operators are not the party
+    // that can act on the report and the row would sit in the queue forever — and, less kindly,
+    // `reported_user` is a string the peer chose, so without this the queue and the per-account
+    // budget below are both keyed on something nothing ever validates.
+    let reported_user = UserId::new(&claim.reported_user);
+    if crate::auth::AccountProfiles::read(auth.profiles(), &reported_user)
         .await
         .map_err(|error| {
-            tracing::error!(%error, %peer, "the report counter could not be reached");
+            tracing::error!(%error, %peer, "the account directory could not answer a report intake");
             ReportRejection::unavailable()
-        })? {
-        crate::counter::Verdict::Admitted { .. } => {}
-        crate::counter::Verdict::Limited { retry_after } => {
-            tracing::info!(%peer, %retry_after, "a peer's report budget is spent");
-            return Err(ReportRejection::RateLimited {
-                code: error_codes::MODERATION_REPORT_RATE_LIMITED,
-            });
-        }
+        })?
+        .is_none()
+    {
+        tracing::info!(%peer, "a report named an account this server does not host");
+        return Err(ReportRejection::UnknownUser {
+            code: error_codes::MODERATION_REPORT_UNKNOWN_USER,
+        });
     }
+
+    // Only now are the *policy* budgets charged: a spoofed `reporting_server` must not be able
+    // to spend a real peer's allowance. Two of them — the contract bounds reports per
+    // `(server, account)`, and a peer cycling accounts would mint itself a fresh allowance each
+    // time, so a ceiling that ignores the account is what actually bounds the peer.
+    charge(
+        &counters,
+        &CounterKey::PeerReports(peer.as_str().to_owned()),
+        budgets::PEER_REPORTS,
+    )
+    .await?;
+    charge(
+        &counters,
+        &CounterKey::FederatedReports(format!("{peer}:{}", claim.reported_user)),
+        budgets::FEDERATED_REPORTS,
+    )
+    .await?;
 
     let received_at = federation.clock().now();
     let report = FederatedReport {
         report_id: uuid::Uuid::now_v7().to_string(),
         reporting_server: peer.as_str().to_owned(),
-        reported_user: UserId::new(&claim.reported_user),
+        reported_user,
         asset_hash: claim.asset_hash.clone(),
         album_id: AlbumId::new(&claim.album_id),
         reason: claim.reason.clone(),
@@ -1156,6 +1264,30 @@ pub async fn submit_federated_report(
         report_id,
         received_at: received_at.to_string(),
     }))
+}
+
+/// Charge `budget` under `key`, rendering the refusals this route gives.
+///
+/// One helper for three budgets so they cannot answer differently: a spent budget is `429` with
+/// the contract's code, and a counter that cannot be reached is `500` and never an admission —
+/// a limiter that failed open would be one an attacker turns off by loading the counter store.
+async fn charge(
+    counters: &CounterContext,
+    key: &CounterKey,
+    budget: crate::counter::Budget,
+) -> Result<(), ReportRejection> {
+    match counters.hit(key, budget).await.map_err(|error| {
+        tracing::error!(%error, kind = key.as_str(), "a report counter could not be reached");
+        ReportRejection::unavailable()
+    })? {
+        crate::counter::Verdict::Admitted { .. } => Ok(()),
+        crate::counter::Verdict::Limited { retry_after } => {
+            tracing::info!(kind = key.as_str(), %retry_after, "a federated report budget is spent");
+            Err(ReportRejection::RateLimited {
+                code: error_codes::MODERATION_REPORT_RATE_LIMITED,
+            })
+        }
+    }
 }
 
 /// The one way intake succeeds.

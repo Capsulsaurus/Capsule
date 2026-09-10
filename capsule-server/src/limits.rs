@@ -65,6 +65,38 @@ pub fn body_size() -> BodySize {
     BodySize::new(MAX_REQUEST_BODY_BYTES)
 }
 
+/// The cap a federation write's body *would* have: **16 KiB** (`S-E2`, `S-C49`).
+///
+/// Declared and **not enforced**, which is the opposite of this module's usual rule, so it says
+/// why rather than sitting here looking like a control.
+///
+/// The transport backstop above is sized for a 16 MiB upload chunk. A federation write is
+/// nothing like one — the largest legitimate body on that surface is a signed moderation report,
+/// six short strings and a base64 signature, under a kilobyte in practice — and it matters
+/// because `POST /v1/federation/reports` is this server's only **unauthenticated** write: an
+/// anonymous caller can hand it a body two thousand times larger than any real report and have
+/// it parsed before anything looks at who is speaking.
+///
+/// Mounting a second [`BodySize`] on the federation group is the obvious fix and Kynos refuses
+/// it at compile time, correctly:
+///
+/// ```text
+/// evaluation panicked: two interceptors covering this route answer with the same status;
+/// a consumer could not tell which one replied
+/// ```
+///
+/// Both answer `413`, and an operation cannot declare two of them. The alternative — moving
+/// `BodySize` off the router and onto every group — would take `413` off the ten operations
+/// mounted outside every group, which `tests/conformance.rs` pins as declared on *every*
+/// operation, and that contract is `S-C33`'s rather than this lane's to change.
+///
+/// What bounds the route meanwhile is not nothing, and is not this: every field is length-capped
+/// before any store is read ([`crate::routes::federation`]), and
+/// [`CounterKey::FederatedIntake`](crate::counter::CounterKey::FederatedIntake) is charged
+/// before the peer lookup and the signature check. What remains unbounded is bytes *parsed* per
+/// request, which needs either a per-operation limit Kynos does not express or `S-C33` revisited.
+pub const MAX_FEDERATION_BODY_BYTES: u64 = 16 * 1024;
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -218,6 +218,18 @@ pub trait ModerationStore: std::fmt::Debug + Send + Sync {
     fn pending_reports(&self) -> StoreFuture<'_, Vec<FederatedReport>>;
 }
 
+/// The most federated reports the in-memory adapter keeps.
+///
+/// Reports arrive on an unauthenticated route from parties an operator pinned, and an in-memory
+/// map with no eviction is process memory that never returns — a `--memory` deployment left
+/// running would grow until it did not. Ten thousand is far above any real queue an operator
+/// works by hand and far below anything that matters to a process.
+///
+/// **Eviction is oldest-first and loud.** A dropped report is a moderation input nobody will
+/// ever see, so it is a `warn`, not a silent trim; the durable adapter (#476) is where a queue
+/// that must not lose anything belongs.
+pub const MAX_IN_MEMORY_REPORTS: usize = 10_000;
+
 /// A deterministic in-memory adapter.
 #[derive(Debug, Default)]
 pub struct InMemoryModeration {
@@ -292,6 +304,19 @@ impl ModerationStore for InMemoryModeration {
                 "a federated moderation report was filed"
             );
             inner.reports.insert(report.report_id.clone(), report);
+            // The `report_id` is a UUIDv7, so the map's own order is arrival order and the first
+            // key is the oldest report.
+            while inner.reports.len() > MAX_IN_MEMORY_REPORTS {
+                let Some(oldest) = inner.reports.keys().next().cloned() else {
+                    break;
+                };
+                tracing::warn!(
+                    report = %oldest,
+                    kept = MAX_IN_MEMORY_REPORTS,
+                    "the in-memory report queue is full; the oldest report was dropped"
+                );
+                inner.reports.remove(&oldest);
+            }
             Ok(())
         })
     }

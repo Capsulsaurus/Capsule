@@ -82,3 +82,19 @@ pub const PEER_REQUESTS: Budget = Budget::new(10_000, SignedDuration::from_hours
 /// flood against one user is the false-flag vector the contract names, and backpressure at
 /// twenty bounds it without silencing a peer that has two things to say.
 pub const FEDERATED_REPORTS: Budget = Budget::new(20, SignedDuration::from_hours(1));
+
+/// Federated moderation reports from one peer against **every** account (`S-C49`).
+///
+/// Two hundred an hour. Ten times the per-account allowance, so a peer with a genuinely bad hour
+/// — a spam wave it is reporting honestly — is not silenced, while a peer cycling `reported_user`
+/// to mint itself a fresh per-account budget each time runs into a ceiling that does not care
+/// which account it named.
+pub const PEER_REPORTS: Budget = Budget::new(200, SignedDuration::from_hours(1));
+
+/// Attempts at `POST /v1/federation/reports` from one **claimed** origin (`S-C49`).
+///
+/// Three hundred an hour, charged before the peer is looked up. Deliberately above
+/// [`PEER_REPORTS`], because it is not a policy on reporting — it is the bound on how much work
+/// an anonymous caller can ask for on the server's one unauthenticated write, and a real peer
+/// must never meet it before meeting the budget that *is* the policy.
+pub const FEDERATED_INTAKE: Budget = Budget::new(300, SignedDuration::from_hours(1));
