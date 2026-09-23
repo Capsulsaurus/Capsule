@@ -1,0 +1,447 @@
+# Seed photos for the README hero screenshot (`mise run screenshot-ios`).
+#
+# Every photo is CC0 (Unsplash's pre-2017 licence, mirrored on Wikimedia Commons) and pinned by
+# the SHA-256 of its original file; `xtask screenshot-seed` refuses bytes that do not match.
+#
+# Listed newest first, exactly as the Library timeline renders them: the first rows here are the
+# first rows of the screenshot. Photos are grouped into capture days of 3 or 6 so every 3-column
+# row is full. `day_offset` counts days before the run date (see `manifest.rs` for why dates are
+# relative); `time` is local wall-clock time on that day.
+
+# ── Golden hour on the coast (2 days ago) ──
+
+[[photo]]
+id = "rocky-shore-dusk"
+day_offset = 2
+time = "17:40"
+url = "https://upload.wikimedia.org/wikipedia/commons/8/86/Daniel_Mallek_2014-10-08_%28Unsplash%29.jpg"
+sha256 = "7b4b231efbfb5e525e5c687843388c3984d35f6eee16e4f74b49a7ab92dfea20"
+source_page = "https://commons.wikimedia.org/wiki/File:Daniel_Mallek_2014-10-08_(Unsplash).jpg"
+author = "Daniel Mallek"
+license = "CC0-1.0"
+
+[[photo]]
+id = "beach-sunset-surf"
+day_offset = 2
+time = "17:33"
+url = "https://upload.wikimedia.org/wikipedia/commons/8/85/Sunset_over_the_beach_%28Unsplash%29.jpg"
+sha256 = "d3165fc31be7a88435fc725bd6d9dc8e1f95a8ec085dbd0441dbb244569ccb5f"
+source_page = "https://commons.wikimedia.org/wiki/File:Sunset_over_the_beach_(Unsplash).jpg"
+author = "Bagus Ghufron"
+license = "CC0-1.0"
+
+[[photo]]
+id = "tidal-flats-sunset"
+day_offset = 2
+time = "17:26"
+url = "https://upload.wikimedia.org/wikipedia/commons/8/85/Moody_beach_sunset._%28Unsplash%29.jpg"
+sha256 = "57b9294a899d3c08b20d95e4ded70ab181e1699fd14457351e1eb8a2f3cce609"
+source_page = "https://commons.wikimedia.org/wiki/File:Moody_beach_sunset._(Unsplash).jpg"
+author = "Hugo Kemmel"
+license = "CC0-1.0"
+
+[[photo]]
+id = "long-exposure-rocks"
+day_offset = 2
+time = "17:19"
+url = "https://upload.wikimedia.org/wikipedia/commons/4/4f/Foamy_shore_%28Unsplash%29.jpg"
+sha256 = "f9e92bb701475ba96f6bb87150e61713861a85215505b47e9495cfe8ad3f5635"
+source_page = "https://commons.wikimedia.org/wiki/File:Foamy_shore_(Unsplash).jpg"
+author = "Jonathan Bean"
+license = "CC0-1.0"
+
+[[photo]]
+id = "kayak-bow-dusk"
+day_offset = 2
+time = "17:12"
+url = "https://upload.wikimedia.org/wikipedia/commons/1/1f/Carl_Heyerdahl_2016-01-06_%28Unsplash_V1BxFWI84-k%29.jpg"
+sha256 = "08b8a1715ea4909817199411259b3d9a9ec87a145e61457ad1df4de49f09aa56"
+source_page = "https://commons.wikimedia.org/wiki/File:Carl_Heyerdahl_2016-01-06_(Unsplash_V1BxFWI84-k).jpg"
+author = "Carl Heyerdahl"
+license = "CC0-1.0"
+
+[[photo]]
+id = "aerial-breaking-wave"
+day_offset = 2
+time = "17:05"
+url = "https://upload.wikimedia.org/wikipedia/commons/4/4d/Palm_Coast%2C_United_States_%28Unsplash%29.jpg"
+sha256 = "c07b565f173847fbc628bc4417219a68bdf305e6b14e3578530313b67545b3ab"
+source_page = "https://commons.wikimedia.org/wiki/File:Palm_Coast,_United_States_(Unsplash).jpg"
+author = "Lance Asper"
+license = "CC0-1.0"
+
+# ── Bakery morning (4 days ago) ──
+
+[[photo]]
+id = "sourdough-on-board"
+day_offset = 4
+time = "08:15"
+url = "https://upload.wikimedia.org/wikipedia/commons/b/ba/Ben_Garratt_2016_%28Unsplash%29.jpg"
+sha256 = "065d19af1be896993cd506af15bc9dc36506948dc8f10481c8ee2ea5d23359d8"
+source_page = "https://commons.wikimedia.org/wiki/File:Ben_Garratt_2016_(Unsplash).jpg"
+author = "Ben Garratt"
+license = "CC0-1.0"
+
+[[photo]]
+id = "cappuccino-and-beans"
+day_offset = 4
+time = "08:08"
+url = "https://upload.wikimedia.org/wikipedia/commons/6/68/Galway_City%2C_Ireland_%28Unsplash%29.jpg"
+sha256 = "b0ba56fe504f35499d080ff6153c356b8a675f2e8ec71f4860ec7a9793cb16a5"
+source_page = "https://commons.wikimedia.org/wiki/File:Galway_City,_Ireland_(Unsplash).jpg"
+author = "fireskystudios.com"
+license = "CC0-1.0"
+
+[[photo]]
+id = "floured-loaves"
+day_offset = 4
+time = "08:01"
+url = "https://upload.wikimedia.org/wikipedia/commons/4/4d/London%2C_United_Kingdom_%28Unsplash_oQh4FabMPs0%29.jpg"
+sha256 = "170bad310cd86b2ea131006f243d47a8f033dfb591f1f3baf2cf9d97492c48cc"
+source_page = "https://commons.wikimedia.org/wiki/File:London,_United_Kingdom_(Unsplash_oQh4FabMPs0).jpg"
+author = "Toa Heftiba"
+license = "CC0-1.0"
+
+# ── Misty morning (6 days ago) ──
+
+[[photo]]
+id = "fence-in-morning-fog"
+day_offset = 6
+time = "06:50"
+url = "https://upload.wikimedia.org/wikipedia/commons/d/d2/Fog_In_Desertland_%28Unsplash%29.jpg"
+sha256 = "335046e50b931b9bf20158cca48b10e35befffa09ba8a180f7b7c820deeb3eac"
+source_page = "https://commons.wikimedia.org/wiki/File:Fog_In_Desertland_(Unsplash).jpg"
+author = "Carsten Stalljohann"
+license = "CC0-1.0"
+
+[[photo]]
+id = "foggy-hillside"
+day_offset = 6
+time = "06:43"
+url = "https://upload.wikimedia.org/wikipedia/commons/2/2a/Fog_In_Desolate_Fields_%28Unsplash%29.jpg"
+sha256 = "eae7c7b092d9c46e07955a3d40d709b7169a0d1745406098cf2d5a48765663d0"
+source_page = "https://commons.wikimedia.org/wiki/File:Fog_In_Desolate_Fields_(Unsplash).jpg"
+author = "Michael Rosner-Hyman"
+license = "CC0-1.0"
+
+[[photo]]
+id = "treetops-above-fog"
+day_offset = 6
+time = "06:36"
+url = "https://upload.wikimedia.org/wikipedia/commons/4/43/Fog_over_the_countryside_%28Unsplash%29.jpg"
+sha256 = "beff8392034a0d8c378c4cc3021127c2fcada046678559584f84a759e7681f37"
+source_page = "https://commons.wikimedia.org/wiki/File:Fog_over_the_countryside_(Unsplash).jpg"
+author = "Ricardo Gomez Angel"
+license = "CC0-1.0"
+
+[[photo]]
+id = "boulder-in-still-water"
+day_offset = 6
+time = "06:29"
+url = "https://upload.wikimedia.org/wikipedia/commons/6/65/Flying_Through_Fog_%28Unsplash%29.jpg"
+sha256 = "256bad0219f718fef7a4be0ab89aa3bb02e4c3e64e065842de5f350c7d326b72"
+source_page = "https://commons.wikimedia.org/wiki/File:Flying_Through_Fog_(Unsplash).jpg"
+author = "Mario Azzi"
+license = "CC0-1.0"
+
+[[photo]]
+id = "rowboats-in-mist"
+day_offset = 6
+time = "06:22"
+url = "https://upload.wikimedia.org/wikipedia/commons/4/4b/Placid_lake_boats_%28Unsplash%29.jpg"
+sha256 = "991385dbd6f77cd38630ea7d6f6a985d7c999ba4652dcfd7fd31855f3d5f8c95"
+source_page = "https://commons.wikimedia.org/wiki/File:Placid_lake_boats_(Unsplash).jpg"
+author = "Mario Ho"
+license = "CC0-1.0"
+
+[[photo]]
+id = "forest-in-fog"
+day_offset = 6
+time = "06:15"
+url = "https://upload.wikimedia.org/wikipedia/commons/b/b9/Transmission_towers_in_fog_%28Unsplash%29.jpg"
+sha256 = "91f136e712c4cd8f0d8b45b25f6996e08aa787f1120fda658fe2b316a6f72923"
+source_page = "https://commons.wikimedia.org/wiki/File:Transmission_towers_in_fog_(Unsplash).jpg"
+author = "Neven Krcmarek"
+license = "CC0-1.0"
+
+# ── Alpine lakes (9 days ago) ──
+
+[[photo]]
+id = "alpenglow-peak"
+day_offset = 9
+time = "10:30"
+url = "https://upload.wikimedia.org/wikipedia/commons/8/85/Burning_Mountain_%28Unsplash%29.jpg"
+sha256 = "a61a556f33f79d2a17f42d6cbf531c8668007dc70bfff65c68409a7646ace9c5"
+source_page = "https://commons.wikimedia.org/wiki/File:Burning_Mountain_(Unsplash).jpg"
+author = "Kaidi Guo"
+license = "CC0-1.0"
+
+[[photo]]
+id = "lake-wanaka-ridges"
+day_offset = 9
+time = "10:23"
+url = "https://upload.wikimedia.org/wikipedia/commons/b/bb/Large_mountain_lake_%28Unsplash%29.jpg"
+sha256 = "790f2b239dfbc7d63880e853e09a85b19e578c0176d71b57fac40d65db319051"
+source_page = "https://commons.wikimedia.org/wiki/File:Large_mountain_lake_(Unsplash).jpg"
+author = "Robert Magnusson"
+license = "CC0-1.0"
+
+[[photo]]
+id = "mountain-lake-reflection"
+day_offset = 9
+time = "10:16"
+url = "https://upload.wikimedia.org/wikipedia/commons/b/b7/Flat_mountain_over_a_lake_%28Unsplash%29.jpg"
+sha256 = "db158f8636aa2df90a99990fdd960b576b250dde5acb025f1abb0ae635f48a54"
+source_page = "https://commons.wikimedia.org/wiki/File:Flat_mountain_over_a_lake_(Unsplash).jpg"
+author = "Cameron Kirby"
+license = "CC0-1.0"
+
+[[photo]]
+id = "alpine-meadow"
+day_offset = 9
+time = "10:09"
+url = "https://upload.wikimedia.org/wikipedia/commons/f/fa/The_French_Alps_%28Unsplash%29.jpg"
+sha256 = "5a7c3dba15a7989b8ce209b15fe2b0c6bd19043c305759e9c8b2c65c51e09b4f"
+source_page = "https://commons.wikimedia.org/wiki/File:The_French_Alps_(Unsplash).jpg"
+author = "Thomas Jarrand"
+license = "CC0-1.0"
+
+[[photo]]
+id = "pink-snow-ridge"
+day_offset = 9
+time = "10:02"
+url = "https://upload.wikimedia.org/wikipedia/commons/d/da/Red_sunset_on_a_mountain_%28Unsplash%29.jpg"
+sha256 = "97a6a4b79986327e519dec7c5acf0c9e77398b56e5c4dec4d8bd7b0c9278af80"
+source_page = "https://commons.wikimedia.org/wiki/File:Red_sunset_on_a_mountain_(Unsplash).jpg"
+author = "Nathan Anderson"
+license = "CC0-1.0"
+
+[[photo]]
+id = "misty-lake-reflection"
+day_offset = 9
+time = "09:55"
+url = "https://upload.wikimedia.org/wikipedia/commons/e/e3/Lake_Oeschinen_%28Unsplash%29.jpg"
+sha256 = "7ca9cf1700a89e86f0ab93ad0019d39b541de13967bfca25d015c229303d5a38"
+source_page = "https://commons.wikimedia.org/wiki/File:Lake_Oeschinen_(Unsplash).jpg"
+author = "Kimon Maritz"
+license = "CC0-1.0"
+
+# ── City afternoon (13 days ago) ──
+
+[[photo]]
+id = "golden-facade"
+day_offset = 13
+time = "14:10"
+url = "https://upload.wikimedia.org/wikipedia/commons/c/c1/Architecture_in_London_%28Unsplash%29.jpg"
+sha256 = "d110763e704d10335a7bb8e783d14b79d8b66bde958b0abe846fda9cbe9fc49d"
+source_page = "https://commons.wikimedia.org/wiki/File:Architecture_in_London_(Unsplash).jpg"
+author = "Karel Vokřál"
+license = "CC0-1.0"
+
+[[photo]]
+id = "light-and-concrete"
+day_offset = 13
+time = "14:03"
+url = "https://upload.wikimedia.org/wikipedia/commons/c/cc/Modern_architecture_%28Unsplash%29.jpg"
+sha256 = "ca97ab8272e1349a8e3853562bb3009d898430d82ba89ba1138c8dd592606f67"
+source_page = "https://commons.wikimedia.org/wiki/File:Modern_architecture_(Unsplash).jpg"
+author = "Mihail Ribkin"
+license = "CC0-1.0"
+
+[[photo]]
+id = "orange-cafe-chairs"
+day_offset = 13
+time = "13:56"
+url = "https://upload.wikimedia.org/wikipedia/commons/7/78/Coffee_shop_entrance_in_Leiden_%28Unsplash%29.jpg"
+sha256 = "f83bdbd4d48f3a957105e6dfcf83cb4f976b0495e182bc3f485ea9b53c37e954"
+source_page = "https://commons.wikimedia.org/wiki/File:Coffee_shop_entrance_in_Leiden_(Unsplash).jpg"
+author = "Alisa Anton"
+license = "CC0-1.0"
+
+# ── Desert dusk (17 days ago) ──
+
+[[photo]]
+id = "dunes-at-sunset"
+day_offset = 17
+time = "18:20"
+url = "https://upload.wikimedia.org/wikipedia/commons/3/31/Sahara_Desert_%28Unsplash_c5X870PwmRE%29.jpg"
+sha256 = "fd50c9eac73ae3ab1567e5bba35ddc1229404d164522367f39baa16e4c3e6e50"
+source_page = "https://commons.wikimedia.org/wiki/File:Sahara_Desert_(Unsplash_c5X870PwmRE).jpg"
+author = "Azer Koçulu"
+license = "CC0-1.0"
+
+[[photo]]
+id = "rippled-dune"
+day_offset = 17
+time = "18:13"
+url = "https://upload.wikimedia.org/wikipedia/commons/0/09/Desert_%28Unsplash%29.jpg"
+sha256 = "75f7ee42b7822281b138aab1a0fcd8c78cef193c63768ef63332ca3251bc2a62"
+source_page = "https://commons.wikimedia.org/wiki/File:Desert_(Unsplash).jpg"
+author = "Piotr Chrobot"
+license = "CC0-1.0"
+
+[[photo]]
+id = "dunes-below-mountains"
+day_offset = 17
+time = "18:06"
+url = "https://upload.wikimedia.org/wikipedia/commons/5/52/Lonely_Desert_Hike_%28Unsplash%29.jpg"
+sha256 = "9747c9c421338e83679dab3c18e3f06c980b9a33efd02424c47e8e6d48a1709e"
+source_page = "https://commons.wikimedia.org/wiki/File:Lonely_Desert_Hike_(Unsplash).jpg"
+author = "Andrew DesLauriers"
+license = "CC0-1.0"
+
+[[photo]]
+id = "van-on-dusty-road"
+day_offset = 17
+time = "17:59"
+url = "https://upload.wikimedia.org/wikipedia/commons/e/e6/Road_dust_under_setting_sun_%28Unsplash%29.jpg"
+sha256 = "8bd80940bc44732b8772bcb2e6d1e3440a2976f9c7fb3f4831f3a59149f2c4a9"
+source_page = "https://commons.wikimedia.org/wiki/File:Road_dust_under_setting_sun_(Unsplash).jpg"
+author = "FORREST CAVALE"
+license = "CC0-1.0"
+
+[[photo]]
+id = "great-dune"
+day_offset = 17
+time = "17:52"
+url = "https://upload.wikimedia.org/wikipedia/commons/8/8b/Hiking_Through_Sand_Dunes_%28Unsplash%29.jpg"
+sha256 = "c413d4f5ab60e34282f657fd5c17d80e6b3f620a0ad8a6c40b4a52707c5b3996"
+source_page = "https://commons.wikimedia.org/wiki/File:Hiking_Through_Sand_Dunes_(Unsplash).jpg"
+author = "Keith Hardy"
+license = "CC0-1.0"
+
+[[photo]]
+id = "desert-sunrise"
+day_offset = 17
+time = "17:45"
+url = "https://upload.wikimedia.org/wikipedia/commons/b/b0/Desert_Sunrise_%28Unsplash%29.jpg"
+sha256 = "37cce31855a0ad445146a4dbfa87ee129c54b860d165bb1a7a205eb60551f084"
+source_page = "https://commons.wikimedia.org/wiki/File:Desert_Sunrise_(Unsplash).jpg"
+author = "Red Morley Hewitt"
+license = "CC0-1.0"
+
+# ── Still life at home (22 days ago) ──
+
+[[photo]]
+id = "stems-in-a-vase"
+day_offset = 22
+time = "11:00"
+url = "https://upload.wikimedia.org/wikipedia/commons/a/a1/Flowers_-_2_%28Unsplash%29.jpg"
+sha256 = "f8f254638d33cbb3c084c6be699d7ff405e1e0b4de4943ab28a93bc50d0d33a1"
+source_page = "https://commons.wikimedia.org/wiki/File:Flowers_-_2_(Unsplash).jpg"
+author = "Maarten Deckers"
+license = "CC0-1.0"
+
+[[photo]]
+id = "plant-on-the-sill"
+day_offset = 22
+time = "10:53"
+url = "https://upload.wikimedia.org/wikipedia/commons/3/36/Wicker_plant_and_big_window_%28Unsplash%29.jpg"
+sha256 = "843b1f85ae82c5bf085560f8fbebcba146680c26587e929f7f6553f9568833c1"
+source_page = "https://commons.wikimedia.org/wiki/File:Wicker_plant_and_big_window_(Unsplash).jpg"
+author = "Amanda Mocci"
+license = "CC0-1.0"
+
+[[photo]]
+id = "bouquet-in-a-jug"
+day_offset = 22
+time = "10:46"
+url = "https://upload.wikimedia.org/wikipedia/commons/0/07/Valentine%27s_bouquet_%28Unsplash%29.jpg"
+sha256 = "68c290449552989e60820049c75382b59436a267465577d2d8b037a97766a5fa"
+source_page = "https://commons.wikimedia.org/wiki/File:Valentine%27s_bouquet_(Unsplash).jpg"
+author = "Leonardo Wong"
+license = "CC0-1.0"
+
+# ── Lakes and harbours (27 days ago) ──
+
+[[photo]]
+id = "island-at-golden-hour"
+day_offset = 27
+time = "16:45"
+url = "https://upload.wikimedia.org/wikipedia/commons/f/fa/Plantation_island_on_quiet_lake_%28Unsplash%29.jpg"
+sha256 = "65767476974761f98d4bbd59a7b404b00d1ab4037d7078610b65d7bed0a1cb6f"
+source_page = "https://commons.wikimedia.org/wiki/File:Plantation_island_on_quiet_lake_(Unsplash).jpg"
+author = "Jasmin Causevic"
+license = "CC0-1.0"
+
+[[photo]]
+id = "harbour-rowboats"
+day_offset = 27
+time = "16:38"
+url = "https://upload.wikimedia.org/wikipedia/commons/b/b3/Fill_art_2014-11-20_%28Unsplash%29.jpg"
+sha256 = "7585810e7a6ba9860f863e1cded8ee881295310028717f38cae7bcff9e54ebbc"
+source_page = "https://commons.wikimedia.org/wiki/File:Fill_art_2014-11-20_(Unsplash).jpg"
+author = "Fill art"
+license = "CC0-1.0"
+
+[[photo]]
+id = "red-canoe"
+day_offset = 27
+time = "16:31"
+url = "https://upload.wikimedia.org/wikipedia/commons/0/03/Michael_Niessl_2016_%28Unsplash%29.jpg"
+sha256 = "23adeff61211bf2d3585cddddf7afc00d293c1649a053d7be907e8dd55ed2d6d"
+source_page = "https://commons.wikimedia.org/wiki/File:Michael_Niessl_2016_(Unsplash).jpg"
+author = "Michael Niessl"
+license = "CC0-1.0"
+
+[[photo]]
+id = "moored-fishing-boats"
+day_offset = 27
+time = "16:24"
+url = "https://upload.wikimedia.org/wikipedia/commons/9/9c/Ship_%28Unsplash%29.jpg"
+sha256 = "8c0a1df958309fb6756c8498b6c07d114cf4d68ac1553b6e0e43cdf8a7831955"
+source_page = "https://commons.wikimedia.org/wiki/File:Ship_(Unsplash).jpg"
+author = "Leo Nard"
+license = "CC0-1.0"
+
+[[photo]]
+id = "lake-at-dusk"
+day_offset = 27
+time = "16:17"
+url = "https://upload.wikimedia.org/wikipedia/commons/7/7d/Lake_Wenatchee_%28Unsplash%29.jpg"
+sha256 = "2e82afa814d6e2032d2fd7e730951f31e42f579f8a313dd3a8cf193af24153ef"
+source_page = "https://commons.wikimedia.org/wiki/File:Lake_Wenatchee_(Unsplash).jpg"
+author = "Anubhav Saxena"
+license = "CC0-1.0"
+
+[[photo]]
+id = "boathouse-at-night"
+day_offset = 27
+time = "16:10"
+url = "https://upload.wikimedia.org/wikipedia/commons/a/a7/The_Blue_Boat_House_%28Unsplash%29.jpg"
+sha256 = "9115484ab35fa48093ca002c91bfc21fc2fc3611ab19dc36b264030dfd149660"
+source_page = "https://commons.wikimedia.org/wiki/File:The_Blue_Boat_House_(Unsplash).jpg"
+author = "Sebastian Davenport-Handley"
+license = "CC0-1.0"
+
+# ── Autumn (33 days ago) ──
+
+[[photo]]
+id = "autumn-orchard-rows"
+day_offset = 33
+time = "13:30"
+url = "https://upload.wikimedia.org/wikipedia/commons/d/d4/Autumn_orchard_%28Unsplash%29.jpg"
+sha256 = "e2c4a3de7a572e991d5f46da438bf50798c4a81f4a80c1ec2c6d43e742d6296d"
+source_page = "https://commons.wikimedia.org/wiki/File:Autumn_orchard_(Unsplash).jpg"
+author = "Lukas Budimaier"
+license = "CC0-1.0"
+
+[[photo]]
+id = "maple-leaf-on-pebbles"
+day_offset = 33
+time = "13:23"
+url = "https://upload.wikimedia.org/wikipedia/commons/c/cd/Germany_autumn_%28Unsplash%29.jpg"
+sha256 = "295771eee9b06e2760106b0d306a8022f408d5ea5f2116ad8b53d7592f096783"
+source_page = "https://commons.wikimedia.org/wiki/File:Germany_autumn_(Unsplash).jpg"
+author = "Sabrina Bachmann"
+license = "CC0-1.0"
+
+[[photo]]
+id = "autumn-road-from-above"
+day_offset = 33
+time = "13:16"
+url = "https://upload.wikimedia.org/wikipedia/commons/c/cf/Autumn_road_from_above_%28Unsplash%29.jpg"
+sha256 = "a3a71488421563b5b98e44ec7d6c3a16917a4051a2470fc5c79a497a1f057309"
+source_page = "https://commons.wikimedia.org/wiki/File:Autumn_road_from_above_(Unsplash).jpg"
+author = "Aaron Burden"
+license = "CC0-1.0"
