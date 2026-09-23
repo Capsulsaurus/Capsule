@@ -99,6 +99,10 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 sha2 = "0.10"
 hex = "0.4"
+# Build tooling only: xtask's README screenshot pipeline (seed normalization + compositing).
+# Product media decoding stays with Rawshift — see the "Tooling image processing" row in
+# design/dependencies.md.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
 [profile.release]
 lto = "thin"
@@ -116,6 +120,18 @@ split-debuginfo = "unpacked"
 # 6.8 GB in another, against a ~90s cold workspace build. With several worktrees in flight
 # that is the difference between building and running out of disk. Full builds it is.
 incremental = false
+
+# xtask's screenshot pipeline decodes and Lanczos-resizes ~40 multi-megapixel photos and blurs a
+# 1.5k×3k canvas; unoptimized, that takes minutes instead of seconds. Only build tooling depends
+# on these crates, so optimizing them costs nothing elsewhere.
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.fdeflate]
+opt-level = 3
 
 # The same settings for the test profile, spelled out rather than inherited.
 #
