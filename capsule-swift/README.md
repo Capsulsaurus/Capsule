@@ -70,6 +70,28 @@ mise exec -- tuist generate     # generates Capsule.xcworkspace
 Re-run `mise run build-ffi-apple` whenever the Rust core changes. The generated
 Xcode project/workspace and the `.ffi/` build output are not committed.
 
+## Regenerating the README Screenshot
+
+`mise run screenshot-ios` regenerates `images/readme-hero-{light,dark}.png`, the
+hero image at the top of the repo README:
+
+1. Fetches the CC0 seed photos pinned in `xtask/screenshot/seed.toml` into
+   `target/screenshot/cache/`. The first run downloads about 335 MB; later
+   runs use the cache.
+2. Builds the app and erases a dedicated `Capsule README` simulator (iPhone
+   17 Pro, newest iOS 26.x). It then imports the photos, grants Photos access,
+   and pins the status bar to 9:41.
+3. Captures the Library timeline in light and dark, then composites each
+   capture with its screen mask and a soft shadow.
+
+Re-running is safe. Every run starts from an erased simulator, and the seed set
+is byte-reproducible for a given anchor day on a given machine (the task prints
+its digest). Capture dates are relative to the run date, and the app titles
+sections against the real clock, so a run on a different day re-dates the
+headers. A run in early January warns when some sections would carry a year
+suffix. To change the photos, edit the manifest. Its header explains the
+ordering and date rules, and a unit test enforces them.
+
 ## Running on the iOS Simulator
 
 After `mise run setup-swift`, pick a simulator
