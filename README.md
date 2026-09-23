@@ -1,5 +1,12 @@
 # Capsule
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="images/readme-hero-dark.png">
+    <img src="images/readme-hero-light.png" alt="Capsule on iPhone: the Library timeline showing a grid of photos" width="360">
+  </picture>
+</p>
+
 Open-source, federated, E2E encrypted photo management and sharing service built for professionals and prosumers.
 
 > Disclaimer: This project continues to be in active development. Star this repo to get the latest updates!
@@ -26,10 +33,6 @@ Capsule is highly refined for photographers and prosumers who want to store and 
 We implement strict security and privacy requirements with the assumption that any data stored can be viewed by unauthorized parties. As such, everything is end-to-end encrypted and processed locally.
 
 However, it is important to note that (at least currently) Capsule requires a **self-hosted** server which requires some technical knowledge. This is not a turn-key solution but rather a capable and actively-developed open-source project. It was created out of passion and so I (as the author) do not ask for any monetary compensation. The best form of compensation is technical contributions and feedback!
-
-## Screenshots
-
-<!-- TODO: Add screenshots -->
 
 ## Who is Capsule for?
 
