@@ -181,15 +181,52 @@ impl CapabilityStore for InMemoryCapabilities {
     fn revoke_issued<'a>(&'a self, jti: &'a str, at: Timestamp) -> StoreFuture<'a, RevokeOutcome> {
         Box::pin(async move {
             let mut inner = lock(&self.inner);
-            let Some(record) = inner.records.get(jti) else {
+            if !inner.records.contains_key(jti) {
                 return Ok(RevokeOutcome::Unknown);
-            };
-            if record.revoked_at.is_some() {
+            }
+            // The whole refresh chain from `jti` forward, so revoking a grant by the `jti` the
+            // owner saw also ends every successor a peer refreshed it into.
+            let mut chain = Vec::new();
+            let mut seen = std::collections::HashSet::new();
+            let mut cursor = Some(jti.to_owned());
+            while let Some(link) = cursor.take() {
+                if !seen.insert(link.clone()) {
+                    return Err(super::store::broken_chain(
+                        jti,
+                        &link,
+                        "it is visited twice",
+                    ));
+                }
+                let record = inner
+                    .records
+                    .get(&link)
+                    .ok_or_else(|| super::store::broken_chain(jti, &link, "it is not recorded"))?;
+                cursor.clone_from(&record.refreshed_to);
+                chain.push(link);
+            }
+            let mut revoked = 0_usize;
+            for link in &chain {
+                let Some(record) = inner.records.get(link) else {
+                    continue;
+                };
+                if record.revoked_at.is_some() {
+                    continue;
+                }
+                let expires_at = record.expires_at;
+                inner.revoke(link, expires_at, at);
+                revoked += 1;
+            }
+            if revoked == 0 {
+                tracing::debug!(%jti, links = chain.len(), "every capability in the refresh chain was already revoked");
                 return Ok(RevokeOutcome::AlreadyRevoked);
             }
-            let expires_at = record.expires_at;
-            inner.revoke(jti, expires_at, at);
-            tracing::info!(%jti, published = inner.published.len(), "an issued capability was revoked");
+            tracing::info!(
+                %jti,
+                links = chain.len(),
+                revoked,
+                published = inner.published.len(),
+                "an issued capability was revoked with its refresh chain"
+            );
             Ok(RevokeOutcome::Revoked)
         })
     }

@@ -19,7 +19,9 @@
 //! transaction-scoped advisory lock keyed on the predecessor's `jti` serialises both, is
 //! released by the commit or the rollback, and needs no row to exist — the same choice
 //! [`PostgresMembership`](crate::membership::postgres::PostgresMembership) makes for the same
-//! reason.
+//! reason. Every transaction holds **one** such lock: `revoke_issued` follows a refresh chain
+//! without locks and locks only its tail, the one link that can still be live, so a hash
+//! collision between two keys can only serialise two operations, never deadlock them.
 //!
 //! # Pruning on read
 //!
@@ -247,6 +249,79 @@ async fn revoke_and_publish<C: ConnectionTrait>(
     publish(connection, jti, expires_at, at).await
 }
 
+/// How many times a chain revocation starts over after a refresh moved the tail under it.
+///
+/// A peer would have to land a refresh in the gap between one statement and the next, every
+/// time; running out is reported as `Unavailable` — nothing was written — rather than looped on.
+const CHAIN_ATTEMPTS: usize = 8;
+
+/// The longest refresh chain a revocation will follow.
+///
+/// A real chain cannot cycle — a successor's `jti` is new by construction — so this exists only
+/// so that a corrupt one ends the recursion, and it is far beyond anything the refresh budget
+/// lets a peer build inside the longest grant.
+const CHAIN_DEPTH_LIMIT: i64 = 10_000_000;
+
+/// The refresh chain from `jti` forward, oldest first, read in one statement and without locks.
+///
+/// Empty when nothing backs `jti`.
+///
+/// # Errors
+///
+/// Returns [`broken_chain`](super::store::broken_chain) when the last link names a successor
+/// that is not recorded, when a link repeats, or when the chain runs past
+/// [`CHAIN_DEPTH_LIMIT`].
+async fn chain_of<C: ConnectionTrait>(
+    connection: &C,
+    jti: &str,
+) -> Result<Vec<CapabilityRecord>, StoreError> {
+    let rows = connection
+        .query_all(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            format!(
+                "WITH RECURSIVE chain(link, next, depth) AS ( \
+                     SELECT jti, refreshed_to, 0::BIGINT FROM federation_capabilities \
+                     WHERE jti = $1 \
+                   UNION ALL \
+                     SELECT c.jti, c.refreshed_to, chain.depth + 1 \
+                     FROM federation_capabilities c JOIN chain ON c.jti = chain.next \
+                     WHERE chain.depth < $2 \
+                 ) \
+                 SELECT {CAPABILITY_COLUMNS} FROM chain \
+                 JOIN federation_capabilities ON federation_capabilities.jti = chain.link \
+                 ORDER BY chain.depth"
+            ),
+            [Value::from(jti.to_owned()), Value::from(CHAIN_DEPTH_LIMIT)],
+        ))
+        .await
+        .map_err(CAPABILITIES.failing("reading a refresh chain"))?;
+    let chain = rows
+        .iter()
+        .map(record_from)
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut seen = std::collections::HashSet::with_capacity(chain.len());
+    for link in &chain {
+        if !seen.insert(link.jti.as_str()) {
+            return Err(super::store::broken_chain(
+                jti,
+                &link.jti,
+                "it is visited twice",
+            ));
+        }
+    }
+    if let Some(next) = chain.last().and_then(|tail| tail.refreshed_to.as_deref()) {
+        let why = if seen.contains(next) {
+            "it is visited twice"
+        } else if i64::try_from(chain.len()).unwrap_or(i64::MAX) > CHAIN_DEPTH_LIMIT {
+            "the chain is longer than any refresh budget allows"
+        } else {
+            "it is not recorded"
+        };
+        return Err(super::store::broken_chain(jti, next, why));
+    }
+    Ok(chain)
+}
+
 /// The durable capability store, and the revocation list it publishes.
 #[derive(Debug, Clone)]
 pub struct PostgresCapabilities {
@@ -389,18 +464,54 @@ impl CapabilityStore for PostgresCapabilities {
 
     fn revoke_issued<'a>(&'a self, jti: &'a str, at: Timestamp) -> StoreFuture<'a, RevokeOutcome> {
         Box::pin(async move {
-            let transaction = begin(&self.connection, CAPABILITIES).await?;
-            lock(&transaction, jti, CAPABILITIES).await?;
-            let Some(record) = record_of(&transaction, jti).await? else {
-                return Ok(RevokeOutcome::Unknown);
-            };
-            if record.revoked_at.is_some() {
-                return Ok(RevokeOutcome::AlreadyRevoked);
+            // Every link but the newest was revoked by the refresh that superseded it, and a
+            // refreshed link never changes again — `refresh` writes `refreshed_to` once, in the
+            // same transaction that revokes it. So only the **tail** can be live, and only the
+            // tail is locked: one advisory lock per transaction however long a peer has made
+            // the chain, which is what keeps a revoke from growing with it.
+            for attempt in 1..=CHAIN_ATTEMPTS {
+                let transaction = begin(&self.connection, CAPABILITIES).await?;
+                let chain = chain_of(&transaction, jti).await?;
+                let Some(tail) = chain.last() else {
+                    return Ok(RevokeOutcome::Unknown);
+                };
+                lock(&transaction, &tail.jti, CAPABILITIES).await?;
+                let tail = record_of(&transaction, &tail.jti).await?.ok_or_else(|| {
+                    super::store::broken_chain(jti, &tail.jti, "it is not recorded")
+                })?;
+                if let Some(next) = &tail.refreshed_to {
+                    // A refresh committed between the read and the lock. Start over rather than
+                    // take a second lock.
+                    tracing::debug!(%jti, tail = %tail.jti, %next, attempt, "the refresh chain moved under a revoke; retrying");
+                    continue;
+                }
+                let mut revoked = 0_usize;
+                for link in chain
+                    .iter()
+                    .take(chain.len() - 1)
+                    .chain(std::iter::once(&tail))
+                {
+                    if link.revoked_at.is_none() {
+                        revoke_and_publish(&transaction, &link.jti, link.expires_at, at).await?;
+                        revoked += 1;
+                    }
+                }
+                if revoked == 0 {
+                    tracing::debug!(%jti, links = chain.len(), "every capability in the refresh chain was already revoked");
+                    return Ok(RevokeOutcome::AlreadyRevoked);
+                }
+                commit(transaction, CAPABILITIES).await?;
+                tracing::info!(%jti, links = chain.len(), revoked, "an issued capability was revoked with its refresh chain");
+                return Ok(RevokeOutcome::Revoked);
             }
-            revoke_and_publish(&transaction, jti, record.expires_at, at).await?;
-            commit(transaction, CAPABILITIES).await?;
-            tracing::info!(%jti, "an issued capability was revoked");
-            Ok(RevokeOutcome::Revoked)
+            tracing::warn!(%jti, attempts = CHAIN_ATTEMPTS, "a revoke kept losing its refresh chain's tail to concurrent refreshes");
+            Err(StoreError::Unavailable {
+                store: CAPABILITIES.store,
+                detail: format!(
+                    "the refresh chain from {jti} was refreshed under {CHAIN_ATTEMPTS} consecutive \
+                     revoke attempts"
+                ),
+            })
         })
     }
 

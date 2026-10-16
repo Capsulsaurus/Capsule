@@ -643,6 +643,85 @@ pub async fn a_refresh_is_one_operation_and_a_replay_answers_the_same_successor(
     );
 }
 
+/// Revoking a grant by its original `jti` after a peer refreshed it ends every successor too.
+///
+/// The owner only ever sees the `jti` they minted; the refresh already revoked it, so a store
+/// that revoked only the named record would answer `AlreadyRevoked` and leave the grant live.
+pub async fn revoking_a_refreshed_grant_by_its_original_jti_revokes_the_whole_chain(
+    h: &dyn Harness,
+) {
+    let case = "chain";
+    let now = h.clock().now();
+    let original = renewable_record(h, case, "original", 6, 48);
+    issue(h, original.clone()).await;
+    let first = renewable_record(h, case, "first", 6, 48);
+    let second = renewable_record(h, case, "second", 6, 48);
+    for (predecessor, successor) in [(&original, &first), (&first, &second)] {
+        assert_eq!(
+            ok(
+                h.capabilities()
+                    .refresh(&predecessor.jti, successor.clone(), now)
+                    .await,
+                "refresh a renewable grant",
+            ),
+            RefreshOutcome::Issued(successor.clone())
+        );
+    }
+    assert!(find(h, &second.jti).await.expect("recorded").is_live(now));
+
+    let later = crate::store::deadline(now, SignedDuration::from_mins(5));
+    assert_eq!(
+        ok(
+            h.capabilities().revoke_issued(&original.jti, later).await,
+            "revoke a refreshed grant",
+        ),
+        RevokeOutcome::Revoked,
+        "the grant was still live in its successor, so this is a revocation, not a retry"
+    );
+    let listed = published(h).await;
+    for successor in [&first, &second] {
+        let stored = find(h, &successor.jti).await.expect("recorded");
+        assert!(
+            !stored.is_live(later),
+            "{} must be refused once the grant it continues is revoked",
+            successor.jti
+        );
+        assert!(
+            listed.contains(&successor.jti),
+            "{} is published",
+            successor.jti
+        );
+    }
+    assert_eq!(
+        find(h, &first.jti).await.expect("recorded").revoked_at,
+        Some(now),
+        "a link the refresh already revoked keeps its instant"
+    );
+    assert_eq!(
+        find(h, &second.jti).await.expect("recorded").revoked_at,
+        Some(later)
+    );
+    assert_eq!(
+        ok(
+            h.capabilities().revoke_issued(&original.jti, later).await,
+            "retry the revoke",
+        ),
+        RevokeOutcome::AlreadyRevoked
+    );
+    // A peer holding the newest token gets nothing more from refreshing it either.
+    let third = renewable_record(h, case, "third", 6, 48);
+    assert_eq!(
+        ok(
+            h.capabilities()
+                .refresh(&second.jti, third.clone(), later)
+                .await,
+            "answer a refresh of a revoked grant",
+        ),
+        RefreshOutcome::Revoked
+    );
+    assert_eq!(find(h, &third.jti).await, None);
+}
+
 /// A revoked predecessor cannot be refreshed, and an unknown one is unknown.
 pub async fn a_revoked_or_unknown_predecessor_is_not_refreshed(h: &dyn Harness) {
     let case = "norefresh";
@@ -794,6 +873,7 @@ pub async fn run_all(h: &dyn Harness) {
     the_published_list_prunes_expired_entries_and_orders_by_expiry(h).await;
     a_refresh_is_one_operation_and_a_replay_answers_the_same_successor(h).await;
     a_revoked_or_unknown_predecessor_is_not_refreshed(h).await;
+    revoking_a_refreshed_grant_by_its_original_jti_revokes_the_whole_chain(h).await;
     a_pinned_peer_reads_back_and_an_unknown_one_is_none(h).await;
     a_block_needs_no_key_and_is_idempotent(h).await;
     a_pin_keeps_a_block_and_an_unblock_keeps_the_key(h).await;

@@ -231,6 +231,20 @@ pub fn continues(
     Ok(())
 }
 
+/// The refresh chain a revocation walked is not one: a link names a successor that is not
+/// recorded, or a successor the walk has already visited.
+///
+/// Every adapter raises the same error for it, so the conformance suite reads one shape. Either
+/// is a store that recorded something no `refresh` could have produced.
+#[must_use]
+pub fn broken_chain(origin: &str, link: &str, why: &str) -> StoreError {
+    StoreError::Corrupt {
+        store: "capabilities",
+        record: "CapabilityRecord",
+        detail: format!("the refresh chain from {origin} is broken at {link}: {why}"),
+    }
+}
+
 /// Which live capabilities a caller wants.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CapabilityFilter {
@@ -243,9 +257,9 @@ pub enum CapabilityFilter {
 /// What revoking an issued capability did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RevokeOutcome {
-    /// It was live and is now revoked and published.
+    /// It, or a successor it was refreshed into, was live and is now revoked and published.
     Revoked,
-    /// It was already revoked. A retry is not a new fact.
+    /// It and every successor were already revoked. A retry is not a new fact.
     AlreadyRevoked,
     /// No capability with that `jti` was ever issued here.
     Unknown,
@@ -286,9 +300,21 @@ pub trait CapabilityStore: RevocationList + fmt::Debug + Send + Sync {
         now: Timestamp,
     ) -> StoreFuture<'a, Vec<CapabilityRecord>>;
 
-    /// Revoke the capability `jti` names at `at`, and publish its `jti`, in one operation.
+    /// Revoke the capability `jti` names **and every successor it was refreshed into** at `at`,
+    /// and publish each `jti`, in one operation.
+    ///
+    /// The chain is followed forward through `refreshed_to`. An owner only ever sees the `jti`
+    /// they minted, while a peer may have refreshed it any number of times, so revoking just
+    /// the named record would answer `204` and leave the grant live in its successor.
+    /// [`RevokeOutcome::Revoked`] means at least one link was newly revoked.
     ///
     /// Idempotent: a second call answers [`RevokeOutcome::AlreadyRevoked`] and changes nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::Corrupt`](crate::store::StoreError::Corrupt), from
+    /// [`broken_chain`], when a link names a successor that is not recorded or one already
+    /// visited.
     fn revoke_issued<'a>(&'a self, jti: &'a str, at: Timestamp) -> StoreFuture<'a, RevokeOutcome>;
 
     /// Issue `successor` in place of the capability `predecessor` names, at `at`.
