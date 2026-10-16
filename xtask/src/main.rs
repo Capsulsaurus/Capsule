@@ -18,11 +18,14 @@
 //!   locale's translation-data file.
 //! - `architecture-check` rejects implicit workspace packages, retired dependencies,
 //!   buildable review-only code, and stale component references (see [`architecture`]).
+//! - `screenshot-seed` / `screenshot-compose` are the platform-independent halves of the
+//!   README hero screenshot pipeline driven by `mise run screenshot-ios` (see [`screenshot`]).
 
 mod architecture;
 mod drop_kat;
 mod i18n;
 mod i18n_guard;
+mod screenshot;
 mod share_kat;
 mod translate_readme;
 
@@ -34,7 +37,7 @@ use regex::{Captures, Regex};
 use semver::Version;
 use toml_edit::Item;
 
-const USAGE: &str = "usage: xtask <set-version <X.Y.Z> | i18n [--check] | i18n-guard | translate-readme [--check | --extract] | share-kat [<out-path>] | drop-kat [<out-path>] | architecture-check>";
+const USAGE: &str = "usage: xtask <set-version <X.Y.Z> | i18n [--check] | i18n-guard | translate-readme [--check | --extract] | share-kat [<out-path>] | drop-kat [<out-path>] | architecture-check | screenshot-seed [--anchor YYYY-MM-DD] | screenshot-compose --input <png> --output <png>>";
 
 /// Default output path (repo-relative) for the share-link KAT fixture the bun test consumes.
 const SHARE_KAT_OUT: &str = "capsule-web/src/generated/share-kat.json";
@@ -43,6 +46,13 @@ const SHARE_KAT_OUT: &str = "capsule-web/src/generated/share-kat.json";
 const DROP_KAT_OUT: &str = "capsule-web/src/generated/drop-kat.json";
 
 fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .with_writer(std::io::stderr)
+        .init();
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
         Some("set-version") => {
@@ -77,6 +87,8 @@ fn main() -> Result<()> {
             let out = args.next().unwrap_or_else(|| DROP_KAT_OUT.to_string());
             drop_kat::run(&repo_root(), &out)
         }
+        Some("screenshot-seed") => screenshot::run_seed(&repo_root(), args),
+        Some("screenshot-compose") => screenshot::run_compose(args),
         Some(other) => bail!("unknown command `{other}`; {USAGE}"),
         None => bail!("{USAGE}"),
     }

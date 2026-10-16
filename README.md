@@ -1,5 +1,12 @@
 # Capsule
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="images/readme-hero-dark.png">
+    <img src="images/readme-hero-light.png" alt="Capsule on iPhone: the Library timeline showing a grid of photos" width="360">
+  </picture>
+</p>
+
 Open-source, federated, E2E encrypted photo management and sharing service built for professionals and prosumers.
 
 > Disclaimer: This project continues to be in active development. Star this repo to get the latest updates!
@@ -7,7 +14,10 @@ Open-source, federated, E2E encrypted photo management and sharing service built
 > Alpha status: The `master` branch is the main development branch. Releases on GitHub will be made once: 1. Features/APIs have been stabilized internally; 2. Internal testing group have tested sufficiently.
 >
 > Project Update (April 2026): We are porting to E2E encryption and offline-first philosophy so it will be another few months before we reach alpha again.
+>
 > Project Update (June 2026): Developer is still working actively but only during spare time. Lots of new prerequisite work on establishing portable, pure Rust libraries in separate repos have been blocking (e.g. image encoding/decoding, metadata processing, geocoordinate logic, on-device ML models finetuned for use cases). However, fleshing out these missing building blocks in the Rust ecosystem is paramount to a solid product.
+>
+> Project Update (Oct 2026): Bidirectional transfer protocol and cryptographic/storage layers are nearing stabilization. A number of notable updates have been made after experiments stress testing high-latency, lossy connections.
 
 ## Features
 
@@ -40,10 +50,6 @@ Capsule is highly refined for photographers and prosumers who want to store and 
 We implement strict security and privacy requirements with the assumption that any data stored can be viewed by unauthorized parties. As such, everything is end-to-end encrypted and processed locally.
 
 However, it is important to note that (at least currently) Capsule requires a **self-hosted** server which requires some technical knowledge. This is not a turn-key solution but rather a capable and actively-developed open-source project. It was created out of passion and so I (as the author) do not ask for any monetary compensation. The best form of compensation is technical contributions and feedback!
-
-## Screenshots
-
-<!-- TODO: Add screenshots -->
 
 ## Who is Capsule for?
 

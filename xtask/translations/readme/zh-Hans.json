@@ -8,8 +8,8 @@
     "target": "为专业人士和高端消费者打造的开源、联邦式、E2E 加密照片管理与共享服务。"
   },
   {
-    "source": "> Disclaimer: This project continues to be in active development. Star this repo to get the latest updates!\n>\n> Alpha status: The `master` branch is the main development branch. Releases on GitHub will be made once: 1. Features/APIs have been stabilized internally; 2. Internal testing group have tested sufficiently.\n>\n> Project Update (April 2026): We are porting to E2E encryption and offline-first philosophy so it will be another few months before we reach alpha again.\n> Project Update (June 2026): Developer is still working actively but only during spare time. Lots of new prerequisite work on establishing portable, pure Rust libraries in separate repos have been blocking (e.g. image encoding/decoding, metadata processing, geocoordinate logic, on-device ML models finetuned for use cases). However, fleshing out these missing building blocks in the Rust ecosystem is paramount to a solid product.",
-    "target": "> 免责声明：本项目仍在积极开发中。为本仓库加星标以获取最新动态！\n>\n> Alpha 状态：`master` 分支是主要开发分支。GitHub 上的正式发布将在以下条件满足后进行：1. 功能/API 已在内部趋于稳定；2. 内部测试小组已充分测试。\n>\n> 项目进展（2026 年 4 月）：我们正在向 E2E 加密和离线优先理念迁移，因此距离再次进入 Alpha 阶段还需要几个月时间。\n> 项目进展（2026 年 6 月）：开发者仍在积极推进，但只能利用业余时间进行。在独立仓库中构建可移植的纯 Rust 库这一大量前置工作一直是瓶颈（例如图像编解码、元数据处理、地理坐标逻辑、针对特定用例微调的设备端 ML 模型）。然而，在 Rust 生态系统中补齐这些缺失的基础模块，对打造一款可靠的产品至关重要。"
+    "source": "> Disclaimer: This project continues to be in active development. Star this repo to get the latest updates!\n>\n> Alpha status: The `master` branch is the main development branch. Releases on GitHub will be made once: 1. Features/APIs have been stabilized internally; 2. Internal testing group have tested sufficiently.\n>\n> Project Update (April 2026): We are porting to E2E encryption and offline-first philosophy so it will be another few months before we reach alpha again.\n>\n> Project Update (June 2026): Developer is still working actively but only during spare time. Lots of new prerequisite work on establishing portable, pure Rust libraries in separate repos have been blocking (e.g. image encoding/decoding, metadata processing, geocoordinate logic, on-device ML models finetuned for use cases). However, fleshing out these missing building blocks in the Rust ecosystem is paramount to a solid product.\n>\n> Project Update (Oct 2026): Bidirectional transfer protocol and cryptographic/storage layers are nearing stabilization. A number of notable updates have been made after experiments stress testing high-latency, lossy connections.",
+    "target": "> 免责声明：本项目仍在积极开发中。为本仓库加星标以获取最新动态！\n>\n> Alpha 状态：`master` 分支是主要开发分支。GitHub 上的正式发布将在以下条件满足后进行：1. 功能/API 已在内部趋于稳定；2. 内部测试小组已充分测试。\n>\n> 项目进展（2026 年 4 月）：我们正在向 E2E 加密和离线优先理念迁移，因此距离再次进入 Alpha 阶段还需要几个月时间。\n>\n> 项目进展（2026 年 6 月）：开发者仍在积极推进，但只能利用业余时间进行。在独立仓库中构建可移植的纯 Rust 库这一大量前置工作一直是瓶颈（例如图像编解码、元数据处理、地理坐标逻辑、针对特定用例微调的设备端 ML 模型）。然而，在 Rust 生态系统中补齐这些缺失的基础模块，对打造一款可靠的产品至关重要。\n>\n> 项目进展（2026 年 10 月）：双向传输协议以及加密/存储层已接近稳定。在高延迟、易丢包的连接上进行压力测试实验后，我们做出了多项重要更新。"
   },
   {
     "source": "## Features",
@@ -70,10 +70,6 @@
   {
     "source": "However, it is important to note that (at least currently) Capsule requires a **self-hosted** server which requires some technical knowledge. This is not a turn-key solution but rather a capable and actively-developed open-source project. It was created out of passion and so I (as the author) do not ask for any monetary compensation. The best form of compensation is technical contributions and feedback!",
     "target": "不过需要注意的是，（至少目前）Capsule 需要一台**自托管**的服务器，这需要一定的技术知识。这并非一个开箱即用的解决方案，而是一个功能强大、正在积极开发中的开源项目。它诞生于热爱，因此我（作为作者）不要求任何金钱报酬。最好的回报形式是技术贡献和反馈！"
-  },
-  {
-    "source": "## Screenshots",
-    "target": "## 截图"
   },
   {
     "source": "## Who is Capsule for?",

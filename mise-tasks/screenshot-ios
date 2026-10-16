@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+#MISE description="Capture the README hero screenshot (light + dark) from a seeded iOS simulator (macOS only)"
+#MISE depends=["build-ffi-apple"]
+# Safe to re-run: the dedicated simulator is erased every run, the seed set is byte-reproducible
+# for a given anchor day on a given machine (xtask screenshot-seed prints its digest), and
+# composition is deterministic. Re-running overwrites images/readme-hero-{light,dark}.png. The
+# rendered section headers follow the real date, so a run on a different day re-dates them.
+#
+# Knobs (environment): SCREENSHOT_DEVICE_TYPE (default "iPhone 17 Pro"), SCREENSHOT_IOS_MAJOR
+# (default 26), SCREENSHOT_ANCHOR (YYYY-MM-DD capture-date anchor, default today).
+set -euo pipefail
+
+if [ "$(uname)" != "Darwin" ]; then
+    echo "screenshot-ios needs macOS with Xcode and an iOS simulator runtime; nothing was captured." >&2
+    exit 1
+fi
+for tool in xcrun xcodebuild jq shasum; do
+    command -v "$tool" >/dev/null || { echo "screenshot-ios: missing required tool: $tool" >&2; exit 1; }
+done
+
+readonly BUNDLE_ID="com.justin13888.capsule.Capsule"
+readonly DEVICE_NAME="Capsule README"
+readonly DEVICE_TYPE="${SCREENSHOT_DEVICE_TYPE:-iPhone 17 Pro}"
+readonly IOS_MAJOR="${SCREENSHOT_IOS_MAJOR:-26}"
+readonly WORK="target/screenshot"
+readonly DERIVED="$WORK/DerivedData"
+readonly APP="$DERIVED/Build/Products/Debug-iphonesimulator/Capsule.app"
+# Photos, thumbnails and Liquid Glass settle asynchronously: capture until two consecutive frames
+# match, but never sooner than SETTLE_MIN_S after launch and never later than SETTLE_MAX_S.
+readonly SETTLE_MIN_S=6
+readonly SETTLE_MAX_S=30
+
+step_started=$SECONDS
+step() {
+    echo "==> [$((SECONDS - step_started))s] $*"
+}
+
+step "seed: fetch, verify and normalize the manifest photos"
+anchor_args=()
+[ -n "${SCREENSHOT_ANCHOR:-}" ] && anchor_args=(--anchor "$SCREENSHOT_ANCHOR")
+seed_digest=$(cargo run -q -p xtask -- screenshot-seed "${anchor_args[@]+"${anchor_args[@]}"}")
+echo "    seed digest: $seed_digest"
+
+step "build: tuist generate + xcodebuild (Debug, iOS Simulator)"
+(cd capsule-swift && mise exec -- tuist generate --no-open)
+xcodebuild -workspace capsule-swift/Capsule.xcworkspace -scheme Capsule -configuration Debug \
+    -destination 'generic/platform=iOS Simulator' -derivedDataPath "$DERIVED" \
+    CODE_SIGNING_ALLOWED=NO build | (cd capsule-swift && mise exec -- xcbeautify)
+[ -d "$APP" ] || { echo "screenshot-ios: build produced no app at $APP" >&2; exit 1; }
+
+step "simulator: resolve iOS $IOS_MAJOR.x runtime and $DEVICE_TYPE"
+runtime=$(xcrun simctl list runtimes available -j | jq -r --arg major "$IOS_MAJOR." '
+    [.runtimes[] | select(.platform == "iOS" and (.version | startswith($major)))]
+    | sort_by(.version | split(".") | map(tonumber)) | last | .identifier // empty')
+if [ -z "$runtime" ]; then
+    echo "screenshot-ios: no iOS $IOS_MAJOR.x simulator runtime installed; try: xcodebuild -downloadPlatform iOS" >&2
+    exit 1
+fi
+device_type=$(xcrun simctl list devicetypes -j | jq -r --arg name "$DEVICE_TYPE" '
+    .devicetypes[] | select(.name == $name) | .identifier' | head -n1)
+if [ -z "$device_type" ]; then
+    echo "screenshot-ios: this Xcode has no \"$DEVICE_TYPE\" device type; update Xcode or set SCREENSHOT_DEVICE_TYPE" >&2
+    exit 1
+fi
+udid=$(xcrun simctl list devices -j | jq -r --arg rt "$runtime" --arg name "$DEVICE_NAME" --arg dt "$device_type" '
+    .devices[$rt][]? | select(.name == $name and .deviceTypeIdentifier == $dt) | .udid' | head -n1)
+if [ -z "$udid" ]; then
+    udid=$(xcrun simctl create "$DEVICE_NAME" "$device_type" "$runtime")
+    echo "    created $DEVICE_NAME ($udid)"
+fi
+echo "    device $udid ($device_type, $runtime)"
+# A runtime upgrade leaves the previous run's device behind; it is ours, so reclaim it.
+xcrun simctl list devices -j | jq -r --arg name "$DEVICE_NAME" --arg keep "$udid" '
+    .devices[][] | select(.name == $name and .udid != $keep) | .udid' |
+    while read -r stale; do
+        echo "    deleting stale $DEVICE_NAME device $stale"
+        xcrun simctl delete "$stale"
+    done
+
+cleanup() {
+    xcrun simctl status_bar "$udid" clear >/dev/null 2>&1 || true
+    xcrun simctl shutdown "$udid" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+step "simulator: erase to a clean state and boot"
+xcrun simctl shutdown "$udid" >/dev/null 2>&1 || true
+xcrun simctl erase "$udid"
+xcrun simctl boot "$udid"
+xcrun simctl bootstatus "$udid" -b >/dev/null
+
+step "simulator: install app, grant Photos, import seed, set timeline density"
+xcrun simctl install "$udid" "$APP"
+xcrun simctl privacy "$udid" grant photos "$BUNDLE_ID"
+xcrun simctl addmedia "$udid" "$WORK"/seed/*.jpg
+# Typed write: launch-argument defaults arrive as strings, and the app reads an Int.
+xcrun simctl spawn "$udid" defaults write "$BUNDLE_ID" timeline.columnCount -int 3
+xcrun simctl status_bar "$udid" override --time "9:41" \
+    --dataNetwork wifi --wifiMode active --wifiBars 3 \
+    --cellularMode active --cellularBars 4 --operatorName "" \
+    --batteryState discharging --batteryLevel 100
+
+capture_settled() {
+    local out="$1" prev="" hash elapsed=0 frame="$WORK/frame.png"
+    sleep "$SETTLE_MIN_S"
+    while [ "$elapsed" -lt "$SETTLE_MAX_S" ]; do
+        xcrun simctl io "$udid" screenshot --type=png --mask=alpha "$frame" >/dev/null
+        hash=$(shasum -a 256 "$frame" | cut -d' ' -f1)
+        if [ "$hash" = "$prev" ]; then
+            mv "$frame" "$out"
+            return 0
+        fi
+        prev=$hash
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    echo "screenshot-ios: screen never settled within ${SETTLE_MAX_S}s ($out)" >&2
+    return 1
+}
+
+for appearance in light dark; do
+    step "capture: $appearance"
+    xcrun simctl ui "$udid" appearance "$appearance"
+    xcrun simctl launch --terminate-running-process "$udid" "$BUNDLE_ID" \
+        -AppleLanguages "(en)" -AppleLocale en_US >/dev/null
+    capture_settled "$WORK/raw-$appearance.png"
+    cargo run -q -p xtask -- screenshot-compose \
+        --input "$WORK/raw-$appearance.png" --output "images/readme-hero-$appearance.png"
+done
+
+step "done: images/readme-hero-light.png, images/readme-hero-dark.png (seed digest $seed_digest)"
