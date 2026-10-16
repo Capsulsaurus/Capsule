@@ -314,7 +314,11 @@ pub struct OidcConfig {
 }
 
 /// Everything an operator gets to decide.
-#[derive(Debug, Clone)]
+///
+/// `Debug` is written by hand rather than derived: `Config` is logged at startup, and every
+/// secret it holds — the key material, and the credentials a connection URL can carry — is
+/// formatted redacted. See [`redacted_url`].
+#[derive(Clone)]
 pub struct Config {
     /// Where the process accepts connections.
     pub listen: SocketAddr,
@@ -362,6 +366,111 @@ pub struct Config {
     pub log_format: LogFormat,
     /// Which family of adapters to run on.
     pub backends: Backends,
+}
+
+/// How a held secret is formatted: whether one is set, never what it is.
+fn redacted<T>(secret: Option<&T>) -> &'static str {
+    if secret.is_some() {
+        "Some(<redacted>)"
+    } else {
+        "None"
+    }
+}
+
+/// `url` with every place a credential can ride redacted: the userinfo, and the whole query.
+///
+/// The query goes too because the Postgres and Redis URL grammars both accept a password there
+/// (`?password=…`), and telling a credential parameter from a harmless one is a list that would
+/// have to be kept current for every driver. What survives — scheme, host, port, path — is what
+/// an operator reading the startup dump needs to see which service the process reached.
+///
+/// Userinfo is everything before the **last** `@` in the whole value, not just in the
+/// authority: the value is logged before any driver parses it, and a malformed password holding
+/// a raw `/`, `?` or `#` would otherwise end the authority early and leak. An `@` in a path or
+/// query over-redacts the host instead, which costs a log reader far less than a credential.
+fn redacted_url(url: &str) -> String {
+    let (scheme, rest) = match url.split_once("://") {
+        Some((scheme, rest)) => (Some(scheme), rest),
+        None => (None, url.trim_start_matches('/')),
+    };
+    let (userinfo, rest) = match rest.rfind('@') {
+        Some(at) => ("<redacted>@", &rest[at + 1..]),
+        None => ("", rest),
+    };
+    let (rest, fragment) = match rest.split_once('#') {
+        Some((rest, _)) => (rest, "#<redacted>"),
+        None => (rest, ""),
+    };
+    let (rest, query) = match rest.split_once('?') {
+        Some((rest, _)) => (rest, "?<redacted>"),
+        None => (rest, ""),
+    };
+    match scheme {
+        Some(scheme) => format!("{scheme}://{userinfo}{rest}{query}{fragment}"),
+        None => format!("{userinfo}{rest}{query}{fragment}"),
+    }
+}
+
+impl fmt::Debug for Config {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Destructured, so a field added later is a compile error here until someone decides
+        // whether it is a secret.
+        let Self {
+            listen,
+            server_domain,
+            api_base_url,
+            federation_url,
+            blob_root,
+            database_url,
+            valkey_url,
+            signing_key_der,
+            sync_cursor_mac_key,
+            attestation_key_seed,
+            protocol_min,
+            protocol_max,
+            min_client_build,
+            grace_window,
+            lockout_window,
+            lockout_attempts,
+            oidc,
+            shutdown_timeout,
+            max_connections,
+            log_format,
+            backends,
+        } = self;
+        f.debug_struct("Config")
+            .field("listen", listen)
+            .field("server_domain", server_domain)
+            .field("api_base_url", api_base_url)
+            .field("federation_url", federation_url)
+            .field("blob_root", blob_root)
+            .field("database_url", &database_url.as_deref().map(redacted_url))
+            .field("valkey_url", &valkey_url.as_deref().map(redacted_url))
+            .field(
+                "signing_key_der",
+                &format_args!("{}", redacted(signing_key_der.as_ref())),
+            )
+            .field(
+                "sync_cursor_mac_key",
+                &format_args!("{}", redacted(sync_cursor_mac_key.as_ref())),
+            )
+            .field(
+                "attestation_key_seed",
+                &format_args!("{}", redacted(attestation_key_seed.as_ref())),
+            )
+            .field("protocol_min", protocol_min)
+            .field("protocol_max", protocol_max)
+            .field("min_client_build", min_client_build)
+            .field("grace_window", grace_window)
+            .field("lockout_window", lockout_window)
+            .field("lockout_attempts", lockout_attempts)
+            .field("oidc", oidc)
+            .field("shutdown_timeout", shutdown_timeout)
+            .field("max_connections", max_connections)
+            .field("log_format", log_format)
+            .field("backends", backends)
+            .finish()
+    }
 }
 
 impl Config {
@@ -927,9 +1036,10 @@ fn derive<const N: usize>(secret: &[u8], info: &[u8]) -> Option<[u8; N]> {
 mod tests {
     use std::collections::BTreeMap;
 
+    use base64::Engine as _;
     use jiff::SignedDuration;
 
-    use super::{Backends, Config, Demands, LogFormat, Overrides};
+    use super::{BASE64, Backends, Config, Demands, LogFormat, Overrides, redacted_url};
 
     /// A PKCS#8 v1 Ed25519 key, base64, from the retired deployment's own `.env.example`.
     ///
@@ -1516,9 +1626,78 @@ mod tests {
 
     #[test]
     fn a_secret_is_not_printed_by_debug() {
-        let config = Config::load(&serveable(), &memory(), Demands::Serve).expect("it loads");
-        let rendered = format!("{config:?}");
-        assert!(rendered.contains("<redacted>"), "{rendered}");
-        assert!(!rendered.contains("MC4CAQAwBQYDK2Vw"), "{rendered}");
+        let mut environment = serveable();
+        environment.insert(
+            "DATABASE_URL".to_owned(),
+            "postgres://capsule:pg-hunter2@db.internal:5432/capsule?password=pg-query-secret"
+                .to_owned(),
+        );
+        environment.insert(
+            "VALKEY_URL".to_owned(),
+            "rediss://default:vk-hunter2@cache.internal:6380/0".to_owned(),
+        );
+        let attestation_seed = [0x5a_u8; 32];
+        environment.insert(
+            "ATTESTATION_KEY_SEED".to_owned(),
+            BASE64.encode(attestation_seed),
+        );
+        let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+        let mac_key = config.sync_cursor_mac_key.expect("derived when unset");
+        let seed = config.attestation_key_seed.expect("configured");
+        for rendered in [format!("{config:?}"), format!("{config:#?}")] {
+            assert!(rendered.contains("<redacted>"), "{rendered}");
+            assert!(!rendered.contains("MC4CAQAwBQYDK2Vw"), "{rendered}");
+            for secret in [
+                "pg-hunter2",
+                "pg-query-secret",
+                "vk-hunter2",
+                "capsule:",
+                "default:",
+            ] {
+                assert!(!rendered.contains(secret), "{secret} leaked: {rendered}");
+            }
+            // The fixed-size keys print as byte lists under a derived `Debug`.
+            for key in [&mac_key[..], &seed[..]] {
+                assert!(!rendered.contains(&format!("{key:?}")), "{rendered}");
+            }
+            // What an operator needs to see which service was reached survives.
+            assert!(rendered.contains("db.internal:5432/capsule"), "{rendered}");
+            assert!(rendered.contains("cache.internal:6380/0"), "{rendered}");
+        }
+    }
+
+    #[test]
+    fn a_url_keeps_its_service_and_loses_every_credential() {
+        for (url, expected) in [
+            (
+                "postgres://user:pa@ss@db:5432/capsule?sslmode=require&password=x",
+                "postgres://<redacted>@db:5432/capsule?<redacted>",
+            ),
+            (
+                "redis://:secret@cache:6379",
+                "redis://<redacted>@cache:6379",
+            ),
+            ("redis://cache:6379/0", "redis://cache:6379/0"),
+            (
+                "redis+unix:///run/valkey.sock?pass=x",
+                "redis+unix:///run/valkey.sock?<redacted>",
+            ),
+            (
+                "postgres://u:p@db/c#frag",
+                "postgres://<redacted>@db/c#<redacted>",
+            ),
+            ("user:secret@db:5432", "<redacted>@db:5432"),
+            ("//user:secret@db:5432", "<redacted>@db:5432"),
+            // A malformed password still never reaches the log, whatever it holds.
+            ("postgres://u:p?ss@db/x", "postgres://<redacted>@db/x"),
+            ("postgres://u:p/ss@db/x", "postgres://<redacted>@db/x"),
+            ("postgres://u:p#ss@db/x", "postgres://<redacted>@db/x"),
+            (
+                "postgres://[::1]:5432/capsule",
+                "postgres://[::1]:5432/capsule",
+            ),
+        ] {
+            assert_eq!(redacted_url(url), expected, "{url}");
+        }
     }
 }
