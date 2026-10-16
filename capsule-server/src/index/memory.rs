@@ -18,8 +18,8 @@ use jiff::Timestamp;
 
 use super::{
     AssetIndex, AssetRow, AssetState, BlobOutcome, BlobRecord, BlobRef, FeedEntry, HoldOutcome,
-    IndexFuture, LifecycleOp, OpAction, OpOutcome, PendingAsset, Reservation, ServingHold,
-    entry_for, is_singular, set_singular,
+    IndexFuture, LifecycleOp, OpAction, OpOutcome, PendingAsset, PurgeOutcome, Reservation,
+    ServingHold, entry_for, is_singular, set_singular,
 };
 use crate::blob::ContentAddress;
 use crate::store::{AlbumId, AssetId, BlobRole, OwnerId};
@@ -501,12 +501,17 @@ impl AssetIndex for InMemoryAssetIndex {
         })
     }
 
-    fn purge<'a>(&'a self, asset: &'a AssetId) -> IndexFuture<'a, Option<AssetRow>> {
+    fn purge<'a>(&'a self, asset: &'a AssetId, now: Timestamp) -> IndexFuture<'a, PurgeOutcome> {
         Box::pin(async move {
             let mut inner = lock(&self.inner);
             let Some(row) = inner.rows.get_mut(asset) else {
-                return Ok(None);
+                return Ok(PurgeOutcome::Unknown);
             };
+            // Re-checked under the lock: the caller's listing may predate a restore.
+            if let Some(refusal) = super::purge_refusal(row, now) {
+                tracing::info!(%asset, state = ?row.state, ?refusal, "a purge skipped a row that is no longer purgeable");
+                return Ok(refusal);
+            }
             row.blobs.clear();
             // The chain goes with the bytes it describes. A purge is the end of the retention
             // window the user's own signed delete fixed, so there is nothing left to rebut with
@@ -514,7 +519,7 @@ impl AssetIndex for InMemoryAssetIndex {
             row.superseded.clear();
             let row = row.clone();
             tracing::info!(%asset, "purged a tombstoned asset's blob references");
-            Ok(Some(row))
+            Ok(PurgeOutcome::Purged(Box::new(row)))
         })
     }
 

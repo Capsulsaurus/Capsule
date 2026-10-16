@@ -609,3 +609,204 @@ async fn a_dry_run_credits_nothing() {
     assert!(report.credited.is_empty());
     assert_eq!(h.used("uploader").await, 16);
 }
+
+/// An index that lands a restore after the purge worker has listed its tombstones and before
+/// it purges them — the interleaving a real `TrashRestore` can produce, made deterministic.
+#[derive(Debug)]
+struct RestoresAfterListing {
+    inner: Arc<InMemoryAssetIndex>,
+    restore: std::sync::Mutex<Option<LifecycleOp>>,
+}
+
+impl AssetIndex for RestoresAfterListing {
+    fn reserve(&self, asset: PendingAsset) -> crate::index::IndexFuture<'_, Reservation> {
+        self.inner.reserve(asset)
+    }
+
+    fn read<'a>(
+        &'a self,
+        asset: &'a AssetId,
+    ) -> crate::index::IndexFuture<'a, Option<crate::index::AssetRow>> {
+        self.inner.read(asset)
+    }
+
+    fn record_blob<'a>(
+        &'a self,
+        asset: &'a AssetId,
+        blob: BlobRecord,
+    ) -> crate::index::IndexFuture<'a, crate::index::BlobOutcome> {
+        self.inner.record_blob(asset, blob)
+    }
+
+    fn tombstone<'a>(
+        &'a self,
+        asset: &'a AssetId,
+        at: Timestamp,
+    ) -> crate::index::IndexFuture<'a, Option<crate::index::AssetRow>> {
+        self.inner.tombstone(asset, at)
+    }
+
+    fn find_by_address<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        album: &'a AlbumId,
+        address: &'a ContentAddress,
+    ) -> crate::index::IndexFuture<'a, Option<AssetId>> {
+        self.inner.find_by_address(owner, album, address)
+    }
+
+    fn find_reference<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+    ) -> crate::index::IndexFuture<'a, Option<crate::index::BlobReference>> {
+        self.inner.find_reference(address)
+    }
+
+    fn apply_op(&self, op: LifecycleOp) -> crate::index::IndexFuture<'_, OpOutcome> {
+        self.inner.apply_op(op)
+    }
+
+    fn set_hold<'a>(
+        &'a self,
+        asset: &'a AssetId,
+        hold: Option<crate::index::ServingHold>,
+    ) -> crate::index::IndexFuture<'a, crate::index::HoldOutcome> {
+        self.inner.set_hold(asset, hold)
+    }
+
+    fn reference_count<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+    ) -> crate::index::IndexFuture<'a, u64> {
+        self.inner.reference_count(address)
+    }
+
+    fn rows<'a>(
+        &'a self,
+        after: Option<&'a AssetId>,
+        limit: usize,
+    ) -> crate::index::IndexFuture<'a, Vec<crate::index::AssetRow>> {
+        self.inner.rows(after, limit)
+    }
+
+    fn tombstoned(
+        &self,
+        limit: usize,
+    ) -> crate::index::IndexFuture<'_, Vec<crate::index::AssetRow>> {
+        Box::pin(async move {
+            let listed = self.inner.tombstoned(limit).await?;
+            let restore = self
+                .restore
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            if let Some(restore) = restore {
+                let outcome = self.inner.apply_op(restore).await?;
+                assert!(matches!(outcome, OpOutcome::Applied { .. }), "{outcome:?}");
+            }
+            Ok(listed)
+        })
+    }
+
+    fn purge<'a>(
+        &'a self,
+        asset: &'a AssetId,
+        now: Timestamp,
+    ) -> crate::index::IndexFuture<'a, crate::index::PurgeOutcome> {
+        self.inner.purge(asset, now)
+    }
+
+    fn feed_page<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        after: u64,
+        limit: usize,
+    ) -> crate::index::IndexFuture<'a, Vec<crate::index::FeedEntry>> {
+        self.inner.feed_page(owner, after, limit)
+    }
+
+    fn head_seq<'a>(&'a self, owner: &'a OwnerId) -> crate::index::IndexFuture<'a, u64> {
+        self.inner.head_seq(owner)
+    }
+
+    fn album_feed_page<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        album: &'a AlbumId,
+        after: u64,
+        limit: usize,
+    ) -> crate::index::IndexFuture<'a, Vec<crate::index::FeedEntry>> {
+        self.inner.album_feed_page(owner, album, after, limit)
+    }
+
+    fn album_head_seq<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        album: &'a AlbumId,
+    ) -> crate::index::IndexFuture<'a, u64> {
+        self.inner.album_head_seq(owner, album)
+    }
+}
+
+#[tokio::test]
+async fn a_restore_between_listing_and_purge_keeps_its_bytes() {
+    let h = Harness::new();
+    let held = h.publish("raced", b"restored while the purge ran").await;
+    h.delete("raced", Some(Timestamp::UNIX_EPOCH), 1).await;
+    h.clock.advance(days(1));
+
+    let id = AssetId::new("raced");
+    let before = h.index.read(&id).await.expect("read").expect("row");
+    let restore = LifecycleOp {
+        asset_id: id.clone(),
+        owner_id: OwnerId::new("gc-owner"),
+        album_id: AlbumId::new("gc-album"),
+        action: OpAction::TrashRestore,
+        manifest_hash: Hash32([2; 32]),
+        prior_provenance_hash: before.chain_head,
+        amk_version: 1,
+        provenance: h.store(b"raced-restore-manifest").await,
+        original: None,
+        metadata: None,
+        retention_until: None,
+        at: h.clock.now(),
+    };
+    let racing = Arc::new(RestoresAfterListing {
+        inner: h.index.clone(),
+        restore: std::sync::Mutex::new(Some(restore)),
+    });
+    let context = CollectionContext::new(
+        racing,
+        h.blobs.clone(),
+        h.marks.clone(),
+        h.quotas.clone(),
+        h.clock.clone(),
+        DEFAULT_GRACE_WINDOW,
+    );
+
+    let report = purge_expired(&context, Mode::Apply, 10)
+        .await
+        .expect("a pass");
+    assert!(
+        report.purged.is_empty(),
+        "the listing saw a tombstone, but the row was restored before the purge took its lock"
+    );
+
+    let row = h.index.read(&id).await.expect("read").expect("row");
+    assert_eq!(row.state, crate::index::AssetState::Visible);
+    assert!(
+        row.blobs.iter().any(|blob| blob.address == held),
+        "a restored asset keeps its references"
+    );
+
+    // Two collection passes a grace window apart: a cleared reference would be marked by the
+    // first and swept by the second.
+    collect(&h.context, Mode::Apply).await.expect("a pass");
+    h.clock.advance(days(2));
+    let report = collect(&h.context, Mode::Apply).await.expect("a pass");
+    assert!(!report.swept.contains(&held), "{report:?}");
+    assert!(
+        h.blobs.stat(&held).await.expect("stat").is_some(),
+        "the restored asset's bytes are still on disk"
+    );
+}

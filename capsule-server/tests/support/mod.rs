@@ -74,7 +74,7 @@ use capsule_server::gc::memory::InMemoryCollection;
 use capsule_server::index::memory::InMemoryAssetIndex;
 use capsule_server::index::{
     AssetIndex, AssetRow, BlobOutcome, BlobRecord, FeedEntry, HoldOutcome, IndexFuture,
-    LifecycleOp, OpOutcome, PendingAsset, Reservation, ServingHold,
+    LifecycleOp, OpOutcome, PendingAsset, PurgeOutcome, Reservation, ServingHold,
 };
 use capsule_server::membership::{
     InMemoryMembership, MemberRole, Membership, MembershipContext, MembershipStore, RosterOutcome,
@@ -2684,11 +2684,11 @@ impl AssetIndex for SwitchableIndex {
         self.inner.tombstoned(limit)
     }
 
-    fn purge<'a>(&'a self, asset: &'a AssetId) -> IndexFuture<'a, Option<AssetRow>> {
+    fn purge<'a>(&'a self, asset: &'a AssetId, now: Timestamp) -> IndexFuture<'a, PurgeOutcome> {
         if self.is_down() {
             return Box::pin(async { Self::refuse() });
         }
-        self.inner.purge(asset)
+        self.inner.purge(asset, now)
     }
 
     fn find_reference<'a>(

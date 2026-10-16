@@ -32,7 +32,7 @@ use jiff::Timestamp;
 
 use super::{
     AssetIndex, AssetState, BlobOutcome, BlobRecord, ChangeKind, HoldOutcome, LifecycleOp,
-    OpAction, OpOutcome, PendingAsset, Reservation, ServingHold,
+    OpAction, OpOutcome, PendingAsset, PurgeOutcome, Reservation, ServingHold,
 };
 use crate::blob::ContentAddress;
 use crate::blob::address::CONTENT_ADDRESS_LEN;
@@ -1177,11 +1177,20 @@ pub async fn a_lifecycle_write_retains_the_manifest_it_supersedes(index: &dyn As
     );
 
     // And the retention ends where the user's own signed delete said it would.
-    ok(
-        index.tombstone(&asset, Timestamp::UNIX_EPOCH).await,
-        "tombstone",
+    let mut delete = op(
+        "op-keep",
+        1,
+        OpAction::Delete,
+        head_of(index, &asset).await,
+        manifest(33),
     );
-    ok(index.purge(&asset).await, "purge");
+    delete.provenance = address("op-keep-prov-4");
+    delete.retention_until = Some(Timestamp::UNIX_EPOCH);
+    ok(index.apply_op(delete).await, "delete");
+    assert!(matches!(
+        ok(index.purge(&asset, Timestamp::UNIX_EPOCH).await, "purge"),
+        PurgeOutcome::Purged(_)
+    ));
     assert_eq!(
         ok(index.reference_count(&first).await, "count after a purge"),
         0,
@@ -1396,7 +1405,11 @@ pub async fn purging_drops_the_references_and_keeps_the_tombstone(index: &dyn As
          rather than from a server policy",
     );
 
-    let purged = ok(index.purge(&asset).await, "purge").expect("the row exists");
+    let PurgeOutcome::Purged(purged) =
+        ok(index.purge(&asset, Timestamp::UNIX_EPOCH).await, "purge")
+    else {
+        panic!("a tombstone past its signed floor is purged");
+    };
     assert!(purged.blobs.is_empty());
     assert_eq!(
         purged.state,
@@ -1406,10 +1419,112 @@ pub async fn purging_drops_the_references_and_keeps_the_tombstone(index: &dyn As
     );
     assert_eq!(
         ok(
-            index.purge(&AssetId::new("purge-no-such-asset")).await,
+            index
+                .purge(&AssetId::new("purge-no-such-asset"), Timestamp::UNIX_EPOCH)
+                .await,
             "purge nothing"
         ),
-        None,
+        PurgeOutcome::Unknown,
+    );
+}
+
+/// A purge re-checks, under the row's lock, that the row is still purgeable.
+///
+/// The worker lists tombstones from a snapshot and purges them one at a time. A restore that
+/// commits in between must keep its bytes, so the index — not the listing — decides; and a
+/// tombstone whose signed floor is absent or not yet reached is never purged at all.
+pub async fn a_purge_rechecks_state_and_retention_under_the_lock(index: &dyn AssetIndex) {
+    let (asset, _) = publish(index, "purge-race", 1).await;
+    let head = head_of(index, &asset).await;
+    let mut delete = op("purge-race", 1, OpAction::Delete, head, manifest(91));
+    delete.provenance = address("purge-race-delete");
+    delete.retention_until = Some(Timestamp::UNIX_EPOCH);
+    let deleted = ok(index.apply_op(delete).await, "delete");
+    assert!(matches!(deleted, OpOutcome::Applied { .. }), "{deleted:?}");
+
+    // The worker's listing, taken before the restore.
+    let listed = ok(index.tombstoned(10_000).await, "list tombstones");
+    assert!(listed.iter().any(|row| row.asset_id == asset));
+
+    // The restore commits between the listing and the purge.
+    let mut restore = op(
+        "purge-race",
+        1,
+        OpAction::TrashRestore,
+        head_of(index, &asset).await,
+        manifest(92),
+    );
+    restore.provenance = address("purge-race-restore");
+    let restored = ok(index.apply_op(restore).await, "restore");
+    assert!(
+        matches!(restored, OpOutcome::Applied { .. }),
+        "{restored:?}"
+    );
+    let before = ok(index.read(&asset).await, "read").expect("the row exists");
+    assert_eq!(before.state, AssetState::Visible);
+
+    let later = Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_hours(24 * 3650);
+    assert_eq!(
+        ok(index.purge(&asset, later).await, "purge a restored row"),
+        PurgeOutcome::NotTombstoned,
+    );
+    let after = ok(index.read(&asset).await, "read").expect("the row exists");
+    assert_eq!(
+        after.blobs, before.blobs,
+        "a restored asset keeps its bytes"
+    );
+    assert_eq!(after.superseded, before.superseded);
+    for blob in &before.blobs {
+        assert!(
+            ok(index.reference_count(&blob.address).await, "count") > 0,
+            "{} is still referenced, so no collection can sweep it",
+            blob.address
+        );
+    }
+
+    // A tombstone still inside its floor, and one with no floor, are retained.
+    let (inside, _) = publish(index, "purge-floor", 1).await;
+    let mut delete = op(
+        "purge-floor",
+        1,
+        OpAction::Delete,
+        head_of(index, &inside).await,
+        manifest(93),
+    );
+    delete.retention_until = Some(later);
+    let deleted = ok(index.apply_op(delete).await, "delete");
+    assert!(matches!(deleted, OpOutcome::Applied { .. }), "{deleted:?}");
+    assert_eq!(
+        ok(
+            index.purge(&inside, Timestamp::UNIX_EPOCH).await,
+            "purge early"
+        ),
+        PurgeOutcome::Retained,
+    );
+    assert!(
+        !ok(index.read(&inside).await, "read")
+            .expect("row")
+            .blobs
+            .is_empty()
+    );
+
+    let (floorless, _) = publish(index, "purge-floorless", 1).await;
+    ok(
+        index.tombstone(&floorless, Timestamp::UNIX_EPOCH).await,
+        "tombstone",
+    );
+    assert_eq!(
+        ok(
+            index.purge(&floorless, later).await,
+            "purge a floorless tombstone"
+        ),
+        PurgeOutcome::Retained,
+    );
+    assert!(
+        !ok(index.read(&floorless).await, "read")
+            .expect("row")
+            .blobs
+            .is_empty()
     );
 }
 
@@ -1822,6 +1937,7 @@ pub async fn run_all(index: &dyn AssetIndex) {
     a_lifecycle_write_retains_the_manifest_it_supersedes(index).await;
     references_are_counted_from_the_rows_that_name_them(index).await;
     purging_drops_the_references_and_keeps_the_tombstone(index).await;
+    a_purge_rechecks_state_and_retention_under_the_lock(index).await;
     a_restore_clears_the_retention_floor(index).await;
     a_serving_hold_is_placed_reported_and_lifted(index).await;
     holding_an_unknown_asset_is_not_found(index).await;

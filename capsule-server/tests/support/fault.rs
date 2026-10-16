@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use capsule_server::blob::ContentAddress;
 use capsule_server::index::{
     AssetIndex, AssetRow, BlobOutcome, BlobRecord, BlobReference, FeedEntry, HoldOutcome,
-    IndexFuture, LifecycleOp, OpOutcome, PendingAsset, Reservation, ServingHold,
+    IndexFuture, LifecycleOp, OpOutcome, PendingAsset, PurgeOutcome, Reservation, ServingHold,
 };
 use capsule_server::store::{AlbumId, AssetId, OwnerId, StoreError};
 use jiff::Timestamp;
@@ -150,8 +150,8 @@ impl AssetIndex for CrashBeforeCommit {
         self.inner.tombstoned(limit)
     }
 
-    fn purge<'a>(&'a self, asset: &'a AssetId) -> IndexFuture<'a, Option<AssetRow>> {
-        self.inner.purge(asset)
+    fn purge<'a>(&'a self, asset: &'a AssetId, now: Timestamp) -> IndexFuture<'a, PurgeOutcome> {
+        self.inner.purge(asset, now)
     }
 
     fn feed_page<'a>(

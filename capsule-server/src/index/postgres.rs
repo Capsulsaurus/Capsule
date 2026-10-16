@@ -41,8 +41,8 @@ use sea_orm::{
 
 use super::{
     AssetIndex, AssetRow, AssetState, BlobOutcome, BlobRecord, BlobRef, BlobReference, FeedEntry,
-    HoldOutcome, IndexFuture, LifecycleOp, OpAction, OpOutcome, PendingAsset, Reservation,
-    ServingHold, entry_for, is_singular, set_singular,
+    HoldOutcome, IndexFuture, LifecycleOp, OpAction, OpOutcome, PendingAsset, PurgeOutcome,
+    Reservation, ServingHold, entry_for, is_singular, set_singular,
 };
 use crate::blob::ContentAddress;
 use crate::postgres::error::Port;
@@ -1111,12 +1111,18 @@ impl AssetIndex for PostgresAssetIndex {
         })
     }
 
-    fn purge<'a>(&'a self, asset: &'a AssetId) -> IndexFuture<'a, Option<AssetRow>> {
+    fn purge<'a>(&'a self, asset: &'a AssetId, now: Timestamp) -> IndexFuture<'a, PurgeOutcome> {
         Box::pin(async move {
             let transaction = begin(&self.connection).await?;
             let Some(mut row) = hydrate_locked(&transaction, asset).await? else {
-                return Ok(None);
+                return Ok(PurgeOutcome::Unknown);
             };
+            // Re-checked under `FOR UPDATE`: the caller's listing came from an earlier snapshot,
+            // and a restore committed since then must keep its bytes.
+            if let Some(refusal) = super::purge_refusal(&row, now) {
+                tracing::info!(%asset, state = ?row.state, ?refusal, "a purge skipped a row that is no longer purgeable");
+                return Ok(refusal);
+            }
             // The row **stays**. A client that has not synced since the delete still has to
             // learn about it, so removing the row would make the deletion invisible rather than
             // final. The chain goes with the bytes it describes: a purge is the end of the
@@ -1126,7 +1132,7 @@ impl AssetIndex for PostgresAssetIndex {
             persist(&transaction, &row).await?;
             commit(transaction).await?;
             tracing::info!(%asset, "purged a tombstoned asset's blob references");
-            Ok(Some(row))
+            Ok(PurgeOutcome::Purged(Box::new(row)))
         })
     }
 

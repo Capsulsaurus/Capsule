@@ -496,6 +496,37 @@ pub struct LifecycleOp {
     pub at: Timestamp,
 }
 
+/// What a retention purge did to one row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PurgeOutcome {
+    /// The row was a tombstone past its signed retention floor; its references are gone.
+    Purged(Box<AssetRow>),
+    /// The row is no longer a tombstone — a restore landed after it was listed. Nothing changed.
+    NotTombstoned,
+    /// The row is a tombstone whose signed retention floor is absent or not yet reached at the
+    /// purge's `now`. Nothing changed.
+    Retained,
+    /// No row with that id.
+    Unknown,
+}
+
+/// Why `row` may not be purged at `now`, or `None` when it may.
+///
+/// The one definition both adapters re-check under the row lock, and the one the purge worker
+/// selects with, so the listing and the write cannot disagree about what "purgeable" means.
+/// Absent retention is never "immediately": that reading would purge exactly the assets whose
+/// delete manifest the server failed to project a field out of.
+#[must_use]
+pub fn purge_refusal(row: &AssetRow, now: Timestamp) -> Option<PurgeOutcome> {
+    if row.state != AssetState::Tombstoned {
+        return Some(PurgeOutcome::NotTombstoned);
+    }
+    match row.retention_until {
+        Some(retention_until) if now >= retention_until => None,
+        _ => Some(PurgeOutcome::Retained),
+    }
+}
+
 /// What applying a lifecycle write did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpOutcome {
@@ -692,13 +723,19 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
     /// deletions rather than revisiting the same page.
     fn tombstoned(&self, limit: usize) -> IndexFuture<'_, Vec<AssetRow>>;
 
-    /// Drop `asset`'s blob references, keeping the tombstone.
+    /// Drop `asset`'s blob references, keeping the tombstone — if it is still purgeable at
+    /// `now`.
     ///
     /// The row **stays**. A client that has not synced since the delete still has to learn
     /// about it, so removing the row would make the deletion invisible rather than final —
     /// and the feed entry a tombstone produces already carries no byte references, so the
     /// purge changes nothing a reader can see.
-    fn purge<'a>(&'a self, asset: &'a AssetId) -> IndexFuture<'a, Option<AssetRow>>;
+    ///
+    /// Purgeability is **re-checked under the row's lock** ([`purge_refusal`]), not taken from
+    /// the [`tombstoned`](Self::tombstoned) listing the caller worked from: a `TrashRestore`
+    /// that commits between the two would otherwise have its blob references cleared and its
+    /// bytes swept by the next collection.
+    fn purge<'a>(&'a self, asset: &'a AssetId, now: Timestamp) -> IndexFuture<'a, PurgeOutcome>;
 
     /// Up to `limit` feed entries for `owner` after sequence number `after`, in sequence order.
     ///
