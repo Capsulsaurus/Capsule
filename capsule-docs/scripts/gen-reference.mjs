@@ -308,7 +308,26 @@ function prose(text) {
  * @returns {string}
  */
 function escapeCell(text) {
-    return text.replace(/\|/g, '\\|').replace(/</g, '&lt;').trim();
+    return escapePipes(text).replace(/</g, '&lt;').trim();
+}
+
+/**
+ * Escape every pipe in `text` that is not already escaped, so none of them opens a column.
+ *
+ * A backslash escape is read as the pair it is — a backslash and the character after it —
+ * and passed through whole, exactly as the GFM table tokenizer reads it. Escaping a bare `|`
+ * alone is not enough: in `a\|b` the tokenizer pairs the existing backslash with the one the
+ * escape adds, `a\\|b` reads as an escaped backslash followed by a column separator, and the
+ * row gains a cell. Escaping every backslash instead would be wrong the other way: artifact
+ * prose is Markdown, so its `\*` and `\|` are the author's escapes and must survive.
+ *
+ * @param {string} text Markdown cell content.
+ * @returns {string}
+ */
+function escapePipes(text) {
+    return text.replace(/\\[\s\S]|\|/g, (token) =>
+        token === '|' ? '\\|' : token,
+    );
 }
 
 /**
@@ -951,7 +970,7 @@ function schemaLink(documented, schema) {
     // A nullable type renders as `string | null`, and every use of this is a table cell, so
     // the separator has to be escaped or it opens a fourth column and shifts the row.
     // GFM requires the escape inside a code span too, and renders it as a bare pipe.
-    const shown = rendered.replace(/\|/g, '\\|');
+    const shown = escapePipes(rendered);
     return documented.includes(bare)
         ? `[\`${shown}\`](#${bare.toLowerCase()})`
         : `\`${shown}\``;

@@ -245,6 +245,21 @@ const MINIMAL_OPENAPI = {
     },
 };
 
+/**
+ * The number of `|`-separated segments in a table row, read the way the GFM table tokenizer
+ * reads it: a backslash escape is a pair, so `\|` is an escaped pipe but `\\|` is an escaped
+ * backslash followed by a column separator.
+ *
+ * @param {string} line
+ * @returns {number}
+ */
+function columnsOf(line) {
+    return (
+        [...line.matchAll(/\\[\s\S]|\|/g)].filter(([token]) => token === '|')
+            .length + 1
+    );
+}
+
 describe('demoteHeadings', () => {
     // `openapi.json` really does carry `# Two statuses, because there are two outcomes`
     // inside an operation description. Rendered as-is it injects a second H1 into a page
@@ -450,8 +465,21 @@ describe('renderCliPage', () => {
         surface.subcommands[0].args[2].help = 'takes a | and a <tag>';
         for (const line of renderCliPage(surface).split('\n')) {
             if (!line.startsWith('|')) continue;
-            const columns = line.replace(/\\\|/g, '').split('|').length;
-            expect(columns).toBe(4);
+            expect(columnsOf(line)).toBe(4);
+        }
+    });
+
+    // A pipe the help text already escapes must not gain a second backslash: `a\\|b` is an
+    // escaped backslash and a column separator, which shifts every cell to its right.
+    it('keeps an already-escaped pipe and a lone backslash intact', () => {
+        const surface = structuredClone(MINIMAL_CLI);
+        surface.subcommands[0].args[2].help = 'matches a\\|b, or c \\ d';
+        const page = renderCliPage(surface);
+        expect(page).toContain('matches a\\|b, or c \\ d');
+        expect(page).not.toContain('a\\\\|b');
+        for (const line of page.split('\n')) {
+            if (!line.startsWith('|')) continue;
+            expect(columnsOf(line)).toBe(4);
         }
     });
 
@@ -931,8 +959,37 @@ describe('renderApiPage', () => {
         for (const line of page().split('\n')) {
             if (!line.startsWith('|')) continue;
             // A cell may legitimately contain an escaped pipe; an unescaped one is a column.
-            const columns = line.replace(/\\\|/g, '').split('|').length;
-            expect(columns).toBeLessThanOrEqual(6);
+            expect(columnsOf(line)).toBeLessThanOrEqual(6);
+        }
+    });
+
+    // Both escaping paths, fed a backslash that already precedes a pipe: a description cell,
+    // and a type rendered into a code span. Escaping the pipe again would turn `\|` into
+    // `\\|` — an escaped backslash, then a column separator.
+    it('keeps a backslash before a pipe from opening a column', () => {
+        const document = structuredClone(MINIMAL_OPENAPI);
+        const properties = document.components.schemas.LoginRequest.properties;
+        properties.email.description = 'Matches a\\|b, and c \\ d.';
+        properties.odd = { $ref: '#/components/schemas/Odd\\|Name' };
+        const rendered = renderApiPage(
+            group,
+            bucketOperations(document).get('auth'),
+            document,
+        );
+        expect(rendered).toContain('Matches a\\|b, and c \\ d.');
+        expect(rendered).toContain('[`Odd\\|Name`]');
+        expect(rendered).not.toContain('\\\\|');
+        const rows = rendered
+            .split('\n')
+            .filter(
+                (line) =>
+                    line.startsWith('|') &&
+                    (line.includes('a\\|b') || line.includes('Odd')),
+            );
+        expect(rows.length).toBeGreaterThanOrEqual(2);
+        for (const line of rows) {
+            // The property table: field, type, description.
+            expect(columnsOf(line)).toBe(5);
         }
     });
 
