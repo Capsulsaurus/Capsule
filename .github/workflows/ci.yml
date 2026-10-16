@@ -461,7 +461,11 @@ jobs:
   kotlin:
     name: Kotlin (ktlint + detekt)
     needs: changes
-    if: ${{ needs.changes.outputs.kotlin == 'true' }}
+    # TODO(track:deferred): re-enable when mobile resumes — see #389 (Android) and #391–#393 (Apple).
+    # Mobile apps are deferred while the server and CLI are stabilized. `false &&` disables the
+    # job (a bare `if: false` trips actionlint's constant-condition check); deleting it, and
+    # re-adding this job to `required`, re-enables the gate.
+    if: ${{ false && needs.changes.outputs.kotlin == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -492,7 +496,11 @@ jobs:
   swift:
     name: Swift (format + lint + unit tests on macOS/iOS/iPadOS + iPhone UI sweep)
     needs: changes
-    if: ${{ needs.changes.outputs.swift == 'true' }}
+    # TODO(track:deferred): re-enable when mobile resumes — see #389 (Android) and #391–#393 (Apple).
+    # Mobile apps are deferred while the server and CLI are stabilized. `false &&` disables the
+    # job (a bare `if: false` trips actionlint's constant-condition check); deleting it, and
+    # re-adding this job to `required`, re-enables the gate.
+    if: ${{ false && needs.changes.outputs.swift == 'true' }}
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
@@ -516,14 +524,16 @@ jobs:
   # Single aggregated status check. Mark THIS ("CI / required") as the required
   # check in branch protection — path-filtered jobs report "skipped", which this
   # treats as a pass. Every job in `needs` is verified below: the loop covers the
-  # eleven gates (`rust-test` included — it became blocking with `S-C59`, see the
+  # nine gates (`rust-test` included — it became blocking with `S-C59`, see the
   # note on that job), and `changes` is checked ahead of it under a stricter rule,
   # because "skipped" is only trustworthy when the filter that skipped it ran.
   # A job in `needs` but absent from both checks is a gate that cannot fail.
   required:
     name: required
     if: always()
-    needs: [changes, commit-lint, rust, rust-test, rust-cross, web, docs, docs-truth, vision, markdown, kotlin, swift]
+    # TODO(track:deferred): re-add `kotlin` and `swift` here and to the loop below when mobile
+    # resumes — see #389 (Android) and #391–#393 (Apple). Both jobs are disabled (`if: false`).
+    needs: [changes, commit-lint, rust, rust-test, rust-cross, web, docs, docs-truth, vision, markdown]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs succeeded
@@ -545,7 +555,7 @@ jobs:
                    "${{ needs.rust-test.result }}" "${{ needs.rust-cross.result }}" \
                    "${{ needs.web.result }}" \
                    "${{ needs.docs.result }}" "${{ needs.docs-truth.result }}" "${{ needs.vision.result }}" \
-                   "${{ needs.markdown.result }}" "${{ needs.kotlin.result }}" "${{ needs.swift.result }}"; do
+                   "${{ needs.markdown.result }}"; do
             if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
               echo "A required job did not pass (result: $r)."
               exit 1

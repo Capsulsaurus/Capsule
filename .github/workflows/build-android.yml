@@ -1,23 +1,26 @@
 name: Build Android app
 
 on:
-  push:
-    branches: [master]
-  pull_request:
-    paths:
-      - "capsule-android/**"
-      - "capsule-core-kotlin/**"
-      - "capsule-core/**"
-      - "capsule-sdk/**"
-      - "**/*.gradle.kts"
-      - "gradle.properties"
-      - "gradle/**"
-      - "gradlew"
-      - "settings.gradle.kts"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain.toml"
-      - ".github/workflows/build-android.yml"
+  # TODO(track:deferred): re-enable push/PR triggers when mobile resumes — see #389 (Android) and #391–#393 (Apple)
+  # Mobile apps are deferred while the server and CLI are stabilized, so this workflow runs
+  # on workflow_dispatch only. Re-enabling is uncommenting the triggers below.
+  # push:
+  #   branches: [master]
+  # pull_request:
+  #   paths:
+  #     - "capsule-android/**"
+  #     - "capsule-core-kotlin/**"
+  #     - "capsule-core/**"
+  #     - "capsule-sdk/**"
+  #     - "**/*.gradle.kts"
+  #     - "gradle.properties"
+  #     - "gradle/**"
+  #     - "gradlew"
+  #     - "settings.gradle.kts"
+  #     - "Cargo.toml"
+  #     - "Cargo.lock"
+  #     - "rust-toolchain.toml"
+  #     - ".github/workflows/build-android.yml"
   # Manual trigger for the hardware-backed StrongBox lane (self-hosted; see below).
   workflow_dispatch:
 

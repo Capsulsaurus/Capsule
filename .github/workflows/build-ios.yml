@@ -1,25 +1,31 @@
 name: Build Apple client (Rust-backed lane)
 
 on:
-  push:
-    branches: [master]
-  pull_request:
-    paths:
-      - "capsule-swift/**"
-      - "capsule-core/**"
-      - "capsule-core-ffi/**"
-      # The umbrella staticlib carries capsule-sdk's uniffi surface (S-F3/S-D9).
-      - "capsule-sdk/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain.toml"
-      - ".github/workflows/build-ios.yml"
+  # TODO(track:deferred): re-enable push/PR triggers when mobile resumes — see #389 (Android) and #391–#393 (Apple)
+  # Mobile apps are deferred while the server and CLI are stabilized, so this workflow runs
+  # on workflow_dispatch only. Re-enabling is uncommenting the triggers below.
+  # push:
+  #   branches: [master]
+  # pull_request:
+  #   paths:
+  #     - "capsule-swift/**"
+  #     - "capsule-core/**"
+  #     - "capsule-core-ffi/**"
+  #     # The umbrella staticlib carries capsule-sdk's uniffi surface (S-F3/S-D9).
+  #     - "capsule-sdk/**"
+  #     - "Cargo.toml"
+  #     - "Cargo.lock"
+  #     - "rust-toolchain.toml"
+  #     - ".github/workflows/build-ios.yml"
   # Manual trigger for the hardware-backed Secure Enclave lane (self-hosted; see below).
   workflow_dispatch:
 
 concurrency:
   group: build-ios-${{ github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
 
 # mise is only a tool installer / exec shim here; never let it implicitly install the
 # root mise.toml [tools]. The cargo-built convco/cargo-nextest in particular build from
