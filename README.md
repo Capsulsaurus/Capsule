@@ -14,7 +14,10 @@ Open-source, federated, E2E encrypted photo management and sharing service built
 > Alpha status: The `master` branch is the main development branch. Releases on GitHub will be made once: 1. Features/APIs have been stabilized internally; 2. Internal testing group have tested sufficiently.
 >
 > Project Update (April 2026): We are porting to E2E encryption and offline-first philosophy so it will be another few months before we reach alpha again.
+>
 > Project Update (June 2026): Developer is still working actively but only during spare time. Lots of new prerequisite work on establishing portable, pure Rust libraries in separate repos have been blocking (e.g. image encoding/decoding, metadata processing, geocoordinate logic, on-device ML models finetuned for use cases). However, fleshing out these missing building blocks in the Rust ecosystem is paramount to a solid product.
+>
+> Project Update (Oct 2026): Bidirectional transfer protocol and cryptographic/storage layers are nearing stabilization. A number of notable updates have been made after experiments stress testing high-latency, lossy connections.
 
 ## Features
 
