@@ -229,8 +229,10 @@ impl StorageVerdictWire {
     }
 }
 
-/// The receipt fetch response (both `GET /upload/{id}/receipt` and `GET /assets/{id}/receipts`
-/// carry `receipt_cbor` as base64 of the full signed canonical-CBOR receipt).
+/// One entry of the `GET /assets/{id}/receipts` chain: `receipt_cbor` is base64 of the full
+/// signed canonical-CBOR receipt (the route's other fields are a reading of those bytes and are
+/// not trusted). `GET /upload/{id}/receipt` does **not** use this shape — it serves the raw
+/// `application/cbor` bytes; see [`StorageVerifyClient::fetch_receipt`].
 #[derive(Deserialize)]
 struct ReceiptWire {
     receipt_cbor: String,
@@ -304,16 +306,22 @@ impl StorageVerifyClient {
     /// `GET /upload/{id}/receipt`: the session-window custody-receipt fetch (pairs with lost-ACK
     /// recovery). Returns the decoded, signed receipt — verify it with
     /// [`capsule_core::library::verify_receipt`] before trusting it.
+    ///
+    /// The server serves the receipt as `application/cbor`: the body **is** the signed canonical
+    /// encoding, so it is decoded from the bytes as they arrived and never round-trips through
+    /// a JSON or base64 projection that could hand the verifier bytes the signature does not
+    /// cover.
     #[instrument(skip_all, fields(%upload_id))]
     pub async fn fetch_receipt(&self, upload_id: Uuid) -> Result<CustodyReceipt, VerifyError> {
         let url = format!("{}/upload/{upload_id}/receipt", self.transport.base_url);
         let response = self.transport.send(|http| http.get(&url)).await?;
         let response = check_status(response).await?;
-        let wire: ReceiptWire = response
-            .json()
+        let bytes = response
+            .bytes()
             .await
-            .map_err(|e| VerifyError::Malformed(e.to_string()))?;
-        decode_receipt(&wire.receipt_cbor)
+            .map_err(|e| VerifyError::Transport(e.to_string()))?;
+        debug!(len = bytes.len(), "custody receipt bytes received");
+        decode_receipt_cbor(&bytes)
     }
 
     /// `GET /assets/{asset_id}/receipts`: the durable, permanent receipt log for an asset, in
@@ -332,7 +340,7 @@ impl StorageVerifyClient {
             .map_err(|e| VerifyError::Malformed(e.to_string()))?;
         wire.receipts
             .iter()
-            .map(|r| decode_receipt(&r.receipt_cbor))
+            .map(|r| decode_receipt_b64(&r.receipt_cbor))
             .collect()
     }
 
@@ -365,11 +373,17 @@ impl StorageVerifyClient {
     }
 }
 
-fn decode_receipt(b64: &str) -> Result<CustodyReceipt, VerifyError> {
+/// Decode a receipt carried as base64 inside a JSON document (the asset-receipts chain).
+fn decode_receipt_b64(b64: &str) -> Result<CustodyReceipt, VerifyError> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(b64.as_bytes())
         .map_err(|e| VerifyError::Malformed(format!("receipt base64: {e}")))?;
-    CustodyReceipt::from_canonical_cbor(&bytes)
+    decode_receipt_cbor(&bytes)
+}
+
+/// Decode the signed canonical-CBOR receipt bytes.
+fn decode_receipt_cbor(bytes: &[u8]) -> Result<CustodyReceipt, VerifyError> {
+    CustodyReceipt::from_canonical_cbor(bytes)
         .map_err(|e| VerifyError::Malformed(format!("receipt cbor: {e}")))
 }
 
