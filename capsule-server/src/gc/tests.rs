@@ -810,3 +810,130 @@ async fn a_restore_between_listing_and_purge_keeps_its_bytes() {
         "the restored asset's bytes are still on disk"
     );
 }
+
+/// A [`ProgressSweep`] that records the instant of every sweep, or fails when told to.
+#[derive(Debug, Default)]
+struct RecordingSweep {
+    swept_at: std::sync::Mutex<Vec<Timestamp>>,
+    fails: bool,
+}
+
+impl ProgressSweep for RecordingSweep {
+    fn sweep_progress(&self, now: Timestamp) -> StoreFuture<'_, usize> {
+        Box::pin(async move {
+            if self.fails {
+                return Err(StoreError::Unavailable {
+                    store: "uploads",
+                    detail: "the session store is down".to_owned(),
+                });
+            }
+            self.swept_at
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(now);
+            Ok(2)
+        })
+    }
+}
+
+impl RecordingSweep {
+    fn sweeps(&self) -> Vec<Timestamp> {
+        self.swept_at
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
+#[tokio::test]
+async fn an_applied_pass_sweeps_the_upload_progress_view_at_its_own_instant() {
+    let h = Harness::new();
+    let sweep = Arc::new(RecordingSweep::default());
+    let context = h.context.clone().with_progress_sweep(sweep.clone());
+    h.clock.advance(days(3));
+
+    collect(&context, Mode::Apply).await.expect("a pass");
+
+    assert_eq!(
+        sweep.sweeps(),
+        vec![h.clock.now()],
+        "one sweep per applied pass, as of the pass's clock"
+    );
+}
+
+#[tokio::test]
+async fn a_dry_run_leaves_the_upload_progress_view_unswept() {
+    let h = Harness::new();
+    let sweep = Arc::new(RecordingSweep::default());
+    let context = h.context.clone().with_progress_sweep(sweep.clone());
+
+    collect(&context, Mode::DryRun).await.expect("a pass");
+
+    assert!(
+        sweep.sweeps().is_empty(),
+        "the sweep removes entries, and a dry run removes nothing"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_sweep_fails_the_pass_after_the_blobs_were_decided() {
+    let h = Harness::new();
+    let orphan = h.store(b"an orphan the pass still marks").await;
+    let sweep = Arc::new(RecordingSweep {
+        fails: true,
+        ..RecordingSweep::default()
+    });
+    let context = h.context.clone().with_progress_sweep(sweep);
+
+    let error = collect(&context, Mode::Apply)
+        .await
+        .expect_err("a session store that cannot answer fails the pass");
+
+    assert!(matches!(error, StoreError::Unavailable { .. }), "{error:?}");
+    assert!(
+        h.marks
+            .marked_since(&orphan)
+            .await
+            .expect("a lookup")
+            .is_some(),
+        "the collection ran to the end before the sweep was tried"
+    );
+}
+
+#[tokio::test]
+async fn the_upload_session_store_sweeps_through_its_pressure_listing() {
+    // The production implementation of the port: an unbounded limit at a horizon of `now` must
+    // reach every evictable session, which the in-memory double answers in full.
+    let clock = StepClock::new();
+    let uploads: Arc<dyn crate::store::UploadSessionStore> =
+        Arc::new(crate::store::memory::InMemoryUploadSessions::with_default_ttl(clock.clone()));
+    for n in 0..3 {
+        uploads
+            .open(crate::store::upload::UploadSessionRecord {
+                upload_id: crate::store::UploadId::new(format!("gc-sweep-{n}")),
+                asset_id: AssetId::new(format!("gc-sweep-asset-{n}")),
+                owner_id: OwnerId::new("gc-owner"),
+                upload_user_id: crate::store::UserId::new("gc-uploader"),
+                album_id: None,
+                content_type: None,
+                expected_hash: format!("{n:064x}"),
+                crypto_suite_id: 1,
+                protocol_version: "2026-08-29".to_owned(),
+                blob_role: BlobRole::Original,
+                intent_id: None,
+                manifest_envelope: "{}".to_owned(),
+                received_bytes: 0,
+                total_size: 1,
+                status: crate::store::upload::UploadSessionStatus::Pending,
+                created_at: clock.now(),
+                last_progress_at: clock.now(),
+            })
+            .await
+            .expect("the session opens");
+    }
+    clock.advance(SignedDuration::from_secs(1));
+
+    let evictable = uploads.sweep_progress(clock.now()).await.expect("a sweep");
+
+    assert_eq!(evictable, 3);
+}

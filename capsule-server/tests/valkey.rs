@@ -246,6 +246,76 @@ async fn a_logically_expired_record_is_dead_but_left_for_the_collector() {
         .expect("cleans up");
 }
 
+/// The collector's sweep drops an expired session from the progress view (#519).
+///
+/// The sorted set has no lifetime of its own, so a member whose record expired stays until a
+/// walk heals it; `gc --apply` is that walk.
+#[tokio::test]
+async fn the_progress_sweep_drops_an_expired_session_from_the_view() {
+    use capsule_server::gc::ProgressSweep;
+
+    let Some(server) = server().await else {
+        return;
+    };
+    let harness = ValkeyHarness::connect(&server.url).await;
+    let upload_id = UploadId::new("valkey-progress-sweep");
+    harness
+        .uploads
+        .open(UploadSessionRecord {
+            upload_id: upload_id.clone(),
+            asset_id: AssetId::new("valkey-progress-sweep-asset"),
+            owner_id: OwnerId::new("valkey-progress-sweep-owner"),
+            upload_user_id: UserId::new("valkey-progress-sweep-uploader"),
+            album_id: None,
+            content_type: None,
+            expected_hash: "d".repeat(64),
+            crypto_suite_id: 1,
+            protocol_version: "2026-08-29".to_owned(),
+            blob_role: BlobRole::Original,
+            intent_id: None,
+            manifest_envelope: "{}".to_owned(),
+            received_bytes: 0,
+            total_size: 1,
+            status: UploadSessionStatus::Pending,
+            created_at: harness.clock.now(),
+            last_progress_at: harness.clock.now(),
+        })
+        .await
+        .expect("the session opens");
+
+    let client = redis::Client::open(server.url.as_str()).expect("the URL opens");
+    let mut connection = client
+        .get_multiplexed_async_connection()
+        .await
+        .expect("a second connection");
+    let mut score = redis::cmd("ZSCORE");
+    score
+        .arg("capsule:upload:progress")
+        .arg(upload_id.to_string());
+    let indexed = |score: Option<f64>| score.is_some();
+
+    let before: Option<f64> = score.query_async(&mut connection).await.expect("answers");
+    assert!(indexed(before), "an open session is in the view");
+
+    harness
+        .advance(harness.uploads.ttl())
+        .await
+        .expect("advances");
+    let expired: Option<f64> = score.query_async(&mut connection).await.expect("answers");
+    assert!(
+        indexed(expired),
+        "an expired session's member outlives its record until something walks over it"
+    );
+
+    harness
+        .uploads
+        .sweep_progress(harness.clock.now())
+        .await
+        .expect("the sweep answers");
+    let after: Option<f64> = score.query_async(&mut connection).await.expect("answers");
+    assert!(!indexed(after), "and the collector's sweep is that walk");
+}
+
 /// The whole counter suite, including the race, on one server.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_counter_suite_passes_against_valkey() {

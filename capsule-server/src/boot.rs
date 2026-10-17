@@ -431,7 +431,10 @@ impl Stores {
                 self.quotas.clone(),
                 self.clock.clone(),
                 grace_window,
-            ),
+            )
+            // The upload-progress view has no lifetime of its own, so `gc --apply` is what
+            // keeps it from growing with every abandoned upload (#519).
+            .with_progress_sweep(Arc::new(self.uploads.clone())),
             scrub: ScrubContext::new(self.index.clone(), self.blobs.clone(), self.uploads.clone()),
         }
     }
