@@ -283,8 +283,9 @@ pub trait ChannelStore: std::fmt::Debug + Send + Sync {
 ///
 /// Keyed by the [`OidcState`] the client carries to the identity provider and back. Everything
 /// here exists to be checked **once**, at the callback: the nonce against the ID token, the
-/// verifier against the token endpoint, and the redirect URI byte-for-byte against the one the
-/// authorization request named (RFC 6749 §4.1.3 requires the two to be identical).
+/// verifier against the token endpoint, the redirect URI byte-for-byte against the one the
+/// authorization request named (RFC 6749 §4.1.3 requires the two to be identical), and the
+/// client binding against the secret the callback presents.
 ///
 /// No `expires_at` field, for the reason [`RevokeAllChallenge`] has none: expiry is the store's,
 /// and the route publishes `issued_at + ttl()`.
@@ -297,6 +298,14 @@ pub struct PendingAuthorization {
     /// The redirect URI the authorization request named, replayed verbatim to the token
     /// endpoint. Client-supplied and allow-listed by the route before it is stored here.
     pub redirect_uri: String,
+    /// The S256 hash of the secret the *initiating client* holds (issue #517).
+    ///
+    /// The PKCE verifier above never leaves this server, so it binds the code to this server and
+    /// not to the client that began the ceremony: anyone holding a `state` and its `code` could
+    /// redeem them. This is the binding that closes that — the client keeps the secret, sends only
+    /// its hash at the authorize, and the callback is refused unless it presents the secret. Not a
+    /// secret itself: a hash of 256 random bits reveals nothing usable.
+    pub binding_challenge: String,
     /// When the ceremony began. The route renders `issued_at + ttl()` as the published expiry.
     pub issued_at: Timestamp,
 }
