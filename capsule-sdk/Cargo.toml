@@ -107,7 +107,16 @@ serde_json = { workspace = true }
 tempfile = "3"
 # A software stand-in for a P-256 secure element, so the S-P1 `FfiHardwareSigner` foreign-trait
 # seam is proven end to end (SEC1 public key in, DER ECDSA signature out — the exact shapes
-# Secure Enclave and StrongBox emit) without an Xcode/Android toolchain. Test-only, and the same
-# pin `capsule-core` already carries for the real composition; nothing here enters the runtime
-# dependency tree.
-p256 = { version = "0.13", default-features = false, features = ["ecdsa", "arithmetic"] }
+# Secure Enclave and StrongBox emit) without an Xcode/Android toolchain. `ecdh` lets the same
+# stand-in play the `FfiHardwareKeyAgreement` element behind the hardware DEK round-trip (S-F5).
+# Test-only, and the same pin `capsule-core` already carries for the real composition; nothing
+# here enters the runtime dependency tree.
+p256 = { version = "0.13", default-features = false, features = [
+    "ecdsa",
+    "ecdh",
+    "arithmetic",
+] }
+# A software stand-in for the Ed25519 element behind `FfiWorkspace::create_with_hardware_signer`
+# (32-byte public key, 64-byte signature). Test-only; the workspace pin `capsule-core` already
+# links, so it adds no crate to the graph.
+ed25519-dalek = { workspace = true }

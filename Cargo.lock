@@ -980,6 +980,7 @@ dependencies = [
  "bytes",
  "capsule-core",
  "capsule-i18n",
+ "ed25519-dalek",
  "hex",
  "jiff",
  "p256",
