@@ -808,7 +808,8 @@ mod tests {
         assert_eq!(receipt.derivatives, DerivativeStatus::Decoded);
         assert_eq!(
             receipt.deferred_formats, 2,
-            "the JXL master and the AVIF delivery variant have no encoder in this build"
+            "two (tier, format) pairs have no encoder: the thumbnail's AVIF and WebP without \
+             `media-linked-codecs`, or WebP for both the thumbnail and the preview with it"
         );
 
         let sidecar = sidecar_of(lib.path(), receipt.asset_id);
@@ -933,8 +934,9 @@ mod tests {
         // The sentinel satisfies the thumbnail tier, so nothing is deferred there. The preview
         // tier (generated under `media-linked-codecs`) has no cap, so it is a re-encode and
         // defers whatever this build cannot encode — WebP.
-        let preview_deferred = if DerivativeTier::GENERATED.contains(&DerivativeTier::Preview) {
-            DerivativeFormat::STILL_DELIVERY_ORDER.len() - DELIVERY_FORMATS_ENCODED
+        let preview_deferred: u32 = if DerivativeTier::GENERATED.contains(&DerivativeTier::Preview)
+        {
+            (DerivativeFormat::STILL_DELIVERY_ORDER.len() - DELIVERY_FORMATS_ENCODED) as u32
         } else {
             0
         };
