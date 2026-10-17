@@ -27,6 +27,15 @@ mod m20260902_000003_cohorts;
 mod m20260902_000004_quota;
 mod m20260902_000005_album_membership;
 mod m20260902_000006_federation;
+mod m20260902_000007_albums;
+mod m20260902_000008_device_directories;
+mod m20260902_000009_moderation;
+mod m20260902_000010_shares;
+mod m20260902_000011_drops;
+mod m20260902_000012_escrow;
+mod m20260902_000013_collection_marks;
+mod m20260902_000014_receipts;
+mod m20260902_000015_totp;
 
 /// The server's migrator.
 pub struct Migrator;
@@ -41,6 +50,15 @@ impl MigratorTrait for Migrator {
             Box::new(m20260902_000004_quota::Migration),
             Box::new(m20260902_000005_album_membership::Migration),
             Box::new(m20260902_000006_federation::Migration),
+            Box::new(m20260902_000007_albums::Migration),
+            Box::new(m20260902_000008_device_directories::Migration),
+            Box::new(m20260902_000009_moderation::Migration),
+            Box::new(m20260902_000010_shares::Migration),
+            Box::new(m20260902_000011_drops::Migration),
+            Box::new(m20260902_000012_escrow::Migration),
+            Box::new(m20260902_000013_collection_marks::Migration),
+            Box::new(m20260902_000014_receipts::Migration),
+            Box::new(m20260902_000015_totp::Migration),
         ]
     }
 }
