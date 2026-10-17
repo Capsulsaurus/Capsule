@@ -1129,6 +1129,44 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::GONE);
 
+    // ── A deployment that does not federate (#509) ─────────────────────────────────────────
+    // Off is the default, and every federation operation declares the `404` it answers then.
+    // Switched off for these four requests and back on, so the one server this walk drives
+    // produces that `404` beside every federated `200`. No credential and no body: the gate
+    // answers before either is read, which is the property `tests/federation.rs` asserts.
+    fixture.federation.set_enabled(false);
+    for (method, path) in [
+        (
+            kynos::http::Method::POST,
+            "/v1/albums/anything/capabilities".to_owned(),
+        ),
+        (
+            kynos::http::Method::DELETE,
+            "/v1/albums/anything/capabilities/anything".to_owned(),
+        ),
+        (
+            kynos::http::Method::POST,
+            "/v1/federation/capabilities/refresh".to_owned(),
+        ),
+        (
+            kynos::http::Method::POST,
+            "/v1/federation/reports".to_owned(),
+        ),
+    ] {
+        let refused = client
+            .method(method.clone(), &path)
+            .header("accept", "application/json")
+            .send()
+            .await;
+        refused.assert_status(StatusCode::NOT_FOUND);
+        let refused: serde_json::Value = refused.json();
+        assert_eq!(
+            refused["code"], "error.federation.not_configured",
+            "{method} {path}"
+        );
+    }
+    fixture.federation.set_enabled(true);
+
     // ── The federation capability lifecycle (`S-E2`) ───────────────────────────────────────
     // A member on the album's roster to mint for, applied through the store: the roster route
     // and its verification are `tests/roster.rs`'s, and this walk is about which statuses exist.
