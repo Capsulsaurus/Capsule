@@ -32,8 +32,8 @@
 //!
 //! [`InMemoryAccounts`] implements all four account ports over a map, verifying with the
 //! [`credential`] helper's Argon2id — so the development profile can register an account and
-//! sign in to it — and [`InMemoryTotp`] implements the second factor's. Neither is durable, and
-//! neither is reachable without `--memory`
+//! sign in to it — and [`InMemoryTotp`] implements the second factor's. Neither is durable (their
+//! durable counterparts are [`PostgresAccounts`] and [`PostgresTotp`]), and neither is reachable without `--memory`
 //! ([`Backends::Memory`](crate::config::Backends)), which is an explicit operator act.
 //!
 //! What is deliberately **not** here is a permissive one. `tests/support/mod.rs` holds a
@@ -76,7 +76,7 @@ pub use self::tokens::{
 };
 pub use self::totp::{
     ActivateOutcome, BeginOutcome, CHALLENGE_TTL, ConsumeOutcome, EnrollmentState, InMemoryTotp,
-    TotpCodes, TotpContext, TotpEnrollment, TotpSecret, TotpStore, UnusableSecret,
+    PostgresTotp, TotpCodes, TotpContext, TotpEnrollment, TotpSecret, TotpStore, UnusableSecret,
 };
 use crate::store::{AuthStateStore, Clock};
 
