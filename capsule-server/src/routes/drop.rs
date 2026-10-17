@@ -1094,6 +1094,16 @@ async fn adopt_claimed(
             "the manifest does not declare this drop's size",
         ));
     }
+    // Invariant 7's account half, as `POST /v1/upload` and `POST /v1/albums/{album_id}/ops`
+    // enforce it: an adopted drop's author is the adopter (design/web-upload.md), so a manifest
+    // naming another account is the caller attributing a write to somebody else. After the
+    // claim, so a stranger's adoption still answers `404` rather than telling this apart.
+    if request.manifest_envelope.created_by_user != owner.as_str() {
+        tracing::info!(%owner, "an adoption was refused: created_by_user is not the caller");
+        return Err(AdoptRejection::refused(
+            "created_by_user is not the authenticated caller",
+        ));
+    }
 
     let owner_id = OwnerId::new(owner.as_str());
     let album = crate::store::AlbumId::new(&request.album_id);
@@ -1167,7 +1177,7 @@ async fn adopt_claimed(
 
     let asset_id = crate::store::AssetId::new(&request.asset_id);
     let now = drops.clock().now();
-    upload
+    match upload
         .index()
         .reserve(crate::index::PendingAsset {
             asset_id: asset_id.clone(),
@@ -1181,12 +1191,24 @@ async fn adopt_claimed(
         .map_err(|error| {
             tracing::error!(%error, "an adoption could not reserve its asset");
             AdoptRejection::unavailable()
-        })?;
+        })? {
+        // A new asset, or the owner's own pending row for the same album and pin.
+        crate::index::Reservation::Created(_) | crate::index::Reservation::Joined(_) => {}
+        // The id names a row filed under another owner, album or pin. Refused with the same
+        // answer as a missing capability, as `POST /v1/upload` does: the id is client-chosen, so
+        // a guess must buy the caller nothing — and the drop must not settle over it.
+        crate::index::Reservation::Conflict => {
+            tracing::info!(%owner, %asset_id, "an adoption was refused: the asset id is not this caller's");
+            return Err(AdoptRejection::refused(
+                "no write capability for that album",
+            ));
+        }
+    }
 
     // The bytes are already committed — that is what makes adoption an in-place promotion
     // rather than a re-upload — so this records the blob the guest deposited against the asset
     // the owner just signed for.
-    upload
+    match upload
         .index()
         .record_blob(
             &asset_id,
@@ -1202,7 +1224,24 @@ async fn adopt_claimed(
         .map_err(|error| {
             tracing::error!(%error, "an adoption could not record its blob");
             AdoptRejection::unavailable()
-        })?;
+        })? {
+        // Recorded, or already held at this exact address: a retried adoption.
+        crate::index::BlobOutcome::Recorded { .. } | crate::index::BlobOutcome::AlreadyHeld(_) => {}
+        // The asset already holds a different original. Re-pointing it would swap the bytes
+        // under a signature that still verifies against the old ones, so it is refused and the
+        // drop goes back to the inbox.
+        crate::index::BlobOutcome::Conflict => {
+            tracing::info!(%owner, %asset_id, "an adoption was refused: the asset already holds a different original");
+            return Err(AdoptRejection::refused(
+                "the asset already holds a different original",
+            ));
+        }
+        // The row reserved a moment ago is gone: the server's own inconsistency.
+        crate::index::BlobOutcome::NotFound => {
+            tracing::error!(%owner, %asset_id, "an adoption found no asset row for the reservation it made");
+            return Err(AdoptRejection::unavailable());
+        }
+    }
 
     Ok(asset_id)
 }

@@ -12,10 +12,12 @@ mod support;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use capsule_server::blob::{BlobStore, ContentAddress};
-use jiff::SignedDuration;
+use capsule_server::index::{AssetIndex, BlobRecord, PendingAsset, Reservation};
+use capsule_server::store::{AssetId, BlobRole, OwnerId};
+use jiff::{SignedDuration, Timestamp};
 use kynos::http::StatusCode;
 use serde_json::{Value, json};
-use support::{Fixture, PROTOCOL_VERSION, album, checksum, payload, user};
+use support::{Fixture, PROTOCOL_VERSION, album, checksum, owner, payload, user};
 
 /// A well-formed opaque id with letters in it.
 fn opaque(tag: u8) -> String {
@@ -694,6 +696,189 @@ async fn another_accounts_drop_cannot_be_adopted() {
             .expect("drops")
             .len(),
         1
+    );
+}
+
+/// The asset id the adoption-refusal cases collide with.
+const ADOPTED: &str = "adopted-asset-1";
+
+/// Deposit one drop and return its id, the bytes it holds, and a create manifest over them.
+async fn pending_drop(fixture: &Fixture, bearer: &str) -> (String, Vec<u8>, Value) {
+    let bytes = payload(b'g', 4096);
+    deposit(fixture, bearer, 1, &bytes).await;
+    let drop_id = inbox(fixture, bearer).await["drops"][0]["drop_id"]
+        .as_str()
+        .expect("a drop id")
+        .to_owned();
+    let manifest = support::create_request(&fixture.clock, &bytes, "original");
+    (drop_id, bytes, manifest)
+}
+
+/// Adopt `drop_id` as [`ADOPTED`] with `envelope`, expecting `expect`.
+async fn adopt(
+    fixture: &Fixture,
+    bearer: &str,
+    drop_id: &str,
+    bytes: &[u8],
+    envelope: &Value,
+    expect: StatusCode,
+) -> Value {
+    fixture
+        .client
+        .post(&format!("/v1/drops/{drop_id}/adopt"))
+        .header("authorization", bearer)
+        .header("accept", "application/json")
+        .json(&json!({
+            "album_id": album().as_str(),
+            "asset_id": ADOPTED,
+            "size": bytes.len(),
+            "hash": checksum(bytes),
+            "content_type": "image/jpeg",
+            "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
+            "protocol_version": PROTOCOL_VERSION,
+            "key_mode": "wrapped",
+            "manifest_envelope": envelope,
+        }))
+        .send()
+        .await
+        .assert_status(expect)
+        .json()
+}
+
+/// The refused adoption left its drop in the inbox, unclaimed.
+async fn assert_drop_kept(fixture: &Fixture, bearer: &str) {
+    let held = inbox(fixture, bearer).await;
+    let drops = held["drops"].as_array().expect("drops");
+    assert_eq!(
+        drops.len(),
+        1,
+        "a refused adoption does not settle its drop"
+    );
+    assert_eq!(drops[0]["adopting"], false, "and it is claimable again");
+}
+
+/// Reserve [`ADOPTED`] in the index under `owner_id`, in the fixture's album and pin.
+async fn reserve_adopted(fixture: &Fixture, owner_id: OwnerId) {
+    let reserved = fixture
+        .index
+        .reserve(PendingAsset {
+            asset_id: AssetId::new(ADOPTED),
+            owner_id,
+            album_id: album(),
+            protocol_version: PROTOCOL_VERSION.to_owned(),
+            crypto_suite_id: capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
+            created_at: Timestamp::UNIX_EPOCH,
+        })
+        .await
+        .expect("the index reserves");
+    assert!(matches!(reserved, Reservation::Created(_)));
+}
+
+#[tokio::test]
+async fn an_adoption_onto_another_owners_pending_asset_is_refused_and_keeps_the_drop() {
+    // The asset id is client-chosen. One already filed under another account is a reservation
+    // conflict, and an adoption over it must neither answer `200` nor settle the drop — which
+    // would lose the drop and leave no asset of the caller's behind it.
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (drop_id, bytes, manifest) = pending_drop(&fixture, &bearer).await;
+    reserve_adopted(
+        &fixture,
+        OwnerId::new("01937b7c-0000-7000-8000-0000000000ff"),
+    )
+    .await;
+
+    let problem = adopt(
+        &fixture,
+        &bearer,
+        &drop_id,
+        &bytes,
+        &manifest["manifest_envelope"],
+        StatusCode::BAD_REQUEST,
+    )
+    .await;
+
+    assert_eq!(problem["code"], "error.drop.adoption_refused");
+    assert_drop_kept(&fixture, &bearer).await;
+    let row = fixture
+        .index
+        .read(&AssetId::new(ADOPTED))
+        .await
+        .expect("the index answers")
+        .expect("the foreign row stands");
+    assert!(row.blobs.is_empty(), "nothing was recorded against it");
+}
+
+#[tokio::test]
+async fn an_adoption_onto_an_asset_holding_another_original_is_refused_and_keeps_the_drop() {
+    // The owner's own pending row joins, but it already holds a different original: recording
+    // this drop's blob is a conflict, not a re-point, and the drop must stay in the inbox.
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (drop_id, bytes, manifest) = pending_drop(&fixture, &bearer).await;
+    reserve_adopted(&fixture, owner()).await;
+    let elsewhere = payload(b'o', 4096);
+    let address = ContentAddress::parse(&checksum(&elsewhere)).expect("a content address");
+    fixture
+        .index
+        .record_blob(
+            &AssetId::new(ADOPTED),
+            BlobRecord {
+                role: BlobRole::Original,
+                address,
+                size: elsewhere.len() as u64,
+                manifest_sha256: None,
+                finalized_at: Timestamp::UNIX_EPOCH,
+            },
+        )
+        .await
+        .expect("the index records");
+
+    let problem = adopt(
+        &fixture,
+        &bearer,
+        &drop_id,
+        &bytes,
+        &manifest["manifest_envelope"],
+        StatusCode::BAD_REQUEST,
+    )
+    .await;
+
+    assert_eq!(problem["code"], "error.drop.adoption_refused");
+    assert_drop_kept(&fixture, &bearer).await;
+}
+
+#[tokio::test]
+async fn an_adoption_attributed_to_another_account_is_refused_and_keeps_the_drop() {
+    // Invariant 7's account half, as the upload and ops surfaces enforce it: the adopter is the
+    // author, so a manifest naming somebody else is refused before anything is reserved, and
+    // the claim is released.
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (drop_id, bytes, mut manifest) = pending_drop(&fixture, &bearer).await;
+    manifest["manifest_envelope"]["created_by_user"] =
+        "01937b7c-0000-7000-8000-0000000000ff".into();
+
+    let problem = adopt(
+        &fixture,
+        &bearer,
+        &drop_id,
+        &bytes,
+        &manifest["manifest_envelope"],
+        StatusCode::BAD_REQUEST,
+    )
+    .await;
+
+    assert_eq!(problem["code"], "error.drop.adoption_refused");
+    assert_drop_kept(&fixture, &bearer).await;
+    assert!(
+        fixture
+            .index
+            .read(&AssetId::new(ADOPTED))
+            .await
+            .expect("the index answers")
+            .is_none(),
+        "no asset was reserved for it"
     );
 }
 
