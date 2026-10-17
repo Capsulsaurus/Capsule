@@ -19,14 +19,18 @@ Open-source, federated, E2E encrypted photo management and sharing service built
 >
 > Project Update (Oct 2026): Bidirectional transfer protocol and cryptographic/storage layers are nearing stabilization. A number of notable updates have been made after experiments stress testing high-latency, lossy connections.
 
+**Where it stands today:** Capsule is not yet usable with real data. The Rust core, the `capsule-cli` and the server are being stabilized first. `capsule-server` builds as one binary and runs entirely in memory (`mise run serve-memory`), but a durable deployment backed by PostgreSQL does not boot yet, so nothing survives a restart. The native apps are deferred until the server and CLI are done, and the web client cannot yet decrypt what it syncs, so it shows placeholders. The [roadmap](ROADMAP.md) gives the state of every package.
+
 ## Features
 
+Items marked *(planned)* are goals the current tree does not yet demonstrate.
+
 - **Native and cross-platform**: Capsule is built as a real native app per platform rather than one web app in several wrappers, so each one is fast and idiomatic where it runs. Every native client is intended to be fully featured and platform-integrated; the table below says what exists today.
-- **Broadest format support**: Capsule supports the majority of image and video formats from ones in common smartphones to professional RAW formats. View any content on any device just like your smartphone photos and videos!
+- **Broadest format support** *(planned)*: Capsule aims to support the majority of image and video formats, from those of common smartphones to professional RAW formats. Today the import pipeline decodes JPEG, PNG, JPEG XL, TIFF and GIF stills; HEIC, AVIF, RAW and video are not supported yet.
 - **Data is always optimized**: Capsule rigorously caches and optimizes any heavy content for seamless delivery (our methodology is [documented](https://capsule.justinchung.net/design/thumbnails/)). If something feels slow, let us know.
 - **Privacy**: Your data is yours and end-to-end encrypted.
-- **Fully-featured access**: Capsule implements several powerful features like real-time viewing, semantic search, AI organization, and more.
-- **Federated**: Capsule users can share their assets with users of other servers seamlessly. Think of it like [Matrix](https://en.wikipedia.org/wiki/Matrix_(protocol)) for photos.
+- **Fully-featured access** *(planned)*: Real-time viewing, semantic search and AI organization are planned; none of them ships today.
+- **Federated** *(planned)*: Capsule users will be able to share their assets with users of other servers seamlessly. Think of it like [Matrix](https://en.wikipedia.org/wiki/Matrix_(protocol)) for photos. The server and SDK implement federated pull, but it has not yet run between two real deployments.
 - **Open-source**: Capsule is open-source forever and you can host your own server.
 
 ## Clients
