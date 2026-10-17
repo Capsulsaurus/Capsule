@@ -417,6 +417,42 @@ pub async fn parallel_guesses_admit_at_most_the_ceiling(h: &dyn Harness) {
     );
 }
 
+/// An attempt cancelled during verification keeps its charge.
+///
+/// The charge is taken before verification, and nothing refunds it when the request goes away:
+/// a refund on drop would make disconnecting mid-verification a free guess. So a correct password
+/// whose request is dropped after its first poll — by then reserved, and waiting on the hash —
+/// counts as a failure, and the ceiling is reached one attempt sooner than
+/// [`a_success_before_the_ceiling_clears_the_count`] reaches it: `lockout_attempts - 1` failures
+/// plus the dropped attempt lock the account, where the same failures plus a *completed* correct
+/// password would have cleared them.
+///
+/// The password is the correct one on purpose. A dropped wrong guess and a completed one leave
+/// the same count, so only a correct password can tell a kept charge from a refunded one — and
+/// the first poll must still be pending, or the attempt completed rather than being cancelled.
+pub async fn a_cancelled_attempt_keeps_its_charge(h: &dyn Harness) {
+    let (address, _) = seed(h, "cancelled").await;
+    fail(h, &address, h.lockout_attempts() - 1).await;
+
+    let mut attempt = h.directory().authenticate(&address, PASSWORD);
+    let first =
+        std::future::poll_fn(|cx| Poll::Ready(attempt.as_mut().poll(cx).is_pending())).await;
+    assert!(
+        first,
+        "the attempt finished in its first poll, so there was no verification to cancel"
+    );
+    drop(attempt);
+
+    assert_eq!(
+        ok(
+            h.directory().authenticate(&address, PASSWORD).await,
+            "authenticate after a cancelled attempt",
+        ),
+        Authentication::Locked,
+        "a cancelled attempt must keep its charge, or disconnecting is a free guess",
+    );
+}
+
 /// Drive every future in `futures` concurrently on the calling task, and collect their outputs
 /// in order.
 ///
@@ -685,6 +721,7 @@ pub async fn run_all(h: &dyn Harness) {
     attempts_during_a_lockout_do_not_extend_it(h).await;
     failures_spread_wider_than_the_window_never_accumulate(h).await;
     parallel_guesses_admit_at_most_the_ceiling(h).await;
+    a_cancelled_attempt_keeps_its_charge(h).await;
 
     a_password_change_grants_the_new_password_and_refuses_the_old(h).await;
     a_password_change_clears_a_lockout(h).await;
