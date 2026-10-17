@@ -33,11 +33,20 @@
 //! across a hash would serialize every account operation in the process behind the slowest
 //! primitive in it.
 //!
-//! The cost of that is a read-modify-write gap in the failed-attempt counter, so two
-//! simultaneous wrong passwords can be recorded as one. That is the right trade for a
-//! development adapter and it is *not* the trade a Postgres adapter should make: there the
-//! increment is one statement, which is why the port asks the adapter for the bookkeeping rather
-//! than describing how to do it.
+//! # The attempt is reserved before it is verified
+//!
+//! Checking the lockout, then verifying, then recording the failure is a race: every guess that
+//! reads the count before any of them records one is admitted, so a burst of parallel guesses
+//! walks straight past the ceiling (#510). So an attempt is **reserved** first — the lockout
+//! check and the failure charge are one critical section — and only a reserved attempt is
+//! verified, outside the lock and off the async runtime. A success then settles the charge by
+//! clearing the run. However many guesses arrive at once, at most `lockout_attempts` of them
+//! inside a window are ever verified; the rest are told `Locked`.
+//!
+//! The charge is taken pessimistically and is never refunded on a refusal or a dropped request.
+//! A refusal is exactly what the charge already says, and a request cancelled mid-verification
+//! must not be a free guess — otherwise disconnecting before the answer is a way to guess
+//! without being counted.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -158,6 +167,15 @@ impl InMemoryAccounts {
         self.accounts().is_empty()
     }
 
+    /// The failure count held for `email`, or `None` when no account holds it.
+    ///
+    /// Test-only: no port discloses the count. The conformance harness reads it to know an
+    /// attempt's charge has landed before it cancels the attempt.
+    #[cfg(test)]
+    pub(crate) fn recorded_failures(&self, email: &str) -> Option<u32> {
+        self.accounts().get(email).map(|held| held.failures)
+    }
+
     /// Take the lock, recovering rather than propagating a poisoned one.
     ///
     /// The same choice [`crate::store::memory`] makes: a panic in one request must not turn
@@ -165,11 +183,6 @@ impl InMemoryAccounts {
     /// `BTreeMap`'s own rather than one a half-finished write could break.
     fn accounts(&self) -> MutexGuard<'_, BTreeMap<String, Account>> {
         self.accounts.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// A snapshot of the account `email` names, if there is one.
-    fn by_email(&self, email: &str) -> Option<Account> {
-        self.accounts().get(email).cloned()
     }
 
     /// A snapshot of the account `user` names, if there is one.
@@ -180,73 +193,131 @@ impl InMemoryAccounts {
             .cloned()
     }
 
-    /// Record the outcome of a credential presentation against `email`.
+    /// Reserve one credential presentation against the account `key` names.
     ///
-    /// One place, so the reset-on-success half cannot be forgotten at one of the two call sites.
-    fn record(&self, email: &str, granted: bool) {
+    /// The lockout check and the failure charge in one critical section, which is the whole fix
+    /// for #510: see the module docs. A failure after the window has passed starts a fresh run
+    /// rather than tipping a stale count over — otherwise ten mistypes spread over a year would
+    /// lock an account on the tenth, which is not a guessing run and not what the ceiling is
+    /// counting. A locked account is **not** charged: an attempt made while locked must not
+    /// extend the window, or anybody who can reach the endpoint can keep somebody else's account
+    /// locked forever.
+    fn reserve(&self, key: Key<'_>) -> Reservation {
         let now = self.clock.now();
         let window = self.lockout_window;
-        if let Some(held) = self.accounts().get_mut(email) {
-            if granted {
-                held.failures = 0;
-                held.last_failure_at = None;
-                return;
-            }
-            // A failure after the window has passed starts a fresh run rather than tipping a
-            // stale count over. Otherwise ten mistypes spread over a year would lock an account
-            // on the tenth, which is not a guessing run and not what the ceiling is counting.
-            if held
-                .last_failure_at
-                .is_some_and(|at| now.duration_since(at) >= window)
-            {
-                held.failures = 0;
-            }
-            held.failures = held.failures.saturating_add(1);
-            held.last_failure_at = Some(now);
-            if held.failures == self.lockout_attempts {
-                tracing::warn!(
-                    user = %held.user_id,
-                    failures = held.failures,
-                    window = %window,
-                    "an account reached the failed-attempt ceiling and is locked out"
-                );
-            }
+        let mut accounts = self.accounts();
+        let held = match key {
+            Key::Email(email) => accounts.get_mut(email),
+            Key::User(user) => accounts.values_mut().find(|held| &held.user_id == user),
+        };
+        let Some(held) = held else {
+            return Reservation::NoSuchAccount;
+        };
+        if held.locked(now, self.lockout_attempts, window) {
+            tracing::debug!(user = %held.user_id, "a credential presentation met a lockout");
+            return Reservation::Locked;
+        }
+        if held
+            .last_failure_at
+            .is_some_and(|at| now.duration_since(at) >= window)
+        {
+            held.failures = 0;
+        }
+        held.failures = held.failures.saturating_add(1);
+        held.last_failure_at = Some(now);
+        tracing::trace!(
+            user = %held.user_id,
+            failures = held.failures,
+            "a credential presentation was reserved"
+        );
+        if held.failures == self.lockout_attempts {
+            tracing::warn!(
+                user = %held.user_id,
+                failures = held.failures,
+                window = %window,
+                "an account reached the failed-attempt ceiling; further attempts are locked out \
+                 unless this one succeeds"
+            );
+        }
+        Reservation::Reserved {
+            email: held.email.clone(),
+            user_id: held.user_id.clone(),
+            stored: held.stored.clone(),
         }
     }
 
-    /// Decide `password` against a snapshot, and record what happened.
+    /// Settle a reservation whose password matched: the run of failures is over.
+    fn settle_success(&self, email: &str) {
+        if let Some(held) = self.accounts().get_mut(email) {
+            held.failures = 0;
+            held.last_failure_at = None;
+        }
+    }
+
+    /// Reserve an attempt against `key`, verify `password` if one was reserved, and settle.
     ///
     /// The shared body of the two [`AccountDirectory`] methods: they differ only in how they
     /// find the account, and that is exactly the difference the port wants them to have.
-    fn decide(
-        &self,
-        held: Option<Account>,
-        password: &str,
-    ) -> Result<Authentication, DirectoryError> {
-        let Some(held) = held else {
-            // The timing-equalized miss. Refusing here without doing the work would leak the
-            // difference between an unknown address and a wrong password in the response time,
-            // whatever the body said.
-            self.credentials.absorb_miss(password);
-            return Ok(Authentication::Refused);
+    async fn decide(&self, key: Key<'_>, password: &str) -> Result<Authentication, DirectoryError> {
+        // The guard is dropped inside `reserve`, so no lock is held across the hash below.
+        let reservation = self.reserve(key);
+        let (email, user_id, stored) = match reservation {
+            Reservation::NoSuchAccount => {
+                // The timing-equalized miss. Refusing here without doing the work would leak the
+                // difference between an unknown address and a wrong password in the response
+                // time, whatever the body said.
+                self.credentials.absorb_miss(password).await;
+                return Ok(Authentication::Refused);
+            }
+            Reservation::Locked => {
+                // Still absorbed: a locked account that returned instantly would tell an
+                // attacker which addresses they have already spent attempts on.
+                self.credentials.absorb_miss(password).await;
+                return Ok(Authentication::Locked);
+            }
+            Reservation::Reserved {
+                email,
+                user_id,
+                stored,
+            } => (email, user_id, stored),
         };
-        if held.locked(self.clock.now(), self.lockout_attempts, self.lockout_window) {
-            // Still absorbed: a locked account that returned instantly would tell an attacker
-            // which addresses they have already spent attempts on.
-            self.credentials.absorb_miss(password);
-            return Ok(Authentication::Locked);
-        }
         let granted = self
             .credentials
-            .verify(password, &held.stored)
+            .verify(password, &stored)
+            .await
             .map_err(unavailable)?;
-        self.record(&held.email, granted);
         if granted {
-            Ok(Authentication::Granted(held.user_id))
+            self.settle_success(&email);
+            Ok(Authentication::Granted(user_id))
         } else {
             Ok(Authentication::Refused)
         }
     }
+}
+
+/// How [`InMemoryAccounts::reserve`] finds the account.
+#[derive(Debug, Clone, Copy)]
+enum Key<'a> {
+    /// By the address it signs in with.
+    Email(&'a str),
+    /// By its id, for re-authentication.
+    User(&'a UserId),
+}
+
+/// What reserving an attempt found.
+#[derive(Debug)]
+enum Reservation {
+    /// No account answers to the key.
+    NoSuchAccount,
+    /// The account is refusing attempts; nothing was charged.
+    Locked,
+    /// One failure was charged, and this is what to verify against.
+    Reserved {
+        email: String,
+        user_id: UserId,
+        /// The Argon2id PHC string. Never a password.
+        stored: String,
+    },
 }
 
 /// A credential fault is a directory fault: no decision was reached.
@@ -267,7 +338,7 @@ impl AccountDirectory for InMemoryAccounts {
         email: &'a str,
         password: &'a str,
     ) -> DirectoryFuture<'a, Authentication> {
-        Box::pin(async move { self.decide(self.by_email(email), password) })
+        Box::pin(async move { self.decide(Key::Email(email), password).await })
     }
 
     fn authenticate_user<'a>(
@@ -275,7 +346,7 @@ impl AccountDirectory for InMemoryAccounts {
         user: &'a UserId,
         password: &'a str,
     ) -> DirectoryFuture<'a, Authentication> {
-        Box::pin(async move { self.decide(self.by_id(user), password) })
+        Box::pin(async move { self.decide(Key::User(user), password).await })
     }
 }
 
@@ -291,7 +362,7 @@ impl AccountRegistry for InMemoryAccounts {
             // Hashed before the lock, so the check-and-write below is short. The cost of that
             // ordering is a hash computed for an address that turns out to be taken, which is
             // the cheap direction to be wrong in.
-            let stored = self.credentials.hash(password).map_err(unavailable)?;
+            let stored = self.credentials.hash(password).await.map_err(unavailable)?;
             // One critical section, as the port requires: a caller that read, saw nothing and
             // then wrote has a window in which a second registration for the same address
             // lands, and both would believe they own it.
@@ -350,7 +421,7 @@ impl PasswordChange for InMemoryAccounts {
         _at: Timestamp,
     ) -> DirectoryFuture<'a, PasswordChanged> {
         Box::pin(async move {
-            let stored = self.credentials.hash(password).map_err(unavailable)?;
+            let stored = self.credentials.hash(password).await.map_err(unavailable)?;
             let mut accounts = self.accounts();
             let Some(held) = accounts.values_mut().find(|held| &held.user_id == user) else {
                 return Ok(PasswordChanged::NoSuchAccount);
@@ -438,7 +509,7 @@ mod tests {
         // The property the port is built on: the credential never rises above the adapter, and
         // it is not sitting in the adapter either.
         let accounts = seeded().await;
-        let held = accounts.by_email(EMAIL).expect("it is held");
+        let held = accounts.accounts().get(EMAIL).cloned().expect("it is held");
         assert!(held.stored.starts_with("$argon2id$"), "{}", held.stored);
         assert!(!held.stored.contains(PASSWORD));
     }
@@ -629,6 +700,37 @@ mod tests {
                 .await
                 .expect("it answers"),
             Authentication::Granted(user())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_attempt_keeps_its_charge() {
+        // Decision 3 of #510: nothing refunds a charge when the request goes away, or
+        // disconnecting mid-verification would be a free guess. The reservation here completes
+        // inside the first poll, so a pending first poll is an attempt charged and verifying.
+        let accounts = seeded().await;
+        fail(&accounts, MAX_FAILED_ATTEMPTS - 1).await;
+
+        let mut attempt = accounts.authenticate(EMAIL, PASSWORD);
+        let pending = std::future::poll_fn(|cx| {
+            std::task::Poll::Ready(attempt.as_mut().poll(cx).is_pending())
+        })
+        .await;
+        assert!(
+            pending,
+            "the attempt must still be verifying when it is dropped"
+        );
+        assert_eq!(accounts.recorded_failures(EMAIL), Some(MAX_FAILED_ATTEMPTS));
+        drop(attempt);
+
+        // The correct password that was cancelled counted: the account is now at the ceiling.
+        assert_eq!(accounts.recorded_failures(EMAIL), Some(MAX_FAILED_ATTEMPTS));
+        assert_eq!(
+            accounts
+                .authenticate(EMAIL, PASSWORD)
+                .await
+                .expect("it answers"),
+            Authentication::Locked
         );
     }
 

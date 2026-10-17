@@ -9,18 +9,25 @@
 //! splitting it across four tables would put the lockout counter somewhere the password change
 //! that must clear it cannot reach in the same statement.
 //!
-//! # Where this adapter is stricter than the in-memory one, and why
+//! # The attempt is reserved before it is verified
 //!
-//! [`accounts_memory`](super::accounts_memory) computes its hash outside its mutex and takes a
-//! read-modify-write gap in the failed-attempt counter as a result, recording its own docs that
-//! *"that is the right trade for a development adapter and it is not the trade a Postgres
-//! adapter should make: there the increment is one statement"*. It is one statement here. The
-//! decay, the reset-on-a-stale-run and the increment are a single `UPDATE … SET failures = CASE
-//! …`, so two simultaneous wrong passwords are two counted failures rather than one.
+//! Reading the failure count, verifying, and then recording the failure is a race: every guess
+//! that reads the row before any of them writes it is admitted, so a burst of parallel guesses
+//! walks straight past the ceiling (#510). Here the lockout check and the failure charge are one
+//! conditional statement — `UPDATE … SET failures = CASE … WHERE <key> AND NOT <locked>
+//! RETURNING credential` — and only an attempt that statement charged is verified. Postgres takes
+//! the row lock for the `UPDATE` and, under `READ COMMITTED`, re-evaluates the `WHERE` against
+//! the newest row version once a concurrent writer commits, so racing reservations serialize on
+//! the row and the `failures` they see is exact: at most `lockout_attempts` of them inside a
+//! window are ever charged and verified. A success then settles the charge by clearing the run.
+//! The in-memory adapter does the same with one critical section.
 //!
-//! Argon2id still runs outside every statement. It costs tens of milliseconds, and a verification
-//! held inside a transaction is a row lock held for the length of the slowest primitive in the
-//! process.
+//! The charge is never refunded on a refusal or a dropped request: a refusal is what it already
+//! says, and a request cancelled mid-verification must not be a free guess.
+//!
+//! Argon2id still runs outside every statement, and off the async runtime. It costs tens of
+//! milliseconds, and a verification held inside a transaction is a row lock held for the length
+//! of the slowest primitive in the process.
 //!
 //! # The clock is injected, and never `now()`
 //!
@@ -101,132 +108,147 @@ impl PostgresAccounts {
         }
     }
 
-    /// The account `column` = `key` names, if there is one.
+    /// Reserve one credential presentation against the account `column` = `key` names.
+    ///
+    /// One conditional statement: the lockout check and the failure charge cannot be separated
+    /// by a concurrent guess (see the module docs). The `CASE` is the decay — a failure whose
+    /// predecessor is older than the window starts a fresh run at 1 rather than tipping a stale
+    /// count over, so ten mistypes spread over a year never lock an account. The `NOT (…)` is the
+    /// lockout, measured from the last **counted** failure: a locked row is not charged, because
+    /// an attempt made while locked must not extend the window, or anybody who can reach the
+    /// endpoint can keep somebody else's account locked forever.
+    ///
+    /// Recent failures are the operative ones, and the decay is not a courtesy: nothing in this
+    /// server can clear a lockout otherwise. `login`, `reauthenticate` and `password` each ask
+    /// the directory first and refuse on `Locked` before verifying anything, there is no unlock
+    /// operation on any surface, and no operator command reaches this row.
+    ///
+    /// When the statement charges nothing, a second read tells a locked account from a missing
+    /// one. That read is not part of the decision's atomicity — a row that unlocks or vanishes
+    /// in between is answered as it was a moment ago, and either answer refuses.
     ///
     /// `column` is a `&'static str` chosen from two literals below and never from a caller, so
     /// this is not a string-built query in the sense that matters — there is no input path to it.
-    /// The alternative, two nearly identical statements, is the same query twice with a
-    /// different `WHERE`, and the second copy is where a lockout column eventually gets left out.
-    async fn lookup(&self, column: &'static str, key: &str) -> Result<Option<Held>, StoreError> {
-        let found = self
+    /// The alternative, two nearly identical statements, is the same statement twice with a
+    /// different `WHERE`, and the second copy is where a lockout clause eventually gets left out.
+    async fn reserve(&self, column: &'static str, key: &str) -> Result<Reservation, StoreError> {
+        let now = self.clock.now();
+        let reserved = self
             .connection
             .query_one(Statement::from_sql_and_values(
                 DbBackend::Postgres,
                 format!(
-                    "SELECT user_id, credential, failures, last_failure_at \
-                     FROM accounts WHERE {column} = $1"
+                    "UPDATE accounts SET \
+                       failures = CASE \
+                         WHEN last_failure_at IS NOT NULL AND $2 - last_failure_at >= $3 THEN 1 \
+                         ELSE failures + 1 END, \
+                       last_failure_at = $2 \
+                     WHERE {column} = $1 \
+                       AND NOT (failures >= $4 \
+                                AND last_failure_at IS NOT NULL \
+                                AND $2 - last_failure_at < $3) \
+                     RETURNING user_id, credential, failures"
                 ),
+                [
+                    Value::from(key.to_owned()),
+                    Value::from(to_micros(now)),
+                    Value::from(self.lockout_window.as_micros() as i64),
+                    Value::from(i64::from(self.lockout_attempts)),
+                ],
+            ))
+            .await
+            .map_err(PORT.failing("reserving a credential presentation"))?;
+
+        if let Some(row) = reserved {
+            let failed = PORT.failing("reading a reserved account row");
+            let user_id: String = row.try_get("", "user_id").map_err(&failed)?;
+            let stored: String = row.try_get("", "credential").map_err(&failed)?;
+            let failures: i64 = row.try_get("", "failures").map_err(&failed)?;
+            let user_id = UserId::new(user_id);
+            tracing::trace!(user = %user_id, failures, "a credential presentation was reserved");
+            if failures == i64::from(self.lockout_attempts) {
+                tracing::warn!(
+                    user = %user_id,
+                    failures,
+                    window = %self.lockout_window,
+                    "an account reached the failed-attempt ceiling; further attempts are locked \
+                     out unless this one succeeds"
+                );
+            }
+            return Ok(Reservation::Reserved { user_id, stored });
+        }
+
+        let exists = self
+            .connection
+            .query_one(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                format!("SELECT user_id FROM accounts WHERE {column} = $1"),
                 [Value::from(key.to_owned())],
             ))
             .await
             .map_err(PORT.failing("looking an account up"))?;
-        let Some(found) = found else { return Ok(None) };
-
-        let failed = PORT.failing("reading an account row");
-        let user_id: String = found.try_get("", "user_id").map_err(&failed)?;
-        let stored: String = found.try_get("", "credential").map_err(&failed)?;
-        let failures: i64 = found.try_get("", "failures").map_err(&failed)?;
-        let last_failure_at: Option<i64> = found.try_get("", "last_failure_at").map_err(&failed)?;
-        Ok(Some(Held {
-            user_id: UserId::new(user_id),
-            stored,
-            failures: u32::try_from(failures)
-                .map_err(|_| PORT.undecodable(format!("{failures} is not a failure count")))?,
-            last_failure_at: last_failure_at
-                .map(|micros| {
-                    from_micros(micros).ok_or_else(|| {
-                        PORT.undecodable(format!("{micros}µs is not a representable instant"))
-                    })
-                })
-                .transpose()?,
-        }))
+        Ok(match exists {
+            Some(row) => {
+                let user_id: String = row
+                    .try_get("", "user_id")
+                    .map_err(PORT.failing("reading an account row"))?;
+                tracing::debug!(user = %user_id, "a credential presentation met a lockout");
+                Reservation::Locked
+            }
+            None => Reservation::NoSuchAccount,
+        })
     }
 
-    /// Whether enough *recent* failures have accumulated to refuse a correct password.
-    ///
-    /// Recent is the operative word, and the decay is not a courtesy: nothing in this server can
-    /// clear a lockout otherwise. `login`, `reauthenticate` and `password` each ask the directory
-    /// first and refuse on `Locked` before verifying anything, there is no unlock operation on
-    /// any surface, and no operator command reaches this row — so a permanent lockout is a
-    /// permanently lost account.
-    fn locked(&self, held: &Held, now: Timestamp) -> bool {
-        held.failures >= self.lockout_attempts
-            && held
-                .last_failure_at
-                .is_some_and(|at| now.duration_since(at) < self.lockout_window)
-    }
-
-    /// Record the outcome of a credential presentation, in one statement.
-    ///
-    /// The `CASE` is the decay: a failure whose predecessor is older than the window starts a
-    /// fresh run at 1 rather than tipping a stale count over, so ten mistypes spread over a year
-    /// never lock an account. Done in SQL rather than by reading, deciding and writing, because
-    /// the read-decide-write is exactly the gap the in-memory adapter documents as the price of
-    /// being a development double.
-    async fn record(&self, user: &UserId, granted: bool, now: Timestamp) -> Result<(), StoreError> {
-        let statement = if granted {
-            Statement::from_sql_and_values(
+    /// Settle a reservation whose password matched: the run of failures is over.
+    async fn settle_success(&self, user: &UserId) -> Result<(), StoreError> {
+        self.connection
+            .execute(Statement::from_sql_and_values(
                 DbBackend::Postgres,
                 "UPDATE accounts SET failures = 0, last_failure_at = NULL WHERE user_id = $1",
                 [Value::from(user.as_str().to_owned())],
-            )
-        } else {
-            Statement::from_sql_and_values(
-                DbBackend::Postgres,
-                "UPDATE accounts SET \
-                   failures = CASE \
-                     WHEN last_failure_at IS NOT NULL AND $2 - last_failure_at >= $3 THEN 1 \
-                     ELSE failures + 1 END, \
-                   last_failure_at = $2 \
-                 WHERE user_id = $1",
-                [
-                    Value::from(user.as_str().to_owned()),
-                    Value::from(to_micros(now)),
-                    Value::from(self.lockout_window.as_micros() as i64),
-                ],
-            )
-        };
-        self.connection
-            .execute(statement)
+            ))
             .await
-            .map_err(PORT.failing("recording a credential presentation"))?;
+            .map_err(PORT.failing("recording a successful credential presentation"))?;
         Ok(())
     }
 
-    /// Decide `password` against a looked-up account, and record what happened.
+    /// Reserve an attempt, verify `password` if one was reserved, and settle.
     ///
     /// The shared body of the two [`AccountDirectory`] methods: they differ only in how they find
     /// the account, and that is exactly the difference the port wants them to have.
     async fn decide(
         &self,
-        held: Option<Held>,
+        column: &'static str,
+        key: &str,
         password: &str,
     ) -> Result<Authentication, DirectoryError> {
-        let now = self.clock.now();
-        let Some(held) = held else {
-            // The timing-equalized miss. Refusing here without doing the work would leak the
-            // difference between an unknown address and a wrong password in the response time,
-            // whatever the body said.
-            self.credentials.absorb_miss(password);
-            return Ok(Authentication::Refused);
+        let reservation = self.reserve(column, key).await.map_err(store_unavailable)?;
+        let (user_id, stored) = match reservation {
+            Reservation::NoSuchAccount => {
+                // The timing-equalized miss. Refusing here without doing the work would leak the
+                // difference between an unknown address and a wrong password in the response
+                // time, whatever the body said.
+                self.credentials.absorb_miss(password).await;
+                return Ok(Authentication::Refused);
+            }
+            Reservation::Locked => {
+                // Still absorbed: a locked account that returned instantly would tell an
+                // attacker which addresses they have already spent attempts on.
+                self.credentials.absorb_miss(password).await;
+                return Ok(Authentication::Locked);
+            }
+            Reservation::Reserved { user_id, stored } => (user_id, stored),
         };
-        if self.locked(&held, now) {
-            // Still absorbed: a locked account that returned instantly would tell an attacker
-            // which addresses they have already spent attempts on. Deliberately **not**
-            // recorded — an attempt made while locked must not extend the window, or anybody
-            // who can reach the endpoint can keep somebody else's account locked forever.
-            self.credentials.absorb_miss(password);
-            return Ok(Authentication::Locked);
-        }
         let granted = self
             .credentials
-            .verify(password, &held.stored)
-            .map_err(unavailable)?;
-        self.record(&held.user_id, granted, now)
+            .verify(password, &stored)
             .await
-            .map_err(store_unavailable)?;
+            .map_err(unavailable)?;
         if granted {
-            Ok(Authentication::Granted(held.user_id))
+            self.settle_success(&user_id)
+                .await
+                .map_err(store_unavailable)?;
+            Ok(Authentication::Granted(user_id))
         } else {
             Ok(Authentication::Refused)
         }
@@ -248,14 +270,19 @@ impl PostgresAccounts {
     }
 }
 
-/// The columns an authentication decision reads.
+/// What reserving an attempt found.
 #[derive(Debug)]
-struct Held {
-    user_id: UserId,
-    /// The Argon2id PHC string. Never a password, and never read above this adapter.
-    stored: String,
-    failures: u32,
-    last_failure_at: Option<Timestamp>,
+enum Reservation {
+    /// No account answers to the key.
+    NoSuchAccount,
+    /// The account is refusing attempts; nothing was charged.
+    Locked,
+    /// One failure was charged, and this is what to verify against.
+    Reserved {
+        user_id: UserId,
+        /// The Argon2id PHC string. Never a password, and never read above this adapter.
+        stored: String,
+    },
 }
 
 /// Read one profile projection back.
@@ -301,13 +328,7 @@ impl AccountDirectory for PostgresAccounts {
         email: &'a str,
         password: &'a str,
     ) -> DirectoryFuture<'a, Authentication> {
-        Box::pin(async move {
-            let held = self
-                .lookup("email", email)
-                .await
-                .map_err(store_unavailable)?;
-            self.decide(held, password).await
-        })
+        Box::pin(async move { self.decide("email", email, password).await })
     }
 
     fn authenticate_user<'a>(
@@ -315,13 +336,7 @@ impl AccountDirectory for PostgresAccounts {
         user: &'a UserId,
         password: &'a str,
     ) -> DirectoryFuture<'a, Authentication> {
-        Box::pin(async move {
-            let held = self
-                .lookup("user_id", user.as_str())
-                .await
-                .map_err(store_unavailable)?;
-            self.decide(held, password).await
-        })
+        Box::pin(async move { self.decide("user_id", user.as_str(), password).await })
     }
 }
 
@@ -337,7 +352,7 @@ impl AccountRegistry for PostgresAccounts {
             // Hashed before the statement, so nothing holds a row while Argon2id runs. The cost
             // of that ordering is a hash computed for an address that turns out to be taken,
             // which is the cheap direction to be wrong in.
-            let stored = self.credentials.hash(password).map_err(unavailable)?;
+            let stored = self.credentials.hash(password).await.map_err(unavailable)?;
             // `ON CONFLICT DO NOTHING` on the unique index, so `AlreadyExists` is decided by the
             // index and never by a read followed by a write: two registrations racing on one
             // address must not both believe they own it.
@@ -419,7 +434,7 @@ impl PasswordChange for PostgresAccounts {
         at: Timestamp,
     ) -> DirectoryFuture<'a, PasswordChanged> {
         Box::pin(async move {
-            let stored = self.credentials.hash(password).map_err(unavailable)?;
+            let stored = self.credentials.hash(password).await.map_err(unavailable)?;
             // The lockout is cleared in the same statement, because the port requires it: a
             // change is a successful credential presentation, and leaving the failure count
             // behind would bar somebody from an account they just proved they own.
@@ -455,8 +470,9 @@ mod tests {
         use std::sync::Arc;
 
         use jiff::SignedDuration;
+        use sea_orm::{ConnectionTrait, DbBackend, Statement, Value};
 
-        use super::super::PostgresAccounts;
+        use super::super::{PORT, PostgresAccounts};
         use crate::auth::accounts_memory::MAX_FAILED_ATTEMPTS;
         use crate::auth::conformance::{self, Harness};
         use crate::auth::credential::Credentials;
@@ -510,6 +526,30 @@ mod tests {
                 Box::pin(async move {
                     self.clock.advance(by);
                     Ok(())
+                })
+            }
+
+            fn recorded_failures<'a>(&'a self, address: &'a str) -> StoreFuture<'a, Option<u32>> {
+                Box::pin(async move {
+                    let row = self
+                        .accounts
+                        .connection
+                        .query_one(Statement::from_sql_and_values(
+                            DbBackend::Postgres,
+                            "SELECT failures FROM accounts WHERE email = $1",
+                            [Value::from(address.to_owned())],
+                        ))
+                        .await
+                        .map_err(PORT.failing("reading a failure count"))?;
+                    let Some(row) = row else {
+                        return Ok(None);
+                    };
+                    let failures: i64 = row
+                        .try_get("", "failures")
+                        .map_err(PORT.failing("reading a failure count"))?;
+                    Ok(Some(
+                        u32::try_from(failures).expect("a failure count is a small non-negative"),
+                    ))
                 })
             }
         }

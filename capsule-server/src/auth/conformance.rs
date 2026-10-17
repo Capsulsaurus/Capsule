@@ -30,14 +30,22 @@
 //! works — and the structural guarantee stays in the adapter, as one lock here and as a unique
 //! index in Postgres.
 //!
+//! The lockout is the exception, because its race *is* exhibitable in one process (#510): a
+//! burst of guesses presented together all reach the adapter before any of them is verified, so
+//! an adapter that checks the count, verifies and only then records the failure admits every
+//! one of them. [`parallel_guesses_admit_at_most_the_ceiling`] presents such a burst and counts
+//! how many were actually verified.
+//!
 //! # Reusing a harness
 //!
 //! Every case scopes its addresses and ids to itself, so cases may share one harness and
 //! [`run_all`] does. A case may move the harness clock forward and never moves it back.
 
+use std::task::Poll;
+
 use jiff::{SignedDuration, Timestamp};
 
-use super::directory::{AccountDirectory, Authentication, DirectoryError};
+use super::directory::{AccountDirectory, Authentication, DirectoryError, DirectoryFuture};
 use super::profile::{
     AccountProfiles, PasswordChange, PasswordChanged, ProfileRecord, ProfileUpdate,
 };
@@ -70,6 +78,15 @@ pub trait Harness: Send + Sync {
     /// The seam that keeps the lockout cases backend-agnostic: the deterministic double advances
     /// a manual clock, and a container-backed harness rebuilds its adapter over a clock it drives.
     fn advance(&self, by: SignedDuration) -> StoreFuture<'_, ()>;
+
+    /// The failure count the adapter has **committed** for `address`, read beneath the ports,
+    /// or `None` when no account holds that address.
+    ///
+    /// No port discloses it, on purpose. The one case that needs it,
+    /// [`a_cancelled_attempt_keeps_its_charge`], must know an attempt's charge has landed before
+    /// it cancels the attempt, and on an adapter whose reservation is a network round trip a
+    /// pending future says nothing about whether that round trip has finished.
+    fn recorded_failures<'a>(&'a self, address: &'a str) -> StoreFuture<'a, Option<u32>>;
 }
 
 /// Unwrap a directory result, failing with the operation that was expected to work.
@@ -373,6 +390,145 @@ pub async fn attempts_during_a_lockout_do_not_extend_it(h: &dyn Harness) {
     );
 }
 
+/// A burst of parallel guesses is admitted at most `lockout_attempts` times.
+///
+/// The lockout is only a ceiling if the check and the charge are one step. Three times the
+/// ceiling is presented at once, all polled together, so every guess reaches the adapter before
+/// any verification completes; a guess that was verified answers `Refused`, and one that was
+/// turned away answers `Locked`. At most the ceiling may be `Refused`, and the account must be
+/// locked afterwards — to a correct password too.
+pub async fn parallel_guesses_admit_at_most_the_ceiling(h: &dyn Harness) {
+    let (address, _) = seed(h, "burst").await;
+    let ceiling = h.lockout_attempts();
+    let guesses = (0..ceiling * 3)
+        .map(|_| h.directory().authenticate(&address, "wrong"))
+        .collect();
+    let outcomes = join_all(guesses).await;
+
+    let mut admitted = 0_u32;
+    for outcome in outcomes {
+        match ok(outcome, "authenticate a parallel guess") {
+            Authentication::Refused => admitted += 1,
+            Authentication::Locked => {}
+            Authentication::Granted(_) => panic!("a wrong password must never be granted"),
+        }
+    }
+    assert!(
+        admitted <= ceiling,
+        "{admitted} parallel guesses were verified against a ceiling of {ceiling}"
+    );
+    assert_eq!(
+        ok(
+            h.directory().authenticate(&address, PASSWORD).await,
+            "authenticate after the burst",
+        ),
+        Authentication::Locked,
+    );
+}
+
+/// How many times [`a_cancelled_attempt_keeps_its_charge`] polls its attempt for the charge to
+/// land before failing. Each poll pays a read of the count, so this is generous for a reservation
+/// that takes a few round trips and still ends a case whose adapter never charges.
+const CANCELLED_ATTEMPT_POLLS: u32 = 1_000;
+
+/// An attempt cancelled during verification keeps its charge.
+///
+/// The charge is taken before verification, and nothing refunds it when the request goes away:
+/// a refund on drop would make disconnecting mid-verification a free guess. So a correct password
+/// whose request is dropped once its charge has been committed — by then reserved, and waiting
+/// on the hash — counts as a failure, and the ceiling is reached one attempt sooner than
+/// [`a_success_before_the_ceiling_clears_the_count`] reaches it: `lockout_attempts - 1` failures
+/// plus the dropped attempt lock the account, where the same failures plus a *completed* correct
+/// password would have cleared them.
+///
+/// The password is the correct one on purpose. A dropped wrong guess and a completed one leave
+/// the same count, so only a correct password can tell a kept charge from a refunded one — and
+/// every poll must still be pending, or the attempt completed rather than being cancelled.
+///
+/// The attempt is dropped only after [`Harness::recorded_failures`] shows its charge, not after
+/// its first poll. A pending first poll proves the reservation has *started*; where the
+/// reservation is a network round trip it may still be in flight, and dropping it there would
+/// cancel the charge itself — a different event from cancelling a verification, and one this
+/// case does not assert about. Between polls the case yields, so a driver that needs the
+/// runtime to make progress gets it; a fixed poll budget bounds the wait.
+pub async fn a_cancelled_attempt_keeps_its_charge(h: &dyn Harness) {
+    let (address, _) = seed(h, "cancelled").await;
+    let ceiling = h.lockout_attempts();
+    fail(h, &address, ceiling - 1).await;
+
+    let mut attempt = h.directory().authenticate(&address, PASSWORD);
+    let mut charged = false;
+    for _ in 0..CANCELLED_ATTEMPT_POLLS {
+        let pending =
+            std::future::poll_fn(|cx| Poll::Ready(attempt.as_mut().poll(cx).is_pending())).await;
+        assert!(
+            pending,
+            "the attempt finished before its charge was observed, so there was no verification \
+             to cancel"
+        );
+        let recorded = match h.recorded_failures(&address).await {
+            Ok(recorded) => present(recorded, "the seeded account"),
+            Err(error) => {
+                panic!("a conforming harness must be able to read its own count: {error}")
+            }
+        };
+        if recorded == ceiling {
+            charged = true;
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        charged,
+        "the attempt's charge was not committed within {CANCELLED_ATTEMPT_POLLS} polls"
+    );
+    drop(attempt);
+
+    assert_eq!(
+        ok(
+            h.directory().authenticate(&address, PASSWORD).await,
+            "authenticate after a cancelled attempt",
+        ),
+        Authentication::Locked,
+        "a cancelled attempt must keep its charge, or disconnecting is a free guess",
+    );
+}
+
+/// Drive every future in `futures` concurrently on the calling task, and collect their outputs
+/// in order.
+///
+/// The suite holds its harness by reference, so its futures borrow it and cannot be spawned; this
+/// is the borrow-friendly join a `futures::join_all` would be, without adding the crate for one
+/// test. Concurrent on one task is exactly the interleaving the case needs: each future runs to
+/// its first await before any is resumed.
+async fn join_all<'a, T>(futures: Vec<DirectoryFuture<'a, T>>) -> Vec<Result<T, DirectoryError>> {
+    let mut pending: Vec<Option<DirectoryFuture<'a, T>>> = futures.into_iter().map(Some).collect();
+    let mut done: Vec<Option<Result<T, DirectoryError>>> = std::iter::repeat_with(|| None)
+        .take(pending.len())
+        .collect();
+    std::future::poll_fn(|cx| {
+        let mut waiting = false;
+        for (slot, out) in pending.iter_mut().zip(done.iter_mut()) {
+            if let Some(future) = slot {
+                match future.as_mut().poll(cx) {
+                    Poll::Ready(value) => {
+                        *out = Some(value);
+                        *slot = None;
+                    }
+                    Poll::Pending => waiting = true,
+                }
+            }
+        }
+        if waiting {
+            Poll::Pending
+        } else {
+            Poll::Ready(())
+        }
+    })
+    .await;
+    done.into_iter().flatten().collect()
+}
+
 /// Failures spread wider than the window never accumulate.
 ///
 /// Ten mistypes over a year is not a guessing run, and counting them as one would lock an
@@ -605,6 +761,8 @@ pub async fn run_all(h: &dyn Harness) {
     a_lockout_decays_because_nothing_else_can_clear_it(h).await;
     attempts_during_a_lockout_do_not_extend_it(h).await;
     failures_spread_wider_than_the_window_never_accumulate(h).await;
+    parallel_guesses_admit_at_most_the_ceiling(h).await;
+    a_cancelled_attempt_keeps_its_charge(h).await;
 
     a_password_change_grants_the_new_password_and_refuses_the_old(h).await;
     a_password_change_clears_a_lockout(h).await;
@@ -670,6 +828,10 @@ mod tests {
                 self.clock.advance(by);
                 Ok(())
             })
+        }
+
+        fn recorded_failures<'a>(&'a self, address: &'a str) -> StoreFuture<'a, Option<u32>> {
+            Box::pin(async move { Ok(self.accounts.recorded_failures(address)) })
         }
     }
 
