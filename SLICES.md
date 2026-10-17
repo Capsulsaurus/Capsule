@@ -396,7 +396,7 @@ lives.
 | S-P7 | Dev-server bring-up (task, keys, blob backend, ATS) | iOS path | — | M | MIXED | done | |
 | S-P8 | Swift behavioral FFI harness (flips S-D9) | iOS path | S-P1, S-P7 | M | MIXED | ready | |
 | S-Q1 | Mark/complete E2E cases 2, 3, 11 | e2e | — | S | MIXED | done\* | 2, 3 in `capsule-e2e`; 11 lands with #447 |
-| S-Q2 | E2E case 6: backup → fresh-device restore | e2e | — | M | MIXED | done\* | restore reads; verify → #468; account seam → #467 |
+| S-Q2 | E2E case 6: backup → fresh-device restore | e2e | — | M | MIXED | done\* | restore reads; verify → #550; account seam → #467 |
 | S-Q3 | E2E case 7: full lifecycle chain | e2e | — | M | MIXED | done | |
 | S-Q4 | E2E case 12: cross-device enrollment | e2e | — | M | MIXED | done\* | server leg; client ceremony → #471, #467, #405 |
 | S-Q5 | Live-browser smokes (gRPC-web, share, drop) | e2e | S-P7 | M | MIXED | ready | |
@@ -5562,13 +5562,13 @@ real composition root over the real SDK and a real library — no container, no 
 lands with #447; in-process shape = 5 and the ceremony half of 8; 4 has no route (federation
 is post-v1, #406). The earlier note that every server-side case was suspended for the Kynos
 rebuild is stale: the rebuilt server is what these cases run against. What still blocks a
-case's full wording is a seam in the tree rather than a transport, each filed: a `Workspace` cannot open as a
-server account (#467), the backup artifact carries no album authority (#468), a library's
-adopt registers nothing to publish (#469), and there is no cross-sign or safety-code seam
-(#471). Four seams closed on the way in and no longer bound a case: the push ladder now ships
-the provenance rung and `sync_apply` decodes the record bytes the feed serves (#464, #465),
-the upload policy accepts `image/jxl` (#470), and the SDK's directory publish sends the
-identity-key header (#466).
+case's full wording is a seam in the tree rather than a transport, each filed: a `Workspace`
+cannot open as a server account (#467), a recovered device has not adopted the account's
+published directory (#550), a library's adopt registers nothing to publish (#469), and there
+is no cross-sign or safety-code seam (#471). Four seams closed on the way in and no longer
+bound a case: the push ladder now ships the provenance rung and `sync_apply` decodes the
+record bytes the feed serves (#464, #465), the upload policy accepts `image/jxl` (#470), and
+the SDK's directory publish sends the identity-key header (#466).
 
 ### S-Q1 — Mark/complete E2E cases 2, 3, 11
 
@@ -5599,7 +5599,9 @@ identity-key header (#466).
   be the account's by deriving its default album id, the backup restored into a fresh library
   that reads the asset byte for byte and walks its chain. No container: the composition root
   runs in-process. **Owed:** opening the fresh library *as* the recovered account → #467;
-  `verify` on the restored asset (the artifact carries no album authority) → #468.
+  `verify` on the restored asset → #550: the artifact now carries the album's public authority
+  (#468), so `verify` reaches a verdict, and rejects the exporting device because the new device
+  has not adopted the account's published directory.
 
 ### S-Q3 — E2E case 7: full lifecycle chain
 

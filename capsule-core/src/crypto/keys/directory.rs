@@ -183,6 +183,31 @@ pub struct DirectoryCore {
     pub devices: Vec<DeviceEntry>,
 }
 
+/// Why a device could not be cross-signed into a directory.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum DirectoryError {
+    /// The directory already lists a device under this id — enrolling it again would leave two
+    /// entries a peer cannot choose between.
+    #[error("device {0} is already in the directory")]
+    DeviceAlreadyListed(Uuid),
+    /// The new entry's signing key is already published under another device id. One key under
+    /// two ids would let a manifest's `created_by_device` name either.
+    #[error("the signing key of device {new} is already published for device {existing}")]
+    SigningKeyAlreadyListed {
+        /// The id the new entry claims.
+        new: Uuid,
+        /// The device already publishing that key.
+        existing: Uuid,
+    },
+    /// The new entry is marked revoked; a device is enrolled live and revoked later, never
+    /// enrolled already revoked.
+    #[error("device {0} is marked revoked and cannot be enrolled")]
+    EntryRevoked(Uuid),
+    /// `directory_version` is at its ceiling, so no later version can be signed.
+    #[error("directory_version cannot advance past {0}")]
+    VersionExhausted(u64),
+}
+
 /// A master/IK-signed device directory.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceDirectory {
@@ -195,6 +220,49 @@ pub struct DeviceDirectory {
 impl DirectoryCore {
     fn signing_bytes(&self) -> Vec<u8> {
         crate::cbor::to_canonical_vec(self).expect("directory core serializes")
+    }
+
+    /// Add a newly enrolled device's entry — the **cross-sign** step of a cross-device add — at
+    /// the next `directory_version`, stamping `updated_at`. Sign the result with
+    /// [`sign`](Self::sign) to publish it.
+    ///
+    /// Refused, leaving `self` unchanged, when the entry's id or signing key is already listed
+    /// (including on a revoked entry, which is retained so its past manifests stay verifiable),
+    /// when the entry arrives already revoked, or when the version cannot advance.
+    pub fn add_device(
+        &mut self,
+        entry: DeviceEntry,
+        updated_at: String,
+    ) -> Result<(), DirectoryError> {
+        if entry.revoked_at.is_some() {
+            return Err(DirectoryError::EntryRevoked(entry.device_id));
+        }
+        if self.devices.iter().any(|d| d.device_id == entry.device_id) {
+            return Err(DirectoryError::DeviceAlreadyListed(entry.device_id));
+        }
+        if let Some(existing) = self
+            .devices
+            .iter()
+            .find(|d| d.dsk_public == entry.dsk_public)
+        {
+            return Err(DirectoryError::SigningKeyAlreadyListed {
+                new: entry.device_id,
+                existing: existing.device_id,
+            });
+        }
+        let next = self
+            .directory_version
+            .checked_add(1)
+            .ok_or(DirectoryError::VersionExhausted(self.directory_version))?;
+        tracing::info!(
+            device_id = %entry.device_id,
+            directory_version = next,
+            "directory: cross-signing a device in"
+        );
+        self.directory_version = next;
+        self.updated_at = updated_at;
+        self.devices.push(entry);
+        Ok(())
     }
 
     /// Sign this core with the user IK, producing a [`DeviceDirectory`].
@@ -315,6 +383,97 @@ mod tests {
         let back: DeviceDirectory = crate::cbor::from_slice(&bytes).unwrap();
         assert_eq!(back, d);
         assert!(back.verify(&ik.verifying_key()));
+    }
+
+    // ── Cross-signing a new device in ───────────────────────────────────────────
+
+    fn second() -> DeviceEntry {
+        DeviceEntry {
+            device_id: Uuid::from_u128(0xD2),
+            dsk_public: HybridSigningKey::from_seed_bytes(&[5; 32], &[6; 32]).verifying_key(),
+            dek_public: Some(DekPublic(DekKeypair::generate().public_bytes())),
+            added_at: "2026-06-01T00:00:00Z".into(),
+            revoked_at: None,
+        }
+    }
+
+    /// The new device is appended at the next version, the existing one survives, and the
+    /// re-signed directory verifies and lets a peer encapsulate to the new device.
+    #[test]
+    fn adding_a_device_bumps_the_version_and_keeps_the_others() {
+        let (ik, dev) = (ik(), dev());
+        let mut c = core(3, &dev);
+        let new = second();
+        c.add_device(new.clone(), "2026-06-01T00:00:01Z".into())
+            .unwrap();
+        assert_eq!(c.directory_version, 4);
+        assert_eq!(c.updated_at, "2026-06-01T00:00:01Z");
+        let d = c.sign(&ik);
+        assert!(d.verify(&ik.verifying_key()));
+        assert!(d.device(&Uuid::from_u128(0xD1)).is_some());
+        assert_eq!(d.device(&Uuid::from_u128(0xD2)), Some(&new));
+        assert!(
+            d.device(&Uuid::from_u128(0xD2))
+                .unwrap()
+                .encapsulate()
+                .is_ok()
+        );
+    }
+
+    /// Every refusal leaves the core exactly as it was — no half-applied version bump.
+    #[test]
+    fn a_refused_add_leaves_the_core_unchanged() {
+        let dev = dev();
+        let original = core(3, &dev);
+
+        let mut duplicate_id = second();
+        duplicate_id.device_id = Uuid::from_u128(0xD1);
+        let mut duplicate_key = second();
+        duplicate_key.dsk_public = dev.verifying_key();
+        let mut revoked = second();
+        revoked.revoked_at = Some("2026-06-02T00:00:00Z".into());
+
+        let cases = [
+            (
+                duplicate_id,
+                DirectoryError::DeviceAlreadyListed(Uuid::from_u128(0xD1)),
+            ),
+            (
+                duplicate_key,
+                DirectoryError::SigningKeyAlreadyListed {
+                    new: Uuid::from_u128(0xD2),
+                    existing: Uuid::from_u128(0xD1),
+                },
+            ),
+            (revoked, DirectoryError::EntryRevoked(Uuid::from_u128(0xD2))),
+        ];
+        for (entry, expected) in cases {
+            let mut c = original.clone();
+            assert_eq!(c.add_device(entry, "later".into()), Err(expected));
+            assert_eq!(c, original);
+        }
+
+        let mut c = original.clone();
+        c.directory_version = u64::MAX;
+        let before = c.clone();
+        assert_eq!(
+            c.add_device(second(), "later".into()),
+            Err(DirectoryError::VersionExhausted(u64::MAX))
+        );
+        assert_eq!(c, before);
+    }
+
+    /// A revoked entry still holds its id: a revoked device cannot be re-enrolled under it.
+    #[test]
+    fn a_revoked_entry_still_reserves_its_id() {
+        let mut c = core(1, &dev());
+        c.devices[0].revoked_at = Some("2026-06-02T00:00:00Z".into());
+        let mut again = second();
+        again.device_id = Uuid::from_u128(0xD1);
+        assert_eq!(
+            c.add_device(again, "later".into()),
+            Err(DirectoryError::DeviceAlreadyListed(Uuid::from_u128(0xD1)))
+        );
     }
 
     // ── `dek_public` wire presence (slice `S-A11`) ──────────────────────────────
