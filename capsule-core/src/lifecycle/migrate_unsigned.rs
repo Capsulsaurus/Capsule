@@ -73,7 +73,8 @@ fn legacy_stack_id(user_id: &Uuid, detection_method: &str, detection_key: &str) 
 #[derive(Debug, Clone)]
 pub struct UnsignedMigrationOptions {
     /// The album a legacy asset lands in when its own `album_id` is absent, unparseable, or
-    /// names an album this workspace holds no write capability for. Must already exist and
+    /// names an album this workspace does not own with write capability (a shared album is
+    /// never honoured: the unsigned claim is untrusted). Must already exist and
     /// be writable: the verb never mints an album.
     pub fallback_album: Uuid,
     /// The retention window, in days, stamped on the `delete` record of a legacy asset whose
@@ -490,9 +491,10 @@ impl Workspace {
     /// admitted candidates plus any an interrupted earlier run already placed in that stack.
     /// A singleton gets no stack; its hint survives in the fold.
     ///
-    /// The album is the legacy `album_id` when this workspace holds write capability for it,
-    /// else `opts.fallback_album`, which must already exist and be writable — the verb never
-    /// mints an album, and a read-only fallback is a typed
+    /// The album is the legacy `album_id` when this workspace owns it (holds its admin and
+    /// write capabilities; a shared album is not honoured), else `opts.fallback_album`, which
+    /// must already exist and be writable — the verb never mints an album, and a read-only
+    /// fallback is a typed
     /// [`AlbumReadOnly`](LifecycleError::AlbumReadOnly) refusal before anything is written.
     ///
     /// Idempotent and resumable: a second run finds signed sidecars with chains and does
@@ -785,20 +787,27 @@ impl Workspace {
         })
     }
 
-    /// The legacy `album_id` when it parses and this workspace can write into it, else the
-    /// fallback.
+    /// The legacy `album_id` when it parses and names an album this workspace **owns** (holds
+    /// its admin capability) and can write into, else the fallback.
+    ///
+    /// The legacy sidecar is unsigned, so its `album_id` is a claim anyone who can plant a file
+    /// under `media/` can make. Write access alone would let such a file be signed into an
+    /// album shared with this device; only the user's own albums are honoured, and everything
+    /// else lands in the fallback album the caller chose.
     fn resolve_legacy_album(&self, legacy: Option<&str>, opts: &UnsignedMigrationOptions) -> Uuid {
-        let held = legacy
-            .and_then(|s| Uuid::parse_str(s).ok())
-            .filter(|id| self.albums.get(id).is_some_and(|a| a.write_tier.is_some()));
-        if let Some(id) = held {
+        let owned = legacy.and_then(|s| Uuid::parse_str(s).ok()).filter(|id| {
+            self.albums
+                .get(id)
+                .is_some_and(|a| a.admin.is_some() && a.write_tier.is_some())
+        });
+        if let Some(id) = owned {
             return id;
         }
         if let Some(legacy) = legacy {
             tracing::debug!(
                 legacy_album = legacy,
                 fallback_album = %opts.fallback_album,
-                "unsigned migration: legacy album not held or not writable; using the fallback"
+                "unsigned migration: legacy album not held, not owned, or not writable; using the fallback"
             );
         }
         opts.fallback_album
@@ -1855,6 +1864,52 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    /// A legacy `album_id` naming an album this device can write into but does not own (a
+    /// shared album: write tier, no admin capability) is not honoured: the unsigned claim
+    /// lands the asset in the fallback album, while an owned legacy album is still honoured.
+    #[test]
+    fn a_writable_album_the_user_does_not_own_falls_back() {
+        let lib = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let fallback = ws.create_album("Imports").unwrap();
+        let shared = ws.create_album("Shared with me").unwrap();
+        let owned = ws.create_album("Mine").unwrap();
+        // A shared album: the write capability without the admin capability.
+        ws.albums.get_mut(&shared).unwrap().admin = None;
+        assert!(ws.albums[&shared].write_tier.is_some(), "still writable");
+
+        let planted = Uuid::from_u128(0xF5);
+        write_legacy(
+            lib.path(),
+            planted,
+            b"\xFF\xD8\xFF planted into shared",
+            vec![("album_id", text(&shared.to_string()))],
+        );
+        let mine = Uuid::from_u128(0xF6);
+        write_legacy(
+            lib.path(),
+            mine,
+            b"\xFF\xD8\xFF legacy owned",
+            vec![("album_id", text(&owned.to_string()))],
+        );
+
+        let report = ws.migrate_unsigned_sidecars(&opts(fallback)).unwrap();
+        let mut migrated = report.migrated.clone();
+        migrated.sort();
+        assert_eq!(migrated, vec![planted, mine]);
+        assert_eq!(
+            ws.asset(&planted).unwrap().album_id,
+            fallback,
+            "a shared album's unsigned claim falls back"
+        );
+        assert_eq!(
+            ws.asset(&mine).unwrap().album_id,
+            owned,
+            "an owned legacy album is honoured"
+        );
+        assert_eq!(ws.verify(&planted).unwrap(), VerifyOutcome::Accept);
     }
 
     /// A read-only fallback album (recovered from a backup: content keys, no write
