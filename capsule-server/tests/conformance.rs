@@ -141,10 +141,11 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::OK);
 
-    // 413 is declared on *every* operation, because the body-size limit is mounted on the whole
-    // router and a Kynos interceptor's declaration is its type (`S-C33`). So every operation
-    // produces one here, sent the cheapest way the limit can be reached: an over-declared
-    // `Content-Length`, refused before a byte of the body is read.
+    // 413 is declared on *every* operation, because every group carries a body-size cap — the
+    // exempt ten in a group holding nothing else — and a Kynos interceptor's declaration is its
+    // type (`S-C33`, #478). So every operation produces one here, sent the cheapest way the
+    // limit can be reached: a `Content-Length` over every group's cap, refused before a byte of
+    // the body is read.
     for (method, path) in [
         ("GET", "/v1/version"),
         ("POST", "/v1/auth/register"),

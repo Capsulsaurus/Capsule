@@ -98,7 +98,6 @@ pub mod upload;
 pub mod verify;
 
 use kynos::middleware::catch_panic::Propagate;
-use kynos::middleware::limits::BodySize;
 use kynos::middleware::stack::Cons;
 use kynos::prelude::*;
 use kynos::router::group::Group;
@@ -127,11 +126,13 @@ pub fn router() -> ServerRouter {
         // scheme's `401`, the gate's own `426` — because each of those is produced beneath this
         // and passes back up through it. See [`negotiation`].
         .intercept(negotiation::Negotiation::new())
-        // Mounted on the whole router, not on the operations that happen to take a body today:
-        // an oversized body is refused wherever it is sent, and the `413` that refusal produces
-        // is declared on every operation it covers because Kynos derives the declaration from
-        // the interceptor's own type. See [`limits`].
-        .intercept(limits::body_size())
+        // The body-size cap is **not** mounted here. It sits on every group below instead — each
+        // group carrying the cap its own operations need — because Kynos refuses two `413`
+        // producers on one route, so a router-wide cap would leave no group room for a tighter
+        // one (#478). Every operation is still covered by exactly one, including the ten the
+        // protocol gate exempts, which get a group holding nothing but the cap. The group's cap
+        // is its **first** interceptor, so it stays outermost beneath `Negotiation` and an
+        // oversized body is refused before the gate reads anything. See [`limits`].
         // The protocol gate is two `Group`s, not a router interceptor, for two reasons the type
         // system makes concrete. First, the design exempts ten operations, and a group is how
         // Kynos spells "these and not those": an operation mounted inside declares the handshake
@@ -152,6 +153,7 @@ pub fn router() -> ServerRouter {
         // makes the next addition obvious rather than a puzzle.
         .group(
             Group::<App>::new("/")
+                .intercept(limits::body_size())
                 .intercept(negotiation::ProtocolGate::new())
                 // The account: opening, refreshing and closing sessions, revoking them all.
                 .mount(kynos::routes![
@@ -211,11 +213,14 @@ pub fn router() -> ServerRouter {
         // with, and the signed report intake. The pull itself is `sync_feed` and `get_blob` in
         // the read group below — federation adds no new data protocol (design/federation.md).
         //
-        // Its own group rather than a fifth `mount` on the one above, because these four are one
-        // surface and the sixteen-operation tuple ceiling is close. A **tighter body cap** was
-        // tried here and cannot be expressed: see [`crate::limits::MAX_FEDERATION_BODY_BYTES`].
+        // Its own group rather than a fifth `mount` on the one above, for two reasons: these four
+        // are one surface and the sixteen-operation tuple ceiling is close, and they carry a
+        // **tighter body cap** than the rest of the writes — no body here is anywhere near an
+        // upload chunk, and `submit_federated_report` is the server's only unauthenticated write.
+        // See [`crate::limits::MAX_FEDERATION_BODY_BYTES`].
         .group(
             Group::<App>::new("/")
+                .intercept(limits::federation_body_size())
                 .intercept(negotiation::ProtocolGate::new())
                 .mount(kynos::routes![
                     routes::federation::issue_capability,
@@ -228,6 +233,7 @@ pub fn router() -> ServerRouter {
         // any protocol date, and declaring the `400` alone.
         .group(
             Group::<App>::new("/")
+                .intercept(limits::body_size())
                 .intercept(negotiation::ProtocolReadGate::new())
                 .mount(kynos::routes![
                     routes::devices::list_devices,
@@ -256,18 +262,26 @@ pub fn router() -> ServerRouter {
         // oracle. The two `/d/{opaque_id}*` guest deposits have their protocol pinned at link
         // issuance (web-upload.md), so a browser guest has nothing to assert. All ten still
         // carry the response headers, because `Negotiation` is the router's.
-        .mount(kynos::routes![
-            routes::version::get_version,
-            routes::well_known::attestation_keys,
-            routes::well_known::server_info,
-            routes::well_known::deprecation_announcements,
-            routes::well_known::revoked_jti,
-            routes::share::share_metadata,
-            routes::share::share_wrapped_secret,
-            routes::share::share_blob,
-            routes::drop::create_drop,
-            routes::drop::append_drop_chunk,
-        ])
+        //
+        // A group holding the body-size cap and nothing else: the cap is per-group now, and these
+        // ten are still covered by one — the backstop, because a guest's drop chunk is as large
+        // as an upload chunk.
+        .group(
+            Group::<App>::new("/")
+                .intercept(limits::body_size())
+                .mount(kynos::routes![
+                    routes::version::get_version,
+                    routes::well_known::attestation_keys,
+                    routes::well_known::server_info,
+                    routes::well_known::deprecation_announcements,
+                    routes::well_known::revoked_jti,
+                    routes::share::share_metadata,
+                    routes::share::share_wrapped_secret,
+                    routes::share::share_blob,
+                    routes::drop::create_drop,
+                    routes::drop::append_drop_chunk,
+                ]),
+        )
 }
 
 /// The router's full type, interceptors included.
@@ -275,12 +289,10 @@ pub fn router() -> ServerRouter {
 /// Spelled out because a Kynos interceptor is part of the router's *type* — that is what makes
 /// two interceptors answering with one status a compile error rather than a runtime surprise —
 /// so mounting one changes this signature. That is a feature: the alias is the one place the
-/// server's middleware stack is written down.
-pub type ServerRouter = Router<
-    App,
-    Propagate,
-    Cons<BodySize, Cons<negotiation::Negotiation, Cons<problem::CodedProblems, ()>>>,
->;
+/// server's router-wide middleware stack is written down. The body-size cap is not in it: each
+/// group carries its own (see [`router`] and [`limits`]).
+pub type ServerRouter =
+    Router<App, Propagate, Cons<negotiation::Negotiation, Cons<problem::CodedProblems, ()>>>;
 
 /// Builds the service the server and the in-process tests both drive.
 ///
