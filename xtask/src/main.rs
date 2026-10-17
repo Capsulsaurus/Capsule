@@ -4,7 +4,7 @@
 //!
 //! - `set-version <X.Y.Z>` writes a single repo-wide version string into every
 //!   package's source of truth so a release bump stays in sync across Rust, web,
-//!   docs, Python, Android, and iOS. Each per-format editor is a pure
+//!   docs, Android, and iOS. Each per-format editor is a pure
 //!   `&str -> Result<String>` function so it can be unit-tested without disk I/O.
 //! - `i18n [--check]` compiles the canonical `locales/` catalogs into each
 //!   platform's native localization format (see [`i18n`]). `--check` verifies the
@@ -108,7 +108,6 @@ type Editor = fn(&str, &str) -> Result<String>;
 fn set_version(root: &Path, version: &str) -> Result<()> {
     let edits: &[(&str, Editor)] = &[
         ("Cargo.toml", set_cargo_workspace_version),
-        ("capsule-vision/pyproject.toml", set_pyproject_version),
         ("capsule-web/package.json", set_package_json_version),
         ("capsule-docs/package.json", set_package_json_version),
         ("gradle.properties", set_gradle_properties_version),
@@ -145,22 +144,6 @@ fn set_cargo_workspace_version(input: &str, version: &str) -> Result<String> {
         bail!("[workspace.package] version not found");
     }
     doc["workspace"]["package"]["version"] = toml_edit::value(version);
-    Ok(doc.to_string())
-}
-
-/// `capsule-vision/pyproject.toml`'s `[project] version`.
-fn set_pyproject_version(input: &str, version: &str) -> Result<String> {
-    let mut doc = input
-        .parse::<toml_edit::DocumentMut>()
-        .context("parsing pyproject.toml")?;
-    let exists = doc
-        .get("project")
-        .and_then(Item::as_table)
-        .is_some_and(|p| p.contains_key("version"));
-    if !exists {
-        bail!("[project] version not found");
-    }
-    doc["project"]["version"] = toml_edit::value(version);
     Ok(doc.to_string())
 }
 
@@ -250,14 +233,6 @@ mod tests {
     }
 
     #[test]
-    fn pyproject_version_updates() {
-        let input = "[project]\nname = \"capsule-vision\"\nversion = \"0.1.0\"\n";
-        let out = set_pyproject_version(input, "1.2.3").unwrap();
-        assert!(out.contains("version = \"1.2.3\""));
-        assert!(out.contains("name = \"capsule-vision\""));
-    }
-
-    #[test]
     fn package_json_version_updates_field_and_keeps_formatting() {
         let input =
             "{\n  \"name\": \"capsule-web\",\n  \"version\": \"0.1.0\",\n  \"private\": true\n}\n";
@@ -290,6 +265,5 @@ mod tests {
         assert!(set_gradle_properties_version("nope=1\n", "0.2.0").is_err());
         assert!(set_marketing_version("no setting here\n", "0.2.0").is_err());
         assert!(set_package_json_version("{}\n", "0.2.0").is_err());
-        assert!(set_pyproject_version("[tool]\nx = 1\n", "0.2.0").is_err());
     }
 }

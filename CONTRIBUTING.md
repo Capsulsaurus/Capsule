@@ -46,7 +46,6 @@ mise run check-docs        # format, lint, test, build
 mise run check-docs-truth  # every name the docs claim resolves in the tree
 mise run check-kotlin      # ktlint + detekt
 mise run check-swift       # format, lint, unit tests, iPhone UI sweep (macOS only)
-mise run check-vision      # format + lint
 mise run check-md          # markdownlint
 ```
 

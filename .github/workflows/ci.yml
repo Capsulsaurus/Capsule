@@ -29,7 +29,6 @@ jobs:
       web: ${{ steps.filter.outputs.web }}
       docs: ${{ steps.filter.outputs.docs }}
       docs-truth: ${{ steps.filter.outputs.docs-truth }}
-      vision: ${{ steps.filter.outputs.vision }}
       markdown: ${{ steps.filter.outputs.markdown }}
       kotlin: ${{ steps.filter.outputs.kotlin }}
       swift: ${{ steps.filter.outputs.swift }}
@@ -139,11 +138,6 @@ jobs:
               - '.gitmodules'
               - 'legacy-review/**'
               - 'mise.toml'
-              - '.github/workflows/ci.yml'
-            vision:
-              - 'capsule-vision/**'
-              - 'mise.toml'
-              - 'mise-tasks/**'
               - '.github/workflows/ci.yml'
             markdown:
               - '**/*.md'
@@ -466,28 +460,6 @@ jobs:
       - name: Check (every file, route, and anchor the docs name)
         run: mise run check-docs-truth
 
-  vision:
-    name: Vision (format + lint)
-    needs: changes
-    if: ${{ needs.changes.outputs.vision == 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
-          cache-dependency-glob: capsule-vision/uv.lock
-      - name: Install Python and sync deps
-        working-directory: capsule-vision
-        run: uv sync --frozen
-      - name: Set up mise (task runner)
-        uses: jdx/mise-action@v2
-        with:
-          install: false
-      - name: Check (format + lint)
-        run: mise run check-vision
-
   markdown:
     name: Markdown (lint)
     needs: changes
@@ -572,7 +544,7 @@ jobs:
   # Single aggregated status check. Mark THIS ("CI / required") as the required
   # check in branch protection — path-filtered jobs report "skipped", which this
   # treats as a pass. Every job in `needs` is verified below: the loop covers the
-  # ten gates (`rust-test` included — it became blocking with `S-C59`, see the
+  # nine gates (`rust-test` included — it became blocking with `S-C59`, see the
   # note on that job — and `rust-containers`, blocking from the start, #514), and `changes` is checked ahead of it under a stricter rule,
   # because "skipped" is only trustworthy when the filter that skipped it ran.
   # A job in `needs` but absent from both checks is a gate that cannot fail.
@@ -581,7 +553,7 @@ jobs:
     if: always()
     # TODO(track:deferred): re-add `kotlin` and `swift` here and to the loop below when mobile
     # resumes — see #389 (Android) and #391–#393 (Apple). Both jobs are disabled (`if: false`).
-    needs: [changes, commit-lint, rust, rust-test, rust-containers, rust-cross, web, docs, docs-truth, vision, markdown]
+    needs: [changes, commit-lint, rust, rust-test, rust-containers, rust-cross, web, docs, docs-truth, markdown]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs succeeded
@@ -603,7 +575,7 @@ jobs:
                    "${{ needs.rust-test.result }}" "${{ needs.rust-containers.result }}" \
                    "${{ needs.rust-cross.result }}" \
                    "${{ needs.web.result }}" \
-                   "${{ needs.docs.result }}" "${{ needs.docs-truth.result }}" "${{ needs.vision.result }}" \
+                   "${{ needs.docs.result }}" "${{ needs.docs-truth.result }}" \
                    "${{ needs.markdown.result }}"; do
             if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
               echo "A required job did not pass (result: $r)."

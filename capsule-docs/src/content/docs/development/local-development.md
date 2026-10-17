@@ -10,7 +10,7 @@ Every command in this repository runs through **[mise](https://mise.jdx.dev/)**.
 
 ```bash
 mise install          # installs the pinned tools from [tools] in mise.toml
-mise run setup        # bun install in capsule-web + capsule-docs, uv sync in capsule-vision
+mise run setup        # bun install in capsule-web + capsule-docs
 mise run hooks-install # installs the git hooks (hk)
 ```
 
@@ -38,7 +38,6 @@ mise run hooks-install # installs the git hooks (hk)
 | `mise run check-web` | `format-check-web`, `lint-check-web`, `test-web`, `build-web` |
 | `mise run check-docs` | `format-check-docs`, `lint-check-docs`, `build-docs` (a real Astro build — a broken internal link fails it) |
 | `mise run check-md` | `lint-check-md` (markdownlint over every `.md` in the repo) |
-| `mise run check-vision` | `format-check-vision`, `lint-check-vision` |
 | `mise run check-kotlin` | `format-check-kotlin`, `lint-check-kotlin` |
 
 ### The ones you run most
