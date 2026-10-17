@@ -3,13 +3,13 @@
 //! This module owns the *structure* the AI design fixes — independent of which model actually
 //! runs:
 //!
-//! - the [`registry`] — the **canonical model inventory** (one v1-committed row per task) and the
+//! - the `registry` — the **canonical model inventory** (one v1-committed row per task) and the
 //!   **embedding-provenance invariant** (every embedding carries `(model_id, model_version)`;
 //!   the [vector index](crate::db::EmbeddingInsert) refuses inserts from **unknown** models, while a
 //!   *superseded-but-known* version is admitted as a stale-flagged row and excluded from
 //!   queries until regenerated). It owns the version-bump [swap
-//!   primitive](registry::Registry::bump_version);
-//! - the [`regen`] loop — the background per-asset **regeneration orchestration** that consumes
+//!   primitive](Registry::bump_version);
+//! - the `regen` loop — the background per-asset **regeneration orchestration** that consumes
 //!   the staleness a swap creates: it walks
 //!   [`stale_embedding_assets`](crate::db::DatabaseDriver::stale_embedding_assets) and re-embeds
 //!   each asset at the new canonical version through an injected [`Embedder`]
@@ -19,12 +19,12 @@
 //!   canonical model through [`ModelRunner`] — the same two seams first-time
 //!   indexing uses, so a regenerated vector equals what a fresh import would produce.
 //!
-//! - the [`runner`] seam — the [`ModelRunner`] trait every consumer routes
+//! - the `runner` seam — the [`ModelRunner`] trait every consumer routes
 //!   per-task inference over decoded pixels through, and the deterministic
 //!   [`FixtureRunner`] double. Real per-platform runners (ONNX/CoreML/NNAPI,
 //!   the CLIP runner) ride the **default-off, weight-fetching `inference` feature** — a follow-up,
 //!   never part of the default gate;
-//! - the [`orchestrator`] — the deterministic execution path for the v1-committed slots: run the
+//! - the `orchestrator` — the deterministic execution path for the v1-committed slots: run the
 //!   canonical model over an asset, land semantic + face vectors in the right `vec0` partition
 //!   ([platform-partition fallback](orchestrator::resolve_partition)), and write zero-shot
 //!   [AI tags](orchestrator::auto_tag) into `tags_ai` as a signed metadata update through the
@@ -42,15 +42,15 @@
 //!
 //! [AI/ML Integrations]: https://docs/design/ai/
 
-pub mod orchestrator;
-pub mod regen;
-pub mod registry;
-pub mod runner;
+mod orchestrator;
+mod regen;
+mod registry;
+mod runner;
 
 pub use orchestrator::{
-    AiTagSink, AssetSource, BatchMode, CANONICAL_PARTITION, KnownAnswer, OrchestratorError,
-    StoreError, auto_tag, choose_batch_mode, embed_and_store, micro_batch_size, resolve_partition,
-    semantic_search, should_pause_for_heat,
+    AiTagSink, AssetSource, BatchMode, CANONICAL_PARTITION, KnownAnswer, MICRO_BATCH_SIZES,
+    OrchestratorError, StoreError, auto_tag, choose_batch_mode, embed_and_store, micro_batch_size,
+    resolve_partition, semantic_search, should_pause_for_heat,
 };
 pub use regen::{
     DeterministicEmbedder, EmbedError, Embedder, RegenError, RegenReport, RunnerEmbedder,

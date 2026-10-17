@@ -75,8 +75,7 @@ use crate::cbor;
 use crate::crypto::encryption::{blob_ciphertext_hash, blob_nonce, open_blob};
 use crate::crypto::hash::Hash32;
 use crate::crypto::keys::Amk;
-use crate::crypto::provenance::action::Action;
-use crate::crypto::provenance::{AssetManifest, ProvenanceRecord};
+use crate::crypto::provenance::{Action, AssetManifest, ProvenanceRecord};
 use crate::crypto::verify_asset::{
     BindingReject, PendingReason, RejectReason, VerifyOutcome, verify_asset,
 };

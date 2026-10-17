@@ -139,7 +139,7 @@ mod tests {
 
     use super::super::fast_workspace;
     use super::*;
-    use crate::crypto::encryption::stream;
+    use crate::crypto::encryption::{decrypt_asset_vec, encrypt_asset_vec_with_prefix};
 
     fn imported_asset(ws: &mut Workspace, bytes: &[u8]) -> (Uuid, Uuid) {
         let src = TempDir::new().unwrap();
@@ -203,8 +203,8 @@ mod tests {
         assert_eq!(recovered, expected, "recipient recovers the true file key");
         // ... and it actually decrypts the asset ciphertext back to plaintext.
         let (_, ciphertext) =
-            stream::encrypt_asset_vec_with_prefix(&expected, head.nonce_prefix, plaintext);
-        let back = stream::decrypt_asset_vec(&recovered, &head.nonce_prefix, &ciphertext).unwrap();
+            encrypt_asset_vec_with_prefix(&expected, head.nonce_prefix, plaintext);
+        let back = decrypt_asset_vec(&recovered, &head.nonce_prefix, &ciphertext).unwrap();
         assert_eq!(back, plaintext);
     }
 
