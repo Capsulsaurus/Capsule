@@ -43,7 +43,7 @@ mise run hooks-install # installs the git hooks (hk)
 
 ### The ones you run most
 
-- **Rust:** `format-rust` (`cargo fmt`), `lint-rust` / `lint-check-rust` (`cargo clippy --workspace` with the shared `$CLIPPY_FLAGS` set — lints are configured once in `mise.toml`, never per crate), `test-rust` (`cargo nextest run`, three invocations: the workspace, then `capsule-core` and `capsule-sdk` with `--features ffi`), `build-rust`, `test-coverage-rust`.
+- **Rust:** `format-rust` (`cargo fmt`), `lint-rust` / `lint-check-rust` (`cargo clippy --workspace` with the shared `$CLIPPY_FLAGS` set — lints are configured once in `mise.toml`, never per crate), `test-rust` (`cargo nextest run`, three invocations: the workspace, then `capsule-core` and `capsule-sdk` with `--features ffi`), `test-rust-release` (the `#[cfg(not(debug_assertions))]` tests, which every test-profile build compiles out: `cargo nextest run --cargo-profile release` over the crates listed in `RELEASE_TEST_CRATES`, after a guard that fails when such a test appears in any other crate — CI's test job and pre-push both run it), `build-rust`, `test-coverage-rust`.
 - **Web:** `format-web` / `lint-web` (biome), `test-web` (bun; depends on `build-wasm`, `share-kat`, and `drop-kat`, which generate the WASM glue and the cross-language KAT fixtures the tests load), `build-web`.
 - **Docs:** `format-docs` / `lint-docs` (biome over `capsule-docs`), `build-docs` (Astro/Starlight).
 - **Markdown:** `lint-md` / `lint-check-md`.
