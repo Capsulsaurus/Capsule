@@ -995,6 +995,11 @@ mod tests {
     /// The fixture's account with a second device published, plus that device's DSK — a user
     /// with a phone and a laptop.
     fn with_second_device(f: &mut Fixture) -> HybridSigningKey {
+        with_second_device_added_at(f, "2026-05-30T00:00:00Z")
+    }
+
+    /// [`with_second_device`], with the second device published at `added_at`.
+    fn with_second_device_added_at(f: &mut Fixture, added_at: &str) -> HybridSigningKey {
         let second = HybridSigningKey::from_seed_bytes(&[21; 32], &[22; 32]);
         let mut core = f.directory.core.clone();
         core.directory_version += 1;
@@ -1002,7 +1007,7 @@ mod tests {
             device_id: Uuid::from_u128(SECOND_DEVICE),
             dsk_public: second.verifying_key(),
             dek_public: None,
-            added_at: "2026-05-30T00:00:00Z".into(),
+            added_at: added_at.into(),
             revoked_at: None,
         });
         f.directory = core.sign(&HybridSigningKey::from_seed_bytes(&[10; 32], &[11; 32]));
@@ -1049,6 +1054,26 @@ mod tests {
         let m = f
             .core(Action::Delete, Some(head))
             .sign(&forger, &f.write1)
+            .unwrap();
+        assert_eq!(
+            f.verify(&m, Some(head)),
+            VerifyOutcome::TerminalReject(RejectReason::BadDeviceSig)
+        );
+        assert_eq!(diagnose(&f, &m, Some(head)), None);
+    }
+
+    /// A device published after the record's timestamp cannot have written it: its
+    /// signature is not diagnosed as the legacy defect, even though it verifies and every
+    /// other step holds.
+    #[test]
+    fn a_signer_added_after_the_record_is_not_diagnosed() {
+        let mut f = Fixture::new();
+        // The record is stamped 2026-05-31T12:00:00Z; the second device arrives a day later.
+        let second = with_second_device_added_at(&mut f, "2026-06-01T00:00:00Z");
+        let head = hash::hash_bytes(b"create-head");
+        let m = f
+            .core(Action::Delete, Some(head))
+            .sign(&second, &f.write1)
             .unwrap();
         assert_eq!(
             f.verify(&m, Some(head)),
