@@ -595,10 +595,24 @@ async fn ffi_escrow_and_device_directory_round_trip() {
 
     // put → get round-trips the opaque document byte-for-byte, and what comes back still
     // opens under the recovery secret — which is the whole point of storing it.
-    session
+    let first = session
         .escrow_put(api_base.clone(), blob.clone())
         .await
         .unwrap();
+    assert_eq!(
+        first,
+        FfiEscrowStored {
+            stored_at: "2026-01-01T00:00:00Z".to_owned(),
+            replaced: false,
+        },
+        "a first escrow is recovery set up, with the server's stored_at as RFC 3339"
+    );
+    // Storing again over it is a replacement — the event that retires the old secret.
+    let second = session
+        .escrow_put(api_base.clone(), blob.clone())
+        .await
+        .unwrap();
+    assert!(second.replaced, "a second escrow replaces the first");
     let fetched = session.escrow_get(api_base.clone()).await.unwrap();
     assert_eq!(fetched, blob, "the escrow blob is stored verbatim");
     assert!(

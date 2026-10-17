@@ -101,6 +101,8 @@ Verification is **local-only**: the client keeps a cached copy of the escrow blo
 
 **Stale-cache rule:** before recording a failure, the client refreshes the escrow blob from the server (it may have been rotated from another device) and retries once — otherwise every rotation would manufacture false failures on the user's other devices.
 
+Storing an escrow (`PUT /v1/auth/escrow`) answers `stored_at` and `replaced`, and the SDK returns both (`EscrowStored`). The cached copy carries the `stored_at` it was stored at when the client knows it. A blob fetched alone has none, because `GET` serves only the bytes. When the client has seen a `stored_at` newer than its copy's, the copy is known stale, so it is refreshed **before** the compare rather than after a failed one, and a wrong passphrase then costs one fetch, not two. `replaced` separates a first escrow (recovery set up) from a rotation (the previous secret has stopped working), and only a rotation surfaces the "re-export or destroy old artifacts" guidance, because a first escrow retired no secret.
+
 ### Schedule and Triggers
 
 - **7 days** after setup (catches the lost-napkin case while re-setup is cheap), then **90 days**, backing off to a **180-day cap** after two consecutive successes.
