@@ -28,6 +28,7 @@ mod album;
 mod backup;
 mod derivatives;
 mod drops;
+mod enrollment;
 mod groups;
 mod import;
 mod metadata;
@@ -48,6 +49,10 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use self::drops::{InboxEntry, IssuedLink};
+pub use self::enrollment::{
+    ENROLLMENT_NONCE_LEN, ENROLLMENT_PAYLOAD_VERSION, EnrolleeKeys, EnrollmentPayload,
+    EnrollmentPayloadError, InitiatorKeys, MAX_ENROLLMENT_PAYLOAD_CHARS, enrollment_safety_code,
+};
 pub use self::migrate_unsigned::{
     LEGACY_FOLD_KEY, MigrationSkip, UnmigratedShape, UnmigratedSidecar, UnsignedMigrationOptions,
     UnsignedMigrationReport,
@@ -60,7 +65,9 @@ use crate::crypto::CryptoError;
 use crate::crypto::authority::Authority;
 use crate::crypto::hash::Hash32;
 use crate::crypto::keys::albumstore::AlbumStoreError;
-use crate::crypto::keys::{Account, DeviceDirectory, HybridSigningKey, HybridVerifyingKey, Signer};
+use crate::crypto::keys::{
+    Account, DeviceDirectory, DirectoryError, HybridSigningKey, HybridVerifyingKey, Signer,
+};
 use crate::crypto::primitives::Argon2Params;
 use crate::crypto::provenance::{Action, ProvenanceChain};
 use crate::crypto::verify_asset::{MetadataBinding, VerifyOutcome};
@@ -133,6 +140,11 @@ pub enum LifecycleError {
     /// contradict its own history.
     #[error("account id cannot be rebound: {0}")]
     AccountRebind(String),
+    /// [`cross_sign_device`](Workspace::cross_sign_device) was refused: the device or its
+    /// signing key is already in the directory, the entry arrived revoked, or the directory
+    /// version cannot advance. The directory is left unchanged.
+    #[error("device directory: {0}")]
+    Directory(#[from] DirectoryError),
 }
 
 type Result<T> = std::result::Result<T, LifecycleError>;

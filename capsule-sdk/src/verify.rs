@@ -11,7 +11,7 @@
 //!    [`capsule_core::library::release_is_safe`], which re-checks every declared blob rather
 //!    than trusting the server's aggregate.
 //! 2. **Accountability.** [`StorageVerifyClient::fetch_receipt`] fetches the write's
-//!    [`CustodyReceipt`](capsule_core::library::CustodyReceipt) and
+//!    [`CustodyReceipt`] and
 //!    [`capsule_core::library::verify_receipt`] checks the hybrid signature under the pinned
 //!    attestation key plus a field match against what the client sent. A server that withholds
 //!    receipts never becomes the sole holder of an only-copy.

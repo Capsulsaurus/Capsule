@@ -6,7 +6,7 @@
 //! # Reference counting is a query, never a counter
 //!
 //! A blob is collectable when *no asset row references it*, and that is asked of
-//! [`AssetIndex::reference_count`](crate::index::AssetIndex::reference_count) each time rather
+//! [`AssetIndex::reference_count`] each time rather
 //! than tracked in a number somebody has to remember to decrement. A counter is a second copy
 //! of a derivable fact, and the failure mode of a counter that drifts low is deleting a live
 //! blob — which is the one outcome this module exists to prevent.

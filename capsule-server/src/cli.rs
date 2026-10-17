@@ -109,7 +109,7 @@ pub enum Command {
         /// The address to bind (`SERVER_HOST`/`SERVER_PORT`, default `0.0.0.0:3000`).
         ///
         /// Port `0` asks the operating system to choose one, and the chosen address is written
-        /// to stdout — see [`serve`].
+        /// to stdout — see `serve`.
         #[arg(long, value_name = "HOST:PORT")]
         listen: Option<SocketAddr>,
 

@@ -20,8 +20,8 @@
 //!   64, or if the shard prefix stops fitting inside the address;
 //! - [`ContentAddress::parse`] rejects every other shape, so a longer digest cannot be stored at
 //!   all — it can never be silently filed under a truncated shard;
-//! - [`digest_change_is_a_layout_change`] states the coupling as a test, so a change made anyway
-//!   fails with the reason rather than with a mystery.
+//! - the `digest_change_is_a_layout_change` test (in this module's `#[cfg(test)]` block, so
+//!   not a doc link) states the coupling, so a change made anyway fails with the reason rather than with a mystery.
 
 use std::fmt;
 use std::path::{Path, PathBuf};

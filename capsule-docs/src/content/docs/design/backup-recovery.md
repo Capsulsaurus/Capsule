@@ -35,8 +35,11 @@ backup.tar
 └── <entries, sorted by (album_id, asset_id, blob_role)>
     ├── blobs/{hash}       # encrypted ciphertext blobs
     ├── meta/{blob_id}     # encrypted metadata blobs
-    └── provenance/{asset_id}  # full per-asset provenance chains
+    ├── provenance/{asset_id}  # full per-asset provenance chains
+    └── authority/{album_id}   # the album's admin-signed epoch ledger (public; format 2+)
 ```
+
+Each `authority/{album_id}` entry is the album's **public** authority: the admin verifying key and the admin-signed epoch ledger that every manifest's write signature is checked against. It is what makes a restored asset *verifiable* and not only decryptable. It is not a capability — no write-tier or admin signing seed rides the artifact — so an album restored into a library that never held it is verifiable but read-only. A restore re-verifies each ledger's admin signature chain before adopting it, adopts it only for an album that holds no authority of its own, and never replaces one it already holds. A format-1 artifact carries no ledger; its albums restore readable but unverifiable.
 
 The artifact carries its own [AMK](/design/cryptography/keys/#album-master-keys-amks) ledger so it is **self-sufficient**: a holder of the recovery passphrase can decrypt `amk-ledger.cbor` and then every included blob, without contacting the server or reconstructing MLS ratchet state. The ledger is wrapped under the backup wrap key (same passphrase-derived key that authenticates `MANIFEST.cbor`), not under any device key — this is what makes the [AMK-completeness check](#backup-verification) a check the artifact can answer about *itself* rather than a promise about a separate server-side blob.
 

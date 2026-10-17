@@ -79,7 +79,7 @@ const SCOPE_ESTIMATE: usize = 1 + 36;
 /// forger which byte to change next.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum CursorError {
-    /// Not base64url, not [`CURSOR_LEN`] bytes, or an unknown version byte.
+    /// Not base64url, not `CURSOR_LEN` bytes, or an unknown version byte.
     #[error("the cursor is malformed")]
     Malformed,
     /// The MAC did not verify: forged, mutated, from another key, or from another owner.

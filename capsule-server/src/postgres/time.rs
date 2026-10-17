@@ -33,14 +33,14 @@
 //! microseconds cannot, so an instant that goes into a column comes back truncated toward zero.
 //! That matters for one thing only: an adapter that builds a record in Rust and returns it
 //! *without* reading it back would hand a caller a value the next read does not produce.
-//! [`stored`] is what such an adapter puts the instant through, so the record it returns is the
+//! `stored` is what such an adapter puts the instant through, so the record it returns is the
 //! record the database holds.
 //!
 //! **`jiff` will not read back its own maximum.** `Timestamp::MAX` is
 //! `9999-12-30T22:00:00.999999999Z`, and `Timestamp::from_microsecond` accepts nothing past the
 //! whole second below it — so the obvious round trip is *not* total, and a naive
-//! `to_micros`-then-`from_micros` on `MAX` is a column no adapter can decode. [`to_micros`]
-//! therefore clamps, exactly as [`crate::store::deadline`] clamps for the same reason: an
+//! `to_micros`-then-`from_micros` on `MAX` is a column no adapter can decode. `to_micros`
+//! therefore clamps, exactly as `crate::store::deadline` clamps for the same reason: an
 //! instant that far out is indistinguishable from never, and clamping is what gives that. The
 //! bounds are derived from `jiff`'s own constants rather than written down, so a repin cannot
 //! silently move them out from under this.

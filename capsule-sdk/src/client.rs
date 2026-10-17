@@ -1,11 +1,11 @@
 //! The session-composed typed REST client (slice `S-D8`).
 //!
 //! [`AuthenticatedClient`] revives the shape the parked wrapper in the crate root promised —
-//! a thin skin over the `spargen`-generated [`rest::Client`](crate::rest::Client) that owns
+//! a thin skin over the `spargen`-generated [`rest::Client`] that owns
 //! the base URL, swaps base URL/credentials without callers rebuilding anything, and
 //! `Deref`s to the typed client so every generated operation is called directly. What the
 //! parked sketch could not express, this composition does: instead of a static bearer string,
-//! the client is wired to S-D7's [`Session`](crate::auth::Session) through spargen's async
+//! the client is wired to S-D7's [`Session`] through spargen's async
 //! token-provider seam, so **every** typed call transparently gets a valid access token, with
 //! the session's proactive pre-flight refresh and single-flight coalescing — callers never
 //! touch a raw token. The refresh/expiry/single-flight logic is reused wholesale from
@@ -16,7 +16,7 @@
 //! The token provider is the **proactive** half: it refreshes when the stored token is within
 //! its skew of expiry, before the request leaves. That cannot cover a token the server stops
 //! honouring early — a revocation mid-flight, or a clock the two ends disagree about — so
-//! [`RefreshOn401`] is the **reactive** half: an [`rest::HttpBackend`] wrapping
+//! `RefreshOn401` is the **reactive** half: an [`rest::HttpBackend`] wrapping
 //! [`rest::ReqwestBackend`] that, on a `401`, refreshes once through the session and replays
 //! the request exactly once. The two are complementary and neither duplicates the other; the
 //! refresh itself is still `auth`'s single-flight gate.
@@ -62,7 +62,7 @@ pub enum ClientError {
 
 /// A typed REST client that authenticates itself from an S-D7 [`Session`].
 ///
-/// Cheap to build; holds one [`rest::Client`](crate::rest::Client) whose bearer credential is
+/// Cheap to build; holds one [`rest::Client`] whose bearer credential is
 /// an async provider backed by the session. Because the provider is consulted per request,
 /// token rotation (refresh) is picked up with no rebuild. Deref-transparent: call any
 /// generated operation directly, e.g. `client.get_quota(PROTOCOL_VERSION, None).await` — every

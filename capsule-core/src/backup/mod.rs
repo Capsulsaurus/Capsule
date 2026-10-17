@@ -2,8 +2,8 @@
 //!
 //! Two distinct things are kept separate:
 //! - the **backup artifact** — a deterministic, self-describing, signed tar of a
-//!   library's encrypted blobs, metadata blobs, provenance chains, and the AMK ledger needed
-//!   to decrypt them;
+//!   library's encrypted blobs, metadata blobs, provenance chains, the AMK ledger needed
+//!   to decrypt them, and each album's public authority ledger needed to verify them;
 //! - the **[master-key escrow](escrow_master_key)** — a small passphrase-wrapped blob that
 //!   reconstructs the key hierarchy.
 //!
@@ -30,7 +30,12 @@ use crate::crypto::pwkdf::{self, WrappedSecret};
 use crate::crypto::{CryptoError, kdf, rng};
 
 /// The backup artifact format version.
-pub const ARTIFACT_FORMAT_VERSION: u16 = 1;
+///
+/// - `1` — blobs, metadata, provenance, receipts, and the sealed AMK ledger.
+/// - `2` — adds an `authority/{album_id}` entry per album: its public admin-signed epoch
+///   ledger, so a restored asset verifies (#468). A format-1 artifact still opens; its albums
+///   restore readable but unverifiable. A format newer than this build is refused.
+pub const ARTIFACT_FORMAT_VERSION: u16 = 2;
 
 /// Errors from backup export/restore and recovery.
 #[derive(Debug, Error, PartialEq, Eq)]

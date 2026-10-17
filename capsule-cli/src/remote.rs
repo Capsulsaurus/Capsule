@@ -317,7 +317,7 @@ pub struct SyncSummary {
 
 /// Drain the sync feed into the local store.
 ///
-/// Auth rides the resumed [`Session`](capsule_sdk::auth::Session) (pre-flight
+/// Auth rides the resumed [`Session`] (pre-flight
 /// refresh + one refresh-and-retry on `Unauthenticated`); the feed and the
 /// anti-rewind contract ride [`SyncConsumer::pull_into`] over a [`SyncState`]
 /// rehydrated from the local store. Each validated page is persisted in one

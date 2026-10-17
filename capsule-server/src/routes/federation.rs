@@ -900,7 +900,7 @@ mod report_bounds {
 /// A moderation report one peer server files against an account on this one.
 ///
 /// Every field except `signature` is covered by the signature, in canonical CBOR — see
-/// [`ReportClaim`](crate::federation::ReportClaim).
+/// [`ReportClaim`].
 #[derive(Schema, Serialize, Deserialize, Debug, Clone)]
 pub struct FederatedReportRequest {
     /// The peer filing the report, as its own `server-info` names it.
@@ -1046,7 +1046,7 @@ impl ReportRejection {
 /// said it too often.
 ///
 /// Every field is length-capped first, before a store is read or a byte is keyed on. Then
-/// [`CounterKey::FederatedIntake`](crate::counter::CounterKey::FederatedIntake) — keyed on the
+/// [`CounterKey::FederatedIntake`] — keyed on the
 /// *claimed* origin, so it bounds one origin looping rather than a caller cycling origins, which
 /// is the most this server can do without a trusted client address. Everything after it is a
 /// store read and an Ed25519 verification, and this is the only place a bound on that work can
@@ -1065,7 +1065,7 @@ impl ReportRejection {
 ///
 /// # What accepting one does
 ///
-/// It writes a row an operator will read ([`ModerationStore::pending_reports`]) and **nothing
+/// It writes a row an operator will read ([`ModerationStore::pending_reports`](crate::moderation::ModerationStore::pending_reports)) and **nothing
 /// else**. A peer's report is an input to a decision, never a decision: no standing changes, no
 /// serving hold appears, and the reported account sees nothing — because nothing has been done
 /// to them.

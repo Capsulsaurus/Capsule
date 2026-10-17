@@ -9,7 +9,13 @@
 //! blobs/{ciphertext_hash} # encrypted asset ciphertext
 //! meta/{asset_id}         # encrypted metadata blob
 //! provenance/{asset_id}   # the full per-asset provenance chain (canonical CBOR)
+//! authority/{album_id}    # the album's admin-signed epoch ledger (public; canonical CBOR)
 //! ```
+//!
+//! The `authority/` entries (format version 2) carry each album's **public** authority — the
+//! admin verifying key and the admin-signed epoch ledger a manifest's write signature is checked
+//! against — so a restored asset verifies, not merely decrypts. No signing seed rides the
+//! artifact: a restored album stays read-only.
 //!
 //! The MANIFEST is authenticated **two ways**: an HMAC under the wrap key (catches
 //! tamper/truncation before any decrypt) and a hybrid exporter signature (defeats a
@@ -28,6 +34,7 @@ use uuid::Uuid;
 
 use super::{ARTIFACT_FORMAT_VERSION, BackupError};
 use crate::cbor;
+use crate::crypto::authority::{ReferenceAuthority, SignedEpochLedger};
 use crate::crypto::encryption::decrypt_asset_vec;
 use crate::crypto::hash::{self, Hash32};
 use crate::crypto::keys::{Amk, HybridVerifyingKey, Signer};
@@ -90,6 +97,11 @@ pub struct BackupInput {
     pub assets: Vec<BackupAsset>,
     /// The AMK bytes for every `(album_id, amk_version)` an asset references.
     pub amks: BTreeMap<(Uuid, u32), [u8; 32]>,
+    /// Each album's public authority: the admin-signed epoch ledger its manifests' write
+    /// signatures verify under. Only albums an included asset belongs to are written; an album
+    /// with no entry here (e.g. one itself recovered from a format-1 artifact) exports without
+    /// one, and restores readable but unverifiable.
+    pub authorities: BTreeMap<Uuid, SignedEpochLedger>,
     /// The exporting device id.
     pub exporter_device: Uuid,
     /// Source library version string.
@@ -140,7 +152,8 @@ fn blob_role_order(role: &str) -> u8 {
         "meta" => 1,
         "provenance" => 2,
         "receipts" => 3,
-        _ => 4,
+        "authority" => 4,
+        _ => 5,
     }
 }
 
@@ -333,6 +346,33 @@ fn export_inner(
         size: sealed_ledger.len() as u64,
     });
 
+    // Each included album's public authority, when the exporter holds one. Public data, so it
+    // rides in the clear; the MANIFEST's HMAC and exporter signature cover it like every entry.
+    let albums: BTreeSet<Uuid> = needed.iter().map(|(album, _)| *album).collect();
+    for album in &albums {
+        let Some(ledger) = input.authorities.get(album) else {
+            tracing::warn!(
+                album_id = %album,
+                "backup: album has no reference authority to export; it restores unverifiable"
+            );
+            continue;
+        };
+        if ledger.album_id != *album {
+            return Err(BackupError::Format(format!(
+                "authority ledger for album {album} speaks for album {}",
+                ledger.album_id
+            )));
+        }
+        let path = format!("authority/{album}");
+        let data = cbor::to_canonical_vec(ledger).expect("authority ledger serializes");
+        entries.push(EntryRef {
+            path: path.clone(),
+            hash: hash::hash_bytes(&data),
+            size: data.len() as u64,
+        });
+        payloads.push((path, data));
+    }
+
     for a in &assets {
         let head = a.head()?;
         let ct_path = format!("blobs/{}", head.core.ciphertext_hash.to_hex());
@@ -502,6 +542,7 @@ pub struct RestoreReport {
 pub struct BackupArtifact {
     files: BTreeMap<String, Vec<u8>>,
     ledger: BTreeMap<(Uuid, u32), [u8; 32]>,
+    authorities: BTreeMap<Uuid, SignedEpochLedger>,
     core: ManifestCore,
 }
 
@@ -538,6 +579,13 @@ impl BackupArtifact {
         if !exporter_pub.verify(&core_bytes, &manifest.exporter_sig) {
             return Err(BackupError::Auth("MANIFEST exporter signature invalid"));
         }
+        // An authenticated manifest from a newer format is refused rather than half-read.
+        if manifest.core.artifact_version > ARTIFACT_FORMAT_VERSION {
+            return Err(BackupError::Format(format!(
+                "artifact format {} is newer than this build supports ({ARTIFACT_FORMAT_VERSION})",
+                manifest.core.artifact_version
+            )));
+        }
 
         // (3) Per-entry content hashes.
         for entry in &manifest.core.entries {
@@ -560,9 +608,13 @@ impl BackupArtifact {
             .map(|(album, epoch, amk)| ((album, epoch), amk))
             .collect();
 
+        // (5) Decode + re-verify every album authority the (authenticated) manifest lists.
+        let authorities = load_authorities(&manifest.core, &files)?;
+
         Ok(Self {
             files,
             ledger,
+            authorities,
             core: manifest.core,
         })
     }
@@ -676,9 +728,10 @@ impl BackupArtifact {
     /// library that lost its album keys becomes able to read its photos again — the backup path
     /// is deliberately independent of the MLS ratchet (SSoT: [Keys]).
     ///
-    /// Note what is *not* here: the write-tier and admin signing keys, and the admin-signed epoch
-    /// ledger. Those are MLS-distributed capabilities, not escrowed secrets, so an album restored
-    /// into a library that never held it is readable but not writable.
+    /// Note what is *not* here: the write-tier and admin signing keys. Those are MLS-distributed
+    /// capabilities, not escrowed secrets, so an album restored into a library that never held
+    /// it is readable but not writable. Its public authority rides separately
+    /// ([`authority_ledgers`](Self::authority_ledgers)), which is what makes it verifiable.
     ///
     /// [Keys]: https://docs/design/cryptography/keys/#album-master-keys-amks
     pub fn amk_rows(&self) -> Vec<(Uuid, u32, [u8; 32])> {
@@ -686,6 +739,14 @@ impl BackupArtifact {
             .iter()
             .map(|((album, epoch), amk)| (*album, *epoch, *amk))
             .collect()
+    }
+
+    /// Each album's public authority the artifact carries: the admin-signed epoch ledger, keyed
+    /// by album id. Every ledger here was listed in the authenticated manifest, speaks for the
+    /// album it is filed under, and re-verified its admin signature chain in [`open`](Self::open).
+    /// Empty for a format-1 artifact, which carried none.
+    pub fn authority_ledgers(&self) -> &BTreeMap<Uuid, SignedEpochLedger> {
+        &self.authorities
     }
 
     /// The exporter device id recorded in the manifest (provenance: who exported).
@@ -721,6 +782,45 @@ impl BackupArtifact {
             None => Ok(None),
         }
     }
+}
+
+/// Decode every `authority/{album_id}` entry the manifest lists (the manifest is authenticated
+/// by this point, so a file the manifest does not name is ignored, never trusted), and refuse a
+/// ledger filed under the wrong album or whose admin signature chain does not re-verify.
+fn load_authorities(
+    core: &ManifestCore,
+    files: &BTreeMap<String, Vec<u8>>,
+) -> Result<BTreeMap<Uuid, SignedEpochLedger>, BackupError> {
+    let mut out = BTreeMap::new();
+    for entry in &core.entries {
+        let Some(album) = entry.path.strip_prefix("authority/") else {
+            continue;
+        };
+        let album_id = Uuid::parse_str(album)
+            .map_err(|_| BackupError::Format(format!("bad authority entry {}", entry.path)))?;
+        let bytes = files
+            .get(&entry.path)
+            .ok_or_else(|| BackupError::Corrupt(format!("missing entry {}", entry.path)))?;
+        let ledger: SignedEpochLedger =
+            cbor::from_slice(bytes).map_err(|e| BackupError::Format(e.to_string()))?;
+        if ledger.album_id != album_id {
+            return Err(BackupError::Auth(
+                "authority ledger filed under another album",
+            ));
+        }
+        if ReferenceAuthority::from_ledger(&ledger, &BTreeSet::new()).is_none() {
+            return Err(BackupError::Auth(
+                "authority ledger failed admin-chain verification",
+            ));
+        }
+        tracing::debug!(
+            album_id = %album_id,
+            epochs = ledger.entries.len(),
+            "backup: album authority ledger verified"
+        );
+        out.insert(album_id, ledger);
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -814,12 +914,23 @@ mod tests {
             }
         }
 
+        /// The album's admin-signed epoch ledger attesting `self.write` for epoch 1.
+        fn ledger(&self) -> SignedEpochLedger {
+            let admin = HybridSigningKey::from_seed_bytes(&[5; 32], &[6; 32]);
+            ReferenceAuthority::new(Uuid::from_u128(ALBUM), admin.verifying_key())
+                .with_epoch(&admin, AmkVersion(1), &self.write.verifying_key(), true)
+                .to_ledger()
+        }
+
         fn input(&self, assets: Vec<BackupAsset>) -> BackupInput {
             let mut amks = BTreeMap::new();
             amks.insert((Uuid::from_u128(ALBUM), 1u32), self.amk);
+            let mut authorities = BTreeMap::new();
+            authorities.insert(Uuid::from_u128(ALBUM), self.ledger());
             BackupInput {
                 assets,
                 amks,
+                authorities,
                 exporter_device: Uuid::from_u128(0xD1),
                 source_library_version: "1".into(),
                 export_timestamp: "2026-05-31T00:00:00Z".into(),
@@ -960,6 +1071,166 @@ mod tests {
         let r = art.restore(RestoreMode::Commit, &BTreeMap::new()).unwrap();
         assert_eq!(r.would_add, vec![asset_id]);
         assert_eq!(r.applied.len(), 1);
+    }
+
+    /// #468: each included album's public authority rides the artifact and comes back out of
+    /// `open` re-verified, so a restored asset has a ledger to verify its write signature under.
+    #[test]
+    fn the_album_authority_rides_the_artifact_and_reverifies_on_open() {
+        let f = Fix::new();
+        let bytes =
+            export_with_params(&f.input(vec![f.asset(1, b"x")]), b"pw", FAST, &f.device).unwrap();
+        let art = BackupArtifact::open(&bytes, b"pw", &f.device.verifying_key()).unwrap();
+
+        let ledgers = art.authority_ledgers();
+        assert_eq!(ledgers.len(), 1);
+        let ledger = &ledgers[&Uuid::from_u128(ALBUM)];
+        assert_eq!(ledger.admin_pub, f.ledger().admin_pub);
+        let authority = ReferenceAuthority::from_ledger(ledger, &BTreeSet::from([1])).unwrap();
+        assert_eq!(
+            crate::crypto::authority::AlbumAuthority::write_tier_pubkey(&authority, AmkVersion(1)),
+            Some(f.write.verifying_key()),
+            "the attested write-tier key is the one the manifest was signed under"
+        );
+    }
+
+    /// An album with no authority to hand (a format-1 recovery re-exported) still exports; it
+    /// simply carries no `authority/` entry.
+    #[test]
+    fn an_album_without_an_authority_exports_without_one() {
+        let f = Fix::new();
+        let mut input = f.input(vec![f.asset(1, b"x")]);
+        input.authorities.clear();
+        let bytes = export_with_params(&input, b"pw", FAST, &f.device).unwrap();
+        let art = BackupArtifact::open(&bytes, b"pw", &f.device.verifying_key()).unwrap();
+        assert!(art.authority_ledgers().is_empty());
+        assert_eq!(
+            art.restore(RestoreMode::DryRun, &BTreeMap::new())
+                .unwrap()
+                .verified,
+            1
+        );
+    }
+
+    /// A ledger whose admin chain does not verify is refused at `open` even when the exporter
+    /// signed the manifest over it: the exporter vouches for the bytes, not for the album admin.
+    #[test]
+    fn a_forged_authority_ledger_is_refused_on_open() {
+        let f = Fix::new();
+        let mut input = f.input(vec![f.asset(1, b"x")]);
+        let ledger = input.authorities.get_mut(&Uuid::from_u128(ALBUM)).unwrap();
+        ledger.entries[0].write_tier_pub =
+            HybridSigningKey::from_seed_bytes(&[9; 32], &[9; 32]).verifying_key();
+        let bytes = export_with_params(&input, b"pw", FAST, &f.device).unwrap();
+        assert!(matches!(
+            BackupArtifact::open(&bytes, b"pw", &f.device.verifying_key()),
+            Err(BackupError::Auth(_))
+        ));
+    }
+
+    /// Re-export `bytes` with its manifest core and file paths edited by `edit`, then
+    /// re-authenticated (HMAC and exporter signature) exactly as an exporter would — so `open`
+    /// gets past authentication and the check under test is the one that refuses.
+    fn reauthenticated(
+        f: &Fix,
+        bytes: &[u8],
+        edit: impl FnOnce(&mut ManifestCore, &mut Vec<(String, Vec<u8>)>),
+    ) -> Vec<u8> {
+        let mut files = tar_read(bytes).unwrap();
+        let (salt, params) = parse_version(&files[0].1).unwrap();
+        let wrap_key = pwkdf::derive_wrap_key(b"pw", &salt, params).unwrap();
+
+        let mut manifest: Manifest = cbor::from_slice(&files[1].1).unwrap();
+        edit(&mut manifest.core, &mut files);
+        let core_bytes = cbor::to_canonical_vec(&manifest.core).unwrap();
+        let mut mac = HmacSha256::new_from_slice(&wrap_key).unwrap();
+        mac.update(&core_bytes);
+        manifest.hmac = mac.finalize().into_bytes().to_vec();
+        manifest.exporter_sig = f.device.sign(&core_bytes);
+
+        let mut builder = tar::Builder::new(Vec::new());
+        for (path, data) in &files {
+            if path == "MANIFEST.cbor" {
+                tar_append(
+                    &mut builder,
+                    path,
+                    &cbor::to_canonical_vec(&manifest).unwrap(),
+                );
+            } else {
+                tar_append(&mut builder, path, data);
+            }
+        }
+        builder.into_inner().unwrap()
+    }
+
+    /// Rename the `authority/{ALBUM}` entry to `authority/{to}` in both the manifest and the
+    /// archive, leaving the ledger bytes (and so their hash) untouched.
+    fn refile_authority(core: &mut ManifestCore, files: &mut [(String, Vec<u8>)], to: &str) {
+        let from = format!("authority/{}", Uuid::from_u128(ALBUM));
+        let to = format!("authority/{to}");
+        let entry = core.entries.iter_mut().find(|e| e.path == from).unwrap();
+        entry.path.clone_from(&to);
+        let file = files.iter_mut().find(|(p, _)| *p == from).unwrap();
+        file.0 = to;
+    }
+
+    /// An authentic manifest declaring a newer format than this build is refused, not half-read.
+    #[test]
+    fn a_newer_artifact_format_is_refused() {
+        let f = Fix::new();
+        let bytes =
+            export_with_params(&f.input(vec![f.asset(1, b"x")]), b"pw", FAST, &f.device).unwrap();
+        let newer = reauthenticated(&f, &bytes, |core, _| {
+            core.artifact_version = ARTIFACT_FORMAT_VERSION + 1;
+        });
+        assert!(matches!(
+            BackupArtifact::open(&newer, b"pw", &f.device.verifying_key()),
+            Err(BackupError::Format(msg)) if msg.contains("newer")
+        ));
+    }
+
+    /// An authenticated `authority/{album}` entry whose ledger speaks for another album is refused
+    /// at `open`: the exporter's signature covers the bytes, not the filing.
+    #[test]
+    fn an_authenticated_ledger_filed_under_another_album_is_refused_on_open() {
+        let f = Fix::new();
+        let bytes =
+            export_with_params(&f.input(vec![f.asset(1, b"x")]), b"pw", FAST, &f.device).unwrap();
+        let misfiled = reauthenticated(&f, &bytes, |core, files| {
+            refile_authority(core, files, &Uuid::from_u128(0xBAD).to_string());
+        });
+        assert!(matches!(
+            BackupArtifact::open(&misfiled, b"pw", &f.device.verifying_key()),
+            Err(BackupError::Auth(msg)) if msg.contains("another album")
+        ));
+    }
+
+    /// An authenticated authority entry whose name is not an album UUID is refused at `open`.
+    #[test]
+    fn an_authority_entry_not_named_by_a_uuid_is_refused_on_open() {
+        let f = Fix::new();
+        let bytes =
+            export_with_params(&f.input(vec![f.asset(1, b"x")]), b"pw", FAST, &f.device).unwrap();
+        let unnamed = reauthenticated(&f, &bytes, |core, files| {
+            refile_authority(core, files, "not-a-uuid");
+        });
+        assert!(matches!(
+            BackupArtifact::open(&unnamed, b"pw", &f.device.verifying_key()),
+            Err(BackupError::Format(msg)) if msg.contains("bad authority entry")
+        ));
+    }
+
+    /// A ledger handed in under the wrong album id is refused at export.
+    #[test]
+    fn a_ledger_filed_under_another_album_is_refused_at_export() {
+        let f = Fix::new();
+        let mut input = f.input(vec![f.asset(1, b"x")]);
+        let ledger = input.authorities.get_mut(&Uuid::from_u128(ALBUM)).unwrap();
+        ledger.album_id = Uuid::from_u128(0xBAD);
+        assert!(matches!(
+            export_with_params(&input, b"pw", FAST, &f.device),
+            Err(BackupError::Format(_))
+        ));
     }
 
     #[test]
