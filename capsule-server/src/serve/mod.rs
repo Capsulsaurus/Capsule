@@ -387,18 +387,28 @@ pub async fn resolve(
 /// the *other* album `403`. So every holder is asked, in the index's order (live before
 /// tombstoned), and the strongest answer wins:
 ///
-/// 1. **any** [`BlobReadAccess::Granted`] serves, from the first such holder — whose own `hold`
-///    and `state` then decide the `410`s, so an owner fetching their deleted asset still learns
-///    it is gone while a stranger's live copy exists;
-/// 2. else any [`BlobReadAccess::ScopeInsufficient`] — the reader is entitled to that album, so
+/// 1. a [`BlobReadAccess::Granted`] holder that is **servable** — live and under no serving
+///    hold — serves at once. A granted holder that is held or tombstoned is remembered and the
+///    fold reads on, because a takedown or a delete is a fact about *that* asset: a caller also
+///    entitled through another, unheld live holder is served from it, exactly as every other
+///    reader of that asset is;
+/// 2. else, if any holder's authority failed, an outage — see below;
+/// 3. else the first granted holder, whose own `hold` and `state` then decide the `410`s, so an
+///    owner fetching their deleted asset still learns it is gone while a stranger's live copy
+///    exists;
+/// 4. else any [`BlobReadAccess::ScopeInsufficient`] — the reader is entitled to that album, so
 ///    a scope answer is truer than a revocation from some other album;
-/// 3. else any [`BlobReadAccess::Revoked`] is [`ServeResolution::Forbidden`];
-/// 4. else [`ServeResolution::NotFound`], byte-identical to an unknown address.
+/// 5. else any [`BlobReadAccess::Revoked`] is [`ServeResolution::Forbidden`];
+/// 6. else [`ServeResolution::NotFound`], byte-identical to an unknown address.
 ///
 /// No holder's lifecycle facts are read before a grant, so the authority-first ordering holds
-/// across holders exactly as it did for one. A collaborator failure on any holder is an outage,
-/// never a refusal — a `404` because the second holder's roster was unreachable would be the
-/// outage-as-revocation confusion [`ReadAuthorityError`] exists to prevent.
+/// across holders exactly as it did for one. A collaborator failure is **deferred**, not
+/// returned on the spot: an owner whose own copy sorts after another owner's must still be
+/// served during a roster outage, because the owner's grant never asks the roster. Once no
+/// holder grants servably, a failure on any holder is an outage and never a refusal — a `404`
+/// because the second holder's roster was unreachable would be the outage-as-revocation
+/// confusion [`ReadAuthorityError`] exists to prevent, and a permanent `410` from a held holder
+/// would be wrong too when the unreachable holder might have served.
 async fn decide_over_holders(
     context: &ServeContext,
     principal: ReadPrincipal<'_>,
@@ -407,17 +417,29 @@ async fn decide_over_holders(
     let holders = references.len();
     let mut scope_insufficient = false;
     let mut revoked = false;
+    let mut failed = false;
+    let mut unservable_grant: Option<BlobReference> = None;
     for reference in references {
-        let access = context
+        let access = match context
             .authority()
             .blob_read_access(principal, &reference)
             .await
-            .map_err(|error| {
-                tracing::error!(%error, "the read authority could not decide a blob fetch");
-                ServeUnavailable("the read authority could not decide".to_owned())
-            })?;
+        {
+            Ok(access) => access,
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    asset = %reference.asset_id,
+                    "the read authority could not decide one holder of a blob fetch"
+                );
+                failed = true;
+                continue;
+            }
+        };
         match access {
-            BlobReadAccess::Granted => {
+            BlobReadAccess::Granted
+                if reference.hold.is_none() && reference.state == AssetState::Visible =>
+            {
                 tracing::trace!(
                     holders,
                     asset = %reference.asset_id,
@@ -425,10 +447,26 @@ async fn decide_over_holders(
                 );
                 return Ok(Ok(reference));
             }
+            BlobReadAccess::Granted => {
+                tracing::trace!(
+                    holders,
+                    asset = %reference.asset_id,
+                    "the caller is entitled through a held or deleted holder; reading on"
+                );
+                unservable_grant.get_or_insert(reference);
+            }
             BlobReadAccess::ScopeInsufficient => scope_insufficient = true,
             BlobReadAccess::Revoked => revoked = true,
             BlobReadAccess::Unrelated => {}
         }
+    }
+    if failed {
+        return Err(ServeUnavailable(
+            "the read authority could not decide".to_owned(),
+        ));
+    }
+    if let Some(reference) = unservable_grant {
+        return Ok(Ok(reference));
     }
     let refusal = if scope_insufficient {
         ServeResolution::ScopeInsufficient

@@ -1277,6 +1277,91 @@ async fn an_owners_deleted_copy_is_gone_while_a_strangers_copy_lives() {
     .assert_status(StatusCode::OK);
 }
 
+#[tokio::test]
+async fn an_owner_whose_copy_sorts_second_is_served_through_a_roster_outage() {
+    // Mallory's holder sorts first, and asking about it needs the roster. The owner's own
+    // holder never does, so the outage on the first holder must not turn into a `500` for a
+    // caller the second holder grants.
+    let fixture = Fixture::working();
+    let bytes = ciphertext();
+    let (address, _) = shared_with_mallory(&fixture, &bytes).await;
+
+    fixture.members.set_unavailable(true);
+    let response = fetch(&fixture, &bearer(&fixture).await, address.as_str()).await;
+    response.assert_status(StatusCode::OK);
+    assert_eq!(response.bytes().as_ref(), bytes.as_slice());
+}
+
+#[tokio::test]
+async fn a_roster_outage_on_a_later_holder_is_an_outage_not_a_refusal() {
+    // Mallory's own copy sorts first and is taken down, so it grants her and cannot serve. The
+    // album's copy is the second holder, and deciding it needs the roster, which is down. That
+    // holder might have served her, so the answer is the outage — never the permanent `410` the
+    // held copy alone would give, and never a `404`.
+    let fixture = Fixture::working();
+    let (address, _) = shared_with_mallory(&fixture, &ciphertext()).await;
+    fixture
+        .index
+        .set_hold(
+            &AssetId::new("00-mallorys-copy"),
+            Some(ServingHold::Takedown),
+        )
+        .await
+        .expect("the hold is placed");
+    let mallory = fixture.other_bearer(MALLORY).await;
+    let bob = fixture.other_bearer(BOB).await;
+
+    fixture.members.set_unavailable(true);
+    for (who, caller) in [("mallory", &mallory), ("a non-owner", &bob)] {
+        let failed = fetch(&fixture, caller, address.as_str()).await;
+        failed.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            failed.json::<serde_json::Value>()["code"],
+            "error.blob.unavailable",
+            "{who} is told the fetch could not be decided"
+        );
+    }
+
+    // With the roster back, Mallory is not on the album's roster, so only her held copy grants.
+    fixture.members.set_unavailable(false);
+    fetch(&fixture, &mallory, address.as_str())
+        .await
+        .assert_status(StatusCode::GONE);
+}
+
+#[tokio::test]
+async fn a_held_holder_does_not_hide_an_unheld_one_the_caller_is_entitled_through() {
+    // A takedown is a fact about one asset. Bob reads both albums; Mallory's copy sorts first
+    // and is held, the album's copy is not, and every other reader of the album's copy is
+    // served — so Bob is too.
+    let fixture = Fixture::working();
+    let bytes = ciphertext();
+    let (address, _) = shared_with_mallory(&fixture, &bytes).await;
+    roster(&fixture, 1, &[(BOB, MemberRole::Reader)]).await;
+    roster_of(&fixture, &mallorys_album(), 1, &[(BOB, MemberRole::Reader)]).await;
+    fixture
+        .index
+        .set_hold(
+            &AssetId::new("00-mallorys-copy"),
+            Some(ServingHold::Takedown),
+        )
+        .await
+        .expect("the hold is placed");
+
+    let response = fetch(&fixture, &fixture.other_bearer(BOB).await, address.as_str()).await;
+    response.assert_status(StatusCode::OK);
+    assert_eq!(response.bytes().as_ref(), bytes.as_slice());
+
+    // Mallory is entitled only through her held copy, so she is told it is gone.
+    fetch(
+        &fixture,
+        &fixture.other_bearer(MALLORY).await,
+        address.as_str(),
+    )
+    .await
+    .assert_status(StatusCode::GONE);
+}
+
 /// Bob's own device, in Bob's own directory: an upload is checked against the *uploader's*
 /// directory, whoever the album belongs to.
 fn bobs_device() -> uuid::Uuid {
