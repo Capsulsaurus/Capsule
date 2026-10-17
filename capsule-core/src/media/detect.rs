@@ -70,7 +70,7 @@ pub enum StillFormat {
     /// would mean thumbnails on desktop and none on a phone; recognising and deferring it is the
     /// honest outcome until upstream fixes the cast.
     WebP,
-    /// JPEG XL. Decoded by `jxl-oxide`. No lossy encoder without C libjxl.
+    /// JPEG XL. Decoded by `jxl-oxide`. Lossy encode needs C++ libjxl (`media-linked-codecs`).
     Jxl,
     /// TIFF. Decoded by the `tiff` crate. Also the container of most RAW families.
     Tiff,
