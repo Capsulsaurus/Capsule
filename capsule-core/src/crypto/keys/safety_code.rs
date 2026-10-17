@@ -75,7 +75,7 @@ pub fn safety_code(a_keys: &[u8], b_keys: &[u8]) -> String {
     head.copy_from_slice(&digest[..8]);
     let modulus = 10u64.pow(u32::try_from(SAFETY_CODE_DIGITS).expect("digit count fits in u32"));
     let value = u64::from_be_bytes(head) % modulus;
-    let digits = format!("{value:0width$}", width = SAFETY_CODE_DIGITS);
+    let digits = format!("{value:0SAFETY_CODE_DIGITS$}");
 
     let chunks: Vec<&str> = digits
         .as_bytes()
