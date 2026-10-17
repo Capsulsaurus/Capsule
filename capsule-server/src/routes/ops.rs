@@ -654,7 +654,8 @@ impl OpRejection {
             GateReject::InvalidHash
             | GateReject::InvalidSize
             | GateReject::FileTooLarge
-            | GateReject::UnsupportedContentType => invalid(
+            | GateReject::UnsupportedContentType
+            | GateReject::UnknownDerivativeFormat(_) => invalid(
                 error_codes::UPLOAD_MALFORMED_REQUEST,
                 "the manifest is not a well-formed lifecycle bundle",
             ),

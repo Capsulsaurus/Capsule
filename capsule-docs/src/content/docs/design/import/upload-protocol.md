@@ -64,6 +64,8 @@ All endpoints are authenticated with a bearer JWT.
 
 Creating a session writes a *pending* asset row to Postgres (`uploaded = false`) and a session record to **Valkey** (see [Filesystem — Server: Required Services](/design/filesystem/server/#required-services)). The pending row reserves the asset ID that derivative and metadata blobs reference. The session record carries everything finalization needs — declared size and hash, `content_type`, `crypto_suite_id`, `protocol_version`, `blob_role`, the manifest envelope, `album_id`/`owner_id`/`intent_id`, and the uploader — so a session is finalizable from its own record with no further client input.
 
+A `derivative` session's `manifest_envelope` also declares the derivative's signed `(role, format)` pair as `derivative_role` (`thumbnail | preview | embedding`) and `derivative_format` (the `DerivativeManifest.format` value, equal to the request's `content_type`). The server holds no key and so never reads the signed derivative manifest; this pair is what lets it run the [closed still-format check](/design/thumbnails/) the tier table requires of every receiver. The pair is **required on a `derivative` blob and refused on every other**, and on every lifecycle write to `POST /v1/albums/{album_id}/ops` (`400 error.upload.envelope_mismatch` either way) — optional would make the closed set bypassable by omission. A `thumbnail` or `preview` whose format is outside the closed set is refused at session creation with `400 error.upload.unknown_derivative_format`: a structural rejection, never a future codec to ignore. An `embedding` format is outside the still set's scope rather than a violation of it. A forged pair buys nothing, because the client that verifies the signed manifest on download runs the same check over the signed values.
+
 Per-endpoint header census (the `X-Capsule-*` namespace itself is owned by the [universal header census](/design/threat-model/validation/#universal-headers)):
 
 | Header                          | Direction | Where                    | Required |
@@ -219,6 +221,7 @@ Every rejection carries a machine-readable `error.*` code (the [i18n error-code 
 | Hash length ≠ suite digest length / not hex           | `400` | `error.upload.invalid_hash`                | 3         |
 | `size` ∉ `(0, max_file_size]`                         | `400`/`413` | `error.upload.invalid_size` / `error.upload.file_too_large` | 4 |
 | `content_type` outside closed enum                    | `400` | `error.upload.unsupported_content_type`    | 5         |
+| `thumbnail`/`preview` derivative format outside the closed still set | `400` | `error.upload.unknown_derivative_format` | —   |
 | Album missing / no write capability / version drift   | `403` | `error.upload.album_access_denied`         | 6         |
 | `created_by_device` not in device directory           | `403` | `error.upload.device_not_authorized`       | 7         |
 | Envelope timestamp outside sanity window              | `400` | `error.upload.timestamp_out_of_range`      | 8         |
