@@ -1116,6 +1116,67 @@ async fn a_membership_store_that_cannot_answer_is_an_outage_never_a_refusal() {
         .assert_status(StatusCode::OK);
 }
 
+/// A published asset holding `bytes` as a backup, and the address they live at.
+async fn published_backup(fixture: &Fixture, asset: &str, bytes: &[u8]) -> ContentAddress {
+    let id = publish(fixture, asset).await;
+    let address = store(fixture, bytes).await;
+    reference(fixture, &id, BlobRole::Backup, &address, bytes.len() as u64).await;
+    address
+}
+
+#[tokio::test]
+async fn only_the_owner_fetches_a_backup() {
+    // A backup is the owner's own durability artefact, not part of what the album shares
+    // (#525). A member of either role is refused it with the unknown-address `404`, not a `403`:
+    // the feed never names a backup, so the refusal must not confirm the address is live.
+    let fixture = Fixture::working();
+    let bytes = ciphertext();
+    let address = published_backup(&fixture, "backed-up", &bytes).await;
+    let bob = fixture.other_bearer(BOB).await;
+
+    let owned = fetch(&fixture, &bearer(&fixture).await, address.as_str()).await;
+    owned.assert_status(StatusCode::OK);
+    assert_eq!(owned.bytes().as_ref(), bytes.as_slice());
+
+    let unknown = fetch(&fixture, &bob, &support::checksum(b"never existed")).await;
+    unknown.assert_status(StatusCode::NOT_FOUND);
+    for (version, role) in [(1, MemberRole::Reader), (2, MemberRole::Writer)] {
+        roster(&fixture, version, &[(BOB, role)]).await;
+        let refused = fetch(&fixture, &bob, address.as_str()).await;
+        refused.assert_status(StatusCode::NOT_FOUND);
+        assert_eq!(
+            refused.bytes(),
+            unknown.bytes(),
+            "a {role:?}'s backup refusal is byte-identical to an unknown address"
+        );
+    }
+
+    // A former member is not owed the `403` for it either: they never had it.
+    roster(&fixture, 3, &[]).await;
+    fetch(&fixture, &bob, address.as_str())
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_non_owners_backup_refusal_does_not_ask_the_roster() {
+    // Decided on the role alone, so a roster outage cannot turn it into a `500` — which would
+    // itself say the address is referenced by an album the caller might be on.
+    let fixture = Fixture::working();
+    let address = published_backup(&fixture, "backed-up-outage", &ciphertext()).await;
+    let bob = fixture.other_bearer(BOB).await;
+    roster(&fixture, 1, &[(BOB, MemberRole::Reader)]).await;
+
+    fixture.members.set_unavailable(true);
+    fetch(&fixture, &bob, address.as_str())
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    fetch(&fixture, &bearer(&fixture).await, address.as_str())
+        .await
+        .assert_status(StatusCode::OK);
+    fixture.members.set_unavailable(false);
+}
+
 // ===========================================================================================
 // Bytes shared across unrelated owners (#462)
 // ===========================================================================================
