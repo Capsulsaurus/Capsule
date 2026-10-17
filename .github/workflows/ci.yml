@@ -478,7 +478,7 @@ jobs:
       # The :android module applies the Android Gradle Plugin, so Gradle needs the SDK
       # (compileSdk 36) just to configure — even for the ktlint/detekt tasks.
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
       - name: Install Android platform
         run: sdkmanager "platforms;android-36"
       - name: Set up Gradle
