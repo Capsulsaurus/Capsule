@@ -5,9 +5,14 @@
 //! handlers produce). Custody receipts are signed with a real `capsule-core` hybrid attestation
 //! key so the client verifies the true signature under the pinned key — no crypto is faked.
 //!
+//! The receipt route serves raw `application/cbor` (the signed bytes, verbatim); the
+//! asset-receipts chain serves JSON with each receipt base64-embedded. The mocks serve each in
+//! its own media type, so a client that decodes one shape where the server serves the other
+//! fails here rather than only against a real server.
+//!
 //! These mock-level smokes are deterministic and hermetic. The cross-module case — this client
-//! driving the REAL media server (testcontainer Postgres, real attestation key, real disk) —
-//! lives in `capsule-api/media`'s test suite, which dev-depends on `capsule-sdk`.
+//! fetching a receipt from the REAL router over a socket and verifying it under the server's
+//! attestation key — is `capsule-server/tests/sdk_client.rs`.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -25,7 +30,7 @@ use uuid::Uuid;
 
 use super::*;
 
-// ─── In-process mock HTTP server (JSON only) ─────────────────────────────────
+// ─── In-process mock HTTP server (JSON and raw CBOR) ─────────────────────────
 
 #[derive(Debug, Clone)]
 struct MockRequest {
@@ -37,6 +42,7 @@ struct MockRequest {
 struct MockResponse {
     status: u16,
     reason: String,
+    content_type: &'static str,
     body: Vec<u8>,
 }
 
@@ -45,7 +51,19 @@ impl MockResponse {
         Self {
             status,
             reason: reason.to_string(),
+            content_type: "application/json",
             body: body.into().into_bytes(),
+        }
+    }
+
+    /// A `200` carrying raw `application/cbor` — the shape `GET /v1/upload/{id}/receipt`
+    /// serves (`capsule-server/src/routes/receipts.rs`: `Binary<Cbor>`).
+    fn cbor(body: Vec<u8>) -> Self {
+        Self {
+            status: 200,
+            reason: "OK".to_string(),
+            content_type: "application/cbor",
+            body,
         }
     }
 }
@@ -148,7 +166,8 @@ where
     let mut out = format!("HTTP/1.1 {} {}\r\n", resp.status, resp.reason).into_bytes();
     out.extend_from_slice(
         format!(
-            "Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            "Content-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            resp.content_type,
             resp.body.len()
         )
         .as_bytes(),
@@ -216,8 +235,9 @@ fn durable_verdict_json(durable: bool) -> String {
     )
 }
 
-/// Sign a valid custody receipt for the write and return `(attestation_key, receipt_cbor_b64)`.
-fn signed_receipt() -> (HybridVerifyingKey, String) {
+/// Sign a valid custody receipt for the write and return `(attestation_key, receipt_cbor)` —
+/// the signed canonical CBOR, exactly the body `GET /v1/upload/{id}/receipt` serves.
+fn signed_receipt() -> (HybridVerifyingKey, Vec<u8>) {
     let key = HybridSigningKey::from_seed64(&[9u8; 64]);
     let core = CustodyReceiptCore {
         version: "custody-receipt/v1".into(),
@@ -239,8 +259,7 @@ fn signed_receipt() -> (HybridVerifyingKey, String) {
     };
     let server_sig = key.sign(&core.signing_bytes());
     let receipt = CustodyReceipt { core, server_sig };
-    let b64 = base64::engine::general_purpose::STANDARD.encode(receipt.to_canonical_cbor());
-    (key.verifying_key(), b64)
+    (key.verifying_key(), receipt.to_canonical_cbor())
 }
 
 fn request() -> ReleaseRequest {
@@ -260,17 +279,15 @@ fn request() -> ReleaseRequest {
 /// receipt), the release proceeds.
 #[tokio::test]
 async fn verify_before_release_gate_smoke() {
-    let (att_key, receipt_b64) = signed_receipt();
+    let (att_key, receipt_cbor) = signed_receipt();
     let durable = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let d = durable.clone();
-    let rb = receipt_b64.clone();
+    let rb = receipt_cbor.clone();
     let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
         ("POST", "/storage/verify") => {
             MockResponse::json(200, "OK", durable_verdict_json(d.load(Ordering::SeqCst)))
         }
-        ("GET", p) if p.ends_with("/receipt") => {
-            MockResponse::json(200, "OK", format!(r#"{{"receipt_cbor":{rb:?}}}"#))
-        }
+        ("GET", p) if p.ends_with("/receipt") => MockResponse::cbor(rb.clone()),
         other => panic!("unexpected {other:?}"),
     })
     .await;
@@ -299,15 +316,15 @@ async fn verify_before_release_gate_smoke() {
 /// receipt endpoint is restored, the release proceeds.
 #[tokio::test]
 async fn receipt_gated_release_smoke() {
-    let (att_key, receipt_b64) = signed_receipt();
+    let (att_key, receipt_cbor) = signed_receipt();
     let receipt_ok = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let ro = receipt_ok.clone();
-    let rb = receipt_b64.clone();
+    let rb = receipt_cbor.clone();
     let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
         ("POST", "/storage/verify") => MockResponse::json(200, "OK", durable_verdict_json(true)),
         ("GET", p) if p.ends_with("/receipt") => {
             if ro.load(Ordering::SeqCst) {
-                MockResponse::json(200, "OK", format!(r#"{{"receipt_cbor":{rb:?}}}"#))
+                MockResponse::cbor(rb.clone())
             } else {
                 // Session Completed but the receipt is withheld — 409 (invariant 33 shape).
                 MockResponse::json(
@@ -343,13 +360,11 @@ async fn receipt_gated_release_smoke() {
 /// carries mismatched fields) never releases — the pin is load-bearing.
 #[tokio::test]
 async fn unpinned_receipt_key_refuses_release() {
-    let (_real_key, receipt_b64) = signed_receipt();
-    let rb = receipt_b64.clone();
+    let (_real_key, receipt_cbor) = signed_receipt();
+    let rb = receipt_cbor.clone();
     let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
         ("POST", "/storage/verify") => MockResponse::json(200, "OK", durable_verdict_json(true)),
-        ("GET", p) if p.ends_with("/receipt") => {
-            MockResponse::json(200, "OK", format!(r#"{{"receipt_cbor":{rb:?}}}"#))
-        }
+        ("GET", p) if p.ends_with("/receipt") => MockResponse::cbor(rb.clone()),
         other => panic!("unexpected {other:?}"),
     })
     .await;
@@ -372,18 +387,16 @@ async fn unpinned_receipt_key_refuses_release() {
 /// verdict (no extra `/storage/verify` round-trip); past the window it re-fetches.
 #[tokio::test]
 async fn reverify_window_reuses_then_refetches() {
-    let (att_key, receipt_b64) = signed_receipt();
+    let (att_key, receipt_cbor) = signed_receipt();
     let verify_hits = Arc::new(AtomicUsize::new(0));
     let vh = verify_hits.clone();
-    let rb = receipt_b64.clone();
+    let rb = receipt_cbor.clone();
     let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
         ("POST", "/storage/verify") => {
             vh.fetch_add(1, Ordering::SeqCst);
             MockResponse::json(200, "OK", durable_verdict_json(true))
         }
-        ("GET", p) if p.ends_with("/receipt") => {
-            MockResponse::json(200, "OK", format!(r#"{{"receipt_cbor":{rb:?}}}"#))
-        }
+        ("GET", p) if p.ends_with("/receipt") => MockResponse::cbor(rb.clone()),
         other => panic!("unexpected {other:?}"),
     })
     .await;
@@ -450,4 +463,80 @@ async fn verify_response_maps_into_core_verdict() {
     assert_eq!(v.blobs[0].hash, ct_hash());
     assert_eq!(v.blobs[0].role, BlobRole::Original);
     assert!(capsule_core::library::release_is_safe(v, true));
+}
+
+/// `fetch_receipt` decodes the raw `application/cbor` body: the receipt it returns re-encodes to
+/// the exact bytes served, so the signature the verifier checks is over what the server signed.
+#[tokio::test]
+async fn fetch_receipt_decodes_the_raw_cbor_body() {
+    let (att_key, receipt_cbor) = signed_receipt();
+    let served = receipt_cbor.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("GET", p) if p == format!("/upload/{}/receipt", upload_id()) => {
+            MockResponse::cbor(served.clone())
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let receipt = server.client().fetch_receipt(upload_id()).await.unwrap();
+    assert_eq!(receipt.to_canonical_cbor(), receipt_cbor);
+    assert_eq!(
+        verify_receipt(&receipt, &[att_key], &expectations(), now_base()),
+        Ok(())
+    );
+}
+
+/// The base64-in-JSON shape `fetch_receipt` used to expect is not what the route serves, and a
+/// body in that shape is refused as malformed rather than silently accepted.
+#[tokio::test]
+async fn fetch_receipt_refuses_a_json_wrapped_body() {
+    let (_key, receipt_cbor) = signed_receipt();
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&receipt_cbor);
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("GET", p) if p.ends_with("/receipt") => {
+            MockResponse::json(200, "OK", format!(r#"{{"receipt_cbor":{b64:?}}}"#))
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let err = server
+        .client()
+        .fetch_receipt(upload_id())
+        .await
+        .expect_err("a JSON body is not a receipt");
+    assert!(matches!(err, VerifyError::Malformed(_)), "got {err:?}");
+}
+
+/// The asset chain is still JSON with each receipt base64-embedded (`GET /v1/assets/{id}/receipts`
+/// serves `AssetReceiptsResponse`), and decodes to the same signed receipt.
+#[tokio::test]
+async fn fetch_asset_receipts_decodes_the_base64_chain() {
+    let (att_key, receipt_cbor) = signed_receipt();
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&receipt_cbor);
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("GET", p) if p == format!("/assets/{}/receipts", asset_id()) => MockResponse::json(
+            200,
+            "OK",
+            format!(
+                r#"{{"asset_id":{aid:?},"receipts":[{{"receipt_seq":1,"receipt_cbor":{b64:?}}}]}}"#,
+                aid = asset_id().to_string()
+            ),
+        ),
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let receipts = server
+        .client()
+        .fetch_asset_receipts(asset_id())
+        .await
+        .unwrap();
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0].to_canonical_cbor(), receipt_cbor);
+    assert_eq!(
+        verify_receipt(&receipts[0], &[att_key], &expectations(), now_base()),
+        Ok(())
+    );
 }
