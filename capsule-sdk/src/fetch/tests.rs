@@ -157,6 +157,7 @@ fn tiered_fetch_plans_only_the_scoped_representations() {
             hash: "original-hash".to_string(),
             size: 1_000_000,
         }),
+        ..AssetBlobs::default()
     };
 
     let planned = plan_eager_fetches(FetchScope::MetadataThumbnails, &asset, &EmptyCache);
@@ -288,6 +289,7 @@ async fn permanent_unavailability_degrades_then_refetches() {
             hash: sha(&original),
             size: original.len() as u64,
         }),
+        ..AssetBlobs::default()
     };
     let held = BTreeSet::from([Representation::Lqip, Representation::Thumbnail]);
 
@@ -303,6 +305,7 @@ async fn permanent_unavailability_degrades_then_refetches() {
         &asset,
         Representation::Original,
         &held,
+        &no_keys(),
         async || {},
     )
     .await;
@@ -322,6 +325,7 @@ async fn permanent_unavailability_degrades_then_refetches() {
         &asset,
         Representation::Original,
         &held,
+        &no_keys(),
         async || {},
     )
     .await;
@@ -351,6 +355,7 @@ async fn forbidden_resyncs_membership_then_degrades_when_still_denied() {
             hash: "o".to_string(),
             size: 4096,
         }),
+        ..AssetBlobs::default()
     };
     let held = BTreeSet::from([Representation::Lqip, Representation::Thumbnail]);
 
@@ -365,6 +370,7 @@ async fn forbidden_resyncs_membership_then_degrades_when_still_denied() {
         &asset,
         Representation::Original,
         &held,
+        &no_keys(),
         async || {
             resyncs.set(resyncs.get() + 1);
         },
@@ -396,6 +402,7 @@ async fn forbidden_then_authorized_fetches_after_resync() {
             hash: sha(&original),
             size: original.len() as u64,
         }),
+        ..AssetBlobs::default()
     };
     let held = BTreeSet::from([Representation::Lqip]);
 
@@ -409,6 +416,7 @@ async fn forbidden_then_authorized_fetches_after_resync() {
         &asset,
         Representation::Original,
         &held,
+        &no_keys(),
         async || {
             resyncs.set(resyncs.get() + 1);
         },
@@ -437,6 +445,7 @@ async fn pending_upload_is_distinct_from_gone() {
             hash: "o".to_string(),
             size: 4096,
         }),
+        ..AssetBlobs::default()
     };
     let held = BTreeSet::from([Representation::Lqip, Representation::Thumbnail]);
 
@@ -449,6 +458,7 @@ async fn pending_upload_is_distinct_from_gone() {
         &asset,
         Representation::Original,
         &held,
+        &no_keys(),
         async || {},
     )
     .await;
@@ -465,8 +475,15 @@ async fn pending_upload_is_distinct_from_gone() {
         status: 410,
         code: None,
     };
-    let resolution =
-        open_representation(&gone, &asset, Representation::Original, &held, async || {}).await;
+    let resolution = open_representation(
+        &gone,
+        &asset,
+        Representation::Original,
+        &held,
+        &no_keys(),
+        async || {},
+    )
+    .await;
     assert!(matches!(
         resolution,
         FetchResolution::Degraded {
@@ -618,4 +635,427 @@ async fn adverse_stall_cut_resumes_with_zero_duplicate_bytes() {
         served.iter().all(|(_, len)| *len as u64 <= window),
         "every request stayed within the bounded adverse window"
     );
+}
+
+// ─── Opening a derivative (issue #448) ───────────────────────────────────────
+
+/// A reader holding no album key.
+fn no_keys() -> BTreeMap<AmkVersion, Amk> {
+    BTreeMap::new()
+}
+
+const EPOCH: AmkVersion = AmkVersion(3);
+const SOURCE_ASSET: uuid::Uuid = uuid::Uuid::from_u128(0x0A55_E7);
+const PREFIX: [u8; NONCE_PREFIX_LEN] = [7, 6, 5, 4, 3, 2, 1];
+
+fn album_key() -> Amk {
+    Amk::from_bytes([0x5A; 32])
+}
+
+fn reader_keys() -> BTreeMap<AmkVersion, Amk> {
+    BTreeMap::from([(EPOCH, album_key())])
+}
+
+/// Seal `plaintext` the way the write half does: under
+/// `AMK(epoch).derive_file_key(source_asset_id, nonce_prefix)`.
+fn seal(amk: &Amk, plaintext: &[u8]) -> Vec<u8> {
+    let file_key = amk.derive_file_key(&SOURCE_ASSET, &PREFIX);
+    capsule_core::crypto::encryption::encrypt_asset_vec_with_prefix(&file_key, PREFIX, plaintext).1
+}
+
+/// A signed derivative manifest for `role`, committing to `ciphertext` in `format`.
+fn manifest(role: DerivativeRole, format: &str, ciphertext: &[u8]) -> DerivativeManifest {
+    use capsule_core::crypto::keys::HybridSigningKey;
+    use capsule_core::crypto::provenance::{DERIVATIVE_MANIFEST_VERSION, DerivativeCore};
+
+    let device = HybridSigningKey::from_seed_bytes(&[1; 32], &[2; 32]);
+    let write = HybridSigningKey::from_seed_bytes(&[3; 32], &[4; 32]);
+    DerivativeCore {
+        version: DERIVATIVE_MANIFEST_VERSION.into(),
+        crypto_suite_id: capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
+        protocol_version: Some(capsule_core::crypto::primitives::PROTOCOL_VERSION.into()),
+        amk_version: Some(EPOCH),
+        source_asset_id: SOURCE_ASSET,
+        role,
+        format: format.into(),
+        ciphertext_hash: capsule_core::crypto::hash::hash_bytes(ciphertext),
+        nonce_prefix: PREFIX,
+        generated_by_device: uuid::Uuid::from_u128(0xD1),
+        generated_by_client: "capsule-cli/0.1.0".into(),
+        model_id: None,
+        model_version: None,
+        generated_at: "2026-10-17T00:00:00Z".into(),
+        prior_provenance_hash: None,
+    }
+    .sign(&device, &write)
+    .unwrap()
+}
+
+/// An asset whose thumbnail is `ciphertext`, described by `manifests`.
+fn thumbnail_asset(ciphertext: &[u8], manifests: Vec<DerivativeManifest>) -> AssetBlobs {
+    AssetBlobs {
+        thumbnail: Some(RepBlob {
+            hash: sha(ciphertext),
+            size: ciphertext.len() as u64,
+        }),
+        derivative_manifests: manifests,
+        ..AssetBlobs::default()
+    }
+}
+
+/// A source that serves `data` whole and records every request.
+fn serving(data: &[u8]) -> ChunkedSource {
+    ChunkedSource {
+        data: data.to_vec(),
+        window: data.len().max(1),
+        requested_starts: Mutex::new(Vec::new()),
+    }
+}
+
+async fn open_thumbnail(
+    source: &ChunkedSource,
+    asset: &AssetBlobs,
+    keys: &BTreeMap<AmkVersion, Amk>,
+) -> FetchResolution {
+    let held = BTreeSet::from([Representation::Lqip]);
+    open_representation(
+        source,
+        asset,
+        Representation::Thumbnail,
+        &held,
+        keys,
+        async || {},
+    )
+    .await
+}
+
+/// **The read half.** A fetched thumbnail is decrypted with the key its manifest selects,
+/// so the caller receives the plaintext still — never AEAD ciphertext.
+#[tokio::test]
+async fn fetched_thumbnail_is_decrypted_with_its_manifest_key() {
+    let plaintext = b"\xff\x0aJXL thumbnail bytes".repeat(400);
+    let ciphertext = seal(&album_key(), &plaintext);
+    let asset = thumbnail_asset(
+        &ciphertext,
+        vec![manifest(
+            DerivativeRole::Thumbnail,
+            "image/jxl",
+            &ciphertext,
+        )],
+    );
+    let source = serving(&ciphertext);
+
+    let resolution = open_thumbnail(&source, &asset, &reader_keys()).await;
+
+    assert_eq!(
+        resolution,
+        FetchResolution::Opened {
+            representation: Representation::Thumbnail,
+            plaintext,
+        }
+    );
+}
+
+/// A preview opens through its own role's manifest, not the thumbnail's.
+#[tokio::test]
+async fn preview_opens_through_the_preview_manifest() {
+    let thumb = seal(&album_key(), b"thumb");
+    let preview_plain = b"preview".repeat(100);
+    let preview = seal(&album_key(), &preview_plain);
+    let asset = AssetBlobs {
+        thumbnail: Some(RepBlob {
+            hash: sha(&thumb),
+            size: thumb.len() as u64,
+        }),
+        preview: Some(RepBlob {
+            hash: sha(&preview),
+            size: preview.len() as u64,
+        }),
+        original: None,
+        derivative_manifests: vec![
+            manifest(DerivativeRole::Thumbnail, "image/jxl", &thumb),
+            manifest(DerivativeRole::Preview, "image/avif", &preview),
+        ],
+    };
+    let source = serving(&preview);
+    let held = BTreeSet::from([Representation::Lqip]);
+
+    let resolution = open_representation(
+        &source,
+        &asset,
+        Representation::Preview,
+        &held,
+        &reader_keys(),
+        async || {},
+    )
+    .await;
+
+    assert_eq!(
+        resolution,
+        FetchResolution::Opened {
+            representation: Representation::Preview,
+            plaintext: preview_plain,
+        }
+    );
+}
+
+/// **Corrupt blob.** Bytes that match their content address but fail AEAD authentication
+/// under the manifest's key are discarded and surfaced as corrupt (regenerate from the
+/// original) — fetched once, never handed out, never re-fetched into the same failure.
+#[tokio::test]
+async fn authentication_failure_is_a_corrupt_blob() {
+    let foreign = Amk::from_bytes([0x11; 32]);
+    let ciphertext = seal(&foreign, b"sealed under some other key");
+    let asset = thumbnail_asset(
+        &ciphertext,
+        vec![manifest(
+            DerivativeRole::Thumbnail,
+            "image/jxl",
+            &ciphertext,
+        )],
+    );
+    let source = serving(&ciphertext);
+
+    let resolution = open_thumbnail(&source, &asset, &reader_keys()).await;
+
+    assert_eq!(
+        resolution,
+        FetchResolution::Degraded {
+            shown: Representation::Lqip,
+            reason: DegradeReason::Corrupt,
+        }
+    );
+    assert_eq!(
+        *source.requested_starts.lock().unwrap(),
+        vec![0],
+        "fetched exactly once"
+    );
+}
+
+/// A blob that would not open after a `403` re-sync admitted the fetch is corrupt, not an
+/// authorization change.
+#[tokio::test]
+async fn corrupt_after_resync_is_reported_as_corrupt() {
+    let ciphertext = seal(&Amk::from_bytes([0x11; 32]), b"other key");
+    let asset = thumbnail_asset(
+        &ciphertext,
+        vec![manifest(
+            DerivativeRole::Thumbnail,
+            "image/jxl",
+            &ciphertext,
+        )],
+    );
+    let source = ForbiddenThenServes {
+        data: ciphertext.clone(),
+        deny: Mutex::new(1),
+    };
+    let held = BTreeSet::from([Representation::Lqip]);
+
+    let resolution = open_representation(
+        &source,
+        &asset,
+        Representation::Thumbnail,
+        &held,
+        &reader_keys(),
+        async || {},
+    )
+    .await;
+
+    assert!(matches!(
+        resolution,
+        FetchResolution::Degraded {
+            reason: DegradeReason::Corrupt,
+            ..
+        }
+    ));
+}
+
+/// **The `original` sentinel is not a fetch.** A tier whose signed manifest carries
+/// `format = "original"` is satisfied by the original, and no request is made.
+#[tokio::test]
+async fn original_sentinel_is_satisfied_without_a_fetch() {
+    let original_ciphertext = seal(&album_key(), b"the original");
+    let asset = AssetBlobs {
+        derivative_manifests: vec![manifest(
+            DerivativeRole::Thumbnail,
+            "original",
+            &original_ciphertext,
+        )],
+        ..AssetBlobs::default()
+    };
+    let source = serving(b"never served");
+
+    let resolution = open_thumbnail(&source, &asset, &no_keys()).await;
+
+    assert_eq!(
+        resolution,
+        FetchResolution::ReferencesOriginal {
+            representation: Representation::Thumbnail,
+        }
+    );
+    assert!(source.requested_starts.lock().unwrap().is_empty());
+}
+
+/// The sentinel is found even when the feed lists a blob for the tier and a same-role
+/// manifest committing to other bytes comes first: the sentinel outranks an arbitrary
+/// manifest of the role, so the tier references the original rather than degrading.
+#[tokio::test]
+async fn original_sentinel_outranks_a_manifest_for_other_bytes() {
+    let listed = seal(&album_key(), b"listed thumbnail");
+    let other = seal(&album_key(), b"some other thumbnail");
+    let original_ciphertext = seal(&album_key(), b"the original");
+    let asset = thumbnail_asset(
+        &listed,
+        vec![
+            manifest(DerivativeRole::Thumbnail, "image/jxl", &other),
+            manifest(DerivativeRole::Thumbnail, "original", &original_ciphertext),
+        ],
+    );
+    let source = serving(&listed);
+
+    let resolution = open_thumbnail(&source, &asset, &reader_keys()).await;
+
+    assert_eq!(
+        resolution,
+        FetchResolution::ReferencesOriginal {
+            representation: Representation::Thumbnail,
+        }
+    );
+    assert!(source.requested_starts.lock().unwrap().is_empty());
+}
+
+/// **The receiver's closed-format check.** A manifest naming a still format outside the
+/// tier table is a structural rejection: nothing is fetched.
+#[tokio::test]
+async fn unrecognised_still_format_is_rejected_before_fetching() {
+    let ciphertext = seal(&album_key(), b"future codec");
+    let asset = thumbnail_asset(
+        &ciphertext,
+        vec![manifest(
+            DerivativeRole::Thumbnail,
+            "image/future-codec",
+            &ciphertext,
+        )],
+    );
+    let source = serving(&ciphertext);
+
+    let resolution = open_thumbnail(&source, &asset, &reader_keys()).await;
+
+    assert_eq!(
+        resolution,
+        FetchResolution::Degraded {
+            shown: Representation::Lqip,
+            reason: DegradeReason::ManifestRejected,
+        }
+    );
+    assert!(source.requested_starts.lock().unwrap().is_empty());
+}
+
+/// A manifest with no AMK epoch cannot select a key and is rejected without a fetch.
+#[tokio::test]
+async fn manifest_without_an_epoch_is_rejected() {
+    let ciphertext = seal(&album_key(), b"no epoch");
+    let mut unbound = manifest(DerivativeRole::Thumbnail, "image/jxl", &ciphertext);
+    unbound.core.amk_version = None;
+    let asset = thumbnail_asset(&ciphertext, vec![unbound]);
+    let source = serving(&ciphertext);
+
+    let resolution = open_thumbnail(&source, &asset, &reader_keys()).await;
+
+    assert!(matches!(
+        resolution,
+        FetchResolution::Degraded {
+            reason: DegradeReason::ManifestRejected,
+            ..
+        }
+    ));
+    assert!(source.requested_starts.lock().unwrap().is_empty());
+}
+
+/// A reader that does not hold the manifest's epoch learns so without spending a fetch.
+#[tokio::test]
+async fn unheld_epoch_degrades_without_fetching() {
+    let ciphertext = seal(&album_key(), b"locked out");
+    let asset = thumbnail_asset(
+        &ciphertext,
+        vec![manifest(
+            DerivativeRole::Thumbnail,
+            "image/jxl",
+            &ciphertext,
+        )],
+    );
+    let source = serving(&ciphertext);
+
+    let resolution = open_thumbnail(&source, &asset, &no_keys()).await;
+
+    assert!(matches!(
+        resolution,
+        FetchResolution::Degraded {
+            reason: DegradeReason::KeyUnavailable,
+            ..
+        }
+    ));
+    assert!(source.requested_starts.lock().unwrap().is_empty());
+}
+
+/// A thumbnail blob that no manifest describes — none at all, or one committing to other
+/// bytes — has no key, so it is not fetched.
+#[tokio::test]
+async fn blob_without_a_describing_manifest_is_not_fetched() {
+    let ciphertext = seal(&album_key(), b"undescribed");
+    let other = seal(&album_key(), b"some other thumbnail");
+
+    for manifests in [
+        Vec::new(),
+        vec![manifest(DerivativeRole::Thumbnail, "image/jxl", &other)],
+        vec![manifest(DerivativeRole::Preview, "image/jxl", &ciphertext)],
+    ] {
+        let asset = thumbnail_asset(&ciphertext, manifests);
+        let source = serving(&ciphertext);
+
+        let resolution = open_thumbnail(&source, &asset, &reader_keys()).await;
+
+        assert!(
+            matches!(
+                resolution,
+                FetchResolution::Degraded {
+                    reason: DegradeReason::NoManifest,
+                    ..
+                }
+            ),
+            "got {resolution:?}"
+        );
+        assert!(source.requested_starts.lock().unwrap().is_empty());
+    }
+}
+
+/// An absent derivative with no manifest is the absent derivative it always was: gone,
+/// degrade — and a manifest-described derivative the server does not list is the same.
+#[tokio::test]
+async fn absent_derivative_still_degrades_as_gone() {
+    let ciphertext = seal(&album_key(), b"unlisted");
+    for manifests in [
+        Vec::new(),
+        vec![manifest(
+            DerivativeRole::Thumbnail,
+            "image/jxl",
+            &ciphertext,
+        )],
+    ] {
+        let asset = AssetBlobs {
+            derivative_manifests: manifests,
+            ..AssetBlobs::default()
+        };
+        let source = serving(&ciphertext);
+
+        let resolution = open_thumbnail(&source, &asset, &reader_keys()).await;
+
+        assert_eq!(
+            resolution,
+            FetchResolution::Degraded {
+                shown: Representation::Lqip,
+                reason: DegradeReason::PermanentlyGone,
+            }
+        );
+    }
 }
