@@ -749,8 +749,15 @@ fn compose(
         // Endpoints only; the issuer and client id stay the server's.
         server_info = server_info.with_oidc();
     }
-    if let Some(url) = &config.federation_url {
-        server_info = server_info.with_federation(url.clone());
+    // Published only when the deployment federates (#509): a `FEDERATION_URL` without
+    // `FEDERATION_ENABLED` is an endpoint nothing behind it would answer.
+    if let Some(url) = config.federation_endpoint() {
+        server_info = server_info.with_federation(url.to_owned());
+    } else if config.federation_url.is_some() {
+        tracing::warn!(
+            "FEDERATION_URL is set but FEDERATION_ENABLED is not; this server does not federate \
+             and publishes no federation endpoint"
+        );
     }
     let server_info = Arc::new(server_info);
     // The same object as `issued`, seen through the port discovery publishes it under.
@@ -861,7 +868,7 @@ fn compose(
             capabilities: issued,
             peers,
             clock: clock.clone(),
-            federation_url: config.federation_url.clone(),
+            enabled: Arc::new(config.federation_endpoint().is_some()),
         }),
         enrollment: EnrollmentContext::new(enrollments, channels, clock.clone()),
         moderation: ModerationContext::new(moderation),
@@ -875,6 +882,7 @@ fn compose(
         server_id = %config.server_domain,
         protocol_min = %config.protocol_min,
         protocol_max = %config.protocol_max,
+        federation = config.federation_endpoint().is_some(),
         adapters,
         "assembled a server"
     );
@@ -1421,23 +1429,51 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn federation_url_is_published_when_configured() {
-        // Opt-in by one variable, and the record is the only way a peer learns it.
+    async fn federation_url_is_published_only_when_federation_is_switched_on() {
+        // Opt-in by the switch (#509), and the record is the only way a peer learns it. A URL
+        // on its own is a deployment that never decided, so it publishes nothing and mounts a
+        // federation surface that answers `404`.
         let root = tempfile::tempdir().expect("a scratch directory");
-        let config = memory_config_with(
-            root.path(),
-            &[("FEDERATION_URL", "https://capsule.example/v1")],
-        );
-        let assembled = assemble(&config).await.expect("it assembles");
-        let client = kynos::test::TestClient::new(assembled.service().expect("the router builds"));
-        let body: serde_json::Value = client
-            .get("/.well-known/capsule/server-info")
-            .header("accept", "application/json")
-            .send()
-            .await
-            .assert_status(kynos::http::StatusCode::OK)
-            .json();
-        assert_eq!(body["federation_url"], "https://capsule.example/v1");
+        for (enabled, published) in [(false, None), (true, Some("https://capsule.example/v1"))] {
+            let mut pairs = vec![("FEDERATION_URL", "https://capsule.example/v1")];
+            if enabled {
+                pairs.push(("FEDERATION_ENABLED", "true"));
+            }
+            let config = memory_config_with(root.path(), &pairs);
+            let assembled = assemble(&config).await.expect("it assembles");
+            let client =
+                kynos::test::TestClient::new(assembled.service().expect("the router builds"));
+            let body: serde_json::Value = client
+                .get("/.well-known/capsule/server-info")
+                .header("accept", "application/json")
+                .send()
+                .await
+                .assert_status(kynos::http::StatusCode::OK)
+                .json();
+            assert_eq!(
+                body.get("federation_url")
+                    .and_then(serde_json::Value::as_str),
+                published,
+                "FEDERATION_ENABLED={enabled}"
+            );
+
+            let report = client
+                .post("/v1/federation/reports")
+                .header("accept", "application/json")
+                .header(
+                    "x-capsule-protocol",
+                    capsule_core::crypto::primitives::PROTOCOL_VERSION,
+                )
+                .json(&serde_json::json!({}))
+                .send()
+                .await;
+            assert_eq!(
+                report.status() == kynos::http::StatusCode::NOT_FOUND,
+                !enabled,
+                "FEDERATION_ENABLED={enabled}: report intake answered {}",
+                report.status()
+            );
+        }
     }
 
     #[tokio::test]

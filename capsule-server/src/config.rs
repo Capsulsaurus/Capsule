@@ -326,12 +326,17 @@ pub struct Config {
     pub server_domain: String,
     /// The absolute base URL clients reach the versioned API at.
     pub api_base_url: String,
-    /// Where federated peers reach this server, when it federates at all (`FEDERATION_URL`).
+    /// Where federated peers reach this server (`FEDERATION_URL`).
     ///
-    /// `None` is a deployment that does not federate: `server-info` publishes no
-    /// `federation_url`, and the capability lifecycle writes refuse with
-    /// `error.federation.not_configured`.
+    /// Read as given, and published only when [`Self::federation_enabled`] is also set: see
+    /// [`Self::federation_endpoint`], which is the one question the rest of the server asks.
     pub federation_url: Option<String>,
+    /// Whether this deployment federates at all (`FEDERATION_ENABLED`, #509). Off by default.
+    ///
+    /// Federation is deferred (#476), and its surface does work for unauthenticated callers, so
+    /// a deployment has to ask for it. Turning it on demands `FEDERATION_URL` on `serve`; a URL
+    /// without the switch is a deployment that does not federate, and says so at startup.
+    pub federation_enabled: bool,
     /// The filesystem tree ciphertext blobs are written to. There is no object store.
     pub blob_root: Option<PathBuf>,
     /// The Postgres URL, once an adapter reads it (#402).
@@ -420,6 +425,7 @@ impl fmt::Debug for Config {
             server_domain,
             api_base_url,
             federation_url,
+            federation_enabled,
             blob_root,
             database_url,
             valkey_url,
@@ -443,6 +449,7 @@ impl fmt::Debug for Config {
             .field("server_domain", server_domain)
             .field("api_base_url", api_base_url)
             .field("federation_url", federation_url)
+            .field("federation_enabled", federation_enabled)
             .field("blob_root", blob_root)
             .field("database_url", &database_url.as_deref().map(redacted_url))
             .field("valkey_url", &valkey_url.as_deref().map(redacted_url))
@@ -474,6 +481,17 @@ impl fmt::Debug for Config {
 }
 
 impl Config {
+    /// Where peers reach this server, when — and only when — it federates.
+    ///
+    /// `FEDERATION_ENABLED` **and** `FEDERATION_URL` (#509). `None` is a deployment that does
+    /// not federate: `server-info` publishes no `federation_url`, the federation operations
+    /// answer `404`, and no capability is honoured on the read primitives.
+    pub fn federation_endpoint(&self) -> Option<&str> {
+        self.federation_url
+            .as_deref()
+            .filter(|_| self.federation_enabled)
+    }
+
     /// Read the configuration for a subcommand that demands `demands`.
     ///
     /// # Errors
@@ -538,6 +556,13 @@ impl Config {
         // versioned API itself (design/federation.md, "no new data protocol"), so a deployment
         // that federates publishes its API base here.
         let federation_url = env.var("FEDERATION_URL");
+        // Off unless asked for (#509): federation is deferred (#476), and its surface answers
+        // unauthenticated callers, so a deployment that never decided must not carry it.
+        let federation_enabled = parse_flag(
+            env.var("FEDERATION_ENABLED").as_deref(),
+            "FEDERATION_ENABLED",
+            &mut faults,
+        );
 
         // ── Storage ─────────────────────────────────────────────────────────────────────
         // `UPLOAD_DIR` is the name the retired deployment used, accepted so an operator's
@@ -734,6 +759,11 @@ impl Config {
             Demands::Serve => {
                 require(blob_root.is_some(), "BLOB_ROOT", &mut faults);
                 require(signing_key_der.is_some(), "JWT_ED25519_DER", &mut faults);
+                // An operator who turned federation on meant peers to reach it somewhere, and a
+                // federating server with no published endpoint is one no peer can find.
+                if federation_enabled {
+                    require(federation_url.is_some(), "FEDERATION_URL", &mut faults);
+                }
                 // The refusal `store/mod.rs` has always documented and nothing has ever
                 // enforced: Valkey is required, and the in-memory adapters are a development
                 // profile an operator opts into rather than something to fall back on.
@@ -760,6 +790,7 @@ impl Config {
                 server_domain,
                 api_base_url,
                 federation_url,
+                federation_enabled,
                 blob_root,
                 database_url,
                 valkey_url,
@@ -873,7 +904,35 @@ fn read_oidc(env: &dyn Environment, faults: &mut Vec<ConfigFault>) -> Option<Oid
         }
     }
 
-    let allow_loopback = match allow_loopback.as_deref().map(str::trim) {
+    let allow_loopback = parse_flag(
+        allow_loopback.as_deref(),
+        "OIDC_ALLOW_LOOPBACK_REDIRECT",
+        faults,
+    );
+
+    Some(OidcConfig {
+        issuer: issuer?,
+        client_id: client_id?,
+        client_secret: client_secret.map(ClientSecret::new),
+        redirects: RedirectPolicy::new(redirect_url, allow_loopback),
+        ca_bundle,
+    })
+}
+
+/// Record a missing required setting.
+fn require(present: bool, key: &'static str, faults: &mut Vec<ConfigFault>) {
+    if !present {
+        faults.push(ConfigFault::Missing { key });
+    }
+}
+
+/// Read an on/off setting, absent meaning off, recording a fault for anything else.
+///
+/// The spellings an operator reaches for either way are all accepted, case-insensitively,
+/// because a switch that silently read `True` or `yes` as off would be worse than one that
+/// refused it.
+fn parse_flag(raw: Option<&str>, key: &'static str, faults: &mut Vec<ConfigFault>) -> bool {
+    match raw.map(str::trim) {
         None => false,
         Some(raw)
             if ["true", "1", "yes", "on"]
@@ -891,26 +950,11 @@ fn read_oidc(env: &dyn Environment, faults: &mut Vec<ConfigFault>) -> Option<Oid
         }
         Some(raw) => {
             faults.push(ConfigFault::Invalid {
-                key: "OIDC_ALLOW_LOOPBACK_REDIRECT",
+                key,
                 detail: format!("`{raw}` is neither `true` nor `false`"),
             });
             false
         }
-    };
-
-    Some(OidcConfig {
-        issuer: issuer?,
-        client_id: client_id?,
-        client_secret: client_secret.map(ClientSecret::new),
-        redirects: RedirectPolicy::new(redirect_url, allow_loopback),
-        ca_bundle,
-    })
-}
-
-/// Record a missing required setting.
-fn require(present: bool, key: &'static str, faults: &mut Vec<ConfigFault>) {
-    if !present {
-        faults.push(ConfigFault::Missing { key });
     }
 }
 
@@ -1463,6 +1507,53 @@ mod tests {
     fn oidc_is_off_unless_an_issuer_is_named() {
         let config = Config::load(&serveable(), &memory(), Demands::Serve).expect("it loads");
         assert!(config.oidc.is_none());
+    }
+
+    #[test]
+    fn federation_is_off_unless_switched_on_and_a_url_alone_does_not_turn_it_on() {
+        // #509: the deferred surface is opt-in. A deployment carrying a `FEDERATION_URL` from
+        // before the switch existed is one that never decided, so it does not federate.
+        let config = Config::load(&serveable(), &memory(), Demands::Serve).expect("it loads");
+        assert!(!config.federation_enabled);
+        assert_eq!(config.federation_endpoint(), None);
+
+        let mut environment = serveable();
+        environment.insert(
+            "FEDERATION_URL".to_owned(),
+            "https://capsule.example/v1".to_owned(),
+        );
+        let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+        assert_eq!(config.federation_endpoint(), None);
+
+        for on in ["true", "1", "YES", " on "] {
+            environment.insert("FEDERATION_ENABLED".to_owned(), on.to_owned());
+            let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+            assert_eq!(
+                config.federation_endpoint(),
+                Some("https://capsule.example/v1"),
+                "FEDERATION_ENABLED={on}"
+            );
+        }
+        environment.insert("FEDERATION_ENABLED".to_owned(), "off".to_owned());
+        let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+        assert_eq!(config.federation_endpoint(), None);
+    }
+
+    #[test]
+    fn switching_federation_on_without_a_url_or_with_a_typo_is_refused_by_name() {
+        let mut environment = serveable();
+        environment.insert("FEDERATION_ENABLED".to_owned(), "true".to_owned());
+        let error = Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
+        assert!(error.names("FEDERATION_URL"), "{error}");
+        // Only `serve` federates, so maintenance is not sent looking for a URL it never reads.
+        environment.insert("BLOB_ROOT".to_owned(), "/blobs".to_owned());
+        Config::load(&environment, &Overrides::default(), Demands::Maintenance)
+            .expect("maintenance loads without one");
+
+        let mut environment = serveable();
+        environment.insert("FEDERATION_ENABLED".to_owned(), "enabled".to_owned());
+        let error = Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
+        assert!(error.names("FEDERATION_ENABLED"), "{error}");
     }
 
     #[test]

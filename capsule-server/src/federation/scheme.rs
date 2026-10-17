@@ -15,7 +15,10 @@
 //! # Session first, capability second
 //!
 //! The authenticator asks the session module first, exactly as `Auth<AccessToken>` would — the
-//! ledger check of `S-C48` included — and only on *unauthenticated* tries the capability codec.
+//! ledger check of `S-C48` included — and only on *unauthenticated* tries the capability codec,
+//! and only when the deployment federates at all (`FEDERATION_ENABLED`, #509): off, the
+//! capability arm does not exist and a non-session bearer is the plain `401` it would be on any
+//! other operation.
 //! A session token that is live and the wrong kind stays `403`: a refresh token is an
 //! insufficient credential on this operation whichever module reads it. A capability that
 //! verifies must also be one this server **recorded**: an unknown `jti` under a valid signature
@@ -102,6 +105,16 @@ impl Authenticator<ReadBearer, App> for FederationContext {
             // session", which is the one answer that opens the capability path.
             Err(AuthRejection::Forbidden) => return Err(AuthRejection::Forbidden),
             Err(_) => {}
+        }
+
+        // A deployment that does not federate has no capability arm (#509): the token is not
+        // verified and no store is read for it, so a stranger presenting garbage costs nothing
+        // past the session check every bearer already pays.
+        if !self.is_enabled() {
+            tracing::debug!(
+                "a non-session credential was refused: this deployment does not federate"
+            );
+            return Err(AuthRejection::unauthenticated());
         }
 
         let grant = self.codec().verify(presented.as_str()).map_err(|reason| {

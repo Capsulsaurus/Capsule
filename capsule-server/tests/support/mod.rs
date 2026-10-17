@@ -67,8 +67,8 @@ use capsule_server::enrollment::EnrollmentContext;
 use capsule_server::escrow::{EscrowContext, EscrowRecord, EscrowStore, InMemoryEscrow, Replaced};
 use capsule_server::federation::{
     CapabilityCodec, CapabilityFilter, CapabilityRecord, CapabilityStore, FederationCollaborators,
-    FederationContext, InMemoryCapabilities, InMemoryPeers, RefreshOutcome, ReportClaim,
-    RevokeOutcome,
+    FederationContext, FederationSetting, InMemoryCapabilities, InMemoryPeers, RefreshOutcome,
+    ReportClaim, RevokeOutcome,
 };
 use capsule_server::gc::memory::InMemoryCollection;
 use capsule_server::index::memory::InMemoryAssetIndex;
@@ -207,9 +207,6 @@ pub(crate) fn identity_header(ik: &HybridSigningKey) -> String {
 /// receipt binds to the origin that signed it and a test asserting the two agree has to be
 /// asserting about one fact rather than two matching literals.
 pub(crate) const SERVER_ORIGIN: &str = "capsule.test";
-
-/// Where peers pull from, in every fixture that federates. The API base, as the design has it.
-pub(crate) const FEDERATION_URL: &str = "https://capsule.test/v1";
 
 /// The account [`Fixture::working`] seeds.
 pub(crate) const EMAIL: &str = "somebody@example.test";
@@ -1214,6 +1211,37 @@ impl ShareStore for SwitchableShares {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.revoke(owner, opaque_id, at)
+    }
+}
+
+/// Whether the fixture's server federates (`FEDERATION_ENABLED`, #509), switchable per request.
+///
+/// A switch for the reason the stores carry one: `assert_declared_responses_covered` walks one
+/// client's recording, so the `404` every federation operation declares for a deployment that
+/// does not federate has to come from the same server that produces their `200`s. Production
+/// hands in a fixed `bool`.
+#[derive(Debug)]
+pub(crate) struct SwitchableFederation {
+    enabled: AtomicBool,
+}
+
+impl SwitchableFederation {
+    /// A switch starting in `enabled`.
+    pub(crate) fn new(enabled: bool) -> Self {
+        Self {
+            enabled: AtomicBool::new(enabled),
+        }
+    }
+
+    /// Turn federation on or off for every subsequent request.
+    pub(crate) fn set_enabled(&self, enabled: bool) {
+        self.enabled.store(enabled, Ordering::SeqCst);
+    }
+}
+
+impl FederationSetting for SwitchableFederation {
+    fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::SeqCst)
     }
 }
 
@@ -2914,6 +2942,9 @@ pub(crate) struct Fixture {
     pub(crate) revocations: Arc<SwitchableRevocations>,
     /// The peers this server has pinned or blocked.
     pub(crate) peers: Arc<InMemoryPeers>,
+    /// Whether the server federates — the *same* switch it reads, so a case can turn the whole
+    /// federation surface off for the requests it is about.
+    pub(crate) federation: Arc<SwitchableFederation>,
     /// The capability codec the server mints with — the *same* one, over the *same* key as
     /// `tokens`, so a test can mint a capability the server will accept, or one it must not.
     pub(crate) codec: Arc<CapabilityCodec>,
@@ -2957,18 +2988,13 @@ impl Fixture {
 
     /// The same server, with a deployment's quota thresholds.
     pub(crate) fn with_quota(quota_limits: QuotaLimits) -> Self {
-        Self::build(quota_limits, None, None, Some(FEDERATION_URL.to_owned()))
+        Self::build(quota_limits, None, None, true)
     }
 
     /// The working server over a **real** identity provider adapter, for the cases that drive
     /// the wire against the mock provider in [`idp`]. `fixture.idp` is present but unused.
     pub(crate) fn with_identity_provider(provider: Arc<dyn IdentityProvider>) -> Self {
-        Self::build(
-            QuotaLimits::unlimited(),
-            Some(provider),
-            None,
-            Some(FEDERATION_URL.to_owned()),
-        )
+        Self::build(QuotaLimits::unlimited(), Some(provider), None, true)
     }
 
     /// The working server whose rate-limit counters hold at most `ceiling` keys **per
@@ -2980,28 +3006,24 @@ impl Fixture {
     /// at-capacity code rather than a `500` that impersonates an outage — does not depend on how
     /// wide it is, so the tests that assert it shrink the partitions and spend two requests.
     pub(crate) fn with_counter_ceiling(ceiling: usize) -> Self {
-        Self::build(
-            QuotaLimits::unlimited(),
-            None,
-            Some(ceiling),
-            Some(FEDERATION_URL.to_owned()),
-        )
+        Self::build(QuotaLimits::unlimited(), None, Some(ceiling), true)
     }
 
-    /// The same server on a deployment that does **not** federate: `FEDERATION_URL` unset.
+    /// The same server on a deployment that does **not** federate: `FEDERATION_ENABLED` off,
+    /// which is the default (#509).
     ///
-    /// Its own constructor rather than a switch on the built fixture, because the setting is
-    /// read once at boot and a server that changed its mind at runtime would be testing a
-    /// deployment nobody runs.
+    /// Built off rather than switched off, so a case about the default deployment never
+    /// observes the server federating. [`Fixture::federation`] still turns it on, which is how
+    /// a case mints a grant "while federation was on" and then asks what off does to it.
     pub(crate) fn without_federation() -> Self {
-        Self::build(QuotaLimits::unlimited(), None, None, None)
+        Self::build(QuotaLimits::unlimited(), None, None, false)
     }
 
     fn build(
         quota_limits: QuotaLimits,
         provider: Option<Arc<dyn IdentityProvider>>,
         counter_ceiling: Option<usize>,
-        federation_url: Option<String>,
+        federating: bool,
     ) -> Self {
         let clock = Arc::new(ManualClock::default());
         let sessions = Arc::new(SwitchableSessions::new(clock.clone()));
@@ -3044,6 +3066,7 @@ impl Fixture {
         ));
         let revocations = Arc::new(SwitchableRevocations::new(clock.clone()));
         let peers = Arc::new(InMemoryPeers::new());
+        let federation = Arc::new(SwitchableFederation::new(federating));
         let challenges = Arc::new(SwitchableChallenges::new(clock.clone()));
         let escrows = Arc::new(SwitchableEscrow::new());
         let cohorts = Arc::new(SwitchableCohorts::new());
@@ -3118,13 +3141,13 @@ impl Fixture {
             ),
             discovery: DiscoveryContext::new(Arc::new(server_info(&tokens)), revocations.clone()),
             escrow: EscrowContext::new(escrows.clone(), clock.clone()),
-            // Configured unless the case asked otherwise ([`Fixture::without_federation`]).
+            // On unless the case asked otherwise ([`Fixture::without_federation`]).
             federation: FederationContext::new(FederationCollaborators {
                 codec: codec.clone(),
                 capabilities: revocations.clone(),
                 peers: peers.clone(),
                 clock: clock.clone(),
-                federation_url,
+                enabled: federation.clone(),
             }),
             enrollment: EnrollmentContext::new(
                 enrollments.clone(),
@@ -3173,6 +3196,7 @@ impl Fixture {
             attestation_key,
             revocations,
             peers,
+            federation,
             codec,
             challenges,
             escrows,
@@ -3291,7 +3315,7 @@ impl Fixture {
                 capabilities: issued,
                 peers: Arc::new(InMemoryPeers::new()),
                 clock: clock.clone(),
-                federation_url: Some(FEDERATION_URL.to_owned()),
+                enabled: Arc::new(true),
             }),
             enrollment: EnrollmentContext::new(
                 Arc::new(InMemoryEnrollments::new(clock.clone(), ENROLLMENT_CODE_TTL)),
