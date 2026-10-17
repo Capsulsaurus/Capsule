@@ -108,6 +108,11 @@ impl ScopeMaterial {
     /// scope it is derived from the requested epoch's AMK with `nonce_prefix` folded into the
     /// salt (the fold is what re-rolls the key per write). A file/epoch this material does not
     /// cover is [`SharingError::ScopeUnavailable`].
+    ///
+    /// The album arm assumes `key_mode = derived`: the triple carries no `wrapped_file_key`,
+    /// so it cannot recover an adopted web-upload drop's key. A caller holding the asset's
+    /// manifest uses [`file_key_for_manifest`](Self::file_key_for_manifest), which honours
+    /// `key_mode`.
     pub fn file_key_for(
         &self,
         file_id: &Uuid,
@@ -125,6 +130,34 @@ impl ScopeMaterial {
                 .get(&amk_version)
                 .map(|amk| Amk::from_bytes(*amk).derive_file_key(file_id, nonce_prefix))
                 .ok_or(SharingError::ScopeUnavailable),
+        }
+    }
+
+    /// Recover the per-file key of the original `core` describes, honouring its `key_mode`.
+    ///
+    /// For an [`Asset`](ScopeMaterial::Asset) scope the carried key is returned (the issuer
+    /// already resolved the key mode when it minted the grant) and `core.file_id` must match.
+    /// For an [`Album`](ScopeMaterial::Album) scope the AMK of `core.amk_version` recovers it
+    /// through [`recover_file_key`](crate::crypto::encryption::recover_file_key): a `derived`
+    /// original re-derives, a `wrapped` one (an adopted web-upload drop) unwraps
+    /// `wrapped_file_key`. A file/epoch this material does not cover is
+    /// [`SharingError::ScopeUnavailable`]; a wrapped key that does not open is
+    /// [`SharingError::Crypto`].
+    pub fn file_key_for_manifest(
+        &self,
+        core: &crate::crypto::provenance::ManifestCore,
+    ) -> Result<[u8; 32], SharingError> {
+        match self {
+            ScopeMaterial::Asset { .. } => {
+                self.file_key_for(&core.file_id, core.amk_version.0, &core.nonce_prefix)
+            }
+            ScopeMaterial::Album { amks, .. } => {
+                let amk = amks
+                    .get(&core.amk_version.0)
+                    .ok_or(SharingError::ScopeUnavailable)?;
+                crate::crypto::encryption::recover_file_key(&Amk::from_bytes(*amk), core)
+                    .map_err(|_| SharingError::Crypto("asset file key recovery failed"))
+            }
         }
     }
 }

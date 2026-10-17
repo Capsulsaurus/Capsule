@@ -465,6 +465,50 @@ mod tests {
         assert_eq!(b.verify(&asset).unwrap(), VerifyOutcome::Accept);
     }
 
+    /// #551: an adopted web-upload drop (`key_mode = wrapped`) survives a backup round trip —
+    /// export ships the guest's ciphertext, and restore unwraps its key rather than deriving
+    /// one, so a fresh library of the same account reads the guest's plaintext back.
+    #[test]
+    fn an_adopted_drop_round_trips_through_backup() {
+        use crate::drop::{DropAdopter, LinkCaps, UploadLinkIssuer, seal_drop};
+
+        let (lib_a, lib_b, src) = (
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+        );
+        let mut a = fast_workspace(lib_a.path());
+        let album = a.create_album("Guests").unwrap();
+        let link = UploadLinkIssuer::create_link(&mut a, LinkCaps::default(), None).unwrap();
+        let plaintext = b"\xFF\xD8\xFF a guest photo worth backing up";
+        let sealed = seal_drop(plaintext, &link.drop_pubkey, "image/jpeg").unwrap();
+        let drop_id = a.receive_drop(link.link_id, sealed).unwrap();
+        let asset = DropAdopter::adopt(&mut a, drop_id, album)
+            .unwrap()
+            .asset_id();
+        let archive = src.path().join("backup.tar");
+        a.export_backup_with_params(&archive, b"pw", FAST_PARAMS)
+            .unwrap();
+
+        let mut b = Workspace::create_from_master(
+            lib_b.path(),
+            b"device b",
+            FAST_PARAMS,
+            MasterKey::from_bytes(*a.account.master.as_bytes()),
+            a.user_id(),
+            &a.sealed_identity(),
+        )
+        .unwrap();
+        assert_eq!(
+            b.import_backup(&archive, b"pw", &a.exporter_verifying_key())
+                .unwrap(),
+            1
+        );
+        assert_eq!(b.read_plaintext(&asset).unwrap(), plaintext);
+        b.directory = a.directory.clone();
+        assert_eq!(b.verify(&asset).unwrap(), VerifyOutcome::Accept);
+    }
+
     /// An album holding a held authority that no longer re-verifies (here a ledger whose admin
     /// key was swapped) still gains the artifact's content keys: the held authority is neither
     /// replaced nor re-checked, so it cannot fail the import. An adopted authority that does not

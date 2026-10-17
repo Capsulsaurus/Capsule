@@ -35,7 +35,7 @@ use uuid::Uuid;
 use super::{ARTIFACT_FORMAT_VERSION, BackupError};
 use crate::cbor;
 use crate::crypto::authority::{ReferenceAuthority, SignedEpochLedger};
-use crate::crypto::encryption::decrypt_asset_vec;
+use crate::crypto::encryption::{decrypt_asset_vec, recover_file_key};
 use crate::crypto::hash::{self, Hash32};
 use crate::crypto::keys::{Amk, HybridVerifyingKey, Signer};
 use crate::crypto::primitives::{Argon2Params, CRYPTO_SUITE_ID, PROTOCOL_VERSION, info};
@@ -692,8 +692,9 @@ impl BackupArtifact {
                     head.core.album_id, head.core.amk_version.0
                 ))
             })?;
-        let amk = Amk::from_bytes(*amk_bytes);
-        let file_key = amk.derive_file_key(&head.core.file_id, &head.core.nonce_prefix);
+        // Honour the head's `key_mode`: an adopted drop carries its key wrapped, not derived.
+        let file_key = recover_file_key(&Amk::from_bytes(*amk_bytes), &head.core)
+            .map_err(|_| BackupError::Auth("asset file key recovery failed"))?;
         let plaintext = decrypt_asset_vec(&file_key, &head.core.nonce_prefix, ct)
             .map_err(|_| BackupError::Auth("asset decryption failed"))?;
 
@@ -914,6 +915,32 @@ mod tests {
             }
         }
 
+        /// Build a backup asset shaped like an adopted web-upload drop: STREAM-encrypted under
+        /// a key a guest chose (`guest_key`), carried AMK-wrapped under `key_mode = wrapped`.
+        fn wrapped_asset(
+            &self,
+            asset_id: u128,
+            guest_key: [u8; 32],
+            plaintext: &[u8],
+        ) -> BackupAsset {
+            let amk = Amk::from_bytes(self.amk);
+            let mut asset = self.asset(asset_id, plaintext);
+            let mut core = asset.provenance[0].manifest.core.clone();
+            let (enc, ct) = crate::crypto::encryption::encrypt_asset_vec_with_prefix(
+                &guest_key,
+                core.nonce_prefix,
+                plaintext,
+            );
+            core.ciphertext_hash = enc.ciphertext_hash;
+            core.key_mode = KeyMode::Wrapped;
+            core.wrapped_file_key = Some(crate::crypto::provenance::WrappedFileKey(
+                crate::crypto::encryption::seal_file_key(&amk, &core.file_id, &guest_key),
+            ));
+            asset.ciphertext = ct;
+            asset.provenance[0].manifest = core.sign(&self.device, &self.write).unwrap();
+            asset
+        }
+
         /// The album's admin-signed epoch ledger attesting `self.write` for epoch 1.
         fn ledger(&self) -> SignedEpochLedger {
             let admin = HybridSigningKey::from_seed_bytes(&[5; 32], &[6; 32]);
@@ -971,6 +998,54 @@ mod tests {
             plaintexts,
             vec![b"hello world".to_vec(), b"second asset".to_vec()]
         );
+    }
+
+    /// #551: an adopted drop (`key_mode = wrapped`) restores. Its key is not
+    /// `HKDF(AMK, file_id ‖ nonce_prefix)`, so restore must unwrap `wrapped_file_key` under
+    /// the ledger AMK rather than re-derive; a derived asset alongside it still restores.
+    #[test]
+    fn a_wrapped_key_asset_round_trips_through_export_and_restore() {
+        let f = Fix::new();
+        let input = f.input(vec![
+            f.asset(1, b"imported photo"),
+            f.wrapped_asset(2, [0x77; 32], b"adopted guest photo"),
+        ]);
+        let bytes = export_with_params(&input, b"pw", FAST, &f.device).unwrap();
+        let art = BackupArtifact::open(&bytes, b"pw", &f.device.verifying_key()).unwrap();
+        let report = art.restore(RestoreMode::Commit, &BTreeMap::new()).unwrap();
+        assert_eq!(report.applied.len(), 2);
+        let adopted = report
+            .applied
+            .iter()
+            .find(|a| a.asset_id == Uuid::from_u128(2))
+            .unwrap();
+        assert_eq!(adopted.plaintext, b"adopted guest photo");
+        assert_eq!(
+            adopted.provenance[0].manifest.core.key_mode,
+            KeyMode::Wrapped
+        );
+    }
+
+    /// A `wrapped` head whose key does not open under the ledger AMK fails restore closed.
+    #[test]
+    fn a_wrapped_key_sealed_under_another_amk_fails_restore() {
+        let f = Fix::new();
+        let mut asset = f.wrapped_asset(2, [0x77; 32], b"adopted guest photo");
+        let mut core = asset.provenance[0].manifest.core.clone();
+        core.wrapped_file_key = Some(crate::crypto::provenance::WrappedFileKey(
+            crate::crypto::encryption::seal_file_key(
+                &Amk::from_bytes([0x99; 32]),
+                &core.file_id,
+                &[0x77; 32],
+            ),
+        ));
+        asset.provenance[0].manifest = core.sign(&f.device, &f.write).unwrap();
+        let bytes = export_with_params(&f.input(vec![asset]), b"pw", FAST, &f.device).unwrap();
+        let art = BackupArtifact::open(&bytes, b"pw", &f.device.verifying_key()).unwrap();
+        assert!(matches!(
+            art.restore(RestoreMode::DryRun, &BTreeMap::new()),
+            Err(BackupError::Auth("asset file key recovery failed"))
+        ));
     }
 
     #[test]
