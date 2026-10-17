@@ -74,7 +74,10 @@
 //! disagree. The serving path asks it of **every** holder of an address and folds the answers
 //! (#462), because shared ciphertext can be held by unrelated owners; this port decides one
 //! holder at a time. It costs one membership lookup per holder asked for a non-owner, stopping
-//! at the first grant, and none for the owner's own holder.
+//! at the first grant, and none for the owner's own holder. The exception is a **backup**
+//! holder asked for a non-owner account: it is refused on its role before the roster is asked,
+//! so it costs none either. A peer's backup holder still costs its lookup, because the peer path
+//! asks the roster before it checks the role.
 //!
 //! **The takedown `410` was deliberately left alone** by `S-C39`, and the reasoning still holds
 //! with members in the picture: design/moderation.md states the per-surface rule as *"takedown
