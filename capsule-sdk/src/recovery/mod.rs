@@ -1250,7 +1250,8 @@ mod tests {
         assert_eq!(cache.stored_at(), Some(rotated.stored_at));
         assert_eq!(store.fetch_count(), 1, "one proactive refresh");
 
-        // Now current: a wrong secret is a genuine failure with no further fetch.
+        // Now current: no proactive refresh runs, so a wrong secret fails the cached
+        // compare and the failure-driven refresh runs once before the genuine failure.
         assert_eq!(
             client
                 .verify(&mut cache, b"wrong", &master, Some(rotated.stored_at))
@@ -1291,6 +1292,47 @@ mod tests {
             "the rotated-away secret no longer verifies"
         );
         assert_eq!(store.fetch_count(), 1);
+    }
+
+    /// The failure-driven refresh's `stored_at` handling, from a stamped cache with no
+    /// `latest_stored_at`: an unchanged blob keeps the cache's `stored_at`, and a changed
+    /// blob drops it, because `GET` does not say when the new blob was stored.
+    #[tokio::test]
+    async fn fallback_refresh_keeps_stored_at_only_when_the_blob_is_unchanged() {
+        let store = EscrowStore::default();
+        let base = start_mock(escrow_handler(store.clone())).await;
+        let client = RecoveryClient::new(session_for(&base), &base).unwrap();
+
+        let master = [0x36u8; 32];
+        let old_blob = wrap(&master, b"old-secret");
+        let old = client.store_escrow(&old_blob).await.unwrap();
+        let mut cache = EscrowCache::with_stored_at(old_blob.clone(), old.stored_at);
+
+        // Unchanged refresh: a wrong secret fetches the same blob, and the stamp survives.
+        assert_eq!(
+            client
+                .verify(&mut cache, b"wrong", &master, None)
+                .await
+                .unwrap(),
+            VerifyOutcome::NotVerified
+        );
+        assert_eq!(store.fetch_count(), 1);
+        assert_eq!(cache.blob(), &old_blob);
+        assert_eq!(cache.stored_at(), Some(old.stored_at));
+
+        // Changed refresh: another device rotates, and the refreshed copy carries no stamp.
+        let new_blob = wrap(&master, b"new-secret");
+        client.store_escrow(&new_blob).await.unwrap();
+        assert_eq!(
+            client
+                .verify(&mut cache, b"new-secret", &master, None)
+                .await
+                .unwrap(),
+            VerifyOutcome::Verified
+        );
+        assert_eq!(store.fetch_count(), 2);
+        assert_eq!(cache.blob(), &new_blob);
+        assert_eq!(cache.stored_at(), None);
     }
 
     /// SSoT § Local Verification stale-cache rule: a rotation on another device makes
