@@ -61,7 +61,8 @@ use capsule_server::discovery::revocation::{
 };
 use capsule_server::discovery::{DiscoveryContext, ProtocolWindow, ServerInfo};
 use capsule_server::drop::{
-    Admission, DropContext, DropStore, InMemoryDrops, InboxEntry, PendingDeposit, UploadLinkRecord,
+    Admission, DropContext, DropStore, InMemoryDrops, InboxEntry, LinkProvisionOutcome,
+    PendingDeposit, UploadLinkRecord,
 };
 use capsule_server::enrollment::EnrollmentContext;
 use capsule_server::escrow::{EscrowContext, EscrowRecord, EscrowStore, InMemoryEscrow, Replaced};
@@ -88,7 +89,7 @@ use capsule_server::quota::{
     ChargeOutcome, InMemoryQuota, QuotaContext, QuotaLimits, QuotaStore, StoredUsage,
 };
 use capsule_server::serve::ServeContext;
-use capsule_server::share::{InMemoryShares, ShareContext, ShareRecord, ShareStore};
+use capsule_server::share::{InMemoryShares, IssueOutcome, ShareContext, ShareRecord, ShareStore};
 use capsule_server::store::memory::{
     InMemoryAuthState, InMemoryChallenges, InMemoryChannels, InMemoryCohorts, InMemoryEnrollments,
     InMemoryOidcAuthorizations, InMemoryUploadSessions, ManualClock,
@@ -1043,7 +1044,7 @@ impl SwitchableDrops {
 }
 
 impl DropStore for SwitchableDrops {
-    fn provision(&self, record: UploadLinkRecord) -> StoreFuture<'_, ()> {
+    fn provision(&self, record: UploadLinkRecord) -> StoreFuture<'_, LinkProvisionOutcome> {
         if self.is_down() {
             return Box::pin(async { Self::refuse() });
         }
@@ -1187,7 +1188,7 @@ impl SwitchableShares {
 }
 
 impl ShareStore for SwitchableShares {
-    fn issue(&self, record: ShareRecord) -> StoreFuture<'_, ()> {
+    fn issue(&self, record: ShareRecord) -> StoreFuture<'_, IssueOutcome> {
         if self.is_down() {
             return Box::pin(async { Self::refuse() });
         }

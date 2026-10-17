@@ -270,6 +270,43 @@ async fn a_links_caps_are_spent_once_per_drop_and_refunded_when_one_is_refused()
 }
 
 #[tokio::test]
+async fn a_held_opaque_id_cannot_be_reprovisioned_and_the_refusal_is_one_answer() {
+    // #553: every guest a link reaches knows its opaque id. Were a re-provision a replace, any
+    // account could swap in its own drop key and take the guests' deposits, and the owner
+    // could reset a spent link's totals.
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let stranger = fixture
+        .other_bearer("01937b7c-0000-7000-8000-0000000000ff")
+        .await;
+    let id = opaque(3);
+    provision(
+        &fixture,
+        &bearer,
+        &link_body(&id, json!({ "max_file_count": 1 })),
+        StatusCode::CREATED,
+    )
+    .await;
+    create_drop(&fixture, &id, &payload(b'g', 512), StatusCode::CREATED).await;
+
+    let mut takeover = link_body(&id, json!({}));
+    takeover["drop_pubkey"] = json!(BASE64.encode([0xEE_u8; 32]));
+    let from_stranger = provision(&fixture, &stranger, &takeover, StatusCode::BAD_REQUEST).await;
+    let from_owner = provision(&fixture, &bearer, &takeover, StatusCode::BAD_REQUEST).await;
+    assert_eq!(
+        from_stranger, from_owner,
+        "the refusal must not say whose the id is"
+    );
+    assert_eq!(from_stranger["code"], "error.drop.malformed");
+
+    let problem = create_drop(&fixture, &id, &payload(b'h', 512), StatusCode::CONFLICT).await;
+    assert_eq!(
+        problem["code"], "error.drop.cap_exhausted",
+        "a refused re-provision must leave the spent cap spent"
+    );
+}
+
+#[tokio::test]
 async fn an_oversized_file_is_told_so_rather_than_told_the_link_is_full() {
     let fixture = Fixture::working();
     let bearer = fixture.bearer().await;

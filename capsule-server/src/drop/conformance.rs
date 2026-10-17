@@ -15,9 +15,11 @@
 //!   it.
 //! - **The inbox is the owner's, oldest first**, ties broken by id, and never shows another
 //!   account's drops.
-//! - **A write under a held key replaces.** Re-provisioning a link, re-declaring an upload
-//!   session and re-depositing a drop id each replace the earlier row whole, as the in-memory
-//!   map inserts do (the link-overwrite flaw this keeps is #553).
+//! - **A held opaque id is never re-provisioned.** Provisioning under an id already held is
+//!   [`LinkProvisionOutcome::Conflict`] — from another account and from the owner alike, spent or
+//!   revoked — and the held link, its totals included, reads back unchanged (#553).
+//! - **Other writes under a held key replace.** Re-declaring an upload session and
+//!   re-depositing a drop id each replace the earlier row whole, as the in-memory map inserts do.
 //! - **Instants are not moved.** They may lose sub-microsecond precision and nothing more.
 //!
 //! # Reusing a harness
@@ -27,7 +29,10 @@
 
 use jiff::{SignedDuration, Timestamp};
 
-use super::{Admission, DropStore, InboxEntry, LinkCaps, PendingDeposit, UploadLinkRecord};
+use super::{
+    Admission, DropStore, InboxEntry, LinkCaps, LinkProvisionOutcome, PendingDeposit,
+    UploadLinkRecord,
+};
 use crate::blob::ContentAddress;
 use crate::store::{StoreError, UploadId, UserId};
 
@@ -100,9 +105,22 @@ fn entry(case: &str, drop: &str, owner: &UserId, received: Timestamp) -> InboxEn
     }
 }
 
-/// Provision `record`, expecting it to work.
+/// Provision `record`, expecting it to be recorded.
 async fn provision(h: &dyn Harness, record: UploadLinkRecord) {
-    ok(h.drops().provision(record).await, "provision a link");
+    assert_eq!(
+        ok(h.drops().provision(record).await, "provision a link"),
+        LinkProvisionOutcome::Provisioned,
+        "a link under a fresh opaque id must be provisioned"
+    );
+}
+
+/// Provision `record` under an id already held, expecting the refusal.
+async fn provision_refused(h: &dyn Harness, record: UploadLinkRecord) {
+    assert_eq!(
+        ok(h.drops().provision(record).await, "provision a link"),
+        LinkProvisionOutcome::Conflict,
+        "provisioning under an opaque id already held must be refused"
+    );
 }
 
 /// What `opaque_id` resolves to.
@@ -168,9 +186,9 @@ pub async fn a_provisioned_link_resolves_to_its_whole_record(h: &dyn Harness) {
     assert_eq!(resolve(h, &bare.opaque_id).await, Some(bare));
 }
 
-/// Provisioning under an opaque id already held replaces the whole record: caps, totals, owner
-/// and revocation are the new record's, and nothing of the earlier one survives.
-pub async fn reprovisioning_a_held_id_replaces_the_link(h: &dyn Harness) {
+/// Provisioning under an opaque id another account holds is refused, and the held link — owner,
+/// key, caps and the totals already charged — reads back unchanged.
+pub async fn provisioning_a_held_id_is_refused_and_the_link_is_unchanged(h: &dyn Harness) {
     let case = "reprovision";
     let first = link(
         case,
@@ -190,7 +208,9 @@ pub async fn reprovisioning_a_held_id_replaces_the_link(h: &dyn Harness) {
         Admission::Admitted { .. }
     ));
 
-    let mut second = link(case, 1, &user(case, "bob"), LinkCaps::default());
+    let charged = resolve(h, &first.opaque_id).await.expect("provisioned");
+
+    let mut second = link(case, 1, &user(case, "mallory"), LinkCaps::default());
     second.drop_pubkey = vec![9; 32];
     second.crypto_suite_id = 2;
     "2026-09-01".clone_into(&mut second.protocol_version);
@@ -198,8 +218,51 @@ pub async fn reprovisioning_a_held_id_replaces_the_link(h: &dyn Harness) {
     second.used_bytes = 7;
     second.used_files = 3;
     second.revoked_at = Some(at(5));
-    provision(h, second.clone()).await;
-    assert_eq!(resolve(h, &first.opaque_id).await, Some(second));
+    provision_refused(h, second).await;
+    assert_eq!(resolve(h, &first.opaque_id).await, Some(charged));
+}
+
+/// The owner cannot re-provision its own id either: a re-provision carrying zero totals would
+/// otherwise lift a spent cap, and one without `revoked_at` would un-revoke the link.
+pub async fn the_owner_cannot_reprovision_a_spent_or_revoked_link(h: &dyn Harness) {
+    let case = "respend";
+    let alice = user(case, "alice");
+    let record = link(
+        case,
+        1,
+        &alice,
+        LinkCaps {
+            single_use: true,
+            ..LinkCaps::default()
+        },
+    );
+    provision(h, record.clone()).await;
+    assert!(matches!(
+        charge(h, &record.opaque_id, 1, at(0)).await,
+        Admission::Admitted { .. }
+    ));
+    provision_refused(h, record.clone()).await;
+    assert_eq!(
+        charge(h, &record.opaque_id, 1, at(1)).await,
+        Admission::NotLive,
+        "a refused re-provision must not reset a spent link's totals"
+    );
+
+    let other = link(case, 2, &alice, LinkCaps::default());
+    provision(h, other.clone()).await;
+    assert!(ok(
+        h.drops().revoke(&alice, &other.opaque_id, at(2)).await,
+        "revoke a link"
+    ));
+    provision_refused(h, other.clone()).await;
+    assert_eq!(
+        resolve(h, &other.opaque_id)
+            .await
+            .expect("provisioned")
+            .revoked_at,
+        Some(at(2)),
+        "a refused re-provision must not un-revoke the link"
+    );
 }
 
 /// An admission reserves one file and its bytes, and names the link's owner and pins.
@@ -670,7 +733,8 @@ pub async fn instants_read_back_at_microsecond_precision(h: &dyn Harness) {
 pub async fn run_all(h: &dyn Harness) {
     an_unknown_link_resolves_to_none_and_is_not_live(h).await;
     a_provisioned_link_resolves_to_its_whole_record(h).await;
-    reprovisioning_a_held_id_replaces_the_link(h).await;
+    provisioning_a_held_id_is_refused_and_the_link_is_unchanged(h).await;
+    the_owner_cannot_reprovision_a_spent_or_revoked_link(h).await;
     an_admission_reserves_one_file_and_its_bytes(h).await;
     a_file_past_the_size_limit_is_refused_first_and_reserves_nothing(h).await;
     the_file_count_cap_is_never_exceeded(h).await;
@@ -724,7 +788,8 @@ mod tests {
     conformance_cases! {
         an_unknown_link_resolves_to_none_and_is_not_live,
         a_provisioned_link_resolves_to_its_whole_record,
-        reprovisioning_a_held_id_replaces_the_link,
+        provisioning_a_held_id_is_refused_and_the_link_is_unchanged,
+        the_owner_cannot_reprovision_a_spent_or_revoked_link,
         an_admission_reserves_one_file_and_its_bytes,
         a_file_past_the_size_limit_is_refused_first_and_reserves_nothing,
         the_file_count_cap_is_never_exceeded,

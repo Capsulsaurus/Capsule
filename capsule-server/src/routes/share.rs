@@ -48,7 +48,7 @@ use crate::auth::AccessToken;
 use crate::blob::ContentAddress;
 use crate::counter::{CounterContext, CounterKey, Verdict, budgets, unix_seconds};
 use crate::serve::BlobSource;
-use crate::share::{ShareContext, ShareRecord, is_opaque_id};
+use crate::share::{IssueOutcome, ShareContext, ShareRecord, is_opaque_id};
 use crate::store::UserId;
 
 /// The public share surface, and the owner operations behind it.
@@ -263,7 +263,7 @@ pub async fn issue_share(
         ),
     };
 
-    share
+    let outcome = share
         .shares()
         .issue(ShareRecord {
             opaque_id: request.opaque_id.clone(),
@@ -284,6 +284,15 @@ pub async fn issue_share(
                 code: error_codes::SHARE_UNAVAILABLE,
             }
         })?;
+    if outcome == IssueOutcome::Conflict {
+        // One answer whoever holds the id, the caller included, so this is no oracle over
+        // whose a known id is. A `400` under the existing malformed code rather than a new
+        // `409`: a client's CSPRNG never repeats 128 bits, so only a replayed or hostile
+        // request lands here (#553).
+        return Err(IssueShareRejection::malformed(
+            "opaque_id is already in use",
+        ));
+    }
 
     Ok(IssueShareReply::Created(IssueShareResponse {
         opaque_id: request.opaque_id,
