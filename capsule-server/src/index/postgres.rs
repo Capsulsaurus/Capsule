@@ -477,7 +477,7 @@ async fn begin(connection: &DatabaseConnection) -> Result<DatabaseTransaction, S
 /// manifests its chain has moved past. Under PostgreSQL's default `READ COMMITTED` each of those
 /// takes a *fresh* snapshot, so a concurrent finalization landing between them yields a row
 /// nobody ever held — the clearest case being
-/// [`AssetIndex::find_reference`](super::AssetIndex::find_reference), where `state` and `hold`
+/// [`AssetIndex::find_references`](super::AssetIndex::find_references), where `state` and `hold`
 /// decide whether bytes are served and `role` and `original_held` come from the blob rows. A
 /// takedown applied between the two statements would produce a reference that says "no hold"
 /// about an asset that has one.
@@ -736,15 +736,15 @@ impl AssetIndex for PostgresAssetIndex {
         })
     }
 
-    fn find_reference<'a>(
+    fn find_references<'a>(
         &'a self,
         address: &'a ContentAddress,
-    ) -> IndexFuture<'a, Option<BlobReference>> {
+    ) -> IndexFuture<'a, Vec<BlobReference>> {
         Box::pin(async move {
-            // Two statements rather than one ordered query: a **visible** reference outranks a
-            // tombstoned one, and a pending row is not a reference at all. Content addressing
-            // means two assets share a thumbnail, so deleting one must not take the other's
-            // bytes with it.
+            // Every holder, **visible** ones first, then tombstoned ones, each in asset-id byte
+            // order; a pending row is not a reference at all. Content addressing means two
+            // assets share a thumbnail — across owners, too (#462) — so the serving path has
+            // to see all of them to judge a caller against the one it is entitled through.
             //
             // All of it inside one snapshot. This is the read the serving path decides a
             // takedown from, and `BlobReference`'s own docs say the decision has to come from
@@ -752,28 +752,25 @@ impl AssetIndex for PostgresAssetIndex {
             // a hold applied between the two reads is missed". At `READ COMMITTED` the row query
             // and the blob query are two reads with exactly that window between them.
             let snapshot = begin_read_snapshot(&self.connection).await?;
-            for state in ["visible", "tombstoned"] {
-                let found = snapshot
-                    .query_one(Statement::from_sql_and_values(
-                        DbBackend::Postgres,
-                        format!(
-                            "SELECT {ASSET_COLUMNS} FROM assets a \
-                             WHERE a.state = $2 AND EXISTS ( \
-                               SELECT 1 FROM asset_blobs b \
-                               WHERE b.asset_id = a.asset_id AND b.address = $1) \
-                             ORDER BY a.asset_id COLLATE \"C\" LIMIT 1"
-                        ),
-                        [
-                            Value::from(address.as_str().to_owned()),
-                            Value::from(state.to_owned()),
-                        ],
-                    ))
-                    .await
-                    .map_err(PORT.failing("looking an address up for the serving path"))?;
-                let Some(found) = found else { continue };
-                let mut row = asset_without_collections(&found)?;
+            let found = snapshot
+                .query_all(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    format!(
+                        "SELECT {ASSET_COLUMNS} FROM assets a \
+                         WHERE a.state IN ('visible', 'tombstoned') AND EXISTS ( \
+                           SELECT 1 FROM asset_blobs b \
+                           WHERE b.asset_id = a.asset_id AND b.address = $1) \
+                         ORDER BY a.state = 'tombstoned', a.asset_id COLLATE \"C\""
+                    ),
+                    [Value::from(address.as_str().to_owned())],
+                ))
+                .await
+                .map_err(PORT.failing("looking an address up for the serving path"))?;
+            let mut references = Vec::with_capacity(found.len());
+            for found in &found {
+                let mut row = asset_without_collections(found)?;
                 load_collections(&snapshot, &mut row).await?;
-                let reference = BlobReference {
+                references.push(BlobReference {
                     asset_id: row.asset_id.clone(),
                     album_id: row.album_id.clone(),
                     owner_id: row.owner_id.clone(),
@@ -785,12 +782,10 @@ impl AssetIndex for PostgresAssetIndex {
                     state: row.state,
                     original_held: row.original_held(),
                     hold: row.hold,
-                };
-                commit(snapshot).await?;
-                return Ok(Some(reference));
+                });
             }
             commit(snapshot).await?;
-            Ok(None)
+            Ok(references)
         })
     }
 

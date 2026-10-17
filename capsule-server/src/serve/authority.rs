@@ -66,10 +66,13 @@
 //! cannot read the MLS group, and the roster does not change that: it is a **transport**
 //! control over who is handed bytes, not a confidentiality control over who can read them.
 //!
-//! The membership question is asked from the reference the index returned, which carries the
+//! The membership question is asked of each reference the index returned, which carries the
 //! asset's `album_id` and `owner_id` for exactly this reason: the decision comes from the same
 //! read that found the reference, so there is no window in which ownership and the answer
-//! disagree. It costs one membership lookup per fetch by a non-owner and none for the owner.
+//! disagree. The serving path asks it of **every** holder of an address and folds the answers
+//! (#462), because shared ciphertext can be held by unrelated owners; this port decides one
+//! holder at a time. It costs one membership lookup per holder asked for a non-owner, stopping
+//! at the first grant, and none for the owner's own holder.
 //!
 //! **The takedown `410` was deliberately left alone** by `S-C39`, and the reasoning still holds
 //! with members in the picture: design/moderation.md states the per-surface rule as *"takedown

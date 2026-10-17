@@ -785,6 +785,102 @@ pub async fn a_live_holder_outranks_a_deleted_one(index: &dyn AssetIndex) {
     assert_eq!(reference.state, AssetState::Visible);
 }
 
+/// Bytes shared across unrelated owners are listed once per holder, live first (#462).
+///
+/// The serving path judges a caller against the holder it is entitled through, so the index
+/// owes it every holder — with each one's own owner and album — rather than the one that sorts
+/// first. A deleted holder stays in the list, after every live one, so an owner fetching their
+/// own deleted asset is still told `410` while a stranger's live copy exists.
+pub async fn a_shared_address_lists_every_holder_across_owners(index: &dyn AssetIndex) {
+    let shared = address("serve-xown");
+    let thumbnail = || BlobRecord {
+        role: BlobRole::Derivative,
+        address: shared.clone(),
+        size: 1024,
+        manifest_sha256: None,
+        finalized_at: Timestamp::UNIX_EPOCH,
+    };
+
+    // Three owners, three albums. `0` sorts first by asset id and is deleted; `a` and `b` are
+    // live and sort in that order.
+    let (deleted, _) = publish(index, "serve-xown-0", 1).await;
+    let (first, _) = publish(index, "serve-xown-a", 1).await;
+    let (second, _) = publish(index, "serve-xown-b", 1).await;
+    for asset in [&deleted, &first, &second] {
+        record(index, asset, thumbnail()).await;
+    }
+    ok(
+        index.tombstone(&deleted, Timestamp::UNIX_EPOCH).await,
+        "tombstone one holder",
+    );
+    // A pending row naming the same bytes is not a holder.
+    let unpublished = pending("serve-xown-p", 1);
+    let unpublished_id = unpublished.asset_id.clone();
+    ok(index.reserve(unpublished).await, "reserve a row");
+    record(index, &unpublished_id, thumbnail()).await;
+
+    let references = ok(
+        index.find_references(&shared).await,
+        "list a shared blob's holders",
+    );
+    let listed: Vec<(&str, &str, &str, AssetState)> = references
+        .iter()
+        .map(|reference| {
+            (
+                reference.asset_id.as_str(),
+                reference.owner_id.as_str(),
+                reference.album_id.as_str(),
+                reference.state,
+            )
+        })
+        .collect();
+    assert_eq!(
+        listed,
+        vec![
+            (
+                first.as_str(),
+                "serve-xown-a-owner",
+                "serve-xown-a-album",
+                AssetState::Visible
+            ),
+            (
+                second.as_str(),
+                "serve-xown-b-owner",
+                "serve-xown-b-album",
+                AssetState::Visible
+            ),
+            (
+                deleted.as_str(),
+                "serve-xown-0-owner",
+                "serve-xown-0-album",
+                AssetState::Tombstoned
+            ),
+        ],
+        "every published holder, live ones first, each under its own owner and album"
+    );
+    assert!(
+        references
+            .iter()
+            .all(|reference| reference.role == BlobRole::Derivative),
+        "each holder reports the role the address holds in its own bundle"
+    );
+
+    assert_eq!(
+        ok(index.find_reference(&shared).await, "look up a shared blob")
+            .map(|reference| reference.asset_id),
+        Some(first),
+        "the single-reference convenience is the first of the list"
+    );
+    assert!(
+        ok(
+            index.find_references(&address("serve-xown-none")).await,
+            "list an unknown blob's holders"
+        )
+        .is_empty(),
+        "an address nothing holds has no holders"
+    );
+}
+
 // ---------------------------------------------------------------------------------------
 // Lifecycle writes
 // ---------------------------------------------------------------------------------------
@@ -1926,6 +2022,7 @@ pub async fn run_all(index: &dyn AssetIndex) {
     the_serving_lookup_ignores_unpublished_rows(index).await;
     the_serving_lookup_reports_state_and_original_holding(index).await;
     a_live_holder_outranks_a_deleted_one(index).await;
+    a_shared_address_lists_every_holder_across_owners(index).await;
     a_lifecycle_write_extends_the_chain(index).await;
     re_applying_a_manifest_is_a_replay(index).await;
     racing_identical_submissions_apply_once_and_replay_once(index).await;

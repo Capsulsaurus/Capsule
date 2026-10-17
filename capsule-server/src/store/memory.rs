@@ -29,8 +29,7 @@ use super::ceremony::{
     RevokeAllChallenge,
 };
 use super::ids::{
-    AlbumId, ChallengeToken, ChannelId, EnrollmentCode, OidcState, OwnerId, SessionId, UploadId,
-    UserId,
+    AlbumId, ChallengeToken, ChannelId, EnrollmentCode, OidcState, SessionId, UploadId, UserId,
 };
 use super::upload::{
     AcceptedChunk, FinalizeClaim, LIFETIME_CAP, UploadSessionRecord, UploadSessionStatus,
@@ -571,7 +570,7 @@ impl UploadSessionStore for InMemoryUploadSessions {
 
     fn pending_for_address<'a>(
         &'a self,
-        owner: &'a OwnerId,
+        uploader: &'a UserId,
         expected_hash: &'a str,
     ) -> StoreFuture<'a, Option<UploadId>> {
         Box::pin(async move {
@@ -579,15 +578,15 @@ impl UploadSessionStore for InMemoryUploadSessions {
             let mut state = lock(&self.state);
             state.purge(now);
             // A scan, and only defensible because this adapter is a double — a real one indexes
-            // `(owner_id, expected_hash)`. Ordered by upload id so two sessions declaring the
-            // same bytes give a deterministic answer rather than a map-iteration one.
+            // `(upload_user_id, expected_hash)`. Ordered by upload id so two sessions declaring
+            // the same bytes give a deterministic answer rather than a map-iteration one.
             let mut matches: Vec<&UploadId> = state
                 .sessions
                 .values()
                 .map(|entry| &entry.record)
                 .filter(|record| {
                     record.status.is_active()
-                        && &record.owner_id == owner
+                        && &record.upload_user_id == uploader
                         && record.expected_hash == expected_hash
                 })
                 .map(|record| &record.upload_id)
@@ -1305,7 +1304,7 @@ mod tests {
         an_expired_session_leaves_no_listing_entry_behind,
         upload_session_round_trips_every_field,
         uploader_listing_is_ordered_and_scoped,
-        a_pending_address_is_owner_scoped_and_ends_with_the_session,
+        a_pending_address_is_uploader_scoped_and_ends_with_the_session,
         discarding_a_session_withdraws_its_pending_address,
         recording_progress_advances_bytes_clock_and_replay_together,
         chunk_replay_is_offset_addressed,
