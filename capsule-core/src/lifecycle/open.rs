@@ -1431,6 +1431,39 @@ mod tests {
         assert_eq!(b.device_directory(), &before);
     }
 
+    /// **#550.** A published directory that lists this device's id under its own signing key but
+    /// **revoked** is refused, not adopted: a revoked device must not re-admit itself by
+    /// extending the directory that revoked it, nor treat that directory as already listing it.
+    #[test]
+    fn extending_a_directory_listing_this_device_revoked_is_refused() {
+        use crate::crypto::keys::DirectoryError;
+
+        let lib_a = TempDir::new().unwrap();
+        let lib_b = TempDir::new().unwrap();
+        let (a, mut b, _) =
+            account_with_two_devices_and_a_recovered_one(lib_a.path(), lib_b.path());
+        let mut revoked = b
+            .device_directory()
+            .device(&b.device_id())
+            .cloned()
+            .expect("B lists itself");
+        revoked.revoked_at = Some(DEVICE_ADDED_AT.into());
+        // `cross_sign_device` refuses a revoked entry, so the account signs one in directly, as a
+        // directory that later revoked B would read.
+        let mut core = a.device_directory().core.clone();
+        core.devices.push(revoked);
+        core.directory_version += 1;
+        let published = core.sign(&a.account.user_ik);
+        assert!(published.verify(&b.user_ik_public()));
+        let before = b.device_directory().clone();
+
+        assert!(matches!(
+            b.extend_account_directory(&published),
+            Err(LifecycleError::Directory(DirectoryError::DeviceAlreadyListed(id))) if id == b.device_id()
+        ));
+        assert_eq!(b.device_directory(), &before, "nothing was adopted");
+    }
+
     /// **#467.** A fresh library adopts the server's account id: the account file, the in-memory
     /// account, and a re-signed directory at the next version all name it, and a reopen keeps it.
     #[test]
