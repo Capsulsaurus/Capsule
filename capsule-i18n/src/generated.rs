@@ -500,11 +500,11 @@ pub mod error_codes {
     /// `error.upload.unknown_crypto_suite`
     pub const UPLOAD_UNKNOWN_CRYPTO_SUITE: &str = "error.upload.unknown_crypto_suite";
 
+    /// `error.upload.unknown_derivative_format`
+    pub const UPLOAD_UNKNOWN_DERIVATIVE_FORMAT: &str = "error.upload.unknown_derivative_format";
+
     /// `error.upload.unsupported_content_type`
     pub const UPLOAD_UNSUPPORTED_CONTENT_TYPE: &str = "error.upload.unsupported_content_type";
-
-    /// `error.upload.unsupported_derivative_format`
-    pub const UPLOAD_UNSUPPORTED_DERIVATIVE_FORMAT: &str = "error.upload.unsupported_derivative_format";
 
     /// `error.upload.unsupported_media_type`
     pub const UPLOAD_UNSUPPORTED_MEDIA_TYPE: &str = "error.upload.unsupported_media_type";
