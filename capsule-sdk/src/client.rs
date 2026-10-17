@@ -205,9 +205,9 @@ impl rest::HttpBackend for RefreshOn401 {
                 Ok(fresh) => fresh,
                 // Deliberately the *original* `401`, not a synthetic transport error: the
                 // generated operation then maps it to its typed `Status401` and the caller
-                // reads the server's own `error.*` code — which matters because an unreadable
-                // revocation ledger is also rendered as `401`, and only that code separates an
-                // outage from an expiry.
+                // reads the server's own problem — the `error.request.unauthenticated` the
+                // operation answered, not whatever the failed refresh answered — instead of a
+                // transport error that carries no code at all.
                 Err(error) => {
                     tracing::warn!(%error, "a 401 could not be recovered; surfacing it");
                     return Ok(response);
