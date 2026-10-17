@@ -355,7 +355,7 @@ mod tests {
                 wrapped_file_key: None,
                 // Present exactly on the metadata-bearing actions, so `structural_ok` (checked
                 // before any signature) holds for every otherwise-valid fixture.
-                metadata_blob_hash: action.binds_metadata_blob().then(|| Hash32([0x4D; 32])),
+                metadata_blob_hash: action.binds_metadata_blob().then_some(Hash32([0x4D; 32])),
                 created_by_user: Uuid::from_u128(USER),
                 created_by_device: Uuid::from_u128(DEVICE),
                 client_version: "capsule-cli/0.1.0".into(),

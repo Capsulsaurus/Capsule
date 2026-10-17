@@ -136,6 +136,8 @@ pub use crate::utils::paths::tmp_path;
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsStr;
+
     use uuid::Uuid;
 
     use super::*;
@@ -169,7 +171,7 @@ mod tests {
         let root = Path::new("/lib");
         let uuid = test_uuid();
         // 2024-07-15 -> ts = 1721001600 (approx)
-        let ts = 1721001600i64;
+        let ts = 1_721_001_600_i64;
         let path = media_path(root, &uuid, "jpg", Some(ts));
         let uuid_str = uuid.simple().to_string();
         assert!(path.to_str().unwrap().contains("media/2024/2024-07"));
@@ -188,8 +190,8 @@ mod tests {
     fn test_sidecar_path() {
         let root = Path::new("/lib");
         let uuid = test_uuid();
-        let path = sidecar_path(root, &uuid, "jpg", Some(1721001600));
-        assert!(path.to_str().unwrap().ends_with(".cbor"));
+        let path = sidecar_path(root, &uuid, "jpg", Some(1_721_001_600));
+        assert_eq!(path.extension(), Some(OsStr::new("cbor")));
         assert!(path.to_str().unwrap().contains("media/2024/2024-07"));
     }
 
@@ -208,7 +210,7 @@ mod tests {
         let uuid = test_uuid();
         let path = transcode_h264_path(root, &uuid);
         assert!(path.to_str().unwrap().contains("transcodes/h264"));
-        assert!(path.to_str().unwrap().ends_with(".mp4"));
+        assert_eq!(path.extension(), Some(OsStr::new("mp4")));
     }
 
     #[test]
@@ -217,7 +219,7 @@ mod tests {
         let uuid = test_uuid();
         let path = transcode_live_path(root, &uuid);
         assert!(path.to_str().unwrap().contains("transcodes/live"));
-        assert!(path.to_str().unwrap().ends_with(".mov"));
+        assert_eq!(path.extension(), Some(OsStr::new("mov")));
     }
 
     #[test]
@@ -226,7 +228,7 @@ mod tests {
         let uuid = test_uuid();
         let path = trash_path(root, &uuid, "jpg");
         assert!(path.to_str().unwrap().contains(".library/trash"));
-        assert!(path.to_str().unwrap().ends_with(".jpg"));
+        assert_eq!(path.extension(), Some(OsStr::new("jpg")));
     }
 
     #[test]

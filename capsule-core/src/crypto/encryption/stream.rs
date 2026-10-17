@@ -245,14 +245,14 @@ mod tests {
     fn round_trip_various_sizes() {
         round_trip(b""); // empty
         round_trip(b"hello"); // < 1 chunk
-        round_trip(&[0xABu8; PLAINTEXT_CHUNK]); // exactly one chunk
-        round_trip(&[0xCDu8; PLAINTEXT_CHUNK + 1]); // one chunk + 1
-        round_trip(&[0x77u8; PLAINTEXT_CHUNK * 3 + 123]); // multi-chunk, partial last
+        round_trip(&vec![0xABu8; PLAINTEXT_CHUNK]); // exactly one chunk
+        round_trip(&vec![0xCDu8; PLAINTEXT_CHUNK + 1]); // one chunk + 1
+        round_trip(&vec![0x77u8; PLAINTEXT_CHUNK * 3 + 123]); // multi-chunk, partial last
     }
 
     #[test]
     fn full_chunk_ciphertext_is_64_kib() {
-        let (_, ct) = encrypt_asset_vec_full(&KEY, &[0u8; PLAINTEXT_CHUNK * 2]);
+        let (_, ct) = encrypt_asset_vec_full(&KEY, &vec![0u8; PLAINTEXT_CHUNK * 2]);
         // Two full plaintext chunks → two 64 KiB ciphertext chunks.
         assert_eq!(ct.len(), CIPHERTEXT_CHUNK * 2);
     }
@@ -280,7 +280,7 @@ mod tests {
 
     #[test]
     fn tamper_in_each_chunk_is_detected() {
-        let plaintext = [0x5Au8; PLAINTEXT_CHUNK * 2 + 10];
+        let plaintext = vec![0x5Au8; PLAINTEXT_CHUNK * 2 + 10];
         let (meta, ct) = encrypt_asset_vec_full(&KEY, &plaintext);
 
         // Bit-flip in the first chunk.
@@ -297,7 +297,7 @@ mod tests {
 
     #[test]
     fn chunk_reorder_and_drop_are_detected() {
-        let plaintext = [0x33u8; PLAINTEXT_CHUNK * 2];
+        let plaintext = vec![0x33u8; PLAINTEXT_CHUNK * 2];
         let (meta, ct) = encrypt_asset_vec_full(&KEY, &plaintext);
 
         // Swap the two chunks (reorder) — STREAM counter mismatch.

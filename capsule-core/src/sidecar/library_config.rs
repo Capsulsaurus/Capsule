@@ -27,8 +27,8 @@ mod tests {
         let cfg = LibraryConfigCbor {
             schema_version: 1,
             library_name: "My Photos".to_string(),
-            last_opened_at: 1720000000,
-            last_scrubbed_at: Some(1719990000),
+            last_opened_at: 1_720_000_000,
+            last_scrubbed_at: Some(1_719_990_000),
         };
         assert_eq!(cfg, cbor_roundtrip(&cfg));
     }
@@ -38,7 +38,7 @@ mod tests {
         let cfg = LibraryConfigCbor {
             schema_version: 1,
             library_name: "Library".to_string(),
-            last_opened_at: 1720000000,
+            last_opened_at: 1_720_000_000,
             last_scrubbed_at: None,
         };
         assert_eq!(cfg, cbor_roundtrip(&cfg));

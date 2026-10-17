@@ -28,9 +28,11 @@ use uuid::Uuid;
 fn workspace_root() -> PathBuf {
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     while !dir.join("Cargo.lock").is_file() {
-        if !dir.pop() {
-            panic!("no Cargo.lock found above {}", env!("CARGO_MANIFEST_DIR"));
-        }
+        assert!(
+            dir.pop(),
+            "no Cargo.lock found above {}",
+            env!("CARGO_MANIFEST_DIR")
+        );
     }
     dir
 }
@@ -165,10 +167,9 @@ fn cargo_lock_graph(lock: &str) -> HashMap<String, Vec<String>> {
                     .trim_matches('"')
                     .split(' ')
                     .next()
+                    && !dep.is_empty()
                 {
-                    if !dep.is_empty() {
-                        deps.push(dep.to_string());
-                    }
+                    deps.push(dep.to_string());
                 }
             }
         }
