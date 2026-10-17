@@ -477,7 +477,7 @@ async fn begin(connection: &DatabaseConnection) -> Result<DatabaseTransaction, S
 /// manifests its chain has moved past. Under PostgreSQL's default `READ COMMITTED` each of those
 /// takes a *fresh* snapshot, so a concurrent finalization landing between them yields a row
 /// nobody ever held — the clearest case being
-/// [`AssetIndex::find_reference`](super::AssetIndex::find_reference), where `state` and `hold`
+/// [`AssetIndex::find_reference`], where `state` and `hold`
 /// decide whether bytes are served and `role` and `original_held` come from the blob rows. A
 /// takedown applied between the two statements would produce a reference that says "no hold"
 /// about an asset that has one.

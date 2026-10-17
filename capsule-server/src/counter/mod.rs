@@ -46,12 +46,12 @@
 //! here is not one feature's problem. Two bounds, the same pair
 //! [`InMemoryOidcAuthorizations`](crate::store::memory::InMemoryOidcAuthorizations) carries:
 //!
-//! - **Purged on every write.** A window whose budget has lapsed decides nothing — [`verdict`]
+//! - **Purged on every write.** A window whose budget has lapsed decides nothing — `verdict`
 //!   already treats it as absent — so it is dropped rather than kept as a row nobody reads. The
 //!   map holds live windows plus whatever lapsed since the last hit, never everything ever
 //!   counted.
 //! - **A ceiling.** Past its ceiling a key that has no window yet is refused with
-//!   [`StoreError::Rejected`], while every key that already has one keeps counting. Callers
+//!   [`StoreError::Rejected`](crate::store::StoreError::Rejected), while every key that already has one keeps counting. Callers
 //!   treat a counter error as a refusal, so a full partition fails *closed*: a limiter under
 //!   memory pressure denies rather than waves through, and an attacker cannot switch a limiter
 //!   off by loading the store.

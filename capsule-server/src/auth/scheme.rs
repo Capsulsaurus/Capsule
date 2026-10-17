@@ -58,7 +58,7 @@
 //!
 //! 1. Every refusal here logs at `error` with the store's own reason, so an operator sees an
 //!    outage rather than a spike in bad credentials.
-//! 2. A client that answers a `401` by refreshing reaches [`crate::routes::auth::refresh`],
+//! 2. A client that answers a `401` by refreshing reaches [`crate::routes::auth::refresh_token`],
 //!    which is Capsule's own route with Capsule's own error enum, and *that* renders `500`
 //!    with `error.auth.unavailable` — so the client learns the truth one hop later and backs
 //!    off instead of prompting for a password.
@@ -117,7 +117,7 @@ pub const TOUCH_INTERVAL: SignedDuration = SignedDuration::from_secs(60);
 /// because a concurrent close or re-authentication can land between the two reads. One read,
 /// one truth, carried forward.
 ///
-/// Field names match [`VerifiedToken`]'s deliberately: this replaced it as the scheme's
+/// Field names match [`VerifiedToken`](super::tokens::VerifiedToken)'s deliberately: this replaced it as the scheme's
 /// credential type, and every `credential.user` in every handler kept meaning what it meant.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthenticatedSession {

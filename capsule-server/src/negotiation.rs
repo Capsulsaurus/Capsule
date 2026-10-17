@@ -89,7 +89,7 @@
 //! `Reads` and `Short` describe themselves through the interceptor's types. `Adds` describes
 //! itself only on success responses (Kynos attaches an interceptor's response headers at
 //! `StatusPattern::Success`, `kynos/src/middleware/erased.rs`), so
-//! [`crate::openapi`] walks the emitted document once and files the same three headers under
+//! [`crate::openapi`](fn@crate::openapi) walks the emitted document once and files the same three headers under
 //! every other response. The names and schemas both come from [`response_header_declarations`],
 //! so the document and the wire cannot disagree about what a header is called.
 
@@ -440,7 +440,7 @@ impl NegotiationResponseHeaders {
 ///
 /// The one source for the document's two spellings of them — the header parameters Kynos
 /// describes on success responses through [`HeaderParams::parameters`], and the response headers
-/// the post-emit walk in [`crate::openapi`] files under every other response — so the two cannot
+/// the post-emit walk in [`crate::openapi`](fn@crate::openapi) files under every other response — so the two cannot
 /// disagree about what a header is called or what it carries.
 fn declarations() -> [(&'static str, Schema, &'static str); 3] {
     [

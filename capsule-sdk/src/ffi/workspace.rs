@@ -18,7 +18,7 @@
 //! `capsule_core` and `capsule_sdk` namespaces never share a binary, because their generated
 //! scaffolding would collide. So the seams core exports as uniffi foreign traits are re-declared
 //! here in *this* namespace — [`FfiHardwareSigner`] and [`FfiHardwareSignerError`] mirror
-//! core's, and [`ForeignHardwareSigner`] adapts one to the other. They are declarations of the
+//! core's, and `ForeignHardwareSigner` adapts one to the other. They are declarations of the
 //! same contract, not a second implementation of it: not a byte of signing logic lives here.
 //!
 //! # Transport independence
@@ -31,6 +31,7 @@
 //! underneath it.
 //!
 //! [`verify_asset`]: capsule_core::crypto::verify_asset::verify_asset
+//! [`Workspace`]: capsule_core::lifecycle::Workspace
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

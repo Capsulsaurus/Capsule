@@ -160,7 +160,7 @@ pub trait AccountProfiles: fmt::Debug + Send + Sync {
     ///
     /// **Read-modify-write is the adapter's problem, in one operation.** A caller that read,
     /// changed a field and wrote the whole record back would clobber a concurrent edit from
-    /// another device — which is the same hazard [`AccountRegistry::create`] is one operation
+    /// another device — which is the same hazard [`AccountRegistry::create`](super::registry::AccountRegistry::create) is one operation
     /// for, in a place where the loss is a name rather than an account.
     ///
     /// Returns `None` when the account does not exist, for the reason [`Self::read`] does.
