@@ -56,7 +56,8 @@
 //!
 //! An earlier version of this paragraph said three adapters were planned per port. That was
 //! never true of any port in this module and was the one line in the tree pointing at a
-//! Postgres session table.
+//! Postgres session table. The two-adapter map, cohorts on Postgres included, is the decision
+//! `adr/0006-…` records in its 2026-10-17 amendment.
 //!
 //! Whichever adapter is in play, it must pass the one shared suite in [`conformance`]. That
 //! suite is what makes "the in-memory adapter behaves like Valkey" an assertion rather than an

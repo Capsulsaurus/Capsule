@@ -61,6 +61,17 @@
 //! used — [provenance.md § Chained, Append-Only Structure] calls the pair "a checked invariant,
 //! not trusted redundancy", and this is the wire path where nothing else would check it.
 //!
+//! # Why the payload carries no version
+//!
+//! `manifest_cbor` is decoded as a [`ProvenanceRecord`] directly: there is no envelope
+//! version, and nothing negotiates one with the sending server. That is a recorded decision
+//! (ADR-0008), and it rests on there being **no released peer** — every
+//! server and client that speaks this feed is built from this tree, so there is no older shape
+//! to stay compatible with. A bytes string that is not a record is quarantined as
+//! `MalformedManifest`, never guessed at. The first change to this shape after a release must
+//! introduce the version rather than assume one; the sealed sidecar inside already carries its
+//! own (`sidecar_schema`, refused forward below).
+//!
 //! [download & sync]: https://docs/design/import/download-sync/
 //! [provenance.md § Asset Manifest]: https://docs/design/cryptography/provenance/#asset-manifest
 //! [provenance.md § Chained, Append-Only Structure]: https://docs/design/cryptography/provenance/#chained-append-only-structure
