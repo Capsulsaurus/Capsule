@@ -1005,7 +1005,8 @@ async fn e2e_case_4_a_peer_pulls_a_shared_album_through_the_sdk_over_a_socket() 
 /// served JSON, so the mock encoded the same wrong belief as the client and nothing caught it.
 /// Only a socket shows the two ends agree: an upload is finalized through the router, the SDK
 /// fetches its receipt over the wire, and the receipt verifies under the server's own
-/// attestation key with the fields the uploader sent.
+/// attestation key with the fields the uploader sent — the key itself fetched through the SDK
+/// from the origin's `.well-known` record, not pinned from the fixture (issue #547).
 #[tokio::test]
 async fn the_sdk_fetches_a_custody_receipt_and_verifies_it_under_the_attestation_key() {
     use capsule_core::crypto::hash::hash_bytes;
@@ -1074,15 +1075,23 @@ async fn the_sdk_fetches_a_custody_receipt_and_verifies_it_under_the_attestation
         .parse::<Timestamp>()
         .expect("an instant")
         .as_second();
+
+    // The pin comes over the wire too (issue #547): the same client, built on the `/v1` API
+    // root, fetches the attestation-key record from the origin's `.well-known`, and what it
+    // pins is the key the server signs with.
+    let pinned = client
+        .fetch_attestation_keys()
+        .await
+        .expect("the SDK fetches the attestation keys from the origin");
+    let signing = fixture.attestation_key.verifying_key().to_bytes();
+    assert!(
+        pinned.iter().any(|key| key.to_bytes() == signing),
+        "the published history holds the server's signing key"
+    );
     assert_eq!(
-        verify_receipt(
-            &receipt,
-            &[fixture.attestation_key.verifying_key()],
-            &expectations,
-            at
-        ),
+        verify_receipt(&receipt, &pinned, &expectations, at),
         Ok(()),
-        "the fetched receipt verifies under the pinned attestation key"
+        "the fetched receipt verifies under the fetched attestation keys"
     );
 
     // The pin is load-bearing: the same receipt under any other key does not verify.

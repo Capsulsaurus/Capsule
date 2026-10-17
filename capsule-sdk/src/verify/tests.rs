@@ -11,8 +11,8 @@
 //! fails here rather than only against a real server.
 //!
 //! These mock-level smokes are deterministic and hermetic. The cross-module case — this client
-//! fetching a receipt from the REAL router over a socket and verifying it under the server's
-//! attestation key — is `capsule-server/tests/sdk_client.rs`.
+//! fetching a receipt and the attestation keys from the REAL router over a socket and
+//! verifying the one under the other — is `capsule-server/tests/sdk_client.rs`.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -576,4 +576,73 @@ async fn fetch_asset_receipts_decodes_the_base64_chain() {
         verify_receipt(&receipts[0], &[att_key], &expectations(), now_base()),
         Ok(())
     );
+}
+
+/// The attestation-key record is served at the origin, while the transport's base is the API
+/// root (`{origin}/v1`): the fetch must drop the API path, or it asks for
+/// `/v1/.well-known/...`, which the server does not route (issue #547). The keys it returns
+/// pin the receipt the same client fetches under the API root.
+#[tokio::test]
+async fn fetch_attestation_keys_resolves_against_the_origin_not_the_api_root() {
+    let (att_key, receipt_cbor) = signed_receipt();
+    let public = base64::engine::general_purpose::STANDARD.encode(att_key.to_bytes());
+    let served = receipt_cbor.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("GET", "/.well-known/capsule/attestation-keys") => MockResponse::json(
+            200,
+            "OK",
+            format!(
+                r#"{{"server_id":"capsule.example","keys":[{{"key_id":"11","public":{public:?},"algorithm":"hybrid-ed25519-mldsa65","active_from":"2026-07-10T00:00:00Z","active_to":null}}]}}"#
+            ),
+        ),
+        ("GET", p) if p == format!("/v1/upload/{}/receipt", upload_id()) => {
+            MockResponse::cbor(served.clone())
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+    let client = StorageVerifyClient::new(VerifyTransport::with_static_token(
+        reqwest::Client::new(),
+        format!("{}/v1/", server.base_url()),
+        StaticToken("test-token".into()),
+    ));
+
+    let keys = client.fetch_attestation_keys().await.unwrap();
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0].to_bytes(), att_key.to_bytes());
+
+    let receipt = client.fetch_receipt(upload_id()).await.unwrap();
+    assert_eq!(
+        verify_receipt(&receipt, &keys, &expectations(), now_base()),
+        Ok(())
+    );
+}
+
+/// `well_known_url` keeps scheme, host and port and replaces whatever API path and query the
+/// base carries; a base that is not a URL is refused before any request is sent.
+#[test]
+fn well_known_url_replaces_the_api_path_with_the_record_path() {
+    for base in [
+        "https://capsule.example",
+        "https://capsule.example/",
+        "https://capsule.example/v1",
+        "https://capsule.example/v1/",
+        "https://capsule.example/prefix/v1?x=1",
+    ] {
+        assert_eq!(
+            well_known_url(base, ATTESTATION_KEYS_PATH)
+                .unwrap()
+                .as_str(),
+            "https://capsule.example/.well-known/capsule/attestation-keys",
+            "base {base}"
+        );
+    }
+    assert_eq!(
+        well_known_url("http://127.0.0.1:8080/v1", ATTESTATION_KEYS_PATH)
+            .unwrap()
+            .as_str(),
+        "http://127.0.0.1:8080/.well-known/capsule/attestation-keys"
+    );
+    let err = well_known_url("not a url", ATTESTATION_KEYS_PATH).unwrap_err();
+    assert!(matches!(err, VerifyError::Transport(_)), "got {err:?}");
 }
