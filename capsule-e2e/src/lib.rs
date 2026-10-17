@@ -15,12 +15,9 @@
 //!   fast Argon2id parameter set for the *library* passphrase only (the wrap records its own
 //!   parameters, so nothing under test reads a weaker setting than it would in the field).
 //!
-//! What the harness adds on top of the SDK is exactly the seams the SDK does not have yet, each
-//! recorded as a finding in the pull request that landed this crate:
-//!
-//! - the **directory publish** ([`Device::publish_directory`]): the server requires the
-//!   `X-Capsule-Identity-Key` header on every publish and the SDK's `DirectoryClient` does not
-//!   send it (issue #466).
+//! The harness hand-writes no request of its own: every call, the directory publish
+//! ([`Device::publish_directory`]) included, goes through an SDK client. A seam the SDK lacks
+//! is an SDK finding to fix, not a request to add here.
 //!
 //! The library adopts the *server's* account id at registration
 //! ([`Workspace::bind_account_id`]), so the directory and every manifest it signs name the
@@ -35,8 +32,6 @@ pub mod push;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64;
 use capsule_core::crypto::keys::{DeviceDirectory, DeviceEntry, DirectoryCore, HybridSigningKey};
 use capsule_core::crypto::primitives::Argon2Params;
 use capsule_core::crypto::provenance::ProvenanceRecord;
@@ -44,6 +39,7 @@ use capsule_core::lifecycle::Workspace;
 use capsule_sdk::albums::{AlbumClient, AlbumTransport};
 use capsule_sdk::auth::{AuthClient, Session};
 use capsule_sdk::client::AuthenticatedClient;
+use capsule_sdk::directory::DirectoryClient;
 use capsule_sdk::sync::{FeedEntry, SyncConsumer, SyncState};
 use capsule_sdk::upload::{UploadClient, UploadTransport};
 use capsule_server::blob::address::{ContentAddress, blob_path};
@@ -342,37 +338,14 @@ impl Device {
         .sign(&self.identity)
     }
 
-    /// Publish the next version of [`Device::directory`], returning the version stored.
-    ///
-    /// Sent through the session's HTTP client rather than `capsule_sdk::directory` because the
-    /// server requires `X-Capsule-Identity-Key` (invariant 23's second clause) and the SDK's
-    /// publish does not carry it — issue #466.
+    /// Publish the next version of [`Device::directory`] through the SDK's
+    /// [`DirectoryClient`], under [`Device::identity`], returning the version stored.
     pub async fn publish_directory(&mut self, server: &Server) -> u64 {
         self.directory_version += 1;
-        let body = capsule_core::cbor::to_canonical_vec(&self.directory())
-            .expect("a directory serializes");
-        let identity = BASE64.encode(self.identity.verifying_key().to_bytes());
-        let url = format!("{}/devices/directory", server.auth_base());
-        let response = self
-            .session
-            .execute(|http| {
-                http.post(&url)
-                    .header("content-type", "application/cbor")
-                    .header("x-capsule-identity-key", &identity)
-                    .body(body.clone())
-            })
+        let version = DirectoryClient::new(self.session.clone(), &server.auth_base())
+            .publish(&self.directory(), &self.identity.verifying_key())
             .await
-            .expect("the publish reaches the server");
-        assert_eq!(
-            response.status().as_u16(),
-            200,
-            "the directory publish is accepted: {}",
-            response.text().await.unwrap_or_default()
-        );
-        let stored: serde_json::Value = response.json().await.expect("a JSON body");
-        let version = stored["directory_version"]
-            .as_u64()
-            .expect("the stored directory version");
+            .expect("the directory publish is accepted");
         assert_eq!(version, self.directory_version);
         version
     }
