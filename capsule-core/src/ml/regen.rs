@@ -27,9 +27,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::db::{DatabaseDriver, EmbeddingInsert, VectorIndexError};
-use crate::ml::AssetSource;
-use crate::ml::{Frame, ModelRunner};
-use crate::ml::{ModelId, ModelVersion, Registry, TaskKind};
+use crate::ml::{AssetSource, Frame, ModelId, ModelRunner, ModelVersion, Registry, TaskKind};
 
 /// The embedder seam the regeneration loop drives: "produce the canonical embedding for an asset
 /// under a task". Abstracting it keeps the orchestration testable with a deterministic double and

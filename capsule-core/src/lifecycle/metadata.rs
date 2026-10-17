@@ -12,8 +12,7 @@ use super::{LifecycleError, Result, Workspace, now_rfc3339};
 use crate::crypto::provenance::Action;
 use crate::db::DatabaseDriver;
 use crate::metadata::crdt::AddId;
-use crate::ml::{AiTagSink, AssetSource};
-use crate::ml::{ModelId, Registry};
+use crate::ml::{AiTagSink, AssetSource, ModelId, Registry};
 use crate::sidecar::AiTag;
 
 impl Workspace {
