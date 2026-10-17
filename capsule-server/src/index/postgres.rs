@@ -746,45 +746,63 @@ impl AssetIndex for PostgresAssetIndex {
             // assets share a thumbnail — across owners, too (#462) — so the serving path has
             // to see all of them to judge a caller against the one it is entitled through.
             //
-            // All of it inside one snapshot. This is the read the serving path decides a
-            // takedown from, and `BlobReference`'s own docs say the decision has to come from
-            // the *same read* that found the reference — "one round trip, and no window in which
-            // a hold applied between the two reads is missed". At `READ COMMITTED` the row query
-            // and the blob query are two reads with exactly that window between them.
-            let snapshot = begin_read_snapshot(&self.connection).await?;
-            let found = snapshot
+            // All of it in **one statement**, which is one snapshot and one round trip however
+            // many holders there are. This is the read the serving path decides a takedown from,
+            // and `BlobReference`'s own docs say the decision has to come from the *same read*
+            // that found the reference — "one round trip, and no window in which a hold applied
+            // between the two reads is missed". The role and `original_held` are the only facts
+            // the reference needs from `asset_blobs`, so they are subqueries here rather than a
+            // per-holder `load_collections`: that cost one extra round trip per holder on every
+            // fetch, for a list the fold usually stops reading at its first entry.
+            //
+            // The role subquery picks the first role in `BlobRole`'s order, which is what the
+            // in-memory adapter's `find` over role-sorted blobs picks when one asset holds the
+            // same address in two roles.
+            let found = self
+                .connection
                 .query_all(Statement::from_sql_and_values(
                     DbBackend::Postgres,
-                    format!(
-                        "SELECT {ASSET_COLUMNS} FROM assets a \
-                         WHERE a.state IN ('visible', 'tombstoned') AND EXISTS ( \
-                           SELECT 1 FROM asset_blobs b \
-                           WHERE b.asset_id = a.asset_id AND b.address = $1) \
-                         ORDER BY a.state = 'tombstoned', a.asset_id COLLATE \"C\""
-                    ),
+                    "SELECT a.asset_id, a.owner_id, a.album_id, a.state, a.hold, \
+                       (SELECT b.role FROM asset_blobs b \
+                        WHERE b.asset_id = a.asset_id AND b.address = $1 \
+                        ORDER BY CASE b.role WHEN 'original' THEN 0 WHEN 'derivative' THEN 1 \
+                          WHEN 'metadata' THEN 2 WHEN 'provenance' THEN 3 ELSE 4 END \
+                        LIMIT 1) AS role, \
+                       EXISTS (SELECT 1 FROM asset_blobs o \
+                        WHERE o.asset_id = a.asset_id AND o.role = 'original') AS original_held \
+                     FROM assets a \
+                     WHERE a.state IN ('visible', 'tombstoned') AND EXISTS ( \
+                       SELECT 1 FROM asset_blobs b \
+                       WHERE b.asset_id = a.asset_id AND b.address = $1) \
+                     ORDER BY a.state = 'tombstoned', a.asset_id COLLATE \"C\"",
                     [Value::from(address.as_str().to_owned())],
                 ))
                 .await
                 .map_err(PORT.failing("looking an address up for the serving path"))?;
+            let column = PORT.failing("reading a blob reference");
             let mut references = Vec::with_capacity(found.len());
             for found in &found {
-                let mut row = asset_without_collections(found)?;
-                load_collections(&snapshot, &mut row).await?;
+                let asset_id: String = found.try_get("", "asset_id").map_err(&column)?;
+                let owner_id: String = found.try_get("", "owner_id").map_err(&column)?;
+                let album_id: String = found.try_get("", "album_id").map_err(&column)?;
+                let state: String = found.try_get("", "state").map_err(&column)?;
+                let hold: Option<String> = found.try_get("", "hold").map_err(&column)?;
+                let role: String = found.try_get("", "role").map_err(&column)?;
+                let original_held: bool = found.try_get("", "original_held").map_err(&column)?;
                 references.push(BlobReference {
-                    asset_id: row.asset_id.clone(),
-                    album_id: row.album_id.clone(),
-                    owner_id: row.owner_id.clone(),
-                    role: row
-                        .blobs
-                        .iter()
-                        .find(|blob| &blob.address == address)
-                        .map_or(BlobRole::Original, |blob| blob.role),
-                    state: row.state,
-                    original_held: row.original_held(),
-                    hold: row.hold,
+                    asset_id: AssetId::new(asset_id),
+                    album_id: AlbumId::new(album_id),
+                    owner_id: OwnerId::new(owner_id),
+                    role: role_from(&role)?,
+                    state: state_from(&state)?,
+                    original_held: crate::upload::visibility::derive_original_held(original_held),
+                    hold: hold_from(hold)?,
                 });
             }
-            commit(snapshot).await?;
+            tracing::trace!(
+                holders = references.len(),
+                "read every holder of an address"
+            );
             Ok(references)
         })
     }
