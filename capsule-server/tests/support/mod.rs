@@ -794,7 +794,7 @@ impl PasswordChange for InMemoryAccounts {
             let Some(held) = accounts.values_mut().find(|held| &held.user_id == user) else {
                 return Ok(PasswordChanged::NoSuchAccount);
             };
-            held.password = password.to_owned();
+            password.clone_into(&mut held.password);
             // The port requires it: a change is a successful credential presentation, and
             // leaving the lockout behind would bar somebody from an account they just proved
             // they own.
@@ -2816,7 +2816,7 @@ impl Client {
         &self.inner
     }
 
-    fn handshake<'a>(request: TestRequest<'a, App>) -> TestRequest<'a, App> {
+    fn handshake(request: TestRequest<'_, App>) -> TestRequest<'_, App> {
         request.header("x-capsule-protocol", PROTOCOL_VERSION)
     }
 

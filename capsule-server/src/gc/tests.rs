@@ -296,7 +296,7 @@ async fn a_dangling_reference_is_reported_and_never_deleted() {
     let held = h.publish("dangling", b"bytes that go missing").await;
     h.blobs.remove(&held).await.expect("the store removes");
 
-    let found = dangling(&h.context, &[held.clone()])
+    let found = dangling(&h.context, std::slice::from_ref(&held))
         .await
         .expect("the check runs");
     assert_eq!(found, vec![held.clone()]);
