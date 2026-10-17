@@ -160,9 +160,11 @@ pub async fn re_provisioning_by_the_owner_answers_the_stored_record_and_writes_n
     let alice = owner(case, "alice");
     let created = provisioned(h, case, &alice).await;
 
-    let mut retry = record(case, &alice);
-    retry.protocol_version = "2027-01-01".to_owned();
-    retry.created_at = at(500);
+    let retry = AlbumRecord {
+        protocol_version: "2027-01-01".to_owned(),
+        created_at: at(500),
+        ..record(case, &alice)
+    };
     let outcome = ok(h.albums().provision(retry).await, "re-provision an album");
     assert_eq!(
         outcome,
