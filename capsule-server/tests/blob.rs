@@ -13,7 +13,7 @@ use capsule_server::blob::{BlobStore, ContentAddress};
 use capsule_server::gc::CollectionStore;
 use capsule_server::index::{AssetIndex, BlobRecord, HoldOutcome, PendingAsset, ServingHold};
 use capsule_server::membership::{MemberRole, MembershipStore as _, RosterRecord};
-use capsule_server::store::{AssetId, BlobRole, UserId};
+use capsule_server::store::{AlbumId, AssetId, BlobRole, OwnerId, UserId};
 use jiff::Timestamp;
 use kynos::http::StatusCode;
 use support::{Fixture, PROTOCOL_VERSION, album, owner, payload};
@@ -44,13 +44,18 @@ async fn store(fixture: &Fixture, bytes: &[u8]) -> ContentAddress {
 
 /// Reserve `asset` and land its index tier, so it is published.
 async fn publish(fixture: &Fixture, asset: &str) -> AssetId {
+    publish_in(fixture, asset, &owner(), &album()).await
+}
+
+/// The same, under another owner's album.
+async fn publish_in(fixture: &Fixture, asset: &str, owner: &OwnerId, album: &AlbumId) -> AssetId {
     let id = AssetId::new(asset);
     fixture
         .index
         .reserve(PendingAsset {
             asset_id: id.clone(),
-            owner_id: owner(),
-            album_id: album(),
+            owner_id: owner.clone(),
+            album_id: album.clone(),
             protocol_version: PROTOCOL_VERSION.to_owned(),
             crypto_suite_id: 1,
             created_at: Timestamp::UNIX_EPOCH,
@@ -917,11 +922,21 @@ const BOB: &str = "01937b7c-0000-7000-8000-0000000000b0";
 
 /// Publish the seeded album's roster at `version`, naming `members`.
 async fn roster(fixture: &Fixture, version: u64, members: &[(&str, MemberRole)]) {
+    roster_of(fixture, &album(), version, members).await;
+}
+
+/// Publish `album`'s roster at `version`, naming `members`.
+async fn roster_of(
+    fixture: &Fixture,
+    album: &AlbumId,
+    version: u64,
+    members: &[(&str, MemberRole)],
+) {
     fixture
         .members
         .apply_roster(
             RosterRecord {
-                album_id: album(),
+                album_id: album.clone(),
                 roster_version: version,
                 amk_epoch: version,
                 attested_by_device: support::device(),
@@ -1099,4 +1114,204 @@ async fn a_membership_store_that_cannot_answer_is_an_outage_never_a_refusal() {
     fetch(&fixture, &bearer(&fixture).await, address.as_str())
         .await
         .assert_status(StatusCode::OK);
+}
+
+// ===========================================================================================
+// Bytes shared across unrelated owners (#462)
+// ===========================================================================================
+
+/// An unrelated account whose album holds the same ciphertext as the seeded one.
+const MALLORY: &str = "01937b7c-0000-7000-8000-0000000000ad";
+/// A current member of the seeded album who was once on Mallory's roster and was removed.
+const CAROL: &str = "01937b7c-0000-7000-8000-0000000000c0";
+/// A former member of the seeded album, never on Mallory's roster.
+const DAVE: &str = "01937b7c-0000-7000-8000-0000000000d0";
+
+/// Mallory's album.
+fn mallorys_album() -> AlbumId {
+    AlbumId::new("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5ead")
+}
+
+/// The same `bytes` held by Mallory's asset and by the seeded owner's, with Mallory's asset id
+/// sorting **first** — the order that used to decide every caller against Mallory's album.
+///
+/// Returns the address and the seeded owner's asset.
+async fn shared_with_mallory(fixture: &Fixture, bytes: &[u8]) -> (ContentAddress, AssetId) {
+    let mallorys = publish_in(
+        fixture,
+        "00-mallorys-copy",
+        &OwnerId::new(MALLORY),
+        &mallorys_album(),
+    )
+    .await;
+    let address = store(fixture, bytes).await;
+    reference(
+        fixture,
+        &mallorys,
+        BlobRole::Original,
+        &address,
+        bytes.len() as u64,
+    )
+    .await;
+    let ours = publish(fixture, "zz-the-albums-copy").await;
+    reference(
+        fixture,
+        &ours,
+        BlobRole::Original,
+        &address,
+        bytes.len() as u64,
+    )
+    .await;
+    let first = fixture
+        .index
+        .find_reference(&address)
+        .await
+        .expect("the index answers")
+        .expect("the address is referenced");
+    assert_eq!(
+        first.asset_id, mallorys,
+        "the case needs Mallory's holder to sort first, or it proves nothing"
+    );
+    (address, ours)
+}
+
+#[tokio::test]
+async fn shared_bytes_are_decided_through_the_holder_the_caller_is_entitled_through() {
+    let fixture = Fixture::working();
+    let bytes = ciphertext();
+    let (address, _) = shared_with_mallory(&fixture, &bytes).await;
+    roster(
+        &fixture,
+        1,
+        &[
+            (BOB, MemberRole::Reader),
+            (CAROL, MemberRole::Reader),
+            (DAVE, MemberRole::Reader),
+        ],
+    )
+    .await;
+    roster(
+        &fixture,
+        2,
+        &[(BOB, MemberRole::Reader), (CAROL, MemberRole::Reader)],
+    )
+    .await;
+    roster_of(
+        &fixture,
+        &mallorys_album(),
+        1,
+        &[(CAROL, MemberRole::Reader)],
+    )
+    .await;
+    roster_of(&fixture, &mallorys_album(), 2, &[]).await;
+
+    // The owner reads their own bytes, whoever else holds a copy.
+    let response = fetch(&fixture, &bearer(&fixture).await, address.as_str()).await;
+    response.assert_status(StatusCode::OK);
+    assert_eq!(response.bytes().as_ref(), bytes.as_slice());
+
+    // A current member reads them, though Mallory's album has never heard of him.
+    fetch(&fixture, &fixture.other_bearer(BOB).await, address.as_str())
+        .await
+        .assert_status(StatusCode::OK);
+
+    // A current member who was once removed from *Mallory's* album is entitled here, and must
+    // not be told her access was revoked.
+    fetch(
+        &fixture,
+        &fixture.other_bearer(CAROL).await,
+        address.as_str(),
+    )
+    .await
+    .assert_status(StatusCode::OK);
+
+    // A former member of the album is still told so, Mallory's unrelated holder notwithstanding.
+    let refused = fetch(
+        &fixture,
+        &fixture.other_bearer(DAVE).await,
+        address.as_str(),
+    )
+    .await;
+    refused.assert_status(StatusCode::FORBIDDEN);
+    assert_eq!(
+        refused.json::<serde_json::Value>()["code"],
+        "error.blob.access_revoked"
+    );
+
+    // And a stranger to both holders is told nothing.
+    fetch(
+        &fixture,
+        &fixture
+            .other_bearer("01937b7c-0000-7000-8000-0000000000ff")
+            .await,
+        address.as_str(),
+    )
+    .await
+    .assert_status(StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn an_owners_deleted_copy_is_gone_while_a_strangers_copy_lives() {
+    // Before #462 the serving path saw only the live holder — Mallory's — and told the owner
+    // `404`, the "never heard of it" answer, about an asset they had deleted. The owner's own
+    // holder is what decides their answer, and a deleted asset's blob is `410`.
+    let fixture = Fixture::working();
+    let (address, ours) = shared_with_mallory(&fixture, &ciphertext()).await;
+    fixture
+        .index
+        .tombstone(&ours, Timestamp::UNIX_EPOCH)
+        .await
+        .expect("the index tombstones")
+        .expect("the asset exists");
+
+    fetch(&fixture, &bearer(&fixture).await, address.as_str())
+        .await
+        .assert_status(StatusCode::GONE);
+    // Mallory still reads her live copy.
+    fetch(
+        &fixture,
+        &fixture.other_bearer(MALLORY).await,
+        address.as_str(),
+    )
+    .await
+    .assert_status(StatusCode::OK);
+}
+
+/// Bob's own device, in Bob's own directory: an upload is checked against the *uploader's*
+/// directory, whoever the album belongs to.
+fn bobs_device() -> uuid::Uuid {
+    uuid::Uuid::parse_str("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5eb0").expect("a uuid")
+}
+
+#[tokio::test]
+async fn a_writer_members_upload_is_pending_to_the_member_and_not_to_the_owner() {
+    // A member's session is filed under the album owner. Keyed on that owner, the transient
+    // `409` went to the owner — about somebody else's transfer — and the member's own second
+    // device got `404`. It belongs to the uploader (#462).
+    let fixture = Fixture::working();
+    let bob = UserId::new(BOB);
+    fixture.authority.add_device(
+        &bob,
+        bobs_device(),
+        capsule_server::store::Clock::now(&*fixture.clock),
+    );
+    fixture.authority.share(&album(), &bob, MemberRole::Writer);
+    let bobs_bearer = fixture.other_bearer(BOB).await;
+
+    let bytes = payload(b'w', 8192);
+    let address = support::checksum(&bytes);
+    let mut request = support::create_request(&fixture.clock, &bytes, "original");
+    request["manifest_envelope"]["created_by_user"] = BOB.into();
+    request["manifest_envelope"]["created_by_device"] = bobs_device().to_string().into();
+    fixture.open_session_with(&request, &bobs_bearer).await;
+
+    let pending = fetch(&fixture, &bobs_bearer, &address).await;
+    pending.assert_status(StatusCode::CONFLICT);
+    assert_eq!(
+        pending.json::<serde_json::Value>()["code"],
+        "error.blob.pending_upload"
+    );
+    fetch(&fixture, &bearer(&fixture).await, &address)
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
 }
