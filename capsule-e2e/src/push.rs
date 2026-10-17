@@ -92,8 +92,8 @@ pub fn wire_envelope(core: &ManifestCore, blob_hash: &str) -> rest::types::Manif
         key_mode: envelope.key_mode,
         metadata_blob_hash: envelope.metadata_blob_hash,
         original_blob_hash: None,
-        // A lifecycle-op or adopt envelope names no derivative, and the gate refuses the pair
-        // on anything but a derivative upload.
+        // A lifecycle-op or adopt envelope names no derivative: `check_op` refuses the pair on
+        // a lifecycle write, and the upload gate refuses it on anything but a derivative.
         derivative_role: None,
         derivative_format: None,
         created_by_user: envelope.created_by_user,

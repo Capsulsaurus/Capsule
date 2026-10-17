@@ -439,7 +439,8 @@ pub fn check_finalize(
 ///
 /// It decides 1, 2, 6, 7, 8, the 15 family, and **16** — the last by refusing every action that
 /// moves blob bytes, because those are uploads by definition (`create` is `S-C1`'s surface and
-/// `replace` is `S-C43`'s).
+/// `replace` is `S-C43`'s). It also refuses the derivative pair (`derivative_role`,
+/// `derivative_format`), which only a derivative upload may carry.
 ///
 /// It does **not** decide **17** or **18**, and the way it does not is worth stating plainly:
 /// the shared battery is handed the manifest's *own* claims as the stored values, so both
@@ -485,6 +486,16 @@ pub fn check_op(
             | Action::DerivativeReplace
     ) {
         return Err(GateReject::ActionNotAllowed);
+    }
+
+    // The derivative pair describes an uploaded derivative blob, and a lifecycle write uploads
+    // none, so it is refused here exactly as `check_derivative` refuses it on a non-derivative
+    // upload. Accepting it silently would leave a declaration nothing ever checks.
+    if envelope.derivative_role.is_some() {
+        return Err(GateReject::EnvelopeMismatch("derivative_role"));
+    }
+    if envelope.derivative_format.is_some() {
+        return Err(GateReject::EnvelopeMismatch("derivative_format"));
     }
 
     let device_added_at = as_rfc3339(context.device_added_at);
