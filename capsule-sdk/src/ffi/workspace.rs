@@ -17,9 +17,10 @@
 //! namespace). This crate must **not** enable it: the `S-F1` invariant is that the
 //! `capsule_core` and `capsule_sdk` namespaces never share a binary, because their generated
 //! scaffolding would collide. So the seams core exports as uniffi foreign traits are re-declared
-//! here in *this* namespace — [`FfiHardwareSigner`] and [`FfiHardwareSignerError`] mirror
-//! core's, and `ForeignHardwareSigner` adapts one to the other. They are declarations of the
-//! same contract, not a second implementation of it: not a byte of signing logic lives here.
+//! here in *this* namespace — [`FfiHardwareSigner`], [`FfiHardwareKeyAgreement`] and
+//! [`FfiHardwareSignerError`] mirror core's, and `ForeignHardwareSigner` /
+//! `ForeignKeyAgreement` adapt one to the other. They are declarations of the same contract,
+//! not a second implementation of it: not a byte of signing or key-agreement logic lives here.
 //!
 //! # Transport independence
 //!
@@ -37,7 +38,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use capsule_core::crypto::keys::{
-    HardwareSigner, HardwareSignerError, P256HybridSigningKey, Signer,
+    HardwareBackedSigner, HardwareKeyAgreement, HardwareSigner, HardwareSignerError, P256HybridDek,
+    P256HybridSigningKey, Signer, encapsulate_to_p256_public,
 };
 use capsule_core::crypto::primitives::DeviceTier;
 use capsule_core::crypto::verify_asset::VerifyOutcome;
@@ -89,23 +91,35 @@ impl From<FfiHardwareSignerError> for HardwareSignerError {
 /// The per-platform secure element (Secure Enclave, StrongBox, TPM), implemented by native
 /// Swift/Kotlin over the uniffi foreign-trait boundary.
 ///
-/// This is the **P-256** shape shipping elements actually provide:
-/// [`enroll`](Self::enroll)/[`classical_public_key`](Self::classical_public_key) return a SEC1
-/// public key and [`sign_classical`](Self::sign_classical) a **DER-encoded ECDSA** signature
-/// over `SHA-256(msg)`. Rust composes it with a software-sealed ML-DSA-65 half into the
-/// published hybrid device key — see
-/// [`FfiWorkspace::create_with_p256_hardware_signer`].
+/// The byte shapes are fixed by the constructor the element is handed to, not by the trait:
+///
+/// - [`FfiWorkspace::create_with_p256_hardware_signer`] — the **P-256** shape shipping
+///   elements actually provide: [`enroll`](Self::enroll) /
+///   [`classical_public_key`](Self::classical_public_key) return a SEC1 public key and
+///   [`sign_classical`](Self::sign_classical) a **DER-encoded ECDSA** signature over
+///   `SHA-256(msg)`.
+/// - [`FfiWorkspace::create_with_hardware_signer`] — the **Ed25519** shape: a 32-byte public
+///   key and a 64-byte signature over `msg`. No shipping secure element holds Ed25519 keys, so
+///   this is the software/TPM reference path.
+///
+/// Either way Rust composes the classical half with a software-sealed ML-DSA-65 half into the
+/// published hybrid device key.
 #[uniffi::export(with_foreign)]
 pub trait FfiHardwareSigner: Send + Sync {
-    /// Generate (or bind to) the hardware P-256 keypair for `key_alias`, returning its SEC1
-    /// public key. Idempotent per alias.
+    /// Generate (or bind to) the hardware keypair for `key_alias`, returning its public key in
+    /// the constructor's shape: a SEC1 P-256 key for
+    /// [`FfiWorkspace::create_with_p256_hardware_signer`], a 32-byte Ed25519 key for
+    /// [`FfiWorkspace::create_with_hardware_signer`]. Idempotent per alias.
     fn enroll(&self, key_alias: String) -> Result<Vec<u8>, FfiHardwareSignerError>;
 
-    /// The SEC1 P-256 public key for an already-enrolled `key_alias`.
+    /// The public key for an already-enrolled `key_alias`, in the same constructor-dependent
+    /// shape [`enroll`](Self::enroll) returns (SEC1 P-256, or 32-byte Ed25519).
     fn classical_public_key(&self, key_alias: String) -> Result<Vec<u8>, FfiHardwareSignerError>;
 
-    /// Produce a DER-encoded ECDSA signature over `SHA-256(msg)` with the hardware key for
-    /// `key_alias`.
+    /// Sign `msg` with the hardware key for `key_alias`, in the constructor's shape: a
+    /// DER-encoded ECDSA signature over `SHA-256(msg)` for
+    /// [`FfiWorkspace::create_with_p256_hardware_signer`], a 64-byte Ed25519 signature over
+    /// `msg` for [`FfiWorkspace::create_with_hardware_signer`].
     fn sign_classical(
         &self,
         key_alias: String,
@@ -139,6 +153,106 @@ impl HardwareSigner for ForeignHardwareSigner {
     fn assert_non_exportable(&self, key_alias: String) -> Result<(), HardwareSignerError> {
         self.0.assert_non_exportable(key_alias).map_err(Into::into)
     }
+}
+
+/// The per-platform **key-agreement** element (Secure Enclave `P256.KeyAgreement`, StrongBox
+/// ECDH, TPM 2.0 ECDH), implemented by native Swift/Kotlin over the uniffi foreign-trait
+/// boundary — the ECDH analogue of [`FfiHardwareSigner`], and this namespace's declaration of
+/// `capsule-core`'s `HardwareKeyAgreement` contract.
+///
+/// It backs the hardware-bound classical half of the device **encryption** key (slice `S-F5`):
+/// the element holds a static P-256 private key and performs the ECDH, so the scalar never
+/// leaves hardware, while Rust drives the software-sealed ML-KEM-768 half and the hybrid
+/// combiner. Failures reuse [`FfiHardwareSignerError`], exactly as core's trait reuses its
+/// signer error.
+#[uniffi::export(with_foreign)]
+pub trait FfiHardwareKeyAgreement: Send + Sync {
+    /// Generate (or bind to) the hardware P-256 key-agreement keypair for `key_alias`,
+    /// returning its public key as **uncompressed SEC1** (`0x04‖x‖y`, 65 bytes). Idempotent per
+    /// alias.
+    fn enroll(&self, key_alias: String) -> Result<Vec<u8>, FfiHardwareSignerError>;
+
+    /// The uncompressed-SEC1 P-256 public key for an already-enrolled `key_alias`.
+    fn public_key(&self, key_alias: String) -> Result<Vec<u8>, FfiHardwareSignerError>;
+
+    /// ECDH against `peer_public` (the sender's ephemeral P-256 public key, uncompressed SEC1)
+    /// with the hardware key for `key_alias`, returning the **raw 32-byte shared secret** (the
+    /// big-endian x-coordinate, before any KDF).
+    fn key_agreement(
+        &self,
+        key_alias: String,
+        peer_public: Vec<u8>,
+    ) -> Result<Vec<u8>, FfiHardwareSignerError>;
+
+    /// Non-exportability assertion: a conforming element MUST refuse to reveal the private
+    /// bytes, returning [`FfiHardwareSignerError::Exportable`] if they can be read.
+    fn assert_non_exportable(&self, key_alias: String) -> Result<(), FfiHardwareSignerError>;
+}
+
+/// Adapts a foreign [`FfiHardwareKeyAgreement`] to `capsule-core`'s `HardwareKeyAgreement`, so
+/// the core composition (`P256HybridDek::enroll`) drives the native element unchanged. Pure
+/// delegation — only the error type is translated.
+struct ForeignKeyAgreement(Arc<dyn FfiHardwareKeyAgreement>);
+
+impl HardwareKeyAgreement for ForeignKeyAgreement {
+    fn enroll(&self, key_alias: String) -> Result<Vec<u8>, HardwareSignerError> {
+        self.0.enroll(key_alias).map_err(Into::into)
+    }
+    fn public_key(&self, key_alias: String) -> Result<Vec<u8>, HardwareSignerError> {
+        self.0.public_key(key_alias).map_err(Into::into)
+    }
+    fn key_agreement(
+        &self,
+        key_alias: String,
+        peer_public: Vec<u8>,
+    ) -> Result<Vec<u8>, HardwareSignerError> {
+        self.0
+            .key_agreement(key_alias, peer_public)
+            .map_err(Into::into)
+    }
+    fn assert_non_exportable(&self, key_alias: String) -> Result<(), HardwareSignerError> {
+        self.0.assert_non_exportable(key_alias).map_err(Into::into)
+    }
+}
+
+/// Parse the 32-byte software-sealed post-quantum seed every hardware composition takes, as a
+/// typed error rather than a panic at the boundary.
+fn parse_ml_seed(bytes: &[u8]) -> Result<[u8; 32], FfiError> {
+    bytes.try_into().map_err(|_| FfiError::InvalidArgument {
+        message: "ml_seed must be exactly 32 bytes".into(),
+    })
+}
+
+/// Smoke the **hardware-bound P-256 device encryption key** (slice `S-F5`) across the FFI seam:
+/// enroll a key-agreement key in `hardware` under `key_alias`, publish the hybrid public key,
+/// encapsulate a fresh shared secret to it **in software** (the sender side), then
+/// **decapsulate through the element's ECDH**. Returns `true` iff the two secrets match —
+/// proving the element's ECDH composes into the hybrid KEM without the private scalar leaving
+/// hardware. `ml_seed` (32 bytes) is the software-sealed ML-KEM-768 half.
+///
+/// The DEK is not yet wired into workspace creation, so this focused round-trip is the
+/// composition's on-device check — the DEK analogue of
+/// [`FfiWorkspace::create_with_p256_hardware_signer`]. Every step is one `capsule-core` call.
+#[uniffi::export]
+pub fn p256_hardware_dek_round_trip(
+    hardware: Arc<dyn FfiHardwareKeyAgreement>,
+    key_alias: String,
+    ml_seed: Vec<u8>,
+) -> Result<bool, FfiError> {
+    let seed = parse_ml_seed(&ml_seed)?;
+    let dek = P256HybridDek::enroll(Arc::new(ForeignKeyAgreement(hardware)), key_alias, &seed)
+        .map_err(|e| FfiError::Workspace {
+            message: format!("hardware P-256 DEK enrollment failed: {e}"),
+        })?;
+    let workspace_error = |e: capsule_core::crypto::CryptoError| FfiError::Workspace {
+        message: e.to_string(),
+    };
+    let (ciphertext, sender_secret) =
+        encapsulate_to_p256_public(&dek.public_bytes()).map_err(workspace_error)?;
+    let receiver_secret = dek.decapsulate(&ciphertext).map_err(workspace_error)?;
+    let matched = sender_secret == receiver_secret;
+    tracing::debug!(matched, "hardware P-256 DEK round trip");
+    Ok(matched)
 }
 
 // ─── Small mirrors ───────────────────────────────────────────────────────────
@@ -517,6 +631,49 @@ impl FfiWorkspace {
         Ok(Self::wrap(workspace))
     }
 
+    /// **Enroll with a hardware-bound Ed25519 device key**: as [`create`](Self::create), but
+    /// the classical half of the device signing key is produced by `hardware` under
+    /// `key_alias` over **Ed25519** (a 32-byte public key, 64-byte signatures). The
+    /// post-quantum ML-DSA-65 half is the software-sealed `ml_seed` (32 bytes).
+    ///
+    /// No shipping secure element holds Ed25519 keys, so this is the software/TPM reference
+    /// composition; phones use
+    /// [`create_with_p256_hardware_signer`](Self::create_with_p256_hardware_signer). It is the
+    /// same core call (`HardwareBackedSigner::enroll`) reached through this namespace's
+    /// [`FfiHardwareSigner`] seam.
+    #[uniffi::constructor]
+    pub fn create_with_hardware_signer(
+        root: String,
+        passphrase: Vec<u8>,
+        tier: FfiDeviceTier,
+        hardware: Arc<dyn FfiHardwareSigner>,
+        key_alias: String,
+        ml_seed: Vec<u8>,
+        client: FfiClientBuild,
+    ) -> Result<Arc<Self>, FfiError> {
+        let seed = parse_ml_seed(&ml_seed)?;
+        let signer = HardwareBackedSigner::enroll(
+            Arc::new(ForeignHardwareSigner(hardware)),
+            key_alias,
+            &seed,
+        )
+        .map_err(|e| FfiError::Workspace {
+            message: format!("hardware Ed25519 key enrollment failed: {e}"),
+        })?;
+        let workspace = Workspace::create_with_hardware_signer(
+            &PathBuf::from(root),
+            &passphrase,
+            DeviceTier::from(tier).params(),
+            Box::new(signer) as Box<dyn Signer>,
+        )?
+        .with_client_id(&client.client_id, &client.semver);
+        tracing::info!(
+            user_id = %workspace.user_id(),
+            "workspace created with a hardware-bound Ed25519 device key"
+        );
+        Ok(Self::wrap(workspace))
+    }
+
     /// **Enroll with a hardware-bound device key**: as [`create`](Self::create), but the
     /// classical half of the device signing key is produced by `hardware` (a native Secure
     /// Enclave / StrongBox / TPM element) under `key_alias`, over **ECDSA-P256** — the
@@ -537,13 +694,7 @@ impl FfiWorkspace {
         ml_seed: Vec<u8>,
         client: FfiClientBuild,
     ) -> Result<Arc<Self>, FfiError> {
-        let seed: [u8; 32] =
-            ml_seed
-                .as_slice()
-                .try_into()
-                .map_err(|_| FfiError::InvalidArgument {
-                    message: "ml_seed must be exactly 32 bytes".into(),
-                })?;
+        let seed = parse_ml_seed(&ml_seed)?;
         let signer = P256HybridSigningKey::enroll(
             Arc::new(ForeignHardwareSigner(hardware)),
             key_alias,

@@ -68,6 +68,12 @@ require "$sdk_swift" sealAsset uploadBlobs applySyncEntry escrowBlob \
 require "$sdk_kt" sealAsset uploadBlobs applySyncEntry escrowBlob \
     signedDeviceDirectory publishDeviceDirectory escrowPut escrowGet \
     createWithP256HardwareSigner
+# #424 — the surfaces the hardware harnesses still reach through the capsule_core
+# namespace, authored in capsule_sdk so the harnesses can move onto it: the Ed25519
+# hardware-signer constructor, the key-agreement seam and the hardware DEK round-trip.
+for f in "$sdk_kt" "$sdk_swift"; do
+    require "$f" FfiHardwareKeyAgreement createWithHardwareSigner p256HardwareDekRoundTrip
+done
 # The core namespace stays its own surface (S-F1): its offline workspace is here and
 # nowhere near the SDK's.
 require "$core_swift" FfiWorkspace HardwareSigner

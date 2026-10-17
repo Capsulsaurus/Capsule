@@ -57,9 +57,9 @@ use crate::upload::{
 mod workspace;
 
 pub use workspace::{
-    FfiAlbum, FfiAssetFacts, FfiAssetMetadata, FfiClientBuild, FfiDeviceTier, FfiHardwareSigner,
-    FfiHardwareSignerError, FfiSyncApplyOutcome, FfiSyncEntry, FfiUploadBlob, FfiVerifyOutcome,
-    FfiWorkspace,
+    FfiAlbum, FfiAssetFacts, FfiAssetMetadata, FfiClientBuild, FfiDeviceTier,
+    FfiHardwareKeyAgreement, FfiHardwareSigner, FfiHardwareSignerError, FfiSyncApplyOutcome,
+    FfiSyncEntry, FfiUploadBlob, FfiVerifyOutcome, FfiWorkspace, p256_hardware_dek_round_trip,
 };
 
 /// The local-alert surface (`S-D29`): the shared `capsule_core::notify` predicate, flattened.
