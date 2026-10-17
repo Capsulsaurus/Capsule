@@ -38,9 +38,9 @@ was deliberate rather than an omission: the contract and its suite are what a re
 written *against*, and a port with two implementations before it has one suite is a port whose
 implementations will disagree.
 
-Four ports now have the second implementation (#402) — the asset index, the account cluster, the
-device-cohort map and the quota ledger — each passing the same case list as its double, against a
-Postgres container. The remaining durable ports are #446's; the volatile ones are Valkey's (#403).
+Every durable port now has the second implementation on Postgres (#402, #446), and every volatile
+one on Valkey (#403), each passing the same case list as its double against a container. The two
+OIDC stores are the exception (#460): a durable `serve` that configures OIDC is refused.
 
 **The test suite still runs without a container.** Every Postgres case is gated on
 `CAPSULE_TEST_POSTGRES=1` and prints one line naming itself when it is skipped:
@@ -96,16 +96,17 @@ One binary, several subcommands:
 ```text
 capsule-server [--config PATH] <SUBCOMMAND>
   serve       [--listen HOST:PORT] [--memory] [--blob-root PATH]
-  gc          [--apply] [--grace-window-hours N] --memory --blob-root PATH
-  purge       [--apply] [--limit N]              --memory --blob-root PATH
-  scrub       [--deep] [--budget BYTES]          --memory --blob-root PATH
+  gc          [--apply] [--grace-window-hours N] [--memory] --blob-root PATH
+  purge       [--apply] [--limit N]              [--memory] --blob-root PATH
+  scrub       [--deep] [--budget BYTES]          [--memory] --blob-root PATH
   gen-openapi [FILE] [--check]
 
-`--memory` is written as required on the three operator commands because today it is — and the
-durable index is no longer why. Both workers read a store that has no durable adapter: the
-collector marks a blob on one pass and sweeps it on a later one, so a mark store that forgets can
-only ever mark (#446), and the scrub reconciles the index against the upload sessions, which is
-how it tells a live transfer from an orphan (#403). Without `--memory` they refuse and say so.
+Without `--memory` the three operator commands run on the durable stores `serve` writes, and need
+`DATABASE_URL` and then `VALKEY_URL`, in that order. The collector marks a blob on one pass and
+sweeps it on a later one, so its marks live in Postgres beside the index; the scrub reconciles the
+index against the upload sessions, which is how it tells a live transfer from an orphan, and those
+are Valkey's (#403). With `--memory` a fresh process can only ever mark, because its marks die with
+it.
 ```
 
 `config` reads every setting an operator decides — command-line flag over environment over
@@ -131,16 +132,15 @@ the two that write; `scrub` mutates nothing and exits non-zero on a non-empty re
 
 ## What is owed
 
-**No Valkey adapter, and nine durable ports still without a Postgres one.** `DATABASE_URL` is
-read: a durable `serve` opens the pool from it and refuses a schema it was not built for, naming
-`capsule-server-migration up`. `VALKEY_URL` is not read yet, so a durable `serve` gets through
-the Postgres half and then refuses, naming #403 — the session, upload-session, ceremony and
-counter state. The remaining durable adapters (albums, the device directory, moderation, shares,
-drops, escrow, revocations, the collector's marks, receipts, TOTP) are #446.
+**A durable `serve` runs, except with OIDC configured.** It opens the pool from `DATABASE_URL`
+and refuses a schema it was not built for, naming `capsule-server-migration up`. It then proves
+`VALKEY_URL` answers `PING`, and builds every port on one of the two: Postgres for every record a
+restart must not lose, Valkey for the session, upload-session, ceremony and counter state. The
+OIDC ceremony and federated-account stores have in-memory adapters only (#460), so a durable
+`serve` with `OIDC_ISSUER` set refuses and names that issue.
 
-Refusing rather than filling those ports with in-memory adapters is the point:
+Refusing rather than filling those two ports with in-memory adapters is the point:
 [Filesystem — Server](../capsule-docs/src/content/docs/design/filesystem/server.md) says required
-means required, and a server that came up holding session state it will lose on the next restart
-is worse than one that does not start. What `--memory` therefore buys is not durability — the
-blob store and, on the durable path, Postgres are the durable halves — but a running surface to
-write the remaining adapters against and to point a client at.
+means required, and a server that came up holding state it will lose on the next restart is worse
+than one that does not start. What `--memory` buys is not durability, but a running surface
+without a database to point a client at.
