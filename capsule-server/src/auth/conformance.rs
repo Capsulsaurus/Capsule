@@ -78,6 +78,15 @@ pub trait Harness: Send + Sync {
     /// The seam that keeps the lockout cases backend-agnostic: the deterministic double advances
     /// a manual clock, and a container-backed harness rebuilds its adapter over a clock it drives.
     fn advance(&self, by: SignedDuration) -> StoreFuture<'_, ()>;
+
+    /// The failure count the adapter has **committed** for `address`, read beneath the ports,
+    /// or `None` when no account holds that address.
+    ///
+    /// No port discloses it, on purpose. The one case that needs it,
+    /// [`a_cancelled_attempt_keeps_its_charge`], must know an attempt's charge has landed before
+    /// it cancels the attempt, and on an adapter whose reservation is a network round trip a
+    /// pending future says nothing about whether that round trip has finished.
+    fn recorded_failures<'a>(&'a self, address: &'a str) -> StoreFuture<'a, Option<u32>>;
 }
 
 /// Unwrap a directory result, failing with the operation that was expected to work.
@@ -417,29 +426,61 @@ pub async fn parallel_guesses_admit_at_most_the_ceiling(h: &dyn Harness) {
     );
 }
 
+/// How many times [`a_cancelled_attempt_keeps_its_charge`] polls its attempt for the charge to
+/// land before failing. Each poll pays a read of the count, so this is generous for a reservation
+/// that takes a few round trips and still ends a case whose adapter never charges.
+const CANCELLED_ATTEMPT_POLLS: u32 = 1_000;
+
 /// An attempt cancelled during verification keeps its charge.
 ///
 /// The charge is taken before verification, and nothing refunds it when the request goes away:
 /// a refund on drop would make disconnecting mid-verification a free guess. So a correct password
-/// whose request is dropped after its first poll — by then reserved, and waiting on the hash —
-/// counts as a failure, and the ceiling is reached one attempt sooner than
+/// whose request is dropped once its charge has been committed — by then reserved, and waiting
+/// on the hash — counts as a failure, and the ceiling is reached one attempt sooner than
 /// [`a_success_before_the_ceiling_clears_the_count`] reaches it: `lockout_attempts - 1` failures
 /// plus the dropped attempt lock the account, where the same failures plus a *completed* correct
 /// password would have cleared them.
 ///
 /// The password is the correct one on purpose. A dropped wrong guess and a completed one leave
 /// the same count, so only a correct password can tell a kept charge from a refunded one — and
-/// the first poll must still be pending, or the attempt completed rather than being cancelled.
+/// every poll must still be pending, or the attempt completed rather than being cancelled.
+///
+/// The attempt is dropped only after [`Harness::recorded_failures`] shows its charge, not after
+/// its first poll. A pending first poll proves the reservation has *started*; where the
+/// reservation is a network round trip it may still be in flight, and dropping it there would
+/// cancel the charge itself — a different event from cancelling a verification, and one this
+/// case does not assert about. Between polls the case yields, so a driver that needs the
+/// runtime to make progress gets it; [`CANCELLED_ATTEMPT_POLLS`] bounds the wait.
 pub async fn a_cancelled_attempt_keeps_its_charge(h: &dyn Harness) {
     let (address, _) = seed(h, "cancelled").await;
-    fail(h, &address, h.lockout_attempts() - 1).await;
+    let ceiling = h.lockout_attempts();
+    fail(h, &address, ceiling - 1).await;
 
     let mut attempt = h.directory().authenticate(&address, PASSWORD);
-    let first =
-        std::future::poll_fn(|cx| Poll::Ready(attempt.as_mut().poll(cx).is_pending())).await;
+    let mut charged = false;
+    for _ in 0..CANCELLED_ATTEMPT_POLLS {
+        let pending =
+            std::future::poll_fn(|cx| Poll::Ready(attempt.as_mut().poll(cx).is_pending())).await;
+        assert!(
+            pending,
+            "the attempt finished before its charge was observed, so there was no verification \
+             to cancel"
+        );
+        let recorded = match h.recorded_failures(&address).await {
+            Ok(recorded) => present(recorded, "the seeded account"),
+            Err(error) => {
+                panic!("a conforming harness must be able to read its own count: {error}")
+            }
+        };
+        if recorded == ceiling {
+            charged = true;
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
     assert!(
-        first,
-        "the attempt finished in its first poll, so there was no verification to cancel"
+        charged,
+        "the attempt's charge was not committed within {CANCELLED_ATTEMPT_POLLS} polls"
     );
     drop(attempt);
 
@@ -787,6 +828,10 @@ mod tests {
                 self.clock.advance(by);
                 Ok(())
             })
+        }
+
+        fn recorded_failures<'a>(&'a self, address: &'a str) -> StoreFuture<'a, Option<u32>> {
+            Box::pin(async move { Ok(self.accounts.recorded_failures(address)) })
         }
     }
 

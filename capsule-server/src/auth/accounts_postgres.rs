@@ -470,8 +470,9 @@ mod tests {
         use std::sync::Arc;
 
         use jiff::SignedDuration;
+        use sea_orm::{ConnectionTrait, DbBackend, Statement, Value};
 
-        use super::super::PostgresAccounts;
+        use super::super::{PORT, PostgresAccounts};
         use crate::auth::accounts_memory::MAX_FAILED_ATTEMPTS;
         use crate::auth::conformance::{self, Harness};
         use crate::auth::credential::Credentials;
@@ -525,6 +526,30 @@ mod tests {
                 Box::pin(async move {
                     self.clock.advance(by);
                     Ok(())
+                })
+            }
+
+            fn recorded_failures<'a>(&'a self, address: &'a str) -> StoreFuture<'a, Option<u32>> {
+                Box::pin(async move {
+                    let row = self
+                        .accounts
+                        .connection
+                        .query_one(Statement::from_sql_and_values(
+                            DbBackend::Postgres,
+                            "SELECT failures FROM accounts WHERE email = $1",
+                            [Value::from(address.to_owned())],
+                        ))
+                        .await
+                        .map_err(PORT.failing("reading a failure count"))?;
+                    let Some(row) = row else {
+                        return Ok(None);
+                    };
+                    let failures: i64 = row
+                        .try_get("", "failures")
+                        .map_err(PORT.failing("reading a failure count"))?;
+                    Ok(Some(
+                        u32::try_from(failures).expect("a failure count is a small non-negative"),
+                    ))
                 })
             }
         }

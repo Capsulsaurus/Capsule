@@ -167,6 +167,15 @@ impl InMemoryAccounts {
         self.accounts().is_empty()
     }
 
+    /// The failure count held for `email`, or `None` when no account holds it.
+    ///
+    /// Test-only: no port discloses the count. The conformance harness reads it to know an
+    /// attempt's charge has landed before it cancels the attempt.
+    #[cfg(test)]
+    pub(crate) fn recorded_failures(&self, email: &str) -> Option<u32> {
+        self.accounts().get(email).map(|held| held.failures)
+    }
+
     /// Take the lock, recovering rather than propagating a poisoned one.
     ///
     /// The same choice [`crate::store::memory`] makes: a panic in one request must not turn
@@ -691,6 +700,37 @@ mod tests {
                 .await
                 .expect("it answers"),
             Authentication::Granted(user())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_attempt_keeps_its_charge() {
+        // Decision 3 of #510: nothing refunds a charge when the request goes away, or
+        // disconnecting mid-verification would be a free guess. The reservation here completes
+        // inside the first poll, so a pending first poll is an attempt charged and verifying.
+        let accounts = seeded().await;
+        fail(&accounts, MAX_FAILED_ATTEMPTS - 1).await;
+
+        let mut attempt = accounts.authenticate(EMAIL, PASSWORD);
+        let pending = std::future::poll_fn(|cx| {
+            std::task::Poll::Ready(attempt.as_mut().poll(cx).is_pending())
+        })
+        .await;
+        assert!(
+            pending,
+            "the attempt must still be verifying when it is dropped"
+        );
+        assert_eq!(accounts.recorded_failures(EMAIL), Some(MAX_FAILED_ATTEMPTS));
+        drop(attempt);
+
+        // The correct password that was cancelled counted: the account is now at the ceiling.
+        assert_eq!(accounts.recorded_failures(EMAIL), Some(MAX_FAILED_ATTEMPTS));
+        assert_eq!(
+            accounts
+                .authenticate(EMAIL, PASSWORD)
+                .await
+                .expect("it answers"),
+            Authentication::Locked
         );
     }
 
