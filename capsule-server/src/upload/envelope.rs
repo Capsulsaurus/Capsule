@@ -583,8 +583,7 @@ fn is_lower_hex(text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use capsule_core::crypto::CRYPTO_SUITE_ID;
-    use capsule_core::crypto::primitives::PROTOCOL_VERSION;
+    use capsule_core::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
 
     use super::*;
 

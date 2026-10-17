@@ -52,7 +52,7 @@ async fn publish(fixture: &Fixture) -> AssetId {
             owner_id: owner(),
             album_id: album(),
             protocol_version: PROTOCOL_VERSION.to_owned(),
-            crypto_suite_id: capsule_core::crypto::CRYPTO_SUITE_ID,
+            crypto_suite_id: capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
             created_at: Timestamp::UNIX_EPOCH,
         })
         .await
@@ -103,7 +103,7 @@ fn bundle(
     let manifest = manifest(seed);
     json!({
         "manifest_envelope": {
-            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
             "protocol_version": PROTOCOL_VERSION,
             "album_id": album().as_str(),
             "file_id": ASSET,
@@ -515,7 +515,7 @@ async fn an_asset_that_is_not_the_callers_is_refused_without_disclosure() {
             owner_id: OwnerId::new("somebody-else"),
             album_id: album(),
             protocol_version: PROTOCOL_VERSION.to_owned(),
-            crypto_suite_id: capsule_core::crypto::CRYPTO_SUITE_ID,
+            crypto_suite_id: capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
             created_at: Timestamp::UNIX_EPOCH,
         })
         .await

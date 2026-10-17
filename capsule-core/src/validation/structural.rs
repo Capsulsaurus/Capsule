@@ -84,7 +84,7 @@ pub fn amk_version_monotonic(new: u32, stored: Option<u32>) -> bool {
 /// when the manifest commits to no hash — a bundle carrying a blob must be committed to.
 ///
 /// This is the value half of the client-side round-trip check
-/// ([`verify_metadata_binding`](crate::crypto::verify_metadata_binding)); the server never
+/// ([`verify_metadata_binding`](crate::crypto::verify_asset::verify_metadata_binding)); the server never
 /// decrypts, so it checks only the content address.
 pub fn metadata_blob_hash_matches(committed: Option<Hash32>, metadata_blob: &[u8]) -> bool {
     committed.is_some_and(|h| blob_ciphertext_hash(metadata_blob) == h)
@@ -184,9 +184,8 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::crypto::CRYPTO_SUITE_ID;
     use crate::crypto::keys::{AmkVersion, HybridSigningKey};
-    use crate::crypto::primitives::PROTOCOL_VERSION;
+    use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
     use crate::crypto::provenance::{ASSET_MANIFEST_VERSION, Action, KeyMode, ManifestCore};
 
     #[test]
