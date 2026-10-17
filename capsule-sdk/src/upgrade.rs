@@ -18,15 +18,17 @@
 //! - **Nothing cryptographic happens here.** The intent is built and signed in `capsule-core`;
 //!   this module is the wire and its refusals.
 //!
-//! # Why hand-written, and what would retire it
+//! # What is hand-written, and what would retire it
 //!
 //! The request body is `application/cbor`, and `spargen` 0.4's `classify_media` does not know
 //! that media type, so `capsule-sdk/build.rs` narrows the operation out of the generated client
-//! (`S-D28`) — the *surface* is narrowed, the document is never mutilated. This module is
-//! therefore the orchestration `AGENTS.md` permits over a wire it cannot generate, and it is
-//! the fourth and last such client: `capsule_sdk::directory` hand-writes two and
-//! [`crate::verify::StorageVerifyClient::fetch_receipt`] the third. Teaching spargen the media
-//! type retires all four; nothing in this repository can.
+//! (`S-D28`) — the *surface* is narrowed, the document is never mutilated. Only the **request**
+//! is hand-written: the path, the media type, and the verbatim CBOR body. Every JSON document
+//! the operation answers with decodes into the generated types — the phase into
+//! [`crate::rest::types::UpgradePhaseResponse`], every refusal into
+//! [`crate::rest::types::CodedProblem`] — so this module carries no second parser for a shape
+//! the contract already declares. ADR 0002 records the exception; teaching spargen the media
+//! type (issue #440) retires it, and nothing in this repository can.
 //!
 //! The **other two** operations on this path — `GET` (read the phase) and `DELETE` (end the
 //! ceremony) — are plain JSON and *are* generated. Call them through
@@ -35,11 +37,11 @@
 //! [Versioning — Album Upgrade Ceremony]: https://docs/design/versioning/#album-upgrade-ceremony
 
 use jiff::Timestamp;
-use serde::Deserialize;
 use tracing::instrument;
 use uuid::Uuid;
 
 use crate::auth::{AuthError, Session};
+use crate::rest::types::{CodedProblem, UpgradePhaseResponse};
 
 /// The media type the intent is *signed* in, and therefore the only one it may be sent as.
 const CBOR: &str = "application/cbor";
@@ -109,6 +111,16 @@ pub enum UpgradeError {
         /// English detail from the problem body.
         detail: String,
     },
+    /// The server's protocol gate refused the request (`426`): this client speaks a protocol
+    /// version outside the server's window. Nothing about the intent is wrong — update the
+    /// client. The code is the server's own (`error.protocol.version_unsupported`).
+    #[error("the server does not accept this client's protocol version: {detail}")]
+    ProtocolUnsupported {
+        /// The stable `error.*` catalog code the refusal carried.
+        code: Option<String>,
+        /// English detail from the problem body.
+        detail: String,
+    },
     /// A collaborator could not answer (`500`). Transient.
     #[error("the upgrade could not be recorded: {detail}")]
     Unavailable {
@@ -140,39 +152,42 @@ impl UpgradeError {
             | Self::NotProposer { code, .. }
             | Self::NotFound { code, .. }
             | Self::InFlight { code, .. }
+            | Self::ProtocolUnsupported { code, .. }
             | Self::Unavailable { code, .. } => code.as_deref(),
             _ => None,
         }
     }
 }
 
-// ─── Wire DTOs (mirror the server's transport JSON) ───────────────────────────
+// ─── Refusal bodies ───────────────────────────────────────────────────────────
 
-/// `UpgradePhaseResponse`, as the server serializes it. The three optional members are absent
-/// when no ceremony is in flight — which also covers *expired*, because the deadline passing
-/// aborts the upgrade and leaves nothing to be in.
-#[derive(Debug, Deserialize)]
-struct UpgradePhaseWire {
-    album_id: String,
-    #[serde(default)]
+/// A refusal's body, read as the contract declares it: a generated [`CodedProblem`], plus the
+/// `409`'s `intent_id` extension member. The contract types that member only through
+/// `CodedProblem`'s `additionalProperties`, so the generated struct does not name it and it is
+/// read off the same document rather than through a second hand-written body type.
+///
+/// `problem` is `None` when there is no coded problem to read — the `413` backstop sends no body
+/// at all, and an unmodeled status may send anything.
+#[derive(Debug, Default)]
+struct Refusal {
+    problem: Option<CodedProblem>,
     intent_id: Option<String>,
-    #[serde(default)]
-    to_protocol_version: Option<String>,
-    #[serde(default)]
-    expires_at: Option<String>,
-    in_flight: u64,
 }
 
-/// The members this module reads off an RFC 9457 problem body. `intent_id` is the `409`'s
-/// extension; the rest are the coded-problem shape every Capsule refusal renders.
-#[derive(Debug, Default, Deserialize)]
-struct ProblemWire {
-    #[serde(default)]
-    code: Option<String>,
-    #[serde(default)]
-    detail: Option<String>,
-    #[serde(default)]
-    intent_id: Option<String>,
+impl Refusal {
+    /// Read a refusal body. Never fails: a body that is not a coded problem is a refusal
+    /// without a code, and the status alone then picks the variant.
+    fn parse(body: &[u8]) -> Self {
+        let Ok(document) = serde_json::from_slice::<serde_json::Value>(body) else {
+            return Self::default();
+        };
+        let intent_id = document
+            .get("intent_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
+        let problem = serde_json::from_value::<CodedProblem>(document).ok();
+        Self { problem, intent_id }
+    }
 }
 
 /// The ceremony an album is in, as the proposal answered it.
@@ -255,8 +270,10 @@ impl UpgradeClient {
 
         let status = response.status();
         if !status.is_success() {
-            let problem = response.json::<ProblemWire>().await.unwrap_or_default();
-            let error = refusal(status.as_u16(), problem);
+            // A body that cannot even be read is a refusal without a code, exactly like one
+            // that is not a coded problem: the status still picks the variant.
+            let body = response.bytes().await.unwrap_or_default();
+            let error = refusal(status.as_u16(), Refusal::parse(&body));
             tracing::warn!(
                 status = status.as_u16(),
                 code = ?error.error_code(),
@@ -265,7 +282,7 @@ impl UpgradeClient {
             return Err(error);
         }
 
-        let wire: UpgradePhaseWire = response
+        let wire: UpgradePhaseResponse = response
             .json()
             .await
             .map_err(|e| UpgradeError::MalformedResponse(e.to_string()))?;
@@ -290,13 +307,11 @@ impl UpgradeClient {
 /// client localizing it would read the SDK's guess as the server's judgement. The variant
 /// already carries the actionable half ("these bytes will not do"), and the English detail
 /// carries the reason.
-fn refusal(status: u16, problem: ProblemWire) -> UpgradeError {
-    let ProblemWire {
-        code,
-        detail,
-        intent_id,
-    } = problem;
-    let detail = detail.unwrap_or_default();
+fn refusal(status: u16, refusal: Refusal) -> UpgradeError {
+    let Refusal { problem, intent_id } = refusal;
+    let (code, detail) = problem.map_or((None, String::new()), |problem| {
+        (Some(problem.code), problem.detail.unwrap_or_default())
+    });
     match status {
         400 | 415 => UpgradeError::Malformed { code, detail },
         401 => UpgradeError::Unauthorized { code, detail },
@@ -311,6 +326,7 @@ fn refusal(status: u16, problem: ProblemWire) -> UpgradeError {
             code: None,
             detail: "the signed upgrade intent exceeds the server's body limit".to_owned(),
         },
+        426 => UpgradeError::ProtocolUnsupported { code, detail },
         500 => UpgradeError::Unavailable { code, detail },
         other => UpgradeError::Unexpected { status: other },
     }
@@ -321,7 +337,7 @@ fn refusal(status: u16, problem: ProblemWire) -> UpgradeError {
 /// The ids become [`Uuid`]s and the deadline a [`jiff::Timestamp`], so a caller compares
 /// instants rather than strings — the deadline is the one field in this ceremony where a
 /// string comparison would be a correctness bug rather than an inconvenience.
-fn decode_phase(wire: UpgradePhaseWire) -> Result<UpgradePhase, UpgradeError> {
+fn decode_phase(wire: UpgradePhaseResponse) -> Result<UpgradePhase, UpgradeError> {
     let album_id = Uuid::parse_str(&wire.album_id)
         .map_err(|e| UpgradeError::MalformedResponse(format!("response album_id: {e}")))?;
     let intent_id = wire
@@ -336,12 +352,20 @@ fn decode_phase(wire: UpgradePhaseWire) -> Result<UpgradePhase, UpgradeError> {
         .map(str::parse::<Timestamp>)
         .transpose()
         .map_err(|e| UpgradeError::MalformedResponse(format!("response expires_at: {e}")))?;
+    // The contract declares the count `uint64`; the generated type carries it signed, so a
+    // negative count is a malformed answer rather than a wrapped one.
+    let in_flight = u64::try_from(wire.in_flight).map_err(|_| {
+        UpgradeError::MalformedResponse(format!(
+            "response in_flight: {} is negative",
+            wire.in_flight
+        ))
+    })?;
     Ok(UpgradePhase {
         album_id,
         intent_id,
         to_protocol_version: wire.to_protocol_version,
         expires_at,
-        in_flight: wire.in_flight,
+        in_flight,
     })
 }
 
@@ -502,6 +526,16 @@ mod tests {
             (400u16, "Bad Request", error_codes::ALBUM_UPGRADE_MALFORMED),
             (403, "Forbidden", error_codes::ALBUM_UPGRADE_PROPOSER),
             (404, "Not Found", error_codes::ALBUM_UPGRADE_NOT_FOUND),
+            (
+                415,
+                "Unsupported Media Type",
+                error_codes::ALBUM_UPGRADE_MALFORMED,
+            ),
+            (
+                426,
+                "Upgrade Required",
+                error_codes::PROTOCOL_VERSION_UNSUPPORTED,
+            ),
             (500, "Internal Server Error", error_codes::ALBUM_UNAVAILABLE),
         ] {
             let server =
@@ -514,9 +548,10 @@ mod tests {
                 .expect_err("the server refused");
             assert_eq!(error.error_code(), Some(code), "status {status}: {error:?}");
             let matched = match status {
-                400 => matches!(error, UpgradeError::Malformed { .. }),
+                400 | 415 => matches!(error, UpgradeError::Malformed { .. }),
                 403 => matches!(error, UpgradeError::NotProposer { .. }),
                 404 => matches!(error, UpgradeError::NotFound { .. }),
+                426 => matches!(error, UpgradeError::ProtocolUnsupported { .. }),
                 500 => matches!(error, UpgradeError::Unavailable { .. }),
                 _ => false,
             };
@@ -547,6 +582,53 @@ mod tests {
             None,
             "a code the server never sent is not this client's to supply"
         );
+    }
+
+    /// A negative drain count is a malformed response, not a count wrapped into a huge one — a
+    /// proposer waiting for zero would otherwise wait forever.
+    #[tokio::test]
+    async fn a_negative_in_flight_count_is_a_malformed_response() {
+        let server = MockServer::start(move |_req: &MockRequest| {
+            MockResponse::new(200, "OK")
+                .json_body(serde_json::json!({ "album_id": ALBUM, "in_flight": -1 }).to_string())
+        })
+        .await;
+        let client = UpgradeClient::new(session_for(&server.base_url()), &server.base_url());
+        let error = client
+            .begin(album(), &signed_intent())
+            .await
+            .expect_err("a negative count is not a count");
+        assert!(
+            matches!(error, UpgradeError::MalformedResponse(_)),
+            "got {error:?}"
+        );
+    }
+
+    /// A refusal whose body is not a coded problem keeps its variant and carries no code: the
+    /// status still says what happened, and a code the body never held is not invented.
+    #[tokio::test]
+    async fn a_refusal_without_a_coded_problem_keeps_its_variant_and_no_code() {
+        let server = MockServer::start(move |_req: &MockRequest| {
+            MockResponse::new(409, "Conflict").json_body(r#"{"detail":"no code here"}"#.to_owned())
+        })
+        .await;
+        let client = UpgradeClient::new(session_for(&server.base_url()), &server.base_url());
+        let error = client
+            .begin(album(), &signed_intent())
+            .await
+            .expect_err("the server refused");
+        assert!(
+            matches!(
+                error,
+                UpgradeError::InFlight {
+                    intent_id: None,
+                    code: None,
+                    ..
+                }
+            ),
+            "got {error:?}"
+        );
+        assert_eq!(error.error_code(), None);
     }
 
     /// An undeclared status is surfaced as itself rather than guessed at.
