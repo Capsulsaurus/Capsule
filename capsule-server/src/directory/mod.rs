@@ -1,4 +1,7 @@
-//! The published device directory (`S-C9`) — the port, and its in-memory adapter.
+//! The published device directory (`S-C9`) — the port and its two adapters.
+//!
+//! [`InMemoryDeviceDirectory`] is the deterministic double and [`PostgresDeviceDirectory`] the
+//! durable store (#446); both pass the one suite in [`conformance`].
 //!
 //! A user publishes a master-signed [`DeviceDirectory`] as opaque canonical CBOR; any
 //! authenticated caller fetches it to pin and to verify manifests against. Nothing downstream
@@ -152,8 +155,9 @@ pub trait DeviceDirectoryStore: std::fmt::Debug + Send + Sync {
 /// A deterministic in-memory adapter.
 ///
 /// One mutex over the whole map, which is what makes [`Self::publish`]'s compare-and-set
-/// atomic. The Postgres adapter gets the same property from a guarded upsert whose `WHERE`
-/// clause is the comparison, so a non-advancing publish updates nothing.
+/// atomic. [`PostgresDeviceDirectory`] gets the same property from a transaction-scoped advisory
+/// lock on the account, which serialises an account's first publish too — the case a guarded
+/// upsert could not, because there is no row yet for its `WHERE` clause to compare against.
 #[derive(Debug, Default)]
 pub struct InMemoryDeviceDirectory {
     published: Mutex<BTreeMap<UserId, PublishedDirectory>>,
@@ -327,6 +331,11 @@ impl DeviceDirectoryContext {
         self.clock.as_ref()
     }
 }
+
+pub mod conformance;
+pub mod postgres;
+
+pub use postgres::PostgresDeviceDirectory;
 
 #[cfg(test)]
 mod tests;
