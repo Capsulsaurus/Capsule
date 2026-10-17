@@ -68,7 +68,9 @@
 //! | `capsule:upload:uploader:{uid}` | set | refreshed on open |
 //! | `capsule:upload:album:{album}` | set | refreshed on open |
 //! | `capsule:upload:pending:{uploader}:{hash}` | set | refreshed on open |
-//! | `capsule:upload:progress` | zset (score = `last_progress_at` µs) | none — heals only when the pressure sweep (`least_recently_progressed`) runs |
+//! | `capsule:upload:progress` | zset (score = `last_progress_at` µs) | none — heals when the pressure sweep (`least_recently_progressed`) walks it, which every `gc --apply` pass does over the whole set (#519) |
+//! | `capsule:counter:{kind}:{scope}` | hash (`hits`, `opened_at`) | the counter's window |
+//! | `capsule:counter_index:{kind}` | zset (score = window end µs), the partition its ceiling bounds | raised to the longest window, never lowered |
 //! | `capsule:challenge:{token}` | hash | challenge TTL |
 //! | `capsule:enroll:code:{spelling}` | hash, written under both spellings | code TTL |
 //! | `capsule:enroll:channel:{id}` | hash | channel TTL |
@@ -79,6 +81,18 @@
 //! user's index on close, for instance) rather than taking them as `KEYS`. That is legal on a
 //! standalone server, which is the only topology this adapter supports; Redis Cluster is out of
 //! scope by the #403 decision record.
+//!
+//! # The server must run `maxmemory-policy noeviction`
+//!
+//! Every key above is correctness state, not cache. An evicting policy picks keys without
+//! regard to which fact they carry: `volatile-lru` drops any key with a TTL, and the index sets
+//! carry one, so it can remove `capsule:user_sessions:{uid}` while the sessions it lists live on
+//! — and *revoke all sessions* then revokes none of them — or remove a counter partition's index
+//! and so reopen its ceiling. Under `noeviction` a full server refuses the write instead, which
+//! every port reports as a failure and every consumer treats as a refusal. That is the
+//! fail-closed answer; silently forgetting state is not. The ceilings on the counter partitions
+//! and the collector's sweep of the progress set are what keep the key space bounded, so memory
+//! pressure is a sizing question rather than something eviction has to answer (#519).
 //!
 //! # Encoding
 //!

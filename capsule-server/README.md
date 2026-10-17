@@ -128,7 +128,16 @@ Logs go to stderr. stdout is a data channel: `serve` writes one `listening on <u
 which is how a `--listen 127.0.0.1:0` caller learns its port.
 
 `gc`, `purge` and `scrub` need a blob root and no key material at all. Dry run is the default for
-the two that write; `scrub` mutates nothing and exits non-zero on a non-empty report.
+the two that write; `scrub` mutates nothing and exits non-zero on a non-empty report. `gc --apply`
+also sweeps the upload-progress set, the one Valkey index with no lifetime of its own, so run it
+on a schedule rather than only when blobs need collecting (#519).
+
+Valkey must run with `--maxmemory-policy noeviction`, as `compose.yaml` does. Every key the
+server writes there is correctness state rather than cache: an evicting policy such as
+`volatile-lru` can drop a per-user session index while its sessions live on, and *revoke all
+sessions* then revokes none of them. Under `noeviction` a full server refuses writes and the server
+fails closed; the per-kind counter ceilings and the `gc --apply` sweep keep the key space bounded,
+so size `maxmemory` for live state rather than relying on eviction to make room.
 
 ## What is owed
 
