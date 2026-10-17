@@ -21,23 +21,24 @@
 //! the former member is indistinguishable from a stranger, and the authorization-change signal
 //! design/import/download-sync.md requires is gone.
 //!
-//! # Removing a member reclaims nothing, and that is observable
+//! # Removing a member reclaims nothing, by design
 //!
 //! A writer member's upload is filed under the album **owner**'s namespace and charged to the
 //! **uploader** (`routes/upload.rs`: `owner_id` is the namespace, `upload_user_id` is billed).
 //! Removing that member from a later roster changes neither fact. The asset stays in the
-//! owner's album, and its bytes stay against the removed member's quota — they are still stored,
-//! so the ledger is not wrong, but the account they are charged to can no longer reach them:
-//! a removed member may not write ops to that album, so they cannot delete their way back under
-//! quota. The only thing that ever releases the attribution is the refcount collector
-//! (`gc/mod.rs`, `QuotaStore::release_attribution`, `S-C44`), which runs when the last reference
-//! to the bytes goes — i.e. only if the *owner* deletes the asset.
+//! owner's album, and its bytes stay against the removed member's quota until the owner deletes
+//! the asset and the refcount collector (`gc/mod.rs`, `QuotaStore::release_attribution`,
+//! `S-C44`) releases the attribution — the one path that ever moves bytes off a ledger once
+//! they are stored.
 //!
-//! This is recorded rather than repaired: reclaiming on removal is a protocol question (does the
-//! owner inherit the bytes, does the member keep paying for what the owner still holds, is
-//! removal a deletion at all?) that no design document in this tree answers, and inventing an
-//! answer inside a storage port is how a quota becomes a way to delete somebody else's photos.
-//! Tracked as issue #473.
+//! That is the decision design/quota.md records under "Departed album members" (issue #473),
+//! not a gap: removal is a key rotation, not a data event, so it re-attributes nothing, and
+//! neither alternative survives the rule that one account's quota pressure must never delete
+//! another account's photos. Making the owner inherit the bytes lets a member's uploads push the
+//! owner over quota; reclaiming them from the member deletes photos the owner still holds and
+//! reads. So this port records who may read and write and touches no ledger, and the ledger's
+//! side of the decision is pinned by
+//! `quota::conformance::a_contributors_attribution_survives_until_the_collector_releases_it`.
 //!
 //! # One critical section
 //!
