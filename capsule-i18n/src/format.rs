@@ -81,7 +81,10 @@ impl fmt::Display for Value<'_> {
 /// use capsule_i18n::{Value, format_message};
 ///
 /// let template = "{count, plural, one {# photo} other {# photos}}";
-/// assert_eq!(format_message(template, &[("count", Value::Int(0))]), "0 photos");
+/// assert_eq!(
+///     format_message(template, &[("count", Value::Int(0))]),
+///     "0 photos"
+/// );
 /// ```
 #[must_use]
 pub fn format_message(template: &str, args: &[(&str, Value<'_>)]) -> String {
