@@ -136,7 +136,7 @@ pub fn router() -> ServerRouter {
         // The protocol gate is two `Group`s, not a router interceptor, for two reasons the type
         // system makes concrete. First, the design exempts ten operations, and a group is how
         // Kynos spells "these and not those": an operation mounted inside declares the handshake
-        // parameters and the gate's statuses, one mounted on the router below does not and still
+        // parameters and the gate's statuses, one in the cap-only group below does not and still
         // carries the response headers. Second, the design holds a **write** to the window (a
         // grammatical date outside it is `426`) and a **read** to the grammar only ("reads of any
         // past version succeed", threat-model/validation.md) — and since an interceptor's
@@ -253,8 +253,8 @@ pub fn router() -> ServerRouter {
                     routes::drop::list_inbox,
                 ]),
         )
-        // **The ten operations the design exempts from the gate**, mounted on the router so
-        // the group above does not cover them (`api-surfaces.md`, "Negotiation Across
+        // **The ten operations the design exempts from the gate**, in a group of their
+        // own so neither gated group above covers them (`api-surfaces.md`, "Negotiation Across
         // Transports"). `GET /v1/version` is the reachability probe a client hits before it
         // knows the window. The four `/.well-known/capsule/*` records are public discovery,
         // read before any handshake. The three `/s/{opaque_id}*` share reads must answer an
