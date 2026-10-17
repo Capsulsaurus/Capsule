@@ -1756,6 +1756,10 @@
     <string name="cli_help_library_init_about">Create a new Capsule library</string>
     <string name="cli_help_library_init_arg_name">Human-readable library name</string>
     <string name="cli_help_library_init_arg_path">Directory for the new library</string>
+    <string name="cli_help_library_migrate_about">Migrate unsigned sidecars from an older library into signed assets</string>
+    <string name="cli_help_library_migrate_arg_passphrase_stdin">Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal</string>
+    <string name="cli_help_library_migrate_arg_path">Path to the library</string>
+    <string name="cli_help_library_migrate_arg_retain_days">Retention window, in days, for an asset the old library had already deleted: it is moved to trash with this much time left before it is purged</string>
     <string name="cli_help_library_rebuild_about">Rebuild the SQLite index from sidecar files</string>
     <string name="cli_help_library_rebuild_arg_path">Path to the library</string>
     <string name="cli_help_list_about">List the assets the sync feed has delivered</string>
@@ -1804,6 +1808,25 @@
     <string name="cli_import_provider_notice">Reading the source as a %s export.</string>
     <string name="cli_import_scan_failed">Scanning the source files failed: %s</string>
     <string name="cli_import_scanning">Scanning source files…</string>
+    <string name="cli_library_migrate_failed">Migration failed: %s</string>
+    <string name="cli_library_migrate_in_progress">Migrating the unsigned sidecars in %1$s (%2$s found)…</string>
+    <string name="cli_library_migrate_migrated_row">Migrated %s</string>
+    <string name="cli_library_migrate_nothing">No unsigned sidecars to migrate.</string>
+    <string name="cli_library_migrate_skip_album_read_only">asset %1$s: album %2$s is read-only on this device, so its pending delete could not be recorded</string>
+    <string name="cli_library_migrate_skip_hash_mismatch">asset %1$s: the original\'s SHA-256 is %2$s, but the old record says %3$s</string>
+    <string name="cli_library_migrate_skip_id_collision">asset %s is already a signed asset in this library</string>
+    <string name="cli_library_migrate_skip_invalid_asset_id">the file name %s is not an asset id</string>
+    <string name="cli_library_migrate_skip_original_missing">asset %s: no original media file beside the sidecar</string>
+    <string name="cli_library_migrate_skip_outside_month_bucket">asset %1$s: %2$s is not a media/YYYY/YYYY-MM folder</string>
+    <string name="cli_library_migrate_skip_quarantine_conflict">asset %s: the quarantine folder already holds a different copy of this sidecar</string>
+    <string name="cli_library_migrate_skip_stranded">asset %s: signed sidecar without a provenance chain cannot be resumed</string>
+    <string name="cli_library_migrate_skip_undecodable">the old record does not decode: %s</string>
+    <string name="cli_library_migrate_skip_unknown_shape">the sidecar is neither a signed nor an old unsigned record</string>
+    <string name="cli_library_migrate_skip_unusual_extension">asset %1$s: the original\'s extension %2$s is not a lowercase single segment</string>
+    <string name="cli_library_migrate_skipped_row">Skipped %1$s: %2$s</string>
+    <string name="cli_library_migrate_stack_row">Stack %s rebuilt from the old library\'s stack hints</string>
+    <string name="cli_library_migrate_summary">Migration: %1$s migrated, %2$s moved to trash, %3$s stack(s), %4$s skipped, %5$s still unmigrated.</string>
+    <string name="cli_library_migrate_trashed_row">Moved %s to trash, as the old library had deleted it</string>
     <string name="cli_list_empty">No assets have synced yet.</string>
     <string name="cli_list_failed">Failed to list the library: %s</string>
     <string name="cli_list_header">Synced library (%s asset(s)):</string>
@@ -2274,6 +2297,10 @@
     <plurals name="app_timeline_selection_count">
         <item quantity="one">%d Selected</item>
         <item quantity="other">%d Selected</item>
+    </plurals>
+    <plurals name="cli_library_migrate_unmigrated_notice">
+        <item quantity="one">%d sidecar in this library is unsigned, so its asset is hidden. Run `capsule library migrate` to admit it.</item>
+        <item quantity="other">%d sidecars in this library are unsigned, so their assets are hidden. Run `capsule library migrate` to admit them.</item>
     </plurals>
     <plurals name="common_item_count">
         <item quantity="one">%d item</item>

@@ -30461,6 +30461,46 @@
         }
       }
     },
+    "cli.help.library.migrate.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Migrate unsigned sidecars from an older library into signed assets"
+          }
+        }
+      }
+    },
+    "cli.help.library.migrate.arg.passphrase_stdin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal"
+          }
+        }
+      }
+    },
+    "cli.help.library.migrate.arg.path": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Path to the library"
+          }
+        }
+      }
+    },
+    "cli.help.library.migrate.arg.retain_days": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Retention window, in days, for an asset the old library had already deleted: it is moved to trash with this much time left before it is purged"
+          }
+        }
+      }
+    },
     "cli.help.library.rebuild.about": {
       "localizations": {
         "en": {
@@ -30937,6 +30977,218 @@
           "stringUnit": {
             "state": "translated",
             "value": "Scanning source files…"
+          }
+        }
+      }
+    },
+    "cli.library.migrate.failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Migration failed: %@"
+          }
+        }
+      }
+    },
+    "cli.library.migrate.in_progress": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Migrating the unsigned sidecars in %1$@ (%2$@ found)…"
+          }
+        }
+      }
+    },
+    "cli.library.migrate.migrated_row": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Migrated %@"
+          }
+        }
+      }
+    },
+    "cli.library.migrate.nothing": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No unsigned sidecars to migrate."
+          }
+        }
+      }
+    },
+    "cli.library.migrate.skip.album_read_only": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "asset %1$@: album %2$@ is read-only on this device, so its pending delete could not be recorded"
+          }
+        }
+      }
+    },
+    "cli.library.migrate.skip.hash_mismatch": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "asset %1$@: the original's SHA-256 is %2$@, but the old record says %3$@"
+          }
+        }
+      }
+    },
+    "cli.library.migrate.skip.id_collision": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "asset %@ is already a signed asset in this library"
+          }
+        }
+      }
+    },
+    "cli.library.migrate.skip.invalid_asset_id": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "the file name %@ is not an asset id"
+          }
+        }
+      }
+    },
+    "cli.library.migrate.skip.original_missing": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "asset %@: no original media file beside the sidecar"
+          }
+        }
+      }
+    },
+    "cli.library.migrate.skip.outside_month_bucket": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "asset %1$@: %2$@ is not a media/YYYY/YYYY-MM folder"
+          }
+        }
+      }
+    },
+    "cli.library.migrate.skip.quarantine_conflict": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "asset %@: the quarantine folder already holds a different copy of this sidecar"
+          }
+        }
+      }
+    },
+    "cli.library.migrate.skip.stranded": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "asset %@: signed sidecar without a provenance chain cannot be resumed"
+          }
+        }
+      }
+    },
+    "cli.library.migrate.skip.undecodable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "the old record does not decode: %@"
+          }
+        }
+      }
+    },
+    "cli.library.migrate.skip.unknown_shape": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "the sidecar is neither a signed nor an old unsigned record"
+          }
+        }
+      }
+    },
+    "cli.library.migrate.skip.unusual_extension": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "asset %1$@: the original's extension %2$@ is not a lowercase single segment"
+          }
+        }
+      }
+    },
+    "cli.library.migrate.skipped_row": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skipped %1$@: %2$@"
+          }
+        }
+      }
+    },
+    "cli.library.migrate.stack_row": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stack %@ rebuilt from the old library's stack hints"
+          }
+        }
+      }
+    },
+    "cli.library.migrate.summary": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Migration: %1$@ migrated, %2$@ moved to trash, %3$@ stack(s), %4$@ skipped, %5$@ still unmigrated."
+          }
+        }
+      }
+    },
+    "cli.library.migrate.trashed_row": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Moved %@ to trash, as the old library had deleted it"
+          }
+        }
+      }
+    },
+    "cli.library.migrate.unmigrated_notice": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld sidecar in this library is unsigned, so its asset is hidden. Run `capsule library migrate` to admit it."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld sidecars in this library are unsigned, so their assets are hidden. Run `capsule library migrate` to admit them."
+                }
+              }
+            }
           }
         }
       }

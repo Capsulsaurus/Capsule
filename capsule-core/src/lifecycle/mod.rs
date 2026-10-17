@@ -128,6 +128,11 @@ pub enum LifecycleError {
     /// [`ensure_album`](Workspace::ensure_album) for resolve-or-create.
     #[error("album {0} already exists")]
     AlbumExists(Uuid),
+    /// [`bind_account_id`](Workspace::bind_account_id) was refused: the library already holds
+    /// assets whose signed manifests name its current account id, so adopting another would
+    /// contradict its own history.
+    #[error("account id cannot be rebound: {0}")]
+    AccountRebind(String),
 }
 
 type Result<T> = std::result::Result<T, LifecycleError>;

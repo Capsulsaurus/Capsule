@@ -37,6 +37,10 @@ use super::master::MasterKey;
 use crate::crypto::primitives::{Argon2Params, DeviceTier};
 use crate::crypto::{CryptoError, pwkdf};
 
+/// Prefix sealed in front of the user IK seeds by [`Account::sealed_identity`], so no other
+/// 64-byte seed sealed under the same master key (an `AccountFile`'s DSK) opens as an identity.
+const SEALED_IDENTITY_DOMAIN: &[u8] = b"capsule-sealed-user-ik/v1\0";
+
 /// This device's Device Encryption Key, in whichever of the two compositions the design allows.
 ///
 /// Both expose the same two operations — publish a public encapsulation key, decapsulate a
@@ -187,7 +191,7 @@ impl Account {
     /// **software** DEK composition. The fallback the design keeps for hosts with no secure
     /// element; [`create_with_hardware_dek`](Self::create_with_hardware_dek) is the bound form.
     pub fn create() -> Self {
-        Self::from_parts(DeviceDek::Software(DekKeypair::generate()))
+        Self::generate(DeviceDek::Software(DekKeypair::generate()))
     }
 
     /// Create a brand-new account whose **DEK's classical half is generated inside `element`**
@@ -205,20 +209,79 @@ impl Account {
     ) -> Result<Self, HardwareSignerError> {
         let ml_seed = crate::crypto::rng::random_array::<32>();
         let dek = P256HybridDek::enroll(element, key_alias, &ml_seed)?;
-        Ok(Self::from_parts(DeviceDek::Hardware(dek)))
+        Ok(Self::generate(DeviceDek::Hardware(dek)))
     }
 
-    fn from_parts(dek: DeviceDek) -> Self {
+    fn generate(dek: DeviceDek) -> Self {
+        Self::from_parts(
+            Uuid::now_v7(),
+            MasterKey::generate(),
+            HybridSigningKey::generate(),
+            dek,
+        )
+    }
+
+    /// Assemble an account from **existing** account-level material on a **new** device: the
+    /// account's `user_id`, its `master` key (e.g. recovered from the server escrow with
+    /// [`recover_master_key`](crate::backup::recover_master_key)), and its user identity key
+    /// (e.g. opened from a [sealed identity](Self::sealed_identity) with
+    /// [`open_sealed_identity`](Self::open_sealed_identity)).
+    ///
+    /// Everything per-device is fresh: a new `device_id` and DSK, plus the caller's `dek`. A
+    /// recovered device is a new device — it never resumes a lost device's keys, whose
+    /// classical halves may have been hardware-bound and are gone with it.
+    pub fn from_parts(
+        user_id: Uuid,
+        master: MasterKey,
+        user_ik: HybridSigningKey,
+        dek: DeviceDek,
+    ) -> Self {
         Self {
-            user_id: Uuid::now_v7(),
-            master: MasterKey::generate(),
-            user_ik: HybridSigningKey::generate(),
+            user_id,
+            master,
+            user_ik,
             device: DeviceKeys {
                 device_id: Uuid::now_v7(),
                 dsk: HybridSigningKey::generate(),
                 dek,
             },
         }
+    }
+
+    /// The user identity key's private seeds sealed under the master key, in a
+    /// domain-separated form a client may store off-device (e.g. beside the master-key escrow).
+    ///
+    /// The user IK is drawn at random at account creation, not derived from the master key —
+    /// rotating the master key must not rotate the identity, and the server pins the identity
+    /// public key on the first directory publish (`S-C42`). So a device that recovers only the
+    /// master key would otherwise have to mint a *new* IK, which the server refuses for an
+    /// account it has already anchored. This blob is a wrap *reachable from* the master key, not
+    /// a second root: whoever recovers the master key opens it, nobody else can.
+    pub fn sealed_identity(&self) -> Vec<u8> {
+        let seed = self.user_ik.to_seed_bytes();
+        let mut plaintext = Vec::with_capacity(SEALED_IDENTITY_DOMAIN.len() + seed.len());
+        plaintext.extend_from_slice(SEALED_IDENTITY_DOMAIN);
+        plaintext.extend_from_slice(&seed);
+        self.master.seal(&plaintext)
+    }
+
+    /// Open a [`sealed_identity`](Self::sealed_identity) blob under `master`.
+    ///
+    /// Returns [`CryptoError::Auth`] when `master` is not the key that sealed it (or the blob was
+    /// tampered with), and [`CryptoError::Malformed`] when it opens but is not a sealed user IK —
+    /// e.g. an `AccountFile`'s sealed *device* key, which the domain prefix keeps from being
+    /// accepted as an identity.
+    pub fn open_sealed_identity(
+        master: &MasterKey,
+        sealed: &[u8],
+    ) -> Result<HybridSigningKey, CryptoError> {
+        let plaintext = master.open(sealed)?;
+        let seed = plaintext
+            .strip_prefix(SEALED_IDENTITY_DOMAIN)
+            .ok_or(CryptoError::Malformed(
+                "sealed identity lacks its domain prefix",
+            ))?;
+        Ok(HybridSigningKey::from_seed64(&seed64(seed.to_vec())?))
     }
 
     /// Encrypt the account for persistence: master under `passphrase` (cost = `tier`),
@@ -360,6 +423,70 @@ mod tests {
         assert_eq!(restored.device.dsk.verifying_key(), dsk_vk);
         // The master key still derives the same default album id.
         assert_eq!(restored.master.derive_default_album_id(), default_album);
+    }
+
+    /// **#467.** An account assembled from recovered parts keeps every account-level key —
+    /// `user_id`, master (proved by the default album id), user IK — and mints a fresh device,
+    /// and it persists and unlocks like any other.
+    #[test]
+    fn from_parts_keeps_the_account_and_mints_a_new_device() {
+        let original = Account::create();
+        let sealed = original.sealed_identity();
+        let user_ik = Account::open_sealed_identity(&original.master, &sealed).unwrap();
+
+        let recovered = Account::from_parts(
+            original.user_id,
+            MasterKey::from_bytes(*original.master.as_bytes()),
+            user_ik,
+            DeviceDek::Software(DekKeypair::generate()),
+        );
+        assert_eq!(recovered.user_id, original.user_id);
+        assert_eq!(
+            recovered.master.derive_default_album_id(),
+            original.master.derive_default_album_id()
+        );
+        assert_eq!(
+            recovered.user_ik.verifying_key(),
+            original.user_ik.verifying_key()
+        );
+        assert_ne!(recovered.device.device_id, original.device.device_id);
+        assert_ne!(
+            recovered.device.dsk.verifying_key(),
+            original.device.dsk.verifying_key()
+        );
+
+        let file = recovered.to_file_with(b"pw", fast()).unwrap();
+        let reopened = file.unlock(b"pw").unwrap();
+        assert_eq!(reopened.user_id, original.user_id);
+        assert_eq!(
+            reopened.user_ik.verifying_key(),
+            original.user_ik.verifying_key()
+        );
+    }
+
+    /// A sealed identity opens only under the master key that sealed it.
+    #[test]
+    fn a_sealed_identity_refuses_a_foreign_master_key() {
+        let acct = Account::create();
+        let sealed = acct.sealed_identity();
+        assert!(matches!(
+            Account::open_sealed_identity(&MasterKey::generate(), &sealed),
+            Err(CryptoError::Auth(_))
+        ));
+    }
+
+    /// The domain prefix keeps another 64-byte seed sealed under the same master key — the
+    /// account file's sealed DSK — from being accepted as the user IK.
+    #[test]
+    fn a_sealed_device_key_is_not_accepted_as_an_identity() {
+        let acct = Account::create();
+        let file = acct.to_file_with(b"pw", fast()).unwrap();
+        for not_an_identity in [&file.sealed_dsk, &file.sealed_ik] {
+            assert!(matches!(
+                Account::open_sealed_identity(&acct.master, not_an_identity),
+                Err(CryptoError::Malformed(_))
+            ));
+        }
     }
 
     #[test]
