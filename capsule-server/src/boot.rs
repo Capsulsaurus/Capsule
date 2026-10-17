@@ -302,8 +302,7 @@ pub async fn assemble(config: &Config) -> Result<Assembled, BootError> {
 /// to run.
 ///
 /// `DATABASE_URL` is demanded here rather than by [`crate::config::Demands`] because it is this
-/// *path* that needs it: `gc`, `purge` and `scrub` never reach here, and `serve --memory` does
-/// not either.
+/// *path* that needs it: `serve --memory` and the `--memory` operator commands never reach here.
 async fn open_durable_database(config: &Config) -> Result<sea_orm::DatabaseConnection, BootError> {
     let database_url = config.database_url.as_ref().ok_or(BootError::Missing {
         key: "DATABASE_URL",
@@ -999,10 +998,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_durable_backend_without_a_database_url_refuses_by_name() {
-        // `Config::load` demands `VALKEY_URL` for the durable path and deliberately does not
-        // demand `DATABASE_URL` — `gc`, `purge` and `scrub` load the same configuration and need
-        // neither. So the demand belongs to this *path*, and this is the assertion that it is
-        // made rather than discovered as a `None` somewhere further in.
+        // `Config::load` demands `VALKEY_URL` for a durable `serve` and deliberately does not
+        // demand `DATABASE_URL` — `gc`, `purge` and `scrub` load the same configuration under
+        // `--memory` and need neither. So the demand belongs to this *path*, and this is the
+        // assertion that it is made rather than discovered as a `None` somewhere further in.
         let root = tempfile::tempdir().expect("a scratch directory");
         let config = Config::load(
             &durable_environment(root.path()),

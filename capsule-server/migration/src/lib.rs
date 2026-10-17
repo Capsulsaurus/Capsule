@@ -1,13 +1,16 @@
 //! The server's PostgreSQL schema, one migration per ordinal.
 //!
-//! # What the six ordinals cover
+//! # What the ordinals cover
 //!
-//! The four durable ports issue #402 lands adapters for — the asset index, the account
-//! cluster, the device-cohort map and the quota ledger — plus album membership (`S-C51`, #405)
-//! and federation's capabilities, revocation list and peers (`S-E2`, #406).
-//! The remaining durable ports keep their
-//! in-memory adapters and gain ordinals with their adapters, so a migration never describes a
-//! table nothing reads.
+//! One ordinal per durable port, landed with the adapter that reads it, so a migration never
+//! describes a table nothing reads:
+//!
+//! - `000001`–`000004` (#402): the asset index, the account cluster, the device-cohort map and
+//!   the quota ledger;
+//! - `000005`: album membership (`S-C51`, #405);
+//! - `000006`: federation's capabilities, revocation list and peers (`S-E2`, #406);
+//! - `000007`–`000015` (#446): albums, device directories, moderation, share links, drops,
+//!   escrow, the collector's marks, custody receipts and TOTP enrolments.
 //!
 //! # Every instant is a `BIGINT` of microseconds since the Unix epoch
 //!
