@@ -40,6 +40,7 @@ each of which maps 1:1 to a CI job:
 ```sh
 mise run check-rust        # fmt, clippy, i18n, boundaries, licences, builds, bindings
 mise run test-rust         # the test job — blocking, and not part of check-rust
+mise run test-rust-release # the test job's release-profile step (cfg(not(debug_assertions)) tests)
 mise run check-web         # format, lint, bun test, bundle
 mise run check-docs        # format, lint, test, build
 mise run check-docs-truth  # every name the docs claim resolves in the tree
