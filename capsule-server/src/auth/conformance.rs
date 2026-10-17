@@ -30,14 +30,22 @@
 //! works — and the structural guarantee stays in the adapter, as one lock here and as a unique
 //! index in Postgres.
 //!
+//! The lockout is the exception, because its race *is* exhibitable in one process (#510): a
+//! burst of guesses presented together all reach the adapter before any of them is verified, so
+//! an adapter that checks the count, verifies and only then records the failure admits every
+//! one of them. [`parallel_guesses_admit_at_most_the_ceiling`] presents such a burst and counts
+//! how many were actually verified.
+//!
 //! # Reusing a harness
 //!
 //! Every case scopes its addresses and ids to itself, so cases may share one harness and
 //! [`run_all`] does. A case may move the harness clock forward and never moves it back.
 
+use std::task::Poll;
+
 use jiff::{SignedDuration, Timestamp};
 
-use super::directory::{AccountDirectory, Authentication, DirectoryError};
+use super::directory::{AccountDirectory, Authentication, DirectoryError, DirectoryFuture};
 use super::profile::{
     AccountProfiles, PasswordChange, PasswordChanged, ProfileRecord, ProfileUpdate,
 };
@@ -373,6 +381,77 @@ pub async fn attempts_during_a_lockout_do_not_extend_it(h: &dyn Harness) {
     );
 }
 
+/// A burst of parallel guesses is admitted at most `lockout_attempts` times.
+///
+/// The lockout is only a ceiling if the check and the charge are one step. Three times the
+/// ceiling is presented at once, all polled together, so every guess reaches the adapter before
+/// any verification completes; a guess that was verified answers `Refused`, and one that was
+/// turned away answers `Locked`. At most the ceiling may be `Refused`, and the account must be
+/// locked afterwards — to a correct password too.
+pub async fn parallel_guesses_admit_at_most_the_ceiling(h: &dyn Harness) {
+    let (address, _) = seed(h, "burst").await;
+    let ceiling = h.lockout_attempts();
+    let guesses = (0..ceiling * 3)
+        .map(|_| h.directory().authenticate(&address, "wrong"))
+        .collect();
+    let outcomes = join_all(guesses).await;
+
+    let mut admitted = 0_u32;
+    for outcome in outcomes {
+        match ok(outcome, "authenticate a parallel guess") {
+            Authentication::Refused => admitted += 1,
+            Authentication::Locked => {}
+            Authentication::Granted(_) => panic!("a wrong password must never be granted"),
+        }
+    }
+    assert!(
+        admitted <= ceiling,
+        "{admitted} parallel guesses were verified against a ceiling of {ceiling}"
+    );
+    assert_eq!(
+        ok(
+            h.directory().authenticate(&address, PASSWORD).await,
+            "authenticate after the burst",
+        ),
+        Authentication::Locked,
+    );
+}
+
+/// Drive every future in `futures` concurrently on the calling task, and collect their outputs
+/// in order.
+///
+/// The suite holds its harness by reference, so its futures borrow it and cannot be spawned; this
+/// is the borrow-friendly join a `futures::join_all` would be, without adding the crate for one
+/// test. Concurrent on one task is exactly the interleaving the case needs: each future runs to
+/// its first await before any is resumed.
+async fn join_all<'a, T>(futures: Vec<DirectoryFuture<'a, T>>) -> Vec<Result<T, DirectoryError>> {
+    let mut pending: Vec<Option<DirectoryFuture<'a, T>>> = futures.into_iter().map(Some).collect();
+    let mut done: Vec<Option<Result<T, DirectoryError>>> = std::iter::repeat_with(|| None)
+        .take(pending.len())
+        .collect();
+    std::future::poll_fn(|cx| {
+        let mut waiting = false;
+        for (slot, out) in pending.iter_mut().zip(done.iter_mut()) {
+            if let Some(future) = slot {
+                match future.as_mut().poll(cx) {
+                    Poll::Ready(value) => {
+                        *out = Some(value);
+                        *slot = None;
+                    }
+                    Poll::Pending => waiting = true,
+                }
+            }
+        }
+        if waiting {
+            Poll::Pending
+        } else {
+            Poll::Ready(())
+        }
+    })
+    .await;
+    done.into_iter().flatten().collect()
+}
+
 /// Failures spread wider than the window never accumulate.
 ///
 /// Ten mistypes over a year is not a guessing run, and counting them as one would lock an
@@ -605,6 +684,7 @@ pub async fn run_all(h: &dyn Harness) {
     a_lockout_decays_because_nothing_else_can_clear_it(h).await;
     attempts_during_a_lockout_do_not_extend_it(h).await;
     failures_spread_wider_than_the_window_never_accumulate(h).await;
+    parallel_guesses_admit_at_most_the_ceiling(h).await;
 
     a_password_change_grants_the_new_password_and_refuses_the_old(h).await;
     a_password_change_clears_a_lockout(h).await;
