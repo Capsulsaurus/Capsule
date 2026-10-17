@@ -162,4 +162,31 @@ pub mod keys {
     pub const REPAIR_CAPTURE_TIME_LIMIT_REQUIRES_APPLY: &str =
         "cli.repair.capture_time.limit_requires_apply";
     pub const REPAIR_FAILED: &str = "cli.repair.failed";
+    // `capsule library migrate` — admit unsigned pre-signed-path sidecars (issue #456, S-D24).
+    pub const LIBRARY_MIGRATE_UNMIGRATED_NOTICE: &str = "cli.library.migrate.unmigrated_notice";
+    pub const LIBRARY_MIGRATE_IN_PROGRESS: &str = "cli.library.migrate.in_progress";
+    pub const LIBRARY_MIGRATE_MIGRATED_ROW: &str = "cli.library.migrate.migrated_row";
+    pub const LIBRARY_MIGRATE_TRASHED_ROW: &str = "cli.library.migrate.trashed_row";
+    pub const LIBRARY_MIGRATE_STACK_ROW: &str = "cli.library.migrate.stack_row";
+    pub const LIBRARY_MIGRATE_SKIPPED_ROW: &str = "cli.library.migrate.skipped_row";
+    pub const LIBRARY_MIGRATE_SUMMARY: &str = "cli.library.migrate.summary";
+    pub const LIBRARY_MIGRATE_NOTHING: &str = "cli.library.migrate.nothing";
+    pub const LIBRARY_MIGRATE_FAILED: &str = "cli.library.migrate.failed";
+    pub const LIBRARY_MIGRATE_SKIP_INVALID_ASSET_ID: &str =
+        "cli.library.migrate.skip.invalid_asset_id";
+    pub const LIBRARY_MIGRATE_SKIP_UNKNOWN_SHAPE: &str = "cli.library.migrate.skip.unknown_shape";
+    pub const LIBRARY_MIGRATE_SKIP_UNDECODABLE: &str = "cli.library.migrate.skip.undecodable";
+    pub const LIBRARY_MIGRATE_SKIP_ID_COLLISION: &str = "cli.library.migrate.skip.id_collision";
+    pub const LIBRARY_MIGRATE_SKIP_ORIGINAL_MISSING: &str =
+        "cli.library.migrate.skip.original_missing";
+    pub const LIBRARY_MIGRATE_SKIP_HASH_MISMATCH: &str = "cli.library.migrate.skip.hash_mismatch";
+    pub const LIBRARY_MIGRATE_SKIP_QUARANTINE_CONFLICT: &str =
+        "cli.library.migrate.skip.quarantine_conflict";
+    pub const LIBRARY_MIGRATE_SKIP_OUTSIDE_MONTH_BUCKET: &str =
+        "cli.library.migrate.skip.outside_month_bucket";
+    pub const LIBRARY_MIGRATE_SKIP_UNUSUAL_EXTENSION: &str =
+        "cli.library.migrate.skip.unusual_extension";
+    pub const LIBRARY_MIGRATE_SKIP_ALBUM_READ_ONLY: &str =
+        "cli.library.migrate.skip.album_read_only";
+    pub const LIBRARY_MIGRATE_SKIP_STRANDED: &str = "cli.library.migrate.skip.stranded";
 }

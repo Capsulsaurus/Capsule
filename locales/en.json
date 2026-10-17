@@ -7055,6 +7055,22 @@
     "message": "Directory for the new library",
     "context": "clap --help: help for the `<PATH>` positional of `capsule library init`."
   },
+  "cli.help.library.migrate.about": {
+    "message": "Migrate unsigned sidecars from an older library into signed assets",
+    "context": "clap --help: the one-line description of `capsule library migrate`. Shown in the parent's command list and at the top of its own --help. A sidecar is the metadata file stored beside each photo; an older library wrote them without a signature."
+  },
+  "cli.help.library.migrate.arg.passphrase_stdin": {
+    "message": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+    "context": "clap --help: help for the `--passphrase-stdin` flag of `capsule library migrate`."
+  },
+  "cli.help.library.migrate.arg.path": {
+    "message": "Path to the library",
+    "context": "clap --help: help for the `<PATH>` positional of `capsule library migrate`."
+  },
+  "cli.help.library.migrate.arg.retain_days": {
+    "message": "Retention window, in days, for an asset the old library had already deleted: it is moved to trash with this much time left before it is purged",
+    "context": "clap --help: help for the `--retain-days` option of `capsule library migrate`."
+  },
   "cli.help.library.rebuild.about": {
     "message": "Rebuild the SQLite index from sidecar files",
     "context": "clap --help: the one-line description of `capsule library rebuild`. Shown in the parent's command list and at the top of its own --help."
@@ -7246,6 +7262,86 @@
   "cli.import.scanning": {
     "message": "Scanning source files…",
     "context": "CLI status line printed while `capsule import` walks the source paths, before any file is planned."
+  },
+  "cli.library.migrate.failed": {
+    "message": "Migration failed: {reason}",
+    "context": "CLI failure line for `capsule library migrate`. {reason} is an English error detail. Assets migrated before the failure stay migrated; running the command again continues."
+  },
+  "cli.library.migrate.in_progress": {
+    "message": "Migrating the unsigned sidecars in {library} ({count} found)…",
+    "context": "CLI status line printed when `capsule library migrate` starts. {count} is how many sidecar files without a signature the library holds; {library} is the library path."
+  },
+  "cli.library.migrate.migrated_row": {
+    "message": "Migrated {asset_id}",
+    "context": "CLI row from `capsule library migrate`: the asset is now a signed asset. {asset_id} is a UUID."
+  },
+  "cli.library.migrate.nothing": {
+    "message": "No unsigned sidecars to migrate.",
+    "context": "CLI line from `capsule library migrate` on a library that has nothing left to migrate."
+  },
+  "cli.library.migrate.skip.album_read_only": {
+    "message": "asset {asset_id}: album {album_id} is read-only on this device, so its pending delete could not be recorded",
+    "context": "CLI skip reason from `capsule library migrate`. The asset was deleted in the old library but this device cannot write to its album. {asset_id} and {album_id} are UUIDs."
+  },
+  "cli.library.migrate.skip.hash_mismatch": {
+    "message": "asset {asset_id}: the original's SHA-256 is {actual}, but the old record says {recorded}",
+    "context": "CLI skip reason from `capsule library migrate`: the photo file on disk does not match its recorded content hash, so it is not signed. {actual} and {recorded} are hex digests."
+  },
+  "cli.library.migrate.skip.id_collision": {
+    "message": "asset {asset_id} is already a signed asset in this library",
+    "context": "CLI skip reason from `capsule library migrate`. {asset_id} is a UUID."
+  },
+  "cli.library.migrate.skip.invalid_asset_id": {
+    "message": "the file name {name} is not an asset id",
+    "context": "CLI skip reason from `capsule library migrate`. {name} is the sidecar file's name without its extension."
+  },
+  "cli.library.migrate.skip.original_missing": {
+    "message": "asset {asset_id}: no original media file beside the sidecar",
+    "context": "CLI skip reason from `capsule library migrate`. {asset_id} is a UUID."
+  },
+  "cli.library.migrate.skip.outside_month_bucket": {
+    "message": "asset {asset_id}: {dir} is not a media/YYYY/YYYY-MM folder",
+    "context": "CLI skip reason from `capsule library migrate`. {dir} is a folder path; `media/YYYY/YYYY-MM` is the year/month folder layout and stays verbatim."
+  },
+  "cli.library.migrate.skip.quarantine_conflict": {
+    "message": "asset {asset_id}: the quarantine folder already holds a different copy of this sidecar",
+    "context": "CLI skip reason from `capsule library migrate`. {asset_id} is a UUID."
+  },
+  "cli.library.migrate.skip.stranded": {
+    "message": "asset {asset_id}: signed sidecar without a provenance chain cannot be resumed",
+    "context": "CLI skip reason from `capsule library migrate`: a signed metadata file is missing its history file and is not an interrupted migration. {asset_id} is a UUID."
+  },
+  "cli.library.migrate.skip.undecodable": {
+    "message": "the old record does not decode: {detail}",
+    "context": "CLI skip reason from `capsule library migrate`. {detail} is an English technical detail."
+  },
+  "cli.library.migrate.skip.unknown_shape": {
+    "message": "the sidecar is neither a signed nor an old unsigned record",
+    "context": "CLI skip reason from `capsule library migrate`."
+  },
+  "cli.library.migrate.skip.unusual_extension": {
+    "message": "asset {asset_id}: the original's extension {ext} is not a lowercase single segment",
+    "context": "CLI skip reason from `capsule library migrate`. {ext} is the file extension as found on disk (e.g. `JPG`)."
+  },
+  "cli.library.migrate.skipped_row": {
+    "message": "Skipped {path}: {reason}",
+    "context": "CLI row from `capsule library migrate` for a sidecar file it left untouched. {path} is the file path; {reason} is one of the cli.library.migrate.skip.* messages."
+  },
+  "cli.library.migrate.stack_row": {
+    "message": "Stack {stack_id} rebuilt from the old library's stack hints",
+    "context": "CLI row from `capsule library migrate`: photos the old library grouped (e.g. a RAW and its JPEG) are now a signed stack. {stack_id} is a UUID."
+  },
+  "cli.library.migrate.summary": {
+    "message": "Migration: {migrated} migrated, {trashed} moved to trash, {stacks} stack(s), {skipped} skipped, {remaining} still unmigrated.",
+    "context": "CLI summary line of `capsule library migrate`. All placeholders are counts; {remaining} is how many sidecars are still without a signature after the run (the skipped ones)."
+  },
+  "cli.library.migrate.trashed_row": {
+    "message": "Moved {asset_id} to trash, as the old library had deleted it",
+    "context": "CLI row from `capsule library migrate`. {asset_id} is a UUID; the asset stays restorable until its retention window elapses."
+  },
+  "cli.library.migrate.unmigrated_notice": {
+    "message": "{count, plural, one {# sidecar in this library is unsigned, so its asset is hidden. Run `capsule library migrate` to admit it.} other {# sidecars in this library are unsigned, so their assets are hidden. Run `capsule library migrate` to admit them.}}",
+    "context": "CLI notice on stderr when a command opens a library written by an older version. `capsule library migrate` is a command and stays verbatim."
   },
   "cli.list.empty": {
     "message": "No assets have synced yet.",

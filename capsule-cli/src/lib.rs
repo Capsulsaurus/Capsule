@@ -36,6 +36,7 @@ pub mod cull;
 pub mod db;
 pub mod demo;
 pub mod i18n;
+pub mod migrate;
 pub mod remote;
 pub mod repair;
 pub mod session;
@@ -255,6 +256,44 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 println!("{}", "Index rebuilt successfully.".green());
                 lib.close()
                     .map_err(|e| eyre!("Failed to close library: {e}"))?;
+            }
+            LibraryCommands::Migrate {
+                path,
+                passphrase_stdin,
+                retain_days,
+            } => {
+                let bundle = i18n::cli_bundle();
+                let mut ws = open_workspace_quiet(&path, passphrase_stdin)?;
+                println!(
+                    "{}",
+                    bundle
+                        .format(
+                            keys::LIBRARY_MIGRATE_IN_PROGRESS,
+                            &[
+                                (
+                                    "count",
+                                    Value::Int(as_count(ws.unmigrated_sidecars().len()))
+                                ),
+                                ("library", Value::Str(&path.to_string_lossy())),
+                            ],
+                        )
+                        .cyan()
+                );
+                match migrate::run(&mut ws, retain_days) {
+                    Ok(report) => print!(
+                        "{}",
+                        migrate::render(&bundle, &report, ws.unmigrated_sidecars().len())
+                    ),
+                    Err(error) => {
+                        return Err(eyre!(
+                            "{}",
+                            bundle.format(
+                                keys::LIBRARY_MIGRATE_FAILED,
+                                &[("reason", Value::Str(&error.to_string()))]
+                            )
+                        ));
+                    }
+                }
             }
         },
 
@@ -941,7 +980,22 @@ async fn sync(dry_run: bool, from_start: bool) -> Result<()> {
 /// are durable now, so a second run MUST resolve the album the first run minted rather than
 /// replacing it — minting a fresh one per run is exactly what left a reopened library unable to
 /// decrypt or extend its own prior imports (and would make a push unrepeatable).
+///
+/// When the open found unsigned pre-signed-path sidecars (`S-D24`), a notice naming their count
+/// and `capsule library migrate` goes to stderr, so every verb over such a library says why
+/// some assets are missing before the user runs the migration.
 fn open_workspace(library: &Path, passphrase_stdin: bool) -> Result<Workspace> {
+    let ws = open_workspace_quiet(library, passphrase_stdin)?;
+    if let Some(notice) = migrate::unmigrated_notice(&i18n::cli_bundle(), ws.unmigrated_sidecars())
+    {
+        eprintln!("{}", notice.yellow());
+    }
+    Ok(ws)
+}
+
+/// [`open_workspace`] without the unmigrated-sidecar notice: for `capsule library migrate`,
+/// which reports the same count as the work it is about to do.
+fn open_workspace_quiet(library: &Path, passphrase_stdin: bool) -> Result<Workspace> {
     let passphrase = read_password(passphrase_stdin, "Library passphrase".to_string())?;
     let mut ws = as_capsule_cli(
         Workspace::open(library, passphrase.as_bytes(), DeviceTier::Normal.params())
