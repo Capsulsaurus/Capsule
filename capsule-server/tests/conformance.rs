@@ -4343,20 +4343,26 @@ async fn drops_block(
         .expect("a drop id")
         .to_owned();
 
+    // An adoption's `asset_id` restates the signed `file_id`. A fresh id, since the suite's
+    // shared fixture already holds `create_request`'s default under another original.
+    let adopted = "018f3f1e-4b7a-7c9d-8e2f-0000000ad0be";
+    let mut adopt_envelope =
+        create_request(&fixture.clock, &dropped, "original")["manifest_envelope"].clone();
+    adopt_envelope["file_id"] = adopted.into();
+
     client
         .post(&format!("/v1/drops/{pending}/adopt"))
         .header("authorization", bearer)
         .json(&serde_json::json!({
             "album_id": support::album().as_str(),
-            "asset_id": "conformance-adopted",
+            "asset_id": adopted,
             "size": dropped.len(),
             "hash": checksum(&dropped),
             "content_type": "image/jpeg",
             "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
             "protocol_version": PROTOCOL_VERSION,
             "key_mode": "smuggled",
-            "manifest_envelope": create_request(&fixture.clock, &dropped, "original")
-                ["manifest_envelope"],
+            "manifest_envelope": adopt_envelope,
         }))
         .send()
         .await
@@ -4366,15 +4372,14 @@ async fn drops_block(
         .header("authorization", bearer)
         .json(&serde_json::json!({
             "album_id": support::album().as_str(),
-            "asset_id": "conformance-adopted",
+            "asset_id": adopted,
             "size": dropped.len(),
             "hash": checksum(&dropped),
             "content_type": "image/jpeg",
             "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
             "protocol_version": PROTOCOL_VERSION,
             "key_mode": "wrapped",
-            "manifest_envelope": create_request(&fixture.clock, &dropped, "original")
-                ["manifest_envelope"],
+            "manifest_envelope": adopt_envelope,
         }))
         .send()
         .await
@@ -4385,15 +4390,14 @@ async fn drops_block(
         .header("accept", "application/json")
         .json(&serde_json::json!({
             "album_id": support::album().as_str(),
-            "asset_id": "conformance-adopted",
+            "asset_id": adopted,
             "size": dropped.len(),
             "hash": checksum(&dropped),
             "content_type": "image/jpeg",
             "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
             "protocol_version": PROTOCOL_VERSION,
             "key_mode": "wrapped",
-            "manifest_envelope": create_request(&fixture.clock, &dropped, "original")
-                ["manifest_envelope"],
+            "manifest_envelope": adopt_envelope,
         }))
         .send()
         .await
@@ -4569,15 +4573,14 @@ async fn drops_block(
         .header("authorization", bearer)
         .json(&serde_json::json!({
             "album_id": support::album().as_str(),
-            "asset_id": "conformance-adopted-2",
+            "asset_id": adopted,
             "size": dropped.len(),
             "hash": checksum(&dropped),
             "content_type": "image/jpeg",
             "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
             "protocol_version": PROTOCOL_VERSION,
             "key_mode": "wrapped",
-            "manifest_envelope": create_request(&fixture.clock, &dropped, "original")
-                ["manifest_envelope"],
+            "manifest_envelope": adopt_envelope,
         }))
         .send()
         .await
