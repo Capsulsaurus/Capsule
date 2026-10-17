@@ -63,7 +63,7 @@
 //! The Valkey upload-session adapter keeps one global sorted set of evictable sessions by last
 //! progress, and that set has no lifetime of its own: a session whose record expired leaves its
 //! member behind until something walks over it, and the only walk is the pressure sweep,
-//! [`UploadSessionStore::least_recently_progressed`](crate::store::UploadSessionStore::least_recently_progressed).
+//! [`UploadSessionStore::least_recently_progressed`].
 //! Nothing on the request path runs it, so the set grew with every abandoned upload. A collection
 //! pass is the server's periodic housekeeping already, so an **applied** pass ends by running
 //! that sweep over the whole view — see [`ProgressSweep`]. A dry run skips it, because it
