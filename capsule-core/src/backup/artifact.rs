@@ -1128,19 +1128,20 @@ mod tests {
         ));
     }
 
-    /// An authentic manifest declaring a newer format than this build is refused, not half-read.
-    #[test]
-    fn a_newer_artifact_format_is_refused() {
-        let f = Fix::new();
-        let bytes =
-            export_with_params(&f.input(vec![f.asset(1, b"x")]), b"pw", FAST, &f.device).unwrap();
-        let files = tar_read(&bytes).unwrap();
+    /// Re-export `bytes` with its manifest core and file paths edited by `edit`, then
+    /// re-authenticated (HMAC and exporter signature) exactly as an exporter would — so `open`
+    /// gets past authentication and the check under test is the one that refuses.
+    fn reauthenticated(
+        f: &Fix,
+        bytes: &[u8],
+        edit: impl FnOnce(&mut ManifestCore, &mut Vec<(String, Vec<u8>)>),
+    ) -> Vec<u8> {
+        let mut files = tar_read(bytes).unwrap();
         let (salt, params) = parse_version(&files[0].1).unwrap();
         let wrap_key = pwkdf::derive_wrap_key(b"pw", &salt, params).unwrap();
 
-        // Re-authenticate a manifest at the next format version, exactly as an exporter would.
         let mut manifest: Manifest = cbor::from_slice(&files[1].1).unwrap();
-        manifest.core.artifact_version = ARTIFACT_FORMAT_VERSION + 1;
+        edit(&mut manifest.core, &mut files);
         let core_bytes = cbor::to_canonical_vec(&manifest.core).unwrap();
         let mut mac = HmacSha256::new_from_slice(&wrap_key).unwrap();
         mac.update(&core_bytes);
@@ -1159,10 +1160,63 @@ mod tests {
                 tar_append(&mut builder, path, data);
             }
         }
-        let newer = builder.into_inner().unwrap();
+        builder.into_inner().unwrap()
+    }
+
+    /// Rename the `authority/{ALBUM}` entry to `authority/{to}` in both the manifest and the
+    /// archive, leaving the ledger bytes (and so their hash) untouched.
+    fn refile_authority(core: &mut ManifestCore, files: &mut [(String, Vec<u8>)], to: &str) {
+        let from = format!("authority/{}", Uuid::from_u128(ALBUM));
+        let to = format!("authority/{to}");
+        let entry = core.entries.iter_mut().find(|e| e.path == from).unwrap();
+        entry.path.clone_from(&to);
+        let file = files.iter_mut().find(|(p, _)| *p == from).unwrap();
+        file.0 = to;
+    }
+
+    /// An authentic manifest declaring a newer format than this build is refused, not half-read.
+    #[test]
+    fn a_newer_artifact_format_is_refused() {
+        let f = Fix::new();
+        let bytes =
+            export_with_params(&f.input(vec![f.asset(1, b"x")]), b"pw", FAST, &f.device).unwrap();
+        let newer = reauthenticated(&f, &bytes, |core, _| {
+            core.artifact_version = ARTIFACT_FORMAT_VERSION + 1;
+        });
         assert!(matches!(
             BackupArtifact::open(&newer, b"pw", &f.device.verifying_key()),
             Err(BackupError::Format(msg)) if msg.contains("newer")
+        ));
+    }
+
+    /// An authenticated `authority/{album}` entry whose ledger speaks for another album is refused
+    /// at `open`: the exporter's signature covers the bytes, not the filing.
+    #[test]
+    fn an_authenticated_ledger_filed_under_another_album_is_refused_on_open() {
+        let f = Fix::new();
+        let bytes =
+            export_with_params(&f.input(vec![f.asset(1, b"x")]), b"pw", FAST, &f.device).unwrap();
+        let misfiled = reauthenticated(&f, &bytes, |core, files| {
+            refile_authority(core, files, &Uuid::from_u128(0xBAD).to_string());
+        });
+        assert!(matches!(
+            BackupArtifact::open(&misfiled, b"pw", &f.device.verifying_key()),
+            Err(BackupError::Auth(msg)) if msg.contains("another album")
+        ));
+    }
+
+    /// An authenticated authority entry whose name is not an album UUID is refused at `open`.
+    #[test]
+    fn an_authority_entry_not_named_by_a_uuid_is_refused_on_open() {
+        let f = Fix::new();
+        let bytes =
+            export_with_params(&f.input(vec![f.asset(1, b"x")]), b"pw", FAST, &f.device).unwrap();
+        let unnamed = reauthenticated(&f, &bytes, |core, files| {
+            refile_authority(core, files, "not-a-uuid");
+        });
+        assert!(matches!(
+            BackupArtifact::open(&unnamed, b"pw", &f.device.verifying_key()),
+            Err(BackupError::Format(msg)) if msg.contains("bad authority entry")
         ));
     }
 
