@@ -741,15 +741,14 @@ fn plan_opening<K: AmkSource>(
     let Some(manifest) = asset.manifest_for(role, blob) else {
         // No manifest and no blob is the absent derivative it always was: the fetch answers
         // `Gone` and the ladder degrades. A blob nobody describes cannot be opened.
-        return match blob {
-            None => Ok(None),
-            Some(_) => {
-                tracing::warn!(
-                    ?role,
-                    "no derivative manifest describes this blob; not fetching"
-                );
-                Err(PreFetch::Degrade(DegradeReason::NoManifest))
-            }
+        return if blob.is_none() {
+            Ok(None)
+        } else {
+            tracing::warn!(
+                ?role,
+                "no derivative manifest describes this blob; not fetching"
+            );
+            Err(PreFetch::Degrade(DegradeReason::NoManifest))
         };
     };
     let core = &manifest.core;
