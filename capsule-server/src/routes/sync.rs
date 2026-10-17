@@ -511,6 +511,22 @@ async fn peer_album_access(
 /// it. (An unprovisioned id costs one store read and the other two cost two; with a UUIDv7 id
 /// space that timing difference buys a guesser nothing, as it does not on the write path.) A
 /// store that cannot answer is an outage, never a refusal.
+///
+/// # A member's page starts at the album's beginning, not at their `granted_epoch` (#525)
+///
+/// Deliberately. The membership's `granted_epoch` is an AMK epoch, and nothing maps it to a feed
+/// position: positions are the owner's sequence numbers, and the only epoch a row carries is the
+/// one its *latest* manifest was written under, so "entries at or after the grant" would hide an
+/// old asset until somebody next touched it. More to the point, hiding them is not what the
+/// album's history policy asks for under either setting ([MLS — History Delivery]): *full
+/// history*, the default for shared albums, hands a joiner every prior AMK so it can read every
+/// photo, and *capped history* keeps older photos "visible but not decryptable — show
+/// placeholders", which needs their entries too. The policy lives in the MLS group, which this
+/// server cannot read, and what a joiner may decrypt is the `Welcome`'s decision, not the
+/// feed's. The roster is a transport control over who is handed bytes, and every current member
+/// is handed the album's.
+///
+/// [MLS — History Delivery]: ../../../capsule-docs/src/content/docs/design/cryptography/mls.md
 async fn album_read_access(
     sync: &SyncContext,
     caller: &UserId,
@@ -535,6 +551,8 @@ async fn album_read_access(
             tracing::error!(%error, %album, "the membership store could not answer a sync page");
             SyncRejection::unavailable()
         })? {
+        // Whatever epoch the membership was granted at: see the section above on why a member's
+        // page is the album's whole history.
         Membership::Member { .. } => Ok(record.owner_id),
         Membership::Revoked(_) | Membership::Never => {
             tracing::info!(%caller, %album, "an album page was refused: not a member");

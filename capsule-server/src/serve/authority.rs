@@ -34,7 +34,9 @@
 //!
 //! [`MembershipAuthority`] grants a fetch to the account the referencing asset is filed under
 //! and to any account on the current roster of the album it belongs to, in either role — a
-//! reader reads, that is what the role is for. An account the roster once carried and no longer
+//! reader reads, that is what the role is for. A **backup** is the exception: it is the owner's
+//! own durability artefact, so only the owner fetches one, and every other account — member,
+//! former member or stranger — is answered [`BlobReadAccess::Unrelated`], as a peer is. An account the roster once carried and no longer
 //! does is [`BlobReadAccess::Revoked`]: the membership store keeps the row and marks it, rather
 //! than deleting it, precisely so this answer has a stored fact behind it. An account the roster
 //! never named is [`BlobReadAccess::Unrelated`], indistinguishable from a stranger, because it
@@ -72,7 +74,10 @@
 //! disagree. The serving path asks it of **every** holder of an address and folds the answers
 //! (#462), because shared ciphertext can be held by unrelated owners; this port decides one
 //! holder at a time. It costs one membership lookup per holder asked for a non-owner, stopping
-//! at the first grant, and none for the owner's own holder.
+//! at the first grant, and none for the owner's own holder. The exception is a **backup**
+//! holder asked for a non-owner account: it is refused on its role before the roster is asked,
+//! so it costs none either. A peer's backup holder still costs its lookup, because the peer path
+//! asks the roster before it checks the role.
 //!
 //! **The takedown `410` was deliberately left alone** by `S-C39`, and the reasoning still holds
 //! with members in the picture: design/moderation.md states the per-surface rule as *"takedown
@@ -228,6 +233,20 @@ impl MembershipAuthority {
         {
             if &reference.owner_id == caller {
                 return Ok(BlobReadAccess::Granted);
+            }
+            // A **backup** is the owner's own durability artefact, not part of what the album
+            // shares (#525): no membership covers it, in either role, current or former. It is
+            // answered as a stranger's — `404`, not `403` — because the feed never names a
+            // backup, so no member holds a fact about it that a `403` would be acknowledging,
+            // and a `403` would confirm the address is live. Decided before the roster is asked,
+            // so the answer cannot vary with the caller's membership either.
+            if reference.role == crate::store::BlobRole::Backup {
+                tracing::info!(
+                    asset = %reference.asset_id,
+                    album = %reference.album_id,
+                    "a non-owner named a backup, which only its owner may fetch"
+                );
+                return Ok(BlobReadAccess::Unrelated);
             }
             // Somebody else's asset: the album's roster decides. The store is asked with the
             // caller's account id, which is the same string the owner id is.
@@ -525,6 +544,27 @@ mod tests {
             decide(&authority, "carol", &reference("alice")).await,
             BlobReadAccess::Granted
         );
+    }
+
+    #[tokio::test]
+    async fn only_the_owner_reads_a_backup() {
+        // A backup is the owner's durability artefact, not part of what the album shares, so no
+        // membership covers it — and the refusal is a stranger's, not a `403`, for everyone.
+        let authority = authority().await;
+        let mut backup = reference("alice");
+        backup.role = BlobRole::Backup;
+        assert_eq!(
+            decide(&authority, "alice", &backup).await,
+            BlobReadAccess::Granted,
+            "the owner reads their own backup"
+        );
+        for caller in ["bob", "carol", "dave", "erin", "mallory"] {
+            assert_eq!(
+                decide(&authority, caller, &backup).await,
+                BlobReadAccess::Unrelated,
+                "{caller} is not the owner, whatever their membership"
+            );
+        }
     }
 
     #[tokio::test]

@@ -714,6 +714,45 @@ async fn a_member_reads_the_albums_page_over_the_owners_sequence() {
 }
 
 #[tokio::test]
+async fn a_member_granted_at_a_later_epoch_still_reads_the_albums_whole_history() {
+    // Pinned on purpose (#525): the history policy lives in the MLS group, and neither of its
+    // settings hides an older entry — full history decrypts it, capped history shows it as a
+    // placeholder — so the server hands every current member the album's page from the start.
+    let fixture = Fixture::working();
+    let owner_bearer = bearer(&fixture).await;
+    provision(&fixture, &owner_bearer).await;
+    let before = publish_into(&fixture, "before-bob", &album()).await;
+    roster(&fixture, 1, &[]).await;
+    // Bob joins at epoch 2, after the album already holds an entry.
+    roster(&fixture, 2, &[(BOB, MemberRole::Reader)]).await;
+    let during = publish_into(&fixture, "with-bob", &album()).await;
+    // Removed at 3, an entry lands while he is off the roster, and he is re-admitted at 4.
+    roster(&fixture, 3, &[]).await;
+    let gap = publish_into(&fixture, "while-bob-was-away", &album()).await;
+    roster(&fixture, 4, &[(BOB, MemberRole::Reader)]).await;
+    let bob = fixture.other_bearer(BOB).await;
+
+    let body = page(
+        &fixture,
+        &bob,
+        &format!("album_id={}", album()),
+        StatusCode::OK,
+    )
+    .await;
+    assert_eq!(
+        body["entries"]
+            .as_array()
+            .expect("an array")
+            .iter()
+            .map(|entry| entry["sync_seq"].as_u64().expect("a position"))
+            .collect::<Vec<_>>(),
+        vec![before, during, gap],
+        "the page starts at the album's first entry, not at the membership's granted epoch"
+    );
+    assert_eq!(body["has_more"], false);
+}
+
+#[tokio::test]
 async fn an_album_cursor_is_refused_on_the_callers_own_feed() {
     // Both shapes carry the owner's sequence numbers, so a cursor that crossed between them
     // would skip a member's unseen entries.
