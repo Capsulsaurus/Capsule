@@ -106,15 +106,20 @@ impl From<FfiHardwareSignerError> for HardwareSignerError {
 /// published hybrid device key.
 #[uniffi::export(with_foreign)]
 pub trait FfiHardwareSigner: Send + Sync {
-    /// Generate (or bind to) the hardware P-256 keypair for `key_alias`, returning its SEC1
-    /// public key. Idempotent per alias.
+    /// Generate (or bind to) the hardware keypair for `key_alias`, returning its public key in
+    /// the constructor's shape: a SEC1 P-256 key for
+    /// [`FfiWorkspace::create_with_p256_hardware_signer`], a 32-byte Ed25519 key for
+    /// [`FfiWorkspace::create_with_hardware_signer`]. Idempotent per alias.
     fn enroll(&self, key_alias: String) -> Result<Vec<u8>, FfiHardwareSignerError>;
 
-    /// The SEC1 P-256 public key for an already-enrolled `key_alias`.
+    /// The public key for an already-enrolled `key_alias`, in the same constructor-dependent
+    /// shape [`enroll`](Self::enroll) returns (SEC1 P-256, or 32-byte Ed25519).
     fn classical_public_key(&self, key_alias: String) -> Result<Vec<u8>, FfiHardwareSignerError>;
 
-    /// Produce a DER-encoded ECDSA signature over `SHA-256(msg)` with the hardware key for
-    /// `key_alias`.
+    /// Sign `msg` with the hardware key for `key_alias`, in the constructor's shape: a
+    /// DER-encoded ECDSA signature over `SHA-256(msg)` for
+    /// [`FfiWorkspace::create_with_p256_hardware_signer`], a 64-byte Ed25519 signature over
+    /// `msg` for [`FfiWorkspace::create_with_hardware_signer`].
     fn sign_classical(
         &self,
         key_alias: String,
