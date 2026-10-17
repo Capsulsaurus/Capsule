@@ -32,13 +32,9 @@ pub mod rng;
 pub mod upgrade;
 pub mod verify_asset;
 
-pub use hash::{Hash32, Sha256Hasher};
-pub use primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION, SuiteId};
+// Every submodule above is the one public path to its items: none is re-exported here, so a
+// type has exactly one name (`crypto::hash::Hash32`, never also `crypto::Hash32`).
 use thiserror::Error;
-pub use verify_asset::{
-    BindingReject, MetadataBinding, PendingReason, RejectReason, VerifyOutcome, verify_asset,
-    verify_metadata_binding,
-};
 
 /// Errors surfaced by the cryptographic layer.
 ///

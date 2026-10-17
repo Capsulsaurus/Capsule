@@ -37,7 +37,7 @@ use secrecy::{ExposeSecret as _, SecretString};
 
 use crate::auth::{AuthClient, AuthError, LoginOutcome, Session};
 use crate::directory::{DirectoryClient, DirectoryError};
-use crate::recovery::{RecoveryClient, RecoveryError};
+use crate::recovery::{EscrowStored, RecoveryClient, RecoveryError};
 use crate::sync::{
     BlobManifest, BlobRef, ChangeKind, FeedEntry, SyncConsumer, SyncCursor, SyncError, SyncPage,
 };
@@ -606,6 +606,25 @@ impl From<SyncPage> for FfiSyncPage {
     }
 }
 
+/// FFI mirror of [`EscrowStored`] — what [`FfiSession::escrow_put`] did.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct FfiEscrowStored {
+    /// When the server accepted the blob, RFC 3339, on the server's clock.
+    pub stored_at: String,
+    /// Whether this displaced an earlier escrow: `false` is a first enrollment (recovery set
+    /// up), `true` a replacement (the previous recovery secret has stopped working).
+    pub replaced: bool,
+}
+
+impl From<EscrowStored> for FfiEscrowStored {
+    fn from(stored: EscrowStored) -> Self {
+        Self {
+            stored_at: stored.stored_at.to_string(),
+            replaced: stored.replaced,
+        }
+    }
+}
+
 // ─── Client (entry point) ────────────────────────────────────────────────────
 
 /// The unauthenticated entry point over the SDK's auth + upload endpoints. Turns
@@ -807,15 +826,22 @@ impl FfiSession {
     /// off is [`FfiError::InvalidArgument`]; a refused credential is [`FfiError::Auth`], so a
     /// caller re-authenticates rather than retrying; everything else is
     /// [`FfiError::Escrow`] with the server's `error.escrow.*` code when it sent one.
-    pub async fn escrow_put(&self, api_base_url: String, blob: Vec<u8>) -> Result<(), FfiError> {
+    ///
+    /// The answer says what the store did: [`FfiEscrowStored::replaced`] separates "recovery
+    /// set up" from "recovery key replaced" (the previous secret has stopped working).
+    pub async fn escrow_put(
+        &self,
+        api_base_url: String,
+        blob: Vec<u8>,
+    ) -> Result<FfiEscrowStored, FfiError> {
         let blob =
             capsule_core::cbor::from_slice(&blob).map_err(|e| FfiError::InvalidArgument {
                 message: format!("escrow blob is not a canonical WrappedSecret: {e}"),
             })?;
-        RecoveryClient::new(self.session.clone(), &api_base_url)?
+        let stored = RecoveryClient::new(self.session.clone(), &api_base_url)?
             .store_escrow(&blob)
             .await?;
-        Ok(())
+        Ok(stored.into())
     }
 
     /// Fetch this account's escrow blob (`GET /v1/auth/escrow`) as opaque canonical CBOR — the

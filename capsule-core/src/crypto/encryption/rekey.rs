@@ -104,8 +104,7 @@ pub fn seal_metadata_blob_with_nonce(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::encryption::blob::{blob_nonce, open_blob};
-    use crate::crypto::encryption::stream::decrypt_asset_vec;
+    use crate::crypto::encryption::{blob_nonce, decrypt_asset_vec, open_blob};
 
     /// The doc's rewrite re-roll case: a same-`file_id`, same-epoch `replace` of byte-identical
     /// plaintext produces a different key AND nonce, so no `(key, nonce)` pair repeats — and

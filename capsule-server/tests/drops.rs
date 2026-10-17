@@ -44,7 +44,7 @@ fn link_body(id: &str, caps: Value) -> Value {
     let mut body = json!({
         "opaque_id": id,
         "drop_pubkey": BASE64.encode([7_u8; 32]),
-        "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+        "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
     });
     for (key, value) in caps.as_object().expect("caps is an object") {
         body[key] = value.clone();
@@ -563,7 +563,7 @@ async fn an_adoption_promotes_the_drop_and_empties_the_inbox_row() {
             "size": bytes.len(),
             "hash": checksum(&bytes),
             "content_type": "image/jpeg",
-            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
             "protocol_version": PROTOCOL_VERSION,
             "key_mode": "wrapped",
             "manifest_envelope": manifest["manifest_envelope"],
@@ -610,7 +610,7 @@ async fn an_adoption_that_is_refused_returns_the_drop_to_the_inbox() {
             "size": bytes.len(),
             "hash": checksum(&bytes),
             "content_type": "image/jpeg",
-            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
             "protocol_version": PROTOCOL_VERSION,
             "key_mode": "smuggled",
             "manifest_envelope": manifest["manifest_envelope"],
@@ -635,7 +635,7 @@ async fn an_adoption_that_is_refused_returns_the_drop_to_the_inbox() {
             "size": other.len(),
             "hash": checksum(&other),
             "content_type": "image/jpeg",
-            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
             "protocol_version": PROTOCOL_VERSION,
             "key_mode": "wrapped",
             "manifest_envelope": manifest["manifest_envelope"],
@@ -679,7 +679,7 @@ async fn another_accounts_drop_cannot_be_adopted() {
             "size": bytes.len(),
             "hash": checksum(&bytes),
             "content_type": "image/jpeg",
-            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
             "protocol_version": PROTOCOL_VERSION,
             "key_mode": "wrapped",
             "manifest_envelope": manifest["manifest_envelope"],

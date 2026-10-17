@@ -106,7 +106,7 @@ fn manifest_envelope_mirrors_the_signed_manifest() {
 #[test]
 fn only_a_derivative_declares_its_role_and_format() {
     use capsule_core::crypto::hash::Hash32;
-    use capsule_core::crypto::provenance::action::DerivativeRole;
+    use capsule_core::crypto::provenance::DerivativeRole;
     use capsule_core::lifecycle::DerivativeBlob;
 
     let (_dir, mut bundle) = real_bundle();

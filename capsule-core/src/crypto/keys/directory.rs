@@ -17,7 +17,7 @@
 //!
 //! [`DirectoryCore::signing_bytes`] is the canonical CBOR of the *whole* core, so every field of
 //! every [`DeviceEntry`] is inside the IK-signed bytes and field **presence** is part of the
-//! signature — exactly as it is for an [asset manifest](crate::crypto::provenance::manifest).
+//! signature — exactly as it is for an [asset manifest](crate::crypto::provenance::AssetManifest).
 //! [`DeviceEntry::dek_public`] is therefore an **absent-key** optional
 //! (`skip_serializing_if = "Option::is_none"`): a present-`null` encoding would change
 //! `signing_bytes()` for every entry that has no DEK and silently break re-verification of every

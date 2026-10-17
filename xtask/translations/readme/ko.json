@@ -12,16 +12,24 @@
     "target": "> 면책 조항: 이 프로젝트는 계속해서 활발히 개발 중입니다. 최신 소식을 받아보려면 이 저장소에 Star를 눌러주세요!\n>\n> 알파 상태: `master` 브랜치가 메인 개발 브랜치입니다. GitHub 릴리스는 다음 조건이 충족되면 이루어집니다: 1. 기능/API가 내부적으로 안정화되었을 때; 2. 내부 테스트 그룹이 충분히 테스트했을 때.\n>\n> 프로젝트 업데이트 (2026년 4월): E2E 암호화와 오프라인 우선 철학으로 이식하는 중이므로, 다시 알파 단계에 도달하기까지 앞으로 몇 개월이 더 걸릴 예정입니다.\n>\n> 프로젝트 업데이트 (2026년 6월): 개발자는 여전히 활발히 작업하고 있지만 여가 시간에만 진행하고 있습니다. 별도의 저장소에서 이식 가능한 순수 Rust 라이브러리를 구축하는 새로운 선행 작업(예: 이미지 인코딩/디코딩, 메타데이터 처리, 지리좌표 로직, 사용 사례에 맞게 미세 조정된 온디바이스 ML 모델)이 많아 진행을 가로막고 있습니다. 그러나 Rust 생태계에서 이러한 누락된 구성 요소를 채우는 것은 견고한 제품을 위해 무엇보다 중요합니다.\n>\n> 프로젝트 업데이트 (2026년 10월): 양방향 전송 프로토콜과 암호화/스토리지 계층이 안정화 단계에 가까워지고 있습니다. 지연 시간이 길고 손실이 많은 연결에서 스트레스 테스트 실험을 진행한 뒤 여러 주목할 만한 업데이트가 이루어졌습니다."
   },
   {
+    "source": "**Where it stands today:** Capsule is not yet usable with real data. The Rust core, the `capsule-cli` and the server are being stabilized first. `capsule-server` builds as one binary and runs entirely in memory (`mise run serve-memory`), but a durable deployment backed by PostgreSQL does not boot yet, so nothing survives a restart. The native apps are deferred until the server and CLI are done, and the web client cannot yet decrypt what it syncs, so it shows placeholders. The [roadmap](ROADMAP.md) gives the state of every package.",
+    "target": "**현재 상태:** Capsule은 아직 실제 데이터로 사용할 수 없습니다. Rust 코어, `capsule-cli`, 서버를 먼저 안정화하고 있습니다. `capsule-server`는 단일 바이너리로 빌드되며 전적으로 메모리에서 실행되지만(`mise run serve-memory`), PostgreSQL 기반의 영구 배포는 아직 부팅되지 않으므로 재시작하면 아무것도 남지 않습니다. 네이티브 앱은 서버와 CLI가 완성될 때까지 보류되었고, 웹 클라이언트는 동기화한 내용을 아직 복호화할 수 없어 자리 표시자를 보여 줍니다. 각 패키지의 상태는 [로드맵](ROADMAP.md)에서 확인할 수 있습니다."
+  },
+  {
     "source": "## Features",
     "target": "## 기능"
+  },
+  {
+    "source": "Items marked *(planned)* are goals the current tree does not yet demonstrate.",
+    "target": "*(계획)* 표시가 있는 항목은 현재 코드가 아직 보여 주지 못하는 목표입니다."
   },
   {
     "source": "- **Native and cross-platform**: Capsule is built as a real native app per platform rather than one web app in several wrappers, so each one is fast and idiomatic where it runs. Every native client is intended to be fully featured and platform-integrated; the table below says what exists today.",
     "target": "- **네이티브 및 멀티플랫폼**: Capsule은 하나의 웹 앱을 여러 껍데기로 감싸는 대신 플랫폼마다 진짜 네이티브 앱으로 만들어지므로, 각 앱은 실행되는 곳에서 빠르고 그 플랫폼답게 동작합니다. 모든 네이티브 클라이언트는 최종적으로 모든 기능을 갖추고 플랫폼에 통합되는 것을 목표로 합니다. 현재 무엇이 있는지는 아래 표를 참고하세요."
   },
   {
-    "source": "- **Broadest format support**: Capsule supports the majority of image and video formats from ones in common smartphones to professional RAW formats. View any content on any device just like your smartphone photos and videos!",
-    "target": "- **가장 폭넓은 형식 지원**: Capsule은 일반 스마트폰에서 사용되는 형식부터 전문가용 RAW 형식까지 대부분의 이미지 및 동영상 형식을 지원합니다. 스마트폰 사진과 동영상을 보듯 어떤 기기에서든 모든 콘텐츠를 확인하세요!"
+    "source": "- **Broadest format support** *(planned)*: Capsule aims to support the majority of image and video formats, from those of common smartphones to professional RAW formats. Today the import pipeline decodes JPEG, PNG, JPEG XL, TIFF and GIF stills; HEIC, AVIF, RAW and video are not supported yet.",
+    "target": "- **가장 폭넓은 형식 지원** *(계획)*: Capsule은 일반 스마트폰에서 사용되는 형식부터 전문가용 RAW 형식까지 대부분의 이미지 및 동영상 형식을 지원하는 것을 목표로 합니다. 현재 가져오기 파이프라인은 JPEG, PNG, JPEG XL, TIFF, GIF 정지 이미지를 디코딩하며, HEIC, AVIF, RAW와 동영상은 아직 지원하지 않습니다."
   },
   {
     "source": "- **Data is always optimized**: Capsule rigorously caches and optimizes any heavy content for seamless delivery (our methodology is [documented](https://capsule.justinchung.net/design/thumbnails/)). If something feels slow, let us know.",
@@ -32,12 +40,12 @@
     "target": "- **프라이버시**: 데이터는 오직 사용자의 것이며 종단 간 암호화됩니다."
   },
   {
-    "source": "- **Fully-featured access**: Capsule implements several powerful features like real-time viewing, semantic search, AI organization, and more.",
-    "target": "- **완전한 기능 지원**: Capsule은 실시간 보기, 시맨틱 검색, AI 정리 등 다양한 강력한 기능을 제공합니다."
+    "source": "- **Fully-featured access** *(planned)*: Real-time viewing, semantic search and AI organization are planned; none of them ships today.",
+    "target": "- **완전한 기능 지원** *(계획)*: 실시간 보기, 시맨틱 검색, AI 정리가 계획되어 있으며, 현재 제공되는 것은 없습니다."
   },
   {
-    "source": "- **Federated**: Capsule users can share their assets with users of other servers seamlessly. Think of it like [Matrix](https://en.wikipedia.org/wiki/Matrix_(protocol)) for photos.",
-    "target": "- **연합형**: Capsule 사용자는 다른 서버의 사용자와 원활하게 자산을 공유할 수 있습니다. 사진을 위한 [Matrix](https://en.wikipedia.org/wiki/Matrix_(protocol))라고 생각하시면 됩니다."
+    "source": "- **Federated** *(planned)*: Capsule users will be able to share their assets with users of other servers seamlessly. Think of it like [Matrix](https://en.wikipedia.org/wiki/Matrix_(protocol)) for photos. The server and SDK implement federated pull, but it has not yet run between two real deployments.",
+    "target": "- **연합형** *(계획)*: Capsule 사용자는 다른 서버의 사용자와 원활하게 자산을 공유할 수 있게 됩니다. 사진을 위한 [Matrix](https://en.wikipedia.org/wiki/Matrix_(protocol))라고 생각하시면 됩니다. 서버와 SDK는 연합 풀(pull)을 구현하고 있지만, 실제 배포 두 곳 사이에서 실행된 적은 아직 없습니다."
   },
   {
     "source": "- **Open-source**: Capsule is open-source forever and you can host your own server.",

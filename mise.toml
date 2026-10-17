@@ -153,17 +153,20 @@ description = "Rustdoc gate for the frozen crates (intra-doc links, over all ite
 env = { RUSTDOCFLAGS = "-D warnings" }
 run = "cargo doc --no-deps --document-private-items -p capsule-core -p capsule-core-ffi -p capsule-wasm -p capsule-i18n"
 
-# nextest: cross-binary parallel scheduling + process-per-test isolation. Two
-# invocations — the workspace (default features), then capsule-core's FFI surface.
-# The workspace run includes `capsule-e2e`, the bounded E2E cases over the real SDK,
-# library and server composition root (no container, no env gate; issue #409).
-# nextest does not run doctests; the workspace has none (if you add one, also add a
-# `cargo test --doc` step). CI selects the `ci` profile via NEXTEST_PROFILE=ci.
+# nextest: cross-binary parallel scheduling + process-per-test isolation. Three
+# invocations — the workspace (default features), then capsule-core's and capsule-sdk's
+# FFI surfaces. The workspace run includes `capsule-e2e`, the bounded E2E cases over the
+# real SDK, library and server composition root (no container, no env gate; issue #409).
+# nextest does not run doctests, so the last step runs them with `cargo test --doc` for
+# the crates whose doctests are part of the contract: capsule-i18n's crate example and
+# its `format_message`/`format_message_in` examples (#480). A crate that adds a doctest
+# is added to that step. CI selects the `ci` profile via NEXTEST_PROFILE=ci.
 [tasks.test-rust]
 run = [
   "cargo nextest run --workspace",
   "cargo nextest run -p capsule-core --features ffi",
   "cargo nextest run -p capsule-sdk --features ffi",
+  "cargo test --doc -p capsule-i18n",
 ]
 
 # `test-rust` builds every test in the test profile, where `debug_assertions` is on, so a

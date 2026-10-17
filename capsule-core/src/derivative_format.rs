@@ -14,8 +14,8 @@
 //! A closed set only a producer can evaluate is not a closed set.
 //!
 //! So it lives here, beside nothing and depending on nothing but
-//! [`crate::crypto::provenance`], which is itself unconditional for the same reason. `media`
-//! re-exports both names, so every existing `media::DerivativeFormat` path still resolves.
+//! [`crate::crypto::provenance`], which is itself unconditional for the same reason. This module
+//! is the one public path to both names: `media` does not re-export them.
 //!
 //! This mirrors [`crate::lqip`]: a contract every surface needs cannot live inside a
 //! feature-gated stack, however natural the stack looks as a home.

@@ -19,7 +19,7 @@ use std::collections::HashSet;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use capsule_core::crypto::provenance::manifest::ManifestCore;
+use capsule_core::crypto::provenance::ManifestCore;
 use capsule_core::lifecycle::UploadBundle;
 use capsule_sdk::net::ConnectionClass;
 pub use capsule_sdk::push::ensure_album;

@@ -35,7 +35,7 @@ use super::import::CreateRequest;
 use super::open::{month_dir_timestamp, original_extension};
 use super::{LifecycleError, Result, SidecarEnrichment, SignedImportOptions, Workspace, media_dir};
 use crate::crypto::hash;
-use crate::crypto::provenance::action::Action;
+use crate::crypto::provenance::Action;
 use crate::domain::{GpsDatum, StackType};
 use crate::sidecar::shape::{self, SidecarShape};
 use crate::sidecar::sidecar_v1::{

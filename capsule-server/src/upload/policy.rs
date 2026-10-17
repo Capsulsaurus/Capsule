@@ -23,31 +23,6 @@
 
 use jiff::Timestamp;
 
-/// The still-derivative content types the thumbnail ladder uploads.
-///
-/// **Source of truth:
-/// [Thumbnails and Previews](../../../capsule-docs/src/content/docs/design/thumbnails.md).** Its
-/// tier table is the closed set: a JXL master with AVIF and WebP as the delivery variants. The
-/// doc is explicit that "every receiver (and every federated peer) compares the
-/// `DerivativeManifest.format` value against this list, and an unknown value is a structural
-/// rejection" — and this server is such a receiver, so its accept-list has to carry every value
-/// that list admits *and no more*.
-///
-/// The `original` sentinel is deliberately **absent**. It is a recognised `format` value, not a
-/// content type: a tier that references the original carries no bytes of its own, so it opens no
-/// upload session and never presents a `content_type` at all. Admitting it here would widen the
-/// closed enum for a blob that cannot exist.
-///
-/// # Why this is a list here and not the enum
-///
-/// It should be `capsule_core::derivative_format::DerivativeFormat::STILL_DELIVERY_ORDER` mapped
-/// through `mime()` — one set, evaluated by producer and receiver alike. That module is not
-/// reachable from this crate yet: it exists only on the branch of #436, is on neither `master`
-/// nor this branch's base, and `capsule-core` is not this change's to edit. So the set is
-/// restated once, in one place, with the swap named — and the test below fails the moment this
-/// list and the accept-list disagree, which is the failure that produced #470.
-pub const DERIVATIVE_CONTENT_TYPES: &[&str] = &["image/jxl", "image/avif", "image/webp"];
-
 /// The closed `content_type` enum for the current protocol version (invariant 5).
 ///
 /// Frozen for a given `protocol_version` and server-tunable across versions. Metadata,
@@ -55,8 +30,16 @@ pub const DERIVATIVE_CONTENT_TYPES: &[&str] = &["image/jxl", "image/avif", "imag
 /// `application/octet-stream`.
 ///
 /// It carries two disjoint things: the **originals** a client imports, and the **derivatives**
-/// its ladder generates ([`DERIVATIVE_CONTENT_TYPES`], plus `video/mp4` for the H.264 baseline
-/// video preview, which the stills-only derivative set does not model). `image/jxl` is here for
+/// its ladder generates (every
+/// [`DerivativeFormat::STILL_DELIVERY_ORDER`](capsule_core::derivative_format::DerivativeFormat::STILL_DELIVERY_ORDER)
+/// value mapped through `mime()`, plus `video/mp4` for the H.264 baseline video preview, which
+/// the stills-only derivative set does not model). The still set is not restated here: the
+/// [Thumbnails and Previews](../../../capsule-docs/src/content/docs/design/thumbnails.md) tier
+/// table is the closed set, `capsule_core::derivative_format` is that table as a type, and this
+/// server is a receiver that must accept every value it admits — the tests below fail the moment
+/// this list and that set disagree. The `original` sentinel is deliberately **absent**: a tier
+/// that references the original carries no bytes, opens no upload session, and never presents a
+/// `content_type`. `image/jxl` is here for
 /// the second reason only — nothing imports a JXL original today — and its absence is #470:
 /// every still larger than the 256 px thumbnail cap failed its T1 upload with
 /// `400 error.upload.unsupported_content_type`, because the ladder encodes that tier as JXL and
@@ -220,6 +203,8 @@ pub fn as_rfc3339(at: Timestamp) -> String {
 
 #[cfg(test)]
 mod tests {
+    use capsule_core::derivative_format::DerivativeFormat;
+
     use super::*;
 
     #[test]
@@ -255,11 +240,13 @@ mod tests {
         // `400 error.upload.unsupported_content_type` — so every still larger than the 256 px
         // cap failed. The defect was not the missing string, it was that nothing tied the
         // accept-list to the closed set it is supposed to mirror. This is that tie.
+        // The set is core's, not a restatement: a format core adds to the ladder fails here
+        // until the server accepts it.
         let policy = UploadPolicy::default();
         let accepted = policy.content_types();
-        for format in DERIVATIVE_CONTENT_TYPES {
+        for format in DerivativeFormat::STILL_DELIVERY_ORDER.map(DerivativeFormat::mime) {
             assert!(
-                accepted.contains(format),
+                accepted.contains(&format),
                 "{format} is a committed derivative format the ladder uploads, and the closed \
                  content-type enum refuses it"
             );
@@ -271,12 +258,13 @@ mod tests {
         // It is a recognised `DerivativeManifest.format` value and nothing more: a tier that
         // references the original carries no bytes, opens no upload session, and presents no
         // `content_type`. Admitting it would widen the closed enum for a blob that cannot exist.
-        assert!(!DERIVATIVE_CONTENT_TYPES.contains(&"original"));
+        let original = DerivativeFormat::Original.mime();
         assert!(
-            !UploadPolicy::default()
-                .content_types()
-                .contains(&"original")
+            !DerivativeFormat::STILL_DELIVERY_ORDER
+                .map(DerivativeFormat::mime)
+                .contains(&original)
         );
+        assert!(!UploadPolicy::default().content_types().contains(&original));
     }
 
     #[test]

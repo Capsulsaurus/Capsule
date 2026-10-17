@@ -138,7 +138,7 @@ pub(crate) fn op_bundle(
     let manifest = format!("signed-lifecycle-manifest-{seed}").into_bytes();
     serde_json::json!({
         "manifest_envelope": {
-            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
             "protocol_version": PROTOCOL_VERSION,
             "album_id": album().as_str(),
             "file_id": OPS_ASSET,
@@ -3578,12 +3578,12 @@ pub(crate) fn create_request(clock: &ManualClock, bytes: &[u8], role: &str) -> s
         "size": bytes.len(),
         "hash": hash,
         "content_type": content_type,
-        "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+        "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
         "protocol_version": PROTOCOL_VERSION,
         "blob_role": role,
         "album_id": album().as_str(),
         "manifest_envelope": {
-            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
             "protocol_version": PROTOCOL_VERSION,
             "album_id": album().as_str(),
             "file_id": "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e61",
@@ -3771,8 +3771,8 @@ pub(crate) fn signed_upgrade_intent(
         intent_id,
         from_protocol_version: PROTOCOL_VERSION.to_owned(),
         to_protocol_version: to_protocol_version.to_owned(),
-        from_suite_id: capsule_core::crypto::CRYPTO_SUITE_ID,
-        to_suite_id: capsule_core::crypto::CRYPTO_SUITE_ID,
+        from_suite_id: capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
+        to_suite_id: capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
         proposer_user: Uuid::parse_str(user().as_str()).expect("the seeded account id is a uuid"),
         proposer_device: device_id,
         deadline_secs,

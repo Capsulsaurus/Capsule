@@ -45,7 +45,7 @@
 use std::collections::HashSet;
 
 use capsule_core::crypto::hash::hash_bytes;
-use capsule_core::crypto::provenance::action::DerivativeRole;
+use capsule_core::crypto::provenance::DerivativeRole;
 use capsule_core::import::UploadTier;
 use capsule_core::lifecycle::UploadBundle;
 use serde::Serialize;

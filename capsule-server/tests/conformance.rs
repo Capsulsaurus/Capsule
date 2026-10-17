@@ -1736,7 +1736,7 @@ async fn every_declared_response_is_exercised() {
             owner_id: support::owner(),
             album_id: support::album(),
             protocol_version: PROTOCOL_VERSION.to_owned(),
-            crypto_suite_id: capsule_core::crypto::CRYPTO_SUITE_ID,
+            crypto_suite_id: capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
             created_at: jiff::Timestamp::UNIX_EPOCH,
         })
         .await
@@ -4211,7 +4211,7 @@ async fn drops_block(
         .json(&serde_json::json!({
             "opaque_id": "too-short",
             "drop_pubkey": "AAAA",
-            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
         }))
         .send()
         .await
@@ -4226,7 +4226,7 @@ async fn drops_block(
         .json(&serde_json::json!({
             "opaque_id": drop_link,
             "drop_pubkey": "AAAA",
-            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
             "max_file_size": 4096,
             "max_file_count": 2,
         }))
@@ -4351,7 +4351,7 @@ async fn drops_block(
             "size": dropped.len(),
             "hash": checksum(&dropped),
             "content_type": "image/jpeg",
-            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
             "protocol_version": PROTOCOL_VERSION,
             "key_mode": "smuggled",
             "manifest_envelope": create_request(&fixture.clock, &dropped, "original")
@@ -4369,7 +4369,7 @@ async fn drops_block(
             "size": dropped.len(),
             "hash": checksum(&dropped),
             "content_type": "image/jpeg",
-            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
             "protocol_version": PROTOCOL_VERSION,
             "key_mode": "wrapped",
             "manifest_envelope": create_request(&fixture.clock, &dropped, "original")
@@ -4388,7 +4388,7 @@ async fn drops_block(
             "size": dropped.len(),
             "hash": checksum(&dropped),
             "content_type": "image/jpeg",
-            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
             "protocol_version": PROTOCOL_VERSION,
             "key_mode": "wrapped",
             "manifest_envelope": create_request(&fixture.clock, &dropped, "original")
@@ -4490,7 +4490,7 @@ async fn drops_block(
         .json(&serde_json::json!({
             "opaque_id": unbounded,
             "drop_pubkey": "AAAA",
-            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
         }))
         .send()
         .await
@@ -4532,7 +4532,7 @@ async fn drops_block(
         .json(&serde_json::json!({
             "opaque_id": drop_link,
             "drop_pubkey": "AAAA",
-            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
         }))
         .send()
         .await
@@ -4572,7 +4572,7 @@ async fn drops_block(
             "size": dropped.len(),
             "hash": checksum(&dropped),
             "content_type": "image/jpeg",
-            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
             "protocol_version": PROTOCOL_VERSION,
             "key_mode": "wrapped",
             "manifest_envelope": create_request(&fixture.clock, &dropped, "original")
