@@ -321,7 +321,11 @@ impl Workspace {
         file.user_id = user_id;
         let bytes =
             cbor::to_canonical_vec(&file).map_err(|e| LifecycleError::Cbor(e.to_string()))?;
-        fs::write(&path, &bytes).map_err(|e| LifecycleError::Io(e.to_string()))?;
+        // Temp-then-rename: this file is the only local wrapped copy of the master and identity
+        // keys, so a crash mid-write must leave the old file intact rather than truncated.
+        let tmp = crate::utils::paths::tmp_path(&path);
+        fs::write(&tmp, &bytes).map_err(|e| LifecycleError::Io(e.to_string()))?;
+        fs::rename(&tmp, &path).map_err(|e| LifecycleError::Io(e.to_string()))?;
 
         self.account.user_id = user_id;
         let mut core = self.directory.core.clone();
@@ -1189,6 +1193,11 @@ mod tests {
 
         ws.bind_account_id(server_id).unwrap();
         assert_eq!(ws.user_id(), server_id);
+        let account_path = lib.path().join(".library").join("account.cbor");
+        assert!(
+            !crate::utils::paths::tmp_path(&account_path).exists(),
+            "the staged account file was renamed into place, not left beside it"
+        );
         let directory = ws.device_directory();
         assert_eq!(directory.core.user_id, server_id);
         assert_eq!(directory.core.directory_version, before + 1);
