@@ -16,10 +16,11 @@
 
 mod support;
 
-use capsule_server::limits::MAX_REQUEST_BODY_BYTES;
+use capsule_server::limits::{MAX_FEDERATION_BODY_BYTES, MAX_REQUEST_BODY_BYTES};
+use capsule_server::upload::chunk::MAX_CHUNK_BYTES;
 use kynos::http::StatusCode;
 use kynos::test::TestClient;
-use support::Fixture;
+use support::{Fixture, PROTOCOL_VERSION};
 
 fn client() -> TestClient<capsule_server::App> {
     TestClient::new(capsule_server::service(Fixture::working_app()).expect("router builds"))
@@ -90,8 +91,9 @@ async fn a_large_body_within_the_limit_reaches_the_handler_whole() {
 
 /// The cap covers operations that take no body at all.
 ///
-/// It is mounted on the router rather than on the operations that happen to accept a body today,
-/// so a body sent where none is expected is refused rather than read into memory and discarded.
+/// Every group carries one, the exempt ten's included, rather than only the operations that
+/// happen to accept a body today, so a body sent where none is expected is refused rather than
+/// read into memory and discarded.
 #[tokio::test]
 async fn the_cap_covers_an_operation_that_takes_no_body() {
     let client = client();
@@ -134,4 +136,98 @@ fn every_operation_declares_the_limit_it_is_covered_by() {
             );
         }
     }
+}
+
+/// The federation group carries its own, tighter cap (#478), refused from the declared length.
+///
+/// Far below the backstop: a body the auth surface would read whole is refused here before a
+/// byte of it is read, and before the protocol gate looks at anything.
+#[tokio::test]
+async fn a_federation_report_over_its_own_cap_is_refused() {
+    let client = client();
+
+    client
+        .post("/v1/federation/reports")
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .header(
+            "content-length",
+            &(MAX_FEDERATION_BODY_BYTES + 1).to_string(),
+        )
+        .body("application/json", "{}")
+        .send()
+        .await
+        .assert_status(StatusCode::PAYLOAD_TOO_LARGE);
+
+    client.assert_conformance();
+}
+
+/// The federation cap holds for a body that declares no length, by the running count.
+#[tokio::test]
+async fn an_undeclared_federation_body_over_its_cap_is_refused_by_the_running_count() {
+    let client = client();
+    let body = vec![b'x'; usize::try_from(MAX_FEDERATION_BODY_BYTES).expect("the cap fits") + 1];
+
+    client
+        .post("/v1/federation/reports")
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .body("application/json", body)
+        .send()
+        .await
+        .assert_status(StatusCode::PAYLOAD_TOO_LARGE);
+
+    client.assert_conformance();
+}
+
+/// A report at exactly the federation cap reaches the handler whole.
+///
+/// The `400` is the extractor refusing the bytes on their merits, which it can only do once the
+/// cap has let them through.
+#[tokio::test]
+async fn a_federation_body_at_its_cap_reaches_the_handler() {
+    let client = client();
+    let body = vec![b'x'; usize::try_from(MAX_FEDERATION_BODY_BYTES).expect("the cap fits")];
+
+    client
+        .post("/v1/federation/reports")
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .body("application/json", body)
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    client.assert_conformance();
+}
+
+/// The chunk routes keep the backstop, so a body past the protocol's 16 MiB chunk bound is not
+/// refused by the transport cap.
+///
+/// That is what leaves `413 error.upload.chunk_too_large` reachable: the route that understands
+/// the bound is the one that answers for it. Neither request here carries what the route needs
+/// to get that far — no bearer on the upload, no live link on the drop — so the proof is that
+/// each is answered by the route's own refusal instead of the body-size `413`.
+#[tokio::test]
+async fn a_body_past_the_chunk_bound_still_reaches_the_chunk_routes() {
+    let client = client();
+    let body = vec![b'x'; usize::try_from(MAX_CHUNK_BYTES).expect("the bound fits") + 1];
+    assert!(
+        body.len() as u64 <= MAX_REQUEST_BODY_BYTES,
+        "the fixture must be inside the backstop for this test to mean anything"
+    );
+
+    client
+        .patch("/v1/upload/anything")
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .body("application/offset+octet-stream", body.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .patch("/d/anything/anything")
+        .header("x-capsule-offset", "0")
+        .body("application/octet-stream", body)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+
+    client.assert_conformance();
 }

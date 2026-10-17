@@ -57,7 +57,7 @@ use kynos::middleware::limits::BodySize;
 /// equal to it.
 pub const MAX_REQUEST_BODY_BYTES: u64 = 32 * 1024 * 1024;
 
-/// The body-size interceptor the router mounts.
+/// The body-size interceptor every group but the federation group mounts.
 ///
 /// One function rather than a literal at the mount site so the cap has a name, a place to be
 /// documented, and one value the tests assert against.
@@ -65,37 +65,41 @@ pub fn body_size() -> BodySize {
     BodySize::new(MAX_REQUEST_BODY_BYTES)
 }
 
-/// The cap a federation write's body *would* have: **16 KiB** (`S-E2`, `S-C49`).
-///
-/// Declared and **not enforced**, which is the opposite of this module's usual rule, so it says
-/// why rather than sitting here looking like a control.
+/// The cap on a federation write's body: **16 KiB** (`S-E2`, `S-C49`).
 ///
 /// The transport backstop above is sized for a 16 MiB upload chunk. A federation write is
 /// nothing like one — the largest legitimate body on that surface is a signed moderation report,
 /// six short strings and a base64 signature, under a kilobyte in practice — and it matters
-/// because `POST /v1/federation/reports` is this server's only **unauthenticated** write: an
-/// anonymous caller can hand it a body two thousand times larger than any real report and have
-/// it parsed before anything looks at who is speaking.
+/// because `POST /v1/federation/reports` is this server's only **unauthenticated** write: under
+/// the backstop an anonymous caller could hand it a body two thousand times larger than any real
+/// report and have it parsed before anything looks at who is speaking.
 ///
-/// Mounting a second [`BodySize`] on the federation group is the obvious fix and Kynos refuses
-/// it at compile time, correctly:
+/// # Why the cap is per group
+///
+/// Mounting a second [`BodySize`] on the federation group *under* a router-wide one is refused
+/// by Kynos at compile time, correctly:
 ///
 /// ```text
 /// evaluation panicked: two interceptors covering this route answer with the same status;
 /// a consumer could not tell which one replied
 /// ```
 ///
-/// Both answer `413`, and an operation cannot declare two of them. The alternative — moving
-/// `BodySize` off the router and onto every group — would take `413` off the ten operations
-/// mounted outside every group, which `tests/conformance.rs` pins as declared on *every*
-/// operation, and that contract is `S-C33`'s rather than this lane's to change. Filed as #478.
+/// Both answer `413`, and an operation cannot declare two producers of one status. So the cap is
+/// not mounted on the router at all (#478): every group carries exactly one, the federation
+/// group this one and every other group [`body_size`]'s backstop — the ten operations the
+/// protocol gate exempts included, in a group that holds nothing but the cap. `413` therefore
+/// stays declared on every operation, which `tests/conformance.rs` pins, and no route can be
+/// mounted outside a group without losing it, which `tests/limits.rs` pins.
 ///
-/// What bounds the route meanwhile is not nothing, and is not this: every field is length-capped
-/// before any store is read ([`crate::routes::federation`]), and
-/// [`CounterKey::FederatedIntake`](crate::counter::CounterKey::FederatedIntake) is charged
-/// before the peer lookup and the signature check. What remains unbounded is bytes *parsed* per
-/// request, which needs either a per-operation limit Kynos does not express or `S-C33` revisited.
+/// The field-length caps ([`crate::routes::federation`]) and the
+/// [`CounterKey::FederatedIntake`](crate::counter::CounterKey::FederatedIntake) budget still run
+/// first in the handler; this bounds what happens before either — the bytes parsed.
 pub const MAX_FEDERATION_BODY_BYTES: u64 = 16 * 1024;
+
+/// The body-size interceptor the federation group mounts, at [`MAX_FEDERATION_BODY_BYTES`].
+pub fn federation_body_size() -> BodySize {
+    BodySize::new(MAX_FEDERATION_BODY_BYTES)
+}
 
 #[cfg(test)]
 mod tests {
@@ -121,5 +125,19 @@ mod tests {
             );
         }
         assert_eq!(body_size().limit, MAX_REQUEST_BODY_BYTES);
+    }
+
+    /// The federation cap is tighter than the backstop, and is the one the federation group gets.
+    ///
+    /// A federation cap at or above the backstop would be a second number doing nothing.
+    #[test]
+    fn the_federation_cap_is_tighter_than_the_backstop() {
+        const {
+            assert!(
+                MAX_FEDERATION_BODY_BYTES < MAX_REQUEST_BODY_BYTES,
+                "the federation group's cap exists to be tighter than the transport backstop"
+            );
+        }
+        assert_eq!(federation_body_size().limit, MAX_FEDERATION_BODY_BYTES);
     }
 }

@@ -837,6 +837,216 @@ fn ffi_hardware_enrollment_failures_are_typed() {
     }
 }
 
+// ─── Ed25519 hardware signer + hardware DEK (the harness surfaces, #424) ─────
+
+/// A software stand-in for an **Ed25519** element behind [`FfiHardwareSigner`]: a 32-byte
+/// public key and a 64-byte signature over `msg` — the shape
+/// [`FfiWorkspace::create_with_hardware_signer`] composes, and the one the native
+/// `SoftwareSigner` harnesses implement.
+struct MockEd25519Element(ed25519_dalek::SigningKey);
+
+impl FfiHardwareSigner for MockEd25519Element {
+    fn enroll(&self, key_alias: String) -> Result<Vec<u8>, FfiHardwareSignerError> {
+        self.classical_public_key(key_alias)
+    }
+
+    fn classical_public_key(&self, _key_alias: String) -> Result<Vec<u8>, FfiHardwareSignerError> {
+        Ok(self.0.verifying_key().to_bytes().to_vec())
+    }
+
+    fn sign_classical(
+        &self,
+        _key_alias: String,
+        msg: Vec<u8>,
+    ) -> Result<Vec<u8>, FfiHardwareSignerError> {
+        use ed25519_dalek::Signer as _;
+        Ok(self.0.sign(&msg).to_bytes().to_vec())
+    }
+
+    fn assert_non_exportable(&self, _key_alias: String) -> Result<(), FfiHardwareSignerError> {
+        Ok(())
+    }
+}
+
+/// The Ed25519 constructor composes a foreign element into a workspace whose assets verify
+/// through the chokepoint and read back — so a mis-delegating adapter (wrong alias, dropped
+/// bytes, swapped arguments) fails here rather than on a device.
+#[test]
+fn ffi_ed25519_hardware_signer_constructor_round_trips() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let workspace = FfiWorkspace::create_with_hardware_signer(
+        lib.path().to_string_lossy().into_owned(),
+        b"test-passphrase".to_vec(),
+        FfiDeviceTier::LowRam,
+        Arc::new(MockEd25519Element(ed25519_dalek::SigningKey::from_bytes(
+            &[5u8; 32],
+        ))),
+        "capsule-device-dsk".into(),
+        vec![6u8; 32],
+        client_build(),
+    )
+    .expect("an Ed25519 hardware-bound workspace enrolls");
+
+    let album = workspace.create_album("Trip".into()).unwrap();
+    let asset = workspace
+        .seal_asset(album, "ed.jpg".into(), b"\xFF\xD8\xFF ed bytes".to_vec())
+        .unwrap();
+    assert!(matches!(
+        workspace.verify_asset(asset.clone()).unwrap(),
+        FfiVerifyOutcome::Accept
+    ));
+    assert_eq!(
+        workspace.read_plaintext(asset).unwrap(),
+        b"\xFF\xD8\xFF ed bytes"
+    );
+}
+
+/// The Ed25519 constructor refuses a P-256 element (a 65-byte SEC1 key is not a 32-byte
+/// Ed25519 key) and a short ML seed as typed errors, never a panic or a half-built workspace.
+#[test]
+fn ffi_ed25519_hardware_enrollment_failures_are_typed() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let root = lib.path().to_string_lossy().into_owned();
+
+    match FfiWorkspace::create_with_hardware_signer(
+        root.clone(),
+        b"pw".to_vec(),
+        FfiDeviceTier::LowRam,
+        Arc::new(MockElement::new()),
+        "capsule-device-dsk".into(),
+        vec![9u8; 32],
+        client_build(),
+    ) {
+        Err(FfiError::Workspace { .. }) => {}
+        Err(other) => panic!("expected a typed workspace error, got {other:?}"),
+        Ok(_) => panic!("a P-256 element must not enroll as Ed25519"),
+    }
+
+    match FfiWorkspace::create_with_hardware_signer(
+        root,
+        b"pw".to_vec(),
+        FfiDeviceTier::LowRam,
+        Arc::new(MockEd25519Element(ed25519_dalek::SigningKey::from_bytes(
+            &[5u8; 32],
+        ))),
+        "capsule-device-dsk".into(),
+        vec![6u8; 16],
+        client_build(),
+    ) {
+        Err(FfiError::InvalidArgument { .. }) => {}
+        Err(other) => panic!("expected InvalidArgument for a short ml_seed, got {other:?}"),
+        Ok(_) => panic!("a short ml_seed must not yield a workspace"),
+    }
+}
+
+/// A software stand-in for a P-256 **key-agreement** element behind
+/// [`FfiHardwareKeyAgreement`]: uncompressed SEC1 public key, raw 32-byte ECDH x-coordinate —
+/// the shapes Secure Enclave `P256.KeyAgreement` and StrongBox ECDH emit. `corrupt` flips the
+/// shared secret, standing in for an element whose ECDH disagrees with its published key;
+/// `unavailable` makes enrollment fail, standing in for a device with no key-agreement element.
+struct MockKeyAgreement {
+    sk: p256::SecretKey,
+    corrupt: bool,
+    unavailable: bool,
+}
+
+impl MockKeyAgreement {
+    fn new(corrupt: bool) -> Self {
+        Self {
+            sk: p256::SecretKey::from_slice(&[7u8; 32]).expect("valid P-256 scalar"),
+            corrupt,
+            unavailable: false,
+        }
+    }
+
+    fn unavailable() -> Self {
+        Self {
+            unavailable: true,
+            ..Self::new(false)
+        }
+    }
+}
+
+impl FfiHardwareKeyAgreement for MockKeyAgreement {
+    fn enroll(&self, key_alias: String) -> Result<Vec<u8>, FfiHardwareSignerError> {
+        self.public_key(key_alias)
+    }
+
+    fn public_key(&self, _key_alias: String) -> Result<Vec<u8>, FfiHardwareSignerError> {
+        use p256::elliptic_curve::sec1::ToEncodedPoint as _;
+        if self.unavailable {
+            return Err(FfiHardwareSignerError::Unavailable);
+        }
+        Ok(self
+            .sk
+            .public_key()
+            .to_encoded_point(false)
+            .as_bytes()
+            .to_vec())
+    }
+
+    fn key_agreement(
+        &self,
+        _key_alias: String,
+        peer_public: Vec<u8>,
+    ) -> Result<Vec<u8>, FfiHardwareSignerError> {
+        let peer = p256::PublicKey::from_sec1_bytes(&peer_public)
+            .map_err(|e| FfiHardwareSignerError::Backend(e.to_string()))?;
+        let shared = p256::ecdh::diffie_hellman(self.sk.to_nonzero_scalar(), peer.as_affine());
+        let mut secret = shared.raw_secret_bytes().to_vec();
+        if self.corrupt {
+            secret[0] ^= 0xff;
+        }
+        Ok(secret)
+    }
+
+    fn assert_non_exportable(&self, _key_alias: String) -> Result<(), FfiHardwareSignerError> {
+        Ok(())
+    }
+}
+
+/// The hardware DEK round-trip reports `true` only when the element's ECDH composes into the
+/// hybrid KEM: an honest element recovers the sender's secret, a disagreeing one does not, and
+/// a short ML seed is a typed error rather than a panic, as is an element that fails enrollment.
+#[test]
+fn ffi_p256_hardware_dek_round_trip_tracks_the_element() {
+    assert!(
+        p256_hardware_dek_round_trip(
+            Arc::new(MockKeyAgreement::new(false)),
+            "device-dek".into(),
+            vec![9u8; 32],
+        )
+        .unwrap()
+    );
+    assert!(
+        !p256_hardware_dek_round_trip(
+            Arc::new(MockKeyAgreement::new(true)),
+            "device-dek".into(),
+            vec![9u8; 32],
+        )
+        .unwrap()
+    );
+    match p256_hardware_dek_round_trip(
+        Arc::new(MockKeyAgreement::new(false)),
+        "device-dek".into(),
+        vec![9u8; 16],
+    ) {
+        Err(FfiError::InvalidArgument { .. }) => {}
+        other => panic!("expected InvalidArgument for a short ml_seed, got {other:?}"),
+    }
+    match p256_hardware_dek_round_trip(
+        Arc::new(MockKeyAgreement::unavailable()),
+        "device-dek".into(),
+        vec![9u8; 32],
+    ) {
+        Err(FfiError::Workspace { message }) => assert!(
+            message.contains("hardware P-256 DEK enrollment failed"),
+            "unexpected enrollment error message: {message}"
+        ),
+        other => panic!("expected Workspace for a failing element enrollment, got {other:?}"),
+    }
+}
+
 /// The workspace surfaces typed errors instead of panicking across the boundary.
 #[test]
 fn ffi_workspace_surfaces_errors_instead_of_panicking() {
