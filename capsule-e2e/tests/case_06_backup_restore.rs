@@ -14,20 +14,25 @@
 //!   master key, the server's account id, and A's sealed identity key. The sealed identity has
 //!   no server route yet, so the case hands it across in memory — the one leg of the bootstrap
 //!   not exercised over the wire.
+//! - The new device joins the account's device directory (#550): its own version-1 directory is
+//!   refused as stale against the one A already published, so it fetches A's through the SDK's
+//!   `DirectoryClient`, verifies it under the identity key it opened, appends itself with
+//!   `Workspace::extend_account_directory` and publishes at the stored version + 1, keeping
+//!   every device A listed.
 //! - The new device imports A's backup under the exporter's verifying key, reads the asset byte
-//!   for byte and walks its chain. The artifact carries the album's public authority (#468), so
-//!   `verify` reaches a verdict; it rejects the device only because B has not yet adopted the
-//!   account's published directory (#550). The recovered album stays read-only. The export names
-//!   [`FAST_KDF`] explicitly, and the import needs no such argument: the artifact records the
-//!   cost it was wrapped under.
+//!   for byte and walks its chain. The artifact carries the album's public authority (#468) and
+//!   the adopted directory lists A's device, so `verify` accepts. The recovered album stays
+//!   read-only. The export names [`FAST_KDF`] explicitly, and the import needs no such argument:
+//!   the artifact records the cost it was wrapped under.
 
 use capsule_core::crypto::keys::MasterKey;
 use capsule_core::crypto::primitives::DeviceTier;
 use capsule_core::crypto::provenance::ProvenanceChain;
-use capsule_core::crypto::verify_asset::{RejectReason, VerifyOutcome};
+use capsule_core::crypto::verify_asset::VerifyOutcome;
 use capsule_core::lifecycle::{LifecycleError, Workspace};
 use capsule_e2e::fixtures::synthetic_jpeg;
 use capsule_e2e::{Device, FAST_KDF, PASSPHRASE, Server};
+use capsule_sdk::directory::{DirectoryClient, DirectoryError};
 use capsule_sdk::recovery::RecoveryClient;
 
 const RECOVERY_SECRET: &[u8] = b"seven words the user wrote down somewhere safe";
@@ -58,7 +63,7 @@ async fn e2e_case_6_a_new_device_bootstraps_from_the_escrow_and_restores_the_bac
 
     // The fresh device: a new session on the account, nothing else.
     let session_b = a.login_again(&server).await;
-    let fetched = RecoveryClient::new(session_b, server.base_url())
+    let fetched = RecoveryClient::new(session_b.clone(), server.base_url())
         .expect("the API root parses")
         .fetch_escrow()
         .await
@@ -94,6 +99,64 @@ async fn e2e_case_6_a_new_device_bootstraps_from_the_escrow_and_restores_the_bac
     );
     assert_ne!(b.device_id(), a.workspace.device_id(), "B is a new device");
     assert!(b.asset_ids().is_empty(), "no prior state");
+
+    // #550: B joins the account's published directory rather than replacing it. The directory
+    // B was created with names only B at version 1, and the server already holds A's at a
+    // higher version, so publishing it as-is is refused as stale.
+    let directory_b = DirectoryClient::new(session_b, &server.auth_base());
+    let stored = directory_b
+        .fetch(a.user_id, &b.user_ik_public())
+        .await
+        .expect(
+            "A's directory fetches and verifies under the IK B opened from the sealed identity",
+        );
+    assert!(stored.core.directory_version >= 1);
+    assert_eq!(
+        stored,
+        a.directory(),
+        "the server serves A's document verbatim"
+    );
+    assert_eq!(b.device_directory().core.directory_version, 1);
+    assert!(matches!(
+        directory_b
+            .publish(b.device_directory(), &b.user_ik_public())
+            .await,
+        Err(DirectoryError::VersionConflict)
+    ));
+
+    let extended = b
+        .extend_account_directory(&stored)
+        .expect("B appends itself to the account's directory")
+        .expect("the stored directory does not list B yet");
+    assert_eq!(
+        directory_b
+            .publish(&extended, &b.user_ik_public())
+            .await
+            .expect("the extended directory publishes"),
+        stored.core.directory_version + 1,
+        "B publishes at stored + 1"
+    );
+    let republished = directory_b
+        .fetch(a.user_id, &b.user_ik_public())
+        .await
+        .expect("the account's directory fetches again");
+    assert_eq!(republished, extended);
+    for device in &stored.core.devices {
+        assert_eq!(
+            republished.device(&device.device_id),
+            Some(device),
+            "every device the account already had survives B's publish"
+        );
+    }
+    assert!(
+        republished.device(&b.device_id()).is_some(),
+        "and B is listed"
+    );
+    assert_eq!(
+        republished.core.devices.len(),
+        stored.core.devices.len() + 1
+    );
+
     let restored = b
         .import_backup(&archive, BACKUP_PASSPHRASE, &exporter)
         .expect("the backup imports under the exporter's key");
@@ -115,15 +178,13 @@ async fn e2e_case_6_a_new_device_bootstraps_from_the_escrow_and_restores_the_bac
     ProvenanceChain::verify_walk(chain.records()).expect("the restored chain walks");
 
     // The artifact carries the album's public authority (the admin-signed epoch ledger a
-    // manifest's write signature is checked against, #468), so `verify` runs to a verdict
-    // instead of refusing for want of an authority. The verdict names the one input still
-    // missing: B's directory lists only B until it adopts the account's published directory
-    // (#550), so A's device is unknown to it. Asserted as the current truth.
+    // manifest's write signature is checked against, #468), and B's directory is now the
+    // account's, listing A's device (#550), so the restored asset verifies end to end.
     assert_eq!(
         b.verify(&asset)
             .expect("the restored album has an authority to verify under"),
-        VerifyOutcome::TerminalReject(RejectReason::UnknownDevice),
-        "verify reaches the device check; only the account directory (#550) is missing"
+        VerifyOutcome::Accept,
+        "the restored asset verifies under the account directory B adopted"
     );
 
     // The restore escrowed no signing capability: the recovered album stays read-only.

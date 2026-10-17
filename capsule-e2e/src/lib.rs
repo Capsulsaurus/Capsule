@@ -32,7 +32,7 @@ pub mod push;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use capsule_core::crypto::keys::{DeviceDirectory, DeviceEntry, DirectoryCore, HybridSigningKey};
+use capsule_core::crypto::keys::{DeviceDirectory, DeviceEntry, HybridSigningKey};
 use capsule_core::crypto::primitives::Argon2Params;
 use capsule_core::crypto::provenance::ProvenanceRecord;
 use capsule_core::lifecycle::Workspace;
@@ -194,11 +194,13 @@ impl Drop for Server {
 
 /// One account on one [`Server`], with its live SDK session and its real library.
 ///
-/// The account's device directory is published by the harness (see
-/// [`Device::publish_directory`]) and names two devices: the library's own, so the manifests it
-/// signs satisfy invariant 7, and a standalone *proposer* device whose signing key the harness
-/// holds — the `Workspace` keeps its device signing key private, and case 8 needs a key that
-/// can sign an `UpgradeIntent`.
+/// The account's device directory is the library's own, published by the harness (see
+/// [`Device::publish_directory`]) under the library's user identity key — the key a recovered
+/// device opens from the sealed identity and verifies the published directory under (#550). It
+/// names two devices: the library's own, so the manifests it signs satisfy invariant 7, and a
+/// standalone *proposer* device the library cross-signs in, whose signing key the harness holds
+/// — the `Workspace` keeps its device signing key private, and case 8 needs a key that can sign
+/// an `UpgradeIntent`.
 pub struct Device {
     /// The registered e-mail.
     pub email: String,
@@ -213,13 +215,10 @@ pub struct Device {
     pub root: TempDir,
     /// Scratch space for files to import.
     pub staging: TempDir,
-    /// The identity key the published directory is signed with.
-    pub identity: HybridSigningKey,
     /// A device signing key the harness holds, listed in the directory as `proposer_id`.
     pub proposer: HybridSigningKey,
     /// The proposer device's id.
     pub proposer_id: Uuid,
-    directory_version: u64,
 }
 
 impl Device {
@@ -253,17 +252,32 @@ impl Device {
             .ensure_album(default_album, "Imports")
             .expect("the default album's keys exist");
 
-        let mut device = Self {
+        let proposer = HybridSigningKey::generate();
+        let proposer_id = Uuid::now_v7();
+        let library = workspace
+            .device_directory()
+            .device(&workspace.device_id())
+            .cloned()
+            .expect("a library lists its own device");
+        workspace
+            .cross_sign_device(DeviceEntry {
+                device_id: proposer_id,
+                dsk_public: proposer.verifying_key(),
+                dek_public: None,
+                added_at: library.added_at,
+                revoked_at: None,
+            })
+            .expect("the proposer device cross-signs into the library's directory");
+
+        let device = Self {
             email,
             session,
             user_id,
             workspace,
             root,
             staging,
-            identity: HybridSigningKey::generate(),
-            proposer: HybridSigningKey::generate(),
-            proposer_id: Uuid::now_v7(),
-            directory_version: 0,
+            proposer,
+            proposer_id,
         };
         device.publish_directory(server).await;
         let albums = AlbumClient::new(AlbumTransport::with_session(
@@ -315,38 +329,30 @@ impl Device {
             .expect("a library lists its own device")
     }
 
-    /// The directory the harness publishes for this account: the server's account id, the
-    /// library's device and the proposer device, signed by [`Device::identity`].
+    /// The directory the harness publishes for this account: the library's own — the server's
+    /// account id, the library's device and the proposer device, signed by the library's user
+    /// identity key.
     #[must_use]
     pub fn directory(&self) -> DeviceDirectory {
-        let library = self.library_device();
-        DirectoryCore {
-            user_id: self.user_id,
-            directory_version: self.directory_version,
-            updated_at: jiff::Timestamp::now().to_string(),
-            devices: vec![
-                library.clone(),
-                DeviceEntry {
-                    device_id: self.proposer_id,
-                    dsk_public: self.proposer.verifying_key(),
-                    dek_public: None,
-                    added_at: library.added_at,
-                    revoked_at: None,
-                },
-            ],
-        }
-        .sign(&self.identity)
+        self.workspace.device_directory().clone()
     }
 
-    /// Publish the next version of [`Device::directory`] through the SDK's
-    /// [`DirectoryClient`], under [`Device::identity`], returning the version stored.
-    pub async fn publish_directory(&mut self, server: &Server) -> u64 {
-        self.directory_version += 1;
-        let version = DirectoryClient::new(self.session.clone(), &server.auth_base())
-            .publish(&self.directory(), &self.identity.verifying_key())
+    /// The SDK's [`DirectoryClient`] over this session.
+    #[must_use]
+    pub fn directory_client(&self, server: &Server) -> DirectoryClient {
+        DirectoryClient::new(self.session.clone(), &server.auth_base())
+    }
+
+    /// Publish [`Device::directory`] through the SDK's [`DirectoryClient`], under the library's
+    /// user identity key, returning the version stored.
+    pub async fn publish_directory(&self, server: &Server) -> u64 {
+        let directory = self.directory();
+        let version = self
+            .directory_client(server)
+            .publish(&directory, &self.workspace.user_ik_public())
             .await
             .expect("the directory publish is accepted");
-        assert_eq!(version, self.directory_version);
+        assert_eq!(version, directory.core.directory_version);
         version
     }
 

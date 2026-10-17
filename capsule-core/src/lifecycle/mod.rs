@@ -145,6 +145,11 @@ pub enum LifecycleError {
     /// version cannot advance. The directory is left unchanged.
     #[error("device directory: {0}")]
     Directory(#[from] DirectoryError),
+    /// [`extend_account_directory`](Workspace::extend_account_directory) was handed a directory
+    /// this workspace must not build on: its signature does not verify under this account's
+    /// user IK, or it names another account. Nothing is adopted.
+    #[error("untrusted account directory: {0}")]
+    UntrustedDirectory(String),
 }
 
 type Result<T> = std::result::Result<T, LifecycleError>;
