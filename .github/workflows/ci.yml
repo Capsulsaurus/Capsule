@@ -255,6 +255,13 @@ jobs:
         env:
           NEXTEST_PROFILE: ci
         run: mise run test-rust
+      # The release-profile half: `#[cfg(not(debug_assertions))]` tests are compiled out of
+      # every test-profile build above. Scoped to the crates that carry one, with a guard that
+      # fails when one appears anywhere else (see `test-rust-release` in mise.toml, #428).
+      - name: Test (release profile)
+        env:
+          NEXTEST_PROFILE: ci
+        run: mise run test-rust-release
 
   # Verify capsule-core cross-compiles to the formally supported targets (mobile +
   # desktop). Tier 1 (Apple, Android) gates; Tier 2 (Windows MSVC, aarch64 Linux)

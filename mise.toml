@@ -166,23 +166,36 @@ run = [
   "cargo nextest run -p capsule-sdk --features ffi",
 ]
 
-# Nothing else in this file or in ci.yml builds tests under the release profile, so every
-# `#[cfg(not(debug_assertions))]` test is dead code that no gate ever compiles, let alone runs
-# (`#428`). capsule-i18n is the only crate carrying one today
-# (capsule-i18n/src/format.rs:157, pinning that a release build passes an unrenderable ICU
-# construct through instead of tripping the `debug_assert!` a debug build trips); widen the
-# `-p` list when a second crate adds one. Narrow on purpose: building the whole workspace
-# twice would double the test job for a handful of tests.
+# `test-rust` builds every test in the test profile, where `debug_assertions` is on, so a
+# `#[cfg(not(debug_assertions))]` test is compiled out of it and never runs (`#428`). This task
+# runs those tests under the release profile. It is narrow on purpose — building the whole
+# workspace a second time in release would double the test job for a handful of tests — so it
+# names the crates that carry such a test in `RELEASE_TEST_CRATES`. Today that is capsule-i18n
+# alone (capsule-i18n/src/format.rs, the release half of each "loud in debug, harmless in
+# release" ICU refusal; each has a `#[cfg(debug_assertions)] #[should_panic]` twin that
+# `test-rust` runs).
 #
-# NOT yet wired into `test-rust`, and that is a defect this task exists to expose rather than
-# an oversight. `format.rs:144` — `an_unrenderable_icu_construct_is_refused_in_debug_builds`,
-# `#[should_panic]`, named for debug builds but missing `#[cfg(debug_assertions)]` — cannot
-# pass under release, because `debug_assert!` compiles out and the panic it expects never
-# happens. Adding the attribute is a one-line change in a file this lane does not own; until
-# it lands, run this task directly. See `#429`.
+# The first step is the guard that keeps the narrow list honest: it fails when any `.rs` file
+# outside `legacy-review/` mentions `not(debug_assertions)` and does not sit under a listed
+# crate's directory, so a new release-only test cannot land in a crate this task never builds.
+# Each entry is both a `-p` package name and the top-level directory holding it; add the crate
+# here when the guard names it. CI runs this in the `rust-test` job; pre-push runs it after
+# `test-rust`.
 [tasks.test-rust-release]
 description = "Run the tests that only exist in release builds (cfg(not(debug_assertions)))"
-run = "cargo nextest run -p capsule-i18n --cargo-profile release"
+env = { RELEASE_TEST_CRATES = "capsule-i18n" }
+run = [
+  '''
+  stray=$(git grep -l -F 'not(debug_assertions)' -- '*.rs' ':!legacy-review' | grep -v -E "^($(printf '%s' "$RELEASE_TEST_CRATES" | tr ' ' '|'))/" || true)
+  if [ -n "$stray" ]; then
+    echo "test-rust-release: not(debug_assertions) found outside RELEASE_TEST_CRATES ($RELEASE_TEST_CRATES):" >&2
+    echo "$stray" >&2
+    echo "Add the crate to RELEASE_TEST_CRATES in mise.toml so its release-only tests run." >&2
+    exit 1
+  fi
+  ''',
+  'cargo nextest run $(printf -- "-p %s " $RELEASE_TEST_CRATES) --cargo-profile release',
+]
 
 [tasks.test-coverage-rust]
 run = "cargo llvm-cov nextest --workspace --fail-under-lines 0"

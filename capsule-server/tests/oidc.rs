@@ -471,7 +471,7 @@ async fn authorize(fixture: &Fixture, redirect_uri: &str) -> Value {
         .client
         .post("/v1/auth/oidc/authorize")
         .header("accept", "application/json")
-        .json(&json!({ "redirect_uri": redirect_uri }))
+        .json(&support::oidc_authorize_body(redirect_uri))
         .send()
         .await
         .assert_status(StatusCode::OK)
@@ -479,7 +479,15 @@ async fn authorize(fixture: &Fixture, redirect_uri: &str) -> Value {
 }
 
 /// Present `state` and `code` to the callback, with the advisory fields a client may add.
-async fn callback(fixture: &Fixture, body: Value) -> kynos::test::TestResponse {
+///
+/// The suite client's binding is presented unless `body` names a `binding_verifier` of its own,
+/// so a test of the binding says what it presents and every other test reads as before.
+async fn callback(fixture: &Fixture, mut body: Value) -> kynos::test::TestResponse {
+    if let Some(fields) = body.as_object_mut() {
+        fields
+            .entry("binding_verifier")
+            .or_insert_with(|| json!(support::OIDC_BINDING));
+    }
     fixture
         .client
         .post("/v1/auth/oidc/callback")
@@ -794,7 +802,9 @@ async fn a_redirect_the_policy_refuses_is_a_400_and_writes_nothing() {
         .client
         .post("/v1/auth/oidc/authorize")
         .header("accept", "application/json")
-        .json(&json!({ "redirect_uri": "https://evil.example.test/cb" }))
+        .json(&support::oidc_authorize_body(
+            "https://evil.example.test/cb",
+        ))
         .send()
         .await
         .assert_status(StatusCode::BAD_REQUEST)
@@ -812,7 +822,7 @@ async fn an_unconfigured_deployment_answers_404_and_publishes_no_endpoints() {
         .client
         .post("/v1/auth/oidc/authorize")
         .header("accept", "application/json")
-        .json(&json!({ "redirect_uri": REDIRECT }))
+        .json(&support::oidc_authorize_body(REDIRECT))
         .send()
         .await
         .assert_status(StatusCode::NOT_FOUND)
@@ -870,7 +880,7 @@ async fn the_published_oidc_endpoints_are_the_ones_the_server_serves() {
         .client
         .post(path)
         .header("accept", "application/json")
-        .json(&json!({ "redirect_uri": REDIRECT }))
+        .json(&support::oidc_authorize_body(REDIRECT))
         .send()
         .await
         .assert_status(StatusCode::OK)
@@ -882,10 +892,107 @@ async fn the_published_oidc_endpoints_are_the_ones_the_server_serves() {
         .client
         .post(path)
         .header("accept", "application/json")
-        .json(&json!({ "state": begun["state"], "code": GOOD_CODE }))
+        .json(&support::oidc_callback_body(&begun["state"], GOOD_CODE))
         .send()
         .await
         .assert_status(StatusCode::OK);
+    fixture.client.assert_conformance();
+}
+
+/// Issue #517: a `state` and `code` carried to a client that did not begin the ceremony are
+/// refused, and the refusal burns the ceremony, so the rightful client cannot be raced either.
+///
+/// The login-CSRF this closes: an attacker begins a ceremony, signs in at the provider as
+/// themselves, and gets a victim's client to post the attacker's `state` and `code`. The victim's
+/// client presents *its own* binding — never the attacker's — so the callback refuses it with
+/// the code an unknown `state` gets, and the provider is never asked to redeem the code.
+#[tokio::test]
+async fn a_callback_from_a_client_that_did_not_begin_the_ceremony_is_refused() {
+    let fixture = Fixture::working();
+    let begun = authorize(&fixture, REDIRECT).await;
+
+    for presented in [
+        json!("the-victim-clients-own-binding-secret-000000"),
+        json!(""),
+        // The hash is public — it rode the authorize. Presenting it is not presenting the secret.
+        json!(support::oidc_binding_challenge()),
+    ] {
+        let begun = authorize(&fixture, REDIRECT).await;
+        let body: Value = callback(
+            &fixture,
+            json!({ "state": begun["state"], "code": GOOD_CODE, "binding_verifier": presented }),
+        )
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED)
+        .json();
+        assert_eq!(
+            code_of(&body),
+            "error.auth.oidc_state_invalid",
+            "{presented}"
+        );
+
+        // Burned: the rightful binding finds nothing afterwards.
+        let retried: Value = callback(
+            &fixture,
+            json!({ "state": begun["state"], "code": GOOD_CODE }),
+        )
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED)
+        .json();
+        assert_eq!(code_of(&retried), "error.auth.oidc_state_invalid");
+    }
+    assert_eq!(
+        fixture.idp.redemptions(),
+        0,
+        "no unbound callback reached the provider, so none could open a session"
+    );
+
+    // The rightful client still completes its own ceremony.
+    callback(
+        &fixture,
+        json!({ "state": begun["state"], "code": GOOD_CODE }),
+    )
+    .await
+    .assert_status(StatusCode::OK);
+    fixture.client.assert_conformance();
+}
+
+/// A `binding_challenge` that is not an S256 hash is refused before anything is charged or kept.
+#[tokio::test]
+async fn an_authorize_without_a_well_formed_binding_is_a_400_and_writes_nothing() {
+    let fixture = Fixture::working();
+    for challenge in [
+        String::new(),
+        "too-short".to_owned(),
+        "A".repeat(44),
+        format!("{}=", "A".repeat(42)),
+        format!("{}+", "A".repeat(42)),
+    ] {
+        let body: Value = fixture
+            .client
+            .post("/v1/auth/oidc/authorize")
+            .header("accept", "application/json")
+            .json(&json!({ "redirect_uri": REDIRECT, "binding_challenge": challenge }))
+            .send()
+            .await
+            .assert_status(StatusCode::BAD_REQUEST)
+            .json();
+        assert_eq!(code_of(&body), "error.request.malformed", "{challenge:?}");
+    }
+    // Missing altogether is the extractor's `422`.
+    fixture
+        .client
+        .post("/v1/auth/oidc/authorize")
+        .header("accept", "application/json")
+        .json(&json!({ "redirect_uri": REDIRECT }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        fixture.idp.requests().is_empty(),
+        "the provider was never asked"
+    );
+    assert_eq!(fixture.counters.len(), 0, "no budget was charged");
     fixture.client.assert_conformance();
 }
 
@@ -900,7 +1007,7 @@ async fn beginning_ceremonies_is_budgeted_per_redirect_host_and_bounded_by_the_s
         .client
         .post("/v1/auth/oidc/authorize")
         .header("accept", "application/json")
-        .json(&json!({ "redirect_uri": REDIRECT }))
+        .json(&support::oidc_authorize_body(REDIRECT))
         .send()
         .await
         .assert_status(StatusCode::TOO_MANY_REQUESTS)
@@ -919,7 +1026,7 @@ async fn beginning_ceremonies_is_budgeted_per_redirect_host_and_bounded_by_the_s
         .client
         .post("/v1/auth/oidc/authorize")
         .header("accept", "application/json")
-        .json(&json!({ "redirect_uri": REDIRECT }))
+        .json(&support::oidc_authorize_body(REDIRECT))
         .send()
         .await
         .assert_status(StatusCode::SERVICE_UNAVAILABLE)
@@ -958,7 +1065,9 @@ async fn a_refused_redirect_cannot_mint_a_counter_key_and_is_still_throttled() {
             .client
             .post("/v1/auth/oidc/authorize")
             .header("accept", "application/json")
-            .json(&json!({ "redirect_uri": format!("https://{index}.attacker.example/cb") }))
+            .json(&support::oidc_authorize_body(&format!(
+                "https://{index}.attacker.example/cb"
+            )))
             .send()
             .await
             .assert_status(StatusCode::BAD_REQUEST)
@@ -978,7 +1087,9 @@ async fn a_refused_redirect_cannot_mint_a_counter_key_and_is_still_throttled() {
         .client
         .post("/v1/auth/oidc/authorize")
         .header("accept", "application/json")
-        .json(&json!({ "redirect_uri": "https://fresh.attacker.example/cb" }))
+        .json(&support::oidc_authorize_body(
+            "https://fresh.attacker.example/cb",
+        ))
         .send()
         .await
         .assert_status(StatusCode::TOO_MANY_REQUESTS)
@@ -1012,7 +1123,7 @@ async fn a_redirect_that_is_not_a_url_mints_no_key_of_its_own() {
             .client
             .post("/v1/auth/oidc/authorize")
             .header("accept", "application/json")
-            .json(&json!({ "redirect_uri": candidate }))
+            .json(&support::oidc_authorize_body(candidate))
             .send()
             .await
             .assert_status(StatusCode::BAD_REQUEST)
@@ -1032,7 +1143,7 @@ async fn a_provider_or_store_outage_is_a_500_with_the_code_that_names_it() {
         .client
         .post("/v1/auth/oidc/authorize")
         .header("accept", "application/json")
-        .json(&json!({ "redirect_uri": REDIRECT }))
+        .json(&support::oidc_authorize_body(REDIRECT))
         .send()
         .await
         .assert_status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -1045,7 +1156,7 @@ async fn a_provider_or_store_outage_is_a_500_with_the_code_that_names_it() {
         .client
         .post("/v1/auth/oidc/authorize")
         .header("accept", "application/json")
-        .json(&json!({ "redirect_uri": REDIRECT }))
+        .json(&support::oidc_authorize_body(REDIRECT))
         .send()
         .await
         .assert_status(StatusCode::INTERNAL_SERVER_ERROR)

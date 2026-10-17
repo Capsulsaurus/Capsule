@@ -5374,7 +5374,11 @@ lands on Kynos rather than on Salvo.
 - **Part landed (issue #407):** `capsule_sdk::auth::AuthClient::begin_oidc_login` /
   `complete_oidc_login` — the two server legs, answering the same `LoginOutcome` a
   password login does, with the cohort riding the completing request and the
-  `error.auth.oidc_*` refusals typed on `AuthError`. **Remainder (#461):** the CLI's
+  `error.auth.oidc_*` refusals typed on `AuthError`. Issue #517 bound the ceremony to
+  the client: `begin_oidc_login` mints a secret the `OidcAuthorization` keeps and sends
+  its S256 hash as `binding_challenge`; `complete_oidc_login(pending, redirect_state,
+  code)` refuses a redirect for another ceremony locally and presents the secret as
+  `binding_verifier`, which the server compares before redeeming. **Remainder (#461):** the CLI's
   loopback listener and `--oidc` arm, the browser-open policy the docs do not carry, and
   the device authorization grant (RFC 8628) with its own ceremony store.
 

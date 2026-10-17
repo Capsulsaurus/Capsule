@@ -41,6 +41,9 @@ hooks {
       ["format-check-rust"]   { glob = "**/*.rs"; check = "mise run format-check-rust" }
       ["lint-check-rust"]     { glob = "**/*.rs"; check = "mise run lint-check-rust"; depends = "format-check-rust" }
       ["test-rust"]           { glob = "**/*.rs"; check = "mise run test-rust"; depends = "lint-check-rust" }
+      // Release-profile build of the crates with `cfg(not(debug_assertions))` tests, plus the
+      // guard that fails when one appears elsewhere (#428). One small crate, so it is cheap.
+      ["test-rust-release"]   { glob = "**/*.rs"; check = "mise run test-rust-release"; depends = "test-rust" }
 
       // The boundary gates out of `check-rust` that cost seconds, not minutes. They are
       // deliberately a subset: `openapi-check-kynos` codegen-links capsule-server and the
