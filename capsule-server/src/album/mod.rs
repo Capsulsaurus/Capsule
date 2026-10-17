@@ -29,6 +29,11 @@
 //! plaintext columns from before the key-free model and the server is not entitled to album
 //! titles; a body carrying one is refused rather than silently ignored, so a client is told the
 //! server will not hold it. `S-C26` retires the columns themselves.
+//!
+//! # Adapters
+//!
+//! [`InMemoryAlbums`] is the deterministic double and [`PostgresAlbums`] the durable store
+//! (#446). Both pass the one suite in [`conformance`].
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -344,6 +349,10 @@ impl AlbumContext {
 }
 
 pub mod authority;
+pub mod conformance;
+pub mod postgres;
+
+pub use postgres::PostgresAlbums;
 
 #[cfg(test)]
 mod tests;

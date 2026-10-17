@@ -5,15 +5,17 @@ use std::collections::BTreeMap;
 
 use uuid::Uuid;
 
-use super::{Workspace, now_rfc3339};
+use super::{AssetState, Workspace, now_rfc3339};
 use crate::crypto::encryption::{
-    blob_ciphertext_hash, decrypt_asset_vec, seal_file_key, seal_metadata_blob,
+    blob_ciphertext_hash, decrypt_asset_vec, encrypt_asset_vec_with_prefix, seal_file_key,
+    seal_metadata_blob,
 };
 use crate::crypto::hash;
 use crate::crypto::keys::{Amk, AmkVersion, DekKeypair};
 use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
 use crate::crypto::provenance::{
-    ASSET_MANIFEST_VERSION, Action, AssetManifest, KeyMode, ManifestCore, WrappedFileKey,
+    ASSET_MANIFEST_VERSION, Action, KeyMode, ManifestCore, ProvenanceChain, ProvenanceRecord,
+    WrappedFileKey,
 };
 use crate::crypto::verify_asset::{
     MetadataBinding, VerifyOutcome, verify_asset, verify_metadata_binding,
@@ -22,8 +24,8 @@ use crate::crypto::verify_asset::{
 // headers below and pulled into scope locally at their (UFCS) call sites — keeping them out
 // of module scope avoids a `create_link`/`revoke_link` name clash with `ShareLinkIssuer`.
 use crate::drop::{
-    DropDescriptor, DropError, DropId, LinkCaps, PassphraseVerifier, PendingDrop, SealedDrop,
-    UploadLink, UploadLinkId, generate_opaque_id as generate_drop_id, open_drop_key,
+    AdoptedDrop, DropDescriptor, DropError, DropId, LinkCaps, PassphraseVerifier, PendingDrop,
+    SealedDrop, UploadLink, UploadLinkId, generate_opaque_id as generate_drop_id, open_drop_key,
 };
 use crate::metadata::crdt::Lww;
 use crate::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1};
@@ -57,6 +59,28 @@ pub(super) struct InboxEntry {
     ciphertext: Vec<u8>,
     via_link: UploadLinkId,
     received_at: String,
+}
+
+/// The longest file extension an adopted drop's media path may carry.
+const MAX_ADOPTED_EXT_LEN: usize = 10;
+
+/// The on-disk extension of an adopted drop, from the guest's `suggested_filename`.
+///
+/// The name is guest-supplied and unverified, and the extension becomes part of a library
+/// path, so it is admitted only as a short run of ASCII alphanumerics (lowercased); anything
+/// else — no name, no extension, a separator, a dot-only or overlong suffix — is `bin`, the
+/// same fallback an extensionless import gets. The extension is a filing hint only: the
+/// sidecar's `content_type` and the signed hash are what describe the bytes.
+fn adopted_extension(suggested_filename: Option<&str>) -> String {
+    suggested_filename
+        .and_then(|name| name.rsplit_once('.'))
+        .map(|(_, ext)| ext)
+        .filter(|ext| {
+            !ext.is_empty()
+                && ext.len() <= MAX_ADOPTED_EXT_LEN
+                && ext.bytes().all(|b| b.is_ascii_alphanumeric())
+        })
+        .map_or_else(|| "bin".to_string(), str::to_ascii_lowercase)
 }
 
 impl Workspace {
@@ -217,15 +241,20 @@ impl crate::drop::DropAdopter for Workspace {
     /// Adopt a pending drop into `album_id` **in place** (no byte re-upload): decapsulate the
     /// guest-chosen `K`, rewrap it under the album AMK (`asset-keywrap/v1`), author + sign a
     /// `create` manifest with `key_mode = wrapped` whose `ciphertext_hash` references the
-    /// staged blob, self-verify through [`verify_asset`], and drop the inbox row. Returns the
-    /// signed adopting manifest. SSoT: [Web Upload] — Review and adopt-in-place.
+    /// staged blob, self-verify through [`verify_asset`], register the asset in the library
+    /// (chain, sidecar, sealed metadata blob, plaintext, index row — the same writes
+    /// `commit_signed_create` makes for an import), and only then drop the inbox row. A
+    /// registration failure leaves the drop in the inbox. Returns the [`AdoptedDrop`]: the
+    /// signed manifest plus the metadata blob and provenance record a push publishes. SSoT:
+    /// [Web Upload] — Review and adopt-in-place.
     ///
     /// [Web Upload]: https://docs/design/web-upload/
+    #[tracing::instrument(skip_all, fields(drop_id = %drop.0, album_id = %album_id))]
     fn adopt(
         &mut self,
         drop: DropId,
         album_id: Uuid,
-    ) -> std::result::Result<AssetManifest, DropError> {
+    ) -> std::result::Result<AdoptedDrop, DropError> {
         let entry = self.inbox.get(&drop).ok_or(DropError::NotFound)?;
         let descriptor = entry.descriptor.clone();
         let ciphertext = entry.ciphertext.clone();
@@ -246,6 +275,31 @@ impl crate::drop::DropAdopter for Workspace {
         // plaintext hash and preview; the bulk ciphertext itself never moves.
         let plaintext = decrypt_asset_vec(&file_key, &descriptor.nonce_prefix, &ciphertext)
             .map_err(|_| DropError::Crypto("staged drop ciphertext failed to decrypt"))?;
+
+        // The library keeps the plaintext and regenerates the ciphertext from it (`verify`,
+        // `upload_bundle`), so the staged bytes must be exactly the canonical re-encryption
+        // under K and the descriptor's nonce prefix. STREAM decryption alone admits encodings
+        // that do not round-trip (a trailing empty last chunk on a chunk-multiple plaintext),
+        // and the descriptor's sizes are guest-asserted; either would register an asset that
+        // then fails its own `verify` and can never be pushed.
+        let (canonical, canonical_bytes) =
+            encrypt_asset_vec_with_prefix(&file_key, descriptor.nonce_prefix, &plaintext);
+        if canonical_bytes != ciphertext
+            || canonical.plaintext_size != descriptor.plaintext_size
+            || canonical.chunk_size != descriptor.chunk_size
+        {
+            tracing::warn!(
+                drop_id = %drop.0,
+                staged_len = ciphertext.len(),
+                canonical_len = canonical_bytes.len(),
+                declared_plaintext_size = descriptor.plaintext_size,
+                plaintext_len = plaintext.len(),
+                "refusing a non-canonical guest drop"
+            );
+            return Err(DropError::Crypto(
+                "staged drop is not the canonical encryption of its plaintext",
+            ));
+        }
 
         // Author + sign the sidecar. `created_by`/author is the adopter — the guest is never
         // a signer; its origin is an unverified, self-asserted descriptive note.
@@ -343,9 +397,62 @@ impl crate::drop::DropAdopter for Workspace {
             ));
         }
 
+        // Register the asset exactly as `commit_signed_create` does for an import: a
+        // one-record chain headed by the adopting `create`, the sealed metadata blob kept
+        // beside it (it cannot be regenerated), the plaintext at the asset's media path (the
+        // library holds plaintext; the wrapped key regenerates the guest's ciphertext from it),
+        // and the queryable index row.
+        let record = ProvenanceRecord {
+            asset_id: file_id,
+            manifest: manifest.clone(),
+            prior_provenance_hash: None,
+        };
+        let mut chain = ProvenanceChain::new();
+        chain
+            .append(record.clone())
+            .map_err(|e| DropError::Register(format!("chain: {e}")))?;
+        let asset = AssetState {
+            asset_id: file_id,
+            album_id,
+            ext: adopted_extension(descriptor.suggested_filename.as_deref()),
+            capture_utc: sidecar
+                .capture_timestamp
+                .parse::<jiff::Timestamp>()
+                .map_or(0, jiff::Timestamp::as_second),
+            chain,
+            sidecar,
+            metadata_blob: metadata_blob.clone(),
+            stack: None,
+        };
+        let register = |ws: &Self| -> super::Result<()> {
+            ws.write_asset_files(&asset, &plaintext)?;
+            ws.index_asset_row(&asset)?;
+            ws.index_original_representation(&asset, plaintext.len())
+        };
+        if let Err(e) = register(self) {
+            tracing::error!(
+                asset_id = %file_id,
+                drop_id = %drop.0,
+                error = %e,
+                "adoption verified but the asset could not be registered; the drop stays in the inbox"
+            );
+            return Err(DropError::Register(e.to_string()));
+        }
+        self.assets.insert(file_id, asset);
+
         // The drop is now a library asset — remove the inbox row (atomic on the server side).
         self.inbox.remove(&drop);
-        Ok(manifest)
+        tracing::info!(
+            asset_id = %file_id,
+            drop_id = %drop.0,
+            album_id = %album_id,
+            "adopted a guest drop into the library"
+        );
+        Ok(AdoptedDrop {
+            manifest,
+            metadata_blob,
+            record,
+        })
     }
 
     /// Discard a pending drop the owner rejects; its bytes are GC'd and the quota freed.
@@ -407,7 +514,8 @@ mod tests {
         assert_eq!(DropAdopter::list_inbox(&ws).unwrap().len(), 1);
 
         // The owner adopts it into the album on their trusted device.
-        let manifest = DropAdopter::adopt(&mut ws, drop_id, album).unwrap();
+        let adopted = DropAdopter::adopt(&mut ws, drop_id, album).unwrap();
+        let manifest = &adopted.manifest;
         assert_eq!(manifest.core.key_mode, KeyMode::Wrapped);
         assert!(manifest.core.wrapped_file_key.is_some());
         assert_eq!(manifest.core.album_id, album);
@@ -415,6 +523,52 @@ mod tests {
         assert_eq!(manifest.core.ciphertext_hash, hash::hash_bytes(&ciphertext));
         // Adoption emptied the inbox.
         assert!(DropAdopter::list_inbox(&ws).unwrap().is_empty());
+
+        // The drop is now a library asset, registered as an import registers one: its
+        // plaintext is readable, it re-verifies from that plaintext through the wrapped key,
+        // its chain is the one `create` record handed back, and it has an index row.
+        let asset_id = adopted.asset_id();
+        assert_eq!(asset_id, manifest.core.file_id);
+        assert!(ws.asset_ids().contains(&asset_id));
+        assert_eq!(ws.read_plaintext(&asset_id).unwrap(), plaintext);
+        assert_eq!(ws.verify(&asset_id).unwrap(), VerifyOutcome::Accept);
+        assert_eq!(adopted.record.asset_id, asset_id);
+        assert_eq!(adopted.record.manifest, *manifest);
+        assert_eq!(adopted.record.prior_provenance_hash, None);
+        let state = &ws.assets[&asset_id];
+        assert_eq!(state.chain.records(), std::slice::from_ref(&adopted.record));
+        assert_eq!(state.metadata_blob, adopted.metadata_blob);
+        assert_eq!(
+            state.ext, "bin",
+            "seal_drop names no file, so the fallback applies"
+        );
+        assert!(
+            ws.db()
+                .find_by_uuid(&asset_id.to_string())
+                .unwrap()
+                .is_some(),
+            "the adopted asset has a queryable index row"
+        );
+        // The handed-back metadata blob is the one the manifest commits to.
+        assert_eq!(
+            manifest.core.metadata_blob_hash,
+            Some(blob_ciphertext_hash(&adopted.metadata_blob))
+        );
+        // A push bundle builds for it: the regenerated ciphertext is the guest's, byte for byte,
+        // and the index tier is the blob and record adoption returned.
+        let bundle = ws.upload_bundle(&asset_id).unwrap();
+        assert_eq!(bundle.ciphertext, ciphertext);
+        assert_eq!(bundle.key_mode, KeyMode::Wrapped);
+        assert_eq!(bundle.metadata_blob, adopted.metadata_blob);
+        assert_eq!(
+            bundle.provenance_blob,
+            crate::cbor::to_canonical_vec(&adopted.record).unwrap()
+        );
+        // Adopting the same drop again is NotFound: the inbox row is gone.
+        assert!(matches!(
+            DropAdopter::adopt(&mut ws, drop_id, album),
+            Err(DropError::NotFound)
+        ));
 
         // A second album member unwraps K under the AMK and decrypts the unchanged ciphertext.
         let epoch = manifest.core.amk_version.0;
@@ -444,6 +598,186 @@ mod tests {
             Err(DropError::NotFound)
         ));
         UploadLinkIssuer::revoke_link(&mut ws, link.link_id).unwrap();
+    }
+
+    /// An adopted drop is durable library state, not an in-memory record: it survives a
+    /// close and reopen with its chain, its sealed metadata blob, and a `verify` that
+    /// regenerates the guest's ciphertext through the wrapped key — and a later metadata edit
+    /// chains onto the adopting `create` like any other asset's.
+    #[test]
+    fn an_adopted_drop_survives_reopen_and_takes_edits() {
+        use crate::drop::{DropAdopter, UploadLinkIssuer, seal_drop};
+
+        let lib = TempDir::new().unwrap();
+        let plaintext = b"\xFF\xD8\xFF a guest photo that outlives the session";
+        let (asset_id, adopted) = {
+            let mut ws = fast_workspace(lib.path());
+            let album = ws.create_album("Guests").unwrap();
+            let link = UploadLinkIssuer::create_link(&mut ws, LinkCaps::default(), None).unwrap();
+            let mut sealed = seal_drop(plaintext, &link.drop_pubkey, "image/jpeg").unwrap();
+            sealed.descriptor.suggested_filename = Some("Beach.JPG".to_string());
+            let drop_id = ws.receive_drop(link.link_id, sealed).unwrap();
+            let adopted = DropAdopter::adopt(&mut ws, drop_id, album).unwrap();
+            assert_eq!(ws.assets[&adopted.asset_id()].ext, "jpg");
+            (adopted.asset_id(), adopted)
+        };
+
+        let mut ws2 =
+            Workspace::open(lib.path(), b"passphrase", super::super::FAST_PARAMS).unwrap();
+        let restored = ws2
+            .asset(&asset_id)
+            .expect("the adopted asset is restored from disk");
+        assert_eq!(
+            restored.chain.records(),
+            std::slice::from_ref(&adopted.record)
+        );
+        assert_eq!(restored.metadata_blob, adopted.metadata_blob);
+        assert_eq!(ws2.read_plaintext(&asset_id).unwrap(), plaintext);
+        assert_eq!(ws2.verify(&asset_id).unwrap(), VerifyOutcome::Accept);
+
+        ws2.tag_add(&asset_id, "guest").unwrap();
+        let chain = ws2.asset(&asset_id).unwrap().chain.records();
+        assert_eq!(chain.len(), 2);
+        assert_eq!(
+            chain[1].manifest.core.prior_provenance_hash,
+            Some(adopted.record.record_hash())
+        );
+        assert_eq!(ws2.verify(&asset_id).unwrap(), VerifyOutcome::Accept);
+    }
+
+    /// A tampered head on an adopted asset — a `wrapped_file_key` that no longer opens, or a
+    /// `wrapped` head stripped of its key — is a `verify` reject, not an error: the unverified
+    /// key fields never short-circuit `verify_asset` (web-upload.md, "Forged
+    /// `wrapped_file_key`").
+    #[test]
+    fn a_tampered_wrapped_file_key_is_a_verify_reject() {
+        use crate::crypto::verify_asset::RejectReason;
+        use crate::drop::{DropAdopter, UploadLinkIssuer, seal_drop};
+
+        let lib = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Guests").unwrap();
+        let link = UploadLinkIssuer::create_link(&mut ws, LinkCaps::default(), None).unwrap();
+        let sealed = seal_drop(b"a guest photo", &link.drop_pubkey, "image/jpeg").unwrap();
+        let drop_id = ws.receive_drop(link.link_id, sealed).unwrap();
+        let adopted = DropAdopter::adopt(&mut ws, drop_id, album).unwrap();
+        let asset_id = adopted.asset_id();
+        assert_eq!(ws.verify(&asset_id).unwrap(), VerifyOutcome::Accept);
+
+        let flipped = |m: &mut crate::crypto::provenance::AssetManifest| {
+            let key = m.core.wrapped_file_key.as_mut().unwrap();
+            let last = key.0.len() - 1;
+            key.0[last] ^= 0x01;
+        };
+        let stripped = |m: &mut crate::crypto::provenance::AssetManifest| {
+            m.core.wrapped_file_key = None;
+        };
+        // A key that does not open leaves nothing to regenerate, so the content check rejects;
+        // a `wrapped` head without a key breaks the structural key-mode coupling first.
+        type Tamper<'a> = &'a dyn Fn(&mut crate::crypto::provenance::AssetManifest);
+        let tampers: [(Tamper<'_>, _); 2] = [
+            (&flipped, RejectReason::CiphertextHashMismatch),
+            (&stripped, RejectReason::Structural),
+        ];
+        for (tamper, reason) in tampers {
+            let mut record = adopted.record.clone();
+            tamper(&mut record.manifest);
+            let mut chain = ProvenanceChain::new();
+            chain.append(record).unwrap();
+            ws.assets.get_mut(&asset_id).unwrap().chain = chain;
+            assert_eq!(
+                ws.verify(&asset_id).unwrap(),
+                VerifyOutcome::TerminalReject(reason)
+            );
+        }
+    }
+
+    /// The guest-named extension is admitted only as a short ASCII-alphanumeric suffix.
+    #[test]
+    fn adopted_extension_admits_only_a_short_alphanumeric_suffix() {
+        assert_eq!(adopted_extension(Some("IMG_0001.JPG")), "jpg");
+        assert_eq!(adopted_extension(Some("clip.tar.mp4")), "mp4");
+        assert_eq!(adopted_extension(None), "bin");
+        assert_eq!(adopted_extension(Some("no-extension")), "bin");
+        assert_eq!(adopted_extension(Some("trailing.")), "bin");
+        assert_eq!(adopted_extension(Some("evil.jpg/../x")), "bin");
+        assert_eq!(adopted_extension(Some("a.j-g")), "bin");
+        assert_eq!(adopted_extension(Some("a.abcdefghijk")), "bin");
+        assert_eq!(adopted_extension(Some("a.ünï")), "bin");
+    }
+
+    /// A drop whose staged bytes decrypt but are not the canonical re-encryption of their
+    /// plaintext — here, a chunk-multiple plaintext sealed with a trailing empty last chunk,
+    /// which STREAM decryption accepts — is refused before anything is registered, and the
+    /// drop stays in the inbox; so is a drop whose descriptor misstates `plaintext_size`.
+    #[test]
+    fn a_non_canonical_drop_is_refused_and_stays_in_the_inbox() {
+        use aes_gcm::aead::KeyInit;
+        use aes_gcm::aead::generic_array::GenericArray;
+        use aes_gcm::aead::stream::EncryptorBE32;
+        use aes_gcm::{Aes256Gcm, Key};
+
+        use crate::crypto::encryption::PLAINTEXT_CHUNK;
+        use crate::crypto::keys::ESEED_LEN;
+        use crate::drop::{DropAdopter, UploadLinkIssuer, seal_drop_derand};
+
+        let lib = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Guests").unwrap();
+        let link = UploadLinkIssuer::create_link(&mut ws, LinkCaps::default(), None).unwrap();
+        let k = [0x42; 32];
+        let nonce_prefix = [0x07; 7];
+        let seal = |plaintext: &[u8]| {
+            seal_drop_derand(
+                plaintext,
+                &link.drop_pubkey,
+                "image/jpeg",
+                &k,
+                &nonce_prefix,
+                &[0x11; ESEED_LEN],
+                &[0x22; 12],
+            )
+            .unwrap()
+        };
+
+        // A one-chunk plaintext, re-sealed as a full chunk followed by an empty last chunk.
+        let plaintext = vec![0xAB; PLAINTEXT_CHUNK];
+        let mut trailing = seal(&plaintext);
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&k));
+        let mut enc =
+            EncryptorBE32::<Aes256Gcm>::from_aead(cipher, GenericArray::from_slice(&nonce_prefix));
+        let mut bytes = enc.encrypt_next(plaintext.as_slice()).unwrap();
+        bytes.extend(enc.encrypt_last(&[][..]).unwrap());
+        assert_eq!(
+            decrypt_asset_vec(&k, &nonce_prefix, &bytes).unwrap(),
+            plaintext,
+            "STREAM decryption accepts the trailing empty chunk"
+        );
+        assert_ne!(bytes, trailing.ciphertext);
+        trailing.descriptor.ciphertext_hash = hash::hash_bytes(&bytes);
+        trailing.ciphertext = bytes;
+
+        // A canonical ciphertext whose descriptor overstates the plaintext size.
+        let mut misstated = seal(b"a short guest photo");
+        misstated.descriptor.plaintext_size += 1;
+
+        for sealed in [trailing, misstated] {
+            let drop_id = ws.receive_drop(link.link_id, sealed).unwrap();
+            assert!(matches!(
+                DropAdopter::adopt(&mut ws, drop_id, album),
+                Err(DropError::Crypto(
+                    "staged drop is not the canonical encryption of its plaintext"
+                ))
+            ));
+            assert!(
+                DropAdopter::list_inbox(&ws)
+                    .unwrap()
+                    .iter()
+                    .any(|p| p.drop_id == drop_id),
+                "a refused drop stays adoptable-or-discardable in the inbox"
+            );
+        }
+        assert!(ws.asset_ids().is_empty(), "nothing was registered");
     }
 
     /// S-A6: a rejected drop is discarded — removed from the inbox with no library trace.

@@ -23041,6 +23041,20 @@
             ],
             "description": "The content hash of the bundle's **original** blob, when the manifest commits to one\n(`S-C43`).\n\nThe manifest's own `ciphertext_hash`, under a name that cannot be confused with\n[`Self::ciphertext_hash`]'s per-session meaning. Optional on the wire and **required on a\n`replace`**: a replace re-points roles that already have bytes, so it has to be applied\nas one act, and the only member of the bundle that can carry the whole change is the\nmanifest — which therefore has to be able to name the original it commits to.\n\nA `create` may omit it. Its bundle is assembled incrementally in a row nobody can see,\nso no member needs to name another and requiring it would be a wire change for no gain."
           },
+          "derivative_role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The derivative's role — `thumbnail`, `preview`, or `embedding` — copied from its signed\n`DerivativeManifest.role`. **Required on a `derivative` blob and refused on every other**.\n\nThe server cannot read the signed derivative manifest (it is key-free), so the closed\nstill-format check the tier table requires of every receiver runs over this declared\npair instead. A forged pair buys nothing: the client that verifies the signed manifest\nruns the same check over the signed values."
+          },
+          "derivative_format": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The derivative's format — `DerivativeManifest.format`, e.g. `image/jxl`. Required and\nrefused exactly as [`Self::derivative_role`] is, and must equal the blob's declared\n`content_type`. For a `thumbnail` or `preview` an unrecognised value is\n[`GateReject::UnknownDerivativeFormat`]."
+          },
           "created_by_user": {
             "type": "string",
             "description": "The account that created the asset."

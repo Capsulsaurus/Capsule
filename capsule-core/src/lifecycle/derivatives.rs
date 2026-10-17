@@ -710,7 +710,6 @@ mod tests {
             &ImageMetadata::default(),
             &EncodeOptions::PngZune(ZunePngEncodeConfig {
                 common: common(MetadataEmbedOptions::none()),
-                ..ZunePngEncodeConfig::default()
             }),
         )
         .expect("the fixture PNG encodes")

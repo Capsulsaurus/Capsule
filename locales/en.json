@@ -8515,6 +8515,10 @@
     "message": "This app version uses an encryption suite the server doesn't recognize.",
     "context": "HTTP 400, invariant 2: crypto_suite_id not in the server's inventory."
   },
+  "error.upload.unknown_derivative_format": {
+    "message": "This thumbnail or preview is in a format that is not supported.",
+    "context": "HTTP 400: a thumbnail or preview derivative's declared format is outside the closed still-derivative format set (Thumbnails and Previews tier table). A structural rejection, not a future codec to ignore."
+  },
   "error.upload.unsupported_content_type": {
     "message": "This file type is not supported.",
     "context": "HTTP 400, invariant 5: content_type outside the closed enum for the pinned protocol version."

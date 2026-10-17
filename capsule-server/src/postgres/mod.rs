@@ -49,6 +49,15 @@ pub const EXPECTED_MIGRATIONS: &[&str] = &[
     "m20260902_000004_quota",
     "m20260902_000005_album_membership",
     "m20260902_000006_federation",
+    "m20260902_000007_albums",
+    "m20260902_000008_device_directories",
+    "m20260902_000009_moderation",
+    "m20260902_000010_shares",
+    "m20260902_000011_drops",
+    "m20260902_000012_escrow",
+    "m20260902_000013_collection_marks",
+    "m20260902_000014_receipts",
+    "m20260902_000015_totp",
 ];
 
 /// The command an operator runs to apply them.

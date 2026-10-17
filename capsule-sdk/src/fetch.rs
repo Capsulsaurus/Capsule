@@ -19,15 +19,28 @@
 //!   of restarting, and re-fetches zero bytes it already holds.
 //! - **Self-verification.** The client recomputes the ciphertext content hash
 //!   against the requested content address; any mismatch discards the blob.
+//! - **Opening a derivative.** Derivative bytes are ciphertext on the server
+//!   ([Encryption]). [`open_representation`] decrypts a fetched thumbnail or preview with
+//!   the material its signed `DerivativeManifest` records — the epoch, the source asset
+//!   id and the nonce prefix — after running the closed still-format check a receiver
+//!   owes a manifest it did not author. An AEAD failure is a corrupt blob: it is
+//!   discarded and the open degrades so the caller regenerates from the original. A
+//!   tier whose manifest carries the `format = "original"` sentinel is satisfied by the
+//!   original and is never fetched.
 //!
 //! The [`BlobSource`] seam abstracts the wire so the resume loop and degrade ladder
 //! are driven by deterministic mocks; [`HttpBlobSource`] is the production
 //! `reqwest`-over-`Range` implementation against the media server's `GET /blob/{hash}`.
 //!
 //! [Download & Sync]: https://docs/design/import/download-sync/
+//! [Encryption]: https://docs/design/cryptography/encryption/
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
+use capsule_core::crypto::encryption::{NONCE_PREFIX_LEN, decrypt_asset_vec};
+use capsule_core::crypto::keys::{Amk, AmkVersion};
+use capsule_core::crypto::provenance::{DerivativeManifest, DerivativeRole};
+use capsule_core::derivative_format::{DerivativeFormat, verify_still_format};
 use capsule_i18n::error_codes;
 use sha2::{Digest, Sha256};
 use tracing::instrument;
@@ -91,7 +104,8 @@ pub struct RepBlob {
 }
 
 /// An asset's fetchable representations, resolved from a sync feed entry's blob
-/// manifest. LQIP is not here — it rides the metadata blob.
+/// manifest, plus the signed derivative manifests that open them. LQIP is not here —
+/// it rides the metadata blob.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AssetBlobs {
     /// The thumbnail derivative, when present.
@@ -100,9 +114,41 @@ pub struct AssetBlobs {
     pub preview: Option<RepBlob>,
     /// The original, when present (absent while `awaiting-original`).
     pub original: Option<RepBlob>,
+    /// The head `DerivativeManifest` of each derivative role this asset carries, already
+    /// signature-verified by the caller (`verify_asset` is the chokepoint; this module checks
+    /// nothing a signature covers).
+    ///
+    /// A derivative's ciphertext is opened with `AMK(amk_version).derive_file_key(
+    /// source_asset_id, nonce_prefix)`, and those three values live here and nowhere else: the
+    /// blob manifest carries only content addresses. A thumbnail or preview with no manifest
+    /// describing its blob is not opened ([`DegradeReason::NoManifest`]).
+    pub derivative_manifests: Vec<DerivativeManifest>,
 }
 
 impl AssetBlobs {
+    /// The manifest that describes `role`'s tier: the one committing to the blob the feed
+    /// names, else a `format = "original"` sentinel, else whichever manifest of that role
+    /// comes first (which the caller's [`open_representation`] then rejects as not describing
+    /// the blob).
+    fn manifest_for(
+        &self,
+        role: DerivativeRole,
+        blob: Option<&RepBlob>,
+    ) -> Option<&DerivativeManifest> {
+        let of_role = || {
+            self.derivative_manifests
+                .iter()
+                .filter(move |manifest| manifest.core.role == role)
+        };
+        blob.and_then(|blob| {
+            of_role().find(|manifest| manifest.core.ciphertext_hash.to_hex() == blob.hash)
+        })
+        .or_else(|| {
+            of_role().find(|manifest| manifest.core.format == DerivativeFormat::Original.mime())
+        })
+        .or_else(|| of_role().next())
+    }
+
     /// The blob backing a representation (`None` for [`Representation::Lqip`], which
     /// is embedded, and for any representation this asset does not carry).
     #[must_use]
@@ -113,6 +159,21 @@ impl AssetBlobs {
             Representation::Preview => self.preview.as_ref(),
             Representation::Original => self.original.as_ref(),
         }
+    }
+}
+
+/// The album keys a reader holds, by epoch — what opens a derivative.
+///
+/// A seam rather than a concrete key store, so the SDK never owns AMKs: the caller's
+/// workspace answers from its album store, and tests answer from a map.
+pub trait AmkSource {
+    /// The AMK for `version`, or `None` when this reader does not hold that epoch.
+    fn amk(&self, version: AmkVersion) -> Option<Amk>;
+}
+
+impl AmkSource for BTreeMap<AmkVersion, Amk> {
+    fn amk(&self, version: AmkVersion) -> Option<Amk> {
+        self.get(&version).cloned()
     }
 }
 
@@ -260,6 +321,13 @@ pub enum FetchError {
     /// The bounded resume budget was spent without completing the transfer.
     #[error("fetch gave up after exhausting the resume budget: {0}")]
     Exhausted(String),
+    /// A derivative's ciphertext hashed correctly but failed AEAD authentication under the
+    /// key its manifest selects — a corrupt blob, discarded.
+    #[error("derivative {hash} failed authentication; discarded")]
+    Corrupt {
+        /// The content address that would not open.
+        hash: String,
+    },
 }
 
 impl FetchError {
@@ -502,17 +570,45 @@ pub enum DegradeReason {
     AuthorizationChanged,
     /// A transient failure; the asset stays listed and re-fetches automatically.
     TemporarilyUnavailable,
+    /// No signed derivative manifest describes the blob the feed names, so there is no key
+    /// to open it with. Nothing was fetched. Recovery-first: the derivative is rebuildable
+    /// from the original.
+    NoManifest,
+    /// The derivative's manifest names a still format outside the closed set, or records no
+    /// AMK epoch — a structural rejection of a manifest this reader did not author. Nothing
+    /// was fetched.
+    ManifestRejected,
+    /// This reader does not hold the AMK epoch the manifest names. Nothing was fetched.
+    KeyUnavailable,
+    /// The ciphertext matched its content address but failed authentication under the key its
+    /// manifest selects; the copy was discarded. Recovery-first: regenerate from the original.
+    Corrupt,
 }
 
 /// The resolution of an on-demand open.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FetchResolution {
-    /// The desired representation was fetched.
-    Fetched {
+    /// A thumbnail or preview was fetched, integrity-verified, and **decrypted**.
+    Opened {
         /// Which representation landed.
+        representation: Representation,
+        /// The derivative's plaintext (an encoded still in the manifest's format).
+        plaintext: Vec<u8>,
+    },
+    /// The original was fetched. Its bytes stay **ciphertext**: the original opens through its
+    /// signed `AssetManifest` (which may carry a wrapped file key), not through this module.
+    Fetched {
+        /// Which representation landed (always [`Representation::Original`]).
         representation: Representation,
         /// The ciphertext bytes (integrity-verified).
         bytes: Vec<u8>,
+    },
+    /// The tier's signed manifest carries the `format = "original"` sentinel: the tier
+    /// *references* the original rather than holding bytes of its own, so it is satisfied by
+    /// the original and nothing was fetched. Never a missing derivative.
+    ReferencesOriginal {
+        /// The representation that the original satisfies.
+        representation: Representation,
     },
     /// The desired representation is unavailable; the asset is shown at the best
     /// locally-held representation instead. The asset's metadata and index entry
@@ -533,7 +629,21 @@ pub enum FetchResolution {
 
 /// Fetch `desired` for an asset, applying the degrade ladder on failure.
 ///
-/// - Success → [`FetchResolution::Fetched`].
+/// Before any byte moves, a thumbnail or preview is resolved against its signed manifest
+/// in [`AssetBlobs::derivative_manifests`]:
+///
+/// - `format = "original"` → [`FetchResolution::ReferencesOriginal`], no fetch.
+/// - a format outside the closed still set, or no AMK epoch →
+///   [`DegradeReason::ManifestRejected`], no fetch (the receiver half of the tier table's
+///   "every receiver compares `DerivativeManifest.format` against this list").
+/// - no manifest committing to the blob the feed names → [`DegradeReason::NoManifest`].
+/// - an epoch `keys` does not hold → [`DegradeReason::KeyUnavailable`].
+///
+/// Then the blob is fetched:
+///
+/// - Success → [`FetchResolution::Opened`] (a derivative, decrypted) or
+///   [`FetchResolution::Fetched`] (the original, still ciphertext).
+/// - AEAD failure on a derivative → the copy is discarded, [`DegradeReason::Corrupt`].
 /// - `403` → invoke `on_authorization_change` (re-sync membership/capability),
 ///   retry once; if it still fails, [`FetchResolution::Degraded`] with
 ///   [`DegradeReason::AuthorizationChanged`] (a revocation surfaced as such, not
@@ -546,31 +656,45 @@ pub enum FetchResolution {
 /// The degrade target is [`best_available`] over `locally_held`, so it steps down
 /// preview → thumbnail → LQIP. The asset's metadata / index entry is never removed
 /// — degrade only changes what is *shown*.
-#[instrument(skip(source, asset, locally_held, on_authorization_change), fields(?desired))]
-pub async fn open_representation<S, H>(
+#[instrument(
+    skip(source, asset, locally_held, keys, on_authorization_change),
+    fields(?desired)
+)]
+pub async fn open_representation<S, K, H>(
     source: &S,
     asset: &AssetBlobs,
     desired: Representation,
     locally_held: &BTreeSet<Representation>,
+    keys: &K,
     mut on_authorization_change: H,
 ) -> FetchResolution
 where
     S: BlobSource,
+    K: AmkSource,
     H: AsyncFnMut(),
 {
-    match fetch_representation(source, asset, desired).await {
-        Ok(bytes) => FetchResolution::Fetched {
-            representation: desired,
-            bytes,
-        },
+    let opening = match plan_opening(asset, desired, keys) {
+        Ok(opening) => opening,
+        Err(PreFetch::ReferencesOriginal) => {
+            tracing::debug!("tier carries the `original` sentinel; satisfied without a fetch");
+            return FetchResolution::ReferencesOriginal {
+                representation: desired,
+            };
+        }
+        Err(PreFetch::Degrade(reason)) => return degrade(desired, locally_held, reason),
+    };
+    let opening = opening.as_ref();
+    match fetch_representation(source, asset, desired, opening).await {
+        Ok(bytes) => landed(desired, opening, bytes),
         Err(FetchError::AuthorizationChanged { .. }) => {
             tracing::info!("403 on fetch — re-syncing album membership before retrying");
             on_authorization_change().await;
-            match fetch_representation(source, asset, desired).await {
-                Ok(bytes) => FetchResolution::Fetched {
-                    representation: desired,
-                    bytes,
-                },
+            match fetch_representation(source, asset, desired, opening).await {
+                Ok(bytes) => landed(desired, opening, bytes),
+                // The re-sync admitted the fetch; the bytes themselves would not open.
+                Err(FetchError::Corrupt { .. }) => {
+                    degrade(desired, locally_held, DegradeReason::Corrupt)
+                }
                 Err(_) => degrade(desired, locally_held, DegradeReason::AuthorizationChanged),
             }
         }
@@ -578,7 +702,112 @@ where
         Err(FetchError::PendingUpload) => FetchResolution::Pending {
             shown: best_available(desired, locally_held).unwrap_or(Representation::Lqip),
         },
+        Err(FetchError::Corrupt { .. }) => degrade(desired, locally_held, DegradeReason::Corrupt),
         Err(_) => degrade(desired, locally_held, DegradeReason::TemporarilyUnavailable),
+    }
+}
+
+/// The key material that opens one derivative's ciphertext, resolved from its manifest.
+struct Opening {
+    file_key: [u8; 32],
+    nonce_prefix: [u8; NONCE_PREFIX_LEN],
+}
+
+/// An open that resolves before any byte is fetched.
+enum PreFetch {
+    /// The tier's manifest is the `original` sentinel.
+    ReferencesOriginal,
+    /// The tier cannot be opened; degrade for this reason.
+    Degrade(DegradeReason),
+}
+
+/// The derivative role a ladder rung is backed by, or `None` for a rung that is not a
+/// derivative (LQIP rides the metadata blob; the original opens through its asset manifest).
+fn derivative_role(representation: Representation) -> Option<DerivativeRole> {
+    match representation {
+        Representation::Thumbnail => Some(DerivativeRole::Thumbnail),
+        Representation::Preview => Some(DerivativeRole::Preview),
+        Representation::Lqip | Representation::Original => None,
+    }
+}
+
+/// Resolve how `desired` will be opened, before fetching anything. `Ok(None)` is a rung that
+/// is fetched as-is (the original; LQIP, which then degrades as it always has).
+fn plan_opening<K: AmkSource>(
+    asset: &AssetBlobs,
+    desired: Representation,
+    keys: &K,
+) -> Result<Option<Opening>, PreFetch> {
+    let Some(role) = derivative_role(desired) else {
+        return Ok(None);
+    };
+    let blob = asset.blob_for(desired);
+    let Some(manifest) = asset.manifest_for(role, blob) else {
+        // No manifest and no blob is the absent derivative it always was: the fetch answers
+        // `Gone` and the ladder degrades. A blob nobody describes cannot be opened.
+        return if blob.is_none() {
+            Ok(None)
+        } else {
+            tracing::warn!(
+                ?role,
+                "no derivative manifest describes this blob; not fetching"
+            );
+            Err(PreFetch::Degrade(DegradeReason::NoManifest))
+        };
+    };
+    let core = &manifest.core;
+    match verify_still_format(manifest) {
+        Ok(Some(DerivativeFormat::Original)) => return Err(PreFetch::ReferencesOriginal),
+        Ok(Some(_)) => {}
+        // `None` is an embedding-role manifest, which `manifest_for` never returns for a
+        // still rung; reject it rather than guess.
+        Ok(None) | Err(_) => {
+            tracing::warn!(?role, format = %core.format, "derivative format outside the closed set");
+            return Err(PreFetch::Degrade(DegradeReason::ManifestRejected));
+        }
+    }
+    let Some(blob) = blob else {
+        // A real derivative the server does not list: permanently unavailable.
+        return Ok(None);
+    };
+    if core.ciphertext_hash.to_hex() != blob.hash {
+        tracing::warn!(
+            ?role,
+            "derivative manifest commits to different bytes than the feed names"
+        );
+        return Err(PreFetch::Degrade(DegradeReason::NoManifest));
+    }
+    let Some(version) = core.amk_version else {
+        tracing::warn!(?role, "derivative manifest records no AMK epoch");
+        return Err(PreFetch::Degrade(DegradeReason::ManifestRejected));
+    };
+    let Some(amk) = keys.amk(version) else {
+        tracing::info!(
+            ?role,
+            epoch = version.0,
+            "AMK epoch not held; cannot open derivative"
+        );
+        return Err(PreFetch::Degrade(DegradeReason::KeyUnavailable));
+    };
+    Ok(Some(Opening {
+        file_key: amk.derive_file_key(&core.source_asset_id, &core.nonce_prefix),
+        nonce_prefix: core.nonce_prefix,
+    }))
+}
+
+/// The resolution for bytes that landed: plaintext when they were opened, ciphertext when
+/// the rung is not a derivative.
+fn landed(desired: Representation, opening: Option<&Opening>, bytes: Vec<u8>) -> FetchResolution {
+    if opening.is_some() {
+        FetchResolution::Opened {
+            representation: desired,
+            plaintext: bytes,
+        }
+    } else {
+        FetchResolution::Fetched {
+            representation: desired,
+            bytes,
+        }
     }
 }
 
@@ -596,15 +825,32 @@ fn degrade(
     FetchResolution::Degraded { shown, reason }
 }
 
-/// Fetch exactly one representation's blob (no degrade). A representation the asset
-/// does not carry is treated as permanently gone (degrade upstream).
+/// Fetch exactly one representation's blob (no degrade), and open it when `opening` says
+/// how. A representation the asset does not carry is treated as permanently gone (degrade
+/// upstream).
+///
+/// An opened blob that fails authentication is discarded as [`FetchError::Corrupt`] and is
+/// **not** re-fetched: [`fetch_blob`] has already verified the bytes against their content
+/// address, so a second fetch can only return the same bytes and fail the same way. The
+/// recovery is the thumbnails doc's — regenerate from the original — and it is the caller's,
+/// signalled by [`DegradeReason::Corrupt`].
 async fn fetch_representation<S: BlobSource>(
     source: &S,
     asset: &AssetBlobs,
     representation: Representation,
+    opening: Option<&Opening>,
 ) -> Result<Vec<u8>, FetchError> {
     let blob = asset.blob_for(representation).ok_or(FetchError::Gone)?;
-    fetch_blob(source, &blob.hash, blob.size).await
+    let ciphertext = fetch_blob(source, &blob.hash, blob.size).await?;
+    let Some(opening) = opening else {
+        return Ok(ciphertext);
+    };
+    decrypt_asset_vec(&opening.file_key, &opening.nonce_prefix, &ciphertext).map_err(|error| {
+        tracing::warn!(hash = %blob.hash, %error, "derivative failed authentication; discarding");
+        FetchError::Corrupt {
+            hash: blob.hash.clone(),
+        }
+    })
 }
 
 // ─── Production HTTP source ──────────────────────────────────────────────────

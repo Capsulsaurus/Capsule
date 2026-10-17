@@ -1414,6 +1414,12 @@ impl CreateRejection {
                 ),
                 code: error_codes::UPLOAD_ENVELOPE_MISMATCH,
             },
+            GateReject::UnknownDerivativeFormat(format) => Self::Invalid {
+                detail: format!(
+                    "derivative_format {format:?} is outside the closed still-derivative format set"
+                ),
+                code: error_codes::UPLOAD_UNKNOWN_DERIVATIVE_FORMAT,
+            },
         }
     }
 

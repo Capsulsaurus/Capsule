@@ -956,9 +956,7 @@ mod tests {
 
         // Move mode released the staged copy: no plaintext is left in the scratch directory.
         let staging = lib.path().join(".library").join("staging");
-        let leftovers = std::fs::read_dir(&staging)
-            .map(|dir| dir.count())
-            .unwrap_or(0);
+        let leftovers = std::fs::read_dir(&staging).map_or(0, std::iter::Iterator::count);
         assert_eq!(leftovers, 0, "the staged plaintext copy must not survive");
     }
 

@@ -392,6 +392,16 @@ pub struct ManifestEnvelope {
     pub key_mode: String,
     /// Hash of the bundle's metadata blob, when known.
     pub metadata_blob_hash: Option<String>,
+    /// A derivative blob's role (`thumbnail | preview | embedding`), from its signed
+    /// `DerivativeManifest`. Set on a `derivative` blob and on nothing else: the server
+    /// requires it there, refuses it elsewhere, and checks the pair against the closed
+    /// still-derivative format set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derivative_role: Option<String>,
+    /// A derivative blob's format (`DerivativeManifest.format`, e.g. `image/jxl`) — the same
+    /// value as the request's `content_type`. Set exactly when [`Self::derivative_role`] is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derivative_format: Option<String>,
     /// The authoring user.
     pub created_by_user: String,
     /// The authoring device.

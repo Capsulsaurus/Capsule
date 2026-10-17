@@ -212,6 +212,8 @@ fn envelope() -> ManifestEnvelope {
         chunk_size: 65536,
         key_mode: "derived".into(),
         metadata_blob_hash: None,
+        derivative_role: None,
+        derivative_format: None,
         created_by_user: "user-1".into(),
         created_by_device: "device-1".into(),
         client_version: "capsule-test/0".into(),

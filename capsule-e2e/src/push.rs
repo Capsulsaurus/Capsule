@@ -64,6 +64,8 @@ pub fn sdk_envelope(core: &ManifestCore, blob_hash: &str) -> ManifestEnvelope {
         chunk_size: core.chunk_size,
         key_mode: wire_enum(&core.key_mode),
         metadata_blob_hash: core.metadata_blob_hash.map(|h| h.to_hex()),
+        derivative_role: None,
+        derivative_format: None,
         created_by_user: core.created_by_user.to_string(),
         created_by_device: core.created_by_device.to_string(),
         client_version: core.client_version.clone(),
@@ -90,6 +92,10 @@ pub fn wire_envelope(core: &ManifestCore, blob_hash: &str) -> rest::types::Manif
         key_mode: envelope.key_mode,
         metadata_blob_hash: envelope.metadata_blob_hash,
         original_blob_hash: None,
+        // A lifecycle-op or adopt envelope names no derivative: `check_op` refuses the pair on
+        // a lifecycle write, and the upload gate refuses it on anything but a derivative.
+        derivative_role: None,
+        derivative_format: None,
         created_by_user: envelope.created_by_user,
         created_by_device: envelope.created_by_device,
         client_version: envelope.client_version,

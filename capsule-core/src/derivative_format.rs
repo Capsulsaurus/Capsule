@@ -125,13 +125,28 @@ impl fmt::Display for DerivativeFormat {
 pub fn verify_still_format(
     manifest: &DerivativeManifest,
 ) -> Result<Option<DerivativeFormat>, String> {
-    let core = &manifest.core;
-    match core.role {
-        DerivativeRole::Thumbnail | DerivativeRole::Preview => {
-            DerivativeFormat::parse(&core.format)
-                .map(Some)
-                .ok_or_else(|| core.format.clone())
-        }
+    verify_still_role_format(manifest.core.role, &manifest.core.format)
+}
+
+/// The same closed-set check over a bare `(role, format)` pair — the **key-free** entry point.
+///
+/// [`verify_still_format`] takes a signed [`DerivativeManifest`], which a key-free receiver
+/// (the server's upload gate) never holds: it sees the unencrypted envelope projection, which
+/// declares the derivative's role and format as two plain fields. Both entry points answer
+/// identically for the same pair, because [`verify_still_format`] is this function applied to
+/// the manifest's own fields — there is one closed set and one check over it.
+///
+/// # Errors
+/// An unrecognised still-role format is `Err(format.to_string())`, exactly as
+/// [`verify_still_format`] reports it.
+pub fn verify_still_role_format(
+    role: DerivativeRole,
+    format: &str,
+) -> Result<Option<DerivativeFormat>, String> {
+    match role {
+        DerivativeRole::Thumbnail | DerivativeRole::Preview => DerivativeFormat::parse(format)
+            .map(Some)
+            .ok_or_else(|| format.to_owned()),
         // Not a still. The embedding-role format grammar belongs to `crate::ml`.
         DerivativeRole::Embedding => Ok(None),
     }
@@ -160,5 +175,41 @@ mod tests {
         }
         assert!(!DerivativeFormat::is_recognized("image/future-codec"));
         assert!(!DerivativeFormat::is_recognized("embedding/mobileclip-b"));
+    }
+
+    /// The key-free pair check is the closed set itself: every still role accepts exactly the
+    /// recognised formats, refuses everything else by naming it, and an embedding role is out of
+    /// the set's scope rather than a violation of it.
+    #[test]
+    fn the_key_free_pair_check_accepts_the_closed_set_and_names_the_rest() {
+        for role in [DerivativeRole::Thumbnail, DerivativeRole::Preview] {
+            for format in [
+                DerivativeFormat::Jxl,
+                DerivativeFormat::Avif,
+                DerivativeFormat::WebP,
+                DerivativeFormat::Original,
+            ] {
+                assert_eq!(
+                    verify_still_role_format(role, format.mime()),
+                    Ok(Some(format))
+                );
+            }
+            for unknown in ["image/future-codec", "image/jpeg", "IMAGE/JXL", ""] {
+                assert_eq!(
+                    verify_still_role_format(role, unknown),
+                    Err(unknown.to_owned()),
+                    "{role:?} must refuse {unknown:?}"
+                );
+            }
+        }
+        assert_eq!(
+            verify_still_role_format(DerivativeRole::Embedding, "embedding/mobileclip-b"),
+            Ok(None)
+        );
+        assert_eq!(
+            verify_still_role_format(DerivativeRole::Embedding, "image/future-codec"),
+            Ok(None),
+            "the embedding grammar is not this set's to judge"
+        );
     }
 }

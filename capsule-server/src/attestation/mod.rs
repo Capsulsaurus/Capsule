@@ -37,9 +37,18 @@
 //!
 //! The other direction is the unrecoverable one: a receipt is evidence a client may keep
 //! forever, and one attesting to a write that never landed cannot be withdrawn from whoever
-//! already has it. Real atomicity arrives with the Postgres adapter, where both are rows in one
-//! transaction; until then this is an ordering with a stated failure mode rather than a
-//! guarantee dressed up as one.
+//! already has it. So this is an ordering with a stated failure mode rather than a guarantee
+//! dressed up as one — and it stays one with the durable adapter.
+//! [`postgres::PostgresReceipts`] makes the log itself durable and its chain allocation one
+//! transaction, but the asset index is a separate port over its own pool, so the receipt and the
+//! `uploaded` flip are still two commits in the order above. Folding them into one transaction
+//! needs a port that spans both, which no adapter here has.
+//!
+//! # Adapters
+//!
+//! [`InMemoryReceipts`] is the deterministic double, [`postgres::PostgresReceipts`] the durable
+//! log, and [`conformance`] the suite both pass. Both build the receipt through one shared
+//! function, so the signed shape cannot differ between them.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -264,42 +273,19 @@ impl ReceiptLog for InMemoryReceipts {
 
             // Position and predecessor, allocated under the lock the append happens under.
             let receipt_seq = inner.chain.len() as u64 + 1;
-            let prior_receipt_hash = inner
-                .chain
-                .last()
-                .map(|prior| hash_bytes(&prior.to_canonical_cbor()));
+            let prior_receipt_hash = inner.chain.last().map(chain_hash);
 
-            let core = CustodyReceiptCore {
-                version: RECEIPT_VERSION.to_owned(),
-                crypto_suite_id: draft.crypto_suite_id,
-                protocol_version: draft.protocol_version,
-                server_id: signer.server_id().to_owned(),
-                server_key_id: signer.key_id(),
-                receipt_seq,
-                prior_receipt_hash,
-                upload_id: draft.upload_id.as_str().to_owned(),
-                asset_id: draft.asset_id.as_str().to_owned(),
-                blob_role: draft.blob_role,
-                ciphertext_hash: draft.ciphertext_hash,
-                size: draft.size,
-                envelope_hash: draft.envelope_hash,
-                uploaded_by_user: draft.uploaded_by_user,
-                uploaded_by_device: draft.uploaded_by_device,
-                received_at: draft.received_at,
-            };
-            let receipt = CustodyReceipt {
-                server_sig: signer.sign(&core.signing_bytes()),
-                core,
-            };
+            let upload_id = draft.upload_id.clone();
+            let receipt = sign_receipt(draft, signer, receipt_seq, prior_receipt_hash);
 
             tracing::info!(
-                upload_id = %draft.upload_id,
-                asset = %draft.asset_id,
+                upload_id = %upload_id,
+                asset = %receipt.core.asset_id,
                 receipt_seq,
                 "issued a custody receipt"
             );
             let position = inner.chain.len();
-            inner.by_upload.insert(draft.upload_id, position);
+            inner.by_upload.insert(upload_id, position);
             inner.chain.push(receipt.clone());
             Ok(receipt)
         })
@@ -325,6 +311,47 @@ impl ReceiptLog for InMemoryReceipts {
                 .collect())
         })
     }
+}
+
+/// Sign `draft` at chain position `receipt_seq`, after the receipt `prior_receipt_hash` names.
+///
+/// The one place a receipt core is assembled, shared by every [`ReceiptLog`] adapter. The
+/// position and the predecessor are the adapter's to allocate under its own lock; everything
+/// else about the receipt is decided here, so two adapters cannot sign two different shapes of
+/// the same custody event.
+pub(crate) fn sign_receipt(
+    draft: ReceiptDraft,
+    signer: &dyn ReceiptSigner,
+    receipt_seq: u64,
+    prior_receipt_hash: Option<Hash32>,
+) -> CustodyReceipt {
+    let core = CustodyReceiptCore {
+        version: RECEIPT_VERSION.to_owned(),
+        crypto_suite_id: draft.crypto_suite_id,
+        protocol_version: draft.protocol_version,
+        server_id: signer.server_id().to_owned(),
+        server_key_id: signer.key_id(),
+        receipt_seq,
+        prior_receipt_hash,
+        upload_id: draft.upload_id.as_str().to_owned(),
+        asset_id: draft.asset_id.as_str().to_owned(),
+        blob_role: draft.blob_role,
+        ciphertext_hash: draft.ciphertext_hash,
+        size: draft.size,
+        envelope_hash: draft.envelope_hash,
+        uploaded_by_user: draft.uploaded_by_user,
+        uploaded_by_device: draft.uploaded_by_device,
+        received_at: draft.received_at,
+    };
+    CustodyReceipt {
+        server_sig: signer.sign(&core.signing_bytes()),
+        core,
+    }
+}
+
+/// The hash a receipt's successor names as its `prior_receipt_hash`.
+pub(crate) fn chain_hash(receipt: &CustodyReceipt) -> Hash32 {
+    hash_bytes(&receipt.to_canonical_cbor())
 }
 
 /// The attestation module's collaborators.
@@ -395,6 +422,11 @@ impl AttestationContext {
         self.signer.as_ref()
     }
 }
+
+pub mod conformance;
+pub mod postgres;
+
+pub use self::postgres::PostgresReceipts;
 
 #[cfg(test)]
 mod tests;

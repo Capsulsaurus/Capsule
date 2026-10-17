@@ -1775,14 +1775,13 @@ mod tests {
         let client = AuthClient::new(&server.base_url).unwrap();
         // `expect_err` needs `Debug` on the ok arm, and `Session` deliberately has none — it
         // holds live tokens.
-        let error = match client
+        let Err(error) = client
             .login("a@example.com", "pw")
             .await
             .unwrap()
             .into_session()
-        {
-            Ok(_) => panic!("a challenge is not a session"),
-            Err(error) => error,
+        else {
+            panic!("a challenge is not a session")
         };
 
         assert!(matches!(error, AuthError::SecondFactorRequired));

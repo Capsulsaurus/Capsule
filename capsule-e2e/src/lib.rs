@@ -20,8 +20,11 @@
 //!
 //! - the **directory publish** ([`Device::publish_directory`]): the server requires the
 //!   `X-Capsule-Identity-Key` header on every publish and the SDK's `DirectoryClient` does not
-//!   send it (issue #466), and a directory must name the *server's* account id, which a
-//!   `Workspace` cannot learn (issue #467).
+//!   send it (issue #466).
+//!
+//! The library adopts the *server's* account id at registration
+//! ([`Workspace::bind_account_id`]), so the directory and every manifest it signs name the
+//! account the server knows.
 //!
 //! Every test that uses this crate names its case — `E2E case N` — so `rg "E2E case N"` finds
 //! it, per the module map's contract.
@@ -205,8 +208,8 @@ pub struct Device {
     pub email: String,
     /// The live SDK session; clone it freely, clones share one token store.
     pub session: Session,
-    /// The **server's** id for this account, read from `GET /v1/auth/profile`. Distinct from
-    /// `workspace.user_id()`, which the library mints locally — there is no seam to align them.
+    /// The **server's** id for this account, read from `GET /v1/auth/profile`. The library is
+    /// bound to it at registration, so `workspace.user_id()` is the same id.
     pub user_id: Uuid,
     /// The real library.
     pub workspace: Workspace,
@@ -246,6 +249,9 @@ impl Device {
         let staging = tempfile::tempdir().expect("a temp staging dir");
         let mut workspace =
             Workspace::create_with_params(root.path(), PASSPHRASE, FAST_KDF).expect("a library");
+        workspace
+            .bind_account_id(user_id)
+            .expect("a fresh library adopts the server's account id");
         let default_album = workspace.default_album_id();
         workspace
             .ensure_album(default_album, "Imports")

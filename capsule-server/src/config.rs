@@ -165,8 +165,8 @@ impl fmt::Debug for SecretBytes {
 
 /// Which family of adapters a process runs on.
 ///
-/// Two arms, and the second one is not implemented yet — see
-/// [`assemble`](crate::boot::assemble). It is an enum rather than a trait because the
+/// Two arms, both assembled by [`assemble`](crate::boot::assemble). It is an enum rather than a
+/// trait because the
 /// `Arc<dyn Port>` fields in [`Modules`](crate::app::Modules) already **are** the abstraction;
 /// a second one over the top would abstract the composition root from itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

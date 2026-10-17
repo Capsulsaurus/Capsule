@@ -205,18 +205,7 @@ mod tests {
     use crate::domain::{MemberRole, StackType};
 
     fn paths(names: &[&str]) -> Vec<PathBuf> {
-        names.iter().map(|n| PathBuf::from(n)).collect()
-    }
-
-    fn find_candidate<'a>(
-        candidates: &'a [ImportCandidate],
-        primary: &str,
-    ) -> Option<&'a ImportCandidate> {
-        candidates.iter().find(|c| {
-            c.members
-                .iter()
-                .any(|(p, r)| p.to_string_lossy() == primary && *r == MemberRole::Primary)
-        })
+        names.iter().map(PathBuf::from).collect()
     }
 
     #[test]

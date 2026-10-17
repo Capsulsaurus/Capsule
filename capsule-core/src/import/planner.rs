@@ -499,8 +499,10 @@ mod tests {
         db.insert_asset(&row).unwrap();
 
         let scan = scan(&[tmp.path().to_path_buf()]).unwrap();
-        let mut config = ImportConfig::default();
-        config.force_reimport_duplicates = true;
+        let config = ImportConfig {
+            force_reimport_duplicates: true,
+            ..ImportConfig::default()
+        };
         let plan = plan(&scan, &db, &config).unwrap();
 
         assert_eq!(

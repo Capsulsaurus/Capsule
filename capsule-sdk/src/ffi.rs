@@ -292,6 +292,11 @@ pub struct FfiManifestEnvelope {
     pub key_mode: String,
     /// Hash of the bundle's metadata blob, when known.
     pub metadata_blob_hash: Option<String>,
+    /// A derivative blob's role (`thumbnail | preview | embedding`); `None` for every other
+    /// blob.
+    pub derivative_role: Option<String>,
+    /// A derivative blob's format, e.g. `image/jxl`; set exactly when `derivative_role` is.
+    pub derivative_format: Option<String>,
     /// The authoring user.
     pub created_by_user: String,
     /// The authoring device.
@@ -321,6 +326,8 @@ impl From<FfiManifestEnvelope> for ManifestEnvelope {
             chunk_size: env.chunk_size,
             key_mode: env.key_mode,
             metadata_blob_hash: env.metadata_blob_hash,
+            derivative_role: env.derivative_role,
+            derivative_format: env.derivative_format,
             created_by_user: env.created_by_user,
             created_by_device: env.created_by_device,
             client_version: env.client_version,
@@ -345,6 +352,8 @@ impl From<ManifestEnvelope> for FfiManifestEnvelope {
             chunk_size: env.chunk_size,
             key_mode: env.key_mode,
             metadata_blob_hash: env.metadata_blob_hash,
+            derivative_role: env.derivative_role,
+            derivative_format: env.derivative_format,
             created_by_user: env.created_by_user,
             created_by_device: env.created_by_device,
             client_version: env.client_version,

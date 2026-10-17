@@ -235,6 +235,62 @@ pub async fn the_collector_releases_by_address_and_the_ledger_names_the_account(
     assert_eq!(ok(h.quotas().usage(&owner).await, "read usage").used, 0);
 }
 
+/// A contributor stays charged until the collector releases the bytes (issue #473).
+///
+/// The ledger's half of design/quota.md's "Departed album members" decision: removing a writer
+/// member from an album's roster reclaims nothing, by design. The member's upload is charged to
+/// them while the album owner holds it, and nothing the owner can say to the ledger moves it.
+/// Charging the same address is a merge, and releasing it is another account's reservation. What
+/// takes the bytes off the member's ledger is the collector, once the owner or a current writer
+/// member has deleted the asset and the last reference is gone. An adapter that let the owner "adopt" the bytes, or let
+/// the owner's release clear the member's charge, would let one account's quota pressure act on
+/// another account's photos.
+pub async fn a_contributors_attribution_survives_until_the_collector_releases_it(h: &dyn Harness) {
+    let member = user("departed", 1);
+    let owner = user("departed", 2);
+    let contributed = address("departed", 1);
+    ok(
+        h.quotas()
+            .charge(&member, &contributed, 96, day(0), limits())
+            .await,
+        "charge a member's upload",
+    );
+
+    assert_eq!(
+        ok(
+            h.quotas()
+                .charge(&owner, &contributed, 96, day(1), limits())
+                .await,
+            "charge the owner for bytes a member already holds",
+        ),
+        ChargeOutcome::AlreadyAttributed,
+        "the owner cannot adopt a member's bytes by charging them",
+    );
+    assert!(
+        !ok(
+            h.quotas().release(&owner, &contributed).await,
+            "release a member's attribution as the owner",
+        ),
+        "the owner cannot free a member's bytes off the member's ledger",
+    );
+    assert_eq!(ok(h.quotas().usage(&owner).await, "read usage").used, 0);
+    assert_eq!(
+        ok(h.quotas().usage(&member).await, "read usage").used,
+        96,
+        "the member stays charged while the owner still holds the bytes",
+    );
+
+    assert_eq!(
+        ok(
+            h.quotas().release_attribution(&contributed).await,
+            "release by address",
+        ),
+        Some((member.clone(), 96)),
+        "the collector credits the member, not the account whose delete exposed the blob",
+    );
+    assert_eq!(ok(h.quotas().usage(&member).await, "read usage").used, 0);
+}
+
 /// Releasing an address the ledger never saw is `None` rather than an error.
 ///
 /// The ordinary case for a blob the ledger never saw. A sweep that treated it as a failure would
@@ -351,6 +407,7 @@ pub async fn run_all(h: &dyn Harness) {
     releasing_a_reservation_credits_the_bytes_back(h).await;
     another_accounts_reservation_is_not_releasable(h).await;
     the_collector_releases_by_address_and_the_ledger_names_the_account(h).await;
+    a_contributors_attribution_survives_until_the_collector_releases_it(h).await;
     releasing_an_unattributed_address_is_none_rather_than_an_error(h).await;
 
     the_crossing_is_stamped_once_and_cleared_by_going_under(h).await;
@@ -396,6 +453,7 @@ mod tests {
         releasing_a_reservation_credits_the_bytes_back,
         another_accounts_reservation_is_not_releasable,
         the_collector_releases_by_address_and_the_ledger_names_the_account,
+        a_contributors_attribution_survives_until_the_collector_releases_it,
         releasing_an_unattributed_address_is_none_rather_than_an_error,
         the_crossing_is_stamped_once_and_cleared_by_going_under,
         a_collector_release_clears_the_over_limit_clock,

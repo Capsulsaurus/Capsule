@@ -32,7 +32,10 @@
 
 use capsule_core::crypto::hash::Hash32;
 use capsule_core::crypto::keys::AmkVersion;
-use capsule_core::crypto::provenance::{ASSET_MANIFEST_VERSION, Action, KeyMode, ManifestCore};
+use capsule_core::crypto::provenance::{
+    ASSET_MANIFEST_VERSION, Action, DerivativeRole, KeyMode, ManifestCore,
+};
+use capsule_core::derivative_format::verify_still_role_format;
 use capsule_core::validation::{
     EnvelopeContext, EnvelopeReject, HandshakeReject, check_manifest_envelope, check_suite,
     content_type_allowed, hash_length_ok, protocol_gate, size_in_bounds,
@@ -94,6 +97,21 @@ pub struct ManifestEnvelope {
     /// so no member needs to name another and requiring it would be a wire change for no gain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub original_blob_hash: Option<String>,
+    /// The derivative's role — `thumbnail`, `preview`, or `embedding` — copied from its signed
+    /// `DerivativeManifest.role`. **Required on a `derivative` blob and refused on every other**.
+    ///
+    /// The server cannot read the signed derivative manifest (it is key-free), so the closed
+    /// still-format check the tier table requires of every receiver runs over this declared
+    /// pair instead. A forged pair buys nothing: the client that verifies the signed manifest
+    /// runs the same check over the signed values.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derivative_role: Option<String>,
+    /// The derivative's format — `DerivativeManifest.format`, e.g. `image/jxl`. Required and
+    /// refused exactly as [`Self::derivative_role`] is, and must equal the blob's declared
+    /// `content_type`. For a `thumbnail` or `preview` an unrecognised value is
+    /// [`GateReject::UnknownDerivativeFormat`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derivative_format: Option<String>,
     /// The account that created the asset.
     pub created_by_user: String,
     /// The device that created it, as a UUID — invariant 7's subject.
@@ -189,6 +207,10 @@ pub enum GateReject {
     /// A `replace`'s manifest does not name the bundle it commits to (`S-C43`). Carries the
     /// field that is missing.
     ReplaceIncomplete(&'static str),
+    /// A `thumbnail` or `preview` derivative declares a format outside the closed still set —
+    /// the tier table's structural rejection, never a future codec to ignore. Carries the
+    /// unrecognised value.
+    UnknownDerivativeFormat(String),
 }
 
 /// Run the create-time battery: invariants 1–8 and the 15-family consistency checks.
@@ -261,7 +283,64 @@ fn check_shared(
     }
 
     // Invariant 15 family.
-    check_consistency(declared, envelope)
+    check_consistency(declared, envelope)?;
+
+    // The closed still-derivative format set, on receipt.
+    check_derivative(declared, envelope)
+}
+
+/// The tier table's closed-format rule, run by the receiver: a `thumbnail` or `preview`
+/// derivative whose declared format is outside the closed still set is a structural rejection.
+///
+/// The check is [`capsule_core::derivative_format::verify_still_role_format`] — the same one
+/// the producer runs before shipping, through its key-free entry point, because the server
+/// holds the envelope's declared `(role, format)` pair and never the signed manifest.
+///
+/// The pair is **required on a derivative and refused on anything else**. Optional on a
+/// derivative would make the closed set bypassable by omission, and a pair on an original or a
+/// metadata blob contradicts the role the request declares. The format must also equal the
+/// declared `content_type`, which is the same value on the wire, so the two cannot disagree
+/// about what the bytes are.
+fn check_derivative(
+    declared: &DeclaredBlob<'_>,
+    envelope: &ManifestEnvelope,
+) -> Result<(), GateReject> {
+    if declared.blob_role != BlobRole::Derivative {
+        if envelope.derivative_role.is_some() {
+            return Err(GateReject::EnvelopeMismatch("derivative_role"));
+        }
+        if envelope.derivative_format.is_some() {
+            return Err(GateReject::EnvelopeMismatch("derivative_format"));
+        }
+        return Ok(());
+    }
+
+    let role: DerivativeRole = envelope
+        .derivative_role
+        .as_deref()
+        .and_then(parse_wire_enum)
+        .ok_or(GateReject::EnvelopeMismatch("derivative_role"))?;
+    let format = envelope
+        .derivative_format
+        .as_deref()
+        .ok_or(GateReject::EnvelopeMismatch("derivative_format"))?;
+    if format != declared.content_type {
+        return Err(GateReject::EnvelopeMismatch("derivative_format"));
+    }
+
+    match verify_still_role_format(role, format) {
+        Ok(_) => Ok(()),
+        // `Err(format)` is an unrecognised still format: a structural rejection, not a future
+        // codec.
+        Err(format) => {
+            tracing::debug!(
+                ?role,
+                %format,
+                "upload gate: still-role derivative names a format outside the closed set"
+            );
+            Err(GateReject::UnknownDerivativeFormat(format))
+        }
+    }
 }
 
 /// Run the same battery for a `replace`, plus the three things a replace must say (`S-C43`).
@@ -360,7 +439,8 @@ pub fn check_finalize(
 ///
 /// It decides 1, 2, 6, 7, 8, the 15 family, and **16** — the last by refusing every action that
 /// moves blob bytes, because those are uploads by definition (`create` is `S-C1`'s surface and
-/// `replace` is `S-C43`'s).
+/// `replace` is `S-C43`'s). It also refuses the derivative pair (`derivative_role`,
+/// `derivative_format`), which only a derivative upload may carry.
 ///
 /// It does **not** decide **17** or **18**, and the way it does not is worth stating plainly:
 /// the shared battery is handed the manifest's *own* claims as the stored values, so both
@@ -406,6 +486,16 @@ pub fn check_op(
             | Action::DerivativeReplace
     ) {
         return Err(GateReject::ActionNotAllowed);
+    }
+
+    // The derivative pair describes an uploaded derivative blob, and a lifecycle write uploads
+    // none, so it is refused here exactly as `check_derivative` refuses it on a non-derivative
+    // upload. Accepting it silently would leave a declaration nothing ever checks.
+    if envelope.derivative_role.is_some() {
+        return Err(GateReject::EnvelopeMismatch("derivative_role"));
+    }
+    if envelope.derivative_format.is_some() {
+        return Err(GateReject::EnvelopeMismatch("derivative_format"));
     }
 
     let device_added_at = as_rfc3339(context.device_added_at);
@@ -610,6 +700,8 @@ mod tests {
             chunk_size: 65_536,
             key_mode: "derived".to_owned(),
             original_blob_hash: None,
+            derivative_role: None,
+            derivative_format: None,
             metadata_blob_hash: None,
             created_by_user: "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e62".to_owned(),
             created_by_device: DEVICE.to_owned(),
@@ -841,6 +933,137 @@ mod tests {
         let original = self::envelope();
         let view = declared(&original, BlobRole::Original);
         assert_eq!(check_create(&view, &original, &context(&policy)), Ok(()));
+    }
+
+    /// A derivative upload with its declared pair, as the SDK sends it: the format rides both
+    /// the top-level `content_type` and the envelope's `derivative_format`.
+    fn derivative_envelope(role: &str, format: &str) -> ManifestEnvelope {
+        let mut envelope = envelope();
+        envelope.derivative_role = Some(role.to_owned());
+        envelope.derivative_format = Some(format.to_owned());
+        envelope
+    }
+
+    /// The default policy with one more content type admitted, so a value reaches the
+    /// derivative check rather than stopping at invariant 5.
+    fn policy_admitting(extra: &'static str) -> UploadPolicy {
+        UploadPolicy::default().with_content_types(
+            super::super::policy::DEFAULT_CONTENT_TYPES
+                .iter()
+                .copied()
+                .chain([extra]),
+        )
+    }
+
+    fn check_derivative_upload(envelope: &ManifestEnvelope) -> Result<(), GateReject> {
+        let policy = policy();
+        let mut view = declared(envelope, BlobRole::Derivative);
+        view.content_type = envelope.derivative_format.as_deref().unwrap_or("image/jxl");
+        check_create(&view, envelope, &context(&policy))
+    }
+
+    #[test]
+    fn a_still_derivative_in_the_closed_set_is_accepted() {
+        for role in ["thumbnail", "preview"] {
+            assert_eq!(
+                check_derivative_upload(&derivative_envelope(role, "image/jxl")),
+                Ok(()),
+                "a {role} in JPEG XL is the format this build produces"
+            );
+        }
+    }
+
+    #[test]
+    fn a_still_derivative_outside_the_closed_set_is_a_structural_rejection() {
+        // Invariant 5 runs first and its enum is the policy's, so each value is admitted there
+        // and reaches the derivative check; the refusal is the closed set's, not the content
+        // type's.
+        let unknown = "image/future-codec";
+        let policy = policy_admitting(unknown);
+        for role in ["thumbnail", "preview"] {
+            let envelope = derivative_envelope(role, unknown);
+            let mut view = declared(&envelope, BlobRole::Derivative);
+            view.content_type = unknown;
+            assert_eq!(
+                check_create(&view, &envelope, &context(&policy)),
+                Err(GateReject::UnknownDerivativeFormat(unknown.to_owned())),
+                "a {role} in an unrecognised format must be refused on receipt"
+            );
+            let mut replace = envelope.clone();
+            replace.action = "replace".to_owned();
+            replace.prior_provenance_hash = Some(CIPHERTEXT_HASH.to_owned());
+            assert_eq!(
+                check_replace(&view, &replace, &context(&policy)),
+                Err(GateReject::UnknownDerivativeFormat(unknown.to_owned())),
+                "a replace ships derivatives through the same gate"
+            );
+        }
+
+        // Under the default policy: `image/jpeg` is an admitted *original* content type, so
+        // invariant 5 passes it, and only the closed still set stands between a JPEG thumbnail
+        // and storage.
+        assert_eq!(
+            check_derivative_upload(&derivative_envelope("thumbnail", "image/jpeg")),
+            Err(GateReject::UnknownDerivativeFormat("image/jpeg".to_owned()))
+        );
+    }
+
+    #[test]
+    fn a_derivative_must_declare_its_pair_and_nothing_else_may() {
+        // Omission would make the closed set bypassable.
+        let mut no_role = derivative_envelope("thumbnail", "image/jxl");
+        no_role.derivative_role = None;
+        assert_eq!(
+            check_derivative_upload(&no_role),
+            Err(GateReject::EnvelopeMismatch("derivative_role"))
+        );
+        let mut no_format = derivative_envelope("thumbnail", "image/jxl");
+        no_format.derivative_format = None;
+        assert_eq!(
+            check_derivative_upload(&no_format),
+            Err(GateReject::EnvelopeMismatch("derivative_format"))
+        );
+
+        // The role is a closed wire enum.
+        assert_eq!(
+            check_derivative_upload(&derivative_envelope("poster", "image/jxl")),
+            Err(GateReject::EnvelopeMismatch("derivative_role"))
+        );
+
+        // The pair may not contradict the content type the request declares.
+        let envelope = derivative_envelope("preview", "image/jxl");
+        let policy = policy();
+        let mut view = declared(&envelope, BlobRole::Derivative);
+        view.content_type = "image/jpeg";
+        assert_eq!(
+            check_create(&view, &envelope, &context(&policy)),
+            Err(GateReject::EnvelopeMismatch("derivative_format"))
+        );
+
+        // A non-derivative blob carrying the pair contradicts its declared role.
+        let carried = derivative_envelope("thumbnail", "image/jxl");
+        let view = declared(&carried, BlobRole::Original);
+        assert_eq!(
+            check_create(&view, &carried, &context(&policy)),
+            Err(GateReject::EnvelopeMismatch("derivative_role"))
+        );
+        let mut format_only = self::envelope();
+        format_only.derivative_format = Some("image/jxl".to_owned());
+        let view = declared(&format_only, BlobRole::Original);
+        assert_eq!(
+            check_create(&view, &format_only, &context(&policy)),
+            Err(GateReject::EnvelopeMismatch("derivative_format"))
+        );
+    }
+
+    #[test]
+    fn an_embedding_derivative_is_outside_the_still_set_not_a_violation_of_it() {
+        let unknown = "embedding/mobileclip-b";
+        let policy = policy_admitting(unknown);
+        let envelope = derivative_envelope("embedding", unknown);
+        let mut view = declared(&envelope, BlobRole::Derivative);
+        view.content_type = unknown;
+        assert_eq!(check_create(&view, &envelope, &context(&policy)), Ok(()));
     }
 
     #[test]

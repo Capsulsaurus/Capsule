@@ -124,19 +124,29 @@ struct Serving {
 impl Serving {
     /// Spawn `serve --memory` on an ephemeral port and wait for it to say where it landed.
     fn spawn(blob_root: &std::path::Path) -> Self {
-        let mut child = server(&[
-            "serve",
-            "--memory",
-            "--listen",
-            EPHEMERAL,
-            "--blob-root",
-            &blob_root.display().to_string(),
-        ])
-        .env("JWT_ED25519_DER", EXAMPLE_DER)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .expect("the binary spawns");
+        Self::spawn_with(blob_root, &["--memory"], &[])
+    }
+
+    /// Spawn `serve` on an ephemeral port with `flags` and `environment` on top of the signing
+    /// key, and wait for it to say where it landed.
+    fn spawn_with(
+        blob_root: &std::path::Path,
+        flags: &[&str],
+        environment: &[(&str, &str)],
+    ) -> Self {
+        let root = blob_root.display().to_string();
+        let mut args = vec!["serve", "--listen", EPHEMERAL, "--blob-root", &root];
+        args.extend_from_slice(flags);
+        let mut command = server(&args);
+        command.env("JWT_ED25519_DER", EXAMPLE_DER);
+        for (key, value) in environment {
+            command.env(key, value);
+        }
+        let mut child = command
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .expect("the binary spawns");
 
         let stdout = child.stdout.take().expect("stdout is piped");
         let mut lines = BufReader::new(stdout).lines();
@@ -473,8 +483,8 @@ fn an_applied_collection_pass_marks_rather_than_sweeps_on_its_first_look() {
     // later pass once the grace window has passed. In this profile the mark store does not
     // survive the process, so a fresh invocation can only ever mark — which is stated in
     // `boot`'s docs and asserted here rather than left as a surprise. The cross-invocation
-    // sweep needs the durable mark store #402 brings; `gc`'s own unit tests prove the
-    // mark-then-sweep sequence in process.
+    // sweep is the durable profile's, and `postgres_conformance` below drives it across real
+    // processes; `gc`'s own unit tests prove the mark-then-sweep sequence in process.
     let (root, address) = seeded_root();
     let blob = seeded_blob(root.path(), &address);
 
@@ -562,10 +572,10 @@ fn the_operator_commands_need_no_key_material() {
 }
 
 #[test]
-fn an_operator_command_without_memory_is_told_that_and_not_about_valkey() {
-    // An operator running `capsule-server scrub` has typically set no backend variable at all.
-    // Naming `VALKEY_URL` — which these commands never demand — would send them to configure
-    // something that would not have helped; what is missing is the durable index they read.
+fn an_operator_command_without_memory_is_told_about_the_database_first() {
+    // Without `--memory` these commands run on the durable stores, and the first one they read
+    // is the index. An operator who set no backend variable at all is told about
+    // `DATABASE_URL` before `VALKEY_URL`, which is the order the workers open them in.
     let root = tempfile::tempdir().expect("a scratch directory");
     for subcommand in ["gc", "purge", "scrub"] {
         let (code, _, stderr) = run(&mut server(&[
@@ -574,7 +584,7 @@ fn an_operator_command_without_memory_is_told_that_and_not_about_valkey() {
             &root.path().display().to_string(),
         ]));
         assert_ne!(code, Some(0), "{subcommand}: {stderr}");
-        assert!(stderr.contains("--memory"), "{subcommand}: {stderr}");
+        assert!(stderr.contains("DATABASE_URL"), "{subcommand}: {stderr}");
         assert!(!stderr.contains("VALKEY_URL"), "{subcommand}: {stderr}");
     }
 }
@@ -660,4 +670,181 @@ fn an_operator_command_without_a_blob_root_refuses_by_name() {
     let (code, _, stderr) = run(&mut server(&["scrub", "--memory"]));
     assert_eq!(code, Some(2), "{stderr}");
     assert!(stderr.contains("BLOB_ROOT"), "{stderr}");
+}
+
+/// The durable profile, as processes: a real Postgres and a real Valkey, and a server that is
+/// killed rather than drained.
+///
+/// Named `postgres_conformance` so `.config/nextest.toml` runs it in the one-thread `containers`
+/// group, and gated on **both** tiers — `CAPSULE_TEST_POSTGRES=1` and `CAPSULE_TEST_VALKEY=1` —
+/// because the durable arm opens both before it builds anything. Without them every case here
+/// prints why it skipped and passes, so `mise run test-rust` still needs no container runtime.
+mod postgres_conformance {
+    use std::process::Stdio;
+
+    use server_migration::MigratorTrait as _;
+    use testcontainers::runners::AsyncRunner as _;
+    use testcontainers::{ContainerAsync, ImageExt as _};
+    use testcontainers_modules::postgres::Postgres;
+    use testcontainers_modules::valkey::{VALKEY_PORT, Valkey};
+
+    use super::{EXAMPLE_SEED, Serving, run, seeded_blob, seeded_root, server};
+
+    /// The tags `capsule-server/compose.yaml` runs, as the in-crate harnesses pin them.
+    const POSTGRES_TAG: &str = "18";
+    /// See [`POSTGRES_TAG`].
+    const VALKEY_TAG: &str = "9.0.4";
+
+    /// The rootless-podman user-namespace mode, when the host needs one (`postgres::testing`).
+    const USERNS_MODE: &str = "CAPSULE_TEST_CONTAINER_USERNS";
+
+    /// A migrated Postgres and a Valkey, held for the length of a case.
+    struct Backends {
+        database_url: String,
+        valkey_url: String,
+        _postgres: ContainerAsync<Postgres>,
+        _valkey: ContainerAsync<Valkey>,
+    }
+
+    impl Backends {
+        /// The settings a durable process needs on top of its blob root and signing key.
+        fn environment(&self) -> [(&str, &str); 3] {
+            [
+                ("DATABASE_URL", self.database_url.as_str()),
+                ("VALKEY_URL", self.valkey_url.as_str()),
+                ("ATTESTATION_KEY_SEED", EXAMPLE_SEED),
+            ]
+        }
+    }
+
+    /// Both backends, migrated, or `None` — logged — unless both tiers are admitted.
+    async fn backends(case: &str) -> Option<Backends> {
+        let admitted = |gate: &str| std::env::var(gate).ok().as_deref() == Some("1");
+        if !admitted("CAPSULE_TEST_POSTGRES") || !admitted("CAPSULE_TEST_VALKEY") {
+            eprintln!(
+                "skipping {case}: the durable process tier needs CAPSULE_TEST_POSTGRES=1 and \
+                 CAPSULE_TEST_VALKEY=1 with a reachable container runtime"
+            );
+            return None;
+        }
+        let userns = std::env::var(USERNS_MODE)
+            .ok()
+            .filter(|mode| !mode.is_empty());
+
+        let mut postgres = Postgres::default()
+            .with_tag(POSTGRES_TAG)
+            // Off the image's declared volume, for the reason `postgres::testing` gives.
+            .with_env_var("PGDATA", "/tmp/pgdata");
+        if let Some(mode) = &userns {
+            postgres = postgres.with_userns_mode(mode);
+        }
+        let postgres = postgres
+            .start()
+            .await
+            .expect("the Postgres container starts");
+        let host = postgres.get_host().await.expect("a host");
+        let port = postgres.get_host_port_ipv4(5432).await.expect("a port");
+        let database_url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
+        let connection = capsule_server::postgres::connect(&database_url)
+            .await
+            .expect("the container accepts a connection");
+        // What an operator runs before the first `serve`: the server refuses an unmigrated
+        // schema rather than migrating it itself.
+        server_migration::Migrator::up(&connection, None)
+            .await
+            .expect("the schema applies");
+        drop(connection);
+
+        let mut valkey = Valkey::default().with_tag(VALKEY_TAG);
+        if let Some(mode) = &userns {
+            valkey = valkey.with_userns_mode(mode);
+        }
+        let valkey = valkey.start().await.expect("the Valkey container starts");
+        let host = valkey.get_host().await.expect("a host");
+        let port = valkey
+            .get_host_port_ipv4(VALKEY_PORT)
+            .await
+            .expect("a port");
+
+        Some(Backends {
+            database_url,
+            valkey_url: format!("redis://{host}:{port}"),
+            _postgres: postgres,
+            _valkey: valkey,
+        })
+    }
+
+    /// `gc --apply` in the durable profile, with no grace window, over `root`.
+    fn durable_gc(root: &std::path::Path, backends: &Backends) -> (Option<i32>, String, String) {
+        let root = root.display().to_string();
+        let mut command = server(&[
+            "gc",
+            "--apply",
+            "--grace-window-hours",
+            "0",
+            "--blob-root",
+            &root,
+        ]);
+        for (key, value) in backends.environment() {
+            command.env(key, value);
+        }
+        run(command.stdin(Stdio::null()))
+    }
+
+    /// **E2E case 11, the process tier.** A server killed outright loses nothing it committed,
+    /// and the orphan a crashed finalization leaves is reclaimed across processes.
+    ///
+    /// `tests/upload.rs` proves the in-process half: a crash between the blob rename and the
+    /// index commit leaves bytes at their content address that nothing references, and the
+    /// collector marks them. What only processes can show is the rest of that story:
+    ///
+    /// 1. a `serve` that is `SIGKILL`ed — no drain, no shutdown hook — has still kept the account
+    ///    it registered, because the next process over the same Postgres and Valkey signs it in;
+    /// 2. the orphan (seeded onto disk the way the crash leaves it: bytes, no row) is **marked**
+    ///    by one `gc` process and is still on disk afterwards;
+    /// 3. and is **swept** by the next `gc` process, which only a durable mark store makes
+    ///    possible — the `--memory` profile's fresh process can only ever mark.
+    #[tokio::test]
+    async fn a_killed_server_loses_nothing_and_a_later_gc_sweeps_what_an_earlier_one_marked() {
+        let Some(backends) = backends("E2E case 11 across processes").await else {
+            return;
+        };
+        let (root, address) = seeded_root();
+        let blob = seeded_blob(root.path(), &address);
+        let environment = backends.environment();
+
+        // 1. A durable server, and an account in it.
+        let serving = Serving::spawn_with(root.path(), &[], &environment);
+        let auth = capsule_sdk::auth::AuthClient::new(&format!("{}/v1/auth", serving.base_url))
+            .expect("a base url");
+        auth.register("somebody@example.test", "correct horse battery staple")
+            .await
+            .expect("registration succeeds");
+        // `Drop` is `SIGKILL`: the process gets no chance to flush or drain anything.
+        drop(serving);
+
+        let serving = Serving::spawn_with(root.path(), &[], &environment);
+        let auth = capsule_sdk::auth::AuthClient::new(&format!("{}/v1/auth", serving.base_url))
+            .expect("a base url");
+        let signed_in = auth
+            .login("somebody@example.test", "correct horse battery staple")
+            .await
+            .expect("the account a killed process registered signs in to the next one");
+        assert!(signed_in.into_session().is_ok());
+        assert_eq!(serving.terminate(), Some(0));
+
+        // 2. The first pass marks the orphan and leaves it.
+        let (code, stdout, stderr) = durable_gc(root.path(), &backends);
+        assert_eq!(code, Some(0), "stdout: {stdout}\nstderr: {stderr}");
+        assert!(stdout.contains("marked (1)"), "{stdout}");
+        assert!(!stdout.contains("swept ("), "{stdout}");
+        assert!(blob.is_file(), "a first look never sweeps");
+
+        // 3. A later process sweeps it, because the mark outlived the process that wrote it.
+        let (code, stdout, stderr) = durable_gc(root.path(), &backends);
+        assert_eq!(code, Some(0), "stdout: {stdout}\nstderr: {stderr}");
+        assert!(stdout.contains("swept (1)"), "{stdout}");
+        assert!(stdout.contains(&address), "{stdout}");
+        assert!(!blob.exists(), "the orphan is reclaimed");
+    }
 }

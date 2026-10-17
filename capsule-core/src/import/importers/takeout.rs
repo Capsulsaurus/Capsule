@@ -809,8 +809,10 @@ mod tests {
         ex.entries
             .iter()
             .find(|e| e.primary_path().ends_with(rel))
-            .map(|e| &e.metadata)
-            .unwrap_or_else(|| panic!("no entry for {rel} under {}", root.display()))
+            .map_or_else(
+                || panic!("no entry for {rel} under {}", root.display()),
+                |e| &e.metadata,
+            )
     }
 
     #[test]
