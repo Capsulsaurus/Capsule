@@ -46073,6 +46073,16 @@
         }
       }
     },
+    "error.upload.unsupported_derivative_format": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This thumbnail or preview is in a format that is not supported."
+          }
+        }
+      }
+    },
     "error.upload.unsupported_media_type": {
       "localizations": {
         "ar": {

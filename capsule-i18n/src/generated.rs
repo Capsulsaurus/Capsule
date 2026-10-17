@@ -503,6 +503,9 @@ pub mod error_codes {
     /// `error.upload.unsupported_content_type`
     pub const UPLOAD_UNSUPPORTED_CONTENT_TYPE: &str = "error.upload.unsupported_content_type";
 
+    /// `error.upload.unsupported_derivative_format`
+    pub const UPLOAD_UNSUPPORTED_DERIVATIVE_FORMAT: &str = "error.upload.unsupported_derivative_format";
+
     /// `error.upload.unsupported_media_type`
     pub const UPLOAD_UNSUPPORTED_MEDIA_TYPE: &str = "error.upload.unsupported_media_type";
 }
