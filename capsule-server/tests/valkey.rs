@@ -375,6 +375,12 @@ async fn the_progress_sweep_pages_by_score_cursor_across_ties_and_drops() {
             .expect("DEL answers");
     }
 
+    // The walk lists only sessions that progressed strictly before its instant, so it runs a
+    // second later — well inside the TTL, so every kept session is still live when it is read.
+    harness
+        .advance(SignedDuration::from_secs(1))
+        .await
+        .expect("advances");
     let swept = harness
         .uploads
         .least_recently_progressed(harness.clock.now(), usize::MAX)
