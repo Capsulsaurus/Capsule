@@ -1165,6 +1165,95 @@ pub async fn an_epoch_that_regresses_the_album_is_refused(index: &dyn AssetIndex
     );
 }
 
+/// How many albums [`racing_epochs_in_one_album_are_decided_in_sequence_order`] races in.
+///
+/// One race is a coin toss for an adapter whose epoch check is not serialized per album; a
+/// handful of independent albums, alternating which op is submitted first, makes the
+/// interleaving that exposes it the likely outcome rather than the lucky one.
+const EPOCH_RACE_ROUNDS: u8 = 16;
+
+/// A manifest hash unique to one op of one epoch-race round.
+///
+/// [`manifest`]'s hashes are one byte repeated; these never are, so they cannot collide with
+/// one, and `applied_manifests` is keyed on the hash globally.
+fn race_manifest(round: u8, which: u8) -> Hash32 {
+    let mut bytes = [0xE5; 32];
+    bytes[0] = round;
+    bytes[1] = which;
+    Hash32(bytes)
+}
+
+/// Two ops on **different** assets of one album, racing across an epoch boundary, are decided
+/// as if one ran entirely before the other.
+///
+/// Invariant 18 is an album rule, so the epoch an op is checked against is the album's high-water
+/// mark — a fact no single asset row holds. An adapter that locks only the target asset reads
+/// that mark with nothing stopping a concurrent op on a sibling from moving it: an op at epoch 1
+/// and an op at epoch 2 both read 0, both pass, and the epoch-1 op can commit *after* the
+/// epoch-2 one. A reader of the feed then sees the album step back to an epoch it had already
+/// left — exactly what [`an_epoch_that_regresses_the_album_is_refused`] forbids sequentially.
+///
+/// No interleaving can be forced from here, so this asserts what holds under every serial
+/// order: either the epoch-1 op is applied and sits **below** the epoch-2 op in the sequence,
+/// or it arrived second and is refused against the epoch the album has moved to.
+pub async fn racing_epochs_in_one_album_are_decided_in_sequence_order(index: &dyn AssetIndex) {
+    for round in 0..EPOCH_RACE_ROUNDS {
+        let case = format!("op-epoch-race-{round}");
+        let (ahead_asset, _) = publish(index, &case, 1).await;
+        let (behind_asset, _) = publish(index, &case, 2).await;
+
+        let mut ahead = op(
+            &case,
+            1,
+            OpAction::MetadataUpdate,
+            head_of(index, &ahead_asset).await,
+            race_manifest(round, 1),
+        );
+        ahead.amk_version = 2;
+        let mut behind = op(
+            &case,
+            2,
+            OpAction::MetadataUpdate,
+            head_of(index, &behind_asset).await,
+            race_manifest(round, 2),
+        );
+        behind.amk_version = 1;
+
+        // Alternate which op is polled first, so neither submission order is the only one tried.
+        let (ahead, behind) = if round % 2 == 0 {
+            tokio::join!(index.apply_op(ahead), index.apply_op(behind))
+        } else {
+            let (behind, ahead) = tokio::join!(index.apply_op(behind), index.apply_op(ahead));
+            (ahead, behind)
+        };
+        let ahead = ok(ahead, "apply the advancing op");
+        let behind = ok(behind, "apply the trailing op");
+
+        let OpOutcome::Applied {
+            sync_seq: ahead_seq,
+            ..
+        } = ahead
+        else {
+            panic!("round {round}: an op advancing the album's epoch was refused: {ahead:?}")
+        };
+        match behind {
+            OpOutcome::Applied {
+                sync_seq: behind_seq,
+                ..
+            } => assert!(
+                behind_seq < ahead_seq,
+                "round {round}: the epoch-1 op was admitted at {behind_seq}, after the epoch-2 op \
+                 at {ahead_seq} — the album's epoch went backwards in its own feed",
+            ),
+            OpOutcome::AmkRegressed { stored } => assert_eq!(
+                stored, 2,
+                "round {round}: a refusal names the epoch the album moved to"
+            ),
+            other => panic!("round {round}: the trailing op answered {other:?}"),
+        }
+    }
+}
+
 /// An op against somebody else's asset, a missing one, or an unpublished one is one answer.
 pub async fn an_op_on_an_asset_that_is_not_the_callers_is_not_found(index: &dyn AssetIndex) {
     let (asset, _) = publish(index, "op-scope", 1).await;
@@ -2028,6 +2117,7 @@ pub async fn run_all(index: &dyn AssetIndex) {
     racing_identical_submissions_apply_once_and_replay_once(index).await;
     delete_and_restore_are_both_publishable_changes(index).await;
     an_epoch_that_regresses_the_album_is_refused(index).await;
+    racing_epochs_in_one_album_are_decided_in_sequence_order(index).await;
     an_op_on_an_asset_that_is_not_the_callers_is_not_found(index).await;
     a_lifecycle_write_repoints_the_provenance_blob(index).await;
     a_replace_repoints_the_original_the_upload_path_may_not_move(index).await;

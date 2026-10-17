@@ -7,7 +7,10 @@
 //! gets it from a row lock held to commit, which is the structure `index/mod.rs` designed the
 //! port around and the one a single-process conformance suite cannot prove. Every mutating
 //! operation here is one `BEGIN … COMMIT` that takes `SELECT … FOR UPDATE` on the asset row
-//! first, mints from `owner_sequences` inside it, and commits both together.
+//! first, mints from `owner_sequences` inside it, and commits both together. A lifecycle op
+//! additionally takes a transaction-scoped advisory lock on its **album** before it reads the
+//! album's epoch (invariant 18), because that mark is a fact about sibling rows the asset lock
+//! does not cover.
 //!
 //! `owner_sequences` is a **counter row**, never a Postgres `SEQUENCE` or a `bigserial`.
 //! `nextval` is deliberately non-transactional: it hands 5 and 6 to two concurrent
@@ -872,6 +875,26 @@ impl AssetIndex for PostgresAssetIndex {
             // Invariant 18, over the **album's** high-water mark rather than this row's: an
             // epoch is an album-wide fact, so an op on a stale asset must not re-admit an epoch
             // the album has already moved past.
+            //
+            // **Serialized per album before the mark is read.** The row lock above covers this
+            // asset only, and at `READ COMMITTED` the `MAX` below would otherwise see nothing a
+            // concurrent op on a *sibling* asset has not yet committed: an epoch-1 op and an
+            // epoch-2 op would both read the old mark, both pass, and the epoch-1 op could mint
+            // — and reach the feed — after the epoch-2 one. A transaction-scoped advisory lock on
+            // the album makes the read, the decision and the write one critical section per
+            // album, which is what the in-memory double's single mutex gives it. The key is
+            // prefixed so it cannot share `membership`'s lock on the same album id; a 32-bit
+            // `hashtext` collision costs serialization, never correctness, as
+            // `membership/postgres.rs` sets out. Each transaction takes exactly one such lock,
+            // always after its one asset-row lock, so two ops cannot wait on each other.
+            transaction
+                .execute(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "SELECT pg_advisory_xact_lock(hashtext('asset_index_album:' || $1))",
+                    [Value::from(op.album_id.as_str().to_owned())],
+                ))
+                .await
+                .map_err(PORT.failing("locking an album's epoch"))?;
             let epoch = transaction
                 .query_one(Statement::from_sql_and_values(
                     DbBackend::Postgres,
