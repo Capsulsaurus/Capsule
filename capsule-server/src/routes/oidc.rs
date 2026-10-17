@@ -695,9 +695,9 @@ fn is_s256_challenge(challenge: &str) -> bool {
 /// Whether `verifier` hashes to the stored `challenge`, compared in constant time.
 ///
 /// The same S256 derivation PKCE uses (RFC 7636 §4.2), so one function is the definition on
-/// both sides of this server. Constant time because the challenge is the one value here an
-/// attacker would want to learn byte by byte; the comparison is of equal-length hashes, so the
-/// length check leaks nothing about the secret.
+/// both sides of this server. Comparing hashes already denies a timing attacker any byte of the
+/// secret; it is constant time anyway, as the drop link's passphrase proof is compared, and
+/// both sides are 43-character hashes, so the length check leaks nothing either.
 fn binding_matches(challenge: &str, verifier: &str) -> bool {
     use subtle::ConstantTimeEq as _;
     let presented = code_challenge(&crate::store::PkceVerifier::new(verifier));
