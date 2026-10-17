@@ -645,7 +645,7 @@ fn no_keys() -> BTreeMap<AmkVersion, Amk> {
 }
 
 const EPOCH: AmkVersion = AmkVersion(3);
-const SOURCE_ASSET: uuid::Uuid = uuid::Uuid::from_u128(0x0A55_E7);
+const SOURCE_ASSET: uuid::Uuid = uuid::Uuid::from_u128(0x000A_55E7);
 const PREFIX: [u8; NONCE_PREFIX_LEN] = [7, 6, 5, 4, 3, 2, 1];
 
 fn album_key() -> Amk {
