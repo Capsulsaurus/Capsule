@@ -26,7 +26,7 @@ use crate::crypto::keys::{
     DEK_CIPHERTEXT_LEN, DekKeypair, ESEED_LEN, encapsulate_to_public_derand,
 };
 use crate::crypto::primitives::Argon2Params;
-use crate::crypto::provenance::AssetManifest;
+use crate::crypto::provenance::{AssetManifest, ProvenanceRecord};
 use crate::crypto::{pwkdf, rng};
 
 /// Length of an upload-link opaque URL-path id: a **full 128 bits** of CSPRNG entropy —
@@ -132,6 +132,33 @@ pub struct PendingDrop {
     pub received_at: String,
 }
 
+/// What adopting a drop produced: the asset it became, and the index tier a push publishes.
+///
+/// The drop's ciphertext is not here — the server already holds it as the inbox blob the
+/// manifest's `ciphertext_hash` names, and adoption promotes it in place. What the server does
+/// not hold until the owner uploads it is the **index tier**: the provenance record (the
+/// asset's chain head) and the sealed metadata blob. Both are un-regenerable — the blob's nonce
+/// is folded into its key — so they are handed back rather than left for a caller to rebuild.
+#[derive(Debug, Clone)]
+pub struct AdoptedDrop {
+    /// The signed adopting `create` manifest (`key_mode = wrapped`). Its `file_id` is the new
+    /// asset's id.
+    pub manifest: AssetManifest,
+    /// The **exact** sealed metadata-blob wire bytes `manifest.core.metadata_blob_hash` commits
+    /// to.
+    pub metadata_blob: Vec<u8>,
+    /// The asset's one provenance record — the `create` that heads its chain.
+    pub record: ProvenanceRecord,
+}
+
+impl AdoptedDrop {
+    /// The adopted asset's id (the manifest's `file_id`).
+    #[must_use]
+    pub fn asset_id(&self) -> Uuid {
+        self.manifest.core.file_id
+    }
+}
+
 /// Failure surfaced by the drop lifecycle.
 #[derive(Debug, Error)]
 pub enum DropError {
@@ -144,6 +171,10 @@ pub enum DropError {
     /// The drop was not found in the caller's inbox.
     #[error("pending drop not found")]
     NotFound,
+    /// The verified adoption could not be written into the library (its files or its index
+    /// row). The drop stays in the inbox, so the adoption can be retried.
+    #[error("adopted drop could not be registered: {0}")]
+    Register(String),
 }
 
 /// An Argon2id **abuse-gate** verifier for a passphrase-protected upload link. Unlike a
@@ -231,9 +262,13 @@ pub trait DropAdopter {
     /// The provisioning user's pending drops.
     fn list_inbox(&self) -> Result<Vec<PendingDrop>, DropError>;
 
-    /// Adopt a drop into `album_id` in place (no byte re-upload). Returns the signed
-    /// adopting `create` manifest whose `ciphertext_hash` references the inbox blob.
-    fn adopt(&mut self, drop: DropId, album_id: Uuid) -> Result<AssetManifest, DropError>;
+    /// Adopt a drop into `album_id` in place (no byte re-upload). The drop becomes a
+    /// library asset — registered with its one-record provenance chain and sealed metadata
+    /// blob, exactly as an import registers one — and the returned [`AdoptedDrop`] carries
+    /// what publishing it needs: the signed adopting `create` manifest (whose
+    /// `ciphertext_hash` references the inbox blob), the sealed metadata blob, and the
+    /// provenance record.
+    fn adopt(&mut self, drop: DropId, album_id: Uuid) -> Result<AdoptedDrop, DropError>;
 
     /// Discard a pending drop; its bytes are GC'd and the quota freed.
     fn discard(&mut self, drop: DropId) -> Result<(), DropError>;

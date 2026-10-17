@@ -87,12 +87,7 @@ impl Workspace {
             .manifest;
         let plaintext =
             fs::read(self.media_path(asset)).map_err(|e| LifecycleError::Io(e.to_string()))?;
-        let file_key = self.file_key(
-            album,
-            head.core.amk_version.0,
-            &head.core.file_id,
-            &head.core.nonce_prefix,
-        );
+        let file_key = self.original_file_key(album, &head.core)?;
         let (_, ciphertext) =
             stream::encrypt_asset_vec_with_prefix(&file_key, head.core.nonce_prefix, &plaintext);
 
