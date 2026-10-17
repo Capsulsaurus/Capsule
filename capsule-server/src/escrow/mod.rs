@@ -33,12 +33,21 @@
 //! happens precisely when the user believes the old secret is lost or compromised, and a server
 //! that retained the blob it unwraps would preserve exactly the artifact the rotation exists to
 //! destroy. Recovery from a bad rotation is the backup *artifact*, which the user holds.
+//!
+//! # Adapters
+//!
+//! [`InMemoryEscrow`] is the deterministic double and [`PostgresEscrow`] the durable adapter;
+//! both pass the one suite in [`conformance`].
+
+pub mod conformance;
+pub mod postgres;
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use jiff::Timestamp;
 
+pub use self::postgres::PostgresEscrow;
 use crate::store::{StoreFuture, UserId};
 
 /// The largest escrow blob this server will accept.

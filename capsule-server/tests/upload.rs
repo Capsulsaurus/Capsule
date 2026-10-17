@@ -1198,9 +1198,9 @@ async fn an_authority_that_cannot_answer_refuses_rather_than_assuming() {
 /// 6. and the retry publishes, because `BlobStore::commit` is idempotent on identical ciphertext.
 ///
 /// The crash is injected through the `AssetIndex` port itself (`support::fault`), so no
-/// production code carries a test hook. A *process*-level restart — a real kill and a second
-/// process over the same blob root and database — belongs to the binary-smoke tier and is filed
-/// with the remaining durable adapters.
+/// production code carries a test hook. The *process*-level restart — a real kill and a second
+/// process over the same blob root and database, and the sweep a later `gc` process makes of the
+/// orphan an earlier one marked — is `tests/binary.rs`'s `postgres_conformance` case.
 #[tokio::test]
 async fn finalization_crash_between_rename_and_commit_leaves_no_dangling_reference() {
     use capsule_server::blob::ContentAddress;

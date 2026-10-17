@@ -156,7 +156,11 @@ pub async fn store_escrow(
         StoreEscrowRejection::malformed(&error)
     })?;
 
-    let stored_at = escrow.clock().now();
+    // Truncated to the microsecond before it is stored, so the instant this response echoes is
+    // the instant every adapter keeps: the durable one holds microseconds, and a `stored_at`
+    // that disagreed with the held one would manufacture the false stale-cache verdict the
+    // field exists to prevent.
+    let stored_at = crate::postgres::time::stored(escrow.clock().now());
     let replaced = escrow
         .escrows()
         .store(EscrowRecord {
