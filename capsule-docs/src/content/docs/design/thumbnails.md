@@ -30,24 +30,31 @@ Two derivative tiers per photo asset and one preview tier for video assets:
 - **H.264 baseline** for video previews — universally decodable, cheap to decode on every platform. AV1 was considered but mobile encode cost is still high in 2026.
 
 :::note[Implementation status — what ships today]
-The table above is the **contract**, not an inventory of what is built. As of `#410`,
-`capsule-core::media` (on `rawshift-image` 0.1.1, behind the `media` feature that `native`
-implies) generates the **thumbnail tier as JXL** and nothing else. Concretely:
+The table above is the **contract**, not an inventory of what is built. `capsule-core::media`
+(on `rawshift-image` 0.1.1, behind the `media` feature that `native` implies) generates stills in
+two build shapes. The native-code encoders sit behind the opt-in `media-linked-codecs` feature
+(`#437`). The CLI enables it. The mobile FFI and every `rust-cross` target do not, so those
+builds stay pure Rust:
 
-| Tier | Photo formats generated | Missing, and why |
-| --- | --- | --- |
-| Thumbnail | **JXL**, 256 px long edge, **lossless**; or the `original` sentinel when the source is already inside the cap | **AVIF** needs `nasm` on every x86_64 build host (`ravif` → `rav1e/asm`). **WebP** does not compile: `rawshift-image`'s codec passes `*const i8` where `libwebp-sys` declares `*const c_char`, which is `u8` on aarch64 — every mobile target. |
-| Preview | — | Blocked with a *lossy* master codec: a source-resolution lossless still would rival the original in size. |
-| Video (either tier) | — | `rawshift-video` is unpublished; slice `S-B5`. |
+| Build | Tier | Photo formats generated | Missing, and why |
+| --- | --- | --- | --- |
+| `media-linked-codecs` (CLI) | Thumbnail | **JXL** (libjxl, **lossy** q=50) and **AVIF** (ravif, q=50), 256 px long edge; or the `original` sentinel when the source is already inside the cap | **WebP** does not compile: `rawshift-image`'s codec passes `*const i8` where `libwebp-sys` declares `*const c_char`, which is `u8` on aarch64, the architecture of every mobile target. |
+| `media-linked-codecs` (CLI) | Preview | **JXL** and **AVIF** at source resolution, q=70 | WebP, as above. |
+| `media` alone (mobile FFI, cross targets) | Thumbnail | **JXL**, 256 px long edge, **lossless**; or the `original` sentinel | AVIF and lossy JXL link native code (rav1e needs `nasm` on x86_64; libjxl is C++ built by cmake). WebP, as above. |
+| `media` alone | Preview | none | Not generated: a source-resolution *lossless* still would rival the original in size. |
+| Either | Video (either tier) | none | `rawshift-video` is unpublished; slice `S-B5`. |
 
-The thumbnail's declared **q=50 is advisory today**: the pure-Rust backend is `zune-jpegxl`'s
-`JxlSimpleEncoder`, which is lossless, so a thumbnail costs more bytes than the table intends. A
-lossy JXL needs C libjxl. That is the one place the build knowingly departs from this table, and
-it is asserted by a test rather than left to be discovered.
+Without `media-linked-codecs` the thumbnail's declared **q=50 is advisory**: the pure-Rust
+backend is `zune-jpegxl`'s `JxlSimpleEncoder`, which is lossless, so a thumbnail costs more bytes
+than the table intends. Tests assert this per build. In one build the thumbnail round-trips
+exactly. In the other it is lossy and smaller than the lossless encode.
 
-Decode is JPEG, PNG, JXL, TIFF and GIF. **HEIC, AVIF, WebP and the RAW families are recognised
-and refused** — HEIC and AVIF need system libheif / libdav1d, and WebP shares the aarch64 defect
-above in both directions (the crate compiles that module for decode *or* encode).
+Decode is JPEG, PNG, JXL, TIFF and GIF in both builds. **HEIC, AVIF, WebP and the RAW families
+are recognised and refused.** HEIC needs libheif and libde265, which are both LGPL-3.0 and
+excluded by the licensing policy. AVIF decode needs a system libdav1d. Both are tracked in
+[#588](https://github.com/Capsulsaurus/Capsule/issues/588), and RAW is tracked in
+[#589](https://github.com/Capsulsaurus/Capsule/issues/589). WebP shares the aarch64 defect above
+in both directions, because the crate compiles that module for decode *or* encode.
 
 **Generated is not yet uploaded.** The server's upload policy fixes a closed content-type set for the protocol version, and `image/jxl` is not in it, so the T1 session for a JXL thumbnail is refused with `error.upload.unsupported_content_type` — every still larger than the 256 px cap, since only a small one gets the byte-free `original` sentinel. That is [#470](https://github.com/Capsulsaurus/Capsule/issues/470), server-side and being fixed separately; the thumbnails on disk and their signed manifests are unaffected.
 
