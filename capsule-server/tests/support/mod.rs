@@ -3533,11 +3533,18 @@ pub(crate) fn create_request(clock: &ManualClock, bytes: &[u8], role: &str) -> s
     } else {
         serde_json::Value::Null
     };
+    // A derivative declares its `(role, format)` pair, which the gate checks against the closed
+    // still set; the format is the one this build produces, and rides `content_type` too.
+    let content_type = match role {
+        "original" => "image/jpeg",
+        "derivative" => DERIVATIVE_FORMAT,
+        _ => "application/octet-stream",
+    };
 
-    serde_json::json!({
+    let mut request = serde_json::json!({
         "size": bytes.len(),
         "hash": hash,
-        "content_type": if role == "original" { "image/jpeg" } else { "application/octet-stream" },
+        "content_type": content_type,
         "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
         "protocol_version": PROTOCOL_VERSION,
         "blob_role": role,
@@ -3563,8 +3570,16 @@ pub(crate) fn create_request(clock: &ManualClock, bytes: &[u8], role: &str) -> s
         },
         "owner_id": serde_json::Value::Null,
         "intent_id": serde_json::Value::Null,
-    })
+    });
+    if role == "derivative" {
+        request["manifest_envelope"]["derivative_role"] = "thumbnail".into();
+        request["manifest_envelope"]["derivative_format"] = DERIVATIVE_FORMAT.into();
+    }
+    request
 }
+
+/// The still format a derivative [`create_request`] declares: the one this build encodes.
+const DERIVATIVE_FORMAT: &str = "image/jxl";
 
 /// The account [`Fixture::working`] seeds.
 pub(crate) fn user() -> UserId {

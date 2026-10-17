@@ -182,6 +182,29 @@ async fn every_creation_invariant_is_refused_with_its_status_and_code() {
             "error.upload.unsupported_content_type",
         ),
         (
+            "the closed still set: a thumbnail in a format outside it",
+            |body| {
+                // `image/jpeg` passes invariant 5 — it is an original's content type — so the
+                // refusal is the derivative format set's alone.
+                body["blob_role"] = "derivative".into();
+                body["content_type"] = "image/jpeg".into();
+                body["manifest_envelope"]["derivative_role"] = "thumbnail".into();
+                body["manifest_envelope"]["derivative_format"] = "image/jpeg".into();
+            },
+            StatusCode::BAD_REQUEST,
+            "error.upload.unknown_derivative_format",
+        ),
+        (
+            "the closed still set: a derivative that does not declare its format",
+            |body| {
+                body["blob_role"] = "derivative".into();
+                body["content_type"] = "image/jxl".into();
+                body["manifest_envelope"]["derivative_role"] = "thumbnail".into();
+            },
+            StatusCode::BAD_REQUEST,
+            "error.upload.envelope_mismatch",
+        ),
+        (
             "invariant 6: an album the authority does not hold",
             |body| {
                 body["album_id"] = "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5eff".into();
