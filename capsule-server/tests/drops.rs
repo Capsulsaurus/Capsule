@@ -561,7 +561,7 @@ async fn an_adoption_promotes_the_drop_and_empties_the_inbox_row() {
         .header("accept", "application/json")
         .json(&json!({
             "album_id": album().as_str(),
-            "asset_id": "adopted-asset-1",
+            "asset_id": ADOPTED,
             "size": bytes.len(),
             "hash": checksum(&bytes),
             "content_type": "image/jpeg",
@@ -575,7 +575,7 @@ async fn an_adoption_promotes_the_drop_and_empties_the_inbox_row() {
         .assert_status(StatusCode::OK)
         .json();
 
-    assert_eq!(body["asset_id"], "adopted-asset-1");
+    assert_eq!(body["asset_id"], ADOPTED);
     assert!(
         inbox(&fixture, &bearer).await["drops"]
             .as_array()
@@ -608,7 +608,7 @@ async fn an_adoption_that_is_refused_returns_the_drop_to_the_inbox() {
         .header("accept", "application/json")
         .json(&json!({
             "album_id": album().as_str(),
-            "asset_id": "adopted-asset-1",
+            "asset_id": ADOPTED,
             "size": bytes.len(),
             "hash": checksum(&bytes),
             "content_type": "image/jpeg",
@@ -633,7 +633,7 @@ async fn an_adoption_that_is_refused_returns_the_drop_to_the_inbox() {
         .header("accept", "application/json")
         .json(&json!({
             "album_id": album().as_str(),
-            "asset_id": "adopted-asset-1",
+            "asset_id": ADOPTED,
             "size": other.len(),
             "hash": checksum(&other),
             "content_type": "image/jpeg",
@@ -677,7 +677,7 @@ async fn another_accounts_drop_cannot_be_adopted() {
         .header("accept", "application/json")
         .json(&json!({
             "album_id": album().as_str(),
-            "asset_id": "adopted-asset-1",
+            "asset_id": ADOPTED,
             "size": bytes.len(),
             "hash": checksum(&bytes),
             "content_type": "image/jpeg",
@@ -699,8 +699,9 @@ async fn another_accounts_drop_cannot_be_adopted() {
     );
 }
 
-/// The asset id the adoption-refusal cases collide with.
-const ADOPTED: &str = "adopted-asset-1";
+/// The asset id an adoption names: the `file_id` [`support::create_request`] signs, which the
+/// request's `asset_id` must restate. The adoption-refusal cases collide with it.
+const ADOPTED: &str = support::OPS_ASSET;
 
 /// Deposit one drop and return its id, the bytes it holds, and a create manifest over them.
 async fn pending_drop(fixture: &Fixture, bearer: &str) -> (String, Vec<u8>, Value) {
@@ -880,6 +881,42 @@ async fn an_adoption_attributed_to_another_account_is_refused_and_keeps_the_drop
             .is_none(),
         "no asset was reserved for it"
     );
+}
+
+#[tokio::test]
+async fn an_adoption_whose_asset_id_is_not_the_signed_file_id_is_refused_and_keeps_the_drop() {
+    // The signed manifest's `file_id` is the asset id; `asset_id` only restates it. An adoption
+    // whose two disagree would reserve under an id the owner's signature does not cover, so it
+    // is refused before anything is claimed or reserved, under either id.
+    const SIGNED: &str = "018f3f1e-4b7a-7c9d-8e2f-00000000beef";
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (drop_id, bytes, mut manifest) = pending_drop(&fixture, &bearer).await;
+    manifest["manifest_envelope"]["file_id"] = SIGNED.into();
+
+    let problem = adopt(
+        &fixture,
+        &bearer,
+        &drop_id,
+        &bytes,
+        &manifest["manifest_envelope"],
+        StatusCode::BAD_REQUEST,
+    )
+    .await;
+
+    assert_eq!(problem["code"], "error.drop.adoption_refused");
+    assert_drop_kept(&fixture, &bearer).await;
+    for id in [ADOPTED, SIGNED] {
+        assert!(
+            fixture
+                .index
+                .read(&AssetId::new(id))
+                .await
+                .expect("the index answers")
+                .is_none(),
+            "no asset was reserved under {id}"
+        );
+    }
 }
 
 #[tokio::test]

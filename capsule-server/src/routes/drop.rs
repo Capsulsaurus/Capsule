@@ -1027,6 +1027,16 @@ pub async fn adopt_drop(
             "key_mode must be derived or wrapped",
         ));
     }
+    // The asset id is the signed manifest's `file_id` (design/web-upload.md: "`file_id` is the
+    // asset id"), as `POST /v1/upload` takes it. `asset_id` restates it unsigned, so a
+    // disagreement would reserve and record under an id the owner's signature does not cover.
+    // Checked before the claim: it is a property of the request alone, like `key_mode`.
+    if request.asset_id != request.manifest_envelope.file_id {
+        tracing::info!(%owner, "an adoption was refused: asset_id is not the manifest's file_id");
+        return Err(AdoptRejection::refused(
+            "asset_id must be the manifest's file_id",
+        ));
+    }
 
     let claimed = drops
         .drops()
