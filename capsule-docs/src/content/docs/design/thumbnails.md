@@ -56,11 +56,16 @@ excluded by the licensing policy. AVIF decode needs a system libdav1d. Both are 
 [#589](https://github.com/Capsulsaurus/Capsule/issues/589). WebP shares the aarch64 defect above
 in both directions, because the crate compiles that module for decode *or* encode.
 
-**Generated is not yet uploaded.** The server's upload policy fixes a closed content-type set for the protocol version, and `image/jxl` is not in it, so the T1 session for a JXL thumbnail is refused with `error.upload.unsupported_content_type` — every still larger than the 256 px cap, since only a small one gets the byte-free `original` sentinel. That is [#470](https://github.com/Capsulsaurus/Capsule/issues/470), server-side and being fixed separately; the thumbnails on disk and their signed manifests are unaffected.
+Every generated derivative uploads. The server's upload policy admits both `image/jxl` and
+`image/avif` ([#470](https://github.com/Capsulsaurus/Capsule/issues/470)), so each JXL and AVIF
+derivative opens its own T1 session and finalizes; only the byte-free `original` sentinel opens
+none.
 
 None of this is silent. A format with no codec is a typed
 `media::MediaError::UnsupportedFormat { format, op }`, and a `(tier, format)` pair with no encoder
-is recorded on `media::StillDerivatives::deferred` and counted by
+— or whose encoder refused this particular frame, such as a preview AVIF of a panorama wider than
+rav1e's 65535 px edge limit — is recorded on `media::StillDerivatives::deferred` while the
+asset's other derivatives still ship, and counted by
 `ImportExecutionSummary::deferred_format_count()` — so the distance between this table and the
 build is a number the import run reports. The remainder is tracked as the `S-B1` follow-up.
 :::
