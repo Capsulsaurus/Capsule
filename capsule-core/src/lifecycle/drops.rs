@@ -645,6 +645,52 @@ mod tests {
         assert_eq!(ws2.verify(&asset_id).unwrap(), VerifyOutcome::Accept);
     }
 
+    /// A tampered head on an adopted asset — a `wrapped_file_key` that no longer opens, or a
+    /// `wrapped` head stripped of its key — is a `verify` reject, not an error: the unverified
+    /// key fields never short-circuit `verify_asset` (web-upload.md, "Forged
+    /// `wrapped_file_key`").
+    #[test]
+    fn a_tampered_wrapped_file_key_is_a_verify_reject() {
+        use crate::crypto::verify_asset::RejectReason;
+        use crate::drop::{DropAdopter, UploadLinkIssuer, seal_drop};
+
+        let lib = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Guests").unwrap();
+        let link = UploadLinkIssuer::create_link(&mut ws, LinkCaps::default(), None).unwrap();
+        let sealed = seal_drop(b"a guest photo", &link.drop_pubkey, "image/jpeg").unwrap();
+        let drop_id = ws.receive_drop(link.link_id, sealed).unwrap();
+        let adopted = DropAdopter::adopt(&mut ws, drop_id, album).unwrap();
+        let asset_id = adopted.asset_id();
+        assert_eq!(ws.verify(&asset_id).unwrap(), VerifyOutcome::Accept);
+
+        let flipped = |m: &mut crate::crypto::provenance::AssetManifest| {
+            let key = m.core.wrapped_file_key.as_mut().unwrap();
+            let last = key.0.len() - 1;
+            key.0[last] ^= 0x01;
+        };
+        let stripped = |m: &mut crate::crypto::provenance::AssetManifest| {
+            m.core.wrapped_file_key = None;
+        };
+        // A key that does not open leaves nothing to regenerate, so the content check rejects;
+        // a `wrapped` head without a key breaks the structural key-mode coupling first.
+        let tampers: [(&dyn Fn(&mut crate::crypto::provenance::AssetManifest), _); 2] = [
+            (&flipped, RejectReason::CiphertextHashMismatch),
+            (&stripped, RejectReason::Structural),
+        ];
+        for (tamper, reason) in tampers {
+            let mut record = adopted.record.clone();
+            tamper(&mut record.manifest);
+            let mut chain = ProvenanceChain::new();
+            chain.append(record).unwrap();
+            ws.assets.get_mut(&asset_id).unwrap().chain = chain;
+            assert_eq!(
+                ws.verify(&asset_id).unwrap(),
+                VerifyOutcome::TerminalReject(reason)
+            );
+        }
+    }
+
     /// The guest-named extension is admitted only as a short ASCII-alphanumeric suffix.
     #[test]
     fn adopted_extension_admits_only_a_short_alphanumeric_suffix() {

@@ -13,7 +13,7 @@ use crate::crypto::hash::Hash32;
 use crate::crypto::keys::Amk;
 use crate::crypto::provenance::{Action, AssetManifest, ManifestCore, ProvenanceRecord};
 use crate::crypto::verify_asset::{
-    MetadataBinding, VerifyOutcome, verify_asset, verify_metadata_binding,
+    MetadataBinding, RejectReason, VerifyOutcome, verify_asset, verify_metadata_binding,
 };
 use crate::metadata::crdt::AddId;
 use crate::sidecar::SidecarV1;
@@ -87,9 +87,25 @@ impl Workspace {
             .manifest;
         let plaintext =
             fs::read(self.media_path(asset)).map_err(|e| LifecycleError::Io(e.to_string()))?;
-        let file_key = self.original_file_key(album, &head.core)?;
-        let (_, ciphertext) =
-            encrypt_asset_vec_with_prefix(&file_key, head.core.nonce_prefix, &plaintext);
+        // The head's `key_mode` / `wrapped_file_key` are read before they are verified, so a
+        // tampered pair must not surface as an `Err`: a wrapped key that does not open (or a
+        // `wrapped` head with none) yields no regenerated ciphertext, and `verify_asset` then
+        // rejects it like any other content the signed manifest does not commit to. A missing
+        // epoch key is local state, not tamper, and stays an error.
+        let ciphertext = match self.original_file_key(album, &head.core) {
+            Ok(file_key) => {
+                Some(encrypt_asset_vec_with_prefix(&file_key, head.core.nonce_prefix, &plaintext).1)
+            }
+            Err(LifecycleError::Crypto(e)) => {
+                tracing::warn!(
+                    asset_id = %asset_id,
+                    error = %e,
+                    "the head's file key does not open; verifying it against no ciphertext"
+                );
+                None
+            }
+            Err(e) => return Err(e),
+        };
 
         // Walk the whole chain forward; the head is what enters the trusted set.
         let prior = asset
@@ -98,13 +114,21 @@ impl Workspace {
             .len()
             .checked_sub(2)
             .map(|i| asset.chain.records()[i].record_hash());
-        Ok(verify_asset(
+        let outcome = verify_asset(
             head,
-            &ciphertext,
+            ciphertext.as_deref().unwrap_or_default(),
             &self.directory,
             self.authority(&asset.album_id)?,
             prior,
-        ))
+        );
+        // No STREAM ciphertext is empty, so an accept here is unreachable; refuse it anyway
+        // rather than accept content that was never regenerated.
+        Ok(match (ciphertext, outcome) {
+            (None, VerifyOutcome::Accept) => {
+                VerifyOutcome::TerminalReject(RejectReason::CiphertextHashMismatch)
+            }
+            (_, outcome) => outcome,
+        })
     }
 
     pub(super) fn append_lifecycle(
