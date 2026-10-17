@@ -589,14 +589,13 @@ impl InMemoryAccounts {
 }
 
 impl FederatedAccounts for InMemoryAccounts {
-    /// Shares the password directory's rows, as the Postgres adapter will: an asserted address a
-    /// password account holds is `AddressTaken`, and a created federated account is one nothing
-    /// can sign into with a password, because no password row exists for it.
+    /// Shares the password directory's rows, as both shipped adapters do since #460: an asserted
+    /// address a password account holds is `AddressTaken`, and a created federated account is one
+    /// nothing can sign into with a password, because no password row exists for it. Only a
+    /// **verified** address is compared, as the shipped adapters do.
     ///
-    /// This double encodes the contract #460 owes — one account table, the cross-directory
-    /// `409`, a null credential `authenticate` refuses — and not behaviour the server ships:
-    /// the development profile's `InMemoryFederatedAccounts` holds rows of its own. Only a
-    /// **verified** address is compared, as the shipped adapter does.
+    /// The shipped adapters prove the contract against the shared suite in
+    /// `capsule_server::auth::conformance`; this double only has to answer the routes alike.
     fn resolve_or_create<'a>(
         &'a self,
         identity: &'a VerifiedIdentity,

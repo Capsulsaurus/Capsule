@@ -9,6 +9,13 @@
 //! splitting it across four tables would put the lockout counter somewhere the password change
 //! that must clear it cannot reach in the same statement.
 //!
+//! [`FederatedAccounts`] is the fifth port on the same row (#460). An account an OpenID Connect
+//! sign-in created is a row with a **null credential**, the provider's verified address if it
+//! asserted one, and the `(oidc_issuer, oidc_subject)` link — so the `409` for an address a
+//! password account holds is the address index's answer, the profile is the same row's, and no
+//! credential presentation can reach a password that does not exist: every statement that
+//! verifies or replaces a credential is filtered on `credential IS NOT NULL`.
+//!
 //! # The attempt is reserved before it is verified
 //!
 //! Reading the failure count, verifying, and then recording the failure is a race: every guess
@@ -50,6 +57,7 @@ use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement, Value};
 
 use super::credential::{CredentialError, Credentials};
 use super::directory::{AccountDirectory, Authentication, DirectoryError, DirectoryFuture};
+use super::oidc::{FederatedAccounts, FederatedLink, VerifiedIdentity, reserved_address};
 use super::profile::{
     AccountProfiles, PasswordChange, PasswordChanged, ProfileRecord, ProfileUpdate,
 };
@@ -123,6 +131,10 @@ impl PostgresAccounts {
     /// the directory first and refuse on `Locked` before verifying anything, there is no unlock
     /// operation on any surface, and no operator command reaches this row.
     ///
+    /// A row whose credential is null — a federated account — is matched by neither statement,
+    /// so it is answered as no account at all: never charged, never `Locked`, and never verified,
+    /// because there is nothing to verify (#460).
+    ///
     /// When the statement charges nothing, a second read tells a locked account from a missing
     /// one. That read is not part of the decision's atomicity — a row that unlocks or vanishes
     /// in between is answered as it was a moment ago, and either answer refuses.
@@ -144,6 +156,7 @@ impl PostgresAccounts {
                          ELSE failures + 1 END, \
                        last_failure_at = $2 \
                      WHERE {column} = $1 \
+                       AND credential IS NOT NULL \
                        AND NOT (failures >= $4 \
                                 AND last_failure_at IS NOT NULL \
                                 AND $2 - last_failure_at < $3) \
@@ -182,7 +195,9 @@ impl PostgresAccounts {
             .connection
             .query_one(Statement::from_sql_and_values(
                 DbBackend::Postgres,
-                format!("SELECT user_id FROM accounts WHERE {column} = $1"),
+                format!(
+                    "SELECT user_id FROM accounts WHERE {column} = $1 AND credential IS NOT NULL"
+                ),
                 [Value::from(key.to_owned())],
             ))
             .await
@@ -255,18 +270,59 @@ impl PostgresAccounts {
     }
 
     /// The profile of `user`, read through whatever connection the caller has.
+    ///
+    /// `email IS NOT NULL` because [`ProfileRecord::email`] is not optional: a federated account
+    /// whose provider asserted no verified address has no profile to show (the OIDC accounts
+    /// module docs), and the in-memory adapter answers the same.
     async fn profile(&self, user: &UserId) -> Result<Option<ProfileRecord>, StoreError> {
         let found = self
             .connection
             .query_one(Statement::from_sql_and_values(
                 DbBackend::Postgres,
                 "SELECT user_id, email, display_name, created_at FROM accounts \
-                 WHERE user_id = $1",
+                 WHERE user_id = $1 AND email IS NOT NULL",
                 [Value::from(user.as_str().to_owned())],
             ))
             .await
             .map_err(PORT.failing("reading a profile"))?;
         found.as_ref().map(profile_from).transpose()
+    }
+
+    /// The account `(issuer, subject)` is linked to, if any.
+    async fn linked(&self, issuer: &str, subject: &str) -> Result<Option<UserId>, StoreError> {
+        let found = self
+            .connection
+            .query_one(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                "SELECT user_id FROM accounts WHERE oidc_issuer = $1 AND oidc_subject = $2",
+                [
+                    Value::from(issuer.to_owned()),
+                    Value::from(subject.to_owned()),
+                ],
+            ))
+            .await
+            .map_err(PORT.failing("looking a federated identity up"))?;
+        found
+            .map(|row| {
+                row.try_get::<String>("", "user_id")
+                    .map(UserId::new)
+                    .map_err(PORT.failing("reading a federated account row"))
+            })
+            .transpose()
+    }
+
+    /// Whether any account holds `email`.
+    async fn address_held(&self, email: &str) -> Result<bool, StoreError> {
+        let found = self
+            .connection
+            .query_one(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                "SELECT 1 AS held FROM accounts WHERE email = $1",
+                [Value::from(email.to_owned())],
+            ))
+            .await
+            .map_err(PORT.failing("looking an address up"))?;
+        Ok(found.is_some())
     }
 }
 
@@ -383,6 +439,97 @@ impl AccountRegistry for PostgresAccounts {
     }
 }
 
+impl FederatedAccounts for PostgresAccounts {
+    fn resolve_or_create<'a>(
+        &'a self,
+        identity: &'a VerifiedIdentity,
+        user: &'a UserId,
+        at: Timestamp,
+    ) -> DirectoryFuture<'a, FederatedLink> {
+        Box::pin(async move {
+            let address = reserved_address(identity).map(str::to_owned);
+            // One statement: the lookup and the insert. The insert runs only when the lookup
+            // found nothing, with a null credential and the link, and `ON CONFLICT DO NOTHING`
+            // with no target defers to **both** unique indexes — the address and the link — so
+            // neither "somebody else holds this verified address" nor "a second callback for the
+            // same person got here first" can be decided by a read followed by a write.
+            let row = self
+                .connection
+                .query_one(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "WITH existing AS ( \
+                       SELECT user_id FROM accounts \
+                       WHERE oidc_issuer = $1 AND oidc_subject = $2 \
+                     ), inserted AS ( \
+                       INSERT INTO accounts \
+                         (user_id, email, display_name, credential, failures, created_at, \
+                          updated_at, oidc_issuer, oidc_subject) \
+                       SELECT $3, $4, NULL, NULL, 0, $5, $5, $1, $2 \
+                       WHERE NOT EXISTS (SELECT 1 FROM existing) \
+                       ON CONFLICT DO NOTHING \
+                       RETURNING user_id \
+                     ) \
+                     SELECT 'linked' AS outcome, user_id FROM existing \
+                     UNION ALL \
+                     SELECT 'created' AS outcome, user_id FROM inserted",
+                    [
+                        Value::from(identity.issuer.clone()),
+                        Value::from(identity.subject.clone()),
+                        Value::from(user.as_str().to_owned()),
+                        Value::String(address.clone().map(Box::new)),
+                        Value::from(to_micros(at)),
+                    ],
+                ))
+                .await
+                .map_err(PORT.failing("resolving a federated identity"))
+                .map_err(store_unavailable)?;
+
+            if let Some(row) = row {
+                let failed = PORT.failing("reading a federated account row");
+                let outcome: String = row
+                    .try_get("", "outcome")
+                    .map_err(&failed)
+                    .map_err(store_unavailable)?;
+                let user_id: String = row
+                    .try_get("", "user_id")
+                    .map_err(&failed)
+                    .map_err(store_unavailable)?;
+                let user_id = UserId::new(user_id);
+                return Ok(if outcome == "created" {
+                    tracing::info!(user = %user_id, issuer = %identity.issuer, "created an account for a federated identity");
+                    FederatedLink::Created(user_id)
+                } else {
+                    tracing::debug!(user = %user_id, issuer = %identity.issuer, "a federated identity resolved to its account");
+                    FederatedLink::Linked(user_id)
+                });
+            }
+
+            // Nothing linked and nothing inserted: the insert met a unique index. Which one is
+            // read back now, outside the decision — a link that appeared is a concurrent callback
+            // for the same person, whose account this is; otherwise the verified address is held.
+            if let Some(existing) = self
+                .linked(&identity.issuer, &identity.subject)
+                .await
+                .map_err(store_unavailable)?
+            {
+                tracing::debug!(user = %existing, issuer = %identity.issuer, "a federated identity resolved to an account a concurrent sign-in created");
+                return Ok(FederatedLink::Linked(existing));
+            }
+            if let Some(email) = &address
+                && self.address_held(email).await.map_err(store_unavailable)?
+            {
+                tracing::info!(issuer = %identity.issuer, "a federated sign-in asserted an address another account holds");
+                return Ok(FederatedLink::AddressTaken);
+            }
+            // The one index left is the primary key: a freshly minted id already held.
+            tracing::error!(%user, "a freshly minted account id is already held");
+            Err(DirectoryError::Unavailable {
+                detail: "a freshly minted account id is already held".to_owned(),
+            })
+        })
+    }
+}
+
 impl AccountProfiles for PostgresAccounts {
     fn read<'a>(&'a self, user: &'a UserId) -> DirectoryFuture<'a, Option<ProfileRecord>> {
         Box::pin(async move { self.profile(user).await.map_err(store_unavailable) })
@@ -406,7 +553,8 @@ impl AccountProfiles for PostgresAccounts {
                 .connection
                 .query_one(Statement::from_sql_and_values(
                     DbBackend::Postgres,
-                    "UPDATE accounts SET display_name = $2, updated_at = $3 WHERE user_id = $1 \
+                    "UPDATE accounts SET display_name = $2, updated_at = $3 \
+                     WHERE user_id = $1 AND email IS NOT NULL \
                      RETURNING user_id, email, display_name, created_at",
                     [
                         Value::from(user.as_str().to_owned()),
@@ -438,13 +586,16 @@ impl PasswordChange for PostgresAccounts {
             // The lockout is cleared in the same statement, because the port requires it: a
             // change is a successful credential presentation, and leaving the failure count
             // behind would bar somebody from an account they just proved they own.
+            //
+            // `credential IS NOT NULL`: a federated account has no password to replace, and
+            // gaining one here would be a password nobody chose at the provider (#460).
             let changed = self
                 .connection
                 .execute(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "UPDATE accounts \
                      SET credential = $2, failures = 0, last_failure_at = NULL, updated_at = $3 \
-                     WHERE user_id = $1",
+                     WHERE user_id = $1 AND credential IS NOT NULL",
                     [
                         Value::from(user.as_str().to_owned()),
                         Value::from(stored),
@@ -477,6 +628,7 @@ mod tests {
         use crate::auth::conformance::{self, Harness};
         use crate::auth::credential::Credentials;
         use crate::auth::directory::AccountDirectory;
+        use crate::auth::oidc::FederatedAccounts;
         use crate::auth::profile::{AccountProfiles, PasswordChange};
         use crate::auth::registry::AccountRegistry;
         use crate::postgres::testing;
@@ -511,6 +663,10 @@ mod tests {
             }
 
             fn passwords(&self) -> &dyn PasswordChange {
+                &self.accounts
+            }
+
+            fn federated(&self) -> &dyn FederatedAccounts {
                 &self.accounts
             }
 

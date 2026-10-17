@@ -10,7 +10,9 @@
 //! - `000005`: album membership (`S-C51`, #405);
 //! - `000006`: federation's capabilities, revocation list and peers (`S-E2`, #406);
 //! - `000007`–`000015` (#446): albums, device directories, moderation, share links, drops,
-//!   escrow, the collector's marks, custody receipts and TOTP enrolments.
+//!   escrow, the collector's marks, custody receipts and TOTP enrolments;
+//! - `000016` (#460): federated accounts on the account table — a nullable credential and
+//!   address, and the `(issuer, subject)` link.
 //!
 //! # Every instant is a `BIGINT` of microseconds since the Unix epoch
 //!
@@ -39,6 +41,7 @@ mod m20260902_000012_escrow;
 mod m20260902_000013_collection_marks;
 mod m20260902_000014_receipts;
 mod m20260902_000015_totp;
+mod m20260902_000016_federated_accounts;
 
 /// The server's migrator.
 pub struct Migrator;
@@ -62,6 +65,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260902_000013_collection_marks::Migration),
             Box::new(m20260902_000014_receipts::Migration),
             Box::new(m20260902_000015_totp::Migration),
+            Box::new(m20260902_000016_federated_accounts::Migration),
         ]
     }
 }

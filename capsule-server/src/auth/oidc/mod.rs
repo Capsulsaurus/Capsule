@@ -37,7 +37,7 @@ pub mod provider;
 
 use std::sync::Arc;
 
-pub use self::accounts::{FederatedAccounts, FederatedLink, InMemoryFederatedAccounts};
+pub use self::accounts::{FederatedAccounts, FederatedLink, reserved_address};
 pub use self::claims::{
     ALLOWED_ALGORITHMS, CLOCK_SKEW_SECONDS, ClaimRejection, Expectations, MAX_QUOTED_BYTES,
     MAX_SUBJECT_LENGTH, VerifiedIdentity, bounded, verify_id_token,
