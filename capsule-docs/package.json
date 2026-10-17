@@ -13,19 +13,20 @@
         "test": "vitest run"
     },
     "dependencies": {
-        "@astrojs/starlight": "^0.34.8",
-        "@astrojs/starlight-tailwind": "^3.0.1",
+        "@astrojs/markdown-remark": "^7.3.0",
+        "@astrojs/starlight": "^0.42.6",
+        "@astrojs/starlight-tailwind": "^5.0.0",
         "@tailwindcss/vite": "^4.3.0",
-        "astro": "^5.18.2",
-        "sharp": "^0.33.5",
-        "starlight-links-validator": "^0.14.3",
-        "starlight-versions": "^0.5.6",
+        "astro": "^7.4.0",
+        "sharp": "^0.35.5",
+        "starlight-links-validator": "^0.27.0",
+        "starlight-versions": "^0.10.1",
         "tailwindcss": "^4.3.0"
     },
     "devDependencies": {
         "@biomejs/biome": "^2.5.1",
         "rehype": "^13.0.2",
-        "vitest": "^3.2.6",
-        "wrangler": "^4.99.0"
+        "vitest": "^4.1.11",
+        "wrangler": "^4.151.1"
     }
 }

@@ -14,13 +14,13 @@
 //! Selection is a two-arm `match` on [`Backends`] and not a trait. The `Arc<dyn Port>` fields in
 //! [`Modules`] already **are** the abstraction; a second one over the top would abstract the
 //! composition root from itself. Each arm fills one `Ports` value and one `Stores` value, and
-//! [`compose`] builds the application out of them identically, so the two profiles cannot drift
+//! `compose` builds the application out of them identically, so the two profiles cannot drift
 //! into serving different applications.
 //!
-//! Both halves of the [`Backends::Durable`] arm are real. [`open_durable_database`] demands
+//! Both halves of the [`Backends::Durable`] arm are real. `open_durable_database` demands
 //! `DATABASE_URL`, opens the pool, and refuses to continue against a database whose schema is not
 //! the one this binary was built for — naming the command that fixes it, never the URL.
-//! [`valkey`] then connects to `VALKEY_URL` and proves it answers `PING`; a server that cannot be
+//! `valkey` then connects to `VALKEY_URL` and proves it answers `PING`; a server that cannot be
 //! reached is [`BootError::Valkey`] — the refusal `store/mod.rs` has said since `S-C29` a
 //! required service earns: *"Valkey is required; the server refuses to boot without
 //! `VALKEY_URL`"*. Every durable port is then on one of the two (#402, #403, #446): Postgres for

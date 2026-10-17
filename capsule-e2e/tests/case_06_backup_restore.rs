@@ -15,13 +15,16 @@
 //!   no server route yet, so the case hands it across in memory — the one leg of the bootstrap
 //!   not exercised over the wire.
 //! - The new device imports A's backup under the exporter's verifying key, reads the asset byte
-//!   for byte and walks its chain. `verify` is asserted to refuse: the artifact carries no album
-//!   authority (issue #468). The export names [`FAST_KDF`] explicitly, and the import needs no
-//!   such argument: the artifact records the cost it was wrapped under.
+//!   for byte and walks its chain. The artifact carries the album's public authority (#468), so
+//!   `verify` reaches a verdict; it rejects the device only because B has not yet adopted the
+//!   account's published directory (#550). The recovered album stays read-only. The export names
+//!   [`FAST_KDF`] explicitly, and the import needs no such argument: the artifact records the
+//!   cost it was wrapped under.
 
 use capsule_core::crypto::keys::MasterKey;
 use capsule_core::crypto::primitives::DeviceTier;
 use capsule_core::crypto::provenance::ProvenanceChain;
+use capsule_core::crypto::verify_asset::{RejectReason, VerifyOutcome};
 use capsule_core::lifecycle::{LifecycleError, Workspace};
 use capsule_e2e::fixtures::synthetic_jpeg;
 use capsule_e2e::{Device, FAST_KDF, PASSPHRASE, Server};
@@ -111,15 +114,23 @@ async fn e2e_case_6_a_new_device_bootstraps_from_the_escrow_and_restores_the_bac
     assert_eq!(chain.records().len(), 1);
     ProvenanceChain::verify_walk(chain.records()).expect("the restored chain walks");
 
-    // What the fresh device cannot yet do is run `verify_asset`: the backup artifact carries
-    // the album's content keys and none of its authority (the admin-signed epoch ledger a
-    // manifest's write signature is checked against), so the library has nothing to verify
-    // the signature under. Asserted as the current truth; issue #468.
-    match b.verify(&asset) {
-        Err(LifecycleError::NotFound(what)) => assert!(
-            what.contains("authority"),
-            "the refusal names the missing authority: {what}"
-        ),
-        other => panic!("a restored album has no authority to verify under, got {other:?}"),
-    }
+    // The artifact carries the album's public authority (the admin-signed epoch ledger a
+    // manifest's write signature is checked against, #468), so `verify` runs to a verdict
+    // instead of refusing for want of an authority. The verdict names the one input still
+    // missing: B's directory lists only B until it adopts the account's published directory
+    // (#550), so A's device is unknown to it. Asserted as the current truth.
+    assert_eq!(
+        b.verify(&asset)
+            .expect("the restored album has an authority to verify under"),
+        VerifyOutcome::TerminalReject(RejectReason::UnknownDevice),
+        "verify reaches the device check; only the account directory (#550) is missing"
+    );
+
+    // The restore escrowed no signing capability: the recovered album stays read-only.
+    let other = a.staging.path().join("other.jpg");
+    std::fs::write(&other, synthetic_jpeg()).expect("a second photo stages");
+    assert!(matches!(
+        b.import_asset(a.workspace.default_album_id(), &other),
+        Err(LifecycleError::AlbumReadOnly(_))
+    ));
 }

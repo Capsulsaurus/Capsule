@@ -280,7 +280,7 @@ pub enum Accepted {
 ///
 /// # Errors
 ///
-/// Returns a [`StoreError`] only when a collaborator could not answer; every refusal a client
+/// Returns a [`StoreError`](crate::store::StoreError) only when a collaborator could not answer; every refusal a client
 /// can act on is an [`Accepted`] variant.
 pub async fn append(
     sessions: &dyn crate::store::UploadSessionStore,

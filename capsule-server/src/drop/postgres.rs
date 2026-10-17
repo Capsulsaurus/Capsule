@@ -10,7 +10,7 @@
 //!
 //! The port's requirement is that the cap decision and the reservation are one operation. The
 //! adapter opens a transaction, takes the link's row with `SELECT … FOR UPDATE`, hydrates the
-//! whole [`UploadLinkRecord`], and runs [`super::admit`] — the same function the in-memory
+//! whole [`UploadLinkRecord`], and runs `super::admit` — the same function the in-memory
 //! adapter runs under its mutex — writing the totals back only on an admission. Two guests
 //! charging one link serialize on the row, so neither can read room the other is about to
 //! take. A link that does not exist has no row to lock and nothing to admit, so no advisory lock

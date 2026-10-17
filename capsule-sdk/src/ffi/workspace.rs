@@ -18,7 +18,7 @@
 //! `capsule_core` and `capsule_sdk` namespaces never share a binary, because their generated
 //! scaffolding would collide. So the seams core exports as uniffi foreign traits are re-declared
 //! here in *this* namespace — [`FfiHardwareSigner`] and [`FfiHardwareSignerError`] mirror
-//! core's, and [`ForeignHardwareSigner`] adapts one to the other. They are declarations of the
+//! core's, and `ForeignHardwareSigner` adapts one to the other. They are declarations of the
 //! same contract, not a second implementation of it: not a byte of signing logic lives here.
 //!
 //! # Transport independence
@@ -31,6 +31,7 @@
 //! underneath it.
 //!
 //! [`verify_asset`]: capsule_core::crypto::verify_asset::verify_asset
+//! [`Workspace`]: capsule_core::lifecycle::Workspace
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -378,7 +379,8 @@ pub enum FfiSyncApplyOutcome {
     /// Refused. `reason` is a stable, switchable code; `detail` is English developer text.
     Quarantined {
         /// A stable code, dotted where a sub-reason applies — e.g. `Rejected.ForgedChain`,
-        /// `Binding.BlobHashMismatch`, `SidecarSignature`.
+        /// `Binding.BlobHashMismatch`, `SidecarSignature`, `LegacyInheritedDevice` (a pre-fix
+        /// continuation attributed to the wrong device of the same account; not a forgery).
         reason: String,
         /// English detail, when the refusal carries one (a parse message, an album id).
         detail: Option<String>,
@@ -403,6 +405,17 @@ impl From<SyncApplyOutcome> for FfiSyncApplyOutcome {
                         ("UnknownAlbum".to_string(), Some(album.to_string()))
                     }
                     QuarantineReason::Rejected(reject) => (format!("Rejected.{reject:?}"), None),
+                    QuarantineReason::LegacyInheritedDevice {
+                        named_device,
+                        signing_device,
+                        record_hash,
+                    } => (
+                        "LegacyInheritedDevice".to_string(),
+                        Some(format!(
+                            "record {record_hash} names device {named_device} but was signed by \
+                             device {signing_device}; the chain stalls at this record"
+                        )),
+                    ),
                     QuarantineReason::Binding(binding) => (format!("Binding.{binding:?}"), None),
                     QuarantineReason::MalformedSidecar(detail) => {
                         ("MalformedSidecar".to_string(), Some(detail))

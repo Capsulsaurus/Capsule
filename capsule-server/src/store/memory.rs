@@ -1179,7 +1179,7 @@ impl InMemoryStores {
 
     /// Every store on one lifetime, for the conformance suite's expiry cases.
     ///
-    /// A single TTL across all of them is what lets [`super::conformance::Harness::advance`] be
+    /// A single TTL across all of them is what lets [`super::conformance::CohortHarness::advance`] be
     /// one operation rather than five, and it is legitimate precisely because the TTL is a
     /// property of the *store instance* — varying it is configuration, not a per-call argument.
     pub fn with_uniform_ttl(ttl: SignedDuration) -> Self {

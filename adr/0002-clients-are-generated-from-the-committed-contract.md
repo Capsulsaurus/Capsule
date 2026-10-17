@@ -50,3 +50,12 @@ serialization versus orchestration**, and it now falls in exactly one place:
   type spargen's `classify_media` does not know; they are signed documents served byte for byte,
   which is why they are not JSON. Relabelling them `application/octet-stream` to satisfy the
   generator would tell every client that a document with a schema it knows is opaque bytes.
+- The exception those narrowings carve is the **CBOR wire only**, not the JSON around it. For
+  `POST /v1/albums/{album_id}/upgrade` (`capsule_sdk::upgrade`) the hand-written part is the
+  request — path, media type, and the signed `application/cbor` body sent verbatim. Its JSON
+  answers decode into the generated types: the phase into `UpgradePhaseResponse`, every
+  refusal into `CodedProblem`, with the `409`'s `intent_id` read as the extension member
+  `CodedProblem`'s `additionalProperties` admits. A hand-written struct mirroring either shape
+  would be the second parser this record rules out. The exception ends when spargen learns
+  `application/cbor` ([#440](https://github.com/Capsulsaurus/Capsule/issues/440)); the
+  narrowing and the hand-written request then go with it.

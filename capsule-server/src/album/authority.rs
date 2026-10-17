@@ -1,6 +1,6 @@
 //! [`ProvisionedAuthority`] — the two facts a write request cannot carry, answered from stores.
 //!
-//! [`WriteAuthority`](crate::upload::WriteAuthority) is the seam invariants 6 and 7 are decided
+//! [`WriteAuthority`] is the seam invariants 6 and 7 are decided
 //! at. Until now the only implementation was a test double, which meant every write path was
 //! proven against facts a fixture asserted rather than facts the server holds. This is the
 //! production one.
