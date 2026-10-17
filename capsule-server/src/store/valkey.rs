@@ -75,6 +75,7 @@
 //! | `capsule:enroll:code:{spelling}` | hash, written under both spellings | code TTL |
 //! | `capsule:enroll:channel:{id}` | hash | channel TTL |
 //! | `capsule:enroll:mbox:{id}:{a\|b}` | list | the channel's remaining TTL |
+//! | `capsule:oidc:authorization:{state}` | hash | authorization TTL |
 //! | `capsule:cohorts:{uid}` | hash (`cohort_hash` → `first last`) | **none** |
 //!
 //! Scripts derive a few of these keys from a record they have just read (`SREM` the previous
@@ -122,12 +123,13 @@ use uuid::Uuid;
 use super::auth::{AuthStateStore, CohortRecord, CohortStore, DEFAULT_SESSION_TTL, SessionRecord};
 use super::ceremony::{
     CHALLENGE_TTL, ChallengeStore, ChannelStore, Direction, DrainOutcome, ENROLLMENT_CODE_TTL,
-    EnrollmentStore, PendingEnrollment, RELAY_CHANNEL_TTL, RelayChannel, RelayOutcome,
-    RelayPayload, RevokeAllChallenge,
+    EnrollmentStore, OIDC_AUTHORIZATION_TTL, OidcAuthorizationStore, PendingAuthorization,
+    PendingEnrollment, RELAY_CHANNEL_TTL, RelayChannel, RelayOutcome, RelayPayload,
+    RevokeAllChallenge,
 };
 use super::ids::{
-    AlbumId, AssetId, ChallengeToken, ChannelId, EnrollmentCode, OwnerId, SessionId, UploadId,
-    UserId,
+    AlbumId, AssetId, ChallengeToken, ChannelId, EnrollmentCode, OidcNonce, OidcState, OwnerId,
+    PkceVerifier, SessionId, UploadId, UserId,
 };
 use super::upload::{
     AcceptedChunk, BlobRole, FinalizeClaim, LIFETIME_CAP, UploadSessionRecord, UploadSessionStatus,
@@ -610,6 +612,7 @@ const CHALLENGES: &str = "challenges";
 const ENROLLMENTS: &str = "enrollments";
 const CHANNELS: &str = "channels";
 const COHORTS: &str = "cohorts";
+const OIDC_AUTHORIZATIONS: &str = "oidc authorizations";
 
 /// The global eviction view.
 const PROGRESS_KEY: &str = "capsule:upload:progress";
@@ -670,6 +673,10 @@ fn channel_key(channel: &ChannelId) -> String {
 
 fn mailbox_key(channel: &ChannelId, direction: Direction) -> String {
     format!("capsule:enroll:mbox:{channel}:{}", direction.as_str())
+}
+
+fn oidc_authorization_key(state: &OidcState) -> String {
+    format!("capsule:oidc:authorization:{}", state.as_str())
 }
 
 fn cohorts_key(user: &UserId) -> String {
@@ -2197,6 +2204,119 @@ impl ChannelStore for ValkeyChannels {
     }
 }
 
+/// Valkey [`OidcAuthorizationStore`] (#460).
+///
+/// One hash per pending ceremony, written by `PUT_RECORD` and burned by `CONSUME_RECORD` — the
+/// same two scripts the revoke-all challenge runs on, because the shape is the same: a
+/// single-use, short-window credential whose read *is* its removal. Two callbacks racing one
+/// `state` are serialized by the server running the script, so exactly one gets the record.
+///
+/// # No ceiling, unlike the in-memory adapter
+///
+/// [`InMemoryOidcAuthorizations`](super::memory::InMemoryOidcAuthorizations) refuses past
+/// [`PENDING_AUTHORIZATION_CEILING`](super::memory::PENDING_AUTHORIZATION_CEILING) because its
+/// map is process heap, and a heap that grows with every unfinished ceremony is a crash. Here the
+/// key space is bounded without one. Every record carries a `PEXPIRE` at the store's lifetime, so
+/// the live set is at most the begin rate times the TTL; and the begin rate is bounded **before**
+/// this store is reached, because the authorize route charges `budgets::OIDC_AUTHORIZE` per
+/// allow-listed redirect host on the shared counter store, and every refused redirect is charged
+/// to one fixed bucket. A full server is `noeviction`'s to refuse (module docs), which this port
+/// reports as a failure and the route renders as a refusal. A ceiling here would need an index to
+/// count against, and that index would be a second statement of what the TTL already bounds.
+#[derive(Debug)]
+pub struct ValkeyOidcAuthorizations {
+    valkey: Valkey,
+    clock: Arc<dyn Clock>,
+    ttl: SignedDuration,
+}
+
+impl ValkeyOidcAuthorizations {
+    /// A store on `valkey` and `clock` with the given authorization lifetime.
+    pub fn new(valkey: Valkey, clock: Arc<dyn Clock>, ttl: SignedDuration) -> Self {
+        Self { valkey, clock, ttl }
+    }
+
+    /// A store with the [`OIDC_AUTHORIZATION_TTL`].
+    pub fn with_default_ttl(valkey: Valkey, clock: Arc<dyn Clock>) -> Self {
+        Self::new(valkey, clock, OIDC_AUTHORIZATION_TTL)
+    }
+}
+
+fn encode_authorization(record: &PendingAuthorization, expires_at: Timestamp) -> Vec<String> {
+    let mut encoder = Encoder::default();
+    encoder
+        .field("nonce", record.nonce.as_str())
+        .field("verifier", record.verifier.as_str())
+        .field("redirect_uri", &record.redirect_uri)
+        .field("binding_challenge", &record.binding_challenge)
+        .field("issued_at", record.issued_at)
+        .field("expires_at", micros(expires_at));
+    encoder.finish()
+}
+
+fn decode_authorization(flat: Vec<String>) -> Result<PendingAuthorization, StoreError> {
+    let fields = Fields::from_flat(OIDC_AUTHORIZATIONS, "PendingAuthorization", flat)?;
+    Ok(PendingAuthorization {
+        nonce: OidcNonce::new(fields.required("nonce")?),
+        verifier: PkceVerifier::new(fields.required("verifier")?),
+        redirect_uri: fields.required("redirect_uri")?.to_owned(),
+        binding_challenge: fields.required("binding_challenge")?.to_owned(),
+        issued_at: fields.timestamp("issued_at")?,
+    })
+}
+
+impl OidcAuthorizationStore for ValkeyOidcAuthorizations {
+    fn ttl(&self) -> SignedDuration {
+        self.ttl
+    }
+
+    fn begin<'a>(
+        &'a self,
+        state: &'a OidcState,
+        record: PendingAuthorization,
+    ) -> StoreFuture<'a, ()> {
+        Box::pin(async move {
+            let expires_at = deadline(self.clock.now(), self.ttl);
+            let mut args = vec![ttl_millis(self.ttl)];
+            args.extend(encode_authorization(&record, expires_at));
+            let _: i64 = self
+                .valkey
+                .eval(
+                    OIDC_AUTHORIZATIONS,
+                    &PUT_RECORD,
+                    &[oidc_authorization_key(state)],
+                    &args,
+                )
+                .await?;
+            tracing::debug!("recorded a pending OIDC authorization");
+            Ok(())
+        })
+    }
+
+    fn consume<'a>(
+        &'a self,
+        state: &'a OidcState,
+    ) -> StoreFuture<'a, Option<PendingAuthorization>> {
+        Box::pin(async move {
+            // Burned on every attempt, live or not: `CONSUME_RECORD` deletes before it judges.
+            let flat: Option<Vec<String>> = self
+                .valkey
+                .eval(
+                    OIDC_AUTHORIZATIONS,
+                    &CONSUME_RECORD,
+                    &[oidc_authorization_key(state)],
+                    &[micros(self.clock.now()).to_string()],
+                )
+                .await?;
+            tracing::debug!(
+                hit = flat.is_some(),
+                "consumed a pending OIDC authorization"
+            );
+            flat.map(decode_authorization).transpose()
+        })
+    }
+}
+
 // ===========================================================================================
 // The bundle
 // ===========================================================================================
@@ -2212,6 +2332,7 @@ pub struct ValkeyStores {
     enrollments: Arc<ValkeyEnrollments>,
     channels: Arc<ValkeyChannels>,
     cohorts: Arc<ValkeyCohorts>,
+    oidc_authorizations: Arc<ValkeyOidcAuthorizations>,
 }
 
 impl ValkeyStores {
@@ -2230,6 +2351,7 @@ impl ValkeyStores {
             CHALLENGE_TTL,
             ENROLLMENT_CODE_TTL,
             RELAY_CHANNEL_TTL,
+            OIDC_AUTHORIZATION_TTL,
         ))
     }
 
@@ -2244,9 +2366,13 @@ impl ValkeyStores {
         ttl: SignedDuration,
     ) -> Result<Self, StoreError> {
         let valkey = Valkey::connect(url).await?;
-        Ok(Self::with_ttl(valkey, clock, ttl, ttl, ttl, ttl, ttl))
+        Ok(Self::with_ttl(valkey, clock, ttl, ttl, ttl, ttl, ttl, ttl))
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one lifetime per store, named in the order the stores are declared"
+    )]
     fn with_ttl(
         valkey: Valkey,
         clock: Arc<dyn Clock>,
@@ -2255,6 +2381,7 @@ impl ValkeyStores {
         challenge: SignedDuration,
         enrollment: SignedDuration,
         channel: SignedDuration,
+        oidc_authorization: SignedDuration,
     ) -> Self {
         Self {
             auth: Arc::new(ValkeyAuthState::new(
@@ -2277,7 +2404,16 @@ impl ValkeyStores {
                 Arc::clone(&clock),
                 enrollment,
             )),
-            channels: Arc::new(ValkeyChannels::new(valkey.clone(), clock, channel)),
+            channels: Arc::new(ValkeyChannels::new(
+                valkey.clone(),
+                Arc::clone(&clock),
+                channel,
+            )),
+            oidc_authorizations: Arc::new(ValkeyOidcAuthorizations::new(
+                valkey.clone(),
+                clock,
+                oidc_authorization,
+            )),
             cohorts: Arc::new(ValkeyCohorts::new(valkey.clone())),
             valkey,
         }
@@ -2316,6 +2452,11 @@ impl ValkeyStores {
     /// The device-cohort map.
     pub fn cohorts(&self) -> Arc<ValkeyCohorts> {
         Arc::clone(&self.cohorts)
+    }
+
+    /// The pending OIDC authorization store.
+    pub fn oidc_authorizations(&self) -> Arc<ValkeyOidcAuthorizations> {
+        Arc::clone(&self.oidc_authorizations)
     }
 }
 
@@ -2403,6 +2544,47 @@ mod tests {
             "absent stays absent"
         );
         assert_eq!(decode_session(flat).expect("decodes"), record);
+    }
+
+    #[test]
+    fn a_pending_authorization_round_trips_through_its_hash_encoding() {
+        let record = PendingAuthorization {
+            nonce: OidcNonce::new("nonce"),
+            verifier: PkceVerifier::new("verifier"),
+            redirect_uri: "http://127.0.0.1:4242/cb?x=1".to_owned(),
+            binding_challenge: "binding".to_owned(),
+            issued_at: deadline(Timestamp::UNIX_EPOCH, SignedDuration::from_nanos(1)),
+        };
+        let flat = encode_authorization(&record, Timestamp::UNIX_EPOCH);
+        assert!(flat.contains(&"expires_at".to_owned()));
+        assert_eq!(decode_authorization(flat).expect("decodes"), record);
+        assert_eq!(
+            oidc_authorization_key(&OidcState::new("s")),
+            "capsule:oidc:authorization:s"
+        );
+    }
+
+    #[test]
+    fn a_pending_authorization_missing_a_field_is_corrupt() {
+        let mut flat = encode_authorization(
+            &PendingAuthorization {
+                nonce: OidcNonce::new("nonce"),
+                verifier: PkceVerifier::new("verifier"),
+                redirect_uri: "http://127.0.0.1:4242/cb".to_owned(),
+                binding_challenge: "binding".to_owned(),
+                issued_at: Timestamp::UNIX_EPOCH,
+            },
+            Timestamp::UNIX_EPOCH,
+        );
+        let at = flat
+            .iter()
+            .position(|field| field == "verifier")
+            .expect("the verifier is encoded");
+        flat.drain(at..at + 2);
+        assert!(matches!(
+            decode_authorization(flat),
+            Err(StoreError::Corrupt { .. })
+        ));
     }
 
     #[test]

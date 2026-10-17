@@ -37,8 +37,8 @@
 //! # Adapters, and what they are for
 //!
 //! **Two** adapters per port, and which two is a property of the port rather than a menu.
-//! The five volatile stores — [`AuthStateStore`], [`UploadSessionStore`] and the three ceremony
-//! stores — get the Valkey adapter in [`valkey`] and the deterministic in-memory double in
+//! The six volatile stores — [`AuthStateStore`], [`UploadSessionStore`] and the four ceremony
+//! stores, [`OidcAuthorizationStore`] among them since #460 — get the Valkey adapter in [`valkey`] and the deterministic in-memory double in
 //! [`memory`], and nothing else: Valkey is required, the server refuses to boot without
 //! `VALKEY_URL` (design/filesystem/server.md, "Required Services"), and [`crate::boot`] connects
 //! to it and proves it answers `PING` before anything else is assembled. The rejected

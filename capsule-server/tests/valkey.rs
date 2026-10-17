@@ -38,7 +38,8 @@ use capsule_server::store::upload::{
 use capsule_server::store::valkey::ValkeyStores;
 use capsule_server::store::{
     AssetId, AuthStateStore, ChallengeStore, ChannelStore, Clock, CohortStore, EnrollmentStore,
-    OwnerId, SessionId, SessionRecord, StoreError, StoreFuture, UploadId, UserId,
+    OidcAuthorizationStore, OwnerId, SessionId, SessionRecord, StoreError, StoreFuture, UploadId,
+    UserId,
 };
 use jiff::{SignedDuration, Timestamp};
 use testcontainers::runners::AsyncRunner;
@@ -106,6 +107,7 @@ struct ValkeyHarness {
     enrollments: Arc<dyn EnrollmentStore>,
     channels: Arc<dyn ChannelStore>,
     cohorts: Arc<dyn CohortStore>,
+    oidc_authorizations: Arc<dyn OidcAuthorizationStore>,
 }
 
 impl ValkeyHarness {
@@ -124,6 +126,7 @@ impl ValkeyHarness {
             enrollments: stores.enrollments(),
             channels: stores.channels(),
             cohorts: stores.cohorts(),
+            oidc_authorizations: stores.oidc_authorizations(),
             stores,
         }
     }
@@ -167,6 +170,10 @@ impl Harness for ValkeyHarness {
 
     fn channels(&self) -> &dyn ChannelStore {
         &*self.channels
+    }
+
+    fn oidc_authorizations(&self) -> &dyn OidcAuthorizationStore {
+        &*self.oidc_authorizations
     }
 }
 
@@ -552,6 +559,51 @@ async fn finalization_claims_race_to_one_winner() {
     }
     assert_eq!((won, lost), (1, 15), "exactly one finalizer wins");
     uploads.discard(&upload_id).await.expect("cleans up");
+}
+
+/// Sixteen callbacks race one `state`; exactly one gets the pending authorization (#460).
+///
+/// `an_oidc_authorization_is_single_use` asserts it in sequence. Contested for real, the read and
+/// the removal are one script, so no two callbacks can both redeem one nonce and one verifier.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn oidc_callbacks_race_to_one_redemption() {
+    use capsule_server::store::{OidcNonce, OidcState, PendingAuthorization, PkceVerifier};
+
+    let Some(server) = server().await else {
+        return;
+    };
+    let harness = ValkeyHarness::connect(&server.url).await;
+    let store = Arc::clone(&harness.oidc_authorizations);
+    let state = OidcState::new("valkey-race-oidc");
+    store
+        .begin(
+            &state,
+            PendingAuthorization {
+                nonce: OidcNonce::new("valkey-race-nonce"),
+                verifier: PkceVerifier::new("valkey-race-verifier"),
+                redirect_uri: "http://127.0.0.1:4242/cb".to_owned(),
+                binding_challenge: "valkey-race-binding".to_owned(),
+                issued_at: harness.clock.now(),
+            },
+        )
+        .await
+        .expect("the ceremony begins");
+
+    let mut tasks = tokio::task::JoinSet::new();
+    for _ in 0..16 {
+        let store = Arc::clone(&store);
+        let state = state.clone();
+        tasks.spawn(async move { store.consume(&state).await.expect("answers") });
+    }
+    let mut redeemed = 0;
+    let mut refused = 0;
+    while let Some(taken) = tasks.join_next().await {
+        match taken.expect("a callback task completes") {
+            Some(_) => redeemed += 1,
+            None => refused += 1,
+        }
+    }
+    assert_eq!((redeemed, refused), (1, 15), "exactly one callback redeems");
 }
 
 /// A counter hit is charged and decided on the server: many tasks, one budget.

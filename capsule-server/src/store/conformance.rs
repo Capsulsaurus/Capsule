@@ -79,7 +79,7 @@ pub trait CohortHarness: Send + Sync {
     fn advance(&self, by: SignedDuration) -> StoreFuture<'_, ()>;
 }
 
-/// The five volatile stores under test, plus the time seam it inherits.
+/// The six volatile stores under test, plus the time seam it inherits.
 ///
 /// `Harness` extends [`CohortHarness`] rather than restating `advance`, so one deterministic
 /// double still implements both and [`run_all`] still runs every case in this module against it.
@@ -94,16 +94,8 @@ pub trait Harness: CohortHarness {
     fn enrollments(&self) -> &dyn EnrollmentStore;
     /// The enrollment relay-channel store under test.
     fn channels(&self) -> &dyn ChannelStore;
-    /// The pending OIDC authorization store under test (slice `S-N1`), if this harness has one.
-    ///
-    /// Optional **for now**, and the default is the whole reason: the port landed with its
-    /// in-memory adapter while the Valkey adapter is owed, and a required accessor would stop a
-    /// container-backed harness compiling until it exists. The rows that read it panic on
-    /// `None` when driven individually and are skipped by [`run_all`]; the slice that lands the
-    /// Valkey adapter removes the `Option` and the skip with it.
-    fn oidc_authorizations(&self) -> Option<&dyn OidcAuthorizationStore> {
-        None
-    }
+    /// The pending OIDC authorization store under test (slice `S-N1`).
+    fn oidc_authorizations(&self) -> &dyn OidcAuthorizationStore;
 }
 
 /// Unwrap a store result, failing with the operation that was expected to work.
@@ -172,18 +164,6 @@ fn upload(case: &str, tag: &str, uploader: &str, offset: i64) -> UploadSessionRe
         status: UploadSessionStatus::Pending,
         created_at,
         last_progress_at: created_at,
-    }
-}
-
-/// The OIDC authorization store, or a failure naming what the harness lacks.
-fn oidc_authorizations(h: &dyn Harness) -> &dyn OidcAuthorizationStore {
-    match h.oidc_authorizations() {
-        Some(store) => store,
-        None => {
-            panic!(
-                "this harness offers no OidcAuthorizationStore; see Harness::oidc_authorizations"
-            )
-        }
     }
 }
 
@@ -1109,7 +1089,7 @@ pub async fn a_challenge_expires_with_its_store(h: &dyn Harness) {
 /// The property that makes a replayed `state` — and therefore a replayed authorization code
 /// on a stolen redirect — unrepeatable, and the reason the nonce can never be checked twice.
 pub async fn an_oidc_authorization_is_single_use(h: &dyn Harness) {
-    let store = oidc_authorizations(h);
+    let store = h.oidc_authorizations();
     let state = OidcState::new("oidc-single-use");
     let record = pending("oidc-single-use", 0);
     ok(
@@ -1139,7 +1119,7 @@ pub async fn an_oidc_authorization_is_single_use(h: &dyn Harness) {
 
 /// A pending authorization dies at its store's TTL, with no caller involved.
 pub async fn an_oidc_authorization_expires_with_its_store(h: &dyn Harness) {
-    let store = oidc_authorizations(h);
+    let store = h.oidc_authorizations();
     let state = OidcState::new("oidc-expiry");
     ok(
         store.begin(&state, pending("oidc-expiry", 0)).await,
@@ -1154,6 +1134,31 @@ pub async fn an_oidc_authorization_expires_with_its_store(h: &dyn Harness) {
         ok(store.consume(&state).await, "consume at the deadline"),
         None,
         "an authorization is gone at its TTL, and the expired record is burned with it"
+    );
+}
+
+/// A pending authorization is still redeemable one tick before its deadline.
+///
+/// The other side of [`an_oidc_authorization_expires_with_its_store`]'s boundary: an adapter
+/// that expired a record early — rounding a deadline down, or reading `PEXPIRE` as the
+/// contract — would fail a person who signed in at the provider inside the window.
+pub async fn an_oidc_authorization_is_live_until_its_deadline(h: &dyn Harness) {
+    let store = h.oidc_authorizations();
+    let state = OidcState::new("oidc-live-until");
+    let record = pending("oidc-live-until", 0);
+    ok(
+        store.begin(&state, record.clone()).await,
+        "begin an authorization",
+    );
+
+    ok(
+        h.advance(store.ttl() - tick()).await,
+        "advance to one tick short of the authorization TTL",
+    );
+    assert_eq!(
+        ok(store.consume(&state).await, "consume before the deadline"),
+        Some(record),
+        "an authorization is live until its TTL has passed"
     );
 }
 
@@ -1564,13 +1569,9 @@ pub async fn run_all(h: &dyn Harness) {
     relayed_payloads_drain_in_order_and_by_direction(h).await;
     closing_a_channel_drops_both_mailboxes(h).await;
 
-    // Skipped, not failed, for a harness without the store — see `Harness::oidc_authorizations`.
-    // These run here rather than in `run_all_cohorts` because the accessor is on `Harness`: the
-    // OIDC ceremony store is one of the volatile five's kind, not the cohort map's.
-    if h.oidc_authorizations().is_some() {
-        an_oidc_authorization_is_single_use(h).await;
-        an_oidc_authorization_expires_with_its_store(h).await;
-    }
+    an_oidc_authorization_is_single_use(h).await;
+    an_oidc_authorization_expires_with_its_store(h).await;
+    an_oidc_authorization_is_live_until_its_deadline(h).await;
 
     run_all_cohorts(h).await;
 }
