@@ -230,7 +230,7 @@ async fn flooding_one_surface_does_not_deny_a_fresh_key_to_another() {
             budgets::OIDC_AUTHORIZE,
         ),
         (
-            CounterKey::EnrollmentRedemption("00000000".to_owned()),
+            CounterKey::EnrollmentRedemption(EnrollmentSpelling::Fallback),
             budgets::ENROLLMENT_REDEMPTION,
         ),
         (
@@ -358,6 +358,11 @@ fn every_ceiling_is_sized_from_its_own_window() {
     // The two keys only one value of which can exist hold exactly one window.
     assert_eq!(CounterKey::OidcAuthorizeRefused.ceiling(), 1);
     assert_eq!(CounterKey::EnrollmentRedemptionMalformed.ceiling(), 1);
+    // The redemption key is one of two spellings (issue #528), so it holds exactly two.
+    assert_eq!(
+        CounterKey::EnrollmentRedemption(EnrollmentSpelling::Full).ceiling(),
+        2
+    );
 
     // The admitted OIDC host is structurally three values; the ceiling is headroom over that
     // and nothing like the caller-controlled partitions.
@@ -368,19 +373,18 @@ fn every_ceiling_is_sized_from_its_own_window() {
         "a bounded key must not be sized like an unbounded one"
     );
 
-    // The three surfaces that key on a caller-supplied string are the ones that need room.
+    // The two surfaces that key on a caller-supplied string are the ones that need room.
     for key in [
         CounterKey::ShareLink(String::new()),
         CounterKey::DropLink(String::new()),
-        CounterKey::EnrollmentRedemption(String::new()),
     ] {
-        assert!(key.ceiling() >= ceilings::ENROLLMENT_REDEMPTION, "{key:?}");
+        assert!(key.ceiling() >= 5_000, "{key:?}");
     }
 
     // No two variants share a partition name, or one flood would reach two ceilings.
     let names = [
         CounterKey::LoginAttempts(UserId::new("u")),
-        CounterKey::EnrollmentRedemption(String::new()),
+        CounterKey::EnrollmentRedemption(EnrollmentSpelling::Full),
         CounterKey::EnrollmentRedemptionMalformed,
         CounterKey::ShareLink(String::new()),
         CounterKey::ShareSource(String::new()),
@@ -403,7 +407,7 @@ fn every_budget_is_declared_in_one_place() {
     // model, and the two pairs the contracts call "the same two limiters" would drift the first
     // time one was tuned.
     assert_eq!(budgets::LOGIN_ATTEMPTS.limit, 5);
-    assert_eq!(budgets::ENROLLMENT_REDEMPTION.window.as_mins(), 10);
+    assert_eq!(budgets::ENROLLMENT_REDEMPTION.window.as_mins(), 1);
     const { assert!(budgets::SHARE_SOURCE.limit > budgets::SHARE_LINK.limit) };
     const { assert!(budgets::DROP_SOURCE.limit > budgets::DROP_LINK.limit) };
     assert_eq!(budgets::DEEP_VERIFY.window.as_hours(), 1);

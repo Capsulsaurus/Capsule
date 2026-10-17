@@ -20,22 +20,39 @@ use super::Budget;
 /// account.
 pub const LOGIN_ATTEMPTS: Budget = Budget::new(5, SignedDuration::from_mins(15));
 
-/// Redemption attempts against one pending enrollment.
+/// Redemption attempts presenting one spelling of a code, deployment-wide (issue #528).
 ///
-/// Ten in the code's own ten-minute lifetime, so the transcribable fallback — deliberately
-/// shorter than the QR payload — cannot be ground through inside the window it exists in. This
-/// is the limiter design/device-enrollment.md names as the reason the short form is safe to
-/// offer at all.
-pub const ENROLLMENT_REDEMPTION: Budget = Budget::new(10, SignedDuration::from_mins(10));
+/// Thirty a minute against each
+/// [`CounterKey::EnrollmentRedemption`](crate::counter::CounterKey::EnrollmentRedemption)
+/// bucket. This is the limiter design/device-enrollment.md names as the reason the transcribable
+/// fallback is safe to offer at all, and the number is that argument:
+///
+/// - A wrong guess names no pending enrollment, so it can only be counted against the space it
+///   searches. Every fallback guess, from every address, spends this one budget.
+/// - A pending enrollment lives ten minutes, which is at most eleven of these fixed one-minute
+///   windows, so at most 330 fallback guesses are admitted across its whole life.
+/// - Each guess matches at most one of the 10^8 eight-digit fallbacks. So the chance that any
+///   one pending enrollment is guessed inside its lifetime is at most 330 in 10^8 — about three
+///   in a million, the same order as [`SECOND_FACTOR`]'s five in a million per sign-in.
+///
+/// Deliberately blunt in the other direction: a flood spends the fallback bucket for everyone,
+/// for a minute at a time. That is the trade, and it is a bounded one — the QR spelling has its
+/// own bucket, so a person whose typed code is throttled can still scan — where the per-code key
+/// this replaced bounded nothing, because every wrong guess was a fresh string with a fresh
+/// budget. Thirty a minute is far above a deployment's honest rate of device adds.
+///
+/// The full-entropy spelling is charged the same budget in its own bucket. Its 122 random bits
+/// already defeat guessing; the budget there exists so that presenting one is not free.
+pub const ENROLLMENT_REDEMPTION: Budget = Budget::new(30, SignedDuration::from_mins(1));
 
 /// Redemption attempts presenting something that is not shaped like a code at all.
 ///
 /// Sixty a minute against
 /// [`CounterKey::EnrollmentRedemptionMalformed`](crate::counter::CounterKey::EnrollmentRedemptionMalformed)'s
-/// one bucket, the same shape the refused-redirect bucket takes. Deliberately far more generous
-/// than [`ENROLLMENT_REDEMPTION`]: a malformed code is not a guess at a *particular* pending
-/// enrollment — it cannot match one — so this number is not part of the entropy argument the
-/// per-code budget carries. It exists so that a malformed attempt is not free, and so the
+/// one bucket, the same shape the refused-redirect bucket takes. Deliberately more generous
+/// than [`ENROLLMENT_REDEMPTION`]: a malformed code is not a guess at any pending enrollment —
+/// it cannot match one — so this number is not part of the entropy argument that budget
+/// carries. It exists so that a malformed attempt is not free, and so the
 /// partition holding it can never be more than one key wide.
 pub const ENROLLMENT_REDEMPTION_MALFORMED: Budget = Budget::new(60, SignedDuration::from_mins(1));
 

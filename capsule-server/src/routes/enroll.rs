@@ -16,12 +16,9 @@
 //! | relay/drain/close `404 error.enrollment.channel_not_found` | the handle names no live channel |
 //! | relay `400 error.enrollment.relay_malformed` | an unknown direction or an implausible payload |
 //! | `401` / `403` | the framework's, on the two operations that take a session |
+//! | redeem `429 error.enrollment.rate_limited` | the redemption budget for the presented spelling is spent |
+//! | redeem `429 error.enrollment.at_capacity` | the limiter's partition is full |
 //! | `500 error.auth.unavailable` | a store could not answer |
-//!
-//! **No `429`.** The contract rate-limits redemption and the catalog carries a code for it, but
-//! the per-user counter has no port (`S-C32`), so declaring the status would promise something
-//! nothing can produce. Single-use, a ten-minute TTL and ≥64 bits of entropy bound the window
-//! meanwhile.
 
 use capsule_i18n::error_codes;
 use kynos::prelude::*;
@@ -30,7 +27,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::auth::AccessToken;
-use crate::counter::{CounterContext, CounterKey, Verdict, budgets, unix_seconds};
+use crate::counter::{
+    CounterContext, CounterKey, EnrollmentSpelling, Verdict, budgets, unix_seconds,
+};
 use crate::enrollment::{EnrollmentContext, MAX_RELAY_BYTES};
 use crate::store::{
     ChannelId, Direction, DrainOutcome, EnrollmentCode, PendingEnrollment, RelayChannel,
@@ -146,14 +145,15 @@ pub enum RedeemRejection {
         code: &'static str,
     },
 
-    /// Too many redemption attempts against this code.
+    /// Too many redemption attempts presenting this spelling of a code.
     ///
     /// The limiter design/device-enrollment.md names as the reason the **shorter transcribable
     /// fallback** is safe to offer: it trades entropy for transcribability, and what keeps that
     /// trade honest is that the code cannot be ground through inside its ten-minute life.
     ///
-    /// Two causes, one status, told apart by `code`: `error.enrollment.rate_limited` is this
-    /// code's own budget spent, `error.enrollment.at_capacity` is the limiter's partition full.
+    /// Two causes, one status, told apart by `code`: `error.enrollment.rate_limited` is the
+    /// spelling's deployment-wide budget spent, `error.enrollment.at_capacity` is the limiter's
+    /// partition full.
     /// The second used to render `500 error.auth.unavailable`, which told a client to report an
     /// outage and an operator to go looking for one, when the limiter was working exactly as
     /// designed and would clear itself inside the window.
@@ -293,29 +293,35 @@ pub async fn redeem_enrollment_code(
     // right on the last try escape it, and one charged after the fact would let a burst through
     // while the first attempt was still resolving.
     //
-    // Keyed on the presented code rather than on a source address, because the contract's
-    // budget is per *pending enrollment* — the thing being guessed — and a caller behind many
-    // addresses is exactly the caller a per-address key would miss.
+    // Keyed on the presented code's **spelling**, never on its value and never on a source
+    // address (issue #528). A key built from the value gives every wrong guess a fresh budget,
+    // because every wrong guess is a different string; a per-address key misses the caller
+    // behind many addresses. A miss names no pending enrollment, so it cannot be charged to the
+    // one it was aimed at — what every guess shares is the space it searches, and that is the
+    // key. `budgets::ENROLLMENT_REDEMPTION` carries the arithmetic that turns one bucket per
+    // spelling into a bound per pending enrollment.
     //
-    // But keyed on it **only when it is shaped like a code**. The presented value is an
-    // arbitrary caller-supplied string, and a counter keyed on one is a partition an
-    // unauthenticated caller fills a row at a time; anything else goes to one fixed bucket, as
-    // the OIDC authorize charges a refused redirect to one. This is a *shape* check and never an
+    // Anything not shaped like either spelling goes to one fixed bucket of its own, as the OIDC
+    // authorize charges a refused redirect to one. This is a *shape* check and never an
     // existence check: it cannot say whether a code is pending, so it tells a prober nothing and
     // leaves untouched the charge-before-resolve ordering above, which is what stops this route
     // being a free existence oracle. A malformed code still walks the same path to the same
     // `error.enrollment.code_refused` it always did.
-    let (key, budget) = if is_enrollment_code(offered) {
-        (
-            CounterKey::EnrollmentRedemption(offered.to_owned()),
+    let (key, budget) = match spelling_of(offered) {
+        Some(spelling) => (
+            CounterKey::EnrollmentRedemption(spelling),
             budgets::ENROLLMENT_REDEMPTION,
-        )
-    } else {
-        (
+        ),
+        None => (
             CounterKey::EnrollmentRedemptionMalformed,
             budgets::ENROLLMENT_REDEMPTION_MALFORMED,
-        )
+        ),
     };
+    tracing::debug!(
+        key = key.as_str(),
+        scope = key.scope(),
+        "charging a redemption"
+    );
     let verdict = counters.hit(&key, budget).await.map_err(|error| {
         // Fail closed. A limiter an attacker turns off by loading the counter store is not a
         // limiter — but a *full* partition is the limiter working, not a broken store, and a
@@ -334,6 +340,13 @@ pub async fn redeem_enrollment_code(
         }
     })?;
     if let Verdict::Limited { retry_after } = verdict {
+        // Debug, not warn: under a flood this fires once per refused request, and the limiter
+        // exists so that a flood costs the server little — its log included.
+        tracing::debug!(
+            key = key.as_str(),
+            scope = key.scope(),
+            "the redemption budget is spent"
+        );
         return Err(RedeemRejection::RateLimited {
             code: error_codes::ENROLLMENT_RATE_LIMITED,
             retry_after: unix_seconds(retry_after),
@@ -513,11 +526,11 @@ pub async fn close_enrollment_channel(
 /// How many digits the transcribable fallback carries. See [`mint`], which is what produces it.
 const TEXT_FALLBACK_DIGITS: usize = 8;
 
-/// Whether `raw` is shaped like one of the two spellings [`mint`] issues.
+/// Which of the two spellings [`mint`] issues `raw` is shaped like, if either.
 ///
 /// The full-entropy form is a canonical hyphenated UUID; the transcribable fallback is exactly
-/// [`TEXT_FALLBACK_DIGITS`] ASCII digits. Nothing else can name a pending enrollment, so nothing
-/// else needs a counter key of its own — that is the whole of what this decides.
+/// [`TEXT_FALLBACK_DIGITS`] ASCII digits. Nothing else can name a pending enrollment — that is
+/// the whole of what this decides, and the answer picks the limiter's bucket.
 ///
 /// **Not an existence check, and it must not become one.** It reads only the presented string's
 /// shape, never the store, so it distinguishes "cannot possibly be a code" from "is a code",
@@ -525,13 +538,13 @@ const TEXT_FALLBACK_DIGITS: usize = 8;
 /// the UUID form: a client that upper-cases what it scanned is presenting a real code, and
 /// pushing it into the malformed bucket would throttle an honest caller on a technicality. The
 /// store remains the only thing that decides whether a code redeems.
-fn is_enrollment_code(raw: &str) -> bool {
+fn spelling_of(raw: &str) -> Option<EnrollmentSpelling> {
     if raw.len() == TEXT_FALLBACK_DIGITS && raw.bytes().all(|b| b.is_ascii_digit()) {
-        return true;
+        return Some(EnrollmentSpelling::Fallback);
     }
     // `try_parse` also accepts the simple, braced and URN spellings; the length pins the
     // hyphenated one `mint` actually issues.
-    raw.len() == 36 && Uuid::try_parse(raw).is_ok()
+    (raw.len() == 36 && Uuid::try_parse(raw).is_ok()).then_some(EnrollmentSpelling::Full)
 }
 
 /// Mint a code pair, refusing one that is already taken.
@@ -613,22 +626,42 @@ mod tests {
     fn both_spellings_mint_issues_are_shaped_like_codes() {
         // The predicate has to admit exactly what `mint` produces, or a legitimate redemption
         // would be counted in the malformed bucket and throttled deployment-wide.
+        // And it has to tell the two apart, or a flood of short guesses would spend the QR
+        // payload's bucket too.
         for _ in 0..64 {
             let uuid = Uuid::new_v4().to_string();
-            assert!(is_enrollment_code(&uuid), "{uuid}");
+            assert_eq!(spelling_of(&uuid), Some(EnrollmentSpelling::Full), "{uuid}");
             let fallback = format!(
                 "{:0width$}",
                 Uuid::new_v4().as_u128() % 100_000_000,
                 width = TEXT_FALLBACK_DIGITS
             );
-            assert!(is_enrollment_code(&fallback), "{fallback}");
+            assert_eq!(
+                spelling_of(&fallback),
+                Some(EnrollmentSpelling::Fallback),
+                "{fallback}"
+            );
         }
         // Including the leading-zero fallback, which is where an "is it a number" check breaks.
-        assert!(is_enrollment_code("00000042"));
+        assert_eq!(spelling_of("00000042"), Some(EnrollmentSpelling::Fallback));
         // And an upper-cased UUID, which is a real code a client re-spelled.
-        assert!(is_enrollment_code(
-            &Uuid::new_v4().to_string().to_ascii_uppercase()
-        ));
+        assert_eq!(
+            spelling_of(&Uuid::new_v4().to_string().to_ascii_uppercase()),
+            Some(EnrollmentSpelling::Full)
+        );
+    }
+
+    #[test]
+    fn the_key_does_not_depend_on_the_guess() {
+        // Issue #528: the key used to be the presented string, so every wrong guess was a fresh
+        // key with a fresh budget. Two different guesses of one spelling must be one key.
+        let key = |raw: &str| spelling_of(raw).map(CounterKey::EnrollmentRedemption);
+        assert_eq!(key("00000001"), key("99999999"));
+        assert_eq!(
+            key(&Uuid::new_v4().to_string()),
+            key(&Uuid::new_v4().to_string())
+        );
+        assert_ne!(key("00000001"), key(&Uuid::new_v4().to_string()));
     }
 
     #[test]
@@ -644,11 +677,11 @@ mod tests {
             "urn:uuid:0193d2f4-a1b7-4c3e-8f5a-6b7c8d9e0f10",
             "{0193d2f4-a1b7-4c3e-8f5a-6b7c8d9e0f10}",
         ] {
-            assert!(!is_enrollment_code(candidate), "{candidate:?}");
+            assert_eq!(spelling_of(candidate), None, "{candidate:?}");
         }
         // The point of the bound: an arbitrarily long string cannot mint a key.
         let long = "a".repeat(64 * 1024);
-        assert!(!is_enrollment_code(&long));
+        assert_eq!(spelling_of(&long), None);
     }
 
     #[test]
@@ -659,8 +692,8 @@ mod tests {
         let minted = Uuid::new_v4().to_string();
         let never_issued = "0193d2f4-a1b7-4c3e-8f5a-6b7c8d9e0f10";
         assert_eq!(
-            is_enrollment_code(&minted),
-            is_enrollment_code(never_issued),
+            spelling_of(&minted),
+            spelling_of(never_issued),
             "a code that exists and one that never will are shaped the same"
         );
     }
