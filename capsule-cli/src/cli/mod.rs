@@ -1,7 +1,7 @@
 //! The `capsule` argument surface, and the machine-readable description of it that the
 //! documentation site is generated from.
 //!
-//! [`Cli`] stays `pub(crate)`: the parsed command is dispatch state, not API. What crosses
+//! `Cli` stays `pub(crate)`: the parsed command is dispatch state, not API. What crosses
 //! the crate boundary is [`command_tree`], the description artifact behind
 //! `/reference/cli/` (slice `S-Z8`).
 

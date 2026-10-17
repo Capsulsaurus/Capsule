@@ -7,9 +7,9 @@
 //!
 //! - runs a quick **asynchronous pre-flight expiry check** before each request and
 //!   refreshes proactively when the access token is within the refresh skew of
-//!   expiry ([`Session::valid_access_token`]);
+//!   expiry (`Session::valid_access_token`);
 //! - **single-flights** refreshes — concurrent callers that all see a stale token
-//!   coalesce onto one network refresh ([`Session::ensure_refreshed`]);
+//!   coalesce onto one network refresh (`Session::ensure_refreshed`);
 //! - **retries once on `401`**: an authenticated request that the server rejects is
 //!   refreshed once and replayed, so a token that expired between the pre-flight
 //!   check and the wire is transparently recovered.
@@ -1026,7 +1026,7 @@ impl Session {
     /// token-provider seam ([`crate::client::AuthenticatedClient`]), where the token is
     /// attached by the client rather than by this module. Pre-flight-refreshes exactly like
     /// [`Session::execute`]; the reactive half — a `401` the pre-flight check could not
-    /// foresee — is [`refresh_rejected`](Session::refresh_rejected)'s.
+    /// foresee — is `refresh_rejected`'s.
     #[instrument(skip_all)]
     pub async fn bearer(&self) -> Result<SecretString, AuthError> {
         self.valid_access_token().await

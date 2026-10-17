@@ -55,6 +55,12 @@ mod testmock;
 /// `mise run openapi-check-kynos` gates it); the client re-generates on every build. The
 /// ergonomic, session-composed entry point is [`client::AuthenticatedClient`]; reach for
 /// [`rest::Client`] directly only for unauthenticated calls.
+///
+/// The two `rustdoc::` allows are the generated text's, not ours to fix here: each operation's
+/// doc comment is the server handler's rustdoc carried through the schema's `description`, so
+/// its intra-doc links name `capsule-server` items (`crate::serve`, `ModerationStore`, …) that
+/// cannot resolve in this crate, and `spargen`'s runtime links its own private helpers. The
+/// workspace rustdoc gate (`mise run doc-check-rust`) still lints every hand-written module.
 pub mod rest {
     #![allow(
         clippy::all,
@@ -62,7 +68,9 @@ pub mod rest {
         clippy::nursery,
         missing_docs,
         unreachable_pub,
-        dead_code
+        dead_code,
+        rustdoc::broken_intra_doc_links,
+        rustdoc::private_intra_doc_links
     )]
     include!(concat!(env!("OUT_DIR"), "/rest_client.rs"));
 }

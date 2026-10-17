@@ -27,7 +27,7 @@
 //! for a session table — while the durable records go to Postgres. No generic CAS, transfer or
 //! TTL abstraction is planned.
 //!
-//! Each module owns one port and, where it has one, the surface over it. [`routes`] is the only
+//! Each module owns one port and, where it has one, the surface over it. [`routes`](mod@routes) is the only
 //! module that knows about HTTP: everything under it — [`album`], [`directory`], [`discovery`],
 //! [`enrollment`], [`escrow`], [`federation`], [`gc`], [`index`], [`membership`],
 //! [`moderation`],
@@ -113,7 +113,7 @@ pub use self::app::App;
 /// tested router would be a surface nothing proves anything about.
 ///
 /// It takes no context *value* — [`App`] appears only as a type parameter — which is what lets
-/// [`openapi`] describe the whole server without a database, a cache or a signing key. The
+/// [`openapi`](fn@openapi) describe the whole server without a database, a cache or a signing key. The
 /// description is a property of the types, not of a running deployment.
 pub fn router() -> ServerRouter {
     Router::<App>::new()
@@ -320,7 +320,7 @@ const SPEC_VERSION: kynos::openapi::SpecVersion = kynos::openapi::SpecVersion::V
 /// # Errors
 ///
 /// Returns an error if the router's types cannot be described, or if the API uses a construct
-/// [`SPEC_VERSION`] cannot express.
+/// `SPEC_VERSION` cannot express.
 pub fn openapi() -> kynos::Result<kynos::openapi::Document> {
     let mut document = router().openapi_as(SPEC_VERSION)?;
     // `S-C38`: Kynos attaches `#[problem(extension)]` members at run time and describes none of

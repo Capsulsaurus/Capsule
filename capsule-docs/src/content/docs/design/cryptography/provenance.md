@@ -125,6 +125,26 @@ Even if every current key (every device's DSK, every album's current AMK and wri
 
 This bounds the blast radius of a credential compromise: history is read-only.
 
+### Legacy Inherited-Device Records
+
+`created_by_user` and `created_by_device` name the **signer of that record**, not the asset's creator: `verify_asset` resolves `device_sig` against the directory entry they name, and the creator stays recoverable from the `create` record at the head of the chain. Clients before the fix for [#475](https://github.com/Capsulsaurus/Capsule/issues/475) copied both fields from the chain head into every continuation (`delete`, `trash-restore`, `metadata-update`) while signing with the current device. A continuation such a client wrote from a **second device of the same account** therefore names the creating device but carries the second device's signature, and can never verify. Chains like this already exist in stored libraries.
+
+**Decision: quarantine in place, with a distinct signal.** The record is refused, and the asset's chain stalls at it:
+
+- **No re-signing.** Both fields are covered by both signatures, so correcting the attribution means minting a new record over a past chain position — the rewrite of history the chain exists to make detectable. A client that re-signed another device's records would also be vouching for writes it never made.
+- **No accept-with-gap.** Accepting the record, or skipping it and resuming the walk behind it, teaches the chokepoint to trust a field it cannot verify and gives a key-holding attacker a way to land a record that is not checked at step 8.
+- **The tail stalls too.** The receiving catalog's chain head never advances past the refused record, so every later record of that asset fails step 11 as `ForgedChain`. The asset stays at its last verified state; nothing behind the stall is applied.
+
+Because `BadDeviceSig` and `ForgedChain` are also what a real forgery or replay produces, the receiving path tells the two apart. `diagnose_misattributed_signer` reclassifies a `BadDeviceSig` as this defect only when **all** of these hold, so it can never be met by someone holding none of the account's device keys:
+
+1. `verify_asset` returns `BadDeviceSig`, and the record is a continuation (create paths always named their signer);
+2. `device_sig` verifies under a **different** device of the same directory, with that entry's declared algorithm, and that device was added no later than the record's timestamp;
+3. steps 9–11 hold unchanged: the epoch is attested, `write_sig` verifies under its write-tier key, and the record chains to the local head.
+
+`apply_remote_entry` then quarantines with `QuarantineReason::LegacyInheritedDevice { named_device, signing_device, record_hash }` — the FFI code `LegacyInheritedDevice` — rather than `Rejected(BadDeviceSig)`. `record_hash` is where the chain stalls: the next record's `prior_provenance_hash` names it, so a client can file that tail's `ForgedChain` verdicts under this stall rather than report an attack, and an operator can tell a library hit by the bug from one under attack. A diagnosis is still a quarantine: it changes what is reported, never what is accepted.
+
+The same bug in a shared album's **member** write is not diagnosed: the record names the owner's device, and the member's signing device is not in the directory the record names, so condition 2 cannot hold and the verdict stays `Rejected(BadDeviceSig)`. No migration exists, and none is planned: a stalled chain stays stalled.
+
 ### Physical Storage
 
 - **Client.** An append-only CBOR file at `media/{YYYY}/{YYYY-MM}/{uuid}.provenance.cbor`, alongside the asset and its sidecar — a sequence of `ProvenanceRecord` entries; on hard-delete the log persists as a tombstone-with-history. This file is a **non-authoritative local cache**. A faulty or malicious client can corrupt or truncate *its own* copy, but cannot rewrite history: the chain is self-authenticating — each record is signed and carries the prior record's hash, so dropping or altering any record breaks the forward walk from `create` — and the authoritative copy is the server's append-only blob sequence plus the replicas every other album member holds, any of which re-detects the tamper on next sync as a chain-head mismatch. A client that finds its local cache inconsistent with the authoritative chain rebuilds it from the server.

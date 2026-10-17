@@ -13,7 +13,7 @@
 //!
 //! | Invariants | Decided by | Why there |
 //! | --- | --- | --- |
-//! | 1, 2, 6, 7, 8, 15, 16 | [`check_op`](crate::upload::envelope::check_op) | pure over the request, so no state can change under them |
+//! | 1, 2, 6, 7, 8, 15, 16 | [`check_op`] | pure over the request, so no state can change under them |
 //! | 25 | this module | it compares bytes in hand against a field in the manifest |
 //! | **17, 18** | [`AssetIndex::apply_op`](crate::index::AssetIndex::apply_op) | they are the only two whose answer depends on **stored** state, and a check taken outside the write's critical section is a check on facts that can change before the write lands |
 //!
@@ -24,7 +24,7 @@
 //! # Who a lifecycle record names, and what the server checks about it
 //!
 //! Every action this surface admits is a **chain continuation**. The allow-list in
-//! [`check_op`](crate::upload::envelope::check_op) is `delete | trash-restore |
+//! [`check_op`] is `delete | trash-restore |
 //! metadata-update | derivative-add | derivative-replace` — the five that do not move blob
 //! bytes — and none may carry a null `prior_provenance_hash`. The two that *do* move bytes,
 //! `create` and `replace`, are `POST /v1/upload`'s by definition.
@@ -47,7 +47,7 @@
 //! 1. the **bearer token** — the caller is an authenticated account, and everything below is
 //!    about that account rather than about a field in the body;
 //! 2. **standing** (`S-C8`) — a suspended account may not write, whoever the manifest names;
-//! 3. **write capability** — [`WriteAuthority::album_write_access`] answers
+//! 3. **write capability** — [`WriteAuthority::album_write_access`](crate::upload::WriteAuthority::album_write_access) answers
 //!    owner-or-writer-member for *this caller* on *this album*, and a reader, a former member and
 //!    a stranger get one indistinguishable `403`;
 //! 4. **invariant 7, both halves** — `created_by_user` must be the caller, and

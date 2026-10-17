@@ -16,6 +16,8 @@
 //!
 //! [Keys — Write Authorization]: https://docs/design/cryptography/keys/#write-authorization
 
+use uuid::Uuid;
+
 use crate::crypto::authority::AlbumAuthority;
 use crate::crypto::encryption::{blob_ciphertext_hash, open_blob};
 use crate::crypto::hash::{self, Hash32};
@@ -101,9 +103,8 @@ pub fn verify_asset(
     local_chain_head: Option<Hash32>,
 ) -> VerifyOutcome {
     use RejectReason::{
-        BadDeviceSig, BadTimestamp, BadWriteSig, CiphertextHashMismatch, DeviceAddedAfter,
-        ForgedChain, Replayed, Structural, SuiteDowngrade, UnknownDevice, UntrustedAuthority,
-        WrongAlbum, WrongEpoch,
+        BadDeviceSig, BadTimestamp, CiphertextHashMismatch, DeviceAddedAfter, Structural,
+        SuiteDowngrade, UnknownDevice, UntrustedAuthority, WrongAlbum,
     };
     use VerifyOutcome::TerminalReject as Reject;
     let core = &manifest.core;
@@ -156,26 +157,10 @@ pub fn verify_asset(
     {
         return Reject(BadDeviceSig);
     }
-    // 9. The epoch must be within the MLS-attested ceiling (no fabricated future epoch).
-    if core.amk_version > authority.epoch_ceiling() {
-        return Reject(WrongEpoch);
-    }
-    // 10. The write-tier signature must verify under the epoch's attested write-tier key.
-    //     Reader-signed and removed-writer manifests both fail this check.
-    let Some(write_pub) = authority.write_tier_pubkey(core.amk_version) else {
-        return Reject(WrongEpoch);
-    };
-    if !write_pub.verify(&signing_bytes, &manifest.write_sig) {
-        return Reject(BadWriteSig);
-    }
-    // 11. Chain placement: a create must be new; a non-create must chain to the local head.
-    if core.action.is_create() {
-        if local_chain_head.is_some() {
-            return Reject(Replayed);
-        }
-    } else if core.prior_provenance_hash.is_none() || core.prior_provenance_hash != local_chain_head
+    // 9–11. Epoch ceiling, write-tier signature, chain placement.
+    if let Some(reason) = authorize_and_place(manifest, &signing_bytes, authority, local_chain_head)
     {
-        return Reject(ForgedChain);
+        return Reject(reason);
     }
     // 12. Everything authorizes; accept iff the AMK is locally held, else hold as pending.
     if authority.has_amk(core.amk_version) {
@@ -183,6 +168,106 @@ pub fn verify_asset(
     } else {
         VerifyOutcome::Pending(PendingReason::AmkNotYetLocal)
     }
+}
+
+/// Steps 9–11 of [`verify_asset`]: epoch ceiling, write-tier signature, chain placement.
+/// `None` when all three hold. Shared with [`diagnose_misattributed_signer`] so the diagnosis
+/// can never hold a record to a weaker standard than the chokepoint does.
+fn authorize_and_place(
+    manifest: &AssetManifest,
+    signing_bytes: &[u8],
+    authority: &dyn AlbumAuthority,
+    local_chain_head: Option<Hash32>,
+) -> Option<RejectReason> {
+    let core = &manifest.core;
+    // 9. The epoch must be within the MLS-attested ceiling (no fabricated future epoch).
+    if core.amk_version > authority.epoch_ceiling() {
+        return Some(RejectReason::WrongEpoch);
+    }
+    // 10. The write-tier signature must verify under the epoch's attested write-tier key.
+    //     Reader-signed and removed-writer manifests both fail this check.
+    let Some(write_pub) = authority.write_tier_pubkey(core.amk_version) else {
+        return Some(RejectReason::WrongEpoch);
+    };
+    if !write_pub.verify(signing_bytes, &manifest.write_sig) {
+        return Some(RejectReason::BadWriteSig);
+    }
+    // 11. Chain placement: a create must be new; a non-create must chain to the local head.
+    if core.action.is_create() {
+        if local_chain_head.is_some() {
+            return Some(RejectReason::Replayed);
+        }
+    } else if core.prior_provenance_hash.is_none() || core.prior_provenance_hash != local_chain_head
+    {
+        return Some(RejectReason::ForgedChain);
+    }
+    None
+}
+
+/// Diagnose a [`RejectReason::BadDeviceSig`] as the **legacy inherited-device defect** (issue
+/// #475) rather than a forgery, returning the directory device that actually signed the record.
+///
+/// Before the fix, `sign_lifecycle` built every continuation (`delete`, `trash-restore`,
+/// `metadata-update`) with `created_by_user`/`created_by_device` copied from the chain head while
+/// signing with the *current* device. A record written that way from a second device of the same
+/// account names a real directory device that did not sign it, so [`verify_asset`] step 8 rejects
+/// it — the same verdict a forged signature earns. This function separates the two, and returns
+/// `Some(signer)` only when **every** fact below holds:
+///
+/// 1. [`verify_asset`] itself returns `TerminalReject(BadDeviceSig)` — this never reclassifies
+///    any other verdict, and never turns a rejection into an acceptance;
+/// 2. the record is a continuation (not a `create`): the create paths always named their signer;
+/// 3. `device_sig` verifies under a **different** device of the same published directory, under
+///    that entry's declared classical algorithm, and that device was added no later than the
+///    record's timestamp (steps 7–8 hold for the true signer);
+/// 4. steps 9–11 hold unchanged: the epoch is attested, `write_sig` verifies under its write-tier
+///    key, and the record chains to `local_chain_head`.
+///
+/// So `Some` means "this record would have been accepted had it named its own signer" — a
+/// signature by a device the account's IK vouches for, carrying album write authority, in the
+/// right chain position. A forger holding none of this account's device keys cannot produce it.
+///
+/// The record is **still refused**: `created_by_device` is covered by both signatures, so the
+/// misattribution cannot be corrected without re-signing history, and accepting the record would
+/// teach the chokepoint to trust a field it cannot verify. The caller quarantines it with the
+/// distinct signal this function enables; see [provenance.md § Legacy Inherited-Device Records].
+///
+/// [provenance.md § Legacy Inherited-Device Records]: https://docs/design/cryptography/provenance/#legacy-inherited-device-records
+pub fn diagnose_misattributed_signer(
+    manifest: &AssetManifest,
+    ciphertext: &[u8],
+    directory: &DeviceDirectory,
+    authority: &dyn AlbumAuthority,
+    local_chain_head: Option<Hash32>,
+) -> Option<Uuid> {
+    let core = &manifest.core;
+    if verify_asset(manifest, ciphertext, directory, authority, local_chain_head)
+        != VerifyOutcome::TerminalReject(RejectReason::BadDeviceSig)
+    {
+        return None;
+    }
+    if core.action.is_create() {
+        return None;
+    }
+    let signing_bytes = manifest.signing_bytes();
+    let signer = directory.core.devices.iter().find(|entry| {
+        entry.device_id != core.created_by_device
+            && rfc3339_le(&entry.added_at, &core.timestamp) == Some(true)
+            && manifest.device_sig.classical_algorithm() == entry.dsk_public.classical_algorithm()
+            && entry
+                .dsk_public
+                .verify(&signing_bytes, &manifest.device_sig)
+    })?;
+    if authorize_and_place(manifest, &signing_bytes, authority, local_chain_head).is_some() {
+        return None;
+    }
+    tracing::debug!(
+        asset_id = %core.file_id,
+        named_device = %core.created_by_device,
+        signing_device = %signer.device_id,
+        "verify_asset: BadDeviceSig diagnosed as a legacy inherited-device record"
+    );
+    Some(signer.device_id)
 }
 
 /// Why a metadata blob fails to bind to its manifest and the locally-signed sidecar.
@@ -901,5 +986,142 @@ mod tests {
             verify_metadata_binding(&m, b"whatever", &[0u8; 32], b"whatever"),
             MetadataBinding::Quarantine(BindingReject::NoManifestCommitment),
         );
+    }
+
+    // ── Legacy inherited-device records (issue #475) ────────────────────────────
+
+    const SECOND_DEVICE: u128 = 0xD2;
+
+    /// The fixture's account with a second device published, plus that device's DSK — a user
+    /// with a phone and a laptop.
+    fn with_second_device(f: &mut Fixture) -> HybridSigningKey {
+        with_second_device_added_at(f, "2026-05-30T00:00:00Z")
+    }
+
+    /// [`with_second_device`], with the second device published at `added_at`.
+    fn with_second_device_added_at(f: &mut Fixture, added_at: &str) -> HybridSigningKey {
+        let second = HybridSigningKey::from_seed_bytes(&[21; 32], &[22; 32]);
+        let mut core = f.directory.core.clone();
+        core.directory_version += 1;
+        core.devices.push(DeviceEntry {
+            device_id: Uuid::from_u128(SECOND_DEVICE),
+            dsk_public: second.verifying_key(),
+            dek_public: None,
+            added_at: added_at.into(),
+            revoked_at: None,
+        });
+        f.directory = core.sign(&HybridSigningKey::from_seed_bytes(&[10; 32], &[11; 32]));
+        second
+    }
+
+    fn diagnose(f: &Fixture, m: &AssetManifest, head: Option<Hash32>) -> Option<Uuid> {
+        diagnose_misattributed_signer(m, CIPHERTEXT, &f.directory, &f.authority, head)
+    }
+
+    /// The defect exactly as the old `sign_lifecycle` wrote it: a continuation that names the
+    /// creating device (inherited from the chain head) but is signed by the second device. The
+    /// chokepoint still refuses it — and the diagnosis names the device that really signed.
+    #[test]
+    fn an_inherited_device_continuation_is_refused_and_diagnosed() {
+        let mut f = Fixture::new();
+        let second = with_second_device(&mut f);
+        let head = hash::hash_bytes(b"create-head");
+        // `created_by_device` is the fixture's DEVICE (the creator); the signer is `second`.
+        let m = f
+            .core(Action::Delete, Some(head))
+            .sign(&second, &f.write1)
+            .unwrap();
+
+        assert_eq!(
+            f.verify(&m, Some(head)),
+            VerifyOutcome::TerminalReject(RejectReason::BadDeviceSig),
+            "the misattributed record is never accepted"
+        );
+        assert_eq!(
+            diagnose(&f, &m, Some(head)),
+            Some(Uuid::from_u128(SECOND_DEVICE))
+        );
+    }
+
+    /// A genuine forgery — a signature under no key the directory publishes — is not diagnosed:
+    /// it keeps the plain `BadDeviceSig` signal.
+    #[test]
+    fn a_forged_device_sig_is_not_diagnosed_as_legacy() {
+        let mut f = Fixture::new();
+        with_second_device(&mut f);
+        let head = hash::hash_bytes(b"create-head");
+        let forger = HybridSigningKey::from_seed_bytes(&[66; 32], &[67; 32]);
+        let m = f
+            .core(Action::Delete, Some(head))
+            .sign(&forger, &f.write1)
+            .unwrap();
+        assert_eq!(
+            f.verify(&m, Some(head)),
+            VerifyOutcome::TerminalReject(RejectReason::BadDeviceSig)
+        );
+        assert_eq!(diagnose(&f, &m, Some(head)), None);
+    }
+
+    /// A device published after the record's timestamp cannot have written it: its
+    /// signature is not diagnosed as the legacy defect, even though it verifies and every
+    /// other step holds.
+    #[test]
+    fn a_signer_added_after_the_record_is_not_diagnosed() {
+        let mut f = Fixture::new();
+        // The record is stamped 2026-05-31T12:00:00Z; the second device arrives a day later.
+        let second = with_second_device_added_at(&mut f, "2026-06-01T00:00:00Z");
+        let head = hash::hash_bytes(b"create-head");
+        let m = f
+            .core(Action::Delete, Some(head))
+            .sign(&second, &f.write1)
+            .unwrap();
+        assert_eq!(
+            f.verify(&m, Some(head)),
+            VerifyOutcome::TerminalReject(RejectReason::BadDeviceSig)
+        );
+        assert_eq!(diagnose(&f, &m, Some(head)), None);
+    }
+
+    /// The diagnosis holds the true signer to every other step: a misattributed record that
+    /// also lacks album write authority, sits at the wrong chain position, or is a `create`
+    /// is not the legacy defect and is not diagnosed as it.
+    #[test]
+    fn the_diagnosis_requires_every_other_step_to_hold() {
+        let mut f = Fixture::new();
+        let second = with_second_device(&mut f);
+        let head = hash::hash_bytes(b"create-head");
+
+        // Wrong write-tier key for the claimed epoch (a removed writer).
+        let unauthorized = f
+            .core(Action::Delete, Some(head))
+            .sign(&second, &f.write2)
+            .unwrap();
+        assert_eq!(diagnose(&f, &unauthorized, Some(head)), None);
+
+        // Right signatures, wrong chain position (stale / replayed continuation).
+        let stale = f
+            .core(Action::Delete, Some(hash::hash_bytes(b"stale")))
+            .sign(&second, &f.write1)
+            .unwrap();
+        assert_eq!(diagnose(&f, &stale, Some(head)), None);
+
+        // A `create` always named its signer; a misattributed one is not this defect.
+        let create = f
+            .core(Action::Create, None)
+            .sign(&second, &f.write1)
+            .unwrap();
+        assert_eq!(
+            f.verify(&create, None),
+            VerifyOutcome::TerminalReject(RejectReason::BadDeviceSig)
+        );
+        assert_eq!(diagnose(&f, &create, None), None);
+
+        // A correctly attributed record is accepted, never "diagnosed".
+        let fine = f
+            .core(Action::Delete, Some(head))
+            .sign(&f.device, &f.write1)
+            .unwrap();
+        assert_eq!(f.verify(&fine, Some(head)), VerifyOutcome::Accept);
+        assert_eq!(diagnose(&f, &fine, Some(head)), None);
     }
 }

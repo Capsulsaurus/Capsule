@@ -12,8 +12,10 @@ use super::{AssetState, LifecycleError, Result, Workspace, now_rfc3339};
 use crate::backup::{
     self, BackupArtifact, BackupAsset, BackupInput, RestoreMode, VerifyOutcome as RecoveryVerdict,
 };
+use crate::crypto::authority::Authority;
 use crate::crypto::hash::{self, Hash32};
 use crate::crypto::keys::HybridVerifyingKey;
+use crate::crypto::keys::albumstore::{AlbumStore, AmkRow, PersistedAuthority};
 #[cfg(any(test, feature = "test-support"))]
 use crate::crypto::primitives::Argon2Params;
 use crate::crypto::primitives::{CRYPTO_SUITE_ID, DeviceTier};
@@ -157,9 +159,30 @@ impl Workspace {
             });
         }
 
+        // Each exported album's public authority. Only the reference ledger travels: an MLS
+        // authority's exported state holds the group's private secrets, which a backup must not
+        // escrow, so such an album exports unverifiable until its ledger has a public form.
+        let mut authorities = BTreeMap::new();
+        for album_id in amks.keys().map(|(album, _)| *album) {
+            match self.authorities.get(&album_id) {
+                Some(Authority::Reference(a)) => {
+                    authorities.insert(album_id, a.to_ledger());
+                }
+                Some(_) => tracing::warn!(
+                    album_id = %album_id,
+                    "backup: album authority is not a reference ledger; exported without it"
+                ),
+                None => tracing::debug!(
+                    album_id = %album_id,
+                    "backup: album holds no authority; exported without one"
+                ),
+            }
+        }
+
         Ok(BackupInput {
             assets,
             amks,
+            authorities,
             exporter_device: self.account.device.device_id,
             source_library_version: "1".into(),
             export_timestamp: now_rfc3339(),
@@ -196,8 +219,9 @@ impl Workspace {
         // Fold the artifact's escrowed AMKs into the durable keystore **before** writing any
         // asset: this is the step that makes a keyless library whole again, and an asset on disk
         // whose key was never persisted is exactly the failure `S-A10` exists to end. An album
-        // already known keeps its write capability and simply gains missing epochs; an unknown
-        // album lands read-only, since a backup escrows content keys but no signing capability.
+        // already known keeps its write capability and authority and simply gains missing epochs;
+        // an unknown album lands read-only with the public authority the artifact carried, since
+        // a backup escrows content keys and the admin-signed ledger but no signing capability.
         self.absorb_recovered_amks(&artifact)?;
 
         let mut added = 0;
@@ -248,9 +272,16 @@ impl Workspace {
         Ok(added)
     }
 
-    /// Merge a verified artifact's escrowed `(album_id, epoch, amk)` rows into the durable album
-    /// keystore, persist it, and re-apply it to the live workspace so the recovered keys are
-    /// usable in this session as well as the next one.
+    /// Merge a verified artifact's escrowed `(album_id, epoch, amk)` rows — and each album's
+    /// public authority ledger — into the durable album keystore, persist it, and re-apply it to
+    /// the live workspace so the recovered keys are usable in this session as well as the next.
+    ///
+    /// A ledger is adopted only by an album holding no authority ([`AlbumStore::merge_amks`]),
+    /// and an adopted ledger must re-verify against the epochs now held before anything is
+    /// persisted: an authority that would be dropped at the next open is refused here instead.
+    /// An authority the album already held is not re-checked — see [`merge_album`].
+    ///
+    /// [`AlbumStore::merge_amks`]: crate::crypto::keys::albumstore::AlbumStore::merge_amks
     #[tracing::instrument(skip_all)]
     fn absorb_recovered_amks(&mut self, artifact: &BackupArtifact) -> Result<()> {
         let rows = artifact.amk_rows();
@@ -269,12 +300,20 @@ impl Workspace {
             let name = store
                 .get(&album_id)
                 .map_or_else(|| RECOVERED_ALBUM_NAME.to_string(), |a| a.name.clone());
-            let added = store.merge_amks(album_id, &name, rows);
+            let carried = artifact
+                .authority_ledgers()
+                .get(&album_id)
+                .map(|ledger| PersistedAuthority::Reference(Box::new(ledger.clone())));
+            let carried_authority = carried.is_some();
+            let (added, authority_adopted) =
+                merge_album(&mut store, album_id, &name, rows, carried)?;
             recovered_epochs += added;
             tracing::info!(
                 album_id = %album_id,
                 known_album = known,
                 epochs_added = added,
+                carried_authority,
+                authority_adopted,
                 "backup: escrowed album keys absorbed into the keystore"
             );
         }
@@ -328,13 +367,188 @@ impl Workspace {
     }
 }
 
+/// Merge one album's escrowed AMK `rows` and the authority the artifact `carried` into `store`.
+/// Returns the epochs added and whether the carried authority was adopted.
+///
+/// Only an **adopted** authority is re-verified, and a failure there refuses the import (the
+/// ledger already re-verified in [`BackupArtifact::open`], so this is defensive). An authority
+/// the album already held is left alone, unchecked: an unusable held authority costs the album
+/// verification and writes, never read access (as in `Workspace::apply_album_store`), so it must
+/// not stop the artifact's content keys from being recovered.
+fn merge_album(
+    store: &mut AlbumStore,
+    album_id: Uuid,
+    name: &str,
+    rows: Vec<AmkRow>,
+    carried: Option<PersistedAuthority>,
+) -> Result<(usize, bool)> {
+    let had_authority = store.get(&album_id).is_some_and(|a| a.authority.is_some());
+    let carried_authority = carried.is_some();
+    let added = store.merge_amks(album_id, name, rows, carried);
+    let adopted = carried_authority && !had_authority;
+    if adopted {
+        let persisted = store
+            .get(&album_id)
+            .expect("merge_amks leaves the album in the store");
+        if let Some(authority) = &persisted.authority {
+            authority.restore(album_id, &persisted.held_epochs())?;
+        }
+    }
+    Ok((added, adopted))
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use tempfile::TempDir;
 
     use super::*;
+    use crate::crypto::authority::{OpenMlsAuthority, ReferenceAuthority};
+    use crate::crypto::keys::albumstore::{AlbumStoreError, PersistedAlbum};
+    use crate::crypto::keys::{AmkVersion, HybridSigningKey, MasterKey};
     use crate::crypto::primitives::Argon2Params;
-    use crate::lifecycle::fast_workspace;
+    use crate::crypto::verify_asset::{RejectReason, VerifyOutcome};
+    use crate::lifecycle::{FAST_PARAMS, fast_workspace};
+
+    /// #468: a backup restored on a new device of the same account carries the album's public
+    /// authority, so the restored asset **verifies** — and still cannot be written, and the
+    /// authority survives a reopen (it is persisted and re-verified on load, not session state).
+    ///
+    /// The new device's own directory lists only itself until it adopts the account's published
+    /// one (#550), so the test hands it A's directory to stand in for that step; what is under
+    /// test is the album authority, which `verify_asset` checks separately.
+    #[test]
+    fn a_restored_asset_verifies_under_the_authority_the_artifact_carried() {
+        let (lib_a, lib_b, src) = (
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+        );
+        let mut a = fast_workspace(lib_a.path());
+        let album = a.create_album("Trip").unwrap();
+        let photo = src.path().join("photo.jpg");
+        fs::write(&photo, b"\xFF\xD8\xFF a photo worth verifying").unwrap();
+        let asset = a.import_asset(album, &photo).unwrap();
+        let archive = src.path().join("backup.tar");
+        a.export_backup_with_params(&archive, b"pw", FAST_PARAMS)
+            .unwrap();
+
+        let mut b = Workspace::create_from_master(
+            lib_b.path(),
+            b"device b",
+            FAST_PARAMS,
+            MasterKey::from_bytes(*a.account.master.as_bytes()),
+            a.user_id(),
+            &a.sealed_identity(),
+        )
+        .unwrap();
+        b.import_backup(&archive, b"pw", &a.exporter_verifying_key())
+            .unwrap();
+
+        // Without the account's directory the next refusal is the device, not the authority.
+        assert_eq!(
+            b.verify(&asset).unwrap(),
+            VerifyOutcome::TerminalReject(RejectReason::UnknownDevice)
+        );
+        b.directory = a.directory.clone();
+        assert_eq!(b.verify(&asset).unwrap(), VerifyOutcome::Accept);
+        assert!(matches!(
+            b.album(&album).unwrap().write_tier_signer(),
+            Err(LifecycleError::AlbumReadOnly(id)) if id == album
+        ));
+
+        // Persisted: a reopened B still verifies (with the account directory stood in again).
+        drop(b);
+        let mut b = Workspace::open(lib_b.path(), b"device b", FAST_PARAMS).unwrap();
+        b.directory = a.directory.clone();
+        assert_eq!(b.verify(&asset).unwrap(), VerifyOutcome::Accept);
+    }
+
+    /// An album holding a held authority that no longer re-verifies (here a ledger whose admin
+    /// key was swapped) still gains the artifact's content keys: the held authority is neither
+    /// replaced nor re-checked, so it cannot fail the import. An adopted authority that does not
+    /// verify is still refused.
+    #[test]
+    fn a_held_tampered_authority_does_not_block_key_recovery() {
+        let album = Uuid::from_u128(0xA1);
+        let admin = HybridSigningKey::from_seed_bytes(&[1; 32], &[2; 32]);
+        let write_tier = HybridSigningKey::from_seed_bytes(&[3; 32], &[4; 32]);
+        let mut tampered = ReferenceAuthority::new(album, admin.verifying_key())
+            .with_epoch(&admin, AmkVersion(1), &write_tier.verifying_key(), true)
+            .to_ledger();
+        tampered.admin_pub = HybridSigningKey::from_seed_bytes(&[5; 32], &[6; 32]).verifying_key();
+        let tampered = PersistedAuthority::Reference(Box::new(tampered));
+        let valid = PersistedAuthority::Reference(Box::new(
+            ReferenceAuthority::new(album, admin.verifying_key())
+                .with_epoch(&admin, AmkVersion(1), &write_tier.verifying_key(), true)
+                .to_ledger(),
+        ));
+        assert!(tampered.restore(album, &BTreeSet::from([1])).is_err());
+
+        // Held and tampered: the import proceeds and adds the missing epoch.
+        let mut store = AlbumStore::new();
+        store.upsert(PersistedAlbum::recovered(
+            album,
+            "Trip",
+            vec![(album, 1, [1; 32])],
+            Some(tampered.clone()),
+        ));
+        let (added, adopted) = merge_album(
+            &mut store,
+            album,
+            "Trip",
+            vec![(album, 1, [1; 32]), (album, 2, [2; 32])],
+            Some(valid),
+        )
+        .unwrap();
+        assert_eq!((added, adopted), (1, false));
+        assert_eq!(
+            store.get(&album).unwrap().held_epochs(),
+            BTreeSet::from([1, 2])
+        );
+        assert!(matches!(
+            store.get(&album).unwrap().authority,
+            Some(PersistedAuthority::Reference(ref l)) if l.admin_pub != admin.verifying_key()
+        ));
+
+        // Adopted and tampered: refused.
+        let mut store = AlbumStore::new();
+        assert!(matches!(
+            merge_album(&mut store, album, "Trip", vec![(album, 1, [1; 32])], Some(tampered)),
+            Err(LifecycleError::AlbumStore(AlbumStoreError::LedgerRejected(id))) if id == album
+        ));
+    }
+
+    /// Decision 2 of #468: an album whose authority is an MLS group exports its content keys but
+    /// no `authority/` entry, since the group's exported state holds private secrets.
+    #[test]
+    fn an_mls_authority_album_exports_without_an_authority_entry() {
+        let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Group").unwrap();
+        let photo = src.path().join("photo.jpg");
+        fs::write(&photo, b"\xFF\xD8\xFF an mls album photo").unwrap();
+        ws.import_asset(album, &photo).unwrap();
+        ws.authorities.insert(
+            album,
+            Authority::OpenMls(Box::new(
+                OpenMlsAuthority::create_self_group(album).unwrap(),
+            )),
+        );
+
+        let archive = src.path().join("backup.tar");
+        ws.export_backup_with_params(&archive, b"pw", FAST_PARAMS)
+            .unwrap();
+        let artifact = BackupArtifact::open(
+            &fs::read(&archive).unwrap(),
+            b"pw",
+            &ws.exporter_verifying_key(),
+        )
+        .unwrap();
+        assert!(artifact.authority_ledgers().is_empty());
+        assert!(artifact.amk_rows().iter().any(|row| row.0 == album));
+    }
 
     /// The escrow verbs are a pair: what `escrow_master_key` mints is exactly what
     /// `verify_escrow` opens back to *this* device's master key, and a wrong secret does not

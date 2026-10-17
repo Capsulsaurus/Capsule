@@ -33,12 +33,14 @@
 //! ## Recovered (read-only) albums
 //!
 //! A backup artifact escrows **AMKs** — read access — but never the write-tier or admin signing
-//! keys, which are MLS-distributed *capabilities*, nor the admin-signed epoch ledger. An album
-//! restored from a backup into a library that never held it therefore lands here with
-//! `write_tier_seed64 = None`, `admin_seed64 = None`, `authority = None`: its photos decrypt and
-//! re-export, but it cannot author new writes until its authority is re-established. That is the
-//! honest state, and the lifecycle surfaces it as a typed error rather than minting a fresh admin
-//! key that attests nothing and no peer trusts.
+//! keys, which are MLS-distributed *capabilities*. It does carry each album's **public**
+//! authority, the admin-signed epoch ledger (#468). An album restored from a backup into a
+//! library that never held it therefore lands here with `write_tier_seed64 = None`,
+//! `admin_seed64 = None`, and `authority = Some(Reference(ledger))` (or `None` from a format-1
+//! artifact, which carried no ledger): its photos decrypt, re-export, and verify, but it cannot
+//! author new writes until its signing capability is re-established. That is the honest state,
+//! and the lifecycle surfaces it as a typed error rather than minting a fresh admin key that
+//! attests nothing and no peer trusts. The ledger re-verifies on every load, like any other.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -186,14 +188,21 @@ pub struct PersistedAlbum {
     pub write_tier_seed64: Option<ByteBuf>,
     /// The per-album admin signing key's 64-byte hybrid seed. `None` as above.
     pub admin_seed64: Option<ByteBuf>,
-    /// The attested authority state. `None` as above.
+    /// The attested authority state. For a backup-recovered album, the public ledger the artifact
+    /// carried, or `None` when it carried none.
     pub authority: Option<PersistedAuthority>,
 }
 
 impl PersistedAlbum {
-    /// A read-only album entry: escrowed AMKs, no write capability, no authority. This is what a
-    /// backup restore can honestly reconstruct.
-    pub fn recovered(album_id: Uuid, name: &str, amks: Vec<AmkRow>) -> Self {
+    /// A read-only album entry: escrowed AMKs and, when the artifact carried one, the album's
+    /// public authority — but no write or admin capability. This is what a backup restore can
+    /// honestly reconstruct.
+    pub fn recovered(
+        album_id: Uuid,
+        name: &str,
+        amks: Vec<AmkRow>,
+        authority: Option<PersistedAuthority>,
+    ) -> Self {
         let current_epoch = amks.iter().map(|(_, epoch, _)| *epoch).max().unwrap_or(0);
         let mut album = Self {
             album_id,
@@ -202,7 +211,7 @@ impl PersistedAlbum {
             current_epoch,
             write_tier_seed64: None,
             admin_seed64: None,
-            authority: None,
+            authority,
         };
         album.normalize();
         album
@@ -309,16 +318,24 @@ impl AlbumStore {
     /// overwritten**: the local copy is the one the local authority attests, and silently
     /// swapping a content key underneath it would be a downgrade vector. Returns the number of
     /// epochs actually added.
+    ///
+    /// `authority` is the album's public authority the artifact carried. It is adopted only by an
+    /// album that holds none — an unknown album, or one recovered earlier from an artifact that
+    /// carried no ledger. A **held authority is never replaced**, for the same downgrade reason.
     pub fn merge_amks(
         &mut self,
         album_id: Uuid,
         name: &str,
         rows: impl IntoIterator<Item = AmkRow>,
+        authority: Option<PersistedAuthority>,
     ) -> usize {
         let rows: Vec<AmkRow> = rows.into_iter().collect();
         match self.albums.binary_search_by_key(&album_id, |a| a.album_id) {
             Ok(i) => {
                 let existing = &mut self.albums[i];
+                if existing.authority.is_none() {
+                    existing.authority = authority;
+                }
                 let held = existing.held_epochs();
                 let mut added = 0;
                 for row in rows {
@@ -331,7 +348,7 @@ impl AlbumStore {
                 added
             }
             Err(i) => {
-                let album = PersistedAlbum::recovered(album_id, name, rows);
+                let album = PersistedAlbum::recovered(album_id, name, rows, authority);
                 let added = album.amks.len();
                 self.albums.insert(i, album);
                 added
@@ -455,6 +472,7 @@ mod tests {
             recovered,
             "Restored",
             vec![(recovered, 2, [9; 32]), (recovered, 1, [8; 32])],
+            None,
         ));
         (store, writable, recovered)
     }
@@ -549,6 +567,7 @@ mod tests {
             recovered,
             "Restored",
             vec![(recovered, 1, [8; 32]), (recovered, 2, [9; 32])],
+            None,
         ));
         for album in ordered.albums() {
             if album.album_id == writable {
@@ -602,6 +621,7 @@ mod tests {
             writable,
             "Trip",
             vec![(writable, 1, [0xEE; 32]), (writable, 2, [0xAB; 32])],
+            None,
         );
         assert_eq!(added, 1, "only the unheld epoch is added");
         let a = store.get(&writable).unwrap();
@@ -617,12 +637,72 @@ mod tests {
         // An unknown album lands as a read-only recovered entry.
         let fresh = Uuid::from_u128(0xFF);
         assert_eq!(
-            store.merge_amks(fresh, "Restored", vec![(fresh, 5, [1; 32])]),
+            store.merge_amks(fresh, "Restored", vec![(fresh, 5, [1; 32])], None),
             1
         );
         let f = store.get(&fresh).unwrap();
         assert!(f.write_tier_key().unwrap().is_none());
         assert_eq!(f.current_epoch, 5);
+    }
+
+    /// #468: a backup's public authority is adopted by an album that holds none — and only by
+    /// such an album. A held authority is never swapped out, and adopting one grants no signing
+    /// capability.
+    #[test]
+    fn merge_amks_adopts_an_authority_only_where_none_is_held() {
+        let (mut store, writable, recovered) = fixture();
+        let other_admin = signing_key(5, 6);
+        let foreign = |album| {
+            PersistedAuthority::Reference(Box::new(
+                ReferenceAuthority::new(album, other_admin.verifying_key())
+                    .with_epoch(
+                        &other_admin,
+                        AmkVersion(1),
+                        &signing_key(7, 8).verifying_key(),
+                        true,
+                    )
+                    .to_ledger(),
+            ))
+        };
+        let admin_of = |store: &AlbumStore, album: Uuid| {
+            let a = store.get(&album).unwrap();
+            match a.authority.as_ref().unwrap() {
+                PersistedAuthority::Reference(l) => l.admin_pub.clone(),
+                PersistedAuthority::OpenMls(_) => panic!("reference fixture"),
+            }
+        };
+
+        // A held authority is kept.
+        store.merge_amks(writable, "Trip", vec![], Some(foreign(writable)));
+        assert_eq!(
+            admin_of(&store, writable),
+            signing_key(1, 2).verifying_key()
+        );
+
+        // A recovered album that had none adopts it, and stays read-only.
+        store.merge_amks(recovered, "Restored", vec![], Some(foreign(recovered)));
+        assert_eq!(admin_of(&store, recovered), other_admin.verifying_key());
+        let r = store.get(&recovered).unwrap();
+        assert!(r.write_tier_key().unwrap().is_none());
+        assert!(r.admin_key().unwrap().is_none());
+
+        // An unknown album lands with it, and it re-verifies on restore.
+        let fresh = Uuid::from_u128(0xFF);
+        store.merge_amks(
+            fresh,
+            "Restored",
+            vec![(fresh, 1, [1; 32])],
+            Some(foreign(fresh)),
+        );
+        let f = store.get(&fresh).unwrap();
+        let authority = f
+            .authority
+            .as_ref()
+            .unwrap()
+            .restore(fresh, &f.held_epochs())
+            .unwrap();
+        assert!(authority.admin_chain_verifies());
+        assert!(authority.has_amk(AmkVersion(1)));
     }
 
     #[test]
@@ -653,10 +733,12 @@ mod tests {
         let album_id = Uuid::from_u128(0xC0FFEE);
 
         let mut store = AlbumStore::new();
-        let mut album =
-            PersistedAlbum::recovered(album_id, "MLS album", vec![(album_id, 1, [3; 32])]);
-        album.authority = Some(PersistedAuthority::OpenMls(ByteBuf::from(vec![1, 2, 3, 4])));
-        store.upsert(album);
+        store.upsert(PersistedAlbum::recovered(
+            album_id,
+            "MLS album",
+            vec![(album_id, 1, [3; 32])],
+            Some(PersistedAuthority::OpenMls(ByteBuf::from(vec![1, 2, 3, 4]))),
+        ));
         store.save(dir.path(), &master).unwrap();
 
         // The store still loads — the album is present, only its authority is unusable here.

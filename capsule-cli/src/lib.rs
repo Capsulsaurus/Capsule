@@ -117,7 +117,7 @@ fn display_paths(paths: &[PathBuf]) -> String {
 /// record under the pipeline's precedence rule before the planner sees anything. The planner and
 /// executor are unchanged by the choice; only what they are fed differs.
 ///
-/// [source adapter]: capsule_core::import::importers
+/// [source adapter]: capsule_core::import::TakeoutAdapter
 fn read_import_source(
     bundle: &Bundle,
     provider: Option<ImportProviderArg>,

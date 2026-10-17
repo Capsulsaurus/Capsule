@@ -10,7 +10,7 @@
 //! mechanism and a **transport** — and borrows everything else:
 //!
 //! - [`discovery`] — the opaque, rotating mDNS advertisement (it must leak neither a user
-//!   handle nor a device name) and the [`Discovery`](discovery::Discovery) seam. The mDNS
+//!   handle nor a device name) and the [`Discovery`] seam. The mDNS
 //!   responder is mocked in tests and is where a real pure-Rust responder (`mdns-sd`) plugs
 //!   in; discovery stays deterministic so every rule is a unit test.
 //! - [`channel`] — a mutually-authenticated **TLS 1.3** channel with no CA. The TLS layer
