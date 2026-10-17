@@ -192,5 +192,5 @@ environment gate. "Blocked on" names the issue that holds the rest of the case's
 | 9 | `capsule-e2e/tests/protocol_contract.rs` | landed (the UI leg is out of scope) | — |
 | 10 | `capsule-core/tests/model_regen_e2e.rs` (`E2E case 10`) | landed | — |
 | 11 | | lands with #447 (an in-memory fault decorator on the index) | the process-restart variant (#447 defers it) |
-| 12 | server leg `capsule-e2e/tests/case_12_enrollment.rs` | server leg landed; verified-channel half unrepresented (#471) | #471, #467, #405 (MLS join) |
+| 12 | server leg `capsule-e2e/tests/case_12_enrollment.rs` | server leg landed; verified-channel half unrepresented (#471) | #471, #405 (MLS join) |
 | 13 | server leg `capsule-e2e/tests/case_13_web_drop_adopt.rs`; seal KAT `capsule-core/tests/drop_adopt_kat.rs` | server leg landed to the durable adopted original | #469 (adopt registers nothing to publish) |
