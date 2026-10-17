@@ -40,8 +40,8 @@
 //!
 //! # The map of windows is bounded, twice — and partitioned, so the bounds are not shared
 //!
-//! A counter's *key* is frequently derived from something a caller sent — a share-link id, an
-//! enrollment code, a redirect host. A key space every caller can extend is a map that only
+//! A counter's *key* is frequently derived from something a caller sent — a share-link id, a
+//! drop-link id, a redirect host. A key space every caller can extend is a map that only
 //! grows, and this one is process-wide and shared by every limiter on the surface, so growth
 //! here is not one feature's problem. Two bounds, the same pair
 //! [`InMemoryOidcAuthorizations`](crate::store::memory::InMemoryOidcAuthorizations) carries:
@@ -58,10 +58,10 @@
 //!
 //! # The ceiling is per [`CounterKey`] variant, never one number for everything
 //!
-//! One shared ceiling makes every limiter share a fate. Three surfaces charge a caller-controlled
-//! key *before* resolving what it names — the share path, the drop path and the enrollment
-//! redemption — and the drop path's window is an hour long, so it is the cheapest of them to
-//! hold saturated. Under a single ceiling, a flood against that one surface would refuse a
+//! One shared ceiling makes every limiter share a fate. Two surfaces charge a caller-controlled
+//! key *before* resolving what it names — the share path and the drop path (the enrollment
+//! redemption did too, until issue #528 keyed it on the code's spelling instead) — and the drop
+//! path's window is an hour long, so it is the cheapest of them to hold saturated. Under a single ceiling, a flood against that one surface would refuse a
 //! **first** key to every other: a first-time share view, a first enrollment redemption after a
 //! reboot, the first OIDC sign-in of the day. Each of those maps a counter error to a fail-closed
 //! `500`/`503`, so the weakest surface would decide the availability of all four.
@@ -107,8 +107,9 @@
 //!
 //! This is defence in depth, not a licence. Every derived key should still be bounded where it
 //! is built — the OIDC authorize validates the redirect before it charges
-//! ([`CounterKey::OidcAuthorizeRefused`]), and the enrollment redemption shape-checks the code
-//! before it charges ([`CounterKey::EnrollmentRedemptionMalformed`]).
+//! ([`CounterKey::OidcAuthorizeRefused`]), and the enrollment redemption keys on the shape of
+//! the code rather than its value ([`CounterKey::EnrollmentRedemption`],
+//! [`CounterKey::EnrollmentRedemptionMalformed`]).
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -126,15 +127,22 @@ use crate::store::{StoreFuture, UserId};
 pub enum CounterKey {
     /// Failed sign-in attempts for one account.
     LoginAttempts(UserId),
-    /// Enrollment-code redemptions against one pending enrollment (`S-C7`, invariant 31's
-    /// sibling in the enrollment contract).
+    /// Enrollment-code redemptions presenting one [`EnrollmentSpelling`], deployment-wide
+    /// (`S-C7`, issue #528).
     ///
-    /// Built only from a code that passed the route's shape check, for the reason
-    /// [`Self::OidcAuthorize`] is built only from an admitted redirect host: the presented code
-    /// is caller-supplied, and a counter keyed on an unchecked one is a partition an
-    /// unauthenticated caller fills a row at a time. Anything malformed goes to
-    /// [`Self::EnrollmentRedemptionMalformed`].
-    EnrollmentRedemption(String),
+    /// Keyed on the **spelling** of the presented code and never on its value. A key built from
+    /// the value is not guess-invariant: every wrong guess is a different string, so every wrong
+    /// guess got a fresh budget and the limiter bounded nothing an attacker would do — the
+    /// fault #528 reports. Nor can a wrong guess be charged to the pending enrollment it was
+    /// aimed at, because a miss names no pending enrollment. What *is* invariant across guesses
+    /// is the space being searched, so that is the key: one window per spelling, which bounds the
+    /// guesses that can land on any one pending enrollment inside its lifetime (see
+    /// [`budgets::ENROLLMENT_REDEMPTION`] for the arithmetic).
+    ///
+    /// The spelling comes from the route's shape check, for the reason [`Self::OidcAuthorize`]
+    /// is built only from an admitted redirect host; anything malformed goes to
+    /// [`Self::EnrollmentRedemptionMalformed`]. The key space is two values by construction.
+    EnrollmentRedemption(EnrollmentSpelling),
     /// Every enrollment redemption presenting a code that is not even shaped like one (`S-C7`).
     ///
     /// One bucket, as [`Self::OidcAuthorizeRefused`] is one bucket, and for the same reasons:
@@ -225,6 +233,29 @@ pub enum CounterKey {
     FederatedIntake(String),
 }
 
+/// Which of the two spellings an enrollment code was presented in.
+///
+/// The redemption limiter's key ([`CounterKey::EnrollmentRedemption`]). Two spellings, two
+/// buckets, so a flood of guesses at the short form cannot spend the QR payload's budget: a
+/// person whose typed fallback is throttled can still scan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum EnrollmentSpelling {
+    /// The full-entropy form the QR payload carries.
+    Full,
+    /// The shorter transcribable numeric fallback.
+    Fallback,
+}
+
+impl EnrollmentSpelling {
+    /// The scope segment the counter key carries.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Fallback => "fallback",
+        }
+    }
+}
+
 /// The scope segment a key with nothing to be scoped *to* carries.
 ///
 /// Only the unit variants use it: a counter that partitions by account or by address puts that
@@ -284,8 +315,8 @@ impl CounterKey {
     pub fn scope(&self) -> &str {
         match self {
             Self::LoginAttempts(user) | Self::DeepVerify(user) => user.as_str(),
-            Self::EnrollmentRedemption(scope)
-            | Self::ShareLink(scope)
+            Self::EnrollmentRedemption(spelling) => spelling.as_str(),
+            Self::ShareLink(scope)
             | Self::ShareSource(scope)
             | Self::DropLink(scope)
             | Self::DropSource(scope)
@@ -404,13 +435,12 @@ pub mod ceilings {
     /// deployment large enough to exceed this has other numbers to raise first.
     pub const LOGIN_ATTEMPTS: usize = 10_000;
 
-    /// [`CounterKey::EnrollmentRedemption`](super::CounterKey::EnrollmentRedemption) —
-    /// 10-minute window, keyed on a shape-checked code.
+    /// [`CounterKey::EnrollmentRedemption`](super::CounterKey::EnrollmentRedemption) — keyed on
+    /// one of the two [`EnrollmentSpelling`](super::EnrollmentSpelling)s, so two windows.
     ///
-    /// 600 s × ~1 code presented per second = 600. Rounded to five thousand. Device enrollment
-    /// is a rare, deliberate act: a deployment redeeming five thousand distinct codes inside ten
-    /// minutes is not one this number is failing.
-    pub const ENROLLMENT_REDEMPTION: usize = 5_000;
+    /// It used to be five thousand, sized for a key built from the presented code; issue #528
+    /// took the value out of the key, and with it the only way this partition could grow.
+    pub const ENROLLMENT_REDEMPTION: usize = 2;
 
     /// [`CounterKey::EnrollmentRedemptionMalformed`](super::CounterKey::EnrollmentRedemptionMalformed)
     /// — one key exists, so one window.

@@ -2414,20 +2414,19 @@ async fn every_declared_response_is_exercised() {
         .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
     fixture.channels.set_unavailable(false);
 
-    // 429 on redeem: the per-code budget, spent against one consistent wrong guess (`S-C32`).
-    // Eight digits, because only a guess shaped like a code gets a per-code budget — anything
-    // else is charged to the one malformed bucket, whose budget is far larger.
-    const GRIND: &str = "00000099";
-    for _ in 0..10 {
+    // 429 on redeem: the fallback spelling's deployment-wide budget, spent by distinct wrong
+    // guesses (`S-C32`, issue #528). Eight digits, because only a guess shaped like the fallback
+    // is charged to that bucket — anything else is charged to the one malformed bucket.
+    for index in 0..30 {
         client
             .post("/v1/auth/devices/enroll/redeem")
-            .json(&serde_json::json!({ "code": GRIND }))
+            .json(&serde_json::json!({ "code": format!("{:08}", 90_000_000 + index) }))
             .send()
             .await;
     }
     client
         .post("/v1/auth/devices/enroll/redeem")
-        .json(&serde_json::json!({ "code": GRIND }))
+        .json(&serde_json::json!({ "code": "99999999" }))
         .send()
         .await
         .assert_status(StatusCode::TOO_MANY_REQUESTS);
