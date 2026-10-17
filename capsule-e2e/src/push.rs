@@ -64,6 +64,8 @@ pub fn sdk_envelope(core: &ManifestCore, blob_hash: &str) -> ManifestEnvelope {
         chunk_size: core.chunk_size,
         key_mode: wire_enum(&core.key_mode),
         metadata_blob_hash: core.metadata_blob_hash.map(|h| h.to_hex()),
+        derivative_role: None,
+        derivative_format: None,
         created_by_user: core.created_by_user.to_string(),
         created_by_device: core.created_by_device.to_string(),
         client_version: core.client_version.clone(),

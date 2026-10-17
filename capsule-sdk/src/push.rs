@@ -45,6 +45,7 @@
 use std::collections::HashSet;
 
 use capsule_core::crypto::hash::hash_bytes;
+use capsule_core::crypto::provenance::action::DerivativeRole;
 use capsule_core::import::UploadTier;
 use capsule_core::lifecycle::UploadBundle;
 use serde::Serialize;
@@ -72,8 +73,11 @@ pub struct BundleBlob<'a> {
     pub tier: UploadTier,
     /// The blob's role within the asset bundle.
     pub role: BlobRole,
-    /// The MIME type declared for this blob.
+    /// The MIME type declared for this blob. For a derivative it is the derivative's signed
+    /// `format`, which the envelope also declares as `derivative_format`.
     pub content_type: &'a str,
+    /// The derivative's signed role, for a [`BlobRole::Derivative`] blob and for nothing else.
+    pub derivative_role: Option<DerivativeRole>,
     /// The bytes to transfer.
     pub bytes: &'a [u8],
 }
@@ -95,6 +99,7 @@ pub fn bundle_blobs(bundle: &UploadBundle) -> Vec<(BundleBlob<'_>, String)> {
             tier: UploadTier::Index,
             role: BlobRole::Provenance,
             content_type: OPAQUE_CONTENT_TYPE,
+            derivative_role: None,
             bytes: &bundle.provenance_blob,
         },
         // The content address of the provenance blob is `record_hash()` by definition — the
@@ -108,6 +113,7 @@ pub fn bundle_blobs(bundle: &UploadBundle) -> Vec<(BundleBlob<'_>, String)> {
                 tier: UploadTier::Index,
                 role: BlobRole::Metadata,
                 content_type: OPAQUE_CONTENT_TYPE,
+                derivative_role: None,
                 bytes: &bundle.metadata_blob,
             },
             hash.to_hex(),
@@ -119,6 +125,7 @@ pub fn bundle_blobs(bundle: &UploadBundle) -> Vec<(BundleBlob<'_>, String)> {
                 tier: UploadTier::Preview,
                 role: BlobRole::Derivative,
                 content_type: &derivative.format,
+                derivative_role: Some(derivative.role),
                 bytes: &derivative.bytes,
             },
             derivative.ciphertext_hash.to_hex(),
@@ -129,6 +136,7 @@ pub fn bundle_blobs(bundle: &UploadBundle) -> Vec<(BundleBlob<'_>, String)> {
             tier: UploadTier::Original,
             role: BlobRole::Original,
             content_type: &bundle.content_type,
+            derivative_role: None,
             bytes: &bundle.ciphertext,
         },
         bundle.ciphertext_hash.to_hex(),
@@ -174,6 +182,9 @@ pub fn envelope_for(bundle: &UploadBundle, blob_hash: &str) -> ManifestEnvelope 
         chunk_size: bundle.chunk_size,
         key_mode: wire_enum(&bundle.key_mode),
         metadata_blob_hash: bundle.metadata_blob_hash.map(|h| h.to_hex()),
+        // Per-blob, not per-head: [`create_request`] fills the pair for a derivative.
+        derivative_role: None,
+        derivative_format: None,
         created_by_user: bundle.created_by_user.to_string(),
         created_by_device: bundle.created_by_device.to_string(),
         client_version: bundle.client_version.clone(),
@@ -185,12 +196,21 @@ pub fn envelope_for(bundle: &UploadBundle, blob_hash: &str) -> ManifestEnvelope 
 }
 
 /// The `POST /upload` body for one blob of `bundle`.
+///
+/// A derivative's envelope declares its signed `(role, format)` pair, which the server checks
+/// against the closed still-derivative format set on receipt; every other blob declares none,
+/// because the server refuses the pair on anything but a derivative.
 #[must_use]
 pub fn create_request(
     bundle: &UploadBundle,
     blob: &BundleBlob<'_>,
     hash: &str,
 ) -> CreateUploadRequest {
+    let mut manifest_envelope = envelope_for(bundle, hash);
+    if let Some(role) = blob.derivative_role {
+        manifest_envelope.derivative_role = Some(wire_enum(&role));
+        manifest_envelope.derivative_format = Some(blob.content_type.to_string());
+    }
     CreateUploadRequest {
         size: blob.bytes.len() as u64,
         hash: hash.to_string(),
@@ -198,7 +218,7 @@ pub fn create_request(
         crypto_suite_id: bundle.crypto_suite_id,
         protocol_version: bundle.protocol_version.clone(),
         blob_role: blob.role,
-        manifest_envelope: envelope_for(bundle, hash),
+        manifest_envelope,
         album_id: Some(bundle.album_id.to_string()),
         owner_id: None,
         intent_id: None,

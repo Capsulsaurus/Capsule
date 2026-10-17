@@ -99,6 +99,54 @@ fn manifest_envelope_mirrors_the_signed_manifest() {
     }
 }
 
+/// **The derivative pair.** A derivative's envelope declares its signed `(role, format)` —
+/// the pair the server checks against the closed still-derivative format set on receipt — and
+/// the format is the same value as the request's `content_type`. No other blob declares it,
+/// because the server refuses the pair on anything but a derivative.
+#[test]
+fn only_a_derivative_declares_its_role_and_format() {
+    use capsule_core::crypto::hash::Hash32;
+    use capsule_core::crypto::provenance::action::DerivativeRole;
+    use capsule_core::lifecycle::DerivativeBlob;
+
+    let (_dir, mut bundle) = real_bundle();
+    bundle.derivatives.push(DerivativeBlob {
+        role: DerivativeRole::Preview,
+        format: "image/jxl".to_owned(),
+        amk_version: Some(bundle.amk_version),
+        bytes: b"derivative ciphertext".to_vec(),
+        ciphertext_hash: Hash32([7u8; 32]),
+    });
+
+    let mut derivatives = 0;
+    for (blob, blob_hash) in bundle_blobs(&bundle) {
+        let request = create_request(&bundle, &blob, &blob_hash);
+        let envelope = &request.manifest_envelope;
+        if blob.role == BlobRole::Derivative {
+            derivatives += 1;
+            assert_eq!(blob.derivative_role, Some(DerivativeRole::Preview));
+            assert_eq!(envelope.derivative_role.as_deref(), Some("preview"));
+            assert_eq!(envelope.derivative_format.as_deref(), Some("image/jxl"));
+            assert_eq!(
+                envelope.derivative_format.as_deref(),
+                Some(request.content_type.as_str())
+            );
+        } else {
+            assert_eq!(blob.derivative_role, None);
+            assert_eq!(envelope.derivative_role, None, "{:?}", blob.role);
+            assert_eq!(envelope.derivative_format, None, "{:?}", blob.role);
+        }
+    }
+    assert_eq!(derivatives, 1);
+
+    // Absent on the wire for a non-derivative blob, so an envelope stays the shape it was.
+    let original = bundle_blobs(&bundle).pop().expect("the original");
+    let json = serde_json::to_value(create_request(&bundle, &original.0, &original.1))
+        .expect("the request serializes");
+    assert!(json["manifest_envelope"].get("derivative_role").is_none());
+    assert!(json["manifest_envelope"].get("derivative_format").is_none());
+}
+
 /// **The ladder.** A bundle's blobs come out strictly T0 (the index tier: provenance, then the
 /// metadata blob) → T1 (derivatives) → T2 (original), and each blob's declared size and role
 /// match what it actually carries.
