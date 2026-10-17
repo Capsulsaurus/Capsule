@@ -896,6 +896,34 @@ async fn original_sentinel_is_satisfied_without_a_fetch() {
     assert!(source.requested_starts.lock().unwrap().is_empty());
 }
 
+/// The sentinel is found even when the feed lists a blob for the tier and a same-role
+/// manifest committing to other bytes comes first: the sentinel outranks an arbitrary
+/// manifest of the role, so the tier references the original rather than degrading.
+#[tokio::test]
+async fn original_sentinel_outranks_a_manifest_for_other_bytes() {
+    let listed = seal(&album_key(), b"listed thumbnail");
+    let other = seal(&album_key(), b"some other thumbnail");
+    let original_ciphertext = seal(&album_key(), b"the original");
+    let asset = thumbnail_asset(
+        &listed,
+        vec![
+            manifest(DerivativeRole::Thumbnail, "image/jxl", &other),
+            manifest(DerivativeRole::Thumbnail, "original", &original_ciphertext),
+        ],
+    );
+    let source = serving(&listed);
+
+    let resolution = open_thumbnail(&source, &asset, &reader_keys()).await;
+
+    assert_eq!(
+        resolution,
+        FetchResolution::ReferencesOriginal {
+            representation: Representation::Thumbnail,
+        }
+    );
+    assert!(source.requested_starts.lock().unwrap().is_empty());
+}
+
 /// **The receiver's closed-format check.** A manifest naming a still format outside the
 /// tier table is a structural rejection: nothing is fetched.
 #[tokio::test]
