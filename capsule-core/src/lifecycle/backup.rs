@@ -12,8 +12,10 @@ use super::{AssetState, LifecycleError, Result, Workspace, now_rfc3339};
 use crate::backup::{
     self, BackupArtifact, BackupAsset, BackupInput, RestoreMode, VerifyOutcome as RecoveryVerdict,
 };
+use crate::crypto::authority::Authority;
 use crate::crypto::hash::{self, Hash32};
 use crate::crypto::keys::HybridVerifyingKey;
+use crate::crypto::keys::albumstore::PersistedAuthority;
 #[cfg(any(test, feature = "test-support"))]
 use crate::crypto::primitives::Argon2Params;
 use crate::crypto::primitives::{CRYPTO_SUITE_ID, DeviceTier};
@@ -157,9 +159,30 @@ impl Workspace {
             });
         }
 
+        // Each exported album's public authority. Only the reference ledger travels: an MLS
+        // authority's exported state holds the group's private secrets, which a backup must not
+        // escrow, so such an album exports unverifiable until its ledger has a public form.
+        let mut authorities = BTreeMap::new();
+        for album_id in amks.keys().map(|(album, _)| *album) {
+            match self.authorities.get(&album_id) {
+                Some(Authority::Reference(a)) => {
+                    authorities.insert(album_id, a.to_ledger());
+                }
+                Some(_) => tracing::warn!(
+                    album_id = %album_id,
+                    "backup: album authority is not a reference ledger; exported without it"
+                ),
+                None => tracing::debug!(
+                    album_id = %album_id,
+                    "backup: album holds no authority; exported without one"
+                ),
+            }
+        }
+
         Ok(BackupInput {
             assets,
             amks,
+            authorities,
             exporter_device: self.account.device.device_id,
             source_library_version: "1".into(),
             export_timestamp: now_rfc3339(),
@@ -196,8 +219,9 @@ impl Workspace {
         // Fold the artifact's escrowed AMKs into the durable keystore **before** writing any
         // asset: this is the step that makes a keyless library whole again, and an asset on disk
         // whose key was never persisted is exactly the failure `S-A10` exists to end. An album
-        // already known keeps its write capability and simply gains missing epochs; an unknown
-        // album lands read-only, since a backup escrows content keys but no signing capability.
+        // already known keeps its write capability and authority and simply gains missing epochs;
+        // an unknown album lands read-only with the public authority the artifact carried, since
+        // a backup escrows content keys and the admin-signed ledger but no signing capability.
         self.absorb_recovered_amks(&artifact)?;
 
         let mut added = 0;
@@ -248,9 +272,15 @@ impl Workspace {
         Ok(added)
     }
 
-    /// Merge a verified artifact's escrowed `(album_id, epoch, amk)` rows into the durable album
-    /// keystore, persist it, and re-apply it to the live workspace so the recovered keys are
-    /// usable in this session as well as the next one.
+    /// Merge a verified artifact's escrowed `(album_id, epoch, amk)` rows — and each album's
+    /// public authority ledger — into the durable album keystore, persist it, and re-apply it to
+    /// the live workspace so the recovered keys are usable in this session as well as the next.
+    ///
+    /// A ledger is adopted only by an album holding no authority ([`AlbumStore::merge_amks`]),
+    /// and it must re-verify against the epochs now held before anything is persisted: an
+    /// authority that would be dropped at the next open is refused here instead.
+    ///
+    /// [`AlbumStore::merge_amks`]: crate::crypto::keys::albumstore::AlbumStore::merge_amks
     #[tracing::instrument(skip_all)]
     fn absorb_recovered_amks(&mut self, artifact: &BackupArtifact) -> Result<()> {
         let rows = artifact.amk_rows();
@@ -269,12 +299,26 @@ impl Workspace {
             let name = store
                 .get(&album_id)
                 .map_or_else(|| RECOVERED_ALBUM_NAME.to_string(), |a| a.name.clone());
-            let added = store.merge_amks(album_id, &name, rows);
+            let had_authority = store.get(&album_id).is_some_and(|a| a.authority.is_some());
+            let carried = artifact
+                .authority_ledgers()
+                .get(&album_id)
+                .map(|ledger| PersistedAuthority::Reference(Box::new(ledger.clone())));
+            let carried_authority = carried.is_some();
+            let added = store.merge_amks(album_id, &name, rows, carried);
+            let persisted = store
+                .get(&album_id)
+                .expect("merge_amks leaves the album in the store");
+            if let Some(authority) = &persisted.authority {
+                authority.restore(album_id, &persisted.held_epochs())?;
+            }
             recovered_epochs += added;
             tracing::info!(
                 album_id = %album_id,
                 known_album = known,
                 epochs_added = added,
+                carried_authority,
+                authority_adopted = carried_authority && !had_authority,
                 "backup: escrowed album keys absorbed into the keystore"
             );
         }
@@ -333,8 +377,64 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::crypto::keys::MasterKey;
     use crate::crypto::primitives::Argon2Params;
-    use crate::lifecycle::fast_workspace;
+    use crate::crypto::verify_asset::{RejectReason, VerifyOutcome};
+    use crate::lifecycle::{FAST_PARAMS, fast_workspace};
+
+    /// #468: a backup restored on a new device of the same account carries the album's public
+    /// authority, so the restored asset **verifies** — and still cannot be written, and the
+    /// authority survives a reopen (it is persisted and re-verified on load, not session state).
+    ///
+    /// The new device's own directory lists only itself until it adopts the account's published
+    /// one (#550), so the test hands it A's directory to stand in for that step; what is under
+    /// test is the album authority, which `verify_asset` checks separately.
+    #[test]
+    fn a_restored_asset_verifies_under_the_authority_the_artifact_carried() {
+        let (lib_a, lib_b, src) = (
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+        );
+        let mut a = fast_workspace(lib_a.path());
+        let album = a.create_album("Trip").unwrap();
+        let photo = src.path().join("photo.jpg");
+        fs::write(&photo, b"\xFF\xD8\xFF a photo worth verifying").unwrap();
+        let asset = a.import_asset(album, &photo).unwrap();
+        let archive = src.path().join("backup.tar");
+        a.export_backup_with_params(&archive, b"pw", FAST_PARAMS)
+            .unwrap();
+
+        let mut b = Workspace::create_from_master(
+            lib_b.path(),
+            b"device b",
+            FAST_PARAMS,
+            MasterKey::from_bytes(*a.account.master.as_bytes()),
+            a.user_id(),
+            &a.sealed_identity(),
+        )
+        .unwrap();
+        b.import_backup(&archive, b"pw", &a.exporter_verifying_key())
+            .unwrap();
+
+        // Without the account's directory the next refusal is the device, not the authority.
+        assert_eq!(
+            b.verify(&asset).unwrap(),
+            VerifyOutcome::TerminalReject(RejectReason::UnknownDevice)
+        );
+        b.directory = a.directory.clone();
+        assert_eq!(b.verify(&asset).unwrap(), VerifyOutcome::Accept);
+        assert!(matches!(
+            b.album(&album).unwrap().write_tier_signer(),
+            Err(LifecycleError::AlbumReadOnly(id)) if id == album
+        ));
+
+        // Persisted: a reopened B still verifies (with the account directory stood in again).
+        drop(b);
+        let mut b = Workspace::open(lib_b.path(), b"device b", FAST_PARAMS).unwrap();
+        b.directory = a.directory.clone();
+        assert_eq!(b.verify(&asset).unwrap(), VerifyOutcome::Accept);
+    }
 
     /// The escrow verbs are a pair: what `escrow_master_key` mints is exactly what
     /// `verify_escrow` opens back to *this* device's master key, and a wrong secret does not
