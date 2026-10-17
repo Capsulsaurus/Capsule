@@ -142,6 +142,11 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.fdeflate]
 opt-level = 3
+# The AV1 encoder behind capsule-core's `media-linked-codecs` AVIF variant (#437). Unoptimized,
+# rav1e takes about ten seconds per small frame, which every media test that generates
+# derivatives pays. It is a leaf codec, so optimizing it changes nothing else's build.
+[profile.dev.package.rav1e]
+opt-level = 3
 
 # The same settings for the test profile, spelled out rather than inherited.
 #
