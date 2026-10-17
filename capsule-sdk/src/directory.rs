@@ -19,13 +19,22 @@
 //!   The signature check itself is `capsule-core`'s ([`DeviceDirectory::verify`]); nothing
 //!   cryptographic is re-implemented here.
 //!
+//! - **A publish names the key it is signed under.** The document carries the user identity
+//!   key's signature but not the key, so [`DirectoryClient::publish`] sends the verifying key
+//!   beside it, base64 in `X-Capsule-Identity-Key` (`S-C42`). The server anchors that key on
+//!   first publish, refuses any other thereafter, and refuses a document that does not verify
+//!   under it — invariant 23's second clause. Without the header every publish is a `400`.
+//!
 //! Hand-written rather than generated: the committed OpenAPI declares no request body for the
 //! publish operation, so the generated client's `publish_device_directory()` takes none. The
-//! wire below is the documented one (`application/cbor` in, `{directory_version}` out).
+//! wire below is the documented one (`application/cbor` plus the identity-key header in,
+//! `{directory_version}` out).
 //!
 //! [`verify_asset`]: capsule_core::crypto::verify_asset::verify_asset
 //! [`RejectReason::UnknownDevice`]: capsule_core::crypto::verify_asset::RejectReason::UnknownDevice
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use capsule_core::crypto::keys::{DeviceDirectory, HybridVerifyingKey};
 use capsule_i18n::error_codes;
 use serde::Deserialize;
@@ -40,6 +49,10 @@ const DIRECTORY_PATH: &str = "devices/directory";
 /// The `application/cbor` media type the directory surface speaks in both directions.
 const CBOR: &str = "application/cbor";
 
+/// The header a publish names its user identity verifying key in, base64 (STANDARD) of
+/// [`HybridVerifyingKey::to_bytes`] — the anchor the server checks the signature against.
+const IDENTITY_KEY_HEADER: &str = "X-Capsule-Identity-Key";
+
 /// Everything the device-directory flows can fail with. Callers switch on the typed variant
 /// (or its stable `error.*` code), never on a bare status.
 #[derive(Debug, thiserror::Error)]
@@ -53,6 +66,10 @@ pub enum DirectoryError {
     /// The server rejected the document as malformed (`400`).
     #[error("the server rejected the device directory as malformed")]
     Malformed,
+    /// The presented identity key is not the account's anchored one (`403`, `S-C42`): the
+    /// document is well-formed and verifies, but under somebody else's key.
+    #[error("the device directory is signed under a key that is not the account's identity anchor")]
+    IdentityMismatch,
     /// The submitted `directory_version` does not advance the stored one (`409`, invariant 23 —
     /// the anti-rollback rule). Re-fetch, re-key, and re-publish at a higher version.
     #[error("device directory version does not advance the published one")]
@@ -81,6 +98,7 @@ impl DirectoryError {
     pub fn error_code(&self) -> Option<&'static str> {
         match self {
             Self::Malformed => Some(error_codes::DIRECTORY_MALFORMED),
+            Self::IdentityMismatch => Some(error_codes::DIRECTORY_IDENTITY_MISMATCH),
             Self::VersionConflict => Some(error_codes::DIRECTORY_VERSION_CONFLICT),
             _ => None,
         }
@@ -114,20 +132,32 @@ impl DirectoryClient {
     /// Publish `directory` for the authenticated caller, returning the `directory_version` the
     /// server now stores.
     ///
+    /// `identity_key` is the account's user identity **verifying** key — the key `directory` is
+    /// signed under. It travels base64 in `X-Capsule-Identity-Key`; the server anchors it on
+    /// the first publish, answers [`DirectoryError::Malformed`] for a document that does not
+    /// verify under it, and [`DirectoryError::IdentityMismatch`] for a key other than the
+    /// anchored one.
+    ///
     /// Idempotent only at the *same* version is **not** the contract: invariant 23 requires the
     /// version to advance, so re-publishing an unchanged document answers
     /// [`DirectoryError::VersionConflict`]. Publish when the document actually changes — a
     /// device enrolled, a device revoked.
     #[instrument(skip_all, fields(directory_version = directory.core.directory_version))]
-    pub async fn publish(&self, directory: &DeviceDirectory) -> Result<u64, DirectoryError> {
+    pub async fn publish(
+        &self,
+        directory: &DeviceDirectory,
+        identity_key: &HybridVerifyingKey,
+    ) -> Result<u64, DirectoryError> {
         let body = capsule_core::cbor::to_canonical_vec(directory)
             .map_err(|e| DirectoryError::Codec(e.to_string()))?;
+        let identity = BASE64.encode(identity_key.to_bytes());
         tracing::debug!(bytes = body.len(), "publishing the signed device directory");
         let response = self
             .session
             .execute(|c| {
                 c.post(&self.base_url)
                     .header(reqwest::header::CONTENT_TYPE, CBOR)
+                    .header(IDENTITY_KEY_HEADER, &identity)
                     .body(body.clone())
             })
             .await?;
@@ -198,6 +228,7 @@ impl DirectoryClient {
 fn publish_status_error(status: u16) -> DirectoryError {
     match status {
         400 => DirectoryError::Malformed,
+        403 => DirectoryError::IdentityMismatch,
         409 => DirectoryError::VersionConflict,
         other => DirectoryError::Unexpected { status: other },
     }

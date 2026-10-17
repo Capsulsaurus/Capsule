@@ -866,7 +866,9 @@ impl FfiSession {
     /// server now stores. `directory_cbor` is the opaque document
     /// [`FfiWorkspace::signed_device_directory`](FfiWorkspace::signed_device_directory)
     /// produced; it travels verbatim, because re-encoding it would detach it from the signature
-    /// it carries.
+    /// it carries. `user_ik` is the account's user identity **public** key the document is
+    /// signed under — the bytes [`FfiWorkspace::user_ik_public`](FfiWorkspace::user_ik_public)
+    /// returns — which the server anchors on first publish and verifies every publish against.
     ///
     /// Publish when the document changes (a device enrolled or revoked). The version must
     /// advance — republishing an unchanged document answers the version-conflict code.
@@ -874,14 +876,19 @@ impl FfiSession {
         &self,
         api_base_url: String,
         directory_cbor: Vec<u8>,
+        user_ik: Vec<u8>,
     ) -> Result<u64, FfiError> {
         let directory = capsule_core::cbor::from_slice(&directory_cbor).map_err(|e| {
             FfiError::InvalidArgument {
                 message: format!("not a canonical DeviceDirectory: {e}"),
             }
         })?;
+        let identity_key = capsule_core::crypto::keys::HybridVerifyingKey::from_bytes(&user_ik)
+            .map_err(|e| FfiError::InvalidArgument {
+                message: format!("user_ik is not a hybrid verifying key: {e}"),
+            })?;
         let version = DirectoryClient::new(self.session.clone(), &api_base_url)
-            .publish(&directory)
+            .publish(&directory, &identity_key)
             .await?;
         Ok(version)
     }

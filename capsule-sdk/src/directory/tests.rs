@@ -5,10 +5,11 @@
 //!
 //! | Case | Guarantee |
 //! | --- | --- |
-//! | `publish_sends_the_signed_document_verbatim_as_cbor` | the bytes on the wire are the canonical CBOR core `capsule-core` signed — never re-encoded |
+//! | `publish_sends_the_signed_document_verbatim_as_cbor` | the bytes on the wire are the canonical CBOR core `capsule-core` signed — never re-encoded — and the identity verifying key rides beside them in `X-Capsule-Identity-Key` |
 //! | `publish_returns_the_stored_version` | the caller learns the version the server now holds |
 //! | `a_version_that_does_not_advance_carries_its_catalog_code` | invariant 23 is switchable by code, not status |
 //! | `a_malformed_document_carries_its_catalog_code` | the 400 path |
+//! | `a_foreign_identity_key_carries_its_catalog_code` | the 403 anchor-mismatch path is typed |
 //! | `fetch_verifies_under_the_pinned_user_ik` | the happy path returns the document |
 //! | `a_foreign_signed_directory_is_refused` | fail-closed: a server cannot inject a device key |
 //! | `a_missing_directory_is_not_published` | the 404 path is typed, not an unexpected status |
@@ -109,13 +110,25 @@ async fn publish_sends_the_signed_document_verbatim_as_cbor() {
     let directory = fixture.directory(1);
     let (server, seen) = recording(|_| published(1)).await;
 
-    client_for(&server).publish(&directory).await.unwrap();
+    client_for(&server)
+        .publish(&directory, &fixture.ik.verifying_key())
+        .await
+        .unwrap();
 
     let seen = seen.lock().unwrap();
     let req = seen.first().expect("one request");
     assert_eq!(req.method, "POST");
     assert_eq!(req.path, "/devices/directory");
     assert_eq!(req.header("Content-Type"), Some("application/cbor"));
+    assert_eq!(
+        req.header("X-Capsule-Identity-Key"),
+        Some(
+            BASE64
+                .encode(fixture.ik.verifying_key().to_bytes())
+                .as_str()
+        ),
+        "the identity verifying key the document is signed under rides beside it, base64"
+    );
     assert_eq!(
         req.header("Authorization"),
         Some("Bearer directory-access-token"),
@@ -137,7 +150,7 @@ async fn publish_returns_the_stored_version() {
     let (server, _) = recording(|_| published(7)).await;
     assert_eq!(
         client_for(&server)
-            .publish(&fixture.directory(7))
+            .publish(&fixture.directory(7), &fixture.ik.verifying_key())
             .await
             .unwrap(),
         7
@@ -153,7 +166,7 @@ async fn a_version_that_does_not_advance_carries_its_catalog_code() {
     let (server, _) = recording(|_| MockResponse::new(409, "Conflict")).await;
 
     let err = client_for(&server)
-        .publish(&fixture.directory(1))
+        .publish(&fixture.directory(1), &fixture.ik.verifying_key())
         .await
         .unwrap_err();
     assert!(matches!(err, DirectoryError::VersionConflict));
@@ -169,11 +182,29 @@ async fn a_malformed_document_carries_its_catalog_code() {
     let (server, _) = recording(|_| MockResponse::new(400, "Bad Request")).await;
 
     let err = client_for(&server)
-        .publish(&fixture.directory(1))
+        .publish(&fixture.directory(1), &fixture.ik.verifying_key())
         .await
         .unwrap_err();
     assert!(matches!(err, DirectoryError::Malformed));
     assert_eq!(err.error_code(), Some(error_codes::DIRECTORY_MALFORMED));
+}
+
+/// `S-C42`: a key other than the account's anchor is its own typed refusal, so a client can
+/// tell "signed by somebody else" from "not a directory at all".
+#[tokio::test]
+async fn a_foreign_identity_key_carries_its_catalog_code() {
+    let fixture = Fixture::new();
+    let (server, _) = recording(|_| MockResponse::new(403, "Forbidden")).await;
+
+    let err = client_for(&server)
+        .publish(&fixture.directory(1), &fixture.ik.verifying_key())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, DirectoryError::IdentityMismatch));
+    assert_eq!(
+        err.error_code(),
+        Some(error_codes::DIRECTORY_IDENTITY_MISMATCH)
+    );
 }
 
 /// The happy fetch: served bytes decode and verify under the pinned identity key.

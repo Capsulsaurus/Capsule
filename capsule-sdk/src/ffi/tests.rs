@@ -373,8 +373,14 @@ async fn flow_server() -> MockServer {
                     response
                 }
             }
+            // As the real server does, a publish without the identity key is a `400`: the
+            // document carries the key's signature but not the key.
             ("POST", "/api/devices/directory") => {
-                MockResponse::new(200, "OK").json_body(r#"{"directory_version":1}"#)
+                if req.header("X-Capsule-Identity-Key").is_some() {
+                    MockResponse::new(200, "OK").json_body(r#"{"directory_version":1}"#)
+                } else {
+                    MockResponse::new(400, "Bad Request")
+                }
             }
             _ => MockResponse::new(404, "Not Found").json_body(r#"{"error":"no route"}"#),
         },
@@ -640,8 +646,24 @@ async fn ffi_escrow_and_device_directory_round_trip() {
             .unwrap()
     );
 
+    // The identity key crosses the boundary as the workspace's public bytes; anything that is
+    // not a hybrid verifying key is refused before a request is made.
+    assert!(matches!(
+        session
+            .publish_device_directory(
+                api_base.clone(),
+                workspace.signed_device_directory().unwrap(),
+                b"not a verifying key".to_vec(),
+            )
+            .await,
+        Err(FfiError::InvalidArgument { .. })
+    ));
     let version = session
-        .publish_device_directory(api_base, workspace.signed_device_directory().unwrap())
+        .publish_device_directory(
+            api_base,
+            workspace.signed_device_directory().unwrap(),
+            workspace.user_ik_public().unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(version, 1);
