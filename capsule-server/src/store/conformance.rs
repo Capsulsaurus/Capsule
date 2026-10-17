@@ -1137,11 +1137,14 @@ pub async fn an_oidc_authorization_expires_with_its_store(h: &dyn Harness) {
     );
 }
 
-/// A pending authorization is still redeemable one tick before its deadline.
+/// A pending authorization is still redeemable a microsecond before its deadline.
 ///
 /// The other side of [`an_oidc_authorization_expires_with_its_store`]'s boundary: an adapter
-/// that expired a record early — rounding a deadline down, or reading `PEXPIRE` as the
-/// contract — would fail a person who signed in at the provider inside the window.
+/// that expired a record early would fail a person who signed in at the provider inside the
+/// window. A microsecond rather than a [`tick`] because that is the Valkey adapter's resolution
+/// (its module docs): a deadline is kept as the microsecond it falls in, so a nanosecond short of
+/// a deadline that is not microsecond-aligned is already that microsecond, and the answer would
+/// depend on where earlier cases left the shared clock.
 pub async fn an_oidc_authorization_is_live_until_its_deadline(h: &dyn Harness) {
     let store = h.oidc_authorizations();
     let state = OidcState::new("oidc-live-until");
@@ -1152,8 +1155,9 @@ pub async fn an_oidc_authorization_is_live_until_its_deadline(h: &dyn Harness) {
     );
 
     ok(
-        h.advance(store.ttl() - tick()).await,
-        "advance to one tick short of the authorization TTL",
+        h.advance(store.ttl() - SignedDuration::from_micros(1))
+            .await,
+        "advance to a microsecond short of the authorization TTL",
     );
     assert_eq!(
         ok(store.consume(&state).await, "consume before the deadline"),
