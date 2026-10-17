@@ -44,6 +44,9 @@ struct MockResponse {
     reason: String,
     content_type: &'static str,
     body: Vec<u8>,
+    /// The `Content-Length` to declare when it must differ from `body.len()` — a body cut short
+    /// of its declared length, so the client's body read fails mid-stream.
+    declared_len: Option<usize>,
 }
 
 impl MockResponse {
@@ -53,6 +56,16 @@ impl MockResponse {
             reason: reason.to_string(),
             content_type: "application/json",
             body: body.into().into_bytes(),
+            declared_len: None,
+        }
+    }
+
+    /// A raw `application/cbor` `200` that declares `declared_len` bytes but closes the
+    /// connection after `body` — a transfer that dies after the status line arrived.
+    fn truncated_cbor(body: Vec<u8>, declared_len: usize) -> Self {
+        Self {
+            declared_len: Some(declared_len),
+            ..Self::cbor(body)
         }
     }
 
@@ -64,6 +77,7 @@ impl MockResponse {
             reason: "OK".to_string(),
             content_type: "application/cbor",
             body,
+            declared_len: None,
         }
     }
 }
@@ -168,7 +182,7 @@ where
         format!(
             "Content-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             resp.content_type,
-            resp.body.len()
+            resp.declared_len.unwrap_or(resp.body.len())
         )
         .as_bytes(),
     );
@@ -507,6 +521,29 @@ async fn fetch_receipt_refuses_a_json_wrapped_body() {
         .await
         .expect_err("a JSON body is not a receipt");
     assert!(matches!(err, VerifyError::Malformed(_)), "got {err:?}");
+}
+
+/// A body that dies short of its declared `Content-Length` never arrived, so it is a
+/// `Transport` failure — `Malformed` is reserved for bytes that arrived and do not decode.
+#[tokio::test]
+async fn fetch_receipt_maps_a_truncated_body_to_transport() {
+    let (_key, receipt_cbor) = signed_receipt();
+    let declared = receipt_cbor.len();
+    let partial = receipt_cbor[..declared / 2].to_vec();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("GET", p) if p.ends_with("/receipt") => {
+            MockResponse::truncated_cbor(partial.clone(), declared)
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let err = server
+        .client()
+        .fetch_receipt(upload_id())
+        .await
+        .expect_err("a truncated body is not a receipt");
+    assert!(matches!(err, VerifyError::Transport(_)), "got {err:?}");
 }
 
 /// The asset chain is still JSON with each receipt base64-embedded (`GET /v1/assets/{id}/receipts`
