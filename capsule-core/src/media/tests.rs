@@ -1238,6 +1238,61 @@ fn linked_codecs_add_the_avif_variant_and_the_preview_tier() {
     }
 }
 
+/// One encoder refusing one `(tier, format)` costs that pair alone. rav1e rejects a frame edge
+/// over 65535 px, which the decode budget admits — a wide panorama — so the source-resolution
+/// preview AVIF fails while every other pair, the thumbnail JXL included, still ships; the
+/// refused pair is recorded as a deferral beside WebP rather than failing the whole call.
+#[cfg(feature = "media-linked-codecs")]
+#[test]
+fn a_refused_encode_defers_its_pair_and_keeps_the_rest() {
+    const WIDE: u32 = 65_536 + 64;
+    let decoded = super::DecodedImage {
+        image: RgbaImage {
+            width: WIDE,
+            height: 2,
+            rgba: [0x40, 0x80, 0xC0, 0xFF].repeat(WIDE as usize * 2),
+        },
+        gamut: Gamut::Srgb,
+        orientation_applied: 1,
+        format: StillFormat::Png,
+    };
+    let (device, write_tier) = signers();
+    let seal = sealer(Uuid::from_u128(0xBA));
+    let heads = no_prior_heads();
+    let ctx = context(&device, &write_tier, &seal, &heads, Uuid::from_u128(0xBA));
+    let result = generate_still_derivatives(&decoded, DerivativeTier::GENERATED, &ctx)
+        .expect("a single refused pair does not fail the call");
+
+    let pairs: Vec<(DerivativeTier, DerivativeFormat)> = result
+        .generated
+        .iter()
+        .map(|d| (d.tier, d.format))
+        .collect();
+    assert_eq!(
+        pairs,
+        vec![
+            (DerivativeTier::Thumbnail, DerivativeFormat::Jxl),
+            (DerivativeTier::Thumbnail, DerivativeFormat::Avif),
+            (DerivativeTier::Preview, DerivativeFormat::Jxl),
+        ],
+        "every pair but the source-resolution AVIF is generated"
+    );
+    assert_eq!(
+        result.deferred,
+        vec![
+            (DerivativeTier::Thumbnail, DerivativeFormat::WebP),
+            (DerivativeTier::Preview, DerivativeFormat::Avif),
+            (DerivativeTier::Preview, DerivativeFormat::WebP),
+        ],
+        "the refused pair is a recorded deferral, in delivery order"
+    );
+    assert_eq!(
+        StillFormat::from_bytes(&result.generated[0].bytes),
+        Some(StillFormat::Jxl),
+        "the thumbnail JXL is real bytes"
+    );
+}
+
 /// A source no larger than the tier's cap takes the signed `original` sentinel — an explicit
 /// marker, distinct from an absent derivative, and never a redundant re-encode.
 #[test]

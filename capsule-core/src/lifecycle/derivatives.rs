@@ -500,7 +500,10 @@ impl Workspace {
                 return Err(LifecycleError::Io(format!("derivative signing: {error}")));
             }
             // Everything else is about *pixels*: a codec refused a frame, a resize was rejected,
-            // a third-party encoder panicked. The signed original, its dimensions and its
+            // a third-party encoder panicked. A refusal on *some* pairs never reaches here —
+            // generation records it as a deferral and ships the rest, so a failed preview AVIF
+            // does not cost the thumbnail JXL — this arm is the asset with no derivative at all.
+            // The signed original, its dimensions and its
             // placeholder are all still right, and failing the import would trade a missing
             // thumbnail for a missing backup — which is the whole of `S-B13`'s reasoning and
             // this module's stated contract. Reported as `DecodeFailed`, the "a supported path

@@ -263,7 +263,9 @@ pub struct GeneratedDerivative {
 pub struct StillDerivatives {
     /// The derivatives that were produced, in generation order.
     pub generated: Vec<GeneratedDerivative>,
-    /// The `(tier, format)` pairs the tier table commits to and this build cannot encode.
+    /// The `(tier, format)` pairs the tier table commits to and this build did not produce:
+    /// those it links no encoder for, and those whose encoder refused (or panicked on) this
+    /// particular frame — both backfillable from the stored original.
     pub deferred: Vec<(DerivativeTier, DerivativeFormat)>,
 }
 
@@ -278,14 +280,18 @@ pub struct StillDerivatives {
 /// - otherwise the frame is downscaled to the tier, encoded to each encodable format of
 ///   [`DerivativeFormat::STILL_DELIVERY_ORDER`], and **encrypted** through
 ///   [`DerivativeContext::sealer`] before its manifest is signed over the ciphertext's address;
-///   the formats with no encoder here are recorded as deferrals.
+///   the formats with no encoder here are recorded as deferrals, and so is any single pair whose
+///   encoder refuses or panics on the frame — the tier's other formats, and the other tiers,
+///   still run.
 ///
 /// Manifests of the same role are hash-chained in generation order, so a role's derivative
 /// provenance is append-only exactly like the asset's.
 ///
 /// # Errors
-/// - [`MediaError::Encode`] — a codec refused the frame. That is the **only** thing this variant
-///   means here.
+/// - [`MediaError::Encode`] or [`MediaError::DecoderPanic`] — a codec refused (or panicked on)
+///   the frame for **every** pair attempted, so no derivative was produced at all; the first
+///   such failure is returned. A refusal on some pairs only is a deferral, not an error.
+///   "A codec refused the frame" is the **only** thing `Encode` means here.
 /// - [`MediaError::ZeroDimension`] — the source frame has a zero dimension.
 /// - [`MediaError::Sign`] — the device signer or the epoch write-tier signer refused, or
 ///   [`DerivativeContext::sealer`] failed (an encryption refusal, or an exhausted nonce-prefix
@@ -313,6 +319,8 @@ pub fn generate_still_derivatives(
     }
 
     let mut out = StillDerivatives::default();
+    // The first per-pair encode failure, reported only if no derivative was produced at all.
+    let mut first_failure: Option<MediaError> = None;
     let source_long_edge = decoded.width().max(decoded.height());
 
     for &tier in tiers {
@@ -365,7 +373,32 @@ pub fn generate_still_derivatives(
             // a pre-1.0 binding, and a panic inside one must not abort an import that may hold the only copy of a file. The
             // stage name makes a caught unwind attributable to the encoder rather than to the
             // decoder that ran before it.
-            let bytes = super::decode::guarded("encode", || encode(&work, format, tier))?;
+            //
+            // A refusal here is **this pair's** failure, not the asset's: rav1e rejects a frame
+            // edge over 65535 px, which the decode budget admits (a wide panorama), so the
+            // source-resolution preview AVIF can fail while the thumbnail JXL beside it encodes
+            // fine. The pair is recorded as a deferral — backfillable like any other — and the
+            // tier's remaining formats still run. Only a call that produced nothing at all
+            // reports the failure, below, so an asset with no renderable derivative is still
+            // counted as one somebody should look at.
+            let bytes = match super::decode::guarded("encode", || encode(&work, format, tier)) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    tracing::warn!(
+                        asset_id = %ctx.source_asset_id,
+                        %tier,
+                        %format,
+                        width = work.width,
+                        height = work.height,
+                        %error,
+                        "media: the encoder refused this (tier, format); recording it as a \
+                         deferral and continuing with the remaining pairs"
+                    );
+                    out.deferred.push((tier, format));
+                    first_failure.get_or_insert(error);
+                    continue;
+                }
+            };
             // Encrypt before signing: the manifest's content address is the ciphertext's, so
             // the ciphertext has to exist first. A fresh prefix per derivative, so two
             // derivatives of one asset never share a key even for identical plaintext.
@@ -374,6 +407,14 @@ pub fn generate_still_derivatives(
                 ctx, tier, format, bytes, sealed, &mut prior,
             )?);
         }
+    }
+
+    // Every pair that was attempted failed, so nothing renderable exists: that is the asset's
+    // failure, and the caller degrades it to `DecodeFailed` as before.
+    if out.generated.is_empty()
+        && let Some(error) = first_failure
+    {
+        return Err(error);
     }
 
     tracing::debug!(
