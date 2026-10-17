@@ -775,8 +775,8 @@ mod tests {
         let gps = back.gps.as_ref().unwrap();
         // Stored verbatim — never converted at rest.
         assert_eq!(gps.datum, GpsDatum::Gcj02);
-        assert_eq!(gps.lat, 39.90869);
-        assert_eq!(gps.lon, 116.39745);
+        assert_eq!(gps.lat.to_bits(), 39.90869_f64.to_bits());
+        assert_eq!(gps.lon.to_bits(), 116.39745_f64.to_bits());
         assert!(back.verify(&ik.verifying_key()));
     }
 

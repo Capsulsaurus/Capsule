@@ -93,7 +93,7 @@ mod tests {
 
     use super::*;
     use crate::crypto::hash::Hash32;
-    use crate::crypto::keys::{HybridSignature, HybridSigningKey, HybridVerifyingKey};
+    use crate::crypto::keys::HybridSigningKey;
     use crate::crypto::receipts::BlobRole;
 
     fn signing_key(seed: u8) -> HybridSigningKey {

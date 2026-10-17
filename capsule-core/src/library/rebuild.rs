@@ -939,7 +939,7 @@ mod tests {
         let root = tmp.path().join("lib");
         let lib = init_library(&root, "T").unwrap();
 
-        let id = Uuid::from_u128(0xC0FFEE);
+        let id = Uuid::from_u128(0x00C0_FFEE);
         write_signed(&root.join(FIXTURE_MEDIA), &signed_sidecar(id, 0x33));
 
         rebuild_index(&lib).unwrap();

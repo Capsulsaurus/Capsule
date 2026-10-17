@@ -151,7 +151,7 @@ mod tests {
         let mut r = Lww::new();
         for i in 0..(SUPERSEDED_CAP + 5) {
             // Each later write wins and pushes the prior winner to superseded.
-            let ts = format!("2026-05-31T{:02}:00:00Z", i);
+            let ts = format!("2026-05-31T{i:02}:00:00Z");
             r.set(format!("v{i}"), ts, dev(1));
         }
         assert_eq!(r.superseded.len(), SUPERSEDED_CAP);

@@ -174,7 +174,6 @@ fn jpeg_bytes(frame: &RgbaImage, metadata: Option<&ImageMetadata>) -> Vec<u8> {
 fn png_bytes(frame: &RgbaImage) -> Vec<u8> {
     let options = EncodeOptions::PngZune(ZunePngEncodeConfig {
         common: common(MetadataEmbedOptions::none()),
-        ..ZunePngEncodeConfig::default()
     });
     encode_rgb_image_to_vec(&to_rgb_u16(frame), &ImageMetadata::default(), &options)
         .expect("the fixture PNG encodes")
@@ -734,7 +733,8 @@ fn a_probe_reports_stored_dimensions_and_the_upright_pair() {
 #[test]
 fn every_exif_orientation_lands_upright() {
     // (orientation, transposed?, (TL, TR, BL, BR) after the transform)
-    let table: &[(u16, bool, (u32, u32, u32, u32))] = &[
+    type Quadrants = (u32, u32, u32, u32);
+    let table: &[(u16, bool, Quadrants)] = &[
         (1, false, (0, 85, 170, 255)), // identity
         (2, false, (85, 0, 255, 170)), // mirror horizontal
         (3, false, (255, 170, 85, 0)), // rotate 180
@@ -874,7 +874,7 @@ fn the_downscale_preserves_flat_regions_and_stays_opaque() {
     let uniform = RgbaImage {
         width: 64,
         height: 64,
-        rgba: vec![137, 42, 200, 255].repeat(64 * 64),
+        rgba: [137, 42, 200, 255].repeat(64 * 64),
     };
     let out = downscale_rgba8(&uniform, 16);
     assert_eq!((out.width, out.height), (16, 16));
@@ -1518,7 +1518,7 @@ fn the_downscale_accumulator_survives_crossing_u32_max() {
     let flat = RgbaImage {
         width: edge,
         height: edge,
-        rgba: vec![255, 255, 255, 255].repeat((edge * edge) as usize),
+        rgba: [255, 255, 255, 255].repeat((edge * edge) as usize),
     };
     let single = downscale_rgba8(&flat, 1);
     assert_eq!((single.width, single.height), (1, 1));
@@ -1533,7 +1533,7 @@ fn the_downscale_accumulator_survives_crossing_u32_max() {
     let tall = RgbaImage {
         width: 1,
         height: 300_000,
-        rgba: vec![200, 100, 50, 255].repeat(300_000),
+        rgba: [200, 100, 50, 255].repeat(300_000),
     };
     let reduced = downscale_rgba8(&tall, 256);
     assert_eq!((reduced.width, reduced.height), (1, 256));

@@ -660,10 +660,10 @@ mod tests {
         AssetRow {
             uuid: uuid.to_string(),
             asset_type: "photo".to_string(),
-            capture_timestamp: 1720000000,
-            capture_utc: Some(1719997200),
+            capture_timestamp: 1_720_000_000,
+            capture_utc: Some(1_719_997_200),
             capture_tz_source: Some("offset_exif".to_string()),
-            import_timestamp: 1720000000,
+            import_timestamp: 1_720_000_000,
             hash_sha256: hash.to_string(),
             width: Some(4032),
             height: Some(3024),
@@ -805,7 +805,7 @@ mod tests {
         let db = DatabaseDriver::open_in_memory().unwrap();
         let asset = make_asset("uuid-1", &"a".repeat(64));
         db.insert_asset(&asset).unwrap();
-        db.soft_delete("uuid-1", 1720000100).unwrap();
+        db.soft_delete("uuid-1", 1_720_000_100).unwrap();
         let timeline = db.query_timeline(0, 100).unwrap();
         assert!(timeline.is_empty());
     }
@@ -848,8 +848,8 @@ mod tests {
             cover_asset_id: Some("uuid-1".to_string()),
             is_collapsed: true,
             is_auto_generated: true,
-            created_at: 1720000000,
-            modified_at: 1720000000,
+            created_at: 1_720_000_000,
+            modified_at: 1_720_000_000,
         };
         db.insert_stack(&stack).unwrap();
         let m1 = StackMemberRow {
@@ -858,7 +858,7 @@ mod tests {
             asset_id: "uuid-1".to_string(),
             sequence_order: 0,
             member_role: "primary".to_string(),
-            created_at: 1720000000,
+            created_at: 1_720_000_000,
         };
         let m2 = StackMemberRow {
             id: "m-2".to_string(),
@@ -866,7 +866,7 @@ mod tests {
             asset_id: "uuid-2".to_string(),
             sequence_order: 1,
             member_role: "raw".to_string(),
-            created_at: 1720000000,
+            created_at: 1_720_000_000,
         };
         db.insert_stack_member(&m1).unwrap();
         db.insert_stack_member(&m2).unwrap();
@@ -931,8 +931,8 @@ mod tests {
         let album = AlbumRow {
             id: "album-1".to_string(),
             name: "Summer".to_string(),
-            created_at: 1720000000,
-            modified_at: 1720000000,
+            created_at: 1_720_000_000,
+            modified_at: 1_720_000_000,
             cover_asset_id: None,
         };
         db.insert_album(&album).unwrap();
@@ -940,7 +940,7 @@ mod tests {
 
         let mut updated = album.clone();
         updated.name = "Summer 2024".to_string();
-        updated.modified_at = 1720000100;
+        updated.modified_at = 1_720_000_100;
         db.update_album(&updated).unwrap();
         assert_eq!(
             db.find_album("album-1").unwrap().unwrap().name,
@@ -957,8 +957,8 @@ mod tests {
         let album = AlbumRow {
             id: "album-1".to_string(),
             name: "Trip".to_string(),
-            created_at: 1720000000,
-            modified_at: 1720000000,
+            created_at: 1_720_000_000,
+            modified_at: 1_720_000_000,
             cover_asset_id: None,
         };
         db.insert_album(&album).unwrap();

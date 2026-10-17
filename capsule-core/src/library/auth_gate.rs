@@ -392,7 +392,8 @@ mod tests {
         let clock2 = ManualClock::new();
         let mut gk2 = GateKeeper::with_clock_and_grace(clock2, DEFAULT_GRACE);
         gk2.open(GatedView::Hidden, &AllowGate::new()).unwrap();
-        gk2.clock.advance(DEFAULT_GRACE - Duration::from_millis(1));
+        gk2.clock
+            .advance(DEFAULT_GRACE.checked_sub(Duration::from_millis(1)).unwrap());
         assert!(gk2.is_open(GatedView::Hidden));
     }
 

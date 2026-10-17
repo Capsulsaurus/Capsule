@@ -412,9 +412,9 @@ mod tests {
     /// A structurally-valid core for `action` (correct prior placement + `metadata_blob_hash`
     /// present exactly on the metadata-bearing actions), so tests can perturb exactly one field.
     fn valid_core(action: Action) -> ManifestCore {
-        let prior = (!action.is_create()).then(|| Hash32([1; 32]));
+        let prior = (!action.is_create()).then_some(Hash32([1; 32]));
         let mut c = core(action, prior);
-        c.metadata_blob_hash = action.binds_metadata_blob().then(|| Hash32([0x4D; 32]));
+        c.metadata_blob_hash = action.binds_metadata_blob().then_some(Hash32([0x4D; 32]));
         c
     }
 

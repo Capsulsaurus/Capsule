@@ -1848,7 +1848,7 @@ async fn an_anonymous_caller_is_bounded_before_the_peer_store_is_read() {
 
     // The budget is above the policy one, so a real peer meets the budget that *is* the policy
     // first and never this one.
-    assert!(budgets::FEDERATED_INTAKE.limit > budgets::PEER_REPORTS.limit);
+    const { assert!(budgets::FEDERATED_INTAKE.limit > budgets::PEER_REPORTS.limit) };
 }
 
 #[tokio::test]

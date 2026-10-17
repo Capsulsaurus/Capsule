@@ -422,7 +422,7 @@ mod tests {
         (ws, album, asset, wire)
     }
 
-    fn entry<'a>(album: Uuid, wire: &'a Wire, head: Option<Hash32>) -> RemoteEntry<'a> {
+    fn entry(album: Uuid, wire: &Wire, head: Option<Hash32>) -> RemoteEntry<'_> {
         RemoteEntry {
             album_id: album,
             manifest_cbor: &wire.manifest_cbor,

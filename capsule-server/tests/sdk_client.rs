@@ -747,13 +747,9 @@ async fn a_pushed_asset_reaches_the_feed_and_the_entry_decodes_and_verifies() {
     // The library signs with the wall clock; the fixture's starts at the Unix epoch. Walk the
     // server's clock up to the manifest's own instant so the timestamp window admits it — the
     // window is a real check and the point here is the ladder, not the calendar.
-    fixture.clock.advance(
-        Timestamp::now()
-            .as_second()
-            .try_into()
-            .map(jiff::SignedDuration::from_secs)
-            .expect("the current second is representable"),
-    );
+    fixture.clock.advance(jiff::SignedDuration::from_secs(
+        Timestamp::now().as_second(),
+    ));
     // #405 refuses an upload whose `created_by_user` is not the authenticated caller — a writer
     // member must not file an asset into somebody else's album attributed to a third account.
     // This case pushes from a *real* `Workspace`, which mints its own account id at creation and
