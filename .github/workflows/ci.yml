@@ -234,9 +234,10 @@ jobs:
     runs-on: ubuntu-latest
     # Blocking as of `S-C59`. It was non-blocking because the Salvo auth crate's integration
     # tests needed testcontainers (Docker), which is slower and flakier; that crate is now
-    # review material and no test in the workspace starts a container — every port has a
-    # deterministic in-memory adapter and Kynos's `TestClient` drives a built service
-    # in-process. A gate that is allowed to fail is not a gate.
+    # review material. Every case this job runs uses a deterministic in-memory adapter, and
+    # Kynos's `TestClient` drives a built service in-process; the container-gated cases skip
+    # here and run against real Postgres and Valkey containers in `rust-containers`. A gate
+    # that is allowed to fail is not a gate.
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust toolchain
