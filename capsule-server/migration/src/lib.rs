@@ -1,13 +1,16 @@
 //! The server's PostgreSQL schema, one migration per ordinal.
 //!
-//! # What the six ordinals cover
+//! # What the ordinals cover
 //!
-//! The four durable ports issue #402 lands adapters for — the asset index, the account
-//! cluster, the device-cohort map and the quota ledger — plus album membership (`S-C51`, #405)
-//! and federation's capabilities, revocation list and peers (`S-E2`, #406).
-//! The remaining durable ports keep their
-//! in-memory adapters and gain ordinals with their adapters, so a migration never describes a
-//! table nothing reads.
+//! One ordinal per durable port, landed with the adapter that reads it, so a migration never
+//! describes a table nothing reads:
+//!
+//! - `000001`–`000004` (#402): the asset index, the account cluster, the device-cohort map and
+//!   the quota ledger;
+//! - `000005`: album membership (`S-C51`, #405);
+//! - `000006`: federation's capabilities, revocation list and peers (`S-E2`, #406);
+//! - `000007`–`000015` (#446): albums, device directories, moderation, share links, drops,
+//!   escrow, the collector's marks, custody receipts and TOTP enrolments.
 //!
 //! # Every instant is a `BIGINT` of microseconds since the Unix epoch
 //!
@@ -27,6 +30,15 @@ mod m20260902_000003_cohorts;
 mod m20260902_000004_quota;
 mod m20260902_000005_album_membership;
 mod m20260902_000006_federation;
+mod m20260902_000007_albums;
+mod m20260902_000008_device_directories;
+mod m20260902_000009_moderation;
+mod m20260902_000010_shares;
+mod m20260902_000011_drops;
+mod m20260902_000012_escrow;
+mod m20260902_000013_collection_marks;
+mod m20260902_000014_receipts;
+mod m20260902_000015_totp;
 
 /// The server's migrator.
 pub struct Migrator;
@@ -41,6 +53,15 @@ impl MigratorTrait for Migrator {
             Box::new(m20260902_000004_quota::Migration),
             Box::new(m20260902_000005_album_membership::Migration),
             Box::new(m20260902_000006_federation::Migration),
+            Box::new(m20260902_000007_albums::Migration),
+            Box::new(m20260902_000008_device_directories::Migration),
+            Box::new(m20260902_000009_moderation::Migration),
+            Box::new(m20260902_000010_shares::Migration),
+            Box::new(m20260902_000011_drops::Migration),
+            Box::new(m20260902_000012_escrow::Migration),
+            Box::new(m20260902_000013_collection_marks::Migration),
+            Box::new(m20260902_000014_receipts::Migration),
+            Box::new(m20260902_000015_totp::Migration),
         ]
     }
 }

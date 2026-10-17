@@ -57,15 +57,14 @@ mise run hooks-install # installs the git hooks (hk)
 ```text
 capsule-server [--config PATH] <SUBCOMMAND>
   serve       [--listen HOST:PORT] [--memory] [--blob-root PATH]
-  gc          [--apply] [--grace-window-hours N] --memory --blob-root PATH
-  purge       [--apply] [--limit N]              --memory --blob-root PATH
-  scrub       [--deep] [--budget BYTES]          --memory --blob-root PATH
+  gc          [--apply] [--grace-window-hours N] [--memory] --blob-root PATH
+  purge       [--apply] [--limit N]              [--memory] --blob-root PATH
+  scrub       [--deep] [--budget BYTES]          [--memory] --blob-root PATH
   gen-openapi [FILE] [--check]
-
-`--memory` is written as required on the three operator commands because today it is: they
-compare the index against the blob store, and the only index adapter written is the in-memory
-one. Without it they refuse and say so. It becomes optional when #402 lands.
 ```
+
+Without `--memory` the three operator commands run on the same Postgres and Valkey stores `serve`
+writes, and need `DATABASE_URL` and then `VALKEY_URL`.
 
 ### The development profile
 
@@ -122,14 +121,15 @@ replaced.
 a task that leaks them. Bring them down with
 `podman compose -f capsule-server/compose.yaml down` (`docker compose` accepts the same file).
 
-**`mise run serve` does not work yet, and refuses rather than pretending.** The Valkey half is
-real: `VALKEY_URL` is connected to and `PING`ed before anything else is assembled, and a server
-that cannot be reached is a refusal naming the failure (never the URL). The Postgres adapters are
-not written, so with Valkey reachable `serve` exits non-zero naming `DATABASE_URL` and the issue
-that will honour it (#402). Without `VALKEY_URL` and without `--memory` it exits 2 naming the
-variable — the refusal `capsule-server/src/store/mod.rs` has documented since `S-C29` and nothing
-could enforce until there was a boot path. Neither ever silently falls back to the in-memory
-adapters, which is the whole point: a deployment that forgot a variable must fail closed.
+**`mise run serve` runs on Postgres and Valkey once the schema is migrated.** `DATABASE_URL` is
+opened first and its schema checked against the migrations this binary was built for — a
+database that is behind refuses, naming `capsule-server-migration up`. Then `VALKEY_URL` is
+connected to and `PING`ed, and a server that cannot be reached is a refusal naming the failure
+(never the URL). Every port is then on one of the two. Without `VALKEY_URL` and without
+`--memory` it exits 2 naming the variable — the refusal `capsule-server/src/store/mod.rs` has
+documented since `S-C29`. With `OIDC_ISSUER` set it refuses too, because the OIDC stores have no
+durable adapter yet (#460). None of these ever silently falls back to the in-memory adapters,
+which is the whole point: a deployment that forgot a variable must fail closed.
 
 The Valkey adapters are proven against a live server by `capsule-server/tests/valkey.rs`, which
 runs the same conformance suites the in-memory doubles pass. It is env-gated so `mise run
@@ -174,9 +174,10 @@ is `pretty` in a debug build and `json` in a release one; `RUST_LOG` is the usua
 deliberately **no key material**: a maintenance host that had to hold the production
 token-signing key to sweep a directory would be a reason to put the key on a maintenance host.
 
-They do need `--memory` today, and they say so rather than naming a variable that would not have
-helped: all three compare the index against the blob store, and the in-memory one is the only
-index adapter written.
+Without `--memory` they read the durable stores: the index and the collector's marks in Postgres,
+and — for the scrub, which tells a live transfer from an orphan by them — the upload sessions in
+Valkey. The marks being durable is what lets one `gc` invocation sweep what an earlier one marked;
+under `--memory` each fresh process can only mark.
 
 Dry run is the default for the two that write; `--apply` opts in, and the report says which
 posture produced it. `scrub` mutates nothing at all and exits non-zero on a non-empty report,

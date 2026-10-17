@@ -45,6 +45,13 @@
 //! it that way would purge exactly the assets whose delete manifest the server failed to
 //! project a field out of.
 //!
+//! # The marks are durable, because a sweep is a later pass
+//!
+//! A mark has to outlive the process that wrote it: the sweep happens on a pass after the grace
+//! window, and a collector run once per process over a volatile store could only ever mark.
+//! [`postgres::PostgresCollection`] is the durable adapter and [`memory::InMemoryCollection`]
+//! the deterministic one; [`conformance`] is the suite both pass.
+//!
 //! # Dry run is the default posture, not a debugging aid
 //!
 //! Both workers take a [`Mode`], and a [`Mode::DryRun`] pass reports precisely what a real one
@@ -424,7 +431,11 @@ pub async fn purge_expired(
     Ok(report)
 }
 
+pub mod conformance;
 pub mod memory;
+pub mod postgres;
+
+pub use self::postgres::PostgresCollection;
 
 #[cfg(test)]
 mod tests;

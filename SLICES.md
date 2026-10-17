@@ -2550,7 +2550,10 @@ working on a surface written after it.
   neither side. Two contradictory unit tests (each lane asserting its own half was the first
   refusal) became one container case,
   `the_durable_arm_clears_postgres_and_refuses_on_an_unreachable_valkey`.
-- **Owed:** the remaining durable ports (#446). Every port has an in-memory adapter and one
+- **The remaining durable ports landed (#446)**, and the `Durable` arm now builds a whole server
+  on Postgres and Valkey; it refuses only a durable boot that configures OIDC (#460). `gc`,
+  `purge` and `scrub` run on the same durable stores without `--memory`.
+- **Was owed:** the remaining durable ports (#446). Every port has an in-memory adapter and one
   shared conformance suite, so "the double behaves like the real one" is an assertion rather than
   an assumption. Counters were deliberately excluded and became `S-C32`.
 - **Done when:** ✅ the conformance suite passes against the in-memory adapter, case by case and
@@ -2783,8 +2786,8 @@ carry a schema, and `S-C48` wants a `503` an `Authenticator` can render. One sea
   at the primary collation level, and a cursor handed between two adapters that disagree about
   that skips rows.
 - **`S-C11`'s remainder is not this row's.** The collector reads this index and writes its marks
-  to `CollectionStore`, which has no durable adapter yet (#446), so `gc`/`purge`/`scrub` still
-  require `--memory`.
+  to `CollectionStore`, whose durable adapter landed with #446, so `gc`/`purge`/`scrub` no
+  longer require `--memory`.
 
 ### S-C38 — problem extensions are absent from the OpenAPI document
 

@@ -50,9 +50,9 @@
 //! record here that deliberately outlives the sessions that carried it (see [`auth`]); its
 //! adapter is [`cohorts_postgres::PostgresCohorts`]. [`valkey::ValkeyCohorts`] also exists — a
 //! Valkey hash with no expiry, written as the interim home while the Postgres adapter was owed —
-//! and `PostgresCohorts` supersedes it: it is the adapter [`crate::boot`] will bind when the
-//! durable arm can be assembled at all (#446), and the Valkey one is kept only so
-//! `tests/valkey.rs` can drive the whole port set on one connection.
+//! and `PostgresCohorts` supersedes it: it is the adapter [`crate::boot`]'s durable arm binds,
+//! and the Valkey one is kept only so `tests/valkey.rs` can drive the whole port set on one
+//! connection.
 //!
 //! An earlier version of this paragraph said three adapters were planned per port. That was
 //! never true of any port in this module and was the one line in the tree pointing at a
