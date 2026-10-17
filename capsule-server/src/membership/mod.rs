@@ -28,8 +28,7 @@
 //! Removing that member from a later roster changes neither fact. The asset stays in the
 //! owner's album, and its bytes stay against the removed member's quota until the owner deletes
 //! the asset and the refcount collector (`gc/mod.rs`, `QuotaStore::release_attribution`,
-//! `S-C44`) releases the attribution — the one path that ever moves bytes off a ledger once
-//! they are stored.
+//! `S-C44`) releases the attribution once the last reference to the bytes is gone.
 //!
 //! That is the decision design/quota.md records under "Departed album members" (issue #473),
 //! not a gap: removal is a key rotation, not a data event, so it re-attributes nothing, and

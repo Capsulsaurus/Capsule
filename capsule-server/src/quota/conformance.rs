@@ -240,10 +240,10 @@ pub async fn the_collector_releases_by_address_and_the_ledger_names_the_account(
 /// The ledger's half of design/quota.md's "Departed album members" decision: removing a writer
 /// member from an album's roster reclaims nothing, by design. The member's upload is charged to
 /// them while the album owner holds it, and nothing the owner can say to the ledger moves it.
-/// Charging the same address is a merge, and releasing it is another account's reservation. The
-/// one path off the member's ledger is the collector, once the owner has deleted the asset and
-/// the last reference is gone. An adapter that let the owner "adopt" the bytes, or let either
-/// account's release clear the other's charge, would let one account's quota pressure act on
+/// Charging the same address is a merge, and releasing it is another account's reservation. What
+/// takes the bytes off the member's ledger is the collector, once the owner has deleted the
+/// asset and the last reference is gone. An adapter that let the owner "adopt" the bytes, or let
+/// the owner's release clear the member's charge, would let one account's quota pressure act on
 /// another account's photos.
 pub async fn a_contributors_attribution_survives_until_the_collector_releases_it(h: &dyn Harness) {
     let member = user("departed", 1);
