@@ -482,7 +482,7 @@ impl Workspace {
         // Reported as `DecodeFailed` — the "a supported path produced no derivative and somebody
         // should look at it" bucket — so the run summary counts it instead of staying silent.
         let generated = guarded("derivatives", || {
-            generate_still_derivatives(&decoded, &DerivativeTier::GENERATED, &ctx)
+            generate_still_derivatives(&decoded, DerivativeTier::GENERATED, &ctx)
         });
         let derivatives = match generated {
             Ok(derivatives) => derivatives,
@@ -651,6 +651,19 @@ mod tests {
     use crate::derivative_format::{DerivativeFormat, verify_still_format};
     use crate::media::Decoder as _;
     use crate::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1};
+
+    /// Delivery formats this build encodes: JXL, plus AVIF under `media-linked-codecs`.
+    const DELIVERY_FORMATS_ENCODED: usize = if cfg!(feature = "media-linked-codecs") {
+        2
+    } else {
+        1
+    };
+
+    /// Manifests a still larger than the thumbnail cap yields: every generated tier times every
+    /// encoded delivery format.
+    fn encoded_pairs_per_large_still() -> usize {
+        DerivativeTier::GENERATED.len() * DELIVERY_FORMATS_ENCODED
+    }
 
     /// A deterministic RGB gradient, `width` x `height`, as interleaved RGB `u16`.
     fn frame(width: u32, height: u32) -> rawshift_image::core::image::RgbImage {
@@ -871,7 +884,10 @@ mod tests {
         let bytes = fs::read(&thumb).unwrap();
         let manifests: Vec<DerivativeManifest> =
             cbor::from_slice(&fs::read(&bundle_path).unwrap()).expect("the bundle decodes");
-        assert_eq!(manifests.len(), 1);
+        // One manifest per generated (tier, format) pair: the thumbnail JXL alone without
+        // `media-linked-codecs`, thumbnail and preview in JXL and AVIF with it. The thumbnail
+        // JXL is first either way.
+        assert_eq!(manifests.len(), encoded_pairs_per_large_still());
         let core = &manifests[0].core;
         assert_ne!(
             core.ciphertext_hash,
@@ -914,9 +930,17 @@ mod tests {
         let original = png(128, 96);
         let receipt = import(&mut ws, album, src.path(), "small.png", &original);
         assert_eq!(receipt.derivatives, DerivativeStatus::Decoded);
+        // The sentinel satisfies the thumbnail tier, so nothing is deferred there. The preview
+        // tier (generated under `media-linked-codecs`) has no cap, so it is a re-encode and
+        // defers whatever this build cannot encode — WebP.
+        let preview_deferred = if DerivativeTier::GENERATED.contains(&DerivativeTier::Preview) {
+            DerivativeFormat::STILL_DELIVERY_ORDER.len() - DELIVERY_FORMATS_ENCODED
+        } else {
+            0
+        };
         assert_eq!(
-            receipt.deferred_formats, 0,
-            "the sentinel satisfies the tier, so nothing was deferred"
+            receipt.deferred_formats, preview_deferred,
+            "the sentinel satisfies the thumbnail tier, so nothing was deferred for it"
         );
 
         let dir = derivatives_dir(lib.path(), receipt.asset_id);
@@ -926,16 +950,21 @@ mod tests {
             .unwrap()
             .flatten()
             .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| !name.contains(".preview."))
             .collect();
         assert_eq!(
             files,
             vec![format!("{stem}.derivatives.cbor")],
-            "the sentinel writes its manifest and no derivative bytes"
+            "the sentinel writes its manifest and no thumbnail bytes"
         );
 
         let manifests: Vec<DerivativeManifest> =
             cbor::from_slice(&fs::read(dir.join(format!("{stem}.derivatives.cbor"))).unwrap())
                 .expect("the bundle decodes");
+        let manifests: Vec<DerivativeManifest> = manifests
+            .into_iter()
+            .filter(|m| m.core.role == DerivativeRole::Thumbnail)
+            .collect();
         assert_eq!(manifests.len(), 1);
         assert_eq!(manifests[0].core.format, "original");
         // The sentinel references the original *blob*: it signs the original manifest's own

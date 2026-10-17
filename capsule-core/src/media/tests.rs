@@ -972,12 +972,23 @@ fn generate(frame: &RgbaImage, original: &[u8]) -> StillDerivatives {
         (decoded.width(), decoded.height()),
         (frame.width, frame.height)
     );
-    generate_still_derivatives(&decoded, &DerivativeTier::GENERATED, &ctx)
+    generate_still_derivatives(&decoded, DerivativeTier::GENERATED, &ctx)
         .expect("generation succeeds")
 }
 
+/// The formats each generated, non-sentinel tier encodes, in delivery order — stated per build
+/// rather than derived from `is_encodable`, so the assertions below cannot agree with a wrong
+/// predicate by construction.
+fn expected_encoded_formats() -> Vec<DerivativeFormat> {
+    if cfg!(feature = "media-linked-codecs") {
+        vec![DerivativeFormat::Jxl, DerivativeFormat::Avif]
+    } else {
+        vec![DerivativeFormat::Jxl]
+    }
+}
+
 /// The thumbnail tier over a source larger than the cap: real JXL bytes, a signed manifest
-/// binding their hash, and the two formats this build cannot encode recorded as deferrals rather
+/// binding their hash, and the formats this build cannot encode recorded as deferrals rather
 /// than silently omitted.
 #[test]
 fn the_thumbnail_tier_encodes_jxl_and_defers_the_rest() {
@@ -985,7 +996,17 @@ fn the_thumbnail_tier_encodes_jxl_and_defers_the_rest() {
     let original = png_bytes(&frame);
     let result = generate(&frame, &original);
 
-    assert_eq!(result.generated.len(), 1, "one encodable format today");
+    let thumbnails: Vec<DerivativeFormat> = result
+        .generated
+        .iter()
+        .filter(|d| d.tier == DerivativeTier::Thumbnail)
+        .map(|d| d.format)
+        .collect();
+    assert_eq!(
+        thumbnails,
+        expected_encoded_formats(),
+        "the thumbnail tier encodes exactly what this build links, in delivery order"
+    );
     let thumb = &result.generated[0];
     assert_eq!(thumb.tier, DerivativeTier::Thumbnail);
     assert_eq!(thumb.format, DerivativeFormat::Jxl);
@@ -1040,16 +1061,21 @@ fn the_thumbnail_tier_encodes_jxl_and_defers_the_rest() {
         .expect("the thumbnail decodes");
     assert_eq!((back.width(), back.height()), (256, 192));
 
-    // The gap is per (tier, format), recorded rather than collapsed. WebP is here for a
-    // different reason from AVIF: not a missing toolchain but a codec that does not compile for
-    // aarch64, so it is deferred on every target rather than only where nasm is absent.
-    assert_eq!(
-        result.deferred,
+    // The gap is per (tier, format), recorded rather than collapsed. WebP is deferred in every
+    // build — not a missing toolchain but a codec that does not compile for aarch64 — while AVIF
+    // is deferred only where `media-linked-codecs` is off.
+    let expected_deferred = if cfg!(feature = "media-linked-codecs") {
+        vec![
+            (DerivativeTier::Thumbnail, DerivativeFormat::WebP),
+            (DerivativeTier::Preview, DerivativeFormat::WebP),
+        ]
+    } else {
         vec![
             (DerivativeTier::Thumbnail, DerivativeFormat::Avif),
             (DerivativeTier::Thumbnail, DerivativeFormat::WebP),
         ]
-    );
+    };
+    assert_eq!(result.deferred, expected_deferred);
 
     // Both signatures verify over the canonical core.
     let (device, write_tier) = signers();
@@ -1070,10 +1096,11 @@ fn the_thumbnail_tier_encodes_jxl_and_defers_the_rest() {
 /// lossless, so the thumbnail round-trips its downscaled pixels exactly and costs what a
 /// lossless encode costs.
 ///
-/// Asserted rather than left as a comment, because it is the one place this build visibly
-/// departs from the tier table and the departure disappears the moment a lossy backend lands.
+/// Asserted rather than left as a comment, because it is the one place a build without
+/// `media-linked-codecs` visibly departs from the tier table.
+#[cfg(not(feature = "media-linked-codecs"))]
 #[test]
-fn the_jxl_thumbnail_is_lossless_today() {
+fn the_jxl_thumbnail_is_lossless_without_linked_codecs() {
     let frame = gradient(512, 384);
     let original = png_bytes(&frame);
     let result = generate(&frame, &original);
@@ -1089,6 +1116,128 @@ fn the_jxl_thumbnail_is_lossless_today() {
     );
 }
 
+/// With libjxl linked the tier's `q=50` reaches the codec: the thumbnail is **lossy** — close to
+/// the downscaled frame but not bit-exact — and smaller than the lossless encode of the same
+/// frame that a build without `media-linked-codecs` would ship.
+#[cfg(feature = "media-linked-codecs")]
+#[test]
+fn the_jxl_thumbnail_is_lossy_with_libjxl() {
+    let frame = gradient(512, 384);
+    let original = png_bytes(&frame);
+    let result = generate(&frame, &original);
+    let thumb = &result.generated[0];
+    assert_eq!(
+        (thumb.tier, thumb.format),
+        (DerivativeTier::Thumbnail, DerivativeFormat::Jxl)
+    );
+
+    let back = RawshiftDecoder
+        .decode(&thumb.bytes, "jxl")
+        .expect("the lossy thumbnail decodes");
+    let expected = downscale_rgba8(&gradient(512, 384), 256);
+    assert_eq!(
+        (back.image.width, back.image.height),
+        (expected.width, expected.height)
+    );
+    assert_ne!(
+        back.image, expected,
+        "a lossy encode does not reproduce the frame bit-exactly"
+    );
+    let total: u64 = back
+        .image
+        .rgba
+        .iter()
+        .zip(&expected.rgba)
+        .map(|(a, b)| u64::from(a.abs_diff(*b)))
+        .sum();
+    let mean = total as f64 / expected.rgba.len() as f64;
+    assert!(
+        mean < 8.0,
+        "q=50 is still a faithful thumbnail: mean absolute error {mean:.2} per channel"
+    );
+
+    let lossless = jxl_bytes(&expected, None);
+    assert!(
+        thumb.bytes.len() < lossless.len(),
+        "the lossy master ({} bytes) undercuts the lossless encode ({} bytes)",
+        thumb.bytes.len(),
+        lossless.len()
+    );
+}
+
+/// With `media-linked-codecs` the AVIF delivery variant is real AVIF bytes of the tier's size,
+/// carrying no metadata, and the preview tier is generated at source resolution in both formats.
+#[cfg(feature = "media-linked-codecs")]
+#[test]
+fn linked_codecs_add_the_avif_variant_and_the_preview_tier() {
+    let frame = gradient(512, 384);
+    let original = png_bytes(&frame);
+    let result = generate(&frame, &original);
+
+    let pairs: Vec<(DerivativeTier, DerivativeFormat)> = result
+        .generated
+        .iter()
+        .map(|d| (d.tier, d.format))
+        .collect();
+    assert_eq!(
+        pairs,
+        vec![
+            (DerivativeTier::Thumbnail, DerivativeFormat::Jxl),
+            (DerivativeTier::Thumbnail, DerivativeFormat::Avif),
+            (DerivativeTier::Preview, DerivativeFormat::Jxl),
+            (DerivativeTier::Preview, DerivativeFormat::Avif),
+        ]
+    );
+    for derivative in &result.generated {
+        assert_eq!(
+            derivative.manifest.core.format,
+            derivative.format.mime(),
+            "the manifest names the format its bytes are in"
+        );
+        assert_eq!(derivative.manifest.core.role, derivative.tier.role());
+    }
+
+    for avif in result
+        .generated
+        .iter()
+        .filter(|d| d.format == DerivativeFormat::Avif)
+    {
+        assert_eq!(
+            StillFormat::from_bytes(&avif.bytes),
+            Some(StillFormat::Avif),
+            "the {} AVIF is an AVIF file",
+            avif.tier
+        );
+        let probe = rawshift_image::formats::probe_standard_image(&avif.bytes)
+            .expect("the AVIF header probes");
+        let size = (probe.size.width, probe.size.height);
+        match avif.tier {
+            DerivativeTier::Thumbnail => assert_eq!(size, (256, 192)),
+            DerivativeTier::Preview => assert_eq!(size, (512, 384), "source resolution"),
+        }
+    }
+
+    // The JXL preview keeps the source resolution and decodes.
+    let preview = result
+        .generated
+        .iter()
+        .find(|d| (d.tier, d.format) == (DerivativeTier::Preview, DerivativeFormat::Jxl))
+        .expect("a JXL preview");
+    let back = RawshiftDecoder
+        .decode(&preview.bytes, "jxl")
+        .expect("the preview decodes");
+    assert_eq!((back.width(), back.height()), (512, 384));
+
+    // Each role is its own chain: the AVIF of a tier chains to that tier's JXL.
+    for pair in result.generated.chunks_exact(2) {
+        let link = crate::crypto::hash::hash_bytes(
+            &crate::cbor::to_canonical_vec(&pair[0].manifest).expect("canonical CBOR"),
+        );
+        assert!(pair[0].manifest.core.prior_provenance_hash.is_none());
+        assert_eq!(pair[1].manifest.core.prior_provenance_hash, Some(link));
+    }
+}
+
 /// A source no larger than the tier's cap takes the signed `original` sentinel — an explicit
 /// marker, distinct from an absent derivative, and never a redundant re-encode.
 #[test]
@@ -1097,8 +1246,16 @@ fn a_source_within_the_cap_signs_the_original_sentinel() {
     let original = png_bytes(&frame);
     let result = generate(&frame, &original);
 
-    assert_eq!(result.generated.len(), 1);
-    let only = &result.generated[0];
+    // Only the thumbnail tier caps a long edge, so only it can be satisfied by the original. The
+    // preview tier (generated under `media-linked-codecs`) has no cap and is a lossy re-encode
+    // at source resolution whatever the source's size.
+    let thumbnails: Vec<_> = result
+        .generated
+        .iter()
+        .filter(|d| d.tier == DerivativeTier::Thumbnail)
+        .collect();
+    assert_eq!(thumbnails.len(), 1, "one sentinel, no re-encode");
+    let only = thumbnails[0];
     assert_eq!(only.format, DerivativeFormat::Original);
     assert_eq!(only.manifest.core.format, "original");
     assert!(
@@ -1116,9 +1273,27 @@ fn a_source_within_the_cap_signs_the_original_sentinel() {
         "and the original's prefix, so the reference selects the same key"
     );
     assert!(
-        result.deferred.is_empty(),
+        !result
+            .deferred
+            .iter()
+            .any(|(tier, _)| *tier == DerivativeTier::Thumbnail),
         "nothing was deferred: the tier is satisfied by the original, not by a missing encoder"
     );
+    let previews: Vec<DerivativeFormat> = result
+        .generated
+        .iter()
+        .filter(|d| d.tier == DerivativeTier::Preview)
+        .map(|d| d.format)
+        .collect();
+    if DerivativeTier::GENERATED.contains(&DerivativeTier::Preview) {
+        assert_eq!(
+            previews,
+            expected_encoded_formats(),
+            "no sentinel for the preview"
+        );
+    } else {
+        assert!(previews.is_empty());
+    }
     assert_eq!(DerivativeFormat::Original.extension(), None);
 }
 
@@ -1126,10 +1301,11 @@ fn a_source_within_the_cap_signs_the_original_sentinel() {
 /// signatures included — the same append-only link the asset provenance chain uses.
 ///
 /// Exercised through [`sign_derivative`](super::derivative::sign_derivative) rather than
-/// through [`generate_still_derivatives`], and deliberately: only JXL is encodable today, so a
-/// single call produces one manifest per role and the multi-link case — the half that can
-/// actually be wrong — is unreachable from the public entry point until a second encoder lands
-/// (the filed `S-B1` remainder, #437).
+/// through [`generate_still_derivatives`], and deliberately: a build without
+/// `media-linked-codecs` encodes only JXL, so there a single call produces one manifest per role
+/// and the multi-link case — the half that can actually be wrong — is unreachable from the
+/// public entry point. (With the feature, `linked_codecs_add_the_avif_variant_and_the_preview_tier`
+/// covers the same link end to end.)
 #[test]
 fn manifests_of_one_role_form_an_append_only_chain() {
     let (device, write_tier) = signers();
@@ -1212,16 +1388,24 @@ fn each_tier_starts_its_own_role_chain() {
     )
     .expect("both tiers");
 
-    let roles: Vec<DerivativeRole> = both
+    // The first manifest of each role is its JXL master; a linked AVIF variant follows it in the
+    // same role's chain (covered by `linked_codecs_add_the_avif_variant_and_the_preview_tier`).
+    let masters: Vec<_> = both
         .generated
         .iter()
-        .map(|d| d.manifest.core.role)
+        .filter(|d| d.format == DerivativeFormat::Jxl)
         .collect();
+    let roles: Vec<DerivativeRole> = masters.iter().map(|d| d.manifest.core.role).collect();
     assert_eq!(
         roles,
         vec![DerivativeRole::Thumbnail, DerivativeRole::Preview]
     );
-    for derivative in &both.generated {
+    assert_eq!(
+        both.generated.len(),
+        2 * expected_encoded_formats().len(),
+        "each tier encodes every format this build links"
+    );
+    for derivative in masters {
         assert!(
             derivative.manifest.core.prior_provenance_hash.is_none(),
             "the first manifest of each role starts that role's chain"
@@ -1327,7 +1511,7 @@ fn a_thumbnail_carries_no_exif_and_no_gps() {
     let seal = sealer(Uuid::from_u128(0xB3));
     let result = generate_still_derivatives(
         &decoded,
-        &DerivativeTier::GENERATED,
+        DerivativeTier::GENERATED,
         &context(
             &device,
             &write_tier,
@@ -1337,15 +1521,36 @@ fn a_thumbnail_carries_no_exif_and_no_gps() {
         ),
     )
     .expect("generation");
-    let thumb = &result.generated[0].bytes;
-    assert!(!thumb.is_empty(), "the thumbnail has bytes to inspect");
-    assert!(!contains(thumb, b"Exif"), "no EXIF box in the thumbnail");
-    assert!(!contains(thumb, b"xml "), "no XMP box");
-    assert!(!contains(thumb, b"jumb"), "no metadata container box");
-    assert!(
-        !gps_rationals_present(thumb),
-        "the GPS rationals must not survive into a thumbnail"
+    // Every encoded derivative, in every format and tier this build produces — the AVIF variant
+    // and the preview included, not only the first JXL.
+    assert_eq!(
+        result.generated.len(),
+        DerivativeTier::GENERATED.len() * expected_encoded_formats().len()
     );
+    for derivative in &result.generated {
+        let (tier, format) = (derivative.tier, derivative.format);
+        let bytes = &derivative.bytes;
+        assert!(
+            !bytes.is_empty(),
+            "the {tier} {format} has bytes to inspect"
+        );
+        assert!(
+            !contains(bytes, b"Exif"),
+            "no EXIF box in the {tier} {format}"
+        );
+        assert!(
+            !contains(bytes, b"xml "),
+            "no XMP box in the {tier} {format}"
+        );
+        assert!(
+            !contains(bytes, b"jumb"),
+            "no metadata container box in the {tier} {format}"
+        );
+        assert!(
+            !gps_rationals_present(bytes),
+            "the GPS rationals must not survive into the {tier} {format}"
+        );
+    }
 }
 
 /// Whether `needle` appears anywhere in `haystack`.
@@ -1397,13 +1602,30 @@ fn the_closed_format_set_round_trips_and_admits_nothing_else() {
             "{rejected:?} is outside the closed set"
         );
     }
-    // Only JXL — the table's committed *master* format — and the sentinel can be produced here.
-    // AVIF is blocked on a build-host assembler; WebP is blocked on an upstream defect, its
-    // codec not compiling for aarch64 at all.
+    // JXL — the table's committed *master* format — and the sentinel are produced in every
+    // build. AVIF only where `media-linked-codecs` links ravif; WebP in none, blocked on an
+    // upstream defect, its codec not compiling for aarch64 at all.
     assert!(DerivativeFormat::Jxl.is_encodable());
     assert!(DerivativeFormat::Original.is_encodable());
-    assert!(!DerivativeFormat::Avif.is_encodable());
+    assert_eq!(
+        DerivativeFormat::Avif.is_encodable(),
+        cfg!(feature = "media-linked-codecs")
+    );
     assert!(!DerivativeFormat::WebP.is_encodable());
+}
+
+/// The preview tier is generated exactly when a lossy master codec is linked: a
+/// source-resolution lossless still would rival the original in size.
+#[test]
+fn the_generated_tiers_follow_the_linked_codecs() {
+    if cfg!(feature = "media-linked-codecs") {
+        assert_eq!(
+            DerivativeTier::GENERATED,
+            &[DerivativeTier::Thumbnail, DerivativeTier::Preview]
+        );
+    } else {
+        assert_eq!(DerivativeTier::GENERATED, &[DerivativeTier::Thumbnail]);
+    }
 }
 
 /// A signed still-role manifest whose `format` is outside the closed set is rejected at
@@ -1570,7 +1792,7 @@ fn a_signing_fault_is_its_own_variant_not_an_encode_failure() {
 
     let error = generate_still_derivatives(
         &decoded,
-        &DerivativeTier::GENERATED,
+        DerivativeTier::GENERATED,
         &context(
             &device,
             &write_tier,
@@ -1605,7 +1827,7 @@ fn a_roles_chain_continues_across_generation_runs() {
     // First generation: the role's chain starts.
     let first = generate_still_derivatives(
         &decoded,
-        &DerivativeTier::GENERATED,
+        DerivativeTier::GENERATED,
         &context(&device, &write_tier, &seal, &no_prior_heads(), asset_id),
     )
     .expect("first run");
@@ -1625,7 +1847,7 @@ fn a_roles_chain_continues_across_generation_runs() {
     // Second generation, handed that head.
     let second = generate_still_derivatives(
         &decoded,
-        &DerivativeTier::GENERATED,
+        DerivativeTier::GENERATED,
         &context(&device, &write_tier, &seal, &heads, asset_id),
     )
     .expect("second run");
@@ -1677,7 +1899,7 @@ fn a_panicking_encoder_is_caught_like_a_panicking_decoder() {
     let caught = super::guarded("derivatives", || {
         generate_still_derivatives(
             &decoded,
-            &DerivativeTier::GENERATED,
+            DerivativeTier::GENERATED,
             &context(
                 &device,
                 &write_tier,

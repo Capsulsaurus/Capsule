@@ -81,6 +81,11 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: release-${{ matrix.target }}
+      # The CLI enables capsule-core's `media-linked-codecs` (#437): rav1e's x86_64 assembly
+      # needs nasm on PATH. libjxl's cmake build and bindgen's libclang are already on every
+      # hosted runner image.
+      - name: Install nasm
+        uses: ilammy/setup-nasm@v1
       - name: Build the CLI
         run: cargo build -p capsule-cli --release --target ${{ matrix.target }}
       - name: Build the server

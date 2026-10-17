@@ -71,3 +71,12 @@ allow = ["ODbL-1.0"]
 # IJG arm is conjunctive and cannot be elected away. It requires only a fixed notice.
 name = "jpeg-encoder"
 allow = ["IJG"]
+
+[[licenses.exceptions]]
+# `(MIT OR Apache-2.0) AND NCSA`. Capsule elects MIT for the disjunctive part, and the
+# conjunctive NCSA arm is attribution-only (BSD-3-like). It is reached only through rav1e's
+# `cfg(fuzzing)` target dependency, under capsule-core's `media-linked-codecs` feature (#437),
+# so no Capsule artefact compiles it. It is listed because `[graph]` checks every target
+# configuration. The NOTICE conjunctive section names it.
+name = "libfuzzer-sys"
+allow = ["NCSA"]

@@ -30,11 +30,12 @@ use crate::crypto::provenance::{DerivativeManifest, DerivativeRole};
 /// outside this set is a structural rejection, never a "future format to ignore".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DerivativeFormat {
-    /// **JPEG XL** — the committed primary/master still codec, and the one format this build
-    /// encodes. Losslessly: the pure-Rust backend is `zune-jpegxl`'s `JxlSimpleEncoder`.
+    /// **JPEG XL** — the committed primary/master still codec, encodable in every `media` build:
+    /// **lossy** through libjxl under the opt-in `media-linked-codecs` feature, and losslessly
+    /// through the pure-Rust `zune-jpegxl` `JxlSimpleEncoder` without it.
     Jxl,
-    /// **AVIF** — the universal delivery format for clients without a JXL decoder. Not
-    /// encodable in this build.
+    /// **AVIF** — the universal delivery format for clients without a JXL decoder. Encodable only
+    /// under `media-linked-codecs` (`ravif` -> rav1e, which needs `nasm` on an x86_64 host).
     Avif,
     /// **WebP** — the last-resort delivery fallback. Not encodable in this build: the crate's
     /// WebP codec does not compile for aarch64 — see `media::StillFormat::WebP`, which cannot be
@@ -99,8 +100,16 @@ impl DerivativeFormat {
     }
 
     /// Whether this build can produce bytes in this format.
+    ///
+    /// Feature-dependent on purpose: the answer is about *this build*, and the AVIF encoder is
+    /// linked only by `media-linked-codecs`. The mobile FFI and the `rust-cross` targets build
+    /// without it, and there AVIF is a recorded per-`(tier, format)` deferral rather than a gap.
     pub const fn is_encodable(self) -> bool {
-        matches!(self, Self::Jxl | Self::Original)
+        match self {
+            Self::Jxl | Self::Original => true,
+            Self::Avif => cfg!(feature = "media-linked-codecs"),
+            Self::WebP => false,
+        }
     }
 }
 

@@ -34,6 +34,34 @@ native = ["dep:rusqlite", "dep:sqlite-vec", "mls", "media"]
 # is not among them. `capsule_core::lqip` stays unconditional and is NOT behind this feature — a
 # placeholder must not depend on which client imported the photo (slice `S-B14`).
 media = ["dep:rawshift-image"]
+# `media-linked-codecs` adds the two still **encoders** that link native code, and is therefore
+# **opt-in and never in `default`** (issue #437). `default` (via `native`) is what the mobile FFI
+# and every `rust-cross` target build, so keeping these out of it is what keeps those builds pure
+# Rust. `capsule-cli` enables it — the stabilize-first consumer that runs on real libraries.
+#
+# - `jxl-encode-libjxl-vendored` — the **lossy** JXL master: the reference C++ libjxl, built from
+#   the `jpegxl-src` crate's vendored tree by cmake and bound by bindgen (so the build host needs
+#   cmake, a C++17 compiler and libclang). Replaces the lossless `zune-jpegxl` encode, so the tier
+#   table's q=50 / q=70 finally reach the codec. Vendored rather than system libjxl because no
+#   build host Capsule targets ships one reliably and a pkg-config miss would be a silent build
+#   break on a fresh machine. libjxl and its bundled highway, brotli and skcms are BSD-3 / MIT /
+#   Apache-2.0: attribution-only.
+# - `avif-encode-ravif` — the AVIF delivery variant via `ravif` -> rav1e. rav1e's default `asm`
+#   feature stays on (a transitive default cannot be turned off from here, and it is the fast
+#   path), so every **x86_64** build host needs `nasm` on PATH; aarch64 assembles with the C
+#   compiler. CI installs nasm for every job that builds `capsule-cli`.
+#
+# With both on, the preview tier is generated too (`media::DerivativeTier::GENERATED`): a
+# source-resolution still is only worth its bytes in a lossy codec.
+#
+# HEIC decode is **not** here and cannot be by policy rather than toolchain: libheif and its HEVC
+# decoder libde265 are both LGPL-3.0, which CLAUDE.md and `deny.toml` exclude outright. AVIF
+# decode needs a system libdav1d (`image`'s `avif-native`), which no vendored build exists for.
+media-linked-codecs = [
+    "media",
+    "rawshift-image/jxl-encode-libjxl-vendored",
+    "rawshift-image/avif-encode-ravif",
+]
 # `mls` links the live OpenMLS group backend (`crypto::authority::OpenMlsAuthority`, slice
 # S-X1) pinned to the X-Wing PQ ciphersuite `MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519`
 # (`0x004D`) via its formally-verified libcrux provider. Implied by `native` so the default
@@ -112,8 +140,9 @@ kamadak-exif = "0.5"
 # - `jxl`           — jxl-oxide decode plus the `zune-jpegxl` encoder that produces the thumbnail
 #                     tier. Pure Rust, and `image/jxl` is the tier table's committed *master*
 #                     format. The backend is `JxlSimpleEncoder`, which is lossless — a thumbnail
-#                     therefore costs more bytes than the table's q=50 intends, and closing that
-#                     needs C libjxl (`jxl-encode-libjxl`: `bindgen` + `pkg-config`).
+#                     therefore costs more bytes than the table's q=50 intends. The lossy libjxl
+#                     backend is the opt-in `media-linked-codecs` feature above; `jxl` stays on
+#                     for the jxl-oxide decoder either way.
 # - `tiff-decode` / `gif-decode` — pure Rust, no encoder needed.
 #
 # **`webp` is deliberately absent, and it is not a preference.** It does not compile for any
@@ -124,8 +153,8 @@ kamadak-exif = "0.5"
 # Every mobile target Capsule ships is aarch64, so WebP is a recognised-but-undecodable format
 # here until upstream fixes the cast.
 #
-# Also absent: `heic` (system libheif), `avif` (image's `avif-native` -> system libdav1d for
-# decode; `ravif` -> `rav1e/asm` -> nasm on every x86_64 build host for encode), `svg`, and the
+# Also absent: `heic` (libheif + libde265, both LGPL-3.0), AVIF *decode* (image's `avif-native` ->
+# system libdav1d), AVIF *encode* and lossy JXL by default (both in `media-linked-codecs`), `svg`, and the
 # RAW families (`experimental`; CR3 pixel decode unimplemented upstream). Each is a typed
 # `media::MediaError::UnsupportedFormat` today rather than a silent gap. MPL-2.0, already
 # allow-listed in `deny.toml`; see the Media row in design/dependencies.md.

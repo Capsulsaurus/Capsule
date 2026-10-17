@@ -181,6 +181,26 @@ fn walk_find(root: &std::path::Path, name: &str) -> bool {
 /// derivative path is exercised rather than the `original` sentinel.
 ///
 /// A 512x384 PNG, built here rather than committed: the repository carries no binary fixtures.
+/// How many derivative blobs the 512x384 fixture of [`library_with_a_thumbnailed_asset`] yields
+/// in this build: every generated tier times every encodable delivery format. One (the
+/// thumbnail JXL) without `media-linked-codecs`; four (thumbnail and preview, JXL and AVIF) with
+/// it. The thumbnail JXL is always first.
+fn blobs_per_thumbnailed_asset() -> usize {
+    crate::media::DerivativeTier::GENERATED.len()
+        * crate::derivative_format::DerivativeFormat::STILL_DELIVERY_ORDER
+            .iter()
+            .filter(|f| f.is_encodable())
+            .count()
+}
+
+/// Whether the bundle still ships the thumbnail tier's JXL.
+fn ships_the_thumbnail_jxl(bundle: &UploadBundle) -> bool {
+    bundle
+        .derivatives
+        .iter()
+        .any(|d| d.role == DerivativeRole::Thumbnail && d.format == "image/jxl")
+}
+
 fn library_with_a_thumbnailed_asset(lib: &TempDir, src: &TempDir) -> (Uuid, Uuid) {
     use rawshift_image::core::metadata::ImageMetadata;
     use rawshift_image::core::{BitDepth, MetadataEmbedOptions};
@@ -241,9 +261,14 @@ fn derivative_blobs_ship_ciphertext_that_decrypts_to_the_bytes_on_disk() {
 
     let ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
     let bundle = ws.upload_bundle(&asset_id).unwrap();
-    assert_eq!(bundle.derivatives.len(), 1, "one encodable format today");
+    assert_eq!(
+        bundle.derivatives.len(),
+        blobs_per_thumbnailed_asset(),
+        "every generated (tier, format) pair is shipped"
+    );
     let blob = &bundle.derivatives[0];
     assert_eq!(blob.format, "image/jxl");
+    assert_eq!(blob.role, DerivativeRole::Thumbnail);
 
     // The plaintext the local gallery paints, straight off disk.
     let asset = ws.asset(&asset_id).expect("the asset is held");
@@ -311,8 +336,13 @@ fn a_tampered_derivative_is_skipped_rather_than_shipped() {
 
     let bundle = ws.upload_bundle(&asset_id).unwrap();
     assert!(
-        bundle.derivatives.is_empty(),
+        !ships_the_thumbnail_jxl(&bundle),
         "a derivative that does not match its signed manifest is not uploaded"
+    );
+    assert_eq!(
+        bundle.derivatives.len(),
+        blobs_per_thumbnailed_asset() - 1,
+        "and only that one is dropped: the untouched derivatives still ship"
     );
     assert!(
         !bundle.ciphertext.is_empty(),
@@ -472,10 +502,12 @@ fn a_non_sentinel_manifest_with_no_bytes_is_still_skipped() {
     let dir = media_dir(lib.path(), asset.capture_utc).join("derivatives");
     fs::remove_file(dir.join(format!("{}.thumbnail.jxl", asset_id.simple()))).unwrap();
 
+    let bundle = ws.upload_bundle(&asset_id).unwrap();
     assert!(
-        ws.upload_bundle(&asset_id).unwrap().derivatives.is_empty(),
+        !ships_the_thumbnail_jxl(&bundle),
         "a thumbnail manifest whose bytes have gone is not shipped"
     );
+    assert_eq!(bundle.derivatives.len(), blobs_per_thumbnailed_asset() - 1);
 }
 
 /// The `capsule import` acceptance case, at the bundle boundary: the bytes a push would send for
@@ -546,8 +578,8 @@ fn a_derivative_survives_a_reopen_and_still_reaches_the_bundle() {
     let bundle = ws.upload_bundle(&asset_id).unwrap();
     assert_eq!(
         bundle.derivatives.len(),
-        1,
-        "the derivative survives a reopen"
+        blobs_per_thumbnailed_asset(),
+        "the derivatives survive a reopen"
     );
     let blob = &bundle.derivatives[0];
     assert_eq!(

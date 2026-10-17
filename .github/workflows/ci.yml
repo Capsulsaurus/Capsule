@@ -209,6 +209,11 @@ jobs:
           rustup target add wasm32-unknown-unknown
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+      # `--workspace` builds capsule-cli, which enables capsule-core's `media-linked-codecs`
+      # (#437): rav1e's x86_64 assembly needs nasm. cmake, a C++ compiler and libclang (for
+      # libjxl and its bindgen bindings) are already on the runner image.
+      - name: Install nasm
+        run: sudo apt-get update && sudo apt-get install -y nasm
       # check-rust runs the verify-examples smoke via nextest.
       - name: Install nextest
         uses: taiki-e/install-action@v2
@@ -244,6 +249,9 @@ jobs:
         run: rustup toolchain install
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+      # nasm for rav1e's x86_64 assembly; see the `rust` job (#437).
+      - name: Install nasm
+        run: sudo apt-get update && sudo apt-get install -y nasm
       - name: Install nextest
         uses: taiki-e/install-action@v2
         with:

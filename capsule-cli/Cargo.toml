@@ -24,7 +24,11 @@ path = "src/lib.rs"
 [dependencies]
 capsule-cli-entity = { path = "./entity" }
 capsule-cli-migration = { path = "./migration" }
-capsule-core = { path = "../capsule-core" }
+# `media-linked-codecs`: the lossy libjxl master, the AVIF delivery variant and the preview tier
+# (issue #437). The CLI is the stabilize-first client that imports real libraries, and it builds
+# only for desktop hosts, so it takes the native-code encoders the mobile FFI deliberately does
+# not. Building it needs cmake, a C++17 compiler, libclang and — on x86_64 — nasm.
+capsule-core = { path = "../capsule-core", features = ["media-linked-codecs"] }
 # The CLI is a client: every network flow (auth login/refresh/logout, the sync
 # feed) rides `capsule-sdk`, the sanctioned network path — the CLI never
 # hand-rolls a request (S-D5). `capsule-i18n` supplies the localized user-facing
