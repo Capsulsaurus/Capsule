@@ -3,21 +3,21 @@
 //! Export a full backup → bootstrap a new device via passphrase and escrow → import the backup
 //! → assert every asset present and verifiable.
 //!
-//! Two tests, because until a `Workspace` can open *as* a recovered account (issue #467) the
-//! escrow and the restore are independent halves: nothing the escrow recovers feeds the
-//! restore, and nothing the restore needs comes from the escrow.
+//! One test, the whole flow:
 //!
-//! - **`E2E case 6 (escrow)`**: A escrows its master key at the low-RAM tier through the SDK's
-//!   `RecoveryClient` over the real route; a second session fetches it byte for byte and
-//!   `recover_master_key` yields A's key, proved by re-deriving A's default album id. Two
-//!   Argon2id passes at `DeviceTier::LowRam` (the wrap and the recovery), which is the only
-//!   memory-hard cost this crate pays: the tier is the thing under test here, so it is spelled
-//!   out rather than made cheap.
-//! - **`E2E case 6 (restore)`**: A exports a backup; a fresh library on a new root imports it
-//!   under the exporter's verifying key, reads the asset byte for byte and walks its chain.
-//!   `verify` is asserted to refuse: the artifact carries no album authority (issue #468).
-//!   The export names [`FAST_KDF`] explicitly, and the import needs no such argument: the
-//!   artifact records the cost it was wrapped under, so a cheap export is a cheap restore.
+//! - A escrows its master key at the low-RAM tier through the SDK's `RecoveryClient` over the
+//!   real route; a second session fetches it byte for byte and `recover_master_key` yields A's
+//!   key. Two Argon2id passes at `DeviceTier::LowRam` (the wrap and the recovery), which is the
+//!   only memory-hard cost this crate pays: the tier is the thing under test here, so it is
+//!   spelled out rather than made cheap.
+//! - The new device opens *as A's account* with `Workspace::create_from_master`: the recovered
+//!   master key, the server's account id, and A's sealed identity key. The sealed identity has
+//!   no server route yet, so the case hands it across in memory — the one leg of the bootstrap
+//!   not exercised over the wire.
+//! - The new device imports A's backup under the exporter's verifying key, reads the asset byte
+//!   for byte and walks its chain. `verify` is asserted to refuse: the artifact carries no album
+//!   authority (issue #468). The export names [`FAST_KDF`] explicitly, and the import needs no
+//!   such argument: the artifact records the cost it was wrapped under.
 
 use capsule_core::crypto::keys::MasterKey;
 use capsule_core::crypto::primitives::DeviceTier;
@@ -30,12 +30,18 @@ use capsule_sdk::recovery::RecoveryClient;
 const RECOVERY_SECRET: &[u8] = b"seven words the user wrote down somewhere safe";
 const BACKUP_PASSPHRASE: &[u8] = b"backup passphrase";
 
-/// **E2E case 6 (escrow)**: the master key round-trips through the real escrow route and
-/// recovers on a second device.
+/// **E2E case 6**: the master key round-trips through the real escrow route, a new device opens
+/// as A's account from it, and that device restores A's backup.
 #[tokio::test]
-async fn e2e_case_6_the_escrow_round_trips_and_recovers_the_master_key() {
+async fn e2e_case_6_a_new_device_bootstraps_from_the_escrow_and_restores_the_backup() {
     let server = Server::boot().await;
-    let a = Device::register(&server, "device-a").await;
+    let mut a = Device::register(&server, "device-a").await;
+    let asset = a.import_jpeg("keepsake.jpg");
+    let archive = a.staging.path().join("backup.tar");
+    a.workspace
+        .export_backup_with_params(&archive, BACKUP_PASSPHRASE, FAST_KDF)
+        .expect("the backup exports");
+    let exporter = a.workspace.exporter_verifying_key();
 
     let escrow = a
         .workspace
@@ -59,29 +65,31 @@ async fn e2e_case_6_the_escrow_round_trips_and_recovers_the_master_key() {
 
     let master = capsule_core::backup::recover_master_key(&wire, RECOVERY_SECRET)
         .expect("the recovery secret opens the escrow");
+
+    // The new device opens as A's account: the recovered master key, the server's id for the
+    // account, and A's identity key sealed under that master key.
+    let root_b = tempfile::tempdir().expect("a fresh library root");
+    let mut b = Workspace::create_from_master(
+        root_b.path(),
+        PASSPHRASE,
+        FAST_KDF,
+        MasterKey::from_bytes(master),
+        a.user_id,
+        &a.workspace.sealed_identity(),
+    )
+    .expect("the recovered master key opens A's sealed identity");
+    assert_eq!(b.user_id(), a.user_id, "B is A's account");
     assert_eq!(
-        MasterKey::from_bytes(master).derive_default_album_id(),
+        b.default_album_id(),
         a.workspace.default_album_id(),
         "the recovered master key is A's: it derives A's default album id"
     );
-}
-
-/// **E2E case 6 (restore)**: a fresh library imports the backup, reads every asset and walks
-/// its chain; `verify` refuses for want of the album authority the artifact does not carry.
-#[tokio::test]
-async fn e2e_case_6_a_fresh_library_restores_the_backup() {
-    let server = Server::boot().await;
-    let mut a = Device::register(&server, "device-a").await;
-    let asset = a.import_jpeg("keepsake.jpg");
-    let archive = a.staging.path().join("backup.tar");
-    a.workspace
-        .export_backup_with_params(&archive, BACKUP_PASSPHRASE, FAST_KDF)
-        .expect("the backup exports");
-    let exporter = a.workspace.exporter_verifying_key();
-
-    let root_b = tempfile::tempdir().expect("a fresh library root");
-    let mut b =
-        Workspace::create_with_params(root_b.path(), PASSPHRASE, FAST_KDF).expect("a library");
+    assert_eq!(
+        b.user_ik_public(),
+        a.workspace.user_ik_public(),
+        "B signs under the identity the server pinned for A"
+    );
+    assert_ne!(b.device_id(), a.workspace.device_id(), "B is a new device");
     assert!(b.asset_ids().is_empty(), "no prior state");
     let restored = b
         .import_backup(&archive, BACKUP_PASSPHRASE, &exporter)
@@ -94,7 +102,7 @@ async fn e2e_case_6_a_fresh_library_restores_the_backup() {
     );
     assert!(
         b.has_album(&a.workspace.default_album_id()),
-        "the restore folded A's album keys into the fresh library"
+        "the restore folded A's album keys into the new device"
     );
 
     // The restored chain is structurally intact, and the plaintext above is the manifest's:

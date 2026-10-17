@@ -186,7 +186,7 @@ environment gate. "Blocked on" names the issue that holds the rest of the case's
 | 3 | server half `capsule-server/tests/sync.rs`; client half `capsule-e2e/tests/case_03_sync_pickup.rs` | landed; the push runs the SDK's own ladder | B's `verify_asset` needs the album keys (cases 6, 12) |
 | 4 | — | not started | federation (#406) |
 | 5 | `capsule-sdk/src/peering/tests.rs` | in-process shape | live two-host shape, post-v1 |
-| 6 | `capsule-e2e/tests/case_06_backup_restore.rs` | landed; the restored asset reads and its chain walks | #467 (open as the recovered account), #468 (verify: no authority in the artifact) |
+| 6 | `capsule-e2e/tests/case_06_backup_restore.rs` | landed; the new device opens as the recovered account (`Workspace::create_from_master`), and the restored asset reads and its chain walks | the sealed identity has no server route yet, so the case hands it across in memory; #468 (verify: no authority in the artifact) |
 | 7 | `capsule-e2e/tests/case_07_lifecycle.rs` | landed; the push runs the SDK's own ladder | — |
 | 8 | server leg `capsule-e2e/tests/case_08_upgrade_ceremony.rs`; ceremony `capsule-core/src/crypto/authority/openmls_authority/tests.rs` | server leg landed, and its feed-visibility assertion runs the SDK's own ladder; ceremony in-process | a library cannot sign an intent (private DSK) |
 | 9 | `capsule-e2e/tests/protocol_contract.rs` | landed (the UI leg is out of scope) | — |
