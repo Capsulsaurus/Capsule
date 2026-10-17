@@ -65,7 +65,7 @@
 //!
 //! `manifest_cbor` is decoded as a [`ProvenanceRecord`] directly: there is no envelope
 //! version, and nothing negotiates one with the sending server. That is a recorded decision
-//! (ADR-0006, amendment item 3), and it rests on there being **no released peer** — every
+//! (ADR-0008), and it rests on there being **no released peer** — every
 //! server and client that speaks this feed is built from this tree, so there is no older shape
 //! to stay compatible with. A bytes string that is not a record is quarantined as
 //! `MalformedManifest`, never guessed at. The first change to this shape after a release must

@@ -87,35 +87,28 @@ resumable encrypted upload protocol stay Capsule-owned behind narrow ports, and 
 
 ## Amendment (2026-10-17)
 
-The binary landed (#479), and it took four decisions this record did not state. The review
-of #479 found them unsanctioned; the maintainer sanctioned them as built, and they are
-recorded here so the record matches the tree (#522).
+The binary landed (#479), and it took decisions this record did not state. Its review
+found them unsanctioned; the maintainer sanctioned them as built (#522). The two that
+concern this record's own subject — which adapters the binary binds, and how it boots
+against the durable one — are recorded here as amendments to it. The other two are
+decisions in their own right and have their own records, per the README's one ADR per
+decision: [ADR-0007](0007-revoking-a-capability-revokes-every-successor-refreshed-from-it.md)
+(revoking a capability reaches its refreshed successors) and
+[ADR-0008](0008-the-sync-manifest-payload-is-an-unversioned-provenance-record.md) (the sync
+payload is an unversioned `ProvenanceRecord`).
 
 1. **Two adapters per port, not three, and Postgres rather than Valkey for cohorts.** No
-   port was ever given all three: the volatile stores have Valkey and the double, and a
-   Postgres session table is what [Filesystem — Server](../capsule-docs/src/content/docs/design/filesystem/server.md)
+   port binds all three in a deployment: the volatile stores bind Valkey, with the double
+   in tests, and a Postgres session table is what [Filesystem — Server](../capsule-docs/src/content/docs/design/filesystem/server.md)
    refuses outright. `CohortStore` is the exception in the other direction — it has no
    expiry, so its durable adapter is Postgres (`PostgresCohorts`), bound by `durable_ports`
-   in [`capsule-server/src/boot.rs`](../capsule-server/src/boot.rs). `ValkeyCohorts`
-   survives only so `capsule-server/tests/valkey.rs` can drive the whole port set on one
+   in [`capsule-server/src/boot.rs`](../capsule-server/src/boot.rs). It is the one port
+   with all three adapters written: `ValkeyCohorts` exists too, but no deployment binds it;
+   it survives only so `capsule-server/tests/valkey.rs` can drive the whole port set on one
    connection. The adapter map is stated in the module docs of
    [`capsule-server/src/store/mod.rs`](../capsule-server/src/store/mod.rs), section
    "Adapters, and what they are for".
-2. **Revoking a capability reaches every successor refreshed from it.** The owner only ever
-   holds the `jti` they minted, and a refresh has already revoked that one, so revoking it
-   alone would answer `204` while the grant lived on. `revoke_issued` walks the refresh
-   chain in [`capsule-server/src/federation/postgres.rs`](../capsule-server/src/federation/postgres.rs),
-   and the conformance case
-   `revoking_a_refreshed_grant_by_its_original_jti_revokes_the_whole_chain` in
-   [`capsule-server/src/federation/conformance.rs`](../capsule-server/src/federation/conformance.rs)
-   holds every adapter to it. Contract: [Federation — Status note](../capsule-docs/src/content/docs/design/federation.md).
-3. **The sync payload is an unversioned `ProvenanceRecord`.** `manifest_cbor` carries the
-   provenance blob's canonical CBOR bytes, and the receiver decodes them as a
-   `ProvenanceRecord` with no version field and no negotiation, because no released peer
-   speaks any other shape. The decode and its rationale are in
-   [`capsule-core/src/lifecycle/sync_apply.rs`](../capsule-core/src/lifecycle/sync_apply.rs).
-   The first change to that shape after a release must introduce the version, not assume one.
-4. **`serve` never migrates.** It reads `seaql_migrations` and refuses a schema behind the
+2. **`serve` never migrates.** It reads `seaql_migrations` and refuses a schema behind the
    one it was built for, naming `capsule-server-migration up`; an operator runs migrations
    explicitly, before the rollout. A server that migrated on start would race once per
    replica during a rolling deploy, and the server cannot link the migrator at all (its
