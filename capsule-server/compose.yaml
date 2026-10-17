@@ -95,7 +95,7 @@ services:
   # The dex configuration is inline (`configs.*.content`) rather than a file beside this one,
   # so the stack stays one file. docker compose ≥ 2.23.1 and podman-compose ≥ 1.2.0 read it.
   dex:
-    image: ghcr.io/dexidp/dex:v2.44.0
+    image: ghcr.io/dexidp/dex:v2.46.0
     profiles: ["oidc"]
     command: ["dex", "serve", "/etc/dex/config.yaml"]
     ports:
