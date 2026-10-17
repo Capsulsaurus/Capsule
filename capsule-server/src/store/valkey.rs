@@ -67,7 +67,7 @@
 //! | `capsule:upload:chunks:{id}` | hash (`offset` → chunk) | the record's remaining TTL |
 //! | `capsule:upload:uploader:{uid}` | set | refreshed on open |
 //! | `capsule:upload:album:{album}` | set | refreshed on open |
-//! | `capsule:upload:pending:{owner}:{hash}` | set | refreshed on open |
+//! | `capsule:upload:pending:{uploader}:{hash}` | set | refreshed on open |
 //! | `capsule:upload:progress` | zset (score = `last_progress_at` µs) | none — heals only when the pressure sweep (`least_recently_progressed`) runs |
 //! | `capsule:challenge:{token}` | hash | challenge TTL |
 //! | `capsule:enroll:code:{spelling}` | hash, written under both spellings | code TTL |
@@ -626,14 +626,20 @@ fn album_key(album: &AlbumId) -> String {
 
 /// The one key with two variable parts, which is why the port's ids must contain no `:` — a
 /// precondition the scripts that rebuild this key from a record (`SET_STATUS`, `DISCARD_UPLOAD`,
-/// `OPEN_UPLOAD`) cannot check for themselves. Owner ids are UUIDs and the hash is hex, so the
+/// `OPEN_UPLOAD`) cannot check for themselves. User ids are UUIDs and the hash is hex, so the
 /// assertion is a guard against a future id space, not a live case.
-fn pending_key(owner: &OwnerId, expected_hash: &str) -> String {
+///
+/// Keyed on the session's **uploader**, not the owner it is filed under (#462): the question
+/// this index answers is "is *this account's* other device sending these bytes", and a writer
+/// member's session is filed under the album owner. A set still keyed by an owner from before
+/// the change heals on read — its members name a different `upload_user_id`, so the lookup
+/// reclaims them as mismatched — and expires with its last session's lifetime regardless.
+fn pending_key(uploader: &UserId, expected_hash: &str) -> String {
     debug_assert!(
-        !owner.as_str().contains(':') && !expected_hash.contains(':'),
-        "an owner id or a content hash must contain no `:`; it is a key segment"
+        !uploader.as_str().contains(':') && !expected_hash.contains(':'),
+        "a user id or a content hash must contain no `:`; it is a key segment"
     );
-    format!("capsule:upload:pending:{owner}:{expected_hash}")
+    format!("capsule:upload:pending:{uploader}:{expected_hash}")
 }
 
 fn challenge_key(token: &ChallengeToken) -> String {
@@ -796,7 +802,7 @@ script!(
 if previous[1] then
   local uploader = 'capsule:upload:uploader:' .. previous[1]
   if uploader ~= KEYS[3] then redis.call('SREM', uploader, ARGV[2]) end
-  local pending = 'capsule:upload:pending:' .. previous[2] .. ':' .. previous[3]
+  local pending = 'capsule:upload:pending:' .. previous[1] .. ':' .. previous[3]
   if pending ~= KEYS[4] then redis.call('SREM', pending, ARGV[2]) end
   if previous[4] and ('capsule:upload:album:' .. previous[4]) ~= KEYS[6] then
     redis.call('SREM', 'capsule:upload:album:' .. previous[4], ARGV[2])
@@ -893,11 +899,11 @@ script!(
     SET_STATUS,
     "if not live(KEYS[1], ARGV[1], KEYS[2]) then return nil end
 redis.call('HSET', KEYS[1], 'status', ARGV[2])
-local owner = redis.call('HGET', KEYS[1], 'owner_id')
+local uploader = redis.call('HGET', KEYS[1], 'upload_user_id')
 local hash = redis.call('HGET', KEYS[1], 'expected_hash')
 local album = redis.call('HGET', KEYS[1], 'album_id')
 local ttl = redis.call('PTTL', KEYS[1])
-local pending = 'capsule:upload:pending:' .. owner .. ':' .. hash
+local pending = 'capsule:upload:pending:' .. uploader .. ':' .. hash
 if ARGV[4] == '1' then
   redis.call('SADD', pending, ARGV[3])
   extend(pending, ttl)
@@ -941,15 +947,15 @@ if #record == 0 then return nil end
 local f = {}
 for i = 1, #record, 2 do f[record[i]] = record[i + 1] end
 if f.upload_user_id then redis.call('SREM', 'capsule:upload:uploader:' .. f.upload_user_id, ARGV[2]) end
-if f.owner_id and f.expected_hash then
-  redis.call('SREM', 'capsule:upload:pending:' .. f.owner_id .. ':' .. f.expected_hash, ARGV[2])
+if f.upload_user_id and f.expected_hash then
+  redis.call('SREM', 'capsule:upload:pending:' .. f.upload_user_id .. ':' .. f.expected_hash, ARGV[2])
 end
 if f.album_id then redis.call('SREM', 'capsule:upload:album:' .. f.album_id, ARGV[2]) end
 if expired(record, ARGV[1]) then return nil end
 return record"
 );
 
-// KEYS: pending set. ARGV: now, owner, expected_hash. Returns {gone, mismatched, {upload_id…}}.
+// KEYS: pending set. ARGV: now, uploader, expected_hash. Returns {gone, mismatched, {upload_id…}}.
 // A terminal session counts as gone: its promise ended, and the set is derived.
 script!(
     PENDING_FOR_ADDRESS,
@@ -962,7 +968,7 @@ for _, id in ipairs(redis.call('SMEMBERS', KEYS[1])) do
     redis.call('SREM', KEYS[1], id)
     gone = gone + 1
   else
-    local r = redis.call('HMGET', key, 'owner_id', 'expected_hash', 'status')
+    local r = redis.call('HMGET', key, 'upload_user_id', 'expected_hash', 'status')
     if r[1] ~= ARGV[2] or r[2] ~= ARGV[3] then
       redis.call('SREM', KEYS[1], id)
       mismatched = mismatched + 1
@@ -1405,7 +1411,7 @@ impl UploadSessionStore for ValkeyUploadSessions {
                 upload_key(&upload_id),
                 chunks_key(&upload_id),
                 uploader_key(&uploader),
-                pending_key(&record.owner_id, &record.expected_hash),
+                pending_key(&record.upload_user_id, &record.expected_hash),
                 PROGRESS_KEY.to_owned(),
             ];
             if let Some(album) = &record.album_id {
@@ -1624,7 +1630,7 @@ impl UploadSessionStore for ValkeyUploadSessions {
 
     fn pending_for_address<'a>(
         &'a self,
-        owner: &'a OwnerId,
+        uploader: &'a UserId,
         expected_hash: &'a str,
     ) -> StoreFuture<'a, Option<UploadId>> {
         Box::pin(async move {
@@ -1633,11 +1639,11 @@ impl UploadSessionStore for ValkeyUploadSessions {
                 .eval(
                     UPLOADS,
                     &PENDING_FOR_ADDRESS,
-                    &[pending_key(owner, expected_hash)],
-                    &[self.now(), owner.to_string(), expected_hash.to_owned()],
+                    &[pending_key(uploader, expected_hash)],
+                    &[self.now(), uploader.to_string(), expected_hash.to_owned()],
                 )
                 .await?;
-            healed(UPLOADS, owner.as_str(), gone, mismatched);
+            healed(UPLOADS, uploader.as_str(), gone, mismatched);
             // Smallest id first, so two sessions declaring the same bytes give a deterministic
             // answer — the same rule the in-memory double applies.
             ids.sort();
@@ -2327,13 +2333,13 @@ mod tests {
             );
         }
         assert_eq!(
-            pending_key(&OwnerId::new("o"), "h"),
+            pending_key(&UserId::new("o"), "h"),
             "capsule:upload:pending:o:h"
         );
         assert!(
             SET_STATUS
                 .source
-                .contains("'capsule:upload:pending:' .. owner .. ':' .. hash"),
+                .contains("'capsule:upload:pending:' .. uploader .. ':' .. hash"),
             "the pending key's two-part suffix is spelled the same way"
         );
     }
@@ -2443,7 +2449,7 @@ mod tests {
     #[test]
     fn a_pending_key_has_exactly_two_variable_segments() {
         assert_eq!(
-            pending_key(&OwnerId::new("o"), "h"),
+            pending_key(&UserId::new("o"), "h"),
             "capsule:upload:pending:o:h"
         );
     }
@@ -2452,7 +2458,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "must contain no `:`")]
     fn a_key_segment_with_a_colon_is_refused_in_debug() {
-        let _ = pending_key(&OwnerId::new("not:an:id"), "h");
+        let _ = pending_key(&UserId::new("not:an:id"), "h");
     }
 
     /// The classification the port's three variants promise, per driver error.

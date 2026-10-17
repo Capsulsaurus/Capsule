@@ -115,11 +115,11 @@ impl AssetIndex for CrashBeforeCommit {
         self.inner.find_by_address(owner, album, address)
     }
 
-    fn find_reference<'a>(
+    fn find_references<'a>(
         &'a self,
         address: &'a ContentAddress,
-    ) -> IndexFuture<'a, Option<BlobReference>> {
-        self.inner.find_reference(address)
+    ) -> IndexFuture<'a, Vec<BlobReference>> {
+        self.inner.find_references(address)
     }
 
     fn apply_op(&self, op: LifecycleOp) -> IndexFuture<'_, OpOutcome> {

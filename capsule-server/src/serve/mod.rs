@@ -48,12 +48,15 @@
 //! [`UploadSessionStore::pending_for_address`](crate::store::UploadSessionStore::pending_for_address)
 //! when nothing references an address, and the promise cannot outlive the thing that made it.
 //!
-//! **It is scoped to the caller's own account.** Unscoped, the `409` would tell any
+//! **It is scoped to the caller's own uploads.** Unscoped, the `409` would tell any
 //! authenticated caller who can name a hash that *somebody, somewhere* is uploading those exact
 //! bytes. That is a small cross-account signal for no gain: the case the transient answer exists
 //! for is a second device of the **same account** fetching an original the first one is still
-//! sending, having learned its address from the signed manifest. A sharee or a federated peer
-//! gets the `404` they got before, and waits for the feed's `original_held` to flip instead.
+//! sending, having learned its address from the signed manifest. So it is keyed on the session's
+//! **uploader** rather than on the owner it is filed under (#462): a writer member's session is
+//! filed under the album owner, and it is the member's other device that waits on it. Everyone
+//! else — the album owner, a sharee, a federated peer — gets the `404` and waits for the feed's
+//! `original_held` to flip instead.
 //!
 //! # Resolution order, and why it is an order
 //!
@@ -70,8 +73,10 @@
 //! and it is not the contract, and it stacks badly besides: an address that leaks once is a
 //! permanent capability, because the address never changes.
 //!
-//! The decision is [`ReadAuthority`]'s, asked from the reference the index returned and asked
-//! **first**. A former member of the album — an account the owner's roster once named and no
+//! The decision is [`ReadAuthority`]'s, asked **first**, and asked of **every** reference the
+//! index holds to the address (#462): the same ciphertext can be held by unrelated owners, and
+//! the caller is entitled through whichever holder grants it, not through whichever sorts first.
+//! A former member of the album — an account the owner's roster once named and no
 //! longer does — is answered [`ServeResolution::Forbidden`], the `403` the download contract
 //! describes as an authorization change; everyone else with no relationship is told exactly
 //! what a caller naming an unknown address is told. See [`crate::serve::authority`] for why the
@@ -121,7 +126,8 @@ pub use self::authority::{
     ReadPrincipal, membership_reads,
 };
 use crate::blob::{BlobError, BlobStore, ContentAddress};
-use crate::index::{AssetIndex, AssetState};
+use crate::index::{AssetIndex, AssetState, BlobReference};
+use crate::store::UserId;
 
 /// The media serving module's collaborators, as one injectable value.
 ///
@@ -254,26 +260,30 @@ pub async fn resolve(
         return Ok(ServeResolution::NotFound);
     };
 
-    let reference = context
+    let references = context
         .index()
-        .find_reference(&address)
+        .find_references(&address)
         .await
         .map_err(|error| {
             tracing::error!(%error, "the asset index could not resolve a content address");
             ServeUnavailable("the index could not answer".to_owned())
         })?;
 
-    let Some(reference) = reference else {
+    if references.is_empty() {
         // Nothing references it. Before answering "unknown", ask whether the caller's own
         // account is in the middle of putting it there (`S-C40`) — the difference between
         // "never heard of it" and "your other device is still sending it" is the difference
         // between a client degrading permanently and a client waiting. Asked only for an
         // account: a peer has no upload here, and offering it the answer would report on
         // somebody else's transfer.
-        if let Some(owner) = principal.own_account()
+        //
+        // Keyed on the **uploader**, not on the owner the session is filed under (#462): a
+        // writer member's session is filed under the album owner, and the device waiting on it
+        // is the member's own, not the owner's.
+        if let Some(account) = principal.own_account()
             && let Some(upload) = context
                 .uploads()
-                .pending_for_address(owner, hash)
+                .pending_for_address(&UserId::new(account.as_str()), hash)
                 .await
                 .map_err(|error| {
                     tracing::error!(%error, "the upload sessions could not be asked about an address");
@@ -285,7 +295,7 @@ pub async fn resolve(
         }
         tracing::debug!("no live reference names the address");
         return Ok(ServeResolution::NotFound);
-    };
+    }
 
     // Who is asking (`S-C39`). **First among the refusals**, and the order is the security
     // property: every answer below this line — the takedown `410`, the tombstone `410`, the
@@ -293,19 +303,10 @@ pub async fn resolve(
     // no relationship to it must not be able to read any of them off the status line. Deciding
     // ownership last would have turned this path into an oracle that reports on other accounts'
     // deletions.
-    match context
-        .authority()
-        .blob_read_access(principal, &reference)
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, "the read authority could not decide a blob fetch");
-            ServeUnavailable("the read authority could not decide".to_owned())
-        })? {
-        BlobReadAccess::Granted => {}
-        BlobReadAccess::Revoked => return Ok(ServeResolution::Forbidden),
-        BlobReadAccess::Unrelated => return Ok(ServeResolution::NotFound),
-        BlobReadAccess::ScopeInsufficient => return Ok(ServeResolution::ScopeInsufficient),
-    }
+    let reference = match decide_over_holders(context, principal, references).await? {
+        Ok(reference) => reference,
+        Err(refusal) => return Ok(refusal),
+    };
 
     // Moderation takedown (`S-C17`). First among the refusals and **before any read**: a held
     // asset's bytes are on disk and completely intact — the hold is a serving constraint, not a
@@ -376,6 +377,110 @@ pub async fn resolve(
         "a referenced blob is missing from the store: dangling reference"
     );
     Ok(ServeResolution::Gone)
+}
+
+/// Fold the read authority over every holder of an address (#462).
+///
+/// The same ciphertext can be held by assets of unrelated owners in unrelated albums, and the
+/// caller is entitled — or not — through each one separately. Judging only the holder that
+/// sorted first answered an entitled member `404`, and a member who had once been removed from
+/// the *other* album `403`. So every holder is asked, in the index's order (live before
+/// tombstoned), and the strongest answer wins:
+///
+/// 1. a [`BlobReadAccess::Granted`] holder that is **servable** — live and under no serving
+///    hold — serves at once. A granted holder that is held or tombstoned is remembered and the
+///    fold reads on, because a takedown or a delete is a fact about *that* asset: a caller also
+///    entitled through another, unheld live holder is served from it, exactly as every other
+///    reader of that asset is;
+/// 2. else, if any holder's authority failed, an outage — see below;
+/// 3. else the first granted holder, whose own `hold` and `state` then decide the `410`s, so an
+///    owner fetching their deleted asset still learns it is gone while a stranger's live copy
+///    exists;
+/// 4. else any [`BlobReadAccess::ScopeInsufficient`] — the reader is entitled to that album, so
+///    a scope answer is truer than a revocation from some other album;
+/// 5. else any [`BlobReadAccess::Revoked`] is [`ServeResolution::Forbidden`];
+/// 6. else [`ServeResolution::NotFound`], byte-identical to an unknown address.
+///
+/// No holder's lifecycle facts are read before a grant, so the authority-first ordering holds
+/// across holders exactly as it did for one. A collaborator failure is **deferred**, not
+/// returned on the spot: an owner whose own copy sorts after another owner's must still be
+/// served during a roster outage, because the owner's grant never asks the roster. Once no
+/// holder grants servably, a failure on any holder is an outage and never a refusal — a `404`
+/// because the second holder's roster was unreachable would be the outage-as-revocation
+/// confusion [`ReadAuthorityError`] exists to prevent, and a permanent `410` from a held holder
+/// would be wrong too when the unreachable holder might have served.
+async fn decide_over_holders(
+    context: &ServeContext,
+    principal: ReadPrincipal<'_>,
+    references: Vec<BlobReference>,
+) -> Result<Result<BlobReference, ServeResolution>, ServeUnavailable> {
+    let holders = references.len();
+    let mut scope_insufficient = false;
+    let mut revoked = false;
+    let mut failed = false;
+    let mut unservable_grant: Option<BlobReference> = None;
+    for reference in references {
+        let access = match context
+            .authority()
+            .blob_read_access(principal, &reference)
+            .await
+        {
+            Ok(access) => access,
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    asset = %reference.asset_id,
+                    "the read authority could not decide one holder of a blob fetch"
+                );
+                failed = true;
+                continue;
+            }
+        };
+        match access {
+            BlobReadAccess::Granted
+                if reference.hold.is_none() && reference.state == AssetState::Visible =>
+            {
+                tracing::trace!(
+                    holders,
+                    asset = %reference.asset_id,
+                    "the caller is entitled through this holder"
+                );
+                return Ok(Ok(reference));
+            }
+            BlobReadAccess::Granted => {
+                tracing::trace!(
+                    holders,
+                    asset = %reference.asset_id,
+                    "the caller is entitled through a held or deleted holder; reading on"
+                );
+                unservable_grant.get_or_insert(reference);
+            }
+            BlobReadAccess::ScopeInsufficient => scope_insufficient = true,
+            BlobReadAccess::Revoked => revoked = true,
+            BlobReadAccess::Unrelated => {}
+        }
+    }
+    if failed {
+        return Err(ServeUnavailable(
+            "the read authority could not decide".to_owned(),
+        ));
+    }
+    if let Some(reference) = unservable_grant {
+        return Ok(Ok(reference));
+    }
+    let refusal = if scope_insufficient {
+        ServeResolution::ScopeInsufficient
+    } else if revoked {
+        ServeResolution::Forbidden
+    } else {
+        ServeResolution::NotFound
+    };
+    tracing::debug!(
+        holders,
+        ?refusal,
+        "no holder of the address grants the caller"
+    );
+    Ok(Err(refusal))
 }
 
 /// One blob, as a source Kynos can range over.

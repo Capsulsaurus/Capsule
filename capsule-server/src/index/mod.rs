@@ -652,20 +652,40 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
         address: &'a ContentAddress,
     ) -> IndexFuture<'a, Option<AssetId>>;
 
-    /// What the index knows about `address`, for the serving path — see [`BlobReference`].
+    /// Every reference the index holds to `address`, for the serving path — see
+    /// [`BlobReference`].
     ///
     /// **Pending rows do not count as references.** An asset whose index tier has not landed is
     /// in nobody's feed, so nothing can legitimately have learned its addresses; treating it as
     /// unknown keeps a half-finished upload from being fetchable before it is published.
     ///
-    /// **A visible reference outranks a tombstoned one.** Content addressing means two assets
-    /// share a thumbnail, so deleting one of them must not take the other's bytes with it. The
-    /// retired implementation took the *newest* reference and would have answered `410` for a
-    /// blob a live asset still holds; this asks whether any live asset holds it.
+    /// **Visible references come first, then tombstoned ones**, each group in asset-id byte
+    /// order. Content addressing means two assets share a thumbnail, so deleting one of them
+    /// must not take the other's bytes with it. The retired implementation took the *newest*
+    /// reference and would have answered `410` for a blob a live asset still holds.
+    ///
+    /// **Every holder, not the first (#462).** The same ciphertext can be referenced by assets
+    /// of unrelated owners in unrelated albums, and a caller is entitled through exactly one of
+    /// them. A single row chosen by sort order judged the caller against whichever owner sorted
+    /// first — a `404` for an entitled member, or a `403` for a member who happened to have
+    /// been removed from the *other* album. The serving path folds its authority over all of
+    /// them instead.
+    fn find_references<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+    ) -> IndexFuture<'a, Vec<BlobReference>>;
+
+    /// The first of [`find_references`](Self::find_references): a visible reference if any
+    /// asset still holds `address`, else a tombstoned one.
+    ///
+    /// A convenience for callers that ask *whether* an address is referenced and by what. The
+    /// serving path must not use it to decide access — see `find_references`.
     fn find_reference<'a>(
         &'a self,
         address: &'a ContentAddress,
-    ) -> IndexFuture<'a, Option<BlobReference>>;
+    ) -> IndexFuture<'a, Option<BlobReference>> {
+        Box::pin(async move { Ok(self.find_references(address).await?.into_iter().next()) })
+    }
 
     /// Apply one lifecycle write, with the two stateful invariants and the sequence mint in one
     /// critical section.
@@ -682,7 +702,7 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
     /// `None` lifts. A hold is a property of the asset rather than of its blobs, because
     /// content addressing means two assets can share a thumbnail and taking one down must not
     /// take the other's bytes with it — the same reason
-    /// [`AssetIndex::find_reference`] prefers a live reference over a tombstoned one.
+    /// [`AssetIndex::find_references`] lists a live reference before a tombstoned one.
     ///
     /// The bytes are never touched. design/moderation.md: a takedown is a serving constraint,
     /// not a destruction, and is reversible by default.

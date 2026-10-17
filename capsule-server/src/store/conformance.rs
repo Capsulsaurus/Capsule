@@ -530,25 +530,45 @@ pub async fn uploader_listing_is_ordered_and_scoped(h: &dyn Harness) {
 }
 
 /// An active session is the promise that bytes are coming; a terminal one is not (`S-C40`).
-pub async fn a_pending_address_is_owner_scoped_and_ends_with_the_session(h: &dyn Harness) {
+///
+/// The promise belongs to the **uploader** (#462). The helper files every session under a
+/// `{case}-owner` distinct from its `{case}-{uploader}`, which is the shape of a writer member's
+/// upload into the album owner's album — and the owner is not the one whose device waits.
+pub async fn a_pending_address_is_uploader_scoped_and_ends_with_the_session(h: &dyn Harness) {
     let store = h.uploads();
     let mine = upload("pending-addr", "mine", "uploader-a", 0);
     let hash = mine.expected_hash.clone();
-    let owner = mine.owner_id.clone();
+    let uploader = mine.upload_user_id.clone();
     ok(store.open(mine.clone()).await, "open");
 
     assert_eq!(
         ok(
-            store.pending_for_address(&owner, &hash).await,
+            store.pending_for_address(&uploader, &hash).await,
             "pending_for_address"
         ),
         Some(mine.upload_id.clone()),
         "an active session declaring the hash is the promise that its bytes are coming"
     );
 
+    // The owner the session is filed under is not the uploader, and is not answered: it is
+    // another account's transfer, however much the owner will end up holding its result.
+    let filed_under = UserId::new(mine.owner_id.as_str());
+    assert_ne!(
+        filed_under, uploader,
+        "the case needs owner and uploader apart"
+    );
+    assert_eq!(
+        ok(
+            store.pending_for_address(&filed_under, &hash).await,
+            "pending_for_address"
+        ),
+        None,
+        "the promise is keyed on the uploader, not on the owner the session is filed under"
+    );
+
     // Another account uploading the same bytes is not this account's answer. The scope is what
     // keeps the serve path's transient status from reporting on somebody else's upload.
-    let stranger = OwnerId::new("someone-else");
+    let stranger = UserId::new("someone-else");
     assert_eq!(
         ok(
             store.pending_for_address(&stranger, &hash).await,
@@ -561,7 +581,7 @@ pub async fn a_pending_address_is_owner_scoped_and_ends_with_the_session(h: &dyn
     // A hash nobody declared was never promised.
     assert_eq!(
         ok(
-            store.pending_for_address(&owner, &"f".repeat(64)).await,
+            store.pending_for_address(&uploader, &"f".repeat(64)).await,
             "pending_for_address"
         ),
         None,
@@ -581,7 +601,7 @@ pub async fn a_pending_address_is_owner_scoped_and_ends_with_the_session(h: &dyn
     );
     assert_eq!(
         ok(
-            store.pending_for_address(&owner, &hash).await,
+            store.pending_for_address(&uploader, &hash).await,
             "pending_for_address"
         ),
         None,
@@ -594,8 +614,16 @@ pub async fn discarding_a_session_withdraws_its_pending_address(h: &dyn Harness)
     let store = h.uploads();
     let record = upload("pending-discard", "a", "uploader", 0);
     let hash = record.expected_hash.clone();
-    let owner = record.owner_id.clone();
+    let uploader = record.upload_user_id.clone();
     ok(store.open(record.clone()).await, "open");
+    assert_eq!(
+        ok(
+            store.pending_for_address(&uploader, &hash).await,
+            "pending_for_address"
+        ),
+        Some(record.upload_id.clone()),
+        "the open session is pending before it is discarded"
+    );
     present(
         ok(store.discard(&record.upload_id).await, "discard"),
         "discard",
@@ -603,7 +631,7 @@ pub async fn discarding_a_session_withdraws_its_pending_address(h: &dyn Harness)
 
     assert_eq!(
         ok(
-            store.pending_for_address(&owner, &hash).await,
+            store.pending_for_address(&uploader, &hash).await,
             "pending_for_address"
         ),
         None,
@@ -1515,7 +1543,7 @@ pub async fn run_all(h: &dyn Harness) {
 
     upload_session_round_trips_every_field(h).await;
     uploader_listing_is_ordered_and_scoped(h).await;
-    a_pending_address_is_owner_scoped_and_ends_with_the_session(h).await;
+    a_pending_address_is_uploader_scoped_and_ends_with_the_session(h).await;
     discarding_a_session_withdraws_its_pending_address(h).await;
     recording_progress_advances_bytes_clock_and_replay_together(h).await;
     chunk_replay_is_offset_addressed(h).await;

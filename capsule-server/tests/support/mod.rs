@@ -1841,13 +1841,13 @@ impl UploadSessionStore for SwitchableUploads {
 
     fn pending_for_address<'a>(
         &'a self,
-        owner: &'a OwnerId,
+        uploader: &'a UserId,
         expected_hash: &'a str,
     ) -> StoreFuture<'a, Option<UploadId>> {
         if self.is_down() {
             return Box::pin(async { Self::refuse() });
         }
-        self.inner.pending_for_address(owner, expected_hash)
+        self.inner.pending_for_address(uploader, expected_hash)
     }
 
     fn in_flight_for_album<'a>(&'a self, album: &'a AlbumId) -> StoreFuture<'a, u64> {
@@ -2724,14 +2724,14 @@ impl AssetIndex for SwitchableIndex {
         self.inner.purge(asset, now)
     }
 
-    fn find_reference<'a>(
+    fn find_references<'a>(
         &'a self,
         address: &'a ContentAddress,
-    ) -> IndexFuture<'a, Option<capsule_server::index::BlobReference>> {
+    ) -> IndexFuture<'a, Vec<capsule_server::index::BlobReference>> {
         if self.is_down() {
             return Box::pin(async { Self::refuse() });
         }
-        self.inner.find_reference(address)
+        self.inner.find_references(address)
     }
 
     fn find_by_address<'a>(

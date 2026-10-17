@@ -257,14 +257,14 @@ impl AssetIndex for InMemoryAssetIndex {
         })
     }
 
-    fn find_reference<'a>(
+    fn find_references<'a>(
         &'a self,
         address: &'a ContentAddress,
-    ) -> IndexFuture<'a, Option<super::BlobReference>> {
+    ) -> IndexFuture<'a, Vec<super::BlobReference>> {
         Box::pin(async move {
             let inner = lock(&self.inner);
-            // Two passes rather than a sort: a live reference outranks a tombstoned one, and
-            // pending rows are not references at all.
+            // Two passes rather than a sort: live references come before tombstoned ones, each
+            // in the map's asset-id order, and pending rows are not references at all.
             let holds = |row: &&AssetRow| row.blobs.iter().any(|blob| &blob.address == address);
             let reference = |row: &AssetRow| super::BlobReference {
                 asset_id: row.asset_id.clone(),
@@ -279,20 +279,17 @@ impl AssetIndex for InMemoryAssetIndex {
                 original_held: row.original_held(),
                 hold: row.hold,
             };
-            let live = inner
-                .rows
-                .values()
-                .filter(|row| row.state == AssetState::Visible)
-                .find(holds);
-            if let Some(row) = live {
-                return Ok(Some(reference(row)));
-            }
-            Ok(inner
-                .rows
-                .values()
-                .filter(|row| row.state == AssetState::Tombstoned)
-                .find(holds)
-                .map(reference))
+            let in_state = |state: AssetState| {
+                inner
+                    .rows
+                    .values()
+                    .filter(move |row| row.state == state)
+                    .filter(holds)
+                    .map(reference)
+            };
+            Ok(in_state(AssetState::Visible)
+                .chain(in_state(AssetState::Tombstoned))
+                .collect())
         })
     }
 
