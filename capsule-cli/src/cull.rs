@@ -22,7 +22,7 @@
 //! SSoT: [Organization — Culling](https://docs/design/organization/#culling).
 
 use capsule_core::lifecycle::Workspace;
-use capsule_core::sidecar::sidecar_v1::CullFlag;
+use capsule_core::sidecar::CullFlag;
 use capsule_i18n::Bundle;
 use colored::Colorize as _;
 use thiserror::Error;

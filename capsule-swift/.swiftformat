@@ -22,4 +22,25 @@
 --trimwhitespace always
 --wraparguments preserve
 --wrapcollections preserve
+# SwiftLint's `opening_brace` rule requires an opening brace on the same line as
+# its declaration. SwiftFormat's `wrapMultilineStatementBraces` moves it onto its
+# own line whenever the condition wraps, so the two gates contradict each other
+# and a file can never satisfy both. SwiftLint wins (it matches the Swift API
+# Design Guidelines and the rest of this codebase), so the rule is disabled here.
+--disable wrapMultilineStatementBraces
+# `hoistTry` moves `try` to the start of the enclosing expression, which inside a
+# swift-testing macro argument produces code that does not compile:
+#   #expect(!(try await port.sessions()).isEmpty)
+# becomes
+#   #expect(try await !(port.sessions()).isEmpty)
+# Every test in this project is a macro invocation, so the rule is off. Bind the
+# awaited value to a local first — it reads better in a failure message anyway.
+--disable hoistTry
+# `preferKeyPath` rewrites `allSatisfy { $0.flag }` as `allSatisfy(\.flag)`. That
+# is usually nicer, but `allSatisfy`/`contains`/`filter` are `rethrows`, and
+# inside a swift-testing `#expect` expansion the compiler stops being able to
+# infer that the closure does not throw — every such assertion then fails with
+# "call can throw, but it is not marked with 'try'". Off, for the same reason as
+# hoistTry: the whole test suite is macro invocations.
+--disable preferKeyPath
 --exclude .ffi,Derived,.build

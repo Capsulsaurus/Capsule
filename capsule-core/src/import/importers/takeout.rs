@@ -936,7 +936,7 @@ mod tests {
     #[test]
     fn fixture_import_is_resumable_and_skips_completed_work() {
         use crate::crypto::primitives::Argon2Params;
-        use crate::import::executor::execute;
+        use crate::import::execute;
         use crate::import::executor_cancellation::CancellationToken;
         use crate::import::planner::{ImportConfig, plan};
         use crate::lifecycle::Workspace;

@@ -26,4 +26,15 @@ public enum PhotoGridStyle: Equatable, Sendable {
     /// One large representative card per section, full width, with the section
     /// title overlaid — the Years and Months aggregation levels.
     case cards
+
+    /// Tiles per row, which a card level answers as one.
+    ///
+    /// The base a pinch measures from. A card level has no density to change,
+    /// so a pinch there falls through to the aggregation-level step instead.
+    public var columnCount: Int {
+        switch self {
+        case let .uniform(columns): max(1, columns)
+        case .cards: 1
+        }
+    }
 }

@@ -32,7 +32,7 @@ impl AmkVersion {
 
 /// A random 32-byte album content key for one epoch. Holding it lets you decrypt; not
 /// holding it means you cannot (secrecy is enforced by encryption, authorization by
-/// signatures — see [`super::hybrid_sig`] write-tier keys).
+/// signatures — see [`HybridSigningKey`](super::HybridSigningKey) write-tier keys).
 #[derive(Clone)]
 pub struct Amk([u8; 32]);
 

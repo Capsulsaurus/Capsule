@@ -130,3 +130,25 @@ public struct AssetCoordinate: Sendable, Hashable {
         self.longitude = longitude
     }
 }
+
+// MARK: - AssetLocationSource
+
+/// One asset's capture coordinate.
+///
+/// A protocol of its own rather than a direct dependency on ``AssetProvider``,
+/// because the one caller that needs it — the viewer's info panel — wants a
+/// single coordinate and `AssetProvider` answers in bulk, capped at
+/// `maximumLocationLookups`. Asking a bulk API for one row would make the panel
+/// pay a map screen's price.
+public protocol AssetLocationSource: Sendable {
+    /// The capture coordinate, or `nil` when the asset has none.
+    func location(for id: AssetID) async -> AssetCoordinate?
+}
+
+public extension AssetLocationSource where Self: AssetProvider {
+    /// Every ``AssetProvider`` can already answer this; the default narrows its
+    /// bulk lookup to one row so a conformance costs nothing.
+    func location(for id: AssetID) async -> AssetCoordinate? {
+        await locations(for: [id])[id]
+    }
+}

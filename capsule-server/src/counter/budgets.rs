@@ -28,6 +28,17 @@ pub const LOGIN_ATTEMPTS: Budget = Budget::new(5, SignedDuration::from_mins(15))
 /// offer at all.
 pub const ENROLLMENT_REDEMPTION: Budget = Budget::new(10, SignedDuration::from_mins(10));
 
+/// Redemption attempts presenting something that is not shaped like a code at all.
+///
+/// Sixty a minute against
+/// [`CounterKey::EnrollmentRedemptionMalformed`](crate::counter::CounterKey::EnrollmentRedemptionMalformed)'s
+/// one bucket, the same shape the refused-redirect bucket takes. Deliberately far more generous
+/// than [`ENROLLMENT_REDEMPTION`]: a malformed code is not a guess at a *particular* pending
+/// enrollment — it cannot match one — so this number is not part of the entropy argument the
+/// per-code budget carries. It exists so that a malformed attempt is not free, and so the
+/// partition holding it can never be more than one key wide.
+pub const ENROLLMENT_REDEMPTION_MALFORMED: Budget = Budget::new(60, SignedDuration::from_mins(1));
+
 /// Requests against one share link's opaque id.
 ///
 /// Sixty a minute: generous for a person opening a shared album, and a hard ceiling on how fast
@@ -60,9 +71,62 @@ pub const DROP_SOURCE: Budget = Budget::new(60, SignedDuration::from_hours(1));
 /// because a code that expires mid-typing costs an attempt through no fault of the user.
 pub const SECOND_FACTOR: Budget = Budget::new(5, SignedDuration::from_mins(5));
 
+/// Begun OIDC ceremonies per **admitted** redirect host (`S-N1`).
+///
+/// Sixty a minute. A person signing in begins one; a browser that retries a few times begins a
+/// handful; a script filling the pending-ceremony store begins thousands. The key space is
+/// three hosts at most (the configured redirect and the two loopback literals) *because the
+/// route validates the redirect before it charges this budget*, so this is close to a
+/// deployment-wide ceiling: at the ten-minute ceremony TTL it caps the in-memory store at
+/// well under two thousand live records against its ten-thousand ceiling.
+pub const OIDC_AUTHORIZE: Budget = Budget::new(60, SignedDuration::from_mins(1));
+
+/// OIDC authorizes whose redirect the policy refused, deployment-wide (`S-N1`).
+///
+/// Sixty a minute, the same number as the admitted path, against
+/// [`CounterKey::OidcAuthorizeRefused`](crate::counter::CounterKey::OidcAuthorizeRefused)'s one
+/// bucket. A refused authorize does no work worth throttling for its own sake — the redirect
+/// check is a string comparison and nothing is written — so this budget is not protecting the
+/// server's CPU. It is here so that "refused" is not the one request on the surface that costs
+/// an attacker nothing to repeat, and so the log line that reports the refusal is itself
+/// bounded.
+pub const OIDC_AUTHORIZE_REFUSED: Budget = Budget::new(60, SignedDuration::from_mins(1));
+
 /// Deep storage verifications per account.
 ///
 /// Four an hour. The contract calls the limiter *half of the feature*: a deep verify reads and
 /// re-hashes every declared blob, so an unbounded one is an I/O-amplification attack costing the
 /// attacker one small JSON body.
 pub const DEEP_VERIFY: Budget = Budget::new(4, SignedDuration::from_hours(1));
+
+/// Requests from one federated peer, across the sync and blob reads (invariant 21).
+///
+/// Ten thousand an hour — the retired server's established-tier default. A peer pulling a
+/// shared album makes one sync page and a few blob fetches per asset; ten thousand is an
+/// evening of photos from one household of peers, and a hostile peer enumerating addresses
+/// gets fewer than three a second. A fixed window, so a peer that spends it waits for the
+/// hour to turn rather than trickling back in.
+pub const PEER_REQUESTS: Budget = Budget::new(10_000, SignedDuration::from_hours(1));
+
+/// Federated moderation reports from one peer against one account (invariant 24).
+///
+/// Twenty an hour per `(reporting_server, reported_user)`. A real report is one message; a
+/// flood against one user is the false-flag vector the contract names, and backpressure at
+/// twenty bounds it without silencing a peer that has two things to say.
+pub const FEDERATED_REPORTS: Budget = Budget::new(20, SignedDuration::from_hours(1));
+
+/// Federated moderation reports from one peer against **every** account (`S-C49`).
+///
+/// Two hundred an hour. Ten times the per-account allowance, so a peer with a genuinely bad hour
+/// — a spam wave it is reporting honestly — is not silenced, while a peer cycling `reported_user`
+/// to mint itself a fresh per-account budget each time runs into a ceiling that does not care
+/// which account it named.
+pub const PEER_REPORTS: Budget = Budget::new(200, SignedDuration::from_hours(1));
+
+/// Attempts at `POST /v1/federation/reports` from one **claimed** origin (`S-C49`).
+///
+/// Three hundred an hour, charged before the peer is looked up. Deliberately above
+/// [`PEER_REPORTS`], because it is not a policy on reporting — it is the bound on how much work
+/// an anonymous caller can ask for on the server's one unauthenticated write, and a real peer
+/// must never meet it before meeting the budget that *is* the policy.
+pub const FEDERATED_INTAKE: Budget = Budget::new(300, SignedDuration::from_hours(1));

@@ -28,9 +28,11 @@ jobs:
       rust: ${{ steps.filter.outputs.rust }}
       web: ${{ steps.filter.outputs.web }}
       docs: ${{ steps.filter.outputs.docs }}
+      docs-truth: ${{ steps.filter.outputs.docs-truth }}
       vision: ${{ steps.filter.outputs.vision }}
       markdown: ${{ steps.filter.outputs.markdown }}
       kotlin: ${{ steps.filter.outputs.kotlin }}
+      swift: ${{ steps.filter.outputs.swift }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -49,22 +51,94 @@ jobs:
               - 'hk.pkl'
               - '.cargo/**'
               - 'capsule-server/**'
-              - 'capsule-wire/**'
               - 'capsule-i18n/**'
               - 'capsule-cli/**'
+              - 'capsule-e2e/**'
               - 'capsule-core/**'
               - 'capsule-sdk/**'
+              - 'capsule-core-ffi/**'
+              - 'capsule-wasm/**'
               - 'xtask/**'
+              # `check-rust` reads the catalogs directly: `i18n-check` and
+              # `i18n-guard` are `cargo run -p xtask -- i18n …` over `locales/`,
+              # so a catalog-only change must still pay the Rust gate. The
+              # `swift` filter already lists it for the same reason.
+              #
+              # `i18n-check` compares `locales/` against its *generated* outputs,
+              # and drift is drift whichever side moved — a hand-edit to a
+              # generated catalog is the case it exists to catch. `check-rust` is
+              # the only task that runs it and the `rust` job is the only job that
+              # runs `check-rust`, so these four globs are what makes the CI gate
+              # at least as wide as the local one — hk.pkl's `i18n-check` step
+              # lists the same generated targets (the two remaining entries of
+              # that glob, `capsule-i18n/src/**` and `xtask/src/i18n.rs`, are
+              # already covered here by `capsule-i18n/**` and `xtask/**`). Keep
+              # the two in step.
+              - 'locales/**'
+              - 'capsule-web/src/i18n/messages/**'
+              - 'capsule-swift/Generated/**'
+              - 'capsule-android/src/androidMain/res/values*/strings.xml'
               - '.github/workflows/ci.yml'
             web:
               - 'capsule-web/**'
               - 'mise.toml'
               - 'mise-tasks/**'
               - '.github/workflows/ci.yml'
+            # Every artifact the docs build reads, not just `capsule-docs/**` — the
+            # generator turns two committed description artifacts into the `/reference/`
+            # pages, so a filter that names only the site lets a stale reference page
+            # publish on a change to the surface it describes. See
+            # design/developer-docs.md, "Artifacts cross the boundary, not toolchains".
             docs:
               - 'capsule-docs/**'
+              - 'capsule-cli/cli-surface.json'
+              - 'capsule-server/openapi.json'
+              # `capsule-docs/biome.jsonc` extends the root one, so a change there can fail
+              # this job's format and lint steps from outside `capsule-docs/**`.
+              - 'biome.jsonc'
               - 'mise.toml'
               - 'mise-tasks/**'
+              - '.github/workflows/ci.yml'
+            # Both sides this gate cross-references: the prose, and the things
+            # the prose names — the committed OpenAPI contract and the crate
+            # source trees. Renaming a module or regenerating the server surface
+            # can invalidate a citation without the citing doc changing, and
+            # neither the `docs` nor the `rust` filter would catch that. The
+            # job installs nothing, so a broad filter is cheap here.
+            docs-truth:
+              - 'capsule-docs/scripts/**'
+              - 'capsule-docs/src/content/docs/**'
+              - 'capsule-docs/astro.config.mjs'
+              - 'capsule-docs/endpoint-census-allowlist.txt'
+              - 'capsule-docs/planned-modules.txt'
+              - 'capsule-server/openapi.json'
+              # No check reads this one today; it is here because the cross-links check
+              # resolves any repo-relative path a document names, and the reference prose
+              # now names this artifact. Cheap: the job installs nothing.
+              - 'capsule-cli/cli-surface.json'
+              - 'capsule-*/src/**'
+              - '**/*.md'
+              - '**/*.mdx'
+              - 'LICENSE'
+              - 'NOTICE'
+              # For the `roadmap` check, which arrives with `#422` together with
+              # the ROADMAP.md it reads — neither is in the tree at this commit.
+              # It will resolve that file's rows against the manifests below,
+              # which declare what actually exists, so a pull request that adds
+              # or removes a package without touching Markdown must still run the
+              # job — otherwise the gate would be advisory for exactly the change
+              # it exists to catch. Listed ahead of the check so the filter is
+              # correct the moment `#422` lands; until then these globs only
+              # widen when `docs-truth` runs, which is harmless.
+              - 'Cargo.toml'
+              - 'settings.gradle.kts'
+              - 'capsule-swift/Project.swift'
+              - '**/Package.swift'
+              - '**/package.json'
+              - '**/pyproject.toml'
+              - '.gitmodules'
+              - 'legacy-review/**'
+              - 'mise.toml'
               - '.github/workflows/ci.yml'
             vision:
               - 'capsule-vision/**'
@@ -74,6 +148,13 @@ jobs:
             markdown:
               - '**/*.md'
               - '.markdownlint-cli2.jsonc'
+              - 'mise.toml'
+              - 'mise-tasks/**'
+              - '.github/workflows/ci.yml'
+            swift:
+              - 'capsule-swift/**'
+              - 'capsule-core-swift/**'
+              - 'locales/**'
               - 'mise.toml'
               - 'mise-tasks/**'
               - '.github/workflows/ci.yml'
@@ -122,6 +203,10 @@ jobs:
         run: |
           rustup toolchain install
           rustup component add rustfmt clippy
+          # `check-rust` includes `build-check-wasm`, which type-checks the
+          # wasm32 sealing build. Without the target, cargo cannot find `core`
+          # and the whole gate fails on the first dependency it compiles.
+          rustup target add wasm32-unknown-unknown
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
       # check-rust runs the verify-examples smoke via nextest.
@@ -261,15 +346,33 @@ jobs:
       - name: Install dependencies
         working-directory: capsule-web
         run: bun install --frozen-lockfile
+      # `check-web` is not pure bun: `test-web` and `build-web` depend on
+      # `build-wasm` / `share-kat` / `drop-kat`, which are cargo (slices S-E1 and
+      # S-D3 added them; this job's step list predates that and was never updated).
+      # Without an explicit install here, each of those tasks triggers rustup's
+      # toolchain-file auto-install itself, and they clobber each other's
+      # `~/.rustup/downloads/*.partial`.
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install
+          # `build-wasm` compiles capsule-wasm for the browser. The target is not
+          # in rust-toolchain.toml — that pins the iOS targets only.
+          rustup target add wasm32-unknown-unknown
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      # `build-wasm` shells out to wasm-bindgen. It is a [tools] pin, but this
+      # workflow sets MISE_AUTO_INSTALL=false, so it has to be asked for by name.
+      # After the rustup step, never before: cargo-built mise tools race the
+      # toolchain bootstrap (see the note at the top of build-ios.yml).
       - name: Set up mise (task runner)
         uses: jdx/mise-action@v2
         with:
-          install: false
+          install_args: "cargo:wasm-bindgen-cli"
       - name: Check (format + lint + test + build)
         run: mise run check-web
 
   docs:
-    name: Docs (format + lint + build)
+    name: Docs (format + lint + test + build)
     needs: changes
     if: ${{ needs.changes.outputs.docs == 'true' }}
     runs-on: ubuntu-latest
@@ -292,8 +395,28 @@ jobs:
         uses: jdx/mise-action@v2
         with:
           install: false
-      - name: Check (format + lint + build)
+      - name: Check (format + lint + test + build)
         run: mise run check-docs
+
+  # No `bun install` step: the scripts import only `node:` builtins, so this job
+  # needs a runtime and nothing else. That is deliberate, not an omission.
+  docs-truth:
+    name: Docs truth (names resolve)
+    needs: changes
+    if: ${{ needs.changes.outputs.docs-truth == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Set up mise (task runner)
+        uses: jdx/mise-action@v2
+        with:
+          install: false
+      - name: Check (every file, route, and anchor the docs name)
+        run: mise run check-docs-truth
 
   vision:
     name: Vision (format + lint)
@@ -338,7 +461,11 @@ jobs:
   kotlin:
     name: Kotlin (ktlint + detekt)
     needs: changes
-    if: ${{ needs.changes.outputs.kotlin == 'true' }}
+    # TODO(track:deferred): re-enable when mobile resumes — see #389 (Android) and #391–#393 (Apple).
+    # Mobile apps are deferred while the server and CLI are stabilized. `false &&` disables the
+    # job (a bare `if: false` trips actionlint's constant-condition check); deleting it, and
+    # re-adding this job to `required`, re-enables the gate.
+    if: ${{ false && needs.changes.outputs.kotlin == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -363,21 +490,72 @@ jobs:
       - name: Check (ktlint + detekt)
         run: mise run check-kotlin
 
+  # The Apple client's mock lane: no Rust core, no xcframework, no cross-compile — so
+  # this gate is fast and runs on every PR that touches the app. The Rust-backed lane
+  # lives in build-ios.yml behind its own path filter.
+  swift:
+    name: Swift (format + lint + unit tests on macOS/iOS/iPadOS + iPhone UI sweep)
+    needs: changes
+    # TODO(track:deferred): re-enable when mobile resumes — see #389 (Android) and #391–#393 (Apple).
+    # Mobile apps are deferred while the server and CLI are stabilized. `false &&` disables the
+    # job (a bare `if: false` trips actionlint's constant-condition check); deleting it, and
+    # re-adding this job to `required`, re-enables the gate.
+    if: ${{ false && needs.changes.outputs.swift == 'true' }}
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - name: Set up mise (task runner)
+        uses: jdx/mise-action@v2
+        with:
+          working_directory: capsule-swift
+          install_args: tuist swiftlint swiftformat xcbeautify
+      - name: Check (format + lint + unit tests + UI sweep)
+        # `check-swift` now also boots an iPhone simulator and walks the app, so
+        # this job is minutes rather than seconds. That is the trade: section
+        # reachability is the kind of regression that unit tests cannot see —
+        # fifteen sections were unreachable on iPhone while every suite passed.
+        timeout-minutes: 45
+        run: mise run check-swift
+
   # Single aggregated status check. Mark THIS ("CI / required") as the required
   # check in branch protection — path-filtered jobs report "skipped", which this
-  # treats as a pass. rust-test is non-blocking and intentionally excluded.
+  # treats as a pass. Every job in `needs` is verified below: the loop covers the
+  # nine gates (`rust-test` included — it became blocking with `S-C59`, see the
+  # note on that job), and `changes` is checked ahead of it under a stricter rule,
+  # because "skipped" is only trustworthy when the filter that skipped it ran.
+  # A job in `needs` but absent from both checks is a gate that cannot fail.
   required:
     name: required
     if: always()
-    needs: [changes, commit-lint, rust, rust-test, rust-cross, web, docs, vision, markdown, kotlin]
+    # TODO(track:deferred): re-add `kotlin` and `swift` here and to the loop below when mobile
+    # resumes — see #389 (Android) and #391–#393 (Apple). Both jobs are disabled (`if: false`).
+    needs: [changes, commit-lint, rust, rust-test, rust-cross, web, docs, docs-truth, vision, markdown]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs succeeded
         run: |
-          for r in "${{ needs.commit-lint.result }}" "${{ needs.rust.result }}" "${{ needs.rust-cross.result }}" \
+          # `changes` must have SUCCEEDED, not merely "not failed". Every filtered
+          # job's `if:` reads needs.changes.outputs.*; if that job dies (a checkout
+          # hiccup, a paths-filter error) those outputs are empty, so every gate
+          # evaluates false and reports "skipped" — and `if: always()` still runs
+          # this one. Treating those skips as passes would green-light a merge with
+          # zero toolchain gates executed, which is the failure mode this whole job
+          # exists to prevent. It is the one `needs` entry that cannot be skipped:
+          # unlike `commit-lint` (push events) or the filtered gates, it has no `if:`.
+          if [ "${{ needs.changes.result }}" != "success" ]; then
+            echo "The path-filter job did not succeed (result: ${{ needs.changes.result }})."
+            echo "Every filtered gate would report skipped, so this aggregate proves nothing."
+            exit 1
+          fi
+          for r in "${{ needs.commit-lint.result }}" "${{ needs.rust.result }}" \
+                   "${{ needs.rust-test.result }}" "${{ needs.rust-cross.result }}" \
                    "${{ needs.web.result }}" \
-                   "${{ needs.docs.result }}" "${{ needs.vision.result }}" \
-                   "${{ needs.markdown.result }}" "${{ needs.kotlin.result }}"; do
+                   "${{ needs.docs.result }}" "${{ needs.docs-truth.result }}" "${{ needs.vision.result }}" \
+                   "${{ needs.markdown.result }}"; do
             if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
               echo "A required job did not pass (result: $r)."
               exit 1

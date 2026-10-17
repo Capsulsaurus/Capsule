@@ -9,6 +9,14 @@ publish.workspace = true
 name = "capsule"
 path = "src/main.rs"
 
+# The command-tree description artifact the documentation site is generated from (slice
+# `S-Z8`). Declared explicitly rather than left to autodiscovery so the crate's two binaries
+# are visible in one place: `capsule` ships, this one only ever runs from `mise run
+# cli-surface` / `cli-surface-check`.
+[[bin]]
+name = "gen_cli_surface"
+path = "src/bin/gen_cli_surface.rs"
+
 [lib]
 name = "capsule_cli"
 path = "src/lib.rs"

@@ -2,8 +2,10 @@ import Foundation
 
 // MARK: - CatalogSidecar
 
-/// The CBOR sidecar paired with every managed media file — a Swift-native,
-/// `Sendable` mirror of the Rust `AssetSidecarRecord`.
+/// The sidecar record of the **mock lane** — a Swift-native, `Sendable` value.
+/// The Rust `AssetSidecarRecord` it once mirrored (the unsigned CBOR shape) was
+/// retired with the unsigned-sidecar migration (`S-D24`); the signed `SidecarV1`
+/// is authored only by the Rust core.
 ///
 /// The sidecar is the portable, self-describing record of an asset that lives
 /// next to the file on disk; the SQLite catalog is a rebuildable index over
@@ -14,7 +16,7 @@ import Foundation
 /// `importMode`, `captureTimezoneSource`). ``unknownFieldsCBOR`` is an opaque
 /// blob of sidecar fields written by a newer build: it is round-tripped
 /// verbatim so forward compatibility holds without Swift parsing CBOR itself.
-public struct CatalogSidecar: Sendable, Equatable {
+public struct CatalogSidecar: Sendable, Equatable, Codable {
     /// The sidecar schema version.
     public var version: UInt8
     /// The asset's catalog UUID.
@@ -146,7 +148,7 @@ public struct CatalogSidecar: Sendable, Equatable {
 
 /// A stack-membership hint stored in a sidecar — enough for `ManagedStore` to
 /// rebuild the `asset_stacks` / `stack_members` rows from sidecars alone.
-public struct CatalogStackHint: Sendable, Equatable {
+public struct CatalogStackHint: Sendable, Equatable, Codable {
     /// The key that groups members of the same stack (e.g. an Apple content
     /// identifier, or a shared filename stem).
     public var detectionKey: String

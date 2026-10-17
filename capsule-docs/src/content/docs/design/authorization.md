@@ -37,7 +37,7 @@ A `delete` or `replace` is therefore authorized by the same proof as the origina
 
 ## The Lifecycle Write Surface
 
-Every non-upload lifecycle write — `delete`, `metadata-update`, `derivative-add`/`derivative-replace` when the manifest references already-stored blobs, and `trash-restore` — travels through **one generic REST endpoint**: `POST /albums/{album_id}/ops`. (`create` and `replace`, and any derivative action carrying new bytes, ride the [upload protocol](/design/import/upload-protocol/) instead — a write that moves blob bytes is an upload by definition.) The body is the signed manifest bundle: the opaque canonical-CBOR manifest plus the encrypted metadata blob when the action carries one.
+Every non-upload lifecycle write — `delete`, `metadata-update`, `derivative-add`/`derivative-replace` when the manifest references already-stored blobs, and `trash-restore` — travels through **one generic REST endpoint**: `POST /v1/albums/{album_id}/ops`. (`create` and `replace`, and any derivative action carrying new bytes, ride the [upload protocol](/design/import/upload-protocol/) instead — a write that moves blob bytes is an upload by definition.) The body is the signed manifest bundle: the opaque canonical-CBOR manifest plus the encrypted metadata blob when the action carries one.
 
 The endpoint is deliberately singular — one closed enum, one gate, one transaction shape:
 
@@ -46,7 +46,13 @@ The endpoint is deliberately singular — one closed enum, one gate, one transac
 - The accepted op appends the provenance record and mints the per-album `sync_seq` in **one transaction**, the same finalization rule the [sync feed](/design/import/download-sync/) relies on — an op is visible on the feed exactly when it is durable.
 - Rejections carry an [`error.*` code](/design/i18n/#server-error-codes) and write nothing; the rejection itself is logged.
 
-The transport row lives in [API Surfaces](/design/api-surfaces/#surface--transport-map). Implementation is planned in `capsule-server::upload::ops` (slice `S-C16`, reusing the upload server's envelope gate).
+The transport row lives in [API Surfaces](/design/api-surfaces/#surface--transport-map). Implementation is planned in `capsule-server::routes::ops` (slice `S-C16`, reusing the upload server's envelope gate).
+
+## Album Membership on the Server
+
+Album sharing between accounts is an MLS group whose roster the server cannot read, by design. What the server holds instead is the album owner's **signed roster** — the whole member list, each with a role of `reader` or `writer`, under a strictly monotonic `roster_version` and the AMK epoch it reflects, signed by a non-revoked device in the owner's published device directory and published at `PUT /v1/albums/{album_id}/roster` (slice `S-C51`; [invariant 33](/design/threat-model/validation/#server-side-validation-invariants)). Only the owner account publishes; removal is a later roster that omits the member, and the server records the version and epoch at which they vanished rather than deleting the row. The version is bounded above as well as below — at most sixteen past the held one — because monotonicity alone would let a single publish latch the counter where nothing could supersede it and freeze the album's membership permanently; the refusal names the held version, and re-signing the same roster one above it says exactly the same thing.
+
+That stored fact widens two decisions that were owner-only until it existed. A **writer** on the current roster may write to the album through the upload path and `POST /v1/albums/{album_id}/ops`; the write is filed under the *owner's* namespace — the owner's feed is the one every member's devices read — and billed to the uploader. Any account on the roster, in either role, may fetch the album's blobs; a **former** member receives the `403` [Download & Sync](/design/import/download-sync/) describes; an account the roster never named gets the same `404` an unknown address gets. The roster is a transport control over who the server serves, never a confidentiality control: the server executes what the owner's signed statement permits, and, as below, authorizes nothing itself.
 
 ## The Server Executes But Never Authorizes
 

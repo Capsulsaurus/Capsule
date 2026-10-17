@@ -58,7 +58,7 @@ fn chained_manifest_bytes(
     prior: Option<Hash32>,
     seed: u8,
 ) -> Vec<u8> {
-    use capsule_core::crypto::keys::hybrid_sig::HybridSigningKey;
+    use capsule_core::crypto::keys::HybridSigningKey;
     use capsule_core::crypto::provenance::action::Action;
     use capsule_core::crypto::provenance::manifest::AssetManifest;
 
@@ -85,8 +85,7 @@ fn decoded(bytes: &[u8]) -> capsule_core::crypto::provenance::manifest::AssetMan
 /// decodes — but a fixture that hand-rolled a struct with placeholder signature bytes would be
 /// asserting against a shape rather than against the artifact.
 fn manifest_bytes(name: &str, metadata: &ContentAddress) -> Vec<u8> {
-    use capsule_core::crypto::keys::AmkVersion;
-    use capsule_core::crypto::keys::hybrid_sig::HybridSigningKey;
+    use capsule_core::crypto::keys::{AmkVersion, HybridSigningKey};
     use capsule_core::crypto::provenance::action::Action;
     use capsule_core::crypto::provenance::manifest::{
         ASSET_MANIFEST_VERSION, KeyMode, ManifestCore,
@@ -629,11 +628,40 @@ async fn purging_a_tombstone_takes_the_chain_with_it() {
     h.supersede("purged", &metadata, 1).await;
     let id = asset_id("purged");
 
-    h.index
-        .tombstone(&id, Timestamp::UNIX_EPOCH)
+    // Deleted under a signed retention floor that has already passed, because the purge
+    // re-checks both before it drops anything.
+    let head = h
+        .index
+        .read(&id)
         .await
-        .expect("the index tombstones");
-    h.index.purge(&id).await.expect("the index purges");
+        .expect("read")
+        .expect("the row exists")
+        .chain_head;
+    let delete_manifest = h.store(b"purged-delete-manifest").await;
+    h.index
+        .apply_op(crate::index::LifecycleOp {
+            asset_id: id.clone(),
+            owner_id: OwnerId::new("scrub-owner"),
+            album_id: AlbumId::new(SCRUB_ALBUM),
+            action: crate::index::OpAction::Delete,
+            manifest_hash: Hash32([9; 32]),
+            prior_provenance_hash: head,
+            amk_version: 0,
+            provenance: delete_manifest,
+            metadata: None,
+            original: None,
+            retention_until: Some(Timestamp::UNIX_EPOCH),
+            at: Timestamp::UNIX_EPOCH,
+        })
+        .await
+        .expect("the index deletes");
+    assert!(matches!(
+        h.index
+            .purge(&id, Timestamp::UNIX_EPOCH)
+            .await
+            .expect("the index purges"),
+        crate::index::PurgeOutcome::Purged(_)
+    ));
 
     assert_eq!(
         h.index

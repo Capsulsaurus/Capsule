@@ -15,7 +15,7 @@ capsule-core = { path = "../../capsule-core" }
 capsule-api-model = { path = "../model" }
 capsule-api-service = { path = "../service", features = ["auth"] }
 capsule-i18n = { path = "../../capsule-i18n" }
-capsule-wire = { path = "../../capsule-wire" }
+capsule-wire = { path = "../wire" }
 argon2 = { workspace = true }
 bb8 = { workspace = true }
 bb8-redis = { workspace = true }

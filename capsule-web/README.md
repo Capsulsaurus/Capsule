@@ -48,8 +48,10 @@ it is not dead code.
 ### Prerequisites
 
 - Install [Bun](https://bun.sh).
-- A running server for anything beyond empty states. **There is not one today**: the Salvo server and its `serve-api` task retired in slice `S-C59`, and the Kynos server that replaces it has no binary yet. Every screen renders its empty state; the sync store's own tests (`bun test src/data/server/`) are what exercise the data path meanwhile.
-  from the repo root. There is no mock gateway to fall back on.
+- A running server for anything beyond empty states. `mise run serve-memory` from the repo root
+  starts one on the in-memory adapters — an account registers and signs in against it, and it
+  loses everything but the blobs when it exits. There is no mock gateway to fall back on; the
+  sync store's own tests (`bun test src/data/server/`) exercise the data path without a server.
 
 With no reachable server the app still builds, runs, and renders empty states, so
 pure UI work needs no backend. Authenticated writes are not a web surface: the

@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+#MISE description="Run Apple's accessibility audit over the Apple client (macOS only)"
+set -euo pipefail
+if [ "$(uname)" != "Darwin" ]; then echo "Skipping swift audits (not macOS)"; exit 0; fi
+
+# Not yet part of `check-swift`: the audit fails on most surfaces today and has
+# since before lane U — it sat in a scheme nothing ran, so nobody had seen its
+# output. It reports which element fails and why, so each failure is actionable;
+# what it needs is somebody to work through them.
+cd capsule-swift
+mise exec -- tuist generate --no-open
+
+set -o pipefail
+xcodebuild test \
+    -workspace Capsule.xcworkspace \
+    -scheme CapsuleAppUITests \
+    -configuration Debug \
+    -destination "platform=iOS Simulator,name=iPhone 17 Pro" \
+    -only-testing:CapsuleAppUITests/AccessibilityAuditTests \
+    CODE_SIGNING_ALLOWED=NO \
+    | mise exec -- xcbeautify

@@ -37,19 +37,22 @@ use crate::crypto::{kdf, pwkdf, rng};
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// Argon2id params for the backup wrap key, recorded in VERSION so restore reproduces the
-/// key. Production uses the normal-tier cost; tests use a trivially-fast cost (the wrap-key
-/// strength is orthogonal to the format/round-trip correctness the tests exercise).
-#[cfg(not(test))]
-const WRAP_PARAMS: Argon2Params = Argon2Params {
+/// The production Argon2id cost for the backup wrap key: the normal device tier.
+///
+/// The parameters an export actually used are recorded in the artifact's `VERSION` entry, so a
+/// restore reproduces the wrap key from the artifact and never from a constant. That is why
+/// this is a *default* and not a rule: [`export`] and [`export_with_salt`] — the two entry
+/// points a production build has — apply it and take no cost argument, while the `*_with_params`
+/// pair takes the cost from the caller and is compiled only under `cfg(test)` or the non-default
+/// `test-support` feature. [`BackupArtifact::open`] reads the cost back off the artifact either
+/// way.
+///
+/// It is one constant for every build. It used to be forked on `#[cfg(test)]`, which meant
+/// `capsule-core`'s own tests were the only code in the workspace that never exercised the
+/// production cost, while every downstream test paid it in full with no way to opt out.
+pub const WRAP_PARAMS: Argon2Params = Argon2Params {
     mem_kib: 256 * 1024,
     t_cost: 3,
-    p_cost: 1,
-};
-#[cfg(test)]
-const WRAP_PARAMS: Argon2Params = Argon2Params {
-    mem_kib: 64,
-    t_cost: 1,
     p_cost: 1,
 };
 
@@ -177,13 +180,16 @@ fn tar_read(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, BackupError> {
     Ok(out)
 }
 
-fn version_blob(salt: &[u8; 32]) -> Vec<u8> {
+/// The plaintext `VERSION` entry. `params` is the cost this export actually derived under, not
+/// a compiled-in default: [`parse_version`] reads it straight back, which is what makes a
+/// restore reproduce the wrap key of an artifact exported at any cost.
+fn version_blob(salt: &[u8; 32], params: Argon2Params) -> Vec<u8> {
     format!(
         "artifact_format={ARTIFACT_FORMAT_VERSION}\ncrypto_suite_id={CRYPTO_SUITE_ID}\nmin_protocol_version={PROTOCOL_VERSION}\nwrap_salt={}\nwrap_mem_kib={}\nwrap_t={}\nwrap_p={}\n",
         hex::encode(salt),
-        WRAP_PARAMS.mem_kib,
-        WRAP_PARAMS.t_cost,
-        WRAP_PARAMS.p_cost,
+        params.mem_kib,
+        params.t_cost,
+        params.p_cost,
     )
     .into_bytes()
 }
@@ -245,14 +251,55 @@ fn open_ledger(wrap_key: &[u8; 32], sealed: &[u8]) -> Result<AmkLedger, BackupEr
 
 // ── Export ──────────────────────────────────────────────────────────────────
 
-/// Assemble a backup artifact with an explicit wrap salt (deterministic; used by tests).
+/// Assemble a backup artifact with an explicit wrap salt (deterministic), at the production
+/// [`WRAP_PARAMS`] cost.
 pub fn export_with_salt(
     input: &BackupInput,
     passphrase: &[u8],
     salt: [u8; 32],
     exporter: &dyn Signer,
 ) -> Result<Vec<u8>, BackupError> {
-    let wrap_key = pwkdf::derive_wrap_key(passphrase, &salt, WRAP_PARAMS)?;
+    export_inner(input, passphrase, salt, WRAP_PARAMS, exporter)
+}
+
+/// Assemble a backup artifact with an explicit wrap salt **and** an explicit Argon2id cost.
+///
+/// `params` is written into the artifact's `VERSION` entry, so whatever cost is chosen here is
+/// the cost [`BackupArtifact::open`] pays to reproduce the wrap key — a caller that exports
+/// cheaply gets a cheap restore, and neither side needs to be told twice.
+///
+/// **Not in a production build.** A weak `params` produces a brute-forceable artifact, and
+/// nothing downstream of here re-checks the cost: [`pwkdf::derive_wrap_key`] accepts anything
+/// `argon2::Params::new` validates. So the entry point that can do it is compiled only under
+/// `cfg(test)` or the non-default `test-support` feature, and weakening a real backup therefore
+/// takes a visible line in a production manifest rather than an unnoticed call. The always-
+/// available [`export`] and [`export_with_salt`] cannot be given a cost at all.
+///
+/// This is the same guard [`escrow_master_key`](super::escrow_master_key) gets from taking a
+/// closed [`DeviceTier`](crate::crypto::primitives::DeviceTier) instead of raw parameters,
+/// reached differently: every `DeviceTier` arm is memory-hard by design, so the tier enum has no
+/// arm a test could use as the fast path.
+#[cfg(any(test, feature = "test-support"))]
+pub fn export_with_salt_and_params(
+    input: &BackupInput,
+    passphrase: &[u8],
+    salt: [u8; 32],
+    params: Argon2Params,
+    exporter: &dyn Signer,
+) -> Result<Vec<u8>, BackupError> {
+    export_inner(input, passphrase, salt, params, exporter)
+}
+
+/// The one implementation every export entry point delegates to. Private, so the only way to
+/// reach it with a caller-chosen cost is through the gated entry points above.
+fn export_inner(
+    input: &BackupInput,
+    passphrase: &[u8],
+    salt: [u8; 32],
+    params: Argon2Params,
+    exporter: &dyn Signer,
+) -> Result<Vec<u8>, BackupError> {
+    let wrap_key = pwkdf::derive_wrap_key(passphrase, &salt, params)?;
 
     // Build the AMK ledger, asserting completeness for every referenced epoch.
     let mut ledger = AmkLedger::default();
@@ -354,7 +401,7 @@ pub fn export_with_salt(
 
     // Write the tar: VERSION, MANIFEST, ledger, then sorted payloads.
     let mut builder = tar::Builder::new(Vec::new());
-    tar_append(&mut builder, "VERSION", &version_blob(&salt));
+    tar_append(&mut builder, "VERSION", &version_blob(&salt, params));
     tar_append(&mut builder, "MANIFEST.cbor", &manifest_bytes);
     tar_append(&mut builder, "keys/amk-ledger.cbor", &sealed_ledger);
     // Re-sort payloads to match the manifest entry order.
@@ -372,13 +419,37 @@ pub fn export_with_salt(
         .map_err(|e| BackupError::Format(e.to_string()))
 }
 
-/// Assemble a backup artifact, drawing a fresh random wrap salt (production path).
+/// Assemble a backup artifact, drawing a fresh random wrap salt, at the production
+/// [`WRAP_PARAMS`] cost (production path).
+///
+/// This is the entry point [`Workspace::export_backup`](crate::lifecycle::Workspace::export_backup)
+/// runs, and it takes no cost argument, so no caller of it can produce a weak artifact.
 pub fn export(
     input: &BackupInput,
     passphrase: &[u8],
     exporter: &dyn Signer,
 ) -> Result<Vec<u8>, BackupError> {
     export_with_salt(input, passphrase, rng::random_array::<32>(), exporter)
+}
+
+/// As [`export`] but with an explicit Argon2id cost for the wrap key — the entry point a test
+/// uses instead of reaching for a build-configuration fork.
+///
+/// **Not in a production build**, for the reason given on [`export_with_salt_and_params`].
+#[cfg(any(test, feature = "test-support"))]
+pub fn export_with_params(
+    input: &BackupInput,
+    passphrase: &[u8],
+    params: Argon2Params,
+    exporter: &dyn Signer,
+) -> Result<Vec<u8>, BackupError> {
+    export_inner(
+        input,
+        passphrase,
+        rng::random_array::<32>(),
+        params,
+        exporter,
+    )
 }
 
 // ── Restore ─────────────────────────────────────────────────────────────────
@@ -664,6 +735,16 @@ mod tests {
 
     const ALBUM: u128 = 0xA1;
 
+    /// The wrap-key cost these tests export under. The artifact records it, so opening is just
+    /// as cheap; the wrap key's *strength* is orthogonal to the format, HMAC, signature and
+    /// reconciliation behaviour under test, and [`WRAP_PARAMS`] is exercised by the callers that
+    /// ship to users.
+    const FAST: Argon2Params = Argon2Params {
+        mem_kib: 64,
+        t_cost: 1,
+        p_cost: 1,
+    };
+
     struct Fix {
         device: HybridSigningKey,
         write: HybridSigningKey,
@@ -752,8 +833,8 @@ mod tests {
         let f = Fix::new();
         let input = f.input(vec![f.asset(1, b"alpha"), f.asset(2, b"beta")]);
         let salt = [0x11; 32];
-        let a = export_with_salt(&input, b"pw", salt, &f.device).unwrap();
-        let b = export_with_salt(&input, b"pw", salt, &f.device).unwrap();
+        let a = export_with_salt_and_params(&input, b"pw", salt, FAST, &f.device).unwrap();
+        let b = export_with_salt_and_params(&input, b"pw", salt, FAST, &f.device).unwrap();
         assert_eq!(a, b, "deterministic export must be byte-identical");
     }
 
@@ -764,7 +845,7 @@ mod tests {
             f.asset(1, b"hello world"),
             f.asset(2, b"second asset"),
         ]);
-        let bytes = export(&input, b"pw", &f.device).unwrap();
+        let bytes = export_with_params(&input, b"pw", FAST, &f.device).unwrap();
 
         let art = BackupArtifact::open(&bytes, b"pw", &f.device.verifying_key()).unwrap();
         // Fresh library (no local heads) → everything applies.
@@ -791,7 +872,7 @@ mod tests {
         with_receipts.receipts = b"receipt-log-cbor-bytes".to_vec();
         let plain = f.asset(2, b"no receipts"); // absent = no entry emitted
         let input = f.input(vec![with_receipts, plain]);
-        let bytes = export(&input, b"pw", &f.device).unwrap();
+        let bytes = export_with_params(&input, b"pw", FAST, &f.device).unwrap();
 
         let art = BackupArtifact::open(&bytes, b"pw", &f.device.verifying_key()).unwrap();
         let report = art.restore(RestoreMode::Commit, &BTreeMap::new()).unwrap();
@@ -812,14 +893,16 @@ mod tests {
     #[test]
     fn wrong_passphrase_fails_to_open() {
         let f = Fix::new();
-        let bytes = export(&f.input(vec![f.asset(1, b"x")]), b"right", &f.device).unwrap();
+        let bytes = export_with_params(&f.input(vec![f.asset(1, b"x")]), b"right", FAST, &f.device)
+            .unwrap();
         assert!(BackupArtifact::open(&bytes, b"wrong", &f.device.verifying_key()).is_err());
     }
 
     #[test]
     fn tampering_an_entry_is_detected() {
         let f = Fix::new();
-        let bytes = export(&f.input(vec![f.asset(1, b"x")]), b"pw", &f.device).unwrap();
+        let bytes =
+            export_with_params(&f.input(vec![f.asset(1, b"x")]), b"pw", FAST, &f.device).unwrap();
         // Flip a byte somewhere in the archive body (a blob) → entry-hash or HMAC mismatch.
         let mut t = bytes.clone();
         let mid = t.len() / 2;
@@ -830,7 +913,8 @@ mod tests {
     #[test]
     fn wrong_exporter_key_is_rejected() {
         let f = Fix::new();
-        let bytes = export(&f.input(vec![f.asset(1, b"x")]), b"pw", &f.device).unwrap();
+        let bytes =
+            export_with_params(&f.input(vec![f.asset(1, b"x")]), b"pw", FAST, &f.device).unwrap();
         let imposter = HybridSigningKey::from_seed_bytes(&[9; 32], &[9; 32]).verifying_key();
         assert!(BackupArtifact::open(&bytes, b"pw", &imposter).is_err());
     }
@@ -842,7 +926,7 @@ mod tests {
         let mut input = f.input(vec![f.asset(1, b"x")]);
         input.amks.clear();
         assert!(matches!(
-            export(&input, b"pw", &f.device),
+            export_with_params(&input, b"pw", FAST, &f.device),
             Err(BackupError::AmkIncomplete(_))
         ));
     }
@@ -853,7 +937,7 @@ mod tests {
         let asset = f.asset(1, b"content");
         let head = asset.provenance.last().unwrap().record_hash();
         let asset_id = asset.asset_id;
-        let bytes = export(&f.input(vec![asset]), b"pw", &f.device).unwrap();
+        let bytes = export_with_params(&f.input(vec![asset]), b"pw", FAST, &f.device).unwrap();
         let art = BackupArtifact::open(&bytes, b"pw", &f.device.verifying_key()).unwrap();
 
         // Identical local head → no-op.
@@ -882,7 +966,8 @@ mod tests {
     #[test]
     fn dry_run_writes_nothing() {
         let f = Fix::new();
-        let bytes = export(&f.input(vec![f.asset(1, b"x")]), b"pw", &f.device).unwrap();
+        let bytes =
+            export_with_params(&f.input(vec![f.asset(1, b"x")]), b"pw", FAST, &f.device).unwrap();
         let art = BackupArtifact::open(&bytes, b"pw", &f.device.verifying_key()).unwrap();
         let r = art.restore(RestoreMode::DryRun, &BTreeMap::new()).unwrap();
         // DryRun verifies (decrypts) but returns nothing to write.

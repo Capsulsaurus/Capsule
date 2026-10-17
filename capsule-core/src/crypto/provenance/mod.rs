@@ -7,7 +7,7 @@
 //!
 //! Verification of all of this flows through the single [`verify_asset`] chokepoint.
 //!
-//! [`verify_asset`]: crate::crypto::verify_asset
+//! [`verify_asset`]: fn@crate::crypto::verify_asset
 //! [Cryptography — Provenance]: https://docs/design/cryptography/provenance/
 
 pub mod action;

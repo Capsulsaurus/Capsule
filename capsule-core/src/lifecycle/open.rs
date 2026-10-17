@@ -11,6 +11,7 @@ use jiff::tz::TimeZone;
 use uuid::Uuid;
 use walkdir::WalkDir;
 
+use super::migrate_unsigned::find_unanchored;
 use super::{
     AssetState, LifecycleError, Result, StackPlacement, Workspace, media_dir, now_rfc3339,
 };
@@ -65,7 +66,7 @@ impl std::fmt::Debug for HardwareDekBinding {
 /// across restarts]).
 ///
 /// The sweep reads the sidecars **without re-verifying their signatures**, for the same reason
-/// [`rebuild_index`](crate::library::rebuild::rebuild_index) does not: these are the device's own
+/// [`rebuild_index`](crate::library::rebuild_index) does not: these are the device's own
 /// local plaintext files, and the value recovered is only ever a *floor* on the next counter.
 /// An unreadable or foreign-schema sidecar is warned about and skipped rather than failing the
 /// open — but note that skipping can only lower the floor, so the warning is load-bearing for
@@ -136,7 +137,7 @@ fn sweep_max_add_counter(root: &Path, device: &Uuid) -> Option<u64> {
 /// The extension of an asset's **original** media file in `dir`: the sibling named
 /// `{uuid}.{ext}` that is not one of the sidecar / provenance / receipts / metadata-blob
 /// artifacts the lifecycle writes beside it.
-fn original_extension(dir: &Path, asset_id: &Uuid) -> Option<String> {
+pub(super) fn original_extension(dir: &Path, asset_id: &Uuid) -> Option<String> {
     let prefix = format!("{}.", asset_id.simple());
     let entries = fs::read_dir(dir).ok()?;
     for entry in entries.filter_map(std::result::Result::ok) {
@@ -161,7 +162,7 @@ fn original_extension(dir: &Path, asset_id: &Uuid) -> Option<String> {
 /// The UTC timestamp of the first instant of the `{YYYY}/{YYYY-MM}` bucket `dir` names — a value
 /// that provably resolves back to `dir` through [`media_dir`], used as the fallback when an
 /// asset's recorded capture time does not.
-fn month_dir_timestamp(dir: &Path) -> i64 {
+pub(super) fn month_dir_timestamp(dir: &Path) -> i64 {
     let parse = || -> Option<i64> {
         let name = dir.file_name()?.to_string_lossy().into_owned();
         let (year, month) = name.split_once('-')?;
@@ -302,6 +303,7 @@ impl Workspace {
             share_links: HashMap::new(),
             upload_links: HashMap::new(),
             inbox: HashMap::new(),
+            unmigrated: Vec::new(),
         })
     }
 
@@ -332,6 +334,11 @@ impl Workspace {
     ///
     /// A library with no `albums.cbor` predates this and opens with zero albums plus a `warn`
     /// naming backup restore — see [`AlbumStore::load`].
+    ///
+    /// A library holding **unsigned pre-signed-path sidecars** still opens (`S-D24`): those
+    /// assets have no provenance chain, so they are not restored, but each is reported through
+    /// [`unmigrated_sidecars`](Self::unmigrated_sidecars) with a `warn` naming
+    /// [`migrate_unsigned_sidecars`](Self::migrate_unsigned_sidecars) as the way in.
     ///
     /// Still session-scoped by design, and dropped on close: the federation group assertions
     /// (re-delivered by the feed), the pending guest-drop inbox (server-authoritative), and the
@@ -368,8 +375,7 @@ impl Workspace {
         params: crate::crypto::primitives::Argon2Params,
         dek_binding: Option<HardwareDekBinding>,
     ) -> Result<Self> {
-        let library = crate::library::open_library(root)
-            .map_err(|e| LifecycleError::Io(format!("open library: {e}")))?;
+        let library = crate::library::open_library(root)?;
         let account_path = root.join(".library").join("account.cbor");
         let account = if account_path.exists() {
             let bytes = fs::read(&account_path).map_err(|e| LifecycleError::Io(e.to_string()))?;
@@ -428,6 +434,7 @@ impl Workspace {
             share_links: HashMap::new(),
             upload_links: HashMap::new(),
             inbox: HashMap::new(),
+            unmigrated: Vec::new(),
         };
         // `S-A10`: album keys, authorities, and every managed asset come back from disk here.
         // Without this the reopened workspace would hold an unlocked account and nothing else.
@@ -477,7 +484,7 @@ impl Workspace {
     /// stack placement, which lives nowhere else.
     ///
     /// The filesystem, not the SQLite index, is the source of truth here for the same
-    /// recovery-first reason [`rebuild_index`](crate::library::rebuild::rebuild_index) exists: an
+    /// recovery-first reason [`rebuild_index`](crate::library::rebuild_index) exists: an
     /// index can be rebuilt from the signed artifacts, but an artifact the index has forgotten is
     /// gone. A missing or undecodable piece for one asset is a `warn` and a skip — never a failed
     /// open, which would take the whole library down for one bad file.
@@ -521,6 +528,28 @@ impl Workspace {
             skipped,
             "workspace open: assets restored from disk"
         );
+
+        // Second pass (`S-D24`): the sidecars no chain anchors. An unsigned pre-signed-path
+        // record has never had one; a signed sidecar without one is an interrupted migration.
+        // Neither is restorable here — open holds no album write capability and must not author
+        // signed records unasked — so each is recorded and named, never silently dropped.
+        self.unmigrated = find_unanchored(&self.root);
+        for found in &self.unmigrated {
+            tracing::warn!(
+                sidecar = %found.path.display(),
+                asset_id = ?found.asset_id,
+                shape = ?found.shape,
+                "workspace open: sidecar with no provenance chain; the asset is invisible until \
+                 `Workspace::migrate_unsigned_sidecars` runs"
+            );
+        }
+        if !self.unmigrated.is_empty() {
+            tracing::info!(
+                unmigrated = self.unmigrated.len(),
+                "workspace open: unmigrated sidecars found; run \
+                 `Workspace::migrate_unsigned_sidecars` to admit them as signed assets"
+            );
+        }
     }
 
     fn restore_one_asset(&self, provenance_path: &Path, stem: &str) -> Result<AssetState> {
@@ -657,20 +686,11 @@ impl Workspace {
 mod tests {
     use tempfile::TempDir;
 
-    use super::super::fast_workspace;
+    use super::super::{FAST_PARAMS, fast_workspace};
     use super::*;
     use crate::crypto::keys::kem_p256::encapsulate_to_p256_public;
     use crate::crypto::primitives::Argon2Params;
     use crate::crypto::verify_asset::VerifyOutcome;
-
-    /// Fast-Argon2 params for a reopen in these tests (the production cost would dominate).
-    fn fast_params() -> Argon2Params {
-        Argon2Params {
-            mem_kib: 64,
-            t_cost: 1,
-            p_cost: 1,
-        }
-    }
 
     /// **S-A10, the core claim.** An asset imported in one session is fully usable in the next:
     /// its album key comes back from the sealed keystore, so the workspace can re-derive the file
@@ -696,7 +716,7 @@ mod tests {
         };
         assert!(!blob_before.is_empty());
 
-        let ws2 = Workspace::open(lib.path(), b"passphrase", fast_params()).unwrap();
+        let ws2 = Workspace::open(lib.path(), b"passphrase", FAST_PARAMS).unwrap();
 
         // The album's key material is back...
         assert!(ws2.has_album(&album), "the album survived the close");
@@ -745,7 +765,7 @@ mod tests {
             (album, id1)
         };
 
-        let mut ws2 = Workspace::open(lib.path(), b"passphrase", fast_params()).unwrap();
+        let mut ws2 = Workspace::open(lib.path(), b"passphrase", FAST_PARAMS).unwrap();
         // Resolve-or-create returns the SAME album rather than minting a second one.
         assert_eq!(ws2.ensure_album(album, "Imports").unwrap(), album);
         assert_eq!(ws2.albums().len(), 1, "no duplicate album was minted");
@@ -795,7 +815,7 @@ mod tests {
             (album, authority.epoch_ceiling(), pubs)
         };
 
-        let ws2 = Workspace::open(lib.path(), b"passphrase", fast_params()).unwrap();
+        let ws2 = Workspace::open(lib.path(), b"passphrase", FAST_PARAMS).unwrap();
         let authority = ws2.authority(&album).expect("authority restored");
         assert!(
             authority.admin_chain_verifies(),
@@ -837,7 +857,7 @@ mod tests {
         assert!(store.exists());
         fs::remove_file(&store).unwrap();
 
-        let ws2 = Workspace::open(lib.path(), b"passphrase", fast_params()).unwrap();
+        let ws2 = Workspace::open(lib.path(), b"passphrase", FAST_PARAMS).unwrap();
         assert!(ws2.albums().is_empty(), "no album keys are recoverable");
         // The asset itself is still tracked (its plaintext is on disk) — only its key is gone.
         assert!(ws2.asset(&id).is_some());
@@ -873,9 +893,10 @@ mod tests {
         };
 
         // Export from the *reopened* workspace.
-        let ws2 = Workspace::open(lib.path(), b"passphrase", fast_params()).unwrap();
+        let ws2 = Workspace::open(lib.path(), b"passphrase", FAST_PARAMS).unwrap();
         let archive = src.path().join("backup.tar");
-        ws2.export_backup(&archive, b"recovery-pass").unwrap();
+        ws2.export_backup_with_params(&archive, b"recovery-pass", FAST_PARAMS)
+            .unwrap();
         let exporter_pub = ws2.exporter_verifying_key();
 
         // Restore into a fresh library and confirm the bytes come back.
@@ -893,12 +914,13 @@ mod tests {
         let album = ws3.asset(&id).unwrap().album_id;
         assert!(ws3.has_album(&album));
         let again = fresh.path().join("re-export.tar");
-        ws3.export_backup(&again, b"pass-two").unwrap();
+        ws3.export_backup_with_params(&again, b"pass-two", FAST_PARAMS)
+            .unwrap();
         assert!(again.exists());
 
         // And those recovered keys are durable in ws3 too: reopening it keeps them.
         drop(ws3);
-        let ws4 = Workspace::open(fresh.path(), b"passphrase", fast_params()).unwrap();
+        let ws4 = Workspace::open(fresh.path(), b"passphrase", FAST_PARAMS).unwrap();
         assert!(
             ws4.has_album(&album),
             "recovered AMKs were persisted, not just held for the session"
@@ -922,7 +944,8 @@ mod tests {
             let mut ws = fast_workspace(lib.path());
             let album = ws.create_album("Trip").unwrap();
             ws.import_asset(album, &img).unwrap();
-            ws.export_backup(&archive, b"pw").unwrap();
+            ws.export_backup_with_params(&archive, b"pw", FAST_PARAMS)
+                .unwrap();
             (album, ws.exporter_verifying_key())
         };
 
@@ -1002,7 +1025,7 @@ mod tests {
         };
 
         // Session 2: a brand-new process over the same library.
-        let ws2 = Workspace::open(lib.path(), b"passphrase", fast_params()).unwrap();
+        let ws2 = Workspace::open(lib.path(), b"passphrase", FAST_PARAMS).unwrap();
         assert_eq!(
             ws2.account.device.device_id, device,
             "reopening resumes the same device identity"
@@ -1032,7 +1055,7 @@ mod tests {
             ws.import_asset(album, &img).unwrap();
         }
 
-        let ws2 = Workspace::open(lib.path(), b"passphrase", fast_params()).unwrap();
+        let ws2 = Workspace::open(lib.path(), b"passphrase", FAST_PARAMS).unwrap();
         assert_eq!(
             ws2.counter.peek(),
             0,
@@ -1075,7 +1098,7 @@ mod tests {
         };
         assert_ne!(asset_id, Uuid::nil());
 
-        let ws2 = Workspace::open(lib.path(), b"passphrase", fast_params()).unwrap();
+        let ws2 = Workspace::open(lib.path(), b"passphrase", FAST_PARAMS).unwrap();
         assert_eq!(
             ws2.counter.peek(),
             1,
@@ -1239,7 +1262,7 @@ mod tests {
             let mut ws = Workspace::create_with_hardware_dek(
                 lib.path(),
                 b"passphrase",
-                fast_params(),
+                FAST_PARAMS,
                 binding.clone(),
             )
             .unwrap();
@@ -1265,7 +1288,7 @@ mod tests {
         // Reopen with the element re-attached: the same DEK comes back and still opens the
         // ciphertext sealed to it in the previous session.
         let reopened =
-            Workspace::open_with_hardware_dek(lib.path(), b"passphrase", fast_params(), binding)
+            Workspace::open_with_hardware_dek(lib.path(), b"passphrase", FAST_PARAMS, binding)
                 .unwrap();
         assert!(reopened.device_dek_is_hardware_bound());
         assert_eq!(reopened.device_dek_public(), published);
@@ -1287,7 +1310,7 @@ mod tests {
             Workspace::create_with_hardware_dek(
                 lib.path(),
                 b"passphrase",
-                fast_params(),
+                FAST_PARAMS,
                 mock_dek_binding(0x1D),
             )
             .unwrap(),
@@ -1295,7 +1318,7 @@ mod tests {
 
         assert!(
             matches!(
-                Workspace::open(lib.path(), b"passphrase", fast_params()),
+                Workspace::open(lib.path(), b"passphrase", FAST_PARAMS),
                 Err(LifecycleError::Crypto(CryptoError::Key(_)))
             ),
             "a hardware-bound library must not open without its secure element"
@@ -1316,7 +1339,7 @@ mod tests {
             ws.device_dek_public()
         };
 
-        let reopened = Workspace::open(lib.path(), b"passphrase", fast_params()).unwrap();
+        let reopened = Workspace::open(lib.path(), b"passphrase", FAST_PARAMS).unwrap();
         assert!(!reopened.device_dek_is_hardware_bound());
         assert_eq!(reopened.device_dek_public(), published);
 
@@ -1329,11 +1352,43 @@ mod tests {
         let hw_ws = Workspace::create_with_hardware_dek(
             hw_lib.path(),
             b"passphrase",
-            fast_params(),
+            FAST_PARAMS,
             mock_dek_binding(0x2E),
         )
         .unwrap();
         let (hw_ct, _) = encapsulate_to_p256_public(&hw_ws.device_dek_public()).unwrap();
         assert!(reopened.device_dek_decapsulate(&hw_ct).is_err());
+    }
+
+    /// **S-D23, the owed half at the workspace boundary.** `Workspace::open` no longer
+    /// stringifies a library-open failure into `Io`: a catalog newer than this build surfaces
+    /// as `LifecycleError::Library(LibraryError::CatalogTooNew { .. })`, so a client can name
+    /// both versions and tell the user to update rather than to check their disk.
+    #[test]
+    fn open_surfaces_a_too_new_catalog_as_a_typed_library_error() {
+        use crate::db::schema::SCHEMA_VERSION;
+        use crate::library::LibraryError;
+
+        let lib = TempDir::new().unwrap();
+        drop(fast_workspace(lib.path()));
+
+        let db_path = lib.path().join("index/library.sqlite");
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute_batch(&format!("PRAGMA user_version = {};", SCHEMA_VERSION + 1))
+                .unwrap();
+        }
+        let before = fs::read(&db_path).unwrap();
+
+        match Workspace::open(lib.path(), b"passphrase", FAST_PARAMS) {
+            Err(LifecycleError::Library(LibraryError::CatalogTooNew { found, supported })) => {
+                assert_eq!(found, SCHEMA_VERSION + 1);
+                assert_eq!(supported, SCHEMA_VERSION);
+            }
+            Ok(_) => panic!("a too-new catalog must not open"),
+            Err(other) => panic!("expected Library(CatalogTooNew), got {other:?}"),
+        }
+        assert_eq!(fs::read(&db_path).unwrap(), before, "nothing was written");
+        assert!(!lib.path().join(".library/lock").exists());
     }
 }

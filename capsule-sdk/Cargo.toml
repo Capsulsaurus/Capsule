@@ -48,7 +48,7 @@ jiff = { workspace = true }
 secrecy = { workspace = true }
 tracing = { workspace = true }
 # SHA-256 lowercase-hex per-chunk checksum (`X-Capsule-Checksum`); byte-identical
-# to the server's `capsule_core::utils::hash::hash_bytes`, so no capsule-core dep.
+# to the server's `capsule_core::crypto::hash::hash_bytes`, so no capsule-core dep.
 sha2 = { workspace = true }
 hex = { workspace = true }
 

@@ -140,7 +140,7 @@ pub(crate) fn verify_leaf_binding(
     Ok((binding.core.user_id, binding.core.device_id))
 }
 
-/// One device's MLS participation identity: the owned OpenMLS [provider](CapsuleMlsProvider)
+/// One device's MLS participation identity: the owned OpenMLS provider (`CapsuleMlsProvider`)
 /// (crypto + rand + serializable storage), the device's **MLS Ed25519 leaf signer**, and the
 /// device's **hybrid DSK identity key** used to attest the leaf binding.
 ///

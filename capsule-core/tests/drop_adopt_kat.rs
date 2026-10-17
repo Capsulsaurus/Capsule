@@ -17,8 +17,9 @@ use capsule_core::crypto::authority::ReferenceAuthority;
 use capsule_core::crypto::encryption::keywrap::{seal_file_key, unseal_file_key};
 use capsule_core::crypto::encryption::stream::decrypt_asset_vec;
 use capsule_core::crypto::hash::hash_bytes;
-use capsule_core::crypto::keys::directory::{DeviceEntry, DirectoryCore};
-use capsule_core::crypto::keys::{Amk, AmkVersion, DekKeypair, DeviceDirectory, HybridSigningKey};
+use capsule_core::crypto::keys::{
+    Amk, AmkVersion, DekKeypair, DeviceDirectory, DeviceEntry, DirectoryCore, HybridSigningKey,
+};
 use capsule_core::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
 use capsule_core::crypto::provenance::action::Action;
 use capsule_core::crypto::provenance::manifest::{

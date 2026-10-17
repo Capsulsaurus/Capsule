@@ -14,6 +14,8 @@ use crate::backup::{
 };
 use crate::crypto::hash::{self, Hash32};
 use crate::crypto::keys::HybridVerifyingKey;
+#[cfg(any(test, feature = "test-support"))]
+use crate::crypto::primitives::Argon2Params;
 use crate::crypto::primitives::{CRYPTO_SUITE_ID, DeviceTier};
 use crate::crypto::provenance::{AssetManifest, ProvenanceChain};
 use crate::crypto::pwkdf::WrappedSecret;
@@ -70,8 +72,47 @@ impl Workspace {
     }
 
     /// Export every managed asset to a portable backup artifact.
+    ///
+    /// The AMK ledger is wrapped at the production Argon2id cost
+    /// ([`backup::WRAP_PARAMS`]) and there is no way to ask for another: this method takes no
+    /// cost argument and [`backup::export`] takes none either, so no caller reachable from a
+    /// production build can write a brute-forceable artifact.
     #[tracing::instrument(skip_all, fields(out = %out.display()))]
     pub fn export_backup(&self, out: &Path, passphrase: &[u8]) -> Result<()> {
+        let input = self.backup_input()?;
+        let bytes = backup::export(&input, passphrase, self.device_signer.as_ref())?;
+        self.write_artifact(out, &bytes)
+    }
+
+    /// As [`export_backup`](Self::export_backup) but with an explicit Argon2id cost for the
+    /// artifact's wrap key.
+    ///
+    /// The cost is recorded in the artifact, so [`import_backup`](Self::import_backup)
+    /// reproduces the wrap key from what it reads rather than from a constant: exporting cheaply
+    /// makes *both* legs of a backup round trip cheap, and no import-side entry point is needed.
+    ///
+    /// **Not in a production build.** Compiled only under `cfg(test)` or the non-default
+    /// `test-support` feature, because a weak cost here is a brute-forceable backup and nothing
+    /// downstream re-checks it — the same reason
+    /// [`escrow_master_key`](Self::escrow_master_key) takes a closed `DeviceTier` rather than
+    /// raw parameters.
+    #[cfg(any(test, feature = "test-support"))]
+    #[tracing::instrument(skip_all, fields(out = %out.display(), ?params))]
+    pub fn export_backup_with_params(
+        &self,
+        out: &Path,
+        passphrase: &[u8],
+        params: Argon2Params,
+    ) -> Result<()> {
+        let input = self.backup_input()?;
+        let bytes =
+            backup::export_with_params(&input, passphrase, params, self.device_signer.as_ref())?;
+        self.write_artifact(out, &bytes)
+    }
+
+    /// Everything the artifact needs about this library, collected once so both export entry
+    /// points read the same state rather than each walking the library themselves.
+    fn backup_input(&self) -> Result<BackupInput> {
         let mut assets = Vec::new();
         let mut amks: BTreeMap<(Uuid, u32), [u8; 32]> = BTreeMap::new();
 
@@ -105,15 +146,18 @@ impl Workspace {
             });
         }
 
-        let input = BackupInput {
+        Ok(BackupInput {
             assets,
             amks,
             exporter_device: self.account.device.device_id,
             source_library_version: "1".into(),
             export_timestamp: now_rfc3339(),
-        };
-        let bytes = backup::export(&input, passphrase, self.device_signer.as_ref())?;
-        fs::write(out, &bytes).map_err(|e| LifecycleError::Io(e.to_string()))?;
+        })
+    }
+
+    /// Write an assembled artifact to `out`.
+    fn write_artifact(&self, out: &Path, bytes: &[u8]) -> Result<()> {
+        fs::write(out, bytes).map_err(|e| LifecycleError::Io(e.to_string()))?;
         tracing::info!(bytes = bytes.len(), "backup: export complete");
         Ok(())
     }

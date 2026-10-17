@@ -37,6 +37,78 @@
 //! v1 abuse gate needs. Where the doubled burst would matter the budget is halved rather than
 //! the algorithm changed, and this paragraph is the record of that trade rather than a comment
 //! somebody later mistakes for a bug.
+//!
+//! # The map of windows is bounded, twice — and partitioned, so the bounds are not shared
+//!
+//! A counter's *key* is frequently derived from something a caller sent — a share-link id, an
+//! enrollment code, a redirect host. A key space every caller can extend is a map that only
+//! grows, and this one is process-wide and shared by every limiter on the surface, so growth
+//! here is not one feature's problem. Two bounds, the same pair
+//! [`InMemoryOidcAuthorizations`](crate::store::memory::InMemoryOidcAuthorizations) carries:
+//!
+//! - **Purged on every write.** A window whose budget has lapsed decides nothing — [`verdict`]
+//!   already treats it as absent — so it is dropped rather than kept as a row nobody reads. The
+//!   map holds live windows plus whatever lapsed since the last hit, never everything ever
+//!   counted.
+//! - **A ceiling.** Past its ceiling a key that has no window yet is refused with
+//!   [`StoreError::Rejected`], while every key that already has one keeps counting. Callers
+//!   treat a counter error as a refusal, so a full partition fails *closed*: a limiter under
+//!   memory pressure denies rather than waves through, and an attacker cannot switch a limiter
+//!   off by loading the store.
+//!
+//! # The ceiling is per [`CounterKey`] variant, never one number for everything
+//!
+//! One shared ceiling makes every limiter share a fate. Three surfaces charge a caller-controlled
+//! key *before* resolving what it names — the share path, the drop path and the enrollment
+//! redemption — and the drop path's window is an hour long, so it is the cheapest of them to
+//! hold saturated. Under a single ceiling, a flood against that one surface would refuse a
+//! **first** key to every other: a first-time share view, a first enrollment redemption after a
+//! reboot, the first OIDC sign-in of the day. Each of those maps a counter error to a fail-closed
+//! `500`/`503`, so the weakest surface would decide the availability of all four.
+//!
+//! So the store holds one partition per variant, each with [`CounterKey::ceiling`] sized from
+//! that variant's own window and its own plausible rate of *distinct* keys — see the constants
+//! below for the arithmetic. Filling one partition refuses new keys in that partition only. The
+//! totals are deliberately close to the single ceiling they replace, because the point is not to
+//! hold more windows; it is that the windows one surface holds are not the windows another
+//! surface is denied.
+//!
+//! # What a legitimate caller experiences when a ceiling bites
+//!
+//! The paragraphs above describe the mechanism. This is the consequence, which is the part worth
+//! knowing at three in the morning.
+//!
+//! Partitioning bounds the blast radius; it does not make the flooded surface well. `DropLink`
+//! is the cheapest partition to hold saturated — twenty thousand fabricated but well-formed ids
+//! across an hour-long window, under six a second — and while it is saturated, every visitor
+//! arriving at a drop link the store holds no window for is refused. That is a **first-time**
+//! visitor: a link already being counted keeps being counted, so the flood cannot evict anyone
+//! it has not already locked out.
+//!
+//! Those callers are told `429` with an `error.*_at_capacity` code and a `retry_after`, **not**
+//! the `500 error.*_unavailable` a broken store renders. The refusal is fail-closed either way;
+//! what changes is that a client can back off instead of reporting an outage, and an operator
+//! paged on `5xx` can tell "saturated by design" from "the store is down" without reading a
+//! server-side `WARN` and inferring it. The distinction is the whole reason the ceiling refusal
+//! has a code of its own.
+//!
+//! What partitioning is *not* is a fix for the flood. A per-source key is what would bound it,
+//! and all three source keys wait on a trusted client address this server does not have.
+//!
+//! # One lock, and what that does and does not cover
+//!
+//! Every partition lives behind the same [`Mutex`]. Admission is genuinely independent — one
+//! partition's occupancy is invisible to another's ceiling — but *latency* is not: a sustained
+//! flood against one key serialises `hit`, `peek` and `reset` for every other. The critical
+//! section holds no `.await` and does `O(log n)` work over at most twenty thousand entries, so at
+//! these sizes it is contention rather than denial. Stated because the claim above ("the windows
+//! one surface holds are not the windows another is denied") is about admission and should not be
+//! read as a latency guarantee. Per-partition locking is deferred to issue #477, not overlooked.
+//!
+//! This is defence in depth, not a licence. Every derived key should still be bounded where it
+//! is built — the OIDC authorize validates the redirect before it charges
+//! ([`CounterKey::OidcAuthorizeRefused`]), and the enrollment redemption shape-checks the code
+//! before it charges ([`CounterKey::EnrollmentRedemptionMalformed`]).
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -56,7 +128,19 @@ pub enum CounterKey {
     LoginAttempts(UserId),
     /// Enrollment-code redemptions against one pending enrollment (`S-C7`, invariant 31's
     /// sibling in the enrollment contract).
+    ///
+    /// Built only from a code that passed the route's shape check, for the reason
+    /// [`Self::OidcAuthorize`] is built only from an admitted redirect host: the presented code
+    /// is caller-supplied, and a counter keyed on an unchecked one is a partition an
+    /// unauthenticated caller fills a row at a time. Anything malformed goes to
+    /// [`Self::EnrollmentRedemptionMalformed`].
     EnrollmentRedemption(String),
+    /// Every enrollment redemption presenting a code that is not even shaped like one (`S-C7`).
+    ///
+    /// One bucket, as [`Self::OidcAuthorizeRefused`] is one bucket, and for the same reasons:
+    /// a malformed attempt must still be throttled, and it must not be throttled *per code*,
+    /// because the code is whatever the caller typed.
+    EnrollmentRedemptionMalformed,
     /// Requests against one share link's opaque id (`S-C4`).
     ShareLink(String),
     /// Requests from one source address, on the public share path.
@@ -83,7 +167,70 @@ pub enum CounterKey {
     /// missed — recorded here rather than replaced by an email-keyed limiter, which would bound
     /// repeated probes against one address while doing nothing about a sweep across many.
     RegistrationSource(String),
+    /// Begun OIDC ceremonies naming one **admitted** redirect host (`S-N1`).
+    ///
+    /// Keyed on the redirect URI's host, and constructed only after
+    /// [`IdentityProvider::admits_redirect`](crate::auth::oidc::IdentityProvider::admits_redirect)
+    /// has said so. That ordering is load-bearing rather than tidy: the policy admits the
+    /// configured redirect and the two loopback literals, so **downstream of validation** the key
+    /// space is three buckets and the budget is, in effect, a deployment-wide ceiling on how fast
+    /// pending ceremonies can be begun — which is what bounds the ceremony store's growth.
+    /// Upstream of validation the host is an arbitrary caller-supplied string, and a counter
+    /// keyed on one is a map an unauthenticated caller grows a row at a time. Every refusal goes
+    /// to [`Self::OidcAuthorizeRefused`] instead.
+    ///
+    /// A per-source key is the better one and is waiting on the same missing fact as
+    /// [`Self::RegistrationSource`].
+    OidcAuthorize(String),
+    /// Every OIDC authorize whose redirect the policy refused, in one bucket (`S-N1`).
+    ///
+    /// A refusal must still be throttled — otherwise the cheapest request on the surface is the
+    /// one nothing counts — but it must not be throttled *per host*, because the host of a
+    /// refused redirect is whatever the caller typed. So refusals share one deployment-wide
+    /// window. That is deliberately blunt: it means a flood of invalid redirects can spend the
+    /// refusal budget for everybody. It costs nothing real, because a client whose redirect the
+    /// deployment admits never charges this bucket at all — only misconfigured and abusive
+    /// callers do, and a misconfigured client's remedy is to be configured.
+    ///
+    /// A unit variant rather than `OidcAuthorize("<refused>")`: this enum exists because the
+    /// retired surface namespaced counters with hand-formatted strings, and a sentinel string is
+    /// that mistake with a nicer name.
+    OidcAuthorizeRefused,
+    /// Requests from one federated peer server, across the sync and blob reads (`S-E2`,
+    /// invariant 21).
+    ///
+    /// Keyed on the peer's origin, never on the capability: a peer holding ten capabilities is
+    /// one blast-radius boundary, and a budget per token would be a budget a peer widens by
+    /// asking for more tokens. Events per hour only; bytes and CPU per hour need a weighted
+    /// counter this port does not have and are post-v1.
+    PeerRequests(String),
+    /// Federated moderation reports from one peer against one account (`S-C49`, invariant
+    /// 24), keyed on `"{reporting_server}:{reported_user}"` as the contract bounds them.
+    FederatedReports(String),
+    /// Federated moderation reports from one peer against **every** account (`S-C49`).
+    ///
+    /// The ceiling the per-account budget cannot provide: `reported_user` is a string a peer
+    /// chooses, so a peer cycling accounts gets a fresh per-account allowance each time, and
+    /// only a key that ignores the account bounds the peer's total volume.
+    PeerReports(String),
+    /// Attempts at `POST /v1/federation/reports`, keyed on the **claimed** reporting origin.
+    ///
+    /// Charged before the peer is looked up, which is the only place a bound can sit on this
+    /// route: it is the server's one unauthenticated write, and everything after it — a store
+    /// read and an Ed25519 verification — is work an anonymous caller would otherwise get for
+    /// free. The key is attacker-chosen and that is stated rather than papered over: it bounds
+    /// one claimed origin looping, not a caller cycling origins, and this server has no trusted
+    /// client address to key on instead (see
+    /// [`CounterKey::RegistrationSource`], which waits on the same missing fact).
+    FederatedIntake(String),
 }
+
+/// The scope segment a key with nothing to be scoped *to* carries.
+///
+/// Only the unit variants use it: a counter that partitions by account or by address puts that
+/// value here, and one that is a single global bucket has no such value to put. Named rather
+/// than written inline at each arm so the two spellings cannot drift.
+const GLOBAL_SCOPE: &str = "global";
 
 impl CounterKey {
     /// The name this key travels under, for a log field.
@@ -91,6 +238,7 @@ impl CounterKey {
         match self {
             Self::LoginAttempts(_) => "login_attempts",
             Self::EnrollmentRedemption(_) => "enrollment_redemption",
+            Self::EnrollmentRedemptionMalformed => "enrollment_redemption_malformed",
             Self::ShareLink(_) => "share_link",
             Self::ShareSource(_) => "share_source",
             Self::DropLink(_) => "drop_link",
@@ -98,6 +246,63 @@ impl CounterKey {
             Self::DeepVerify(_) => "deep_verify",
             Self::SecondFactor(_) => "second_factor",
             Self::RegistrationSource(_) => "registration_source",
+            Self::OidcAuthorize(_) => "oidc_authorize",
+            Self::OidcAuthorizeRefused => "oidc_authorize_refused",
+            Self::PeerRequests(_) => "peer_requests",
+            Self::FederatedReports(_) => "federated_reports",
+            Self::PeerReports(_) => "peer_reports",
+            Self::FederatedIntake(_) => "federated_intake",
+        }
+    }
+
+    /// How many simultaneously live windows this variant's partition may hold.
+    ///
+    /// Per variant and never one number for all of them: see the module docs for why a shared
+    /// ceiling is a shared fate, and [`ceilings`] for each number's arithmetic.
+    pub fn ceiling(&self) -> usize {
+        match self {
+            Self::LoginAttempts(_) => ceilings::LOGIN_ATTEMPTS,
+            Self::EnrollmentRedemption(_) => ceilings::ENROLLMENT_REDEMPTION,
+            Self::EnrollmentRedemptionMalformed => ceilings::ENROLLMENT_REDEMPTION_MALFORMED,
+            Self::ShareLink(_) => ceilings::SHARE_LINK,
+            Self::DropLink(_) => ceilings::DROP_LINK,
+            Self::ShareSource(_) | Self::DropSource(_) | Self::RegistrationSource(_) => {
+                ceilings::SOURCE_ADDRESS
+            }
+            Self::DeepVerify(_) => ceilings::DEEP_VERIFY,
+            Self::SecondFactor(_) => ceilings::SECOND_FACTOR,
+            Self::OidcAuthorize(_) => ceilings::OIDC_AUTHORIZE,
+            Self::OidcAuthorizeRefused => ceilings::OIDC_AUTHORIZE_REFUSED,
+            Self::PeerRequests(_) | Self::PeerReports(_) => ceilings::PEER_ORIGIN,
+            Self::FederatedReports(_) => ceilings::FEDERATED_REPORTS,
+            Self::FederatedIntake(_) => ceilings::FEDERATED_INTAKE,
+        }
+    }
+
+    /// What the key is scoped to — the account, the link, the address — for the backend key
+    /// that carries it. Paired with [`Self::as_str`], which names the kind.
+    pub fn scope(&self) -> &str {
+        match self {
+            Self::LoginAttempts(user) | Self::DeepVerify(user) => user.as_str(),
+            Self::EnrollmentRedemption(scope)
+            | Self::ShareLink(scope)
+            | Self::ShareSource(scope)
+            | Self::DropLink(scope)
+            | Self::DropSource(scope)
+            | Self::SecondFactor(scope)
+            | Self::OidcAuthorize(scope)
+            | Self::PeerRequests(scope)
+            | Self::FederatedReports(scope)
+            | Self::PeerReports(scope)
+            | Self::FederatedIntake(scope)
+            | Self::RegistrationSource(scope) => scope,
+            // The two unit variants are each **one** global bucket by construction — that is why
+            // they are unit variants rather than a scoped one carrying a sentinel string (see
+            // their own docs). They still need a scope segment, because the backend key is
+            // `capsule:counter:{kind}:{scope}` and a key ending in `:` invites a second, subtly
+            // different spelling later. `GLOBAL` is that segment, shared deliberately: `as_str`
+            // already distinguishes the two kinds, so one constant cannot collide them.
+            Self::EnrollmentRedemptionMalformed | Self::OidcAuthorizeRefused => GLOBAL_SCOPE,
         }
     }
 }
@@ -150,8 +355,15 @@ pub trait CounterStore: std::fmt::Debug + Send + Sync {
     ///
     /// **The two together, never separately.** Read-then-increment lets every request in a burst
     /// read the same under-limit value, which is the burst the limiter exists to stop. Every
-    /// adapter owes this atomically; the in-memory one gets it from a mutex and Valkey from
-    /// `INCR` plus a first-hit `EXPIRE`.
+    /// adapter owes this atomically; the in-memory one gets it from a mutex and Valkey from one
+    /// Lua script that opens, charges or refuses the window in a single server-side step
+    /// ([`valkey::ValkeyCounters`]).
+    ///
+    /// An adapter may answer [`StoreError::Rejected`](crate::store::StoreError::Rejected) when
+    /// it cannot hold another key's window. That is an error and not a [`Verdict`], deliberately:
+    /// the caller's rule for *any* counter failure is already "refuse", so a full store denies
+    /// through the path that is documented to fail closed rather than through a new one somebody
+    /// could handle as an admission.
     fn hit<'a>(
         &'a self,
         key: &'a CounterKey,
@@ -178,10 +390,129 @@ pub trait CounterStore: std::fmt::Debug + Send + Sync {
     fn reset<'a>(&'a self, key: &'a CounterKey) -> StoreFuture<'a, ()>;
 }
 
+/// How many simultaneously live windows each [`CounterKey`] variant may hold.
+///
+/// Each is that variant's window length multiplied by a stated rate of *distinct* keys, rounded
+/// up for headroom. The budget bounds hits **per key**; it says nothing about how many keys
+/// exist, so the key rate is the assumption each number is built on and each is written down.
+pub mod ceilings {
+    /// [`CounterKey::LoginAttempts`](super::CounterKey::LoginAttempts) — 15-minute window, keyed
+    /// on an account.
+    ///
+    /// 900 s × ~1 account entering a failure window per second = 900. Rounded to ten thousand:
+    /// the key is an account id, so the true bound is the size of the directory, and a
+    /// deployment large enough to exceed this has other numbers to raise first.
+    pub const LOGIN_ATTEMPTS: usize = 10_000;
+
+    /// [`CounterKey::EnrollmentRedemption`](super::CounterKey::EnrollmentRedemption) —
+    /// 10-minute window, keyed on a shape-checked code.
+    ///
+    /// 600 s × ~1 code presented per second = 600. Rounded to five thousand. Device enrollment
+    /// is a rare, deliberate act: a deployment redeeming five thousand distinct codes inside ten
+    /// minutes is not one this number is failing.
+    pub const ENROLLMENT_REDEMPTION: usize = 5_000;
+
+    /// [`CounterKey::EnrollmentRedemptionMalformed`](super::CounterKey::EnrollmentRedemptionMalformed)
+    /// — one key exists, so one window.
+    pub const ENROLLMENT_REDEMPTION_MALFORMED: usize = 1;
+
+    /// [`CounterKey::ShareLink`](super::CounterKey::ShareLink) — 1-minute window, keyed on a
+    /// caller-supplied opaque id.
+    ///
+    /// 60 s × ~100 distinct links opened per second = 6 000. Rounded to twenty thousand for
+    /// three-fold headroom, because this is the surface a public link is *meant* to be hit on.
+    pub const SHARE_LINK: usize = 20_000;
+
+    /// [`CounterKey::DropLink`](super::CounterKey::DropLink) — 1-hour window, keyed on a
+    /// caller-supplied opaque id.
+    ///
+    /// 3 600 s × ~1 distinct link receiving a session per second = 3 600. Rounded to twenty
+    /// thousand. The hour-long window makes this the cheapest partition to hold saturated — at
+    /// twenty thousand ids an hour, under six a second — which is exactly why it is a partition:
+    /// saturating it costs the drop path its first-time keys and costs no other surface
+    /// anything.
+    pub const DROP_LINK: usize = 20_000;
+
+    /// [`CounterKey::SecondFactor`](super::CounterKey::SecondFactor) — 5-minute window, keyed on
+    /// a server-minted challenge id.
+    ///
+    /// 300 s × ~10 sign-ins reaching a second factor per second = 3 000. Rounded to ten
+    /// thousand. Not caller-controlled: a challenge id comes off a token this server signed.
+    pub const SECOND_FACTOR: usize = 10_000;
+
+    /// [`CounterKey::DeepVerify`](super::CounterKey::DeepVerify) — 1-hour window, keyed on an
+    /// authenticated account.
+    ///
+    /// Bounded by the directory, as `LOGIN_ATTEMPTS` is, and reached only by accounts that asked
+    /// for a deep scan in the last hour.
+    pub const DEEP_VERIFY: usize = 10_000;
+
+    /// The three source-address keys — 1-minute and 1-hour windows, keyed on a client address.
+    ///
+    /// Charged nowhere yet: all three wait on a trusted client address this server does not have
+    /// behind an unconfigured proxy chain. Sized for the day one arrives — distinct addresses in
+    /// the window, which for a self-hosted deployment is thousands, not millions.
+    pub const SOURCE_ADDRESS: usize = 10_000;
+
+    /// [`CounterKey::OidcAuthorize`](super::CounterKey::OidcAuthorize) — 1-minute window, keyed
+    /// on an **admitted** redirect host.
+    ///
+    /// Three keys can exist: the configured redirect's host and the two loopback literals. Set
+    /// to sixteen rather than three so that changing `OIDC_REDIRECT_URL` while a window is open,
+    /// or a provider spelling `[::1]` differently, meets headroom instead of a cliff — and small
+    /// enough that it is visibly a *bounded* key rather than a hopeful one.
+    pub const OIDC_AUTHORIZE: usize = 16;
+
+    /// [`CounterKey::OidcAuthorizeRefused`](super::CounterKey::OidcAuthorizeRefused) — one key
+    /// exists, so one window.
+    pub const OIDC_AUTHORIZE_REFUSED: usize = 1;
+
+    /// [`CounterKey::PeerRequests`](super::CounterKey::PeerRequests) and
+    /// [`CounterKey::PeerReports`](super::CounterKey::PeerReports) — both keyed on a peer's
+    /// origin, so both are bounded by the same thing and share one number.
+    ///
+    /// Not caller-controlled: a peer origin reaches either key only off a capability this
+    /// server minted, so the true bound is the size of the peer list an operator pinned. Ten
+    /// thousand is the same rounding as [`LOGIN_ATTEMPTS`], and for the same reason — a
+    /// deployment federating with more peers than that has other numbers to raise first.
+    pub const PEER_ORIGIN: usize = 10_000;
+
+    /// [`CounterKey::FederatedReports`](super::CounterKey::FederatedReports) — 1-hour window,
+    /// keyed on `"{reporting_server}:{reported_user}"`.
+    ///
+    /// The account half is a string a peer chooses, so this partition *is* growable by a
+    /// misbehaving peer — which is exactly why
+    /// [`CounterKey::PeerReports`](super::CounterKey::PeerReports) exists. That is also what
+    /// bounds this: a report charges both keys, so a peer cannot create more distinct pairs per
+    /// hour than [`budgets::PEER_REPORTS`](super::budgets::PEER_REPORTS) admits — 200. Across a
+    /// pinned peer list of the order [`PEER_ORIGIN`] anticipates, twenty thousand is roughly a
+    /// hundred peers each spending their whole hourly allowance on distinct accounts.
+    pub const FEDERATED_REPORTS: usize = 20_000;
+
+    /// [`CounterKey::FederatedIntake`](super::CounterKey::FederatedIntake) — 1-hour window,
+    /// keyed on the **claimed** reporting origin.
+    ///
+    /// The one federation key charged before anything is authenticated, so the key space is
+    /// attacker-chosen outright and this ceiling is the only bound on it. Sized like
+    /// [`SHARE_LINK`] and [`DROP_LINK`], the other partitions a caller supplies the key for:
+    /// twenty thousand distinct claimed origins in an hour is under six a second, and spending
+    /// it costs the intake path its first-time keys and costs no other surface anything. That
+    /// containment is the whole reason it is a partition rather than a share of one.
+    pub const FEDERATED_INTAKE: usize = 20_000;
+}
+
 /// A deterministic in-memory adapter.
+///
+/// Windows are purged as they lapse, and each [`CounterKey`] variant is bounded in a partition of
+/// its own; see the module docs.
 #[derive(Debug, Default)]
 pub struct InMemoryCounters {
-    windows: Mutex<BTreeMap<CounterKey, Window>>,
+    /// Set by [`InMemoryCounters::with_ceiling`], and then the ceiling of **every** partition.
+    /// `None` in production, where each variant carries its own.
+    ceiling_override: Option<usize>,
+    /// Partitioned by [`CounterKey::as_str`], so one variant's occupancy is invisible to
+    /// another's ceiling. An emptied partition is dropped by the purge rather than left behind.
+    windows: Mutex<BTreeMap<&'static str, BTreeMap<CounterKey, Window>>>,
 }
 
 /// One key's open window.
@@ -189,12 +520,69 @@ pub struct InMemoryCounters {
 struct Window {
     hits: u32,
     opened_at: Timestamp,
+    /// When this window may be dropped, from the budget in force when it opened.
+    ///
+    /// A **purge hint only.** Admission is always recomputed by [`verdict`] from `opened_at`
+    /// against the budget the caller supplies, so re-tuning a budget takes effect on the next
+    /// hit exactly as it did before this field existed; all this decides is when a row nobody
+    /// will read again is collected.
+    purge_after: Timestamp,
 }
 
+/// The partitioned window map: one inner map per [`CounterKey`] variant.
+type Partitions = BTreeMap<&'static str, BTreeMap<CounterKey, Window>>;
+
 impl InMemoryCounters {
-    /// An empty set of counters.
+    /// An empty set of counters, each variant bounded by its own [`CounterKey::ceiling`].
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The same counters with **every** partition bounded at `ceiling` instead.
+    ///
+    /// A tuning and testing affordance: it makes the partition boundary observable without
+    /// writing twenty thousand keys. Production leaves it unset, so each variant carries the
+    /// number its own window and key rate justify.
+    #[must_use]
+    pub fn with_ceiling(mut self, ceiling: usize) -> Self {
+        self.ceiling_override = Some(ceiling);
+        self
+    }
+
+    /// How many distinct keys hold a window right now, across every partition.
+    ///
+    /// For tests that assert the *cardinality* of the key space rather than any one verdict —
+    /// the property a caller-controlled key silently destroys.
+    pub fn len(&self) -> usize {
+        lock(&self.windows).values().map(BTreeMap::len).sum()
+    }
+
+    /// How many distinct keys hold a window in `key`'s partition.
+    ///
+    /// The number the ceiling is actually compared against, so a test can assert that filling
+    /// one surface left another's occupancy alone.
+    pub fn len_of(&self, key: &CounterKey) -> usize {
+        lock(&self.windows)
+            .get(key.as_str())
+            .map_or(0, BTreeMap::len)
+    }
+
+    /// Whether no key holds a window.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// This key's partition ceiling, or the override every partition shares when one is set.
+    fn ceiling_for(&self, key: &CounterKey) -> usize {
+        self.ceiling_override.unwrap_or_else(|| key.ceiling())
+    }
+
+    /// Drop every window whose budget has lapsed, and every partition thereby emptied.
+    fn purge(windows: &mut Partitions, now: Timestamp) {
+        windows.retain(|_, partition| {
+            partition.retain(|_, window| now < window.purge_after);
+            !partition.is_empty()
+        });
     }
 }
 
@@ -241,7 +629,33 @@ impl CounterStore for InMemoryCounters {
     ) -> StoreFuture<'a, Verdict> {
         Box::pin(async move {
             let mut windows = lock(&self.windows);
-            let (decision, live) = verdict(windows.get(key).copied(), budget, at);
+            Self::purge(&mut windows, at);
+
+            let held = windows
+                .get(key.as_str())
+                .and_then(|partition| partition.get(key))
+                .copied();
+            let ceiling = self.ceiling_for(key);
+            let occupancy = windows.get(key.as_str()).map_or(0, BTreeMap::len);
+            // Only a key with no window yet can be refused, and only by its own partition's
+            // occupancy. A key already being counted keeps being counted, and another variant's
+            // flood is not visible here at all.
+            if held.is_none() && occupancy >= ceiling {
+                tracing::warn!(
+                    counter = key.as_str(),
+                    windows = occupancy,
+                    ceiling,
+                    "a counter partition is full; a hit was refused rather than counted"
+                );
+                return Err(crate::store::StoreError::Rejected {
+                    store: COUNTER_STORE,
+                    detail: format!(
+                        "{ceiling} open windows is the ceiling for `{}`",
+                        key.as_str()
+                    ),
+                });
+            }
+            let (decision, live) = verdict(held, budget, at);
 
             match decision {
                 Verdict::Limited { retry_after } => {
@@ -259,13 +673,18 @@ impl CounterStore for InMemoryCounters {
                         Some(open) => Window {
                             hits: open.hits.saturating_add(1),
                             opened_at: open.opened_at,
+                            purge_after: crate::store::deadline(open.opened_at, budget.window),
                         },
                         None => Window {
                             hits: 1,
                             opened_at: at,
+                            purge_after: crate::store::deadline(at, budget.window),
                         },
                     };
-                    windows.insert(key.clone(), updated);
+                    windows
+                        .entry(key.as_str())
+                        .or_default()
+                        .insert(key.clone(), updated);
                     Ok(Verdict::Admitted {
                         remaining: budget.limit.saturating_sub(updated.hits),
                     })
@@ -282,13 +701,23 @@ impl CounterStore for InMemoryCounters {
     ) -> StoreFuture<'a, Verdict> {
         Box::pin(async move {
             let windows = lock(&self.windows);
-            Ok(verdict(windows.get(key).copied(), budget, at).0)
+            let held = windows
+                .get(key.as_str())
+                .and_then(|partition| partition.get(key))
+                .copied();
+            Ok(verdict(held, budget, at).0)
         })
     }
 
     fn reset<'a>(&'a self, key: &'a CounterKey) -> StoreFuture<'a, ()> {
         Box::pin(async move {
-            if lock(&self.windows).remove(key).is_some() {
+            let mut windows = lock(&self.windows);
+            if let Some(partition) = windows.get_mut(key.as_str())
+                && partition.remove(key).is_some()
+            {
+                if partition.is_empty() {
+                    windows.remove(key.as_str());
+                }
                 tracing::debug!(counter = key.as_str(), "a counter window was cleared");
             }
             Ok(())
@@ -345,9 +774,64 @@ impl CounterContext {
     pub async fn reset(&self, key: &CounterKey) -> Result<(), crate::store::StoreError> {
         self.counters.reset(key).await
     }
+
+    /// What a caller should be told about a failed [`Self::hit`].
+    ///
+    /// `Some(retry_after)` when the partition was full — the limiter working as designed, which
+    /// a route renders `429 error.*_at_capacity` — and `None` when the store could not answer at
+    /// all, which stays a `500`. One method rather than a predicate plus a clock read at three
+    /// call sites, because the half that is easy to forget is the deadline.
+    ///
+    /// The refusal is fail-closed either way; this decides only the answer.
+    pub fn capacity_refusal(
+        &self,
+        error: &crate::store::StoreError,
+        budget: Budget,
+    ) -> Option<Timestamp> {
+        is_at_capacity(error).then(|| capacity_retry_after(self.clock.now(), budget))
+    }
+}
+
+/// Whether a [`CounterStore`] failure was the partition ceiling rather than a broken store.
+///
+/// The two failures arrive as one `Result::Err` and mean opposite things to a caller: a full
+/// partition is the limiter working as designed and clears on its own within the window, while
+/// anything else is a store that could not answer. A route that renders both as `500` tells a
+/// client to report an outage and tells an operator to go looking for one, so every route that
+/// charges a caller-influenced key asks this and answers `429 error.*_at_capacity` when it is
+/// true.
+///
+/// The refusal itself is fail-closed either way. This decides only what the caller is told.
+pub fn is_at_capacity(error: &crate::store::StoreError) -> bool {
+    matches!(
+        error,
+        crate::store::StoreError::Rejected { store, .. } if *store == COUNTER_STORE
+    )
+}
+
+/// The `store` name [`InMemoryCounters`] refuses under, and [`is_at_capacity`] matches on.
+pub const COUNTER_STORE: &str = "counters";
+
+/// When a caller refused by a full partition may expect room, as an **upper** bound.
+///
+/// One window from now. A full partition is full of *live* windows, and the earliest of them
+/// lapses no later than one window after it opened, so a caller that waits this long finds room
+/// unless the flood is still running — in which case it finds the same honest `429` again.
+pub fn capacity_retry_after(now: Timestamp, budget: Budget) -> Timestamp {
+    crate::store::deadline(now, budget.window)
+}
+
+/// `at` as Unix seconds for a `retry_after` extension member.
+///
+/// Saturating at zero, as every other deadline on this surface does: a clock before the epoch is
+/// a misconfiguration, and "retry now" is the safe reading of one.
+pub fn unix_seconds(at: Timestamp) -> u64 {
+    u64::try_from(at.as_second()).unwrap_or(0)
 }
 
 pub mod budgets;
+pub mod conformance;
+pub mod valkey;
 
 #[cfg(test)]
 mod tests;

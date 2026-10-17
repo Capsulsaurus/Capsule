@@ -159,6 +159,21 @@ pub fn hash_reader<R: Read>(mut reader: R) -> io::Result<Hash32> {
     Ok(hasher.finalize())
 }
 
+/// SHA-256 of a file's contents, streamed in fixed blocks.
+///
+/// Opens `path` and feeds it through [`hash_reader`] rather than reading the whole file
+/// into memory, so arbitrarily large originals hash with bounded memory.
+///
+/// `native`-gated, unlike the rest of this module: the browser sealing build
+/// (`--no-default-features`, `wasm32-unknown-unknown`) has no filesystem, so an ungated
+/// `hash_file` would compile there and then fail at runtime on every call. Its two callers
+/// — the import planner and the file-metadata reader — are `native` anyway.
+#[cfg(feature = "native")]
+pub fn hash_file(path: &std::path::Path) -> io::Result<Hash32> {
+    let file = std::fs::File::open(path)?;
+    hash_reader(io::BufReader::new(file))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,6 +214,26 @@ mod tests {
 
         // And via the reader path.
         assert_eq!(hash_reader(&data[..]).unwrap(), one_shot);
+    }
+
+    #[cfg(feature = "native")]
+    #[test]
+    fn hash_file_matches_one_shot() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("blob.bin");
+        // Larger than the 64 KiB read block, so the streaming path takes more than one turn.
+        let data = vec![0x5Au8; 64 * 1024 + 7];
+        std::fs::write(&path, &data).unwrap();
+
+        assert_eq!(hash_file(&path).unwrap(), hash_bytes(&data));
+    }
+
+    #[cfg(feature = "native")]
+    #[test]
+    fn hash_file_reports_a_missing_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = hash_file(&dir.path().join("absent.bin")).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
 
     #[test]

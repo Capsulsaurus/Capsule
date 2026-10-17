@@ -5,7 +5,7 @@ use std::{fs, io};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::utils::hash::get_file_hash;
+use crate::crypto::hash::hash_file;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct HashData(String);
@@ -57,7 +57,7 @@ impl FileMetadata {
         let metadata = fs::metadata(path)?;
 
         // Get file hash
-        let hash = get_file_hash(path)?;
+        let hash = hash_file(path)?.to_hex();
 
         // Get file size
         let size = metadata.len();

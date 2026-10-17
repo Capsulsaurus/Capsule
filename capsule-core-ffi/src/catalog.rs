@@ -322,6 +322,64 @@ impl Catalog {
     }
 }
 
+// ── LQIP placeholder rendering (slice S-B14) ────────────────────────────────
+
+/// A decoded LQIP placeholder handed to the native clients: packed RGBA8, ready for a
+/// `CGImage` / `Bitmap`.
+///
+/// A record rather than raw bytes because the caller cannot know the dimensions in advance:
+/// `decode_capped` returns the largest frame that fits *inside* the requested box while
+/// preserving the source aspect ratio.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct LqipPlaceholder {
+    /// Frame width in pixels — at most the requested `max_width`.
+    pub width: u32,
+    /// Frame height in pixels — at most the requested `max_height`.
+    pub height: u32,
+    /// Packed RGBA8 samples, `width * height * 4` bytes long.
+    pub rgba: Vec<u8>,
+}
+
+/// Render the three fields of a sidecar `lqip` record to a paintable placeholder, band-limited
+/// to the box being painted.
+///
+/// The mirror of `capsule-wasm`'s `decodeLqip`, over the same
+/// [`capsule_core::lqip::render`] the import pipeline encodes against — one implementation, so
+/// a photo's placeholder does not depend on which client is painting it (slice `S-B14`).
+///
+/// **A free function rather than a [`Catalog`] method, deliberately.** The `assets` table has
+/// `chromahash` and `dominant_color` columns, and they are NULL: the signed sidecar is the
+/// placeholder's home, and projecting it onto the index would have to be done identically by
+/// `capsule_core::library::rebuild` or a rebuilt index would disagree with a freshly written
+/// one. Until both sides move together, an accessor keyed on an asset id could only ever
+/// return nothing — so this takes the record the caller already holds from the decrypted
+/// sidecar instead of pretending the index has it.
+///
+/// **Infallible.** An unrecognised `format_version`, a payload the parser rejects, or a
+/// `dominant_color` that is not three bytes all yield the 1x1 solid fill: a reader must never
+/// misrender a placeholder, and a gallery must never fail to draw a cell over one.
+#[uniffi::export]
+#[must_use]
+pub fn render_lqip(
+    format_version: u16,
+    chromahash: Vec<u8>,
+    dominant_color: Vec<u8>,
+    max_width: u32,
+    max_height: u32,
+) -> LqipPlaceholder {
+    // A malformed fill is the one input `capsule_core::lqip::render` cannot take, and unlike the
+    // wasm boundary there is nothing useful to throw across the FFI for it: black is the
+    // conventional empty-cell fill and is what a caller would paint anyway.
+    let fill: [u8; 3] = dominant_color.try_into().unwrap_or([0, 0, 0]);
+    let image =
+        capsule_core::lqip::render(format_version, &chromahash, fill, max_width, max_height);
+    LqipPlaceholder {
+        width: image.width,
+        height: image.height,
+        rgba: image.rgba,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -623,6 +681,58 @@ mod tests {
         // listings, so they stay ungated by design — asserted so the choice is explicit.
         assert!(cat.find_by_uuid("deleted".to_string()).unwrap().is_some());
         assert!(cat.find_by_uuid("hidden".to_string()).unwrap().is_some());
+    }
+
+    // ── LQIP placeholder rendering ──────────────────────────────────────────
+
+    /// The native surface decodes the same bytes the import pipeline encoded, to the same
+    /// pixels `capsule_core::lqip` produces — the `S-B14` cross-surface criterion at the FFI
+    /// boundary.
+    #[test]
+    fn render_lqip_matches_the_core_decoder() {
+        use capsule_core::lqip::{Gamut, LQIP_FORMAT_V1, Lqip};
+
+        let (w, h) = (120u32, 90u32);
+        let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                rgba.extend_from_slice(&[(x * 2) as u8, (y * 2) as u8, 128, 255]);
+            }
+        }
+        let lqip = Lqip::encode(w, h, &rgba, Gamut::Srgb).expect("encode");
+        assert_eq!(lqip.as_bytes().len(), 32, "the committed tier is 32 bytes");
+
+        let expected = lqip.decode_capped(48, 48);
+        let got = render_lqip(
+            LQIP_FORMAT_V1,
+            lqip.as_bytes().to_vec(),
+            lqip.dominant_color().to_vec(),
+            48,
+            48,
+        );
+        assert_eq!((got.width, got.height), (expected.width, expected.height));
+        assert_eq!(got.rgba, expected.rgba, "byte-identical to the core");
+        assert_eq!(got.rgba.len() as u32, got.width * got.height * 4);
+    }
+
+    /// Every malformed input paints the fallback rather than failing: an unknown version, a
+    /// corrupt payload, and a `dominant_color` that is not three bytes.
+    #[test]
+    fn render_lqip_never_fails_on_a_malformed_record() {
+        use capsule_core::lqip::LQIP_FORMAT_V1;
+
+        let fill = vec![9u8, 8, 7];
+        let unknown = render_lqip(LQIP_FORMAT_V1 + 42, vec![1, 2, 3], fill.clone(), 32, 32);
+        assert_eq!((unknown.width, unknown.height), (1, 1));
+        assert_eq!(unknown.rgba, vec![9, 8, 7, 255]);
+
+        let corrupt = render_lqip(LQIP_FORMAT_V1, vec![0xDE, 0xAD], fill, 32, 32);
+        assert_eq!(corrupt.rgba, vec![9, 8, 7, 255]);
+
+        // No usable fill: black, the conventional empty-cell colour.
+        let no_fill = render_lqip(LQIP_FORMAT_V1, vec![0xDE, 0xAD], vec![1, 2], 32, 32);
+        assert_eq!((no_fill.width, no_fill.height), (1, 1));
+        assert_eq!(no_fill.rgba, vec![0, 0, 0, 255]);
     }
 
     /// The retention sweep is deliberately ungated (it runs unattended) — pinned here so

@@ -32,6 +32,11 @@ extension Asset {
 
 extension AssetAuthorizationStatus {
     /// Maps a PhotoKit authorization status to the source-agnostic status.
+    ///
+    /// `.limited` is reachable only on iOS — macOS has no limited-library
+    /// picker, so it answers full access or nothing. The case still maps
+    /// unconditionally: the platform simply never produces it, which is
+    /// cheaper than a branch that has to be kept true.
     init(photoKit status: PHAuthorizationStatus) {
         self =
             switch status {

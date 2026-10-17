@@ -1,8 +1,8 @@
-pub mod driver;
-pub mod migrate;
-pub mod rows;
-pub mod schema;
-pub mod vector;
+pub(crate) mod driver;
+pub(crate) mod migrate;
+pub(crate) mod rows;
+pub(crate) mod schema;
+pub(crate) mod vector;
 
 pub use driver::DatabaseDriver;
 pub use migrate::{Applied, MigrationError, Outcome as MigrationOutcome};

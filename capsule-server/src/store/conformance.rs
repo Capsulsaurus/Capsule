@@ -40,11 +40,13 @@ use uuid::Uuid;
 
 use super::auth::{AuthStateStore, CohortStore, SessionRecord};
 use super::ceremony::{
-    ChallengeStore, ChannelStore, Direction, DrainOutcome, EnrollmentStore, PendingEnrollment,
-    RelayChannel, RelayOutcome, RelayPayload, RevokeAllChallenge,
+    ChallengeStore, ChannelStore, Direction, DrainOutcome, EnrollmentStore, OidcAuthorizationStore,
+    PendingAuthorization, PendingEnrollment, RelayChannel, RelayOutcome, RelayPayload,
+    RevokeAllChallenge,
 };
 use super::ids::{
-    AssetId, ChallengeToken, ChannelId, EnrollmentCode, OwnerId, SessionId, UploadId, UserId,
+    AssetId, ChallengeToken, ChannelId, EnrollmentCode, OidcNonce, OidcState, OwnerId,
+    PkceVerifier, SessionId, UploadId, UserId,
 };
 use super::upload::{
     AcceptedChunk, BlobRole, FinalizeClaim, UploadSessionRecord, UploadSessionStatus,
@@ -52,12 +54,36 @@ use super::upload::{
 };
 use super::{StoreError, StoreFuture, deadline};
 
-/// The six stores under test, plus the one thing a suite cannot do through a port: move time.
+/// The durable device-cohort map, on its own.
 ///
-/// `advance` is the seam that keeps the suite backend-agnostic. The deterministic double
-/// advances a manual clock; a Valkey- or Postgres-backed harness sleeps, or resets its stores
-/// with a lifetime short enough to wait out. Either way the cases below are identical.
-pub trait Harness: Send + Sync {
+/// Split out of [`Harness`] because [`CohortStore`] is the one port in this module that is
+/// **not** Valkey's. Everything else here is volatile TTL state — sessions, upload progress, four
+/// ceremonies — and the cohort map deliberately outlives all of it: a cohort becomes worth
+/// knowing exactly when the sessions that carried it have expired. Its production adapter is
+/// therefore Postgres (#402) while the other five are Valkey's (#403), and a Postgres-backed
+/// harness that had to implement `auth()`, `uploads()` and three ceremony stores to run four
+/// cohort cases would have to invent five adapters it will never have.
+///
+/// `advance` rides along rather than staying on [`Harness`], for the same reason: a cohort case
+/// asserts the map does *not* expire, and a suite that could not move time could not assert it.
+pub trait CohortHarness: Send + Sync {
+    /// The durable device-cohort map under test.
+    fn cohorts(&self) -> &dyn CohortStore;
+
+    /// Move every store in this harness `by` forward in its own time.
+    ///
+    /// The seam that keeps the suite backend-agnostic. The deterministic double advances a
+    /// manual clock; a Valkey- or Postgres-backed harness sleeps, or resets its stores with a
+    /// lifetime short enough to wait out — and for a store with no TTL at all it is legitimately
+    /// a no-op, because there is nothing to move.
+    fn advance(&self, by: SignedDuration) -> StoreFuture<'_, ()>;
+}
+
+/// The five volatile stores under test, plus the time seam it inherits.
+///
+/// `Harness` extends [`CohortHarness`] rather than restating `advance`, so one deterministic
+/// double still implements both and [`run_all`] still runs every case in this module against it.
+pub trait Harness: CohortHarness {
     /// The authentication-state store under test.
     fn auth(&self) -> &dyn AuthStateStore;
     /// The upload-session store under test.
@@ -68,11 +94,16 @@ pub trait Harness: Send + Sync {
     fn enrollments(&self) -> &dyn EnrollmentStore;
     /// The enrollment relay-channel store under test.
     fn channels(&self) -> &dyn ChannelStore;
-    /// The durable device-cohort map under test.
-    fn cohorts(&self) -> &dyn CohortStore;
-
-    /// Move every store in this harness `by` forward in its own time.
-    fn advance(&self, by: SignedDuration) -> StoreFuture<'_, ()>;
+    /// The pending OIDC authorization store under test (slice `S-N1`), if this harness has one.
+    ///
+    /// Optional **for now**, and the default is the whole reason: the port landed with its
+    /// in-memory adapter while the Valkey adapter is owed, and a required accessor would stop a
+    /// container-backed harness compiling until it exists. The rows that read it panic on
+    /// `None` when driven individually and are skipped by [`run_all`]; the slice that lands the
+    /// Valkey adapter removes the `Option` and the skip with it.
+    fn oidc_authorizations(&self) -> Option<&dyn OidcAuthorizationStore> {
+        None
+    }
 }
 
 /// Unwrap a store result, failing with the operation that was expected to work.
@@ -141,6 +172,28 @@ fn upload(case: &str, tag: &str, uploader: &str, offset: i64) -> UploadSessionRe
         status: UploadSessionStatus::Pending,
         created_at,
         last_progress_at: created_at,
+    }
+}
+
+/// The OIDC authorization store, or a failure naming what the harness lacks.
+fn oidc_authorizations(h: &dyn Harness) -> &dyn OidcAuthorizationStore {
+    match h.oidc_authorizations() {
+        Some(store) => store,
+        None => {
+            panic!(
+                "this harness offers no OidcAuthorizationStore; see Harness::oidc_authorizations"
+            )
+        }
+    }
+}
+
+/// A pending authorization for `case`, begun `offset` seconds after [`base`].
+fn pending(case: &str, offset: i64) -> PendingAuthorization {
+    PendingAuthorization {
+        nonce: OidcNonce::new(format!("{case}-nonce")),
+        verifier: PkceVerifier::new(format!("{case}-verifier")),
+        redirect_uri: format!("http://127.0.0.1:4242/{case}"),
+        issued_at: deadline(base(), SignedDuration::from_secs(offset)),
     }
 }
 
@@ -697,6 +750,55 @@ pub async fn finalization_is_claimed_exactly_once(h: &dyn Harness) {
     );
 }
 
+/// A claimed session is no longer an eviction candidate — the promise the claim makes.
+///
+/// The winner finalizes from the record it was handed and must not have the bytes discarded
+/// out from under it by the pressure sweep. `WaitingForProcessing` is in flight for every other
+/// purpose, so this is asserted through the eviction view specifically. Works in its own band
+/// of progress time, below every other case's, and clears up after itself.
+pub async fn a_claimed_session_leaves_the_eviction_view(h: &dyn Harness) {
+    let store = h.uploads();
+    let record = upload("claimed", "a", "uploader", -20_000);
+    ok(store.open(record.clone()).await, "open");
+
+    let horizon = deadline(base(), SignedDuration::from_secs(-19_000));
+    assert_eq!(
+        ok(
+            store.least_recently_progressed(horizon, 10).await,
+            "least_recently_progressed"
+        ),
+        vec![record.upload_id.clone()],
+        "an unclaimed, stalled session is a candidate"
+    );
+
+    match ok(
+        store.claim_finalize(&record.upload_id).await,
+        "claim_finalize",
+    ) {
+        FinalizeClaim::Won(_) => {}
+        other => panic!("the first claim must win, got {other:?}"),
+    }
+    assert!(
+        ok(
+            store.least_recently_progressed(horizon, 10).await,
+            "least_recently_progressed"
+        )
+        .is_empty(),
+        "a claimed session has left the eviction view"
+    );
+    assert_eq!(
+        present(
+            ok(store.read(&record.upload_id).await, "read"),
+            "the session"
+        )
+        .status,
+        UploadSessionStatus::WaitingForProcessing,
+        "and is still in flight for every other purpose"
+    );
+
+    ok(store.discard(&record.upload_id).await, "discard");
+}
+
 /// The startup scrub sets the byte counter absolutely and does not fake progress.
 pub async fn reconciling_received_bytes_does_not_move_the_progress_clock(h: &dyn Harness) {
     let store = h.uploads();
@@ -973,6 +1075,59 @@ pub async fn a_challenge_expires_with_its_store(h: &dyn Harness) {
     );
 }
 
+/// A begun authorization is redeemed by the first callback, successful or not.
+///
+/// The property that makes a replayed `state` — and therefore a replayed authorization code
+/// on a stolen redirect — unrepeatable, and the reason the nonce can never be checked twice.
+pub async fn an_oidc_authorization_is_single_use(h: &dyn Harness) {
+    let store = oidc_authorizations(h);
+    let state = OidcState::new("oidc-single-use");
+    let record = pending("oidc-single-use", 0);
+    ok(
+        store.begin(&state, record.clone()).await,
+        "begin an authorization",
+    );
+
+    assert_eq!(
+        ok(store.consume(&state).await, "consume"),
+        Some(record),
+        "the first callback gets the record, every field intact"
+    );
+    assert_eq!(
+        ok(store.consume(&state).await, "consume again"),
+        None,
+        "a consumed state cannot be replayed"
+    );
+    assert_eq!(
+        ok(
+            store.consume(&OidcState::new("oidc-never-begun")).await,
+            "consume unknown"
+        ),
+        None,
+        "an unknown state is indistinguishable from a spent one"
+    );
+}
+
+/// A pending authorization dies at its store's TTL, with no caller involved.
+pub async fn an_oidc_authorization_expires_with_its_store(h: &dyn Harness) {
+    let store = oidc_authorizations(h);
+    let state = OidcState::new("oidc-expiry");
+    ok(
+        store.begin(&state, pending("oidc-expiry", 0)).await,
+        "begin an authorization",
+    );
+
+    ok(
+        h.advance(store.ttl()).await,
+        "advance to the authorization TTL",
+    );
+    assert_eq!(
+        ok(store.consume(&state).await, "consume at the deadline"),
+        None,
+        "an authorization is gone at its TTL, and the expired record is burned with it"
+    );
+}
+
 /// An enrollment redeems under either spelling, and redeeming burns both.
 pub async fn an_enrollment_redeems_by_either_spelling_and_burns_both(h: &dyn Harness) {
     let store = h.enrollments();
@@ -1242,7 +1397,7 @@ pub async fn closing_a_channel_drops_both_mailboxes(h: &dyn Harness) {
 // -------------------------------------------------------------------------------------------
 
 /// A cohort is a fact about a device, not an event: seeing it twice is one row.
-pub async fn observing_a_cohort_twice_is_one_row_that_moves_last_seen(h: &dyn Harness) {
+pub async fn observing_a_cohort_twice_is_one_row_that_moves_last_seen(h: &dyn CohortHarness) {
     let user = UserId::new("cohort-user-1");
     let at = Timestamp::UNIX_EPOCH;
 
@@ -1272,7 +1427,7 @@ pub async fn observing_a_cohort_twice_is_one_row_that_moves_last_seen(h: &dyn Ha
 }
 
 /// Cohorts are listed oldest first sighting first, and the order is total.
-pub async fn cohorts_are_listed_oldest_first(h: &dyn Harness) {
+pub async fn cohorts_are_listed_oldest_first(h: &dyn CohortHarness) {
     let user = UserId::new("cohort-user-2");
     let base = Timestamp::UNIX_EPOCH;
     for (hash, hours) in [
@@ -1298,7 +1453,7 @@ pub async fn cohorts_are_listed_oldest_first(h: &dyn Harness) {
 }
 
 /// A cohort is scoped to its account, and the hash folds the account in besides.
-pub async fn a_cohort_is_scoped_to_its_account(h: &dyn Harness) {
+pub async fn a_cohort_is_scoped_to_its_account(h: &dyn CohortHarness) {
     let mine = UserId::new("cohort-user-3");
     let theirs = UserId::new("cohort-user-4");
     ok(
@@ -1316,7 +1471,7 @@ pub async fn a_cohort_is_scoped_to_its_account(h: &dyn Harness) {
 }
 
 /// The cohort map does not expire with the sessions that carried it.
-pub async fn the_cohort_map_does_not_expire(h: &dyn Harness) {
+pub async fn the_cohort_map_does_not_expire(h: &dyn CohortHarness) {
     // The one store in this module with no TTL, and deliberately: a cohort is worth recording
     // precisely because it outlives the sessions that named it. A map that expired with them
     // would forget exactly when "have I seen this device before?" starts being worth asking.
@@ -1364,6 +1519,7 @@ pub async fn run_all(h: &dyn Harness) {
     recording_progress_advances_bytes_clock_and_replay_together(h).await;
     chunk_replay_is_offset_addressed(h).await;
     finalization_is_claimed_exactly_once(h).await;
+    a_claimed_session_leaves_the_eviction_view(h).await;
     reconciling_received_bytes_does_not_move_the_progress_clock(h).await;
     a_terminal_session_is_not_an_eviction_candidate(h).await;
     discarding_removes_the_record_its_chunks_and_its_listing(h).await;
@@ -1378,6 +1534,24 @@ pub async fn run_all(h: &dyn Harness) {
     relaying_requires_a_live_channel(h).await;
     relayed_payloads_drain_in_order_and_by_direction(h).await;
     closing_a_channel_drops_both_mailboxes(h).await;
+
+    // Skipped, not failed, for a harness without the store — see `Harness::oidc_authorizations`.
+    // These run here rather than in `run_all_cohorts` because the accessor is on `Harness`: the
+    // OIDC ceremony store is one of the volatile five's kind, not the cohort map's.
+    if h.oidc_authorizations().is_some() {
+        an_oidc_authorization_is_single_use(h).await;
+        an_oidc_authorization_expires_with_its_store(h).await;
+    }
+
+    run_all_cohorts(h).await;
+}
+
+/// Run every [`CohortHarness`] case above, in order.
+///
+/// A second entry point rather than a subset of [`run_all`], because the cohort map's adapter is
+/// a different backend from the other five stores' — so the two suites are run against different
+/// harnesses, and only the deterministic double is both.
+pub async fn run_all_cohorts(h: &dyn CohortHarness) {
     observing_a_cohort_twice_is_one_row_that_moves_last_seen(h).await;
     cohorts_are_listed_oldest_first(h).await;
     a_cohort_is_scoped_to_its_account(h).await;

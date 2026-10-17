@@ -138,7 +138,9 @@ pub struct FeedEntry {
     pub kind: ChangeKind,
     /// The asset id.
     pub asset_id: Vec<u8>,
-    /// The signed `AssetManifest` as opaque canonical CBOR (verified by core).
+    /// The asset's head **provenance record** as opaque canonical CBOR — the `provenance`
+    /// blob's bytes, served back unchanged, carrying the signed `AssetManifest` inside it
+    /// (decoded and verified by core's `apply_remote_entry`). Never re-encoded here.
     pub manifest_cbor: Vec<u8>,
     /// The encrypted metadata blob's **content address**, as its UTF-8 bytes; empty when the
     /// entry carries none (a tombstone).
@@ -470,15 +472,28 @@ impl SyncConsumer {
     /// retries, then a visible failure — no configuration hot-loops.
     #[instrument(skip(self, cursor), fields(page_size, entries))]
     pub async fn pull(&self, cursor: &SyncCursor, page_size: u32) -> Result<SyncPage, SyncError> {
+        self.pull_scoped(cursor, page_size, None).await
+    }
+
+    /// The body both [`Self::pull`] and [`Self::pull_album`] run: one album or the whole feed.
+    async fn pull_scoped(
+        &self,
+        cursor: &SyncCursor,
+        page_size: u32,
+        album_id: Option<&str>,
+    ) -> Result<SyncPage, SyncError> {
         let mut engine: RetryEngine = RetryClass::Interactive.engine();
         let response = loop {
-            match self.call(cursor, page_size).await {
+            match self.call(cursor, page_size, album_id).await {
                 Ok(page) => break page,
                 Err(error) if is_unauthenticated(&error) => match &self.auth {
                     SyncAuth::Session(session) => {
                         tracing::info!("the feed answered 401; refreshing once and retrying");
                         session.refresh().await?;
-                        break self.call(cursor, page_size).await.map_err(map_error)?;
+                        break self
+                            .call(cursor, page_size, album_id)
+                            .await
+                            .map_err(map_error)?;
                     }
                     SyncAuth::Static => return Err(map_error(error)),
                 },
@@ -500,6 +515,28 @@ impl SyncConsumer {
         Ok(page)
     }
 
+    /// Pull one page of **one album** after `cursor`.
+    ///
+    /// The album arm of the same operation (`S-C51`, `S-E5`): an account reads it as the album's
+    /// owner or a member of its current roster, and a federated peer reads it under a capability
+    /// whose audience is that album. Same retry and same refresh-once behaviour as
+    /// [`Self::pull`]; the only difference is the parameter, because the *server* is where the
+    /// two arms differ and the client has one feed.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::pull`], plus the album refusals the server renders — a peer's revoked or
+    /// out-of-audience capability among them.
+    #[instrument(skip(self, cursor), fields(page_size, entries))]
+    pub async fn pull_album(
+        &self,
+        cursor: &SyncCursor,
+        page_size: u32,
+        album_id: &str,
+    ) -> Result<SyncPage, SyncError> {
+        self.pull_scoped(cursor, page_size, Some(album_id)).await
+    }
+
     /// Pull the next page for `state` (using its stored cursor), validate and apply it, and
     /// return it. The one call that ties the opaque-cursor round-trip to the anti-rewind layer.
     #[instrument(skip(self, state), fields(page_size))]
@@ -518,8 +555,11 @@ impl SyncConsumer {
         &self,
         cursor: &SyncCursor,
         page_size: u32,
+        album_id: Option<&str>,
     ) -> Result<rest::types::SyncPageResponse, rest::Error<rest::SyncFeedError>> {
         let params = rest::SyncFeedParams {
+            // Absent is the caller's own feed; present is one album's page.
+            album_id: album_id.map(str::to_owned),
             // The cursor is round-tripped verbatim. Empty means "from the beginning", which the
             // server spells as an absent parameter rather than an empty one.
             cursor: cursor
@@ -527,14 +567,27 @@ impl SyncConsumer {
                 .filter(|value| !value.is_empty())
                 .map(str::to_owned),
             page_size: Some(i64::from(page_size)),
+            // The suite and the sidecar schema are validated when present and a feed pull has
+            // no use for either; the suite already rides the transport's default headers.
+            ..rest::SyncFeedParams::default()
         };
-        Ok(self.client.sync_feed(params).await?.into_inner())
+        // The protocol date is a required parameter of every gated operation in the document,
+        // so the generated signature asks for it; the value is the build's own, the same one the
+        // transport's default header carries.
+        Ok(self
+            .client
+            .sync_feed(capsule_core::crypto::primitives::PROTOCOL_VERSION, params)
+            .await?
+            .into_inner())
     }
 }
 
 /// A generated client for `base_url` carrying `credential` under the bearer scheme.
 fn build_client(base_url: &str, credential: rest::Credential) -> Result<rest::Client, SyncError> {
-    let client = rest::Client::with_client(reqwest::Client::new(), base_url)
+    // The SDK's one HTTP client, so the feed pull carries the protocol handshake.
+    let http =
+        crate::net::http_client().map_err(|error| SyncError::Transport(error.to_string()))?;
+    let client = rest::Client::with_client(http, base_url)
         .map_err(|error| SyncError::Transport(error.to_string()))?
         .with_credential(BEARER_SCHEME, credential);
     Ok(client)
@@ -585,9 +638,16 @@ fn map_error(error: rest::Error<rest::SyncFeedError>) -> SyncError {
     match error {
         rest::Error::Api(response) => {
             let (code, message) = match response.into_inner() {
+                // The 400 includes the protocol gate's malformed-handshake answer (issue #404).
+                // There is no 426 to map: the feed is a read, and a read is admitted at any
+                // grammatical protocol date — the window rides the response headers instead.
+                // The 429 is a federated peer's events budget (`S-E5`): a capability puller
+                // over its hour. Rejected rather than retried, because the window is an hour
+                // and the interactive retry class would give up long before it turned.
                 rest::SyncFeedError::Status400(problem)
                 | rest::SyncFeedError::Status401(problem)
                 | rest::SyncFeedError::Status403(problem)
+                | rest::SyncFeedError::Status429(problem)
                 | rest::SyncFeedError::Status500(problem) => (
                     Some(problem.code.clone()),
                     problem.detail.clone().unwrap_or_default(),

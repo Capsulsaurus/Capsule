@@ -56,7 +56,7 @@ use std::sync::Arc;
 use jiff::{SignedDuration, Timestamp};
 
 use crate::blob::{BlobStore, ContentAddress};
-use crate::index::AssetIndex;
+use crate::index::{AssetIndex, PurgeOutcome, purge_refusal};
 use crate::store::{AssetId, StoreError};
 
 /// How long a blob must sit at zero references before it is swept.
@@ -365,16 +365,20 @@ pub async fn purge_expired(
     let mut report = PurgeReport::default();
 
     for row in context.index.tombstoned(limit).await? {
-        let Some(retention_until) = row.retention_until else {
-            // A tombstone with no signed retention is never purged. Absent is not
-            // "immediately", and reading it that way would purge exactly the assets whose
-            // delete manifest the server failed to project a field out of.
-            tracing::debug!(asset = %row.asset_id, "a tombstone carries no retention floor");
-            report.retained.push(row.asset_id);
-            continue;
-        };
-        if now < retention_until {
-            report.retained.push(row.asset_id);
+        // The same rule the index re-checks under the row lock. A tombstone with no signed
+        // retention is never purged: absent is not "immediately", and reading it that way would
+        // purge exactly the assets whose delete manifest the server failed to project a field
+        // out of.
+        if let Some(refusal) = purge_refusal(&row, now) {
+            tracing::debug!(
+                asset = %row.asset_id,
+                retention_until = ?row.retention_until,
+                ?refusal,
+                "a listed row is not purgeable yet"
+            );
+            if refusal == PurgeOutcome::Retained {
+                report.retained.push(row.asset_id);
+            }
             continue;
         }
         // A moderation hold does **not** stop the purge, and that is a decision rather than an
@@ -387,14 +391,29 @@ pub async fn purge_expired(
         // either direction here would be worse than recording that it is open.
         tracing::info!(
             asset = %row.asset_id,
-            %retention_until,
+            retention_until = ?row.retention_until,
             blobs = row.blobs.len(),
             "purging a tombstoned asset's blob references"
         );
-        if mode.applies() {
-            context.index.purge(&row.asset_id).await?;
+        if !mode.applies() {
+            report.purged.push(row.asset_id);
+            continue;
         }
-        report.purged.push(row.asset_id);
+        // The listing is a snapshot; the index re-checks state and retention under the row
+        // lock, because a restore that committed since the listing must keep its bytes.
+        match context.index.purge(&row.asset_id, now).await? {
+            PurgeOutcome::Purged(_) => report.purged.push(row.asset_id),
+            PurgeOutcome::Retained => {
+                tracing::info!(asset = %row.asset_id, "a tombstone was re-deleted under a later retention floor since it was listed");
+                report.retained.push(row.asset_id);
+            }
+            PurgeOutcome::NotTombstoned => {
+                tracing::info!(asset = %row.asset_id, "an asset was restored after it was listed for purge; its bytes are kept");
+            }
+            PurgeOutcome::Unknown => {
+                tracing::warn!(asset = %row.asset_id, "a listed tombstone has no row by the time it is purged");
+            }
+        }
     }
 
     tracing::info!(

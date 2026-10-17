@@ -21,15 +21,17 @@
 //! ([`rotate_epoch`](Workspace::rotate_epoch)); the MLS membership ceremony (`Welcome`,
 //! add/remove) remains deferred (see `SLICES.md`).
 //!
-//! [`verify_asset`]: crate::crypto::verify_asset
+//! [`verify_asset`]: fn@crate::crypto::verify_asset
 //! [`ReferenceAuthority`]: crate::crypto::authority::ReferenceAuthority
 
 mod album;
 mod backup;
+mod derivatives;
 mod drops;
 mod groups;
 mod import;
 mod metadata;
+mod migrate_unsigned;
 mod open;
 mod organize;
 mod provenance;
@@ -46,6 +48,10 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use self::drops::{InboxEntry, IssuedLink};
+pub use self::migrate_unsigned::{
+    LEGACY_FOLD_KEY, MigrationSkip, UnmigratedShape, UnmigratedSidecar, UnsignedMigrationOptions,
+    UnsignedMigrationReport,
+};
 pub use self::open::HardwareDekBinding;
 pub use self::sync_apply::{QuarantineReason, RemoteAssetFacts, RemoteEntry, SyncApplyOutcome};
 pub use self::upload::{DerivativeBlob, UploadBundle};
@@ -62,7 +68,7 @@ use crate::crypto::verify_asset::{MetadataBinding, VerifyOutcome};
 use crate::db::DatabaseDriver;
 use crate::drop::{DropId, UploadLinkId};
 use crate::federation::AlbumGroupAssertion;
-use crate::library::Library;
+use crate::library::{Library, LibraryError};
 use crate::metadata::crdt::Counter;
 use crate::sharing::{ShareLinkId, ShareLinkRecord};
 use crate::sidecar::sidecar_v1::{Gps, SidecarV1, StackMembership, StackRole};
@@ -96,6 +102,11 @@ pub enum LifecycleError {
     /// Library index (SQLite) error.
     #[error("db: {0}")]
     Db(String),
+    /// The on-disk library could not be opened. Typed rather than stringified so a caller
+    /// can act on the one open failure with its own recovery — a catalog stamped by a newer
+    /// build ([`LibraryError::CatalogTooNew`], slice `S-D23`) — instead of matching on text.
+    #[error("open library: {0}")]
+    Library(#[from] LibraryError),
     /// The durable album-key store could not be read or written (slice `S-A10`). Never
     /// swallowed: losing album keys silently is exactly the failure this store exists to fix.
     #[error(transparent)]
@@ -203,7 +214,7 @@ pub struct AssetState {
 /// [`Workspace::set_stack_membership`] write. It survives here for the one case the register
 /// cannot serve — an asset imported **before** `S-B15`, whose placement was written only to the
 /// index and therefore exists nowhere else (see [`Workspace::open`] step (6) and
-/// [`library::rebuild`](crate::library::rebuild)).
+/// [`library::rebuild_index`](crate::library::rebuild_index)).
 #[derive(Debug, Clone)]
 pub struct StackPlacement {
     /// The shared stack id (the `asset_stacks` row id the members belong to).
@@ -224,8 +235,8 @@ impl StackPlacement {
     }
 }
 
-/// Out-of-band metadata a third-party [source adapter](crate::import::importers) folded for one
-/// media file, in the shape the signed sidecar stores it (slice `S-B10`).
+/// Out-of-band metadata a third-party [source adapter](crate::import::SourceAdapter) folded for
+/// one media file, in the shape the signed sidecar stores it (slice `S-B10`).
 ///
 /// The [precedence rule] is resolved in two places, and this type is what keeps the two halves
 /// apart:
@@ -242,7 +253,7 @@ impl StackPlacement {
 ///
 /// Every field left empty writes nothing, so an import carrying no exporter record produces a
 /// sidecar byte-identical to a plain filesystem import's. The provider-specific mapping that
-/// fills this in lives in [`import::enrichment`](crate::import::enrichment).
+/// fills this in lives in [`import::sidecar_enrichment`](crate::import::sidecar_enrichment).
 ///
 /// [precedence rule]: https://docs/design/import/pipeline/#third-party-importers
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -278,9 +289,9 @@ pub struct SignedImportOptions {
     /// row. `None` imports a standalone asset and leaves the register wire-absent.
     pub stack: Option<StackMembership>,
     /// Folded third-party exporter metadata for this file (`S-B10`), attached by the
-    /// [executor](crate::import::executor::execute_with_source_metadata) when the import came
-    /// from a [source adapter](crate::import::importers). `None` — a plain filesystem import —
-    /// leaves every enriched field exactly as it was before the slice.
+    /// [executor](crate::import::execute_with_source_metadata) when the import came
+    /// from a [source adapter](crate::import::SourceAdapter). `None` — a plain filesystem
+    /// import — leaves every enriched field exactly as it was before the slice.
     pub enrichment: Option<SidecarEnrichment>,
 }
 
@@ -295,29 +306,34 @@ pub struct SignedImportOptions {
 /// is a real problem someone should look at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DerivativeStatus {
-    /// The still decoded: dimensions and LQIP came from real pixels, and signed derivatives
-    /// were generated if a [`StillEncoder`](crate::media::image::derivative::StillEncoder) is
-    /// attached to the workspace.
+    /// The still decoded: `dimensions` and `lqip` came from real pixels, and the derivatives
+    /// this build can encode were generated and signed. **Independent of how many *formats*
+    /// deferred** — a decoded still whose AVIF and WebP variants have no encoder here is still
+    /// `Decoded`, because it has a renderable JXL thumbnail. The per-format gap is counted
+    /// separately by
+    /// [`ImportExecutionSummary::deferred_format_count`](crate::import::ImportExecutionSummary::deferred_format_count).
     Decoded,
     /// **Expected deferral.** This build links no codec for the asset's format — see
-    /// [`SUPPORTED_IMAGE_FORMATS`](crate::media::image::types::SUPPORTED_IMAGE_FORMATS). The
+    /// [`SUPPORTED_STILL_FORMATS`](crate::media::SUPPORTED_STILL_FORMATS) for what it does
+    /// link, and [`StillFormat`](crate::media::StillFormat) for what it recognises. The
     /// original is safely backed up; dimensions fall back to EXIF and there is no LQIP or
-    /// preview until the codec lands, at which point derivatives can be backfilled from the
+    /// thumbnail until the codec lands, at which point derivatives can be backfilled from the
     /// stored original. Counted by
-    /// [`ImportExecutionSummary::deferred_derivative_count`](crate::import::progress::ImportExecutionSummary::deferred_derivative_count).
+    /// [`ImportExecutionSummary::deferred_derivative_count`](crate::import::ImportExecutionSummary::deferred_derivative_count).
     ///
-    /// A build compiled without the `media` feature has no codecs at all, so every asset it
-    /// imports reports this.
+    /// What reaches here today: HEIC, AVIF and the RAW families, each needing a system library
+    /// (libheif, libdav1d) or an assembler the cross and cargo-ndk builds do not carry.
     DeferredNoCodec,
     /// **A real problem.** The format *is* one this build can decode, but these particular
     /// bytes did not decode — truncation, corruption, or a decoder bug. The original is still
     /// imported (the bytes are backed up verbatim, whatever they are), but this is worth
     /// investigating rather than shrugging at.
     DecodeFailed,
-    /// Nothing to decode: the extension names no still image this build models — a video, an
-    /// XMP sidecar, an unknown suffix, or an exotic RAW flavour
-    /// [`RawImageFormat`](crate::media::image::types::RawImageFormat) has no variant for. Video
-    /// derivatives are generated on their own path.
+    /// Nothing to decode: neither the bytes' header nor the extension names a still image
+    /// Capsule models — a video, an XMP sidecar, an SVG, or an unknown suffix. Distinct from
+    /// [`DeferredNoCodec`](Self::DeferredNoCodec), which is a still whose codec is merely
+    /// absent and whose derivatives are therefore backfillable. Video derivatives are generated
+    /// on their own path (slice `S-B5`).
     NotAKnownStill,
 }
 
@@ -342,13 +358,19 @@ pub struct SignedImport {
     pub asset_id: Uuid,
     /// Whether thumbnail/preview derivatives were generated, and if not, why.
     pub derivatives: DerivativeStatus,
+    /// How many `(tier, format)` pairs the tier table commits to and this build cannot encode
+    /// — the per-format half of the `S-B13` gap, which is orthogonal to
+    /// [`derivatives`](Self::derivatives): a `Decoded` asset can still carry deferred formats.
+    /// Zero when the still did not decode at all, because nothing was attempted.
+    pub deferred_formats: u32,
 }
 
-/// A streamed import: everything the [streaming window](crate::import::streaming) needs about one
-/// just-imported asset to drive its upload → verify → release step, without exposing workspace
-/// internals. Produced by [`Workspace::import_asset_streaming`], which commits on the signed path
-/// with source release **deferred** to the server-side verify-before-destroy gate (`S-D4`), since
-/// in streaming mode the local bytes are the only copy until the *server* durably holds them.
+/// A streamed import: everything the [streaming window](crate::import::execute_streaming) needs
+/// about one just-imported asset to drive its upload → verify → release step, without exposing
+/// workspace internals. Produced by [`Workspace::import_asset_streaming`], which commits on the
+/// signed path with source release **deferred** to the server-side verify-before-destroy gate
+/// (`S-D4`), since in streaming mode the local bytes are the only copy until the *server* durably
+/// holds them.
 #[derive(Debug, Clone)]
 pub struct StreamedImport {
     /// The imported asset's id.
@@ -383,7 +405,8 @@ pub struct Workspace {
     albums: HashMap<Uuid, AlbumKeys>,
     /// Per-album write authority behind the [`AlbumAuthority`](crate::crypto::authority::AlbumAuthority)
     /// seam (`&Authority` coerces to `&dyn AlbumAuthority` at every `verify_asset` call site). The
-    /// offline [`ReferenceAuthority`] is the shipped default; the enum lets the live
+    /// offline [`ReferenceAuthority`](crate::crypto::authority::ReferenceAuthority) is the shipped
+    /// default; the enum lets the live
     /// [`OpenMlsAuthority`](crate::crypto::authority::OpenMlsAuthority) drop in without the
     /// lifecycle naming a concrete backend. **Persisted** alongside the album keys in
     /// [`AlbumStore`](crate::crypto::keys::AlbumStore) and restored on open (`S-A10`) — without
@@ -436,6 +459,11 @@ pub struct Workspace {
     /// **Deliberately session-scoped** (`S-A10`): the server's staging store is the authority and
     /// a client refills this from it, so there is nothing here to lose.
     inbox: HashMap<DropId, InboxEntry>,
+    /// The `{uuid}.cbor` files under `media/` that no provenance chain anchors, found at
+    /// [`open`](Self::open): unsigned pre-signed-path sidecars awaiting
+    /// [`migrate_unsigned_sidecars`](Self::migrate_unsigned_sidecars), or the debris of an
+    /// interrupted run (`S-D24`). Recomputed by the verb; empty for a signed-only library.
+    unmigrated: Vec<UnmigratedSidecar>,
 }
 
 fn now_rfc3339() -> String {
@@ -481,7 +509,7 @@ impl Workspace {
     }
 
     /// This device's stable id — the `created_by_device` every manifest this workspace
-    /// authors carries, and the [`DeviceEntry`](crate::crypto::keys::directory::DeviceEntry)
+    /// authors carries, and the [`DeviceEntry`](crate::crypto::keys::DeviceEntry)
     /// key under which its signing key is published in the device directory.
     pub fn device_id(&self) -> Uuid {
         self.account.device.device_id
@@ -554,6 +582,29 @@ impl Workspace {
         self.assets.keys().copied().collect()
     }
 
+    /// The on-disk path of a managed asset's plaintext original, or `None` for an unknown id.
+    ///
+    /// The path is derived from the asset's **shard** (`AssetState::capture_utc`), which is
+    /// fixed at import — so it keeps resolving after a capture-time correction
+    /// ([`set_capture_timestamp`](Self::set_capture_timestamp)) even though the sidecar's
+    /// timestamp no longer names the month directory. Exposed for the repair pass, which has
+    /// to re-read each original's EXIF without loading every file through
+    /// [`read_plaintext`](Self::read_plaintext).
+    pub fn original_path(&self, asset_id: &Uuid) -> Option<PathBuf> {
+        self.assets
+            .get(asset_id)
+            .map(|asset| self.media_path(asset))
+    }
+
+    /// Whether a managed asset is currently in trash — a replay of its provenance chain's
+    /// lifecycle actions (a `delete` moves it to trash, a later `trash-restore` brings it
+    /// back), which is the single source of truth the workspace itself applies. `false` for an
+    /// unknown id. Exposed so a client can report or skip trashed assets without re-deriving
+    /// the rule from the chain.
+    pub fn is_trashed(&self, asset_id: &Uuid) -> bool {
+        self.assets.get(asset_id).is_some_and(asset_is_deleted)
+    }
+
     /// A managed asset's current state.
     pub fn asset(&self, asset_id: &Uuid) -> Option<&AssetState> {
         self.assets.get(asset_id)
@@ -593,18 +644,20 @@ impl Workspace {
     }
 }
 
+/// The trivially-fast Argon2id cost the `lifecycle` suite derives under. Named, rather than
+/// spelled out per call, because a test now hands it to explicit-parameter entry points
+/// (`Workspace::create_with_params`, `Workspace::export_backup_with_params`) instead of getting
+/// a cheap cost from a `#[cfg(test)]` fork inside the library.
+#[cfg(test)]
+const FAST_PARAMS: Argon2Params = Argon2Params {
+    mem_kib: 64,
+    t_cost: 1,
+    p_cost: 1,
+};
+
 /// A fast-Argon2 workspace over `dir` — the shared fixture every `lifecycle` test module
 /// builds on (the production cost would dominate the suite's runtime).
 #[cfg(test)]
 fn fast_workspace(dir: &Path) -> Workspace {
-    Workspace::create_with_params(
-        dir,
-        b"passphrase",
-        Argon2Params {
-            mem_kib: 64,
-            t_cost: 1,
-            p_cost: 1,
-        },
-    )
-    .unwrap()
+    Workspace::create_with_params(dir, b"passphrase", FAST_PARAMS).unwrap()
 }

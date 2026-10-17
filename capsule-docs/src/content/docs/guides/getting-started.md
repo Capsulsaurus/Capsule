@@ -1,6 +1,7 @@
 ---
 title: Getting Started
 description: How to start using Capsule
+status: draft
 ---
 
 Welcome to Capsule! Capsule is a powerful asset management service for all your photos, videos and media files. It is built for professionals and enthusiasts who expect high-performance, modern features, and reliability.

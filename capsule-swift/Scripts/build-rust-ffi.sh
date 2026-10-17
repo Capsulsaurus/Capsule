@@ -4,8 +4,9 @@
 # alongside the generated Swift bindings. Outputs land in capsule-swift/.ffi/
 # (git-ignored) and are consumed by the Tuist `CapsuleCatalog` module.
 #
-# The simulator slice is a universal binary (arm64 + x86_64) so the xcframework
-# links on both Apple Silicon and Intel Macs.
+# Three slices, because the app ships for three destinations: iOS device, iOS
+# simulator, and macOS. The simulator and macOS slices are each universal
+# (arm64 + x86_64) so the xcframework links on Apple Silicon and Intel alike.
 #
 # Run via `mise run build-ffi-apple`, or directly. Requires: rustup, cargo, xcodebuild.
 set -euo pipefail
@@ -19,6 +20,8 @@ LIB_NAME="libcapsule_core_ffi.a"
 DEVICE_TARGET="aarch64-apple-ios"
 SIM_ARM_TARGET="aarch64-apple-ios-sim"
 SIM_X86_TARGET="x86_64-apple-ios"
+MAC_ARM_TARGET="aarch64-apple-darwin"
+MAC_X86_TARGET="x86_64-apple-darwin"
 
 FFI_OUT="$SWIFT_DIR/.ffi"
 GEN_DIR="$FFI_OUT/generated"
@@ -29,9 +32,11 @@ XCFRAMEWORK="$FFI_OUT/CapsuleCoreFFI.xcframework"
 cd "$REPO_ROOT"
 
 echo "▸ Ensuring Rust Apple targets are installed"
-rustup target add "$DEVICE_TARGET" "$SIM_ARM_TARGET" "$SIM_X86_TARGET" >/dev/null
+rustup target add "$DEVICE_TARGET" "$SIM_ARM_TARGET" "$SIM_X86_TARGET" \
+    "$MAC_ARM_TARGET" "$MAC_X86_TARGET" >/dev/null
 
-for target in "$DEVICE_TARGET" "$SIM_ARM_TARGET" "$SIM_X86_TARGET"; do
+for target in "$DEVICE_TARGET" "$SIM_ARM_TARGET" "$SIM_X86_TARGET" \
+    "$MAC_ARM_TARGET" "$MAC_X86_TARGET"; do
     echo "▸ Building $CRATE staticlib for $target"
     cargo build -p "$CRATE" --lib --release --target "$target"
 done
@@ -81,20 +86,26 @@ for mm in "$GEN_DIR"/*FFI.modulemap; do
     echo
 done >"$HEADERS_DIR/module.modulemap"
 
-echo "▸ Lipo-ing the universal simulator library (arm64 + x86_64)"
+echo "▸ Lipo-ing the universal simulator and macOS libraries (arm64 + x86_64)"
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 SIM_FAT_LIB="$BUILD_DIR/libcapsule_core_ffi_sim.a"
+MAC_FAT_LIB="$BUILD_DIR/libcapsule_core_ffi_macos.a"
 lipo -create \
     "$REPO_ROOT/target/$SIM_ARM_TARGET/release/$LIB_NAME" \
     "$REPO_ROOT/target/$SIM_X86_TARGET/release/$LIB_NAME" \
     -output "$SIM_FAT_LIB"
+lipo -create \
+    "$REPO_ROOT/target/$MAC_ARM_TARGET/release/$LIB_NAME" \
+    "$REPO_ROOT/target/$MAC_X86_TARGET/release/$LIB_NAME" \
+    -output "$MAC_FAT_LIB"
 
 echo "▸ Assembling CapsuleCoreFFI.xcframework"
 rm -rf "$XCFRAMEWORK"
 xcodebuild -create-xcframework \
     -library "$REPO_ROOT/target/$DEVICE_TARGET/release/$LIB_NAME" -headers "$HEADERS_DIR" \
     -library "$SIM_FAT_LIB" -headers "$HEADERS_DIR" \
+    -library "$MAC_FAT_LIB" -headers "$HEADERS_DIR" \
     -output "$XCFRAMEWORK" >/dev/null
 
 echo "✓ FFI build complete"

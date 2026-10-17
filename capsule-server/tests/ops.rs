@@ -578,3 +578,311 @@ async fn a_lifecycle_write_requires_a_credential() {
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
 }
+
+// ===========================================================================================
+// Member writes (`S-C51`)
+// ===========================================================================================
+
+/// A second account, on the seeded album's roster in whatever role a case puts it.
+const BOB: &str = "01937b7c-0000-7000-8000-0000000000b0";
+
+fn bobs_device() -> uuid::Uuid {
+    uuid::Uuid::parse_str("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5eb0").expect("a uuid")
+}
+
+/// A fixture with the owner's asset published, Bob's device known, and Bob seated as `role`.
+async fn with_bob(role: Option<capsule_server::membership::MemberRole>) -> (Fixture, String) {
+    let fixture = Fixture::working();
+    publish(&fixture).await;
+    let bob = capsule_server::store::UserId::new(BOB);
+    fixture
+        .authority
+        .add_device(&bob, bobs_device(), fixture.clock.now());
+    if let Some(role) = role {
+        fixture.authority.share(&album(), &bob, role);
+    }
+    let bearer = fixture.other_bearer(BOB).await;
+    (fixture, bearer)
+}
+
+/// The delete bundle a writer member's device really produces, continuing the owner's chain.
+///
+/// **Both identity fields are Bob's**, and that is what `capsule_core` emits: a lifecycle record
+/// names the account and device that *signed it*, re-minted per write by
+/// `lifecycle::provenance::sign_lifecycle`, never inherited from the chain head. It has to be —
+/// `verify_asset` resolves `created_by_device` inside `created_by_user`'s directory (step 6) and
+/// verifies `device_sig` under that entry (step 8), so a record naming anyone but its signer
+/// cannot verify. The owner's album is protected by `write_sig` at step 10 instead, which is why
+/// a member writing under their own name takes nothing from the owner.
+///
+/// The asset stays the owner's: it is filed under the owner's namespace, it lands on the owner's
+/// feed, and the `create` record at the head of the chain still names the owner as creator. Only
+/// *this record* is Bob's, because Bob wrote it.
+fn bobs_delete(fixture: &Fixture) -> Value {
+    let mut body = bundle(
+        fixture,
+        "delete",
+        "bob-deletes",
+        Some(&created_head()),
+        None,
+    );
+    body["manifest_envelope"]["created_by_user"] = BOB.into();
+    body["manifest_envelope"]["created_by_device"] = bobs_device().to_string().into();
+    body
+}
+
+#[tokio::test]
+async fn a_writer_members_op_is_filed_under_the_owner_and_reaches_the_owners_feed() {
+    use capsule_server::membership::MemberRole;
+
+    let (fixture, bob) = with_bob(Some(MemberRole::Writer)).await;
+    let owner_bearer = token(&fixture).await;
+    let before = feed(&fixture, &owner_bearer).await;
+    let body = apply(&fixture, &bob, &bobs_delete(&fixture), StatusCode::OK).await;
+    assert_eq!(body["action"], "delete");
+
+    // The owner's feed — the one every member's devices read — advanced with the tombstone.
+    let owners = feed(&fixture, &owner_bearer).await;
+    assert_ne!(owners, before, "the member's op advanced the owner's feed");
+    let entry = &owners["entries"][0];
+    assert_eq!(entry["asset_id"], ASSET);
+    assert_eq!(entry["change"], "deleted");
+    assert_eq!(
+        entry["sync_seq"], body["sync_seq"],
+        "the feed position is the one the op was answered with"
+    );
+    // And Bob's own feed does not: the op was not filed under the member.
+    let bobs = feed(&fixture, &bob).await;
+    assert_eq!(bobs["entries"].as_array().map(Vec::len), Some(0));
+}
+
+#[tokio::test]
+async fn a_reader_a_former_member_and_a_stranger_cannot_apply_an_op() {
+    use capsule_server::membership::MemberRole;
+
+    let (fixture, bob) = with_bob(Some(MemberRole::Reader)).await;
+    let reader = apply(
+        &fixture,
+        &bob,
+        &bobs_delete(&fixture),
+        StatusCode::FORBIDDEN,
+    )
+    .await;
+    assert_eq!(reader["code"], "error.upload.album_access_denied");
+
+    let (fixture, bob) = with_bob(Some(MemberRole::Writer)).await;
+    fixture
+        .authority
+        .unshare(&album(), &capsule_server::store::UserId::new(BOB));
+    let former = apply(
+        &fixture,
+        &bob,
+        &bobs_delete(&fixture),
+        StatusCode::FORBIDDEN,
+    )
+    .await;
+
+    let (fixture, bob) = with_bob(None).await;
+    let owner_bearer = token(&fixture).await;
+    let before = feed(&fixture, &owner_bearer).await;
+    let stranger = apply(
+        &fixture,
+        &bob,
+        &bobs_delete(&fixture),
+        StatusCode::FORBIDDEN,
+    )
+    .await;
+
+    assert_eq!(reader, former);
+    assert_eq!(former, stranger);
+    // Nothing reached the owner's feed.
+    assert_eq!(feed(&fixture, &owner_bearer).await, before);
+}
+
+#[tokio::test]
+async fn a_members_op_is_checked_against_the_members_own_directory() {
+    use capsule_server::membership::MemberRole;
+
+    let (fixture, bob) = with_bob(Some(MemberRole::Writer)).await;
+    let mut body = bobs_delete(&fixture);
+    body["manifest_envelope"]["created_by_device"] = device().to_string().into();
+    let problem = apply(&fixture, &bob, &body, StatusCode::BAD_REQUEST).await;
+    assert_eq!(problem["code"], "error.upload.device_not_authorized");
+}
+
+/// **A suspended account may not write, and a lifecycle op is a write.** `POST /v1/upload`
+/// refused a suspended uploader from the start; this surface did not, which stopped being merely
+/// inconsistent once `S-C51` widened it from the owner to every writer member. Both principals
+/// are asserted, because the refusal has to be about *standing* and not about ownership.
+#[tokio::test]
+async fn a_suspended_account_may_not_apply_a_lifecycle_op() {
+    use capsule_server::membership::MemberRole;
+    use capsule_server::moderation::{
+        ModerationAction, ModerationEvent, ModerationStore as _, Standing,
+    };
+    use capsule_server::store::UserId;
+
+    // The album's own owner, suspended.
+    let fixture = Fixture::working();
+    let bearer = token(&fixture).await;
+    publish(&fixture).await;
+    let since = fixture.clock.now();
+    fixture
+        .moderation
+        .apply(
+            ModerationEvent {
+                user_id: UserId::new(user().as_str()),
+                action: ModerationAction::Suspended,
+                asset_id: None,
+                at: since,
+                reason: Some("verified report".to_owned()),
+            },
+            Some(Standing::Suspended { since }),
+        )
+        .await
+        .expect("the moderation store applies");
+
+    let before = feed(&fixture, &bearer).await;
+    let problem = apply(
+        &fixture,
+        &bearer,
+        &bundle(&fixture, "delete", "suspended", Some(&created_head()), None),
+        StatusCode::FORBIDDEN,
+    )
+    .await;
+    assert_eq!(problem["code"], "error.moderation.account_suspended");
+    assert_eq!(
+        feed(&fixture, &bearer).await,
+        before,
+        "a refused write reaches no feed"
+    );
+
+    // And a writer member, suspended: the standing is the account's, not the album's.
+    let (fixture, bob) = with_bob(Some(MemberRole::Writer)).await;
+    let since = fixture.clock.now();
+    fixture
+        .moderation
+        .apply(
+            ModerationEvent {
+                user_id: UserId::new(BOB),
+                action: ModerationAction::Suspended,
+                asset_id: None,
+                at: since,
+                reason: None,
+            },
+            Some(Standing::Suspended { since }),
+        )
+        .await
+        .expect("the moderation store applies");
+    let members = apply(
+        &fixture,
+        &bob,
+        &bobs_delete(&fixture),
+        StatusCode::FORBIDDEN,
+    )
+    .await;
+    assert_eq!(members["code"], "error.moderation.account_suspended");
+}
+
+/// Fail closed: a moderation store that cannot answer "is this account suspended" must not be
+/// read as "no", or an outage becomes a window in which every suspension is lifted.
+#[tokio::test]
+async fn an_unreachable_moderation_store_refuses_the_lifecycle_op() {
+    let fixture = Fixture::working();
+    let bearer = token(&fixture).await;
+    publish(&fixture).await;
+    fixture.moderation.set_unavailable(true);
+
+    apply(
+        &fixture,
+        &bearer,
+        &bundle(
+            &fixture,
+            "delete",
+            "unreachable",
+            Some(&created_head()),
+            None,
+        ),
+        StatusCode::INTERNAL_SERVER_ERROR,
+    )
+    .await;
+}
+
+/// **The owner creates, a writer member deletes, and the write is accepted** — authored by the
+/// member, filed under the owner, landing on the owner's feed.
+///
+/// The case the membership widening exists for, and the one that pins the settled rule after
+/// three passes over it. A lifecycle record names its own signer, so the member's delete is
+/// authored by the member; the *asset* stays the owner's, which is what the namespace and the
+/// feed assert here. The `create` record at the head of the chain is where the creator lives.
+///
+/// The second arm is the other half of invariant 7: swap in the owner's device — an account Bob
+/// cannot publish devices for — and the write is refused, because the device a manifest names
+/// must live in the caller's own directory.
+#[tokio::test]
+async fn a_member_continues_the_owners_chain_under_their_own_authorship() {
+    use capsule_server::membership::MemberRole;
+
+    let (fixture, bob) = with_bob(Some(MemberRole::Writer)).await;
+    let owner_bearer = token(&fixture).await;
+    let before = feed(&fixture, &owner_bearer).await;
+
+    let body = bobs_delete(&fixture);
+    assert_eq!(
+        body["manifest_envelope"]["created_by_user"],
+        Value::from(BOB),
+        "the record names the account that signed it"
+    );
+    assert_ne!(
+        body["manifest_envelope"]["created_by_user"],
+        Value::from(user().as_str()),
+        "which is not the album's owner, and that is the point of the case"
+    );
+
+    let applied = apply(&fixture, &bob, &body, StatusCode::OK).await;
+    assert_eq!(applied["action"], "delete");
+
+    // The asset is still the owner's: the member's write lands on the owner's feed.
+    let owners = feed(&fixture, &owner_bearer).await;
+    assert_ne!(owners, before, "the member's op advanced the owner's feed");
+    assert_eq!(owners["entries"][0]["asset_id"], ASSET);
+    assert_eq!(owners["entries"][0]["change"], "deleted");
+    assert_eq!(owners["entries"][0]["sync_seq"], applied["sync_seq"]);
+
+    // Invariant 7's device half: a device the caller has not published is refused.
+    let (fixture, bob) = with_bob(Some(MemberRole::Writer)).await;
+    let mut owners_device = bobs_delete(&fixture);
+    owners_device["manifest_envelope"]["created_by_device"] = device().to_string().into();
+    let problem = apply(&fixture, &bob, &owners_device, StatusCode::BAD_REQUEST).await;
+    assert_eq!(problem["code"], "error.upload.device_not_authorized");
+}
+
+/// **A write may not be attributed to another account.** Invariant 7's account half, and the
+/// refusal the write widening made necessary: before `S-C51` only the album owner could reach
+/// this surface and the field could only plausibly be their own.
+#[tokio::test]
+async fn an_op_attributed_to_another_account_is_refused() {
+    use capsule_server::membership::MemberRole;
+
+    let (fixture, bob) = with_bob(Some(MemberRole::Writer)).await;
+    let owner_bearer = token(&fixture).await;
+    let before = feed(&fixture, &owner_bearer).await;
+
+    // The member attributing their delete to the album's owner.
+    let mut forged = bobs_delete(&fixture);
+    forged["manifest_envelope"]["created_by_user"] = user().as_str().into();
+    let problem = apply(&fixture, &bob, &forged, StatusCode::BAD_REQUEST).await;
+    assert_eq!(problem["code"], "error.upload.envelope_mismatch");
+    assert_eq!(
+        feed(&fixture, &owner_bearer).await,
+        before,
+        "and nothing was written"
+    );
+
+    // The owner attributing theirs to the member: the rule is "the author is the caller", not
+    // "the author is the owner".
+    let mut theirs = bundle(&fixture, "delete", "d-owner", Some(&created_head()), None);
+    theirs["manifest_envelope"]["created_by_user"] = BOB.into();
+    let mine = apply(&fixture, &owner_bearer, &theirs, StatusCode::BAD_REQUEST).await;
+    assert_eq!(mine["code"], "error.upload.envelope_mismatch");
+}

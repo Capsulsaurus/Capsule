@@ -11,17 +11,33 @@ use crate::domain::model_identity::TaskKind;
 pub struct DatabaseDriver {
     pub(in crate::db) conn: Connection,
     /// Tasks whose `vec0` partition table this driver has already created. The DDL is idempotent,
-    /// so this is purely a hot-path memo — see [`crate::db::vector::VectorTableSpec`] for why the
+    /// so this is purely a hot-path memo — see [`crate::db::VectorTableSpec`] for why the
     /// tables are created by their writer rather than at open time.
     pub(in crate::db) vector_tables: RefCell<BTreeSet<TaskKind>>,
 }
 
 impl DatabaseDriver {
+    /// Open (or create) the catalog at `path` and bring it to the crate's `SCHEMA_VERSION`.
+    ///
+    /// The migrator's typed [`MigrationError`] is flattened into `rusqlite::Error` here
+    /// because this signature is consumed by `capsule-core-ffi`; the crate's own library
+    /// opener goes through the crate-private `open_typed` so a catalog newer than this build
+    /// surfaces as a typed refusal rather than a message inside a `SqliteFailure`.
     pub fn open(path: &Path) -> Result<Self, rusqlite::Error> {
+        Self::open_typed(path).map_err(rusqlite::Error::from)
+    }
+
+    /// As [`open`](Self::open), keeping the migrator's typed error.
+    ///
+    /// [`MigrationError::CatalogTooNew`] is the one variant a caller acts on differently: the
+    /// catalog was left untouched and the recovery is to update the app, so `library::open`
+    /// maps it to [`LibraryError::CatalogTooNew`](crate::library::LibraryError::CatalogTooNew)
+    /// instead of folding it into a generic database error (slice `S-D23`).
+    pub(crate) fn open_typed(path: &Path) -> Result<Self, MigrationError> {
         crate::db::vector::ensure_vec_extension();
         let conn = Connection::open(path)?;
         let driver = Self::new(conn);
-        driver.init_schema()?;
+        driver.migrate()?;
         Ok(driver)
     }
 
@@ -40,8 +56,8 @@ impl DatabaseDriver {
         }
     }
 
-    /// Bring the catalog to [`crate::db::schema::SCHEMA_VERSION`], creating it if the database is empty
-    /// and otherwise migrating it forward (see [`crate::db::migrate`]).
+    /// Bring the catalog to the crate's `SCHEMA_VERSION`, creating it if the database is empty
+    /// and otherwise migrating it forward (see the crate-private `db::migrate`).
     ///
     /// The migrator's typed [`MigrationError`] is flattened into `rusqlite::Error` here because
     /// this signature is consumed by `capsule-core-ffi` and `library::open`; callers that want
@@ -55,7 +71,7 @@ impl DatabaseDriver {
         Ok(())
     }
 
-    /// Bring the catalog to [`crate::db::schema::SCHEMA_VERSION`], reporting exactly what ran.
+    /// Bring the catalog to the crate's `SCHEMA_VERSION`, reporting exactly what ran.
     ///
     /// Refuses (without writing anything) a catalog stamped newer than this build supports —
     /// see [`MigrationError::CatalogTooNew`].

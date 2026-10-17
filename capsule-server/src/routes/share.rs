@@ -46,7 +46,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth::AccessToken;
 use crate::blob::ContentAddress;
-use crate::counter::{CounterContext, CounterKey, budgets};
+use crate::counter::{CounterContext, CounterKey, Verdict, budgets, unix_seconds};
 use crate::serve::BlobSource;
 use crate::share::{ShareContext, ShareRecord, is_opaque_id};
 use crate::store::UserId;
@@ -181,12 +181,22 @@ pub enum ShareRejection {
     /// because enumeration does not care which of the three it probes with. Deliberately *not*
     /// folded into the indistinguishable `404`: a `404` that was really a throttle would teach a
     /// legitimate viewer that a live link is dead.
+    ///
+    /// Two causes, one status, told apart by `code`: `error.share.rate_limited` is this link's
+    /// own budget spent, `error.share.at_capacity` is the limiter's per-link partition full. The
+    /// second used to render the `500` below, which told a client to report an outage and an
+    /// operator to go looking for one, when the limiter was working exactly as designed and
+    /// would clear itself inside the window.
     #[error("too many requests")]
     #[problem(status = 429, title = "Too many requests")]
     RateLimited {
         /// The stable catalog code.
         #[problem(extension)]
         code: &'static str,
+        /// When the caller may retry, as Unix seconds. An **upper** bound: one limiter window,
+        /// by which time a live window has lapsed and freed room.
+        #[problem(extension)]
+        retry_after: u64,
     },
 
     /// The store could not answer.
@@ -420,16 +430,23 @@ async fn throttle(counters: &CounterContext, opaque_id: &str) -> Result<(), Shar
         .hit(&key, budgets::SHARE_LINK)
         .await
         .map_err(|error| {
-            // Fail closed, like every other limiter here.
-            tracing::error!(%error, "the share limiter could not be reached");
-            ShareRejection::unavailable()
+            // Fail closed, like every other limiter here — but say which failure it was. A full
+            // partition is the limiter working as designed and clears inside the window; only a
+            // store that could not answer is a `500`.
+            if let Some(retry_after) = counters.capacity_refusal(&error, budgets::SHARE_LINK) {
+                tracing::warn!(%error, "the share limiter is at capacity");
+                ShareRejection::at_capacity(retry_after)
+            } else {
+                tracing::error!(%error, "the share limiter could not be reached");
+                ShareRejection::unavailable()
+            }
         })?;
-    if verdict.admits() {
-        Ok(())
-    } else {
-        Err(ShareRejection::RateLimited {
+    match verdict {
+        Verdict::Admitted { .. } => Ok(()),
+        Verdict::Limited { retry_after } => Err(ShareRejection::RateLimited {
             code: error_codes::SHARE_RATE_LIMITED,
-        })
+            retry_after: unix_seconds(retry_after),
+        }),
     }
 }
 
@@ -469,6 +486,19 @@ impl ShareRejection {
     fn unavailable() -> Self {
         Self::Unavailable {
             code: error_codes::SHARE_UNAVAILABLE,
+        }
+    }
+
+    /// The limiter is holding as many distinct links as it will hold.
+    ///
+    /// A `429` and not the `500` this used to be: the limiter is working as designed and clears
+    /// itself inside the window, so the caller is told to wait rather than told the server is
+    /// broken. Deliberately still distinct from the indistinguishable `404` — a `404` that was
+    /// really a capacity refusal would teach a legitimate viewer that a live link is dead.
+    fn at_capacity(retry_after: jiff::Timestamp) -> Self {
+        Self::RateLimited {
+            code: error_codes::SHARE_AT_CAPACITY,
+            retry_after: unix_seconds(retry_after),
         }
     }
 }

@@ -8,9 +8,12 @@ export const collections = {
         loader: docsLoader(),
         schema: docsSchema({
             extend: z.object({
-                // Design-doc review state: `draft` until a human re-review passes the
-                // doc, then flipped to `stable`. See Core Principles — Doc Structure.
-                status: z.enum(['draft', 'stable']).optional(),
+                // Review state: `draft` until a human re-review passes the doc,
+                // then flipped to `stable`. See Core Principles — Doc Structure.
+                // Required, not optional: the field only means anything if a new
+                // page cannot land unmarked, and `astro build` — already the
+                // `build-docs` gate — is what enforces it.
+                status: z.enum(['draft', 'stable']),
             }),
         }),
     }),

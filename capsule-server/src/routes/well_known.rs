@@ -140,6 +140,19 @@ pub struct AuthEndpointsResponse {
     pub refresh: String,
     /// Where a session is ended.
     pub logout: String,
+    /// Where a sign-in through an external identity provider begins and ends, or `null` when
+    /// this deployment has none. Always present, so a client reads one field rather than
+    /// probing for one.
+    pub oidc: Option<OidcEndpointsResponse>,
+}
+
+/// The OIDC ceremony's endpoints (slice `S-N1`).
+#[derive(Schema, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct OidcEndpointsResponse {
+    /// Where a client asks for an authorization URL.
+    pub authorize: String,
+    /// Where a client presents the `state` and `code` the provider's redirect carried.
+    pub callback: String,
 }
 
 /// The accepted `protocol_version` range.
@@ -225,6 +238,14 @@ pub async fn server_info(Inject(discovery): Inject<DiscoveryContext>) -> Json<Se
             login: info.auth().login.clone(),
             refresh: info.auth().refresh.clone(),
             logout: info.auth().logout.clone(),
+            oidc: info
+                .auth()
+                .oidc
+                .as_ref()
+                .map(|endpoints| OidcEndpointsResponse {
+                    authorize: endpoints.authorize.clone(),
+                    callback: endpoints.callback.clone(),
+                }),
         },
         federation_url: info.federation_url().map(ToOwned::to_owned),
         protocol_version: ProtocolWindowResponse {

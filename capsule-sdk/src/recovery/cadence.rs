@@ -17,6 +17,7 @@
 //!
 //! [Backup — Recovery Verification Cadence]: https://docs/design/backup-recovery/#recovery-verification-cadence
 
+use capsule_core::notify::RecoveryFacts;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
@@ -270,6 +271,68 @@ impl RecoveryCadence {
     pub fn declare_lost(&mut self) {
         self.declared_lost = true;
     }
+
+    /// Project the scheduler into the flat facts the shared alert predicate consumes
+    /// ([`capsule_core::notify`], slice `S-D29`).
+    ///
+    /// The direction matters: `capsule-sdk` depends on `capsule-core` and never the reverse, so
+    /// the predicate cannot read this scheduler. It is handed a projection instead, and this is
+    /// the only place that mapping exists — the ladder, the re-arm triggers, and the snooze
+    /// accounting stay owned here, and `capsule_core::notify` never recomputes them.
+    ///
+    /// It is derived from [`state`](Self::state) rather than from the fields, so the alert and
+    /// the prompt the UX renders can never disagree about whether a check is due. Two mappings
+    /// are worth stating:
+    ///
+    /// - [`VerificationState::Badge`] reports `snooze_budget_spent`, which is what stops the
+    ///   alert being pre-armed as a notification while leaving the condition reported — the
+    ///   badge is persistent and non-blocking, and never escalates back into an alert.
+    /// - [`VerificationState::RewrapDue`] is due **now**, whatever the ladder says: repeated
+    ///   failure or an explicit "I lost it" is not a scheduled check. The alert class set is
+    ///   closed, so `recovery_check_due` is the only class that can carry it — which is why the
+    ///   escalation also rides [`RecoveryFacts::rewrap_due`], surfacing as the alert's
+    ///   `recovery` parameter. Without it the alert would be byte-identical to the routine
+    ///   ninety-day check, and the client could not know to route into
+    ///   [`RecoveryClient::guided_rewrap`](crate::recovery::RecoveryClient::guided_rewrap)
+    ///   rather than a plain verification prompt.
+    #[must_use]
+    pub fn notify_facts(&self, now: Timestamp) -> RecoveryFacts {
+        match self.state(now) {
+            VerificationState::Verified { next_due } => RecoveryFacts {
+                next_due,
+                snoozed_until: None,
+                snooze_budget_spent: false,
+                rewrap_due: false,
+            },
+            VerificationState::Due => RecoveryFacts {
+                next_due: self.next_due,
+                snoozed_until: None,
+                snooze_budget_spent: false,
+                rewrap_due: false,
+            },
+            VerificationState::Snoozed {
+                until,
+                snoozes_used,
+            } => RecoveryFacts {
+                next_due: self.next_due,
+                snoozed_until: Some(until),
+                snooze_budget_spent: snoozes_used >= MAX_CONSECUTIVE_SNOOZES,
+                rewrap_due: false,
+            },
+            VerificationState::Badge => RecoveryFacts {
+                next_due: self.next_due,
+                snoozed_until: None,
+                snooze_budget_spent: true,
+                rewrap_due: false,
+            },
+            VerificationState::RewrapDue => RecoveryFacts {
+                next_due: now,
+                snoozed_until: None,
+                snooze_budget_spent: false,
+                rewrap_due: true,
+            },
+        }
+    }
 }
 
 /// Add a signed second offset to a timestamp, saturating at the representable bounds
@@ -285,6 +348,8 @@ fn add_secs(base: Timestamp, secs: i64) -> Timestamp {
 
 #[cfg(test)]
 mod tests {
+    use capsule_core::notify::{self, AlertClass, NotifyInput};
+
     use super::*;
 
     /// A fixed, round base instant well away from the timestamp bounds.
@@ -485,5 +550,112 @@ mod tests {
         let json = serde_json::to_string(&cad).unwrap();
         let back: RecoveryCadence = serde_json::from_str(&json).unwrap();
         assert_eq!(cad, back);
+    }
+
+    // ── `S-D29` projection ──────────────────────────────────────────────────
+
+    /// The projection walks every [`VerificationState`], and the fact it hands the shared
+    /// predicate agrees with the state the UX renders at the same instant.
+    #[test]
+    fn notify_facts_projects_every_state() {
+        let due = BASE + INITIAL_INTERVAL_SECS;
+
+        // Verified → the prompt is scheduled, nothing is snoozed, budget intact.
+        let cad = RecoveryCadence::armed_at_setup(ts(BASE));
+        let facts = cad.notify_facts(ts(BASE));
+        assert_eq!(facts.next_due, ts(due));
+        assert_eq!(facts.snoozed_until, None);
+        assert!(!facts.snooze_budget_spent);
+
+        // Due → the same `next_due`, now in the past, so the predicate fires.
+        let facts = cad.notify_facts(ts(due));
+        assert_eq!(facts.next_due, ts(due));
+        assert_eq!(facts.snoozed_until, None);
+        assert!(!facts.snooze_budget_spent);
+
+        // Snoozed within budget → the snooze end is carried, the budget is not spent.
+        let mut cad = RecoveryCadence::armed_at_setup(ts(BASE));
+        cad.snooze(ts(due), SnoozeDuration::OneDay);
+        let facts = cad.notify_facts(ts(due));
+        assert_eq!(facts.snoozed_until, Some(ts(due + DAY_SECS)));
+        assert!(!facts.snooze_budget_spent);
+
+        // The budget spends on the third consecutive snooze, and the last one still holds.
+        let mut at = due;
+        for _ in 1..MAX_CONSECUTIVE_SNOOZES {
+            at += DAY_SECS;
+            cad.snooze(ts(at), SnoozeDuration::OneDay);
+        }
+        let facts = cad.notify_facts(ts(at));
+        assert_eq!(facts.snoozed_until, Some(ts(at + DAY_SECS)));
+        assert!(facts.snooze_budget_spent);
+
+        // Badge → the snooze has expired with the budget spent: reported, never pre-armed.
+        let after = at + DAY_SECS;
+        assert_eq!(cad.state(ts(after)), VerificationState::Badge);
+        let facts = cad.notify_facts(ts(after));
+        assert_eq!(facts.next_due, ts(due));
+        assert_eq!(facts.snoozed_until, None);
+        assert!(facts.snooze_budget_spent);
+
+        // None of the scheduled states is a re-wrap escalation.
+        for at in [BASE, due, at, after] {
+            assert!(!cad.notify_facts(ts(at)).rewrap_due, "at {at}");
+        }
+    }
+
+    /// `RewrapDue` is due now, whatever the ladder says: an explicit "I lost it" is not a
+    /// scheduled check, and the closed class set has only `recovery_check_due` to carry it.
+    #[test]
+    fn notify_facts_reports_rewrap_due_immediately() {
+        let mut cad = RecoveryCadence::armed_at_setup(ts(BASE));
+        cad.declare_lost();
+        assert_eq!(cad.state(ts(BASE)), VerificationState::RewrapDue);
+
+        // The ladder still says "not for 7 days"; the projection says "now".
+        assert_eq!(cad.next_due(), ts(BASE + INITIAL_INTERVAL_SECS));
+        let facts = cad.notify_facts(ts(BASE));
+        assert_eq!(facts.next_due, ts(BASE));
+        assert_eq!(facts.snoozed_until, None);
+        assert!(!facts.snooze_budget_spent);
+        assert!(
+            facts.rewrap_due,
+            "the escalation must be distinguishable from a routine check"
+        );
+
+        // And it reaches the alert as a parameter, not just as an earlier due date.
+        let input = NotifyInput {
+            recovery: Some(facts),
+            ..NotifyInput::default()
+        };
+        let alert = notify::evaluate(&input, ts(BASE))
+            .into_iter()
+            .find(|a| a.class == AlertClass::RecoveryCheckDue)
+            .expect("due now");
+        assert_eq!(alert.params["recovery"], "rewrap");
+    }
+
+    /// The projection is the whole of the wiring: what the scheduler says and what the shared
+    /// predicate decides never disagree about whether a check is due.
+    #[test]
+    fn notify_facts_agrees_with_the_rendered_state() {
+        let mut cad = RecoveryCadence::armed_at_setup(ts(BASE));
+        cad.snooze(ts(BASE + INITIAL_INTERVAL_SECS), SnoozeDuration::OneWeek);
+
+        for offset in [0, INITIAL_INTERVAL_SECS - 1, INITIAL_INTERVAL_SECS] {
+            let now = ts(BASE + offset);
+            let input = NotifyInput {
+                recovery: Some(cad.notify_facts(now)),
+                ..NotifyInput::default()
+            };
+            let fired = notify::evaluate(&input, now)
+                .iter()
+                .any(|a| a.class == AlertClass::RecoveryCheckDue);
+            let rendered_due = matches!(
+                cad.state(now),
+                VerificationState::Due | VerificationState::Badge | VerificationState::RewrapDue
+            );
+            assert_eq!(fired, rendered_due, "at +{offset}s");
+        }
     }
 }

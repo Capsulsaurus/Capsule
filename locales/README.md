@@ -49,7 +49,11 @@ Hello, {name}!
 {count, plural, one {# photo} other {# photos}}
 ```
 
-The same ICU syntax compiles to every platform, so you write a message once.
+The same ICU syntax compiles to every platform, so you write a message once —
+and every target evaluates plurals, the Rust server and CLI included, so a
+`plural` block is rendered rather than shown to the reader as message source.
+`select`, `selectordinal` and `offset:` are not supported anywhere yet; a
+message using one fails the build rather than reaching a user.
 
 ### Key naming
 

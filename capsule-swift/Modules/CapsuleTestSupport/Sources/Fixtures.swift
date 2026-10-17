@@ -7,7 +7,7 @@ import Foundation
 /// about and inherit sensible defaults for everything else.
 public enum Fixtures {
     /// A fixed reference instant — 2024-07-03 12:26:40 UTC.
-    public static let referenceTimestamp: Int64 = 1_720_000_000
+    public static let referenceTimestamp: Int64 = 1720000000
 
     /// A fixed reference `Date` at ``referenceTimestamp``.
     public static let referenceDate = Date(timeIntervalSince1970: TimeInterval(referenceTimestamp))
@@ -66,7 +66,7 @@ public enum Fixtures {
         assetType: String = "photo",
         originalFilename: String = "IMG_0001.HEIC",
         hashSHA256: String? = nil,
-        fileSize: UInt64 = 2_400_000,
+        fileSize: UInt64 = 2400000,
         stackHint: CatalogStackHint? = nil
     ) -> CatalogSidecar {
         CatalogSidecar(
@@ -115,7 +115,7 @@ public enum Fixtures {
         (0 ..< count).map { index in
             asset(
                 mediaType: mediaType,
-                captureDate: referenceDate.addingTimeInterval(TimeInterval(index) * 86_400)
+                captureDate: referenceDate.addingTimeInterval(TimeInterval(index) * 86400)
             )
         }
     }

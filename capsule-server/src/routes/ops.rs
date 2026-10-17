@@ -21,6 +21,48 @@
 //! chain head and then both write would both pass a handler-side check and double-apply, which
 //! is the stale revival invariant 17 exists to catch, reintroduced by the code enforcing it.
 //!
+//! # Who a lifecycle record names, and what the server checks about it
+//!
+//! Every action this surface admits is a **chain continuation**. The allow-list in
+//! [`check_op`](crate::upload::envelope::check_op) is `delete | trash-restore |
+//! metadata-update | derivative-add | derivative-replace` — the five that do not move blob
+//! bytes — and none may carry a null `prior_provenance_hash`. The two that *do* move bytes,
+//! `create` and `replace`, are `POST /v1/upload`'s by definition.
+//!
+//! **`created_by_user` and `created_by_device` name the signer of *this record*, not the asset's
+//! creator**, on a continuation exactly as on a create. That is not a convention this server
+//! picked: `capsule_core::crypto::verify_asset` resolves the device inside *that account's*
+//! published directory (step 6) and verifies `device_sig` under that entry's key (step 8), so a
+//! record naming anyone but its own signer cannot verify by any reader. Album write authority is
+//! decided separately, by `write_sig` under the epoch's write-tier key at step 10 — which is why
+//! a member writing under their own name does not weaken the owner's album.
+//!
+//! So on a shared album, a writer member's delete of the owner's asset is authored by the
+//! **member**, and the asset's creator remains recoverable from the `create` record at the head
+//! of the append-only chain. The client half of that is
+//! `capsule_core::lifecycle::provenance::sign_lifecycle`, which re-mints both fields per write.
+//!
+//! What this surface checks, in the order it decides:
+//!
+//! 1. the **bearer token** — the caller is an authenticated account, and everything below is
+//!    about that account rather than about a field in the body;
+//! 2. **standing** (`S-C8`) — a suspended account may not write, whoever the manifest names;
+//! 3. **write capability** — [`WriteAuthority::album_write_access`] answers
+//!    owner-or-writer-member for *this caller* on *this album*, and a reader, a former member and
+//!    a stranger get one indistinguishable `403`;
+//! 4. **invariant 7, both halves** — `created_by_user` must be the caller, and
+//!    `created_by_device` must be a device in that caller's **own** published directory with an
+//!    `added_at` preceding the manifest. The account half stops a member attributing a write to
+//!    another account; the device half is the one an attacker cannot satisfy by editing a field,
+//!    because a device id in your directory is not something another account can borrow.
+//!
+//! And what the server does **not** do, stated plainly so invariant 7 is not read as more than
+//! it is: it holds no keys and never parses `manifest_cbor`, so it cannot check `device_sig` at
+//! all. It checks that the *claimed* identity is the caller's and that the claimed device is
+//! one the caller published — never that the signature over those bytes is real. Deciding
+//! whether a stored record is authentic is a key-holder's job and stays one, in `verify_asset`
+//! on the client.
+//!
 //! # A rejection writes nothing a client can observe
 //!
 //! The bundle's blobs are stored *before* the index is asked to apply the op, so a refusal can
@@ -50,6 +92,7 @@
 //! | `200` | kept, and now **static**. The retired handler picked its status at run time with `StatusCode::from_u16(result.status)`, which is why salvo-oapi could describe no responses at all and spargen refused the operation outright — and the value was unconditionally `200` every time |
 //! | `400` (envelope, action, amk) | kept, each with its own `error.*` code |
 //! | `403 error.upload.album_access_denied` | kept, and it now also answers an asset that is not the caller's — one value, because the asset id is client-chosen |
+//! | `403 error.moderation.account_suspended` | **added.** A suspension removes the ability to write and a lifecycle op is a write; `POST /v1/upload` refused one from the start and this surface did not, which stopped being merely inconsistent when `S-C51` widened it from the owner to every writer member |
 //! | `409 error.upload.stale_revival` | kept — invariant 17, the status this surface exists to be able to give |
 //! | `401` | kept, and now the framework's |
 //! | `500` | kept |
@@ -64,7 +107,7 @@ use serde::{Deserialize, Serialize};
 use crate::auth::AccessToken;
 use crate::blob::ContentAddress;
 use crate::index::{LifecycleOp, OpAction, OpOutcome};
-use crate::store::{AlbumId, AssetId, OwnerId};
+use crate::store::{AlbumId, AssetId};
 use crate::upload::envelope::{GateContext, GateReject, ManifestEnvelope, check_op};
 use crate::upload::{AlbumWriteAccess, UploadContext};
 
@@ -175,6 +218,20 @@ pub enum OpRejection {
         code: &'static str,
     },
 
+    /// The account is suspended (`S-C8`).
+    ///
+    /// The same status, code and reasoning as `POST /v1/upload`'s: a suspension removes the
+    /// ability to *write*, and a lifecycle op is a write. Distinct from the quota `403` and from
+    /// the permission one because the three send a client to three different screens, which is
+    /// what design/moderation.md asks a structured code for.
+    #[error("this account is suspended and cannot write")]
+    #[problem(status = 403, title = "Account suspended")]
+    AccountSuspended {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
     /// The account is past its grace window, and this write would grow stored metadata.
     ///
     /// Never returned for a `delete` or a `trash-restore`: a user must be able to delete their
@@ -211,12 +268,12 @@ pub enum OpRejection {
 pub async fn apply_op(
     Inject(upload): Inject<UploadContext>,
     Inject(quota): Inject<crate::quota::QuotaContext>,
+    Inject(moderation): Inject<crate::moderation::ModerationContext>,
     Auth(credential): Auth<AccessToken>,
     Path(path): Path<AlbumPath>,
     Json(request): Json<OpRequest>,
 ) -> Result<Json<OpResponse>, OpRejection> {
     let caller = credential.user.clone();
-    let owner = OwnerId::new(caller.as_str());
     let album = AlbumId::new(&path.album_id);
 
     // The envelope must agree with the path it arrived on. A contradiction is a client bug the
@@ -228,17 +285,60 @@ pub async fn apply_op(
         ));
     }
 
-    // Invariant 6, the half only the authority can answer.
-    let AlbumWriteAccess::Writable { protocol_pin, .. } = upload
+    // Invariant 7's account half. `created_by_user` names the account whose device signed this
+    // record — a per-record fact, not the asset's creator — so on this surface it is the caller,
+    // and a mismatch is a caller attributing a write to somebody else. See the module docs.
+    //
+    // A `400` and the envelope-mismatch code, like every other field that contradicts what the
+    // request itself establishes: the album id in the path, the metadata hash over the bytes in
+    // hand. The `403`s here are about *capability*; this is a contradiction.
+    if request.manifest_envelope.created_by_user != caller.as_str() {
+        tracing::info!(
+            %caller, %album,
+            "a lifecycle write was refused: created_by_user is not the caller"
+        );
+        return Err(OpRejection::invalid(
+            error_codes::UPLOAD_ENVELOPE_MISMATCH,
+            "created_by_user is not the authenticated caller",
+        ));
+    }
+
+    // Account standing (`S-C8`), on the seam `POST /v1/upload` uses and for the same reason: a
+    // suspension removes the ability to write, and a lifecycle op is a write — the only one that
+    // never moves blob bytes, which is exactly why it was easy to miss. Checked before the
+    // authority, before the quota and before anything is stored.
+    let standing = moderation
+        .store()
+        .standing(&crate::store::UserId::new(caller.as_str()))
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %caller, "the moderation store could not answer");
+            OpRejection::unavailable()
+        })?;
+    if !standing.may_write() {
+        tracing::info!(%caller, "a lifecycle write was refused: the account is suspended");
+        return Err(OpRejection::AccountSuspended {
+            code: error_codes::MODERATION_ACCOUNT_SUSPENDED,
+        });
+    }
+
+    // Invariant 6, the half only the authority can answer — and the namespace the op is filed
+    // under, which is the album owner's whoever the caller is (`S-C51`): the owner's feed is the
+    // one every member's devices read.
+    let AlbumWriteAccess::Writable {
+        owner_id: owner,
+        protocol_pin,
+        ..
+    } = upload
         .authority()
-        .album_write_access(&owner, &album)
+        .album_write_access(&caller, &album)
         .await
         .map_err(|error| {
             tracing::error!(%error, "the write authority could not answer for an album");
             OpRejection::unavailable()
         })?
     else {
-        tracing::info!(%owner, %album, "a lifecycle write was refused: no write capability");
+        tracing::info!(%caller, %album, "a lifecycle write was refused: no write capability");
         return Err(OpRejection::album_access_denied());
     };
 
@@ -395,7 +495,7 @@ pub async fn apply_op(
             &format!("amk_version regresses against the album's recorded epoch {stored}"),
         )),
         OpOutcome::NotFound => {
-            tracing::info!(%owner, asset = %asset_id, "a lifecycle write was refused: not this caller's asset");
+            tracing::info!(%owner, asset = %asset_id, "a lifecycle write was refused: not this album's asset");
             Err(OpRejection::album_access_denied())
         }
     }
@@ -496,7 +596,7 @@ impl OpRejection {
         }
     }
 
-    /// The album is not writable, or the asset is not this caller's.
+    /// The album is not writable, or the asset is not this album's.
     fn album_access_denied() -> Self {
         Self::AlbumAccessDenied {
             code: error_codes::UPLOAD_ALBUM_ACCESS_DENIED,

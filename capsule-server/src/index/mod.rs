@@ -59,6 +59,7 @@
 
 pub mod conformance;
 pub mod memory;
+pub mod postgres;
 
 use capsule_core::crypto::hash::Hash32;
 use jiff::Timestamp;
@@ -388,6 +389,11 @@ impl ChangeKind {
 pub struct BlobReference {
     /// The asset the reference belongs to.
     pub asset_id: AssetId,
+    /// The album that asset belongs to (`S-C51`).
+    ///
+    /// What the read authority asks the membership store about, from the same read that found
+    /// the reference, for the reason [`Self::owner_id`] rides here.
+    pub album_id: AlbumId,
     /// The account that asset is filed under (`S-C39`).
     ///
     /// The fact the read authority decides on. Carried on the reference for the same reason
@@ -488,6 +494,37 @@ pub struct LifecycleOp {
     pub retention_until: Option<Timestamp>,
     /// When the server accepted it.
     pub at: Timestamp,
+}
+
+/// What a retention purge did to one row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PurgeOutcome {
+    /// The row was a tombstone past its signed retention floor; its references are gone.
+    Purged(Box<AssetRow>),
+    /// The row is no longer a tombstone — a restore landed after it was listed. Nothing changed.
+    NotTombstoned,
+    /// The row is a tombstone whose signed retention floor is absent or not yet reached at the
+    /// purge's `now`. Nothing changed.
+    Retained,
+    /// No row with that id.
+    Unknown,
+}
+
+/// Why `row` may not be purged at `now`, or `None` when it may.
+///
+/// The one definition both adapters re-check under the row lock, and the one the purge worker
+/// selects with, so the listing and the write cannot disagree about what "purgeable" means.
+/// Absent retention is never "immediately": that reading would purge exactly the assets whose
+/// delete manifest the server failed to project a field out of.
+#[must_use]
+pub fn purge_refusal(row: &AssetRow, now: Timestamp) -> Option<PurgeOutcome> {
+    if row.state != AssetState::Tombstoned {
+        return Some(PurgeOutcome::NotTombstoned);
+    }
+    match row.retention_until {
+        Some(retention_until) if now >= retention_until => None,
+        _ => Some(PurgeOutcome::Retained),
+    }
 }
 
 /// What applying a lifecycle write did.
@@ -686,13 +723,19 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
     /// deletions rather than revisiting the same page.
     fn tombstoned(&self, limit: usize) -> IndexFuture<'_, Vec<AssetRow>>;
 
-    /// Drop `asset`'s blob references, keeping the tombstone.
+    /// Drop `asset`'s blob references, keeping the tombstone — if it is still purgeable at
+    /// `now`.
     ///
     /// The row **stays**. A client that has not synced since the delete still has to learn
     /// about it, so removing the row would make the deletion invisible rather than final —
     /// and the feed entry a tombstone produces already carries no byte references, so the
     /// purge changes nothing a reader can see.
-    fn purge<'a>(&'a self, asset: &'a AssetId) -> IndexFuture<'a, Option<AssetRow>>;
+    ///
+    /// Purgeability is **re-checked under the row's lock** ([`purge_refusal`]), not taken from
+    /// the [`tombstoned`](Self::tombstoned) listing the caller worked from: a `TrashRestore`
+    /// that commits between the two would otherwise have its blob references cleared and its
+    /// bytes swept by the next collection.
+    fn purge<'a>(&'a self, asset: &'a AssetId, now: Timestamp) -> IndexFuture<'a, PurgeOutcome>;
 
     /// Up to `limit` feed entries for `owner` after sequence number `after`, in sequence order.
     ///
@@ -711,6 +754,80 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
     /// What lets a page report whether the client is caught up without asking for another page
     /// that would come back empty.
     fn head_seq<'a>(&'a self, owner: &'a OwnerId) -> IndexFuture<'a, u64>;
+
+    /// Up to `limit` feed entries in `album` after sequence number `after`, in sequence order
+    /// (`S-C51`).
+    ///
+    /// The **owner's** sequence, filtered to one album: positions are the same numbers the
+    /// owner's own feed carries, so they are per-album monotonic exactly as the client's
+    /// anti-rewind mark requires, and gaps are the other albums' entries. A member of the album
+    /// reads this page; the route decides who is one, and hands over the album's owner from
+    /// the album record so the query is bound to the rows that owner filed — the `(owner,
+    /// album)` pair is what the index is keyed on, and a row another account filed under the
+    /// same album id is not this album's.
+    fn album_feed_page<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        album: &'a AlbumId,
+        after: u64,
+        limit: usize,
+    ) -> IndexFuture<'a, Vec<FeedEntry>>;
+
+    /// The highest sequence number any entry in `album` carries, or `0` for none (`S-C51`).
+    ///
+    /// The album page's caught-up mark. Not the owner's allocator: a member who has seen the
+    /// album's last entry is caught up whatever the owner has minted in other albums since.
+    fn album_head_seq<'a>(&'a self, owner: &'a OwnerId, album: &'a AlbumId)
+    -> IndexFuture<'a, u64>;
+}
+
+/// The roles an asset may hold exactly one of.
+///
+/// The manifest, the metadata blob and the original are each named by the signed manifest, so a
+/// second address under one of these roles is a contradiction rather than an addition.
+/// Derivatives and backups are plural by nature — an asset has a thumbnail *and* a preview.
+///
+/// Free function beside [`entry_for`] rather than a method on an adapter, and for the same
+/// reason: two adapters that disagreed about which roles are singular would disagree about when
+/// [`BlobOutcome::Conflict`] is the answer, which is a security property (`record_blob` refuses
+/// to re-point a role a signature names) and not a formatting detail.
+pub(crate) fn is_singular(role: BlobRole) -> bool {
+    matches!(
+        role,
+        BlobRole::Original | BlobRole::Metadata | BlobRole::Provenance
+    )
+}
+
+/// Point `role` at `address`, replacing whatever it held.
+///
+/// The one place a singular role legitimately moves. [`AssetIndex::record_blob`] refuses to
+/// re-point one because an upload doing so would swap bytes under a signature that still
+/// verifies against the old ones; a lifecycle op is the *authorized* form of the same change,
+/// and it arrives with a manifest chaining onto the one it supersedes.
+///
+/// Shared by every adapter for the reason [`entry_for`] is: the `S-C52` retention rule below —
+/// a superseded *manifest* is kept referenced rather than dropped — is exactly the kind of thing
+/// two implementations drift on, and the drift reclaims the server's own rebuttal evidence.
+pub(crate) fn set_singular(row: &mut AssetRow, role: BlobRole, address: &ContentAddress) {
+    // `S-C52`: only the provenance role. The other singular roles are ciphertext, and the old
+    // bytes of a replaced original are exactly what the collector is for.
+    if role == BlobRole::Provenance
+        && let Some(previous) = row.address_for(BlobRole::Provenance).cloned()
+        && &previous != address
+        && !row.superseded.contains(&previous)
+    {
+        row.superseded.push(previous);
+    }
+    row.blobs.retain(|blob| blob.role != role);
+    row.blobs.push(BlobRef {
+        role,
+        address: address.clone(),
+        // Size is not a fact this path learns: the bytes were stored by whoever put them in the
+        // blob store, and re-`stat`ing here would make the index depend on the store.
+        size: 0,
+    });
+    row.blobs
+        .sort_by(|a, b| (a.role, a.address.as_str()).cmp(&(b.role, b.address.as_str())));
 }
 
 /// Build the feed entry a row presents to a reader sitting at `after`.

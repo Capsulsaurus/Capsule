@@ -50,7 +50,7 @@ use uuid::Uuid;
 
 use crate::auth::AccessToken;
 use crate::blob::ContentAddress;
-use crate::counter::{CounterContext, CounterKey, budgets};
+use crate::counter::{CounterContext, CounterKey, Verdict, budgets, unix_seconds};
 use crate::drop::{Admission, DropContext, InboxEntry, LinkCaps, UploadLinkRecord, is_opaque_id};
 use crate::store::{BlobRole, OwnerId, UploadId, UploadSessionRecord, UploadSessionStatus, UserId};
 use crate::upload::body::ChunkBody;
@@ -421,13 +421,24 @@ pub enum DropRejection {
         code: &'static str,
     },
 
-    /// Too many drop-session creations against this link (invariant 31).
+    /// Too many drop-session creations against this link (invariant 31), **or** the limiter is
+    /// holding as many distinct links as it will hold.
+    ///
+    /// Two causes, one status, told apart by `code`: `error.drop.rate_limited` is this link's own
+    /// budget spent, `error.drop.at_capacity` is the limiter's per-link partition full. The
+    /// second used to render `500 error.drop.unavailable`, which told a client to report an
+    /// outage and an operator to go looking for one, when the limiter was working exactly as
+    /// designed and would clear itself inside the window.
     #[error("too many uploads through this link")]
     #[problem(status = 429, title = "Too many requests")]
     RateLimited {
         /// The stable catalog code.
         #[problem(extension)]
         code: &'static str,
+        /// When the caller may retry, as Unix seconds. An **upper** bound: one limiter window,
+        /// by which time a live window has lapsed and freed room.
+        #[problem(extension)]
+        retry_after: u64,
     },
 
     /// A store could not answer.
@@ -636,12 +647,20 @@ pub async fn create_drop(
         )
         .await
         .map_err(|error| {
-            tracing::error!(%error, "the drop limiter could not be reached");
-            DropRejection::unavailable()
+            // A full partition is the limiter working, not a broken store, and a caller told
+            // `500` cannot tell the difference. Fail-closed either way; only the answer differs.
+            if let Some(retry_after) = counters.capacity_refusal(&error, budgets::DROP_LINK) {
+                tracing::warn!(%error, "the drop limiter is at capacity");
+                DropRejection::at_capacity(retry_after)
+            } else {
+                tracing::error!(%error, "the drop limiter could not be reached");
+                DropRejection::unavailable()
+            }
         })?;
-    if !verdict.admits() {
+    if let Verdict::Limited { retry_after } = verdict {
         return Err(DropRejection::RateLimited {
             code: error_codes::DROP_RATE_LIMITED,
+            retry_after: unix_seconds(retry_after),
         });
     }
 
@@ -1080,10 +1099,17 @@ async fn adopt_claimed(
     let album = crate::store::AlbumId::new(&request.album_id);
 
     // Invariant 6, unchanged: adoption is a write into an album and needs the same capability
-    // any other write does.
-    let crate::upload::AlbumWriteAccess::Writable { protocol_pin, .. } = upload
+    // any other write does. And it stays a write into the link owner's **own** album: a drop is
+    // deposited with one account, and promoting it into an album that account merely writes to
+    // would file a guest's bytes under a third party.
+    let crate::upload::AlbumWriteAccess::Writable {
+        owner_id: filed_under,
+        role,
+        protocol_pin,
+        ..
+    } = upload
         .authority()
-        .album_write_access(&owner_id, &album)
+        .album_write_access(owner, &album)
         .await
         .map_err(|error| {
             tracing::error!(%error, "the write authority could not answer for an adoption");
@@ -1094,6 +1120,12 @@ async fn adopt_claimed(
             "no write capability for that album",
         ));
     };
+    if role != crate::upload::WriteRole::Owner || filed_under != owner_id {
+        tracing::info!(%owner, %album, "an adoption was refused: the album is not the link owner's own");
+        return Err(AdoptRejection::refused(
+            "no write capability for that album",
+        ));
+    }
 
     // Invariant 7, unchanged.
     let device = crate::upload::envelope::created_by_device(&request.manifest_envelope)
@@ -1344,6 +1376,18 @@ impl DropRejection {
         Self::Malformed {
             detail: detail.to_owned(),
             code: error_codes::DROP_MALFORMED,
+        }
+    }
+
+    /// The limiter is holding as many distinct links as it will hold.
+    ///
+    /// A `429` and not the `500` this used to be: the limiter is working as designed and clears
+    /// itself inside the window, so the caller is told to wait rather than told the server is
+    /// broken.
+    fn at_capacity(retry_after: jiff::Timestamp) -> Self {
+        Self::RateLimited {
+            code: error_codes::DROP_AT_CAPACITY,
+            retry_after: unix_seconds(retry_after),
         }
     }
 

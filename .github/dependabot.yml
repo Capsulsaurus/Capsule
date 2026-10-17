@@ -11,16 +11,22 @@ updates:
     directory: "/capsule-web"
     schedule:
       interval: "weekly"
+  # The workspace root: `Cargo.toml` and `Cargo.lock` live here and cover every member. This
+  # pointed at `/capsule-api` until the Salvo tree moved to `legacy-review/` in `S-C59`, so it
+  # had been watching a directory that no longer exists — and therefore watching nothing.
   - package-ecosystem: "cargo"
-    directory: "/capsule-api"
+    directory: "/"
     schedule:
       interval: "weekly"
-  - package-ecosystem: "docker"
-    directory: "/capsule-api"
-    schedule:
-      interval: "weekly"
+  # The server's local service images (Postgres, Valkey). Same story: `/capsule-api/compose.yaml`
+  # went with the Salvo tree, and `capsule-server/compose.yaml` is the live file (issue #401).
+  #
+  # There is no `docker` entry any more. It watched `/capsule-api/Containerfile`, and no
+  # Containerfile exists anywhere in the active tree — an OCI image for the rebuilt server is
+  # not written yet, and an ecosystem pointed at an absent file is a permanent dashboard error
+  # rather than a dependency update. Add it back in the change that adds the Containerfile.
   - package-ecosystem: "docker-compose"
-    directory: "/capsule-api"
+    directory: "/capsule-server"
     schedule:
       interval: "weekly"
   - package-ecosystem: "github-actions"

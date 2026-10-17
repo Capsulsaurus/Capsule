@@ -11,7 +11,10 @@ const TMP_AGE_SECS: u64 = 5 * 60;
 /// Run a startup scrub if more than 7 days have passed since the last one.
 /// Removes `.tmp` files older than 5 minutes from `media/` and updates
 /// `config.last_scrubbed_at`.
-pub fn startup_scrub(root: &Path, config: &mut LibraryConfigCbor) -> Result<(), LibraryError> {
+pub(crate) fn startup_scrub(
+    root: &Path,
+    config: &mut LibraryConfigCbor,
+) -> Result<(), LibraryError> {
     let now = now_secs();
     let needs_scrub = match config.last_scrubbed_at {
         None => true,

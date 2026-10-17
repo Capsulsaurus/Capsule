@@ -1,9 +1,16 @@
 name: Release
 
 # Fires when a release commit (`chore(release): vX.Y.Z`, produced by prepare-release.yml
-# and merged via its PR) lands on master. It builds the `capsule` CLI for each target and
-# publishes a GitHub Release. `gh release create` also creates the tag, so the whole
-# build+publish happens in this one run — no PAT or tag-push re-trigger needed.
+# and merged via its PR) lands on master. It builds the `capsule` CLI and the `capsule-server`
+# binary for each target and publishes a GitHub Release. `gh release create` also creates the
+# tag, so the whole build+publish happens in this one run — no PAT or tag-push re-trigger
+# needed.
+#
+# Both binaries ride in the one per-target archive rather than two: an operator running a
+# self-hosted deployment wants the server and the CLI that talks to it at the same version, and
+# two downloads is two chances to mix versions. The server is Unix-only here — Windows is
+# already best-effort for the CLI, and adding a server build to a job that is allowed to fail
+# would make "did the Windows CLI ship" harder to answer, not easier.
 on:
   push:
     branches: [master]
@@ -41,7 +48,7 @@ jobs:
           fi
 
   build:
-    name: Build capsule (${{ matrix.target }})
+    name: Build binaries (${{ matrix.target }})
     needs: detect
     if: ${{ needs.detect.outputs.release == 'true' }}
     runs-on: ${{ matrix.os }}
@@ -74,8 +81,11 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: release-${{ matrix.target }}
-      - name: Build release binary
+      - name: Build the CLI
         run: cargo build -p capsule-cli --release --target ${{ matrix.target }}
+      - name: Build the server
+        if: runner.os != 'Windows'
+        run: cargo build -p capsule-server --release --target ${{ matrix.target }}
       - name: Package (unix)
         if: runner.os != 'Windows'
         shell: bash
@@ -84,6 +94,11 @@ jobs:
           dist="capsule-v${{ needs.detect.outputs.version }}-${{ matrix.target }}"
           mkdir -p "$dist"
           cp "target/${{ matrix.target }}/release/capsule" "$dist/"
+          cp "target/${{ matrix.target }}/release/capsule-server" "$dist/"
+          # The operator's starting point: every setting the server reads, with what it defaults
+          # to and why. A release without it is a binary that refuses to start and an operator
+          # reading GitHub to find out which variables it wanted.
+          cp capsule-server/.env.example "$dist/"
           cp README.md LICENSE NOTICE CHANGELOG.md "$dist/"
           tar -czf "${dist}.tar.gz" "$dist"
           echo "ASSET=${dist}.tar.gz" >> "$GITHUB_ENV"

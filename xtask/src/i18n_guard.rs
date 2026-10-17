@@ -19,7 +19,7 @@
 //! - **SwiftUI** (`capsule-swift/{App,Modules}/**/*.swift`): the string argument of
 //!   `Text("…")`, `.navigationTitle("…")`, `Label("…", …)`, `Button("…", …)`,
 //!   `Section("…")`, `.accessibilityLabel("…")`, `Toggle("…", …)`, `.alert("…", …)`.
-//!   A migrated call passes a catalog KEY (`Text("ios.settings.title")`); a literal
+//!   A migrated call passes a catalog KEY (`Text("app.settings.title")`); a literal
 //!   (`Text("Settings")`) is not a key, so it fails. Slice `S-I4` added two more Swift
 //!   detectors: *interpolated* literals in those same positions (`Text("Delete \(n)")`),
 //!   which `S-I1` had to skip because they had no catalog mechanism yet, and the key
@@ -32,6 +32,8 @@
 //!   argument list of a terminal-output or error macro. See the rule below — the CLI is
 //!   the one Rust surface that renders prose to a human, and it had never been scanned,
 //!   which is how the entire `capsule import` arm printed hardcoded English for months.
+//!   [`NEVER_SCANNED`] carves out `capsule-cli/src/bin/`, which is build tooling rather
+//!   than that surface.
 //!
 //! ## What counts as user-facing in a Rust binary
 //!
@@ -63,10 +65,16 @@
 //! literal in the ICU **argument-name** position (`("email", Value::Str(&email))`) names a
 //! placeholder rather than displaying it.
 //!
-//! **Known blind spot:** clap's `--help` output. Usage text comes from doc comments and
-//! `#[arg(...)]` attributes that clap renders itself, with no catalog mechanism to render
-//! a key through; localizing it is a separate slice, not something an allowlist entry per
-//! flag would express honestly. It is recorded here rather than silently omitted.
+//! **clap's `--help` output is outside this scanner, and covered elsewhere.** Usage text
+//! comes from doc comments and `#[arg(...)]` attributes that clap renders itself, so no
+//! `println!` carries it and nothing here can see it. Since slice `S-I8` the CLI rewrites
+//! every `about`/`help` from the `cli.help.*` catalog keys at parser construction
+//! (`capsule_cli::cli::help`), and the gate for that surface is the invariant test in that
+//! module: every help string must have an `en` entry equal to its doc comment, so a doc
+//! comment added without a key fails `cargo test -p capsule-cli` rather than this guard.
+//! What remains unlocalized is a `ValueEnum` variant's help (`--filter pick` → "A keeper."),
+//! which clap 4 cannot re-word without discarding the typed parser; the i18n design doc
+//! records it as the residual gap.
 //!
 //! The Swift/Compose surfaces are anchored to the catalog: a captured string passes
 //! only if it exactly matches a key in `locales/en.json`. The web surface has no
@@ -77,7 +85,7 @@
 //! (zero findings on the migrated tree; an injected literal is caught) run without
 //! disk I/O.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -86,10 +94,31 @@ use eyre::{Context, ContextCompat, Result, bail};
 use regex::Regex;
 use serde_json::Value;
 
+/// Subtrees inside a scanned root that are not the user-facing surface the root stands for.
+///
+/// `capsule-cli/src/bin/` holds description-artifact emitters — `gen_cli_surface`, and
+/// whatever joins it — that run from `mise` tasks and CI and are never installed. Their
+/// audience is a developer reading a task's output, not a user of `capsule`, so the rule
+/// this module enforces ("every string a user reads is a catalog key") does not apply to
+/// them: routing a build tool's status line through `locales/` would put a string no user
+/// can reach into every translation catalog.
+///
+/// This is a carve-out for an *audience*, which is the distinction the module doc is built
+/// on, not a narrowing of the rule for the surface itself. `capsule-cli/src/**` outside
+/// this prefix is scanned exactly as before.
+const NEVER_SCANNED: &[&str] = &["capsule-cli/src/bin/"];
+
 /// Repo-relative path of the documented allowlist (one `path\tstring` per line;
 /// `#` comments and blank lines ignored). Entries suppress a single known,
 /// intentionally-untranslated finding at that file for that exact captured string.
 const ALLOWLIST_PATH: &str = "locales/i18n-guard-allowlist.txt";
+
+/// The hand-written Swift mirror of the server's stable error codes.
+///
+/// Its Rust counterpart, [`capsule_i18n::error_codes`], is *generated* from the
+/// catalog and therefore cannot drift. This one can, which is the whole reason
+/// the check below exists.
+const SWIFT_ERROR_CODE_PATH: &str = "capsule-swift/Modules/CapsuleDomain/Sources/ErrorCode.swift";
 
 /// One detector hit: the 1-based line and the exact captured string.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -152,6 +181,10 @@ pub(crate) fn run(root: &Path) -> Result<()> {
 
     violations.retain(|v| !allowlist.contains(&(v.file.clone(), v.text.clone())));
 
+    // Runs before the literal verdict so a tree with both problems reports both
+    // rather than hiding one behind the other's `bail!`.
+    check_swift_error_codes(root, &keys)?;
+
     if violations.is_empty() {
         println!(
             "i18n-guard: no hardcoded user-facing literals found across web/swift/compose/cli."
@@ -197,6 +230,9 @@ fn scan_surface(
                 .unwrap_or(&path)
                 .to_string_lossy()
                 .replace('\\', "/");
+            if NEVER_SCANNED.iter().any(|prefix| file.starts_with(prefix)) {
+                continue;
+            }
             for f in detect(&content) {
                 if is_key(&f.text) {
                     continue;
@@ -295,6 +331,40 @@ fn normalize_ws(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// The SwiftUI call and modifier positions whose string argument reaches the screen.
+///
+/// One list, shared by the plain-literal and the interpolated detectors, because a
+/// position watched by one and not the other is a hole nobody notices: `confirmationDialog`
+/// was in the interpolation regex and not the literal one for two slices (#394). The
+/// leading word boundary at each use keeps a helper that merely *ends* in one of these
+/// (`barButton("sf.symbol.name")`) out.
+const SWIFT_TEXT_POSITIONS: &str = "Text|Label|Button|Section|Toggle|navigationTitle\
+|accessibilityLabel|accessibilityHint|accessibilityValue|alert|confirmationDialog|help\
+|searchable|ContentUnavailableView|tabItem";
+
+/// The property and function name stems that mark a `String` member as display text.
+///
+/// `value` is deliberately absent: `var rawValue: String` appears two dozen times in
+/// `capsule-swift/Modules/CapsuleDomain/Sources/` returning identifiers, none of which is
+/// display text.
+const SWIFT_DISPLAY_STEMS: &str = "title|message|label|name|description|subtitle\
+|heading|text|summary|prompt";
+
+/// A display-text literal: a capital followed by a **lowercase letter**.
+///
+/// This is the rule #394 was filed about. It used to be "a capital, then a space
+/// somewhere", which excluded every single-word string — including `case .places:
+/// "Places"`, the example the detector's own doc comment gave as the shape it catches.
+/// Requiring a lowercase letter in position two keeps out exactly what the space was
+/// there to keep out (`"HEIC"`, `"HDR10"`, `"HLG"`, an SF Symbol name like `"key.fill"`),
+/// and lets a single capitalized word through.
+///
+/// The trade: prose whose second character is neither lowercase nor a space
+/// (`"E-mail sent"`, `"AI Insights"`) is no longer caught. Measured across
+/// `capsule-swift/{App,Modules}` at the time of the change, in every position this
+/// detector scans: **zero** strings are lost and one is gained.
+const SWIFT_DISPLAY_LITERAL: &str = r#"[A-Z][a-z][^"\\]*"#;
+
 /// Detect hardcoded user-facing strings in a SwiftUI source: plain literals in a watched
 /// API position, *interpolated* literals in the same positions, and the key argument of
 /// `String(localized:)`.
@@ -309,22 +379,171 @@ pub(crate) fn swift_findings(content: &str) -> Vec<Finding> {
 /// Detect string-literal arguments to user-facing SwiftUI APIs.
 fn swift_literal_findings(content: &str) -> Vec<Finding> {
     static RE: OnceLock<Regex> = OnceLock::new();
-    // `Text("…")`, `.navigationTitle("…")`, `Label("…", …)`, `Button("…", …)`,
-    // `Section("…")`, `.accessibilityLabel("…")`, `Toggle("…", …)`, `.alert("…", …)`.
-    // The leading `(?:^|[^A-Za-z0-9_])` is a word boundary so helper names that
-    // merely END in one of these (`barButton("sf.symbol.name")`) don't match; a
-    // leading `.` (method syntax) is still allowed. The `"` must immediately follow
-    // `(` so `Text(verbatim: "…")` and `Text(dynamicVar)` are not matched.
-    // `[^"\\]*` keeps it to simple literals — interpolations contain `\(` and are
-    // skipped (documented blind spot; ICU-argument catalog support for Swift is a
-    // follow-up).
+    // `Text("…")`, `.navigationTitle("…")`, `Label("…", …)` and the rest of
+    // [`SWIFT_TEXT_POSITIONS`]. The leading `(?:^|[^A-Za-z0-9_])` is a word boundary so
+    // helper names that merely END in one of these (`barButton("sf.symbol.name")`) don't
+    // match; a leading `.` (method syntax) is still allowed. The `"` must immediately
+    // follow `(` so `Text(verbatim: "…")` and `Text(dynamicVar)` are not matched.
+    // `[^"\\]*` keeps it to simple literals — an interpolation contains `\(` and is
+    // caught by [`swift_interpolation_findings`] instead.
     let re = RE.get_or_init(|| {
-        Regex::new(
-            r#"(?:^|[^A-Za-z0-9_])(?:Text|Label|Button|Section|Toggle|navigationTitle|accessibilityLabel|accessibilityHint|alert)\(\s*"([^"\\]*[A-Za-z][^"\\]*)""#,
-        )
+        Regex::new(&format!(
+            r#"(?:^|[^A-Za-z0-9_])(?:{SWIFT_TEXT_POSITIONS})\(\s*"([^"\\]*[A-Za-z][^"\\]*)""#
+        ))
         .expect("static regex is valid")
     });
-    matched_findings(content, re, "swift-literal")
+    let mut findings = matched_findings(content, re, "swift-literal");
+    findings.extend(swift_key_parameter_findings(content));
+    findings.extend(swift_computed_property_findings(content));
+    findings
+}
+
+/// Detect catalog keys passed to a `…Key:` parameter.
+///
+/// The app's own convention is that any parameter whose label ends in `Key`
+/// carries a catalog key — `titleKey:`, `labelKey:`, `emptyDescriptionKey:`, and
+/// a dozen more. [`swift_findings`] cannot see them, because it only knows the
+/// stock SwiftUI call shapes, which left several hundred keys outside the gate:
+/// a typo'd or never-added key there compiles, renders as its own raw text, and
+/// nothing fails.
+///
+/// The same catalog membership test applies, so a real key passes and a literal
+/// or a missing key is reported.
+fn swift_key_parameter_findings(content: &str) -> Vec<Finding> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    // `[A-Za-z]*Key:` — a labelled argument whose name ends in `Key`. The
+    // leading class excludes `.` as well as identifier characters, because an
+    // argument label is never preceded by a dot but an enum case in a switch
+    // always is: `case .masterKey: "key.fill"` is a pattern returning an SF
+    // Symbol name, not a catalog reference. As in
+    // `swift_findings`, `[^"\\]*` keeps this to simple literals, so
+    // interpolated keys (`"app.x.\(raw).title"`) stay a documented blind spot.
+    let re = RE.get_or_init(|| {
+        Regex::new(r#"(?:^|[^A-Za-z0-9_.])[A-Za-z]*Key:\s*"([^"\\]*[A-Za-z][^"\\]*)""#)
+            .expect("static regex is valid")
+    });
+    matched_findings(content, re, "swift-key-param")
+}
+
+/// Detect display text returned from a `String`-typed computed property or function.
+///
+/// The blind spot that hid twenty-two English strings from this gate. A view
+/// that writes `Text("Places")` is caught by [`swift_literal_findings`]; a view that
+/// writes `Text(category.title)` is not, and neither is the property behind it:
+///
+/// ```swift
+/// var title: String {
+///     switch self {
+///     case .places: "Places"          // never seen by the gate
+///     }
+/// }
+/// ```
+///
+/// The literal reaches the screen through a variable, so no call site carries
+/// it and no argument label ends in `Key`. Non-English users read those in
+/// English, and the gate reported zero findings the whole time.
+///
+/// # What is scanned
+///
+/// A member whose name ends in one of [`SWIFT_DISPLAY_STEMS`] and whose type is
+/// `String` — a `var`, or (since #394) a `func` such as `hdrName(_:) -> String`. The
+/// function form reads the signature with `\([^)]*\)`, so one whose parameters contain a
+/// nested `)` (a closure type) is not matched: a remaining blind spot, but a narrowing
+/// one, never a false positive. Inside
+/// its body, four literal positions, because a property returns display text in more
+/// shapes than a `switch`: a `case` arm, an explicit `return`, a bare literal on its own
+/// line (an implicit return, or an `if` branch), and a dictionary value. Hits are keyed by
+/// absolute offset, so a literal two positions both match is reported once.
+///
+/// A `String` member is not automatically display text — a symbol name or a raw value is
+/// not — which is what [`SWIFT_DISPLAY_LITERAL`] filters on. Its history is #394: the rule
+/// used to require a space, which excluded the single-word example this doc comment gives.
+fn swift_computed_property_findings(content: &str) -> Vec<Finding> {
+    static MEMBERS: OnceLock<Vec<Regex>> = OnceLock::new();
+    static LITERALS: OnceLock<Vec<Regex>> = OnceLock::new();
+    let members = MEMBERS.get_or_init(|| {
+        [
+            // `var displayName: String {` — the stem ends the name.
+            format!(r"var\s+[A-Za-z]*(?i:{SWIFT_DISPLAY_STEMS})\s*:\s*String\s*\{{"),
+            // `static func hdrName(_ format: HDRFormat) -> String {` — the stem may sit
+            // anywhere in the name, since a function reads `label(for:)` as often as
+            // `formattedLabel()`.
+            format!(
+                r"func\s+[A-Za-z]*(?i:{SWIFT_DISPLAY_STEMS})[A-Za-z]*\s*\([^)]*\)\s*->\s*String\s*\{{"
+            ),
+        ]
+        .iter()
+        .map(|pattern| Regex::new(pattern).expect("static regex is valid"))
+        .collect()
+    });
+    let literals = LITERALS.get_or_init(|| {
+        [
+            // `case .places: "Places"`
+            format!(r#"case\s+\.[A-Za-z0-9_]+:\s*"({SWIFT_DISPLAY_LITERAL})""#),
+            // `return "Places"`
+            format!(r#"return\s+"({SWIFT_DISPLAY_LITERAL})""#),
+            // A bare literal statement: an implicit return, or an `if`/`else` branch.
+            format!(r#"(?m)^\s*"({SWIFT_DISPLAY_LITERAL})"\s*$"#),
+            // A dictionary or array value: `[.places: "Places"]`. The key must start
+            // with `.`, so a *labelled argument* is not mistaken for one — in
+            // particular `String(localized:defaultValue:)`, whose `defaultValue:` is the
+            // English source text and is deliberately never captured (see
+            // [`swift_localized_key_findings`]).
+            format!(r#"\.[A-Za-z0-9_]+\s*:\s*"({SWIFT_DISPLAY_LITERAL})"\s*[,\]]"#),
+        ]
+        .iter()
+        .map(|pattern| Regex::new(pattern).expect("static regex is valid"))
+        .collect()
+    });
+
+    // Keyed by absolute offset: the dictionary and `case` patterns overlap, and a member
+    // nested inside another member's body is scanned twice. Either way the literal is one
+    // finding, and `BTreeMap` also puts them back in source order.
+    let mut hits: BTreeMap<usize, String> = BTreeMap::new();
+    for member in members {
+        for member_match in member.find_iter(content) {
+            let open = member_match.end() - 1;
+            let Some(body) = brace_body(content, open) else {
+                continue;
+            };
+            for literal in literals {
+                for capture in literal.captures_iter(body) {
+                    let group = capture.get(1).expect("group 1 exists");
+                    // Offsets are into `body`, which starts one byte past the
+                    // brace — so the absolute position is that plus the local one.
+                    hits.entry(open + 1 + group.start())
+                        .or_insert_with(|| group.as_str().to_string());
+                }
+            }
+        }
+    }
+    hits.into_iter()
+        .map(|(offset, text)| Finding {
+            line: line_of(content, offset),
+            text,
+            kind: "swift-computed-property",
+        })
+        .collect()
+}
+
+/// The text between the brace at `open` and its match, or `None` if unbalanced.
+fn brace_body(content: &str, open: usize) -> Option<&str> {
+    let bytes = content.as_bytes();
+    debug_assert_eq!(bytes[open], b'{');
+    let mut depth = 0usize;
+    for (offset, byte) in bytes[open..].iter().enumerate() {
+        match byte {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return content.get(open + 1..open + offset);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Detect *interpolated* literals in the same watched positions — `Text("Delete \(n)")`.
@@ -338,9 +557,9 @@ fn swift_literal_findings(content: &str) -> Vec<Finding> {
 fn swift_interpolation_findings(content: &str) -> Vec<Finding> {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| {
-        Regex::new(
-            r#"(?:^|[^A-Za-z0-9_])(?:Text|Label|Button|Section|Toggle|navigationTitle|accessibilityLabel|accessibilityHint|alert|confirmationDialog)\(\s*"([^"]*\\\([^"]*)""#,
-        )
+        Regex::new(&format!(
+            r#"(?:^|[^A-Za-z0-9_])(?:{SWIFT_TEXT_POSITIONS})\(\s*"([^"]*\\\([^"]*)""#
+        ))
         .expect("static regex is valid")
     });
     matched_findings(content, re, "swift-interpolation")
@@ -350,7 +569,7 @@ fn swift_interpolation_findings(content: &str) -> Vec<Finding> {
 /// `LocalizedStringKey` positions (`LAContext` reasons, view-model strings, enum labels).
 ///
 /// The capture is the *key*, checked against the catalog by the runner, so
-/// `String(localized: "Photos")` fails while `String(localized: "ios.media_type.photo")`
+/// `String(localized: "Photos")` fails while `String(localized: "app.media.photo")`
 /// passes. The `defaultValue:` argument is deliberately not captured — it is the English
 /// source text the ICU arguments hang off, and is expected to be a literal.
 fn swift_localized_key_findings(content: &str) -> Vec<Finding> {
@@ -648,6 +867,136 @@ fn load_allowlist(root: &Path) -> Result<BTreeSet<(String, String)>> {
     Ok(set)
 }
 
+/// Fail when Swift's `ErrorCode` enum names an `error.*` code the catalog does
+/// not define.
+///
+/// The server error codes are a stable contract shared by three surfaces. Two of
+/// them are generated: `capsule_i18n::error_codes` comes out of the catalog, and
+/// the web reads the catalog directly. The Swift side is a hand-written enum
+/// whose raw values *are* the catalog keys, so it is the one surface where the
+/// contract can rot silently — and it rots into the worst possible symptom, a
+/// lookup miss that renders a blank or raw-key message on exactly the screens a
+/// user reaches when something has already gone wrong.
+///
+/// **The two directions are deliberately not symmetric.**
+///
+/// - A code in Swift that the catalog lacks is **fatal**. There is no message to
+///   show; the client is asking for a key that does not exist.
+/// - A code in the catalog that no Swift source mentions is **reported, not
+///   fatal**. The enum's `unknown(String)` case is load-bearing by design — a
+///   newer server may legitimately send a code this build predates, and the raw
+///   value *is* the catalog key, so the string still localizes. Making this
+///   fatal would force a Swift change for every server-side error addition,
+///   which is exactly the coupling `unknown` exists to avoid. It is still worth
+///   naming: each is a recovery the client cannot offer an affordance for.
+///
+/// The second direction is measured against **every Swift source, not just the
+/// enum**. Some catalog error strings are client-local and are reached
+/// deliberately through `unknown(_)` rather than through a case —
+/// `error.client.unclassified` is the generic fallback a screen shows when it
+/// has no code at all. Those are handled; calling them "codes with no case"
+/// would be a gate that reports noise, and a gate that reports noise is a gate
+/// people learn to skim.
+fn check_swift_error_codes(root: &Path, catalog_keys: &BTreeSet<String>) -> Result<()> {
+    let path = root.join(SWIFT_ERROR_CODE_PATH);
+    let Ok(content) = fs::read_to_string(&path) else {
+        // Not an error: the Swift client may not be checked out in every
+        // context this runs in (a sparse checkout, a docs-only CI lane).
+        return Ok(());
+    };
+
+    let swift_codes = swift_error_codes(&content);
+    if swift_codes.is_empty() {
+        bail!(
+            "i18n-guard: {SWIFT_ERROR_CODE_PATH} declares no `error.*` raw values. \
+             Either the file moved or its shape changed — this check would silently \
+             pass forever, so it fails loudly instead."
+        );
+    }
+
+    let catalog_codes: BTreeSet<&String> = catalog_keys
+        .iter()
+        .filter(|k| k.starts_with("error."))
+        .collect();
+
+    let dangling: Vec<&String> = swift_codes
+        .iter()
+        .filter(|code| !catalog_keys.contains(*code))
+        .collect();
+
+    let referenced = swift_referenced_error_codes(root)?;
+    let unhandled: Vec<&&String> = catalog_codes
+        .iter()
+        .filter(|code| !referenced.contains(**code))
+        .collect();
+
+    if !unhandled.is_empty() {
+        println!(
+            "i18n-guard: {} error code(s) are defined in the catalog but named nowhere \
+             in the Swift client. They still localize through `unknown(_)`, but no \
+             screen can offer a specific recovery for them:",
+            unhandled.len()
+        );
+        for code in &unhandled {
+            println!("  {code}");
+        }
+    }
+
+    if dangling.is_empty() {
+        println!(
+            "i18n-guard: Swift `ErrorCode` matches the catalog ({} codes).",
+            swift_codes.len()
+        );
+        return Ok(());
+    }
+
+    eprintln!(
+        "i18n-guard: Swift `ErrorCode` names {} code(s) that `locales/en.json` does not\n\
+         define. Each is a lookup miss — the user sees a blank or raw-key message on a\n\
+         failure screen. Add the key to the catalog, or correct the raw value:\n",
+        dangling.len()
+    );
+    for code in &dangling {
+        eprintln!("  {SWIFT_ERROR_CODE_PATH}: {code:?}");
+    }
+    bail!(
+        "i18n-guard failed: {} Swift error code(s) missing from the catalog",
+        dangling.len()
+    );
+}
+
+/// Every `error.*` code named anywhere in the Swift client.
+///
+/// Broader than the enum on purpose — see [`check_swift_error_codes`].
+fn swift_referenced_error_codes(root: &Path) -> Result<BTreeSet<String>> {
+    let mut codes = BTreeSet::new();
+    for rel in ["capsule-swift/App", "capsule-swift/Modules"] {
+        let dir = root.join(rel);
+        if !dir.exists() {
+            continue;
+        }
+        for path in collect_files(&dir, "swift")? {
+            let content =
+                fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+            codes.extend(swift_error_codes(&content));
+        }
+    }
+    Ok(codes)
+}
+
+/// Every `"error.*"` string literal in a Swift source file.
+///
+/// A plain literal scan rather than a parse of the `rawValue` switch: the switch
+/// is the only place these strings appear, and a scanner cannot be broken by the
+/// enum being reorganised into extensions or split across files.
+pub(crate) fn swift_error_codes(content: &str) -> BTreeSet<String> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r#""(error\.[a-z0-9_.]+)""#).expect("valid regex"));
+    re.captures_iter(content)
+        .map(|c| c[1].to_string())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -699,7 +1048,7 @@ mod tests {
     #[test]
     fn swift_flags_literal_but_not_verbatim_or_dynamic() {
         let src = r#"Text("Settings")
-            Text("ios.settings.title")
+            Text("app.settings.title")
             Text(verbatim: "raw")
             Text(model.title)
             .navigationTitle("Albums")
@@ -709,7 +1058,7 @@ mod tests {
         assert!(t.contains(&"Settings"));
         assert!(t.contains(&"Albums"));
         // The dotted key IS captured; the runner filters it against the catalog.
-        assert!(t.contains(&"ios.settings.title"));
+        assert!(t.contains(&"app.settings.title"));
         // `verbatim:` and dynamic args are never captured.
         assert!(!t.contains(&"raw"));
     }
@@ -744,7 +1093,7 @@ mod tests {
         // position holds no literal at all and the `defaultValue:` text is not captured.
         let src = r#"Button(
                 String(
-                    localized: "ios.timeline.delete_selected.confirm",
+                    localized: "app.timeline.delete_selected.confirm",
                     defaultValue: "Delete \(count) Items"
                 ),
                 role: .destructive
@@ -752,19 +1101,19 @@ mod tests {
         "#;
         let f = swift_findings(src);
         // Only the catalog key is captured; the runner then matches it against the catalog.
-        assert_eq!(texts(&f), vec!["ios.timeline.delete_selected.confirm"]);
+        assert_eq!(texts(&f), vec!["app.timeline.delete_selected.confirm"]);
     }
 
     #[test]
     fn swift_flags_a_string_localized_key_that_is_not_a_catalog_key() {
         let src = r#"String(localized: "Photos")
-            String(localized: "ios.media_type.photo")
+            String(localized: "app.media.photo")
         "#;
         let f = swift_findings(src);
         let t = texts(&f);
         // Both are captured; the runner keeps only the one that is not a catalog key.
         assert!(t.contains(&"Photos"));
-        assert!(t.contains(&"ios.media_type.photo"));
+        assert!(t.contains(&"app.media.photo"));
     }
 
     #[test]
@@ -780,6 +1129,242 @@ mod tests {
         assert!(t.contains(&"Hello"));
         assert!(t.contains(&"Back arrow"));
         assert_eq!(t.len(), 2, "stringResource and dynamic args are ignored");
+    }
+
+    #[test]
+    fn swift_computed_properties_are_scanned() {
+        // The shape that hid twenty-two English strings: display text returned
+        // from a `String` property, reaching the screen through a variable so
+        // no call site ever carries the literal.
+        let src = r#"
+            var title: String {
+                switch self {
+                case .places: "Places and Trips"
+                case .people: "People and Pets"
+                }
+            }
+        "#;
+        let texts: Vec<String> = swift_findings(src).into_iter().map(|f| f.text).collect();
+        assert!(texts.contains(&"Places and Trips".to_string()));
+        assert!(texts.contains(&"People and Pets".to_string()));
+    }
+
+    #[test]
+    fn swift_computed_properties_ignore_identifier_like_values() {
+        // A `String` property is not automatically display text. Symbol names, raw values
+        // and file formats do not spell a lowercase letter in position two; a `String`
+        // property that is not named like display text is not scanned at all.
+        let src = r#"
+            var title: String {
+                switch self {
+                case .heic: "HEIC"
+                case .dng: "DNG"
+                case .hdr10: "HDR10"
+                case .hlg: "HLG"
+                case .photo: "app.media.photo"
+                case .masterKey: "key.fill"
+                }
+            }
+            var systemImage: String {
+                switch self {
+                case .places: "Map Pin Icon"
+                }
+            }
+        "#;
+        assert_eq!(swift_findings(src), Vec::new());
+    }
+
+    #[test]
+    fn swift_computed_properties_catch_a_single_word_string() {
+        // Issue #394: the detector's own documented example. The literal rule used to
+        // require a space, so `case .places: "Places"` — the exact shape the doc comment
+        // advertises as the motivating bug — could not be caught.
+        let src = r#"
+            var title: String {
+                switch self {
+                case .places: "Places"
+                case .people: "People"
+                }
+            }
+        "#;
+        let texts: Vec<String> = swift_findings(src).into_iter().map(|f| f.text).collect();
+        assert_eq!(texts, vec!["Places".to_string(), "People".to_string()]);
+    }
+
+    #[test]
+    fn swift_display_functions_are_scanned() {
+        // `var` was required, so a `func` returning display text was invisible — the
+        // blind spot that hid "Dolby Vision" in `AssetInfoFormatting.hdrName(_:)`.
+        let src = r#"
+            static func hdrName(_ format: HDRFormat) -> String {
+                switch format {
+                case .hdr10: "HDR10"
+                case .dolbyVision: "Dolby Vision"
+                case .hlg: "HLG"
+                }
+            }
+        "#;
+        let texts: Vec<String> = swift_findings(src).into_iter().map(|f| f.text).collect();
+        assert_eq!(texts, vec!["Dolby Vision".to_string()]);
+    }
+
+    #[test]
+    fn swift_display_members_are_scanned_beyond_the_switch() {
+        // A property returns display text in more shapes than a `switch`: an explicit
+        // `return`, an implicit one, and a dictionary value. Only `case` was scanned.
+        // `heading`, `summary` and `text` are also new stems — `var heading` was not
+        // matched at all before.
+        let src = r#"
+            var heading: String {
+                if isEmpty { return "Nothing here yet" }
+                "Your library"
+            }
+            var summary: String {
+                let names: [Kind: String] = [.places: "Places and trips"]
+                return names[kind] ?? ""
+            }
+            var promptText: String {
+                "Choose an album"
+            }
+        "#;
+        let texts: Vec<String> = swift_findings(src).into_iter().map(|f| f.text).collect();
+        assert_eq!(
+            texts,
+            vec![
+                "Nothing here yet".to_string(),
+                "Your library".to_string(),
+                "Places and trips".to_string(),
+                "Choose an album".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn swift_display_members_do_not_report_a_literal_twice() {
+        // A `func` nested in a `var` body is scanned by both members, and the dictionary
+        // and `case` patterns overlap. Findings are keyed by absolute offset, so the
+        // literal is one violation, not two.
+        let src = r#"
+            var title: String {
+                func headingFor(_ k: Kind) -> String {
+                    return "Places and trips"
+                }
+                return headingFor(kind)
+            }
+        "#;
+        let findings = swift_findings(src);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].text, "Places and trips");
+    }
+
+    #[test]
+    fn swift_display_members_ignore_a_localized_default_value() {
+        // `String(localized:defaultValue:)` is the *migrated* shape: the key is checked
+        // against the catalog and the default value is the English source the ICU
+        // arguments hang off. Neither is a hardcoded literal, and the dictionary-value
+        // pattern must not read `defaultValue:` as a dictionary key.
+        let src = r#"
+            var title: String {
+                String(
+                    localized: "app.timeline.delete_selected.confirm",
+                    defaultValue: "Delete Items",
+                    comment: "Confirm button"
+                )
+            }
+        "#;
+        let texts: Vec<String> = swift_computed_property_findings(src)
+            .into_iter()
+            .map(|f| f.text)
+            .collect();
+        assert_eq!(texts, Vec::<String>::new());
+    }
+
+    /// The watched positions, one per alternative of the shared list.
+    fn swift_text_positions() -> Vec<&'static str> {
+        SWIFT_TEXT_POSITIONS.split('|').collect()
+    }
+
+    #[test]
+    fn every_watched_api_position_is_a_bare_identifier() {
+        // The shared list is spliced into two regexes, so a stray space, an empty
+        // alternative or a regex metacharacter in it would silently widen or break both.
+        let positions = swift_text_positions();
+        assert!(positions.len() >= 15, "{positions:?}");
+        for position in &positions {
+            assert!(
+                !position.is_empty()
+                    && position
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_'),
+                "`{position}` is not a bare identifier"
+            );
+        }
+        let mut unique = positions.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), positions.len(), "a position is listed twice");
+    }
+
+    #[test]
+    fn every_watched_api_position_is_caught_in_both_regexes() {
+        // The fixture is *derived* from the shared list rather than written out, so a
+        // position cannot be added without a case: `confirmationDialog` sat in the
+        // interpolation regex and not the literal one for two slices (#394) precisely
+        // because the two lists were maintained by hand. `searchable` and `tabItem` had
+        // no fixture at all until this test, so a broken alternative would have been
+        // silent.
+        for position in swift_text_positions() {
+            let literal = format!("Watched {position} text");
+            let interpolated = format!("Watched {position} \\(count)");
+            let src = format!(
+                "view\n    {position}(\"{literal}\")\n    {position}(\"{interpolated}\")\n"
+            );
+            let findings = swift_findings(&src);
+            let found = texts(&findings);
+            assert!(
+                found.contains(&literal.as_str()),
+                "{position}: the plain literal was not caught, got {found:?}"
+            );
+            assert!(
+                found.contains(&interpolated.as_str()),
+                "{position}: the interpolated literal was not caught, got {found:?}"
+            );
+            // And the word boundary still holds, for both regexes: a helper that merely
+            // ends in a watched name is not a watched position.
+            let helper = format!("view\n    my{position}(\"{literal}\")\n");
+            assert_eq!(
+                swift_findings(&helper),
+                Vec::new(),
+                "{position}: the word boundary was lost"
+            );
+        }
+    }
+
+    #[test]
+    fn swift_watches_every_api_position_in_both_regexes() {
+        // The derived fixture above proves each alternative matches; this one proves the
+        // real call shapes do, with the arguments SwiftUI actually puts after the string.
+        // `confirmationDialog` was in the interpolation regex and not the literal one;
+        // `help`, `accessibilityValue`, `ContentUnavailableView` and `tabItem` were in
+        // neither. One shared list now, so the two cannot disagree again.
+        let src = r#"
+            .help("Show the import log")
+            ContentUnavailableView("No photos yet", systemImage: "photo")
+            .accessibilityValue("Three of ten")
+            .confirmationDialog("Delete this?", isPresented: $flag) {}
+            .help("Imported \(count) files")
+        "#;
+        let f = swift_findings(src);
+        let t = texts(&f);
+        for expected in [
+            "Show the import log",
+            "No photos yet",
+            "Three of ten",
+            "Delete this?",
+        ] {
+            assert!(t.contains(&expected), "{expected} missing from {t:?}");
+        }
+        assert!(t.contains(&r"Imported \(count) files"), "{t:?}");
     }
 
     #[test]
@@ -954,5 +1539,87 @@ mod tests {
         let src = "line1\nline2 Text(\"x\")\n";
         assert_eq!(line_of(src, 0), 1);
         assert_eq!(line_of(src, 6), 2);
+    }
+
+    #[test]
+    fn swift_key_parameters_are_scanned() {
+        let src = r#"
+        SettingsRow(titleKey: "app.settings.storage.title", labelKey: "app.common.done")
+        EmptyState(emptyDescriptionKey: "app.import.plan.empty.description")
+        "#;
+        let texts: Vec<String> = swift_findings(src).into_iter().map(|f| f.text).collect();
+        assert!(texts.contains(&"app.settings.storage.title".to_string()));
+        assert!(texts.contains(&"app.common.done".to_string()));
+        assert!(texts.contains(&"app.import.plan.empty.description".to_string()));
+    }
+
+    /// The whole point of widening the gate: a key nobody added to the catalog
+    /// used to compile, render as its own raw text, and fail nothing.
+    #[test]
+    fn swift_key_parameters_catch_a_key_that_was_never_added() {
+        let src = r#"Row(titleKey: "app.settings.totally.made.up")"#;
+        let texts: Vec<String> = swift_findings(src).into_iter().map(|f| f.text).collect();
+        assert_eq!(texts, vec!["app.settings.totally.made.up".to_string()]);
+    }
+
+    /// A switch over an enum whose case ends in `Key` is not a call site. This
+    /// exact shape — `case .masterKey: "key.fill"` returning an SF Symbol —
+    /// was the first false positive the widened detector produced.
+    #[test]
+    fn swift_key_parameters_ignore_enum_case_patterns() {
+        let src = r#"
+        public var symbolName: String {
+            switch self {
+            case .masterKey: "key.fill"
+            case .userIdentityKey: "person.badge.key.fill"
+            }
+        }
+        "#;
+        assert_eq!(swift_key_parameter_findings(src), Vec::new());
+    }
+
+    /// A parameter that merely contains "key" is not a catalog reference.
+    #[test]
+    fn swift_key_parameters_require_the_label_to_end_in_key() {
+        let src = r#"Signer(publicKeyPem: "-----BEGIN PUBLIC KEY-----", keyring: "default")"#;
+        assert_eq!(swift_key_parameter_findings(src), Vec::new());
+    }
+
+    #[test]
+    fn swift_error_codes_reads_the_raw_value_switch() {
+        let src = r#"
+        public var rawValue: String {
+            switch self {
+            case .protocolVersionUnsupported: "error.protocol.version_unsupported"
+            case .authInvalidCredentials: "error.auth.invalid_credentials"
+            case let .unknown(raw): raw
+            }
+        }
+        "#;
+        let codes = swift_error_codes(src);
+        assert_eq!(codes.len(), 2);
+        assert!(codes.contains("error.protocol.version_unsupported"));
+        assert!(codes.contains("error.auth.invalid_credentials"));
+    }
+
+    /// The scanner must not mistake an ordinary catalog key for an error code —
+    /// the check's whole value is that its two sets are the *same* contract.
+    #[test]
+    fn swift_error_codes_ignores_ui_keys_and_prose() {
+        let src = r#"
+        Text("app.settings.title")
+        // an error.something mentioned in a comment, unquoted
+        Label("app.error.banner", systemImage: "x")
+        "#;
+        assert!(swift_error_codes(src).is_empty());
+    }
+
+    /// A real regression this guards: a typo'd raw value still compiles, still
+    /// round-trips through `init(rawValue:)`, and fails only at lookup time.
+    #[test]
+    fn swift_error_codes_captures_a_typo_verbatim() {
+        let src = r#"case .authRateLimited: "error.auth.rate_limted""#;
+        let codes = swift_error_codes(src);
+        assert!(codes.contains("error.auth.rate_limted"));
     }
 }

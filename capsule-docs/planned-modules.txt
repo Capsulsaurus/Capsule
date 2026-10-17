@@ -1,0 +1,16 @@
+# Modules the design specifies and the tree does not have yet.
+#
+# Format, tab-separated:
+#   <module path>	<why it does not exist yet, and the slice that lands it>
+#
+# Keyed on the path alone: a module that does not exist does not exist in every
+# doc that names it. `mise run check-docs-truth` fails on an entry whose module
+# has since been built, and on one no doc names any more, so this list cannot
+# quietly outlive either condition.
+#
+# This is deliberately the *only* way a design doc may name a module that is not
+# there. Everything here is a commitment nobody has met yet — read it as the
+# module-layer answer to "what has been designed and not built?"
+
+capsule-core::media::video	The video half of the media module: first-frame still extraction and the H.264 baseline preview transcode. The still half now exists (`capsule-core::media`, slice S-B1 on rawshift-image 0.1.1); this does not, because `rawshift-video` is unpublished and the transcode toolchain touches nothing the still path does. Contract: design/thumbnails.md § Video Previews. Slice S-B5 in SLICES.md.
+capsule-core::import::camera	The PTP/IP tethered-camera source adapter (S-B9). Post-v1; the contract exists so the adapter seam is fixed before anything implements it.

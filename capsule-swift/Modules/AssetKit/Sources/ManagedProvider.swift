@@ -12,7 +12,7 @@ import ManagedStore
 /// picks up the new assets.
 public actor ManagedProvider: AssetProvider, TrashProvider {
     /// Upper bound on the managed timeline window for the prototype.
-    private static let timelineLimit = 10_000
+    private static let timelineLimit = 10000
 
     private let library: ManagedLibrary
     private let authGate: any LocalAuthGate
@@ -107,10 +107,26 @@ public actor ManagedProvider: AssetProvider, TrashProvider {
         await emitReload()
     }
 
+    /// Permanently remove an asset: its bytes first, then its catalog row.
+    ///
+    /// Bytes first is the load-bearing part. This is the operation a user reaches
+    /// for when they want a photograph *gone*, so a failure to delete the file has
+    /// to surface as a failure — not as a vanished row over bytes still on disk,
+    /// which would report success while leaving the thing the user was trying to
+    /// destroy. Throwing here leaves the asset in Recently Deleted, where it can be
+    /// tried again.
+    ///
+    /// The reverse order's failure — a row pointing at bytes that are gone — is a
+    /// broken thumbnail. This one's is a privacy hole, and they are not comparable.
     public func purge(_ id: AssetID) async throws {
         guard case let .managed(uuid) = id else { return }
         let catalog = try await library.catalog()
-        // Removes the catalog row; the on-disk file cleanup is a follow-up.
+        // Read the row before dropping it: the media partition is derived from the
+        // capture timestamp, so once the row is gone the directory is unknowable.
+        if let asset = try await catalog.asset(id: uuid) {
+            let captureDate = Date(timeIntervalSince1970: TimeInterval(asset.captureTimestamp))
+            try await library.removeAssetFiles(uuid: uuid, captureDate: captureDate)
+        }
         try await catalog.purgeAsset(id: uuid)
         await emitReload()
     }

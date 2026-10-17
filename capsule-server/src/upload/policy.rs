@@ -9,20 +9,58 @@
 //! - **Protocol surface** — the 4 KiB alignment, the `[4 KiB, 16 MiB]` chunk range, the
 //!   offset semantics — is *not* here. It is fixed for a protocol version, so it lives as
 //!   constants in [`super::chunk`] where no deployment can move it.
-//! - **Server-tunable** — the accepted protocol window, the per-file ceiling, the closed
-//!   `content_type` enum, the timestamp-drift bound, and the suggested chunk-size tiers — is
-//!   here, because a self-hosted deployment legitimately sets them differently.
+//! - **Server-tunable** — the accepted protocol window and the client-build cutoff it
+//!   advertises beside it, the per-file ceiling, the closed `content_type` enum, the
+//!   timestamp-drift bound, and the suggested chunk-size tiers — is here, because a self-hosted
+//!   deployment legitimately sets them differently.
+//!
+//! The protocol window is read by more than the upload surface: [`crate::negotiation`]
+//! advertises it on every response and gates every covered operation against it, from this one
+//! value, so the window a client is told and the window it is held to cannot be two numbers.
 //!
 //! Every value carries the Salvo deployment's default, so the rebuild starts from the
 //! behaviour clients already see rather than from a fresh set of numbers.
 
 use jiff::Timestamp;
 
+/// The still-derivative content types the thumbnail ladder uploads.
+///
+/// **Source of truth:
+/// [Thumbnails and Previews](../../../capsule-docs/src/content/docs/design/thumbnails.md).** Its
+/// tier table is the closed set: a JXL master with AVIF and WebP as the delivery variants. The
+/// doc is explicit that "every receiver (and every federated peer) compares the
+/// `DerivativeManifest.format` value against this list, and an unknown value is a structural
+/// rejection" — and this server is such a receiver, so its accept-list has to carry every value
+/// that list admits *and no more*.
+///
+/// The `original` sentinel is deliberately **absent**. It is a recognised `format` value, not a
+/// content type: a tier that references the original carries no bytes of its own, so it opens no
+/// upload session and never presents a `content_type` at all. Admitting it here would widen the
+/// closed enum for a blob that cannot exist.
+///
+/// # Why this is a list here and not the enum
+///
+/// It should be `capsule_core::derivative_format::DerivativeFormat::STILL_DELIVERY_ORDER` mapped
+/// through `mime()` — one set, evaluated by producer and receiver alike. That module is not
+/// reachable from this crate yet: it exists only on the branch of #436, is on neither `master`
+/// nor this branch's base, and `capsule-core` is not this change's to edit. So the set is
+/// restated once, in one place, with the swap named — and the test below fails the moment this
+/// list and the accept-list disagree, which is the failure that produced #470.
+pub const DERIVATIVE_CONTENT_TYPES: &[&str] = &["image/jxl", "image/avif", "image/webp"];
+
 /// The closed `content_type` enum for the current protocol version (invariant 5).
 ///
 /// Frozen for a given `protocol_version` and server-tunable across versions. Metadata,
 /// provenance and backup blobs are opaque CBOR or ciphertext and declare
 /// `application/octet-stream`.
+///
+/// It carries two disjoint things: the **originals** a client imports, and the **derivatives**
+/// its ladder generates ([`DERIVATIVE_CONTENT_TYPES`], plus `video/mp4` for the H.264 baseline
+/// video preview, which the stills-only derivative set does not model). `image/jxl` is here for
+/// the second reason only — nothing imports a JXL original today — and its absence is #470:
+/// every still larger than the 256 px thumbnail cap failed its T1 upload with
+/// `400 error.upload.unsupported_content_type`, because the ladder encodes that tier as JXL and
+/// the server had never been told the format existed.
 pub const DEFAULT_CONTENT_TYPES: &[&str] = &[
     "image/jpeg",
     "image/png",
@@ -30,6 +68,7 @@ pub const DEFAULT_CONTENT_TYPES: &[&str] = &[
     "image/heif",
     "image/webp",
     "image/avif",
+    "image/jxl",
     "image/gif",
     "image/tiff",
     "video/mp4",
@@ -43,6 +82,14 @@ pub const DEFAULT_PROTOCOL_MIN: &str = "2026-01-01";
 
 /// Highest protocol date this server accepts (`X-Capsule-Protocol-Max`).
 pub const DEFAULT_PROTOCOL_MAX: &str = "2026-12-31";
+
+/// The semver client build below which this server stops answering
+/// (`X-Capsule-Min-Client-Build`).
+///
+/// `0.0.0` is "no cutoff announced": every build satisfies it. The header is advisory until a
+/// path is hard-deprecated (threat-model/validation.md), and no path is, so nothing refuses on
+/// it — but it is sent on every response so a client that reads it today reads a real value.
+pub const DEFAULT_MIN_CLIENT_BUILD: &str = "0.0.0";
 
 /// Gross-drift sanity bound for the envelope timestamp, in days (invariant 8).
 pub const DEFAULT_DRIFT_DAYS: i64 = 30;
@@ -64,6 +111,8 @@ pub struct UploadPolicy {
     protocol_min: String,
     /// Highest accepted protocol date (`YYYY-MM-DD`).
     protocol_max: String,
+    /// The advisory semver deprecation cutoff advertised on every response.
+    min_client_build: String,
     /// The closed `content_type` allow-list (invariant 5).
     content_types: Vec<String>,
     /// Gross-drift sanity bound in days for the envelope timestamp (invariant 8).
@@ -77,6 +126,7 @@ impl Default for UploadPolicy {
         Self {
             protocol_min: DEFAULT_PROTOCOL_MIN.to_owned(),
             protocol_max: DEFAULT_PROTOCOL_MAX.to_owned(),
+            min_client_build: DEFAULT_MIN_CLIENT_BUILD.to_owned(),
             content_types: DEFAULT_CONTENT_TYPES
                 .iter()
                 .map(|kind| (*kind).to_owned())
@@ -96,6 +146,11 @@ impl UploadPolicy {
     /// The highest protocol date this server accepts.
     pub fn protocol_max(&self) -> &str {
         &self.protocol_max
+    }
+
+    /// The semver client build below which this server stops answering.
+    pub fn min_client_build(&self) -> &str {
+        &self.min_client_build
     }
 
     /// The closed `content_type` allow-list, as the shared predicate wants it.
@@ -118,6 +173,13 @@ impl UploadPolicy {
     pub fn with_protocol_window(mut self, min: impl Into<String>, max: impl Into<String>) -> Self {
         self.protocol_min = min.into();
         self.protocol_max = max.into();
+        self
+    }
+
+    /// Announce a client-build cutoff.
+    #[must_use]
+    pub fn with_min_client_build(mut self, build: impl Into<String>) -> Self {
+        self.min_client_build = build.into();
         self
     }
 
@@ -171,6 +233,11 @@ mod tests {
     }
 
     #[test]
+    fn no_cutoff_is_the_build_every_client_satisfies() {
+        assert_eq!(UploadPolicy::default().min_client_build(), "0.0.0");
+    }
+
+    #[test]
     fn the_allow_list_carries_the_opaque_blob_type() {
         // Metadata, provenance and backup blobs all declare `application/octet-stream`; an
         // allow-list without it would refuse every blob but the original.
@@ -182,15 +249,48 @@ mod tests {
     }
 
     #[test]
+    fn every_committed_derivative_format_is_accepted() {
+        // #470: the ladder encodes the thumbnail tier as JXL, the SDK uploads each derivative
+        // with `content_type = derivative.format`, and the server answered
+        // `400 error.upload.unsupported_content_type` — so every still larger than the 256 px
+        // cap failed. The defect was not the missing string, it was that nothing tied the
+        // accept-list to the closed set it is supposed to mirror. This is that tie.
+        let policy = UploadPolicy::default();
+        let accepted = policy.content_types();
+        for format in DERIVATIVE_CONTENT_TYPES {
+            assert!(
+                accepted.contains(format),
+                "{format} is a committed derivative format the ladder uploads, and the closed \
+                 content-type enum refuses it"
+            );
+        }
+    }
+
+    #[test]
+    fn the_original_sentinel_is_not_a_content_type() {
+        // It is a recognised `DerivativeManifest.format` value and nothing more: a tier that
+        // references the original carries no bytes, opens no upload session, and presents no
+        // `content_type`. Admitting it would widen the closed enum for a blob that cannot exist.
+        assert!(!DERIVATIVE_CONTENT_TYPES.contains(&"original"));
+        assert!(
+            !UploadPolicy::default()
+                .content_types()
+                .contains(&"original")
+        );
+    }
+
+    #[test]
     fn a_deployment_can_narrow_every_tunable() {
         let policy = UploadPolicy::default()
             .with_protocol_window("2026-06-01", "2026-06-30")
+            .with_min_client_build("1.2.3")
             .with_content_types(["image/jpeg"])
             .with_max_file_bytes(1024)
             .with_drift_days(1);
 
         assert_eq!(policy.protocol_min(), "2026-06-01");
         assert_eq!(policy.protocol_max(), "2026-06-30");
+        assert_eq!(policy.min_client_build(), "1.2.3");
         assert_eq!(policy.content_types(), vec!["image/jpeg"]);
         assert_eq!(policy.max_file_bytes(), 1024);
         assert_eq!(policy.drift_days(), 1);

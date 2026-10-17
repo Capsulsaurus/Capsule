@@ -5,9 +5,11 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
+use ciborium::value::Value;
 use jiff::Timestamp;
 use uuid::Uuid;
 
+use super::derivatives::{PreparedStill, StillSource};
 use super::{
     AssetState, LifecycleError, Result, SidecarEnrichment, SignedImport, SignedImportOptions,
     StackPlacement, StreamedImport, Workspace, asset_is_deleted, media_dir, now_rfc3339,
@@ -28,8 +30,27 @@ use crate::exif::extract::extract_exif;
 use crate::exif::timezone::resolve_timezone;
 use crate::metadata::crdt::{Lww, OrSet};
 use crate::sidecar::sidecar_v1::{
-    Dimensions, Gps, GpsSource, SIDECAR_SCHEMA_V1, SidecarV1, StackMembership, StackRole,
+    Gps, GpsSource, SIDECAR_SCHEMA_V1, SidecarV1, StackMembership, StackRole,
 };
+use crate::utils::paths::tmp_path;
+
+// A fault injected between the signed sidecar's `.tmp` write and its rename into place — the
+// crash the single-file atomic rename exists to survive (maintenance doc, Atomic Writes).
+// `#[cfg(test)]` and thread-local for the same reasons as `derivatives::SealerFault`: absent
+// from a release build, and a test seam that stays out of a production signature.
+#[cfg(test)]
+thread_local! {
+    static SIDECAR_RENAME_FAULT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `body` with the sidecar rename failing after the `.tmp` write, restoring after.
+#[cfg(test)]
+pub(super) fn with_sidecar_rename_fault<T>(body: impl FnOnce() -> T) -> T {
+    SIDECAR_RENAME_FAULT.with(|slot| slot.set(true));
+    let out = body();
+    SIDECAR_RENAME_FAULT.with(|slot| slot.set(false));
+    out
+}
 
 /// Render a Unix-second capture time as the sidecar's RFC 3339 `capture_timestamp`.
 fn capture_rfc3339(secs: i64) -> String {
@@ -97,13 +118,19 @@ fn folded_gps(embedded: Option<Gps>, folded: Option<&Gps>) -> Option<Gps> {
     embedded.or_else(|| folded.cloned())
 }
 
+/// The sidecar `content_type` for a file whose bytes named no still image Capsule models.
+///
+/// The **fallback only**: [`Workspace::prepare_still`] sniffs the header first, so a still's
+/// media type comes from [`StillFormat::mime`](crate::media::StillFormat::mime) and a `.jpg`
+/// that is really a HEIC is typed `image/heic`. What is left for this table is the non-still
+/// suffixes — video above all, which has no detection path until slice `S-B5`.
 fn content_type_for(ext: &str) -> String {
     match ext {
-        "jpg" | "jpeg" => "image/jpeg",
-        "png" => "image/png",
-        "heic" => "image/heic",
-        "webp" => "image/webp",
-        "mp4" => "video/mp4",
+        "mp4" | "m4v" => "video/mp4",
+        "mov" | "qt" => "video/quicktime",
+        "mkv" => "video/x-matroska",
+        "webm" => "video/webm",
+        "avi" => "video/x-msvideo",
         _ => "application/octet-stream",
     }
     .to_string()
@@ -157,11 +184,33 @@ fn asset_row_from_state(asset: &AssetState) -> AssetRow {
             .as_ref()
             .map_or((None, false), |s| (Some(s.stack_id.clone()), s.hidden)),
     };
+    // Capture time is projected from the **signed sidecar**, not from `AssetState::capture_utc`
+    // — exactly as `library::rebuild::signed_asset_row` projects it, so the write path and a
+    // rebuild agree. The two values are equal at import; they part ways after a capture-time
+    // correction (`Workspace::set_capture_timestamp`, `S-B17`), which by design re-signs the
+    // sidecar and leaves the `media/{YYYY}/{YYYY-MM}` shard — and therefore `capture_utc`,
+    // which names it — where the files already are. Reading the shard here would keep the
+    // timeline on the wrong date until the next rebuild while the rebuild read the right one.
+    let capture_utc = asset
+        .sidecar
+        .capture_timestamp
+        .parse::<Timestamp>()
+        .map_or_else(
+            |_| {
+                tracing::warn!(
+                    asset_id = %asset.asset_id,
+                    capture_timestamp = %asset.sidecar.capture_timestamp,
+                    "index: unparseable capture timestamp; indexing it as the epoch"
+                );
+                0
+            },
+            Timestamp::as_second,
+        );
     AssetRow {
         uuid: asset.asset_id.to_string(),
         asset_type: asset_type_for(&asset.sidecar.content_type),
-        capture_timestamp: asset.capture_utc,
-        capture_utc: Some(asset.capture_utc),
+        capture_timestamp: capture_utc,
+        capture_utc: Some(capture_utc),
         capture_tz_source: None,
         import_timestamp: rfc3339_to_secs(&asset.sidecar.import_timestamp),
         hash_sha256: asset.sidecar.hash.to_hex(),
@@ -182,14 +231,96 @@ fn asset_row_from_state(asset: &AssetState) -> AssetRow {
     }
 }
 
+/// Whether `a` and `b` resolve to the same existing file.
+fn is_same_file(a: &Path, b: &Path) -> bool {
+    match (fs::canonicalize(a), fs::canonicalize(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => false,
+    }
+}
+
+/// One signed create, as [`Workspace::commit_signed_create`] takes it: everything a caller
+/// decides *before* the sealing order starts. A fresh import fills the defaults; the
+/// unsigned-sidecar migration (`S-D24`) is the one caller that pins an id, a bucket, an import
+/// time, and a fold.
+pub(super) struct CreateRequest<'a> {
+    /// The asset id. An import mints `Uuid::now_v7()`; the migration keeps the legacy id.
+    pub asset_id: Uuid,
+    /// The owning album; must be held with write capability.
+    pub album_id: Uuid,
+    /// The plaintext to admit. When this already *is* the asset's own media path, the bytes are
+    /// left where they are rather than rewritten over themselves.
+    pub src: &'a Path,
+    /// The sidecar's `import_timestamp`; `None` stamps now.
+    pub import_timestamp: Option<String>,
+    /// The `media/{YYYY}/{YYYY-MM}` bucket the asset's files live in, as UTC seconds. `None`
+    /// derives it from the resolved capture time (a fresh import); the migration pins the
+    /// bucket the files already sit in, so nothing moves.
+    pub media_bucket: Option<i64>,
+    /// `_unknown` entries the signed sidecar carries from birth — empty for an import.
+    pub extra_unknown: BTreeMap<String, Value>,
+    /// Move-mode release, stack placement, and exporter enrichment.
+    pub opts: &'a SignedImportOptions,
+}
+
 impl Workspace {
+    /// Write an asset's plaintext and its signed artifacts.
+    ///
+    /// The plaintext is written only when the media path does not already hold it: an
+    /// original that is already correct is never rewritten over itself, which would only open
+    /// a crash window in which the one copy is truncated. The decision is made from the
+    /// buffer — a `stat` of the media path, a length comparison, and `hash_bytes(plaintext)`
+    /// against the sidecar's `hash` — with no second read of the disk, so a metadata edit
+    /// costs one read of the original and no write.
+    ///
+    /// **Caller rule.** `plaintext` must be either the bytes read from the media path
+    /// (`append_lifecycle`) or the file about to become it (`commit_signed_create`; for the
+    /// migration that is the media path itself). A caller whose buffer may legitimately differ
+    /// from a *same-length* file already at the media path is not covered by this guard and
+    /// must decide the overwrite itself; `import_backup` restores into a workspace where the
+    /// media path does not exist, so it never meets that case.
     pub(super) fn write_asset_files(&self, asset: &AssetState, plaintext: &[u8]) -> Result<()> {
         let dir = media_dir(&self.root, asset.capture_utc);
         fs::create_dir_all(&dir).map_err(|e| LifecycleError::Io(e.to_string()))?;
-        fs::write(self.media_path(asset), plaintext)
+        let media_path = self.media_path(asset);
+        let already_correct = fs::metadata(&media_path)
+            .is_ok_and(|m| m.is_file() && m.len() == plaintext.len() as u64)
+            && hash::hash_bytes(plaintext) == asset.sidecar.hash;
+        if already_correct {
+            tracing::debug!(
+                asset_id = %asset.asset_id,
+                "original already on disk with the signed hash; not rewriting it"
+            );
+        } else {
+            fs::write(&media_path, plaintext).map_err(|e| LifecycleError::Io(e.to_string()))?;
+        }
+        self.write_signed_artifacts(asset)
+    }
+
+    /// The signed half of [`write_asset_files`](Self::write_asset_files): the sidecar, the
+    /// provenance chain, and the sealed metadata blob — everything but the plaintext. The
+    /// right call for a writer whose plaintext is already on disk and unchanged (a metadata
+    /// edit), which then needs neither to read nor to write the original.
+    ///
+    /// The sidecar is staged to `{uuid}.cbor.tmp` and renamed into place (the single-file
+    /// atomic write of the maintenance doc), so a crash mid-write leaves the previous sidecar
+    /// intact rather than a torn one — for the migration, that previous sidecar is the legacy
+    /// record itself. The stale `.tmp` is the startup scrub's to remove. The per-asset
+    /// *bundle* (sidecar, chain, blob renamed together) remains its own slice.
+    pub(super) fn write_signed_artifacts(&self, asset: &AssetState) -> Result<()> {
+        let dir = media_dir(&self.root, asset.capture_utc);
+        fs::create_dir_all(&dir).map_err(|e| LifecycleError::Io(e.to_string()))?;
+        let sidecar_path = self.sidecar_path(asset);
+        let staged = tmp_path(&sidecar_path);
+        fs::write(&staged, asset.sidecar.to_canonical_vec())
             .map_err(|e| LifecycleError::Io(e.to_string()))?;
-        fs::write(self.sidecar_path(asset), asset.sidecar.to_canonical_vec())
-            .map_err(|e| LifecycleError::Io(e.to_string()))?;
+        #[cfg(test)]
+        if SIDECAR_RENAME_FAULT.with(std::cell::Cell::get) {
+            return Err(LifecycleError::Io(
+                "injected fault: crashed before renaming the sidecar into place".into(),
+            ));
+        }
+        fs::rename(&staged, &sidecar_path).map_err(|e| LifecycleError::Io(e.to_string()))?;
         let prov = cbor::to_canonical_vec(&asset.chain.records().to_vec())
             .map_err(|e| LifecycleError::Cbor(e.to_string()))?;
         fs::write(self.provenance_path(asset), prov)
@@ -303,12 +434,13 @@ impl Workspace {
     /// As [`import_asset`](Self::import_asset) but with executor-supplied [`SignedImportOptions`]
     /// (Move-mode source release + stack placement). This is the single signed write path the
     /// import executor drives (S-B2): every imported member lands as a signed `SidecarV1` +
-    /// manifest + append-only provenance, self-verified through [`verify_asset`], and — behind
-    /// the `media` feature, when a [`StillEncoder`](crate::media::image::derivative::StillEncoder)
-    /// is attached — with signed thumbnail/preview derivatives + an LQIP in the sidecar.
+    /// manifest + append-only provenance, self-verified through [`verify_asset`], and — when the
+    /// still decodes — with a chromahash `lqip` in the sidecar and signed thumbnail derivatives
+    /// on disk (the private `prepare_still`, slices `S-B1`/`S-B14`).
     ///
-    /// Returns a [`SignedImport`]: the asset id, plus the [`DerivativeStatus`](super::DerivativeStatus)
-    /// saying whether derivatives were generated and, if not, why. A format this build has no
+    /// Returns a [`SignedImport`]: the asset id, the
+    /// [`DerivativeStatus`](super::DerivativeStatus) saying whether derivatives were generated
+    /// and, if not, why, and the per-format deferral count. A format this build has no
     /// codec for **still imports** — the original is the backup, the thumbnail is a bonus — so
     /// the status is a report, never a rejection (slice `S-B13`).
     #[tracing::instrument(skip_all, fields(album_id = %album_id, src = %src.display()))]
@@ -318,12 +450,36 @@ impl Workspace {
         src: &Path,
         opts: &SignedImportOptions,
     ) -> Result<SignedImport> {
+        self.commit_signed_create(&CreateRequest {
+            asset_id: Uuid::now_v7(),
+            album_id,
+            src,
+            import_timestamp: None,
+            media_bucket: None,
+            extra_unknown: BTreeMap::new(),
+            opts,
+        })
+    }
+
+    /// The signed create commit every import — and the unsigned-sidecar migration — goes
+    /// through: EXIF scan, encrypt, derivatives, author + sign the sidecar, seal it, build +
+    /// sign the create manifest, self-verify, write, index. The [`CreateRequest`] carries the
+    /// few things a caller decides beforehand; the sealing order and the self-checks are the
+    /// same for every caller, which is the point of there being one of these.
+    #[tracing::instrument(
+        skip_all,
+        fields(asset_id = %req.asset_id, album_id = %req.album_id, src = %req.src.display())
+    )]
+    pub(super) fn commit_signed_create(&mut self, req: &CreateRequest<'_>) -> Result<SignedImport> {
+        let src = req.src;
+        let asset_id = req.asset_id;
+        let album_id = req.album_id;
+        let opts = req.opts;
         let plaintext = fs::read(src)
             .map_err(|e| LifecycleError::Io(format!("read {}: {e}", src.display())))?;
         let ext = src
             .extension()
             .map_or_else(|| "bin".into(), |e| e.to_string_lossy().to_lowercase());
-        let asset_id = Uuid::now_v7();
 
         // Scan & extract: capture time, dimensions, and GPS from the file's EXIF. Missing values
         // degrade cleanly (capture → now; dimensions/GPS → absent).
@@ -382,26 +538,52 @@ impl Workspace {
             "import: sidecar metadata resolved"
         );
 
-        // Still-derived sidecar metadata. Dimensions come from EXIF; there is **no decoder in
-        // this build** since `S-C59` retired `capsule_core::media`, so no still is decoded, no
-        // LQIP is computed and no derivatives are generated. The import proceeds regardless: the
-        // original is still backed up as a signed, encrypted blob, and `derivative_status`
-        // records the gap so it is reportable rather than silent (`S-B13`). Rawshift's
-        // replacement is what closes it.
-        let (dimensions, lqip, derivative_status) = (
-            exif.width
-                .zip(exif.height)
-                .map(|(width, height)| Dimensions { width, height }),
-            None::<crate::sidecar::sidecar_v1::Lqip>,
-            super::DerivativeStatus::DeferredNoCodec,
-        );
-
         let album = self.album(&album_id)?;
         let epoch = album.current_epoch;
         let amk = Amk::from_bytes(album.amks[&epoch]);
         // First write: draw a fresh nonce prefix and derive the folded file key together
         // (nothing to replace on a create).
+        //
+        // **Before** the derivatives, and that ordering is load-bearing: the `original`
+        // sentinel is a signed *reference* to this blob, so it commits to this ciphertext's
+        // address and this nonce prefix, neither of which exists until now.
         let (enc, ciphertext, _file_key) = encrypt_asset_rekey(&amk, &asset_id, &plaintext, None)?;
+
+        // The media bucket every file of this asset resolves to. A fresh import buckets by the
+        // resolved capture time; the migration pins the bucket the files already sit in, and
+        // the sidecar's `capture_timestamp` below still carries the resolved truth.
+        let bucket = req.media_bucket.unwrap_or(capture_utc);
+
+        // Still-derived sidecar metadata, from one decode pass over the plaintext: the
+        // header-derived `content_type`, pixel `dimensions`, the chromahash `lqip`, and the
+        // signed thumbnail derivatives to persist once the asset's own files are durable. Each
+        // generated derivative is encrypted under its own fresh nonce prefix as it is signed —
+        // derivative bytes cross the network encrypted exactly like the original.
+        //
+        // Never fatal. A still this build cannot decode — or cannot decode *these bytes* of —
+        // commits exactly as before: EXIF dimensions, no LQIP, no derivatives, and a
+        // `DerivativeStatus` recording which reason applied so the gap is reportable rather
+        // than silent (`S-B13`).
+        let PreparedStill {
+            format,
+            dimensions,
+            lqip,
+            derivatives,
+            deferred_formats,
+            status: derivative_status,
+        } = self.prepare_still(
+            &StillSource {
+                plaintext: &plaintext,
+                ext: &ext,
+                src,
+                exif: &exif,
+            },
+            asset_id,
+            album_id,
+            bucket,
+            &amk,
+            &enc,
+        )?;
 
         // Sealing order (1) the prior head `H` is `None` on a create; (2) author + sign the
         // sidecar with `provenance_chain_hash = H`.
@@ -411,8 +593,10 @@ impl Workspace {
             uuid: asset_id,
             hash: hash::hash_bytes(&plaintext),
             capture_timestamp: capture_rfc3339(capture_utc),
-            import_timestamp: now_rfc3339(),
-            content_type: content_type_for(&ext),
+            import_timestamp: req.import_timestamp.clone().unwrap_or_else(now_rfc3339),
+            // Header-derived wherever the bytes name a still Capsule models; the extension
+            // table is the fallback for everything else (video, unknown suffixes).
+            content_type: format.map_or_else(|| content_type_for(&ext), |f| f.mime().to_string()),
             dimensions,
             lqip,
             tags_user,
@@ -435,7 +619,7 @@ impl Workspace {
             session_id: Uuid::now_v7(),
             gps,
             provenance_chain_hash: None,
-            unknown: BTreeMap::new(),
+            unknown: req.extra_unknown.clone(),
             signature: None,
         };
         sidecar.sign(&self.account.user_ik);
@@ -503,7 +687,7 @@ impl Workspace {
             asset_id,
             album_id,
             ext,
-            capture_utc,
+            capture_utc: bucket,
             chain,
             sidecar,
             metadata_blob,
@@ -511,14 +695,22 @@ impl Workspace {
             // reaches `AssetState::stack` by any other route.
             stack: opts.stack.as_ref().map(StackPlacement::from_membership),
         };
+        // Bytes already at their own media path (the migration) are signed where they lie:
+        // `write_asset_files` sees the signed hash already on disk and leaves the original
+        // alone, and the Move-mode release below must not delete what is now the asset.
+        let in_place = is_same_file(src, &self.media_path(&asset));
         self.write_asset_files(&asset, &plaintext)?;
+        // After the asset's own files, and deliberately: a derivative is regenerable, so a
+        // failure to write one must never fail an import whose signed original is already
+        // durable. `persist_derivatives` logs and continues rather than returning.
+        self.persist_derivatives(&asset, &derivatives);
         self.index_asset_row(&asset)?;
         self.index_original_representation(&asset, plaintext.len())?;
 
         // Move mode: release the source only after the durable, self-verified commit — unless
         // the caller defers release to its server-side verify-before-destroy gate (S-D4/S-B3),
         // where the source is the only copy until the *server* durably holds it.
-        if opts.move_source && !opts.defer_source_release {
+        if opts.move_source && !opts.defer_source_release && !in_place {
             let _ = fs::remove_file(src);
         }
 
@@ -526,15 +718,16 @@ impl Workspace {
         Ok(SignedImport {
             asset_id,
             derivatives: derivative_status,
+            deferred_formats: deferred_formats as u32,
         })
     }
 
     /// Import a file on the signed path for a **streaming** import: identical to
     /// [`import_asset_with`](Self::import_asset_with) but with `defer_source_release` forced on,
-    /// and returning the [`StreamedImport`] descriptor the streaming window drives its
-    /// per-asset upload → verify → release step from. The local original (and any Move-mode
-    /// source) is left in place — the [streaming executor](crate::import::streaming) releases it
-    /// only after the server's `durable` verdict + custody receipt clear the `S-D4` gate.
+    /// and returning the [`StreamedImport`] descriptor the streaming window drives its per-asset
+    /// upload → verify → release step from. The local original (and any Move-mode source) is left
+    /// in place — the [streaming executor](crate::import::execute_streaming) releases it only
+    /// after the server's `durable` verdict + custody receipt clear the `S-D4` gate.
     ///
     /// `enrichment` carries the folded third-party exporter metadata for this file exactly as
     /// [`import_asset_with`](Self::import_asset_with) takes it (`S-B11`). It is a parameter and
@@ -589,7 +782,7 @@ impl Workspace {
 mod tests {
     use tempfile::TempDir;
 
-    use super::super::fast_workspace;
+    use super::super::{FAST_PARAMS, fast_workspace};
     use super::*;
     use crate::crypto::keys::HybridSigningKey;
 
@@ -697,6 +890,135 @@ mod tests {
             .unwrap();
         assert_eq!(ws.asset(&asset).unwrap().ext, "bin");
         assert_eq!(ws.verify(&asset).unwrap(), VerifyOutcome::Accept);
+    }
+
+    /// The rewrite guard, directly. A media path holding bytes of a *different length* than
+    /// the correct plaintext is overwritten; a media path already holding the correct bytes is
+    /// left alone, its mtime intact — the safety property the migration and every metadata
+    /// edit rely on.
+    #[test]
+    fn write_asset_files_overwrites_wrong_bytes_and_leaves_correct_bytes_alone() {
+        use std::time::{Duration, SystemTime};
+
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let img = src.path().join("photo.jpg");
+        let correct = b"\xFF\xD8\xFF the signed bytes".to_vec();
+        fs::write(&img, &correct).unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Trip").unwrap();
+        let id = ws.import_asset(album, &img).unwrap();
+        let media = ws.media_path(ws.asset(&id).unwrap());
+
+        // Wrong bytes at the media path (truncated, then longer): overwritten.
+        for wrong in [
+            &correct[..correct.len() / 2],
+            b"\xFF\xD8\xFF not the signed bytes at all",
+        ] {
+            fs::write(&media, wrong).unwrap();
+            ws.write_asset_files(ws.asset(&id).unwrap(), &correct)
+                .unwrap();
+            assert_eq!(
+                fs::read(&media).unwrap(),
+                correct,
+                "wrong bytes were rewritten"
+            );
+        }
+
+        // Correct bytes already there: not touched, which the mtime proves.
+        let long_ago = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        fs::File::options()
+            .write(true)
+            .open(&media)
+            .unwrap()
+            .set_modified(long_ago)
+            .unwrap();
+        ws.write_asset_files(ws.asset(&id).unwrap(), &correct)
+            .unwrap();
+        assert_eq!(fs::metadata(&media).unwrap().modified().unwrap(), long_ago);
+        assert_eq!(fs::read(&media).unwrap(), correct);
+        assert_eq!(ws.verify(&id).unwrap(), VerifyOutcome::Accept);
+    }
+
+    /// The guard's documented limit, pinned so it cannot change silently: the decision is
+    /// made from the buffer with no second read of the disk, so a *same-length* file whose
+    /// bytes differ from a correct buffer is not detected. No caller in the tree can produce
+    /// that case — `append_lifecycle` passes the bytes it just read from this very path, a
+    /// create's source either is this path or the path does not exist yet, and `import_backup`
+    /// restores into a workspace where the path does not exist — and a wrong original is
+    /// caught by `verify`, never silently accepted. A caller that could meet the case must
+    /// decide the overwrite itself (see the caller rule on `write_asset_files`).
+    #[test]
+    fn write_asset_files_trusts_a_same_length_buffer_over_the_disk() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let img = src.path().join("photo.jpg");
+        let correct = b"\xFF\xD8\xFF the signed bytes".to_vec();
+        fs::write(&img, &correct).unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Trip").unwrap();
+        let id = ws.import_asset(album, &img).unwrap();
+        let media = ws.media_path(ws.asset(&id).unwrap());
+
+        let same_length = b"\xFF\xD8\xFF THE SIGNED BYTES".to_vec();
+        assert_eq!(same_length.len(), correct.len());
+        fs::write(&media, &same_length).unwrap();
+        ws.write_asset_files(ws.asset(&id).unwrap(), &correct)
+            .unwrap();
+        assert_eq!(
+            fs::read(&media).unwrap(),
+            same_length,
+            "the buffer is trusted; no second read decides this"
+        );
+        // ...and the wrong original does not pass verification.
+        assert_ne!(ws.verify(&id).unwrap(), VerifyOutcome::Accept);
+    }
+
+    /// A lifecycle write — caption, tag, soft-delete, restore — touches the signed artifacts
+    /// and nothing else: the original is neither read nor rewritten. The original is made
+    /// unreadable for the duration (so any read would fail the edit), and its mtime and bytes
+    /// are unchanged afterwards.
+    #[test]
+    fn metadata_edits_neither_read_nor_rewrite_the_original() {
+        use std::time::{Duration, SystemTime};
+
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let img = src.path().join("photo.jpg");
+        let bytes = b"\xFF\xD8\xFF never touched by an edit".to_vec();
+        fs::write(&img, &bytes).unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Trip").unwrap();
+        let id = ws.import_asset(album, &img).unwrap();
+        let media = ws.media_path(ws.asset(&id).unwrap());
+
+        let long_ago = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        fs::File::options()
+            .write(true)
+            .open(&media)
+            .unwrap()
+            .set_modified(long_ago)
+            .unwrap();
+        #[cfg(unix)]
+        let readable = {
+            use std::os::unix::fs::PermissionsExt;
+            let readable = fs::metadata(&media).unwrap().permissions();
+            fs::set_permissions(&media, fs::Permissions::from_mode(0o000)).unwrap();
+            readable
+        };
+
+        ws.set_caption(&id, "edited without touching the bytes")
+            .unwrap();
+        ws.tag_add(&id, "untouched").unwrap();
+        ws.soft_delete(&id, 30).unwrap();
+        ws.restore(&id).unwrap();
+
+        #[cfg(unix)]
+        fs::set_permissions(&media, readable).unwrap();
+        assert_eq!(fs::metadata(&media).unwrap().modified().unwrap(), long_ago);
+        assert_eq!(fs::read(&media).unwrap(), bytes);
+        assert_eq!(ws.asset(&id).unwrap().chain.records().len(), 5);
+        assert_eq!(ws.verify(&id).unwrap(), VerifyOutcome::Accept);
     }
 
     // ── Importer-formed stacks (S-B15) ──────────────────────────────────────────
@@ -929,7 +1251,8 @@ mod tests {
         // Backup → restore into a FRESH library (new device, verifying against the
         // exporter's published key) → byte-equal plaintext.
         let backup_path = src.path().join("backup.tar");
-        ws.export_backup(&backup_path, b"recovery-pass").unwrap();
+        ws.export_backup_with_params(&backup_path, b"recovery-pass", FAST_PARAMS)
+            .unwrap();
         let exporter_pub = ws.exporter_verifying_key();
 
         let fresh = TempDir::new().unwrap();
@@ -997,5 +1320,50 @@ mod tests {
         assert!(ws.db().query_timeline(0, 100).unwrap().is_empty());
         ws.restore(&id).unwrap();
         assert_eq!(ws.db().query_timeline(0, 100).unwrap().len(), 1);
+    }
+
+    // ── The index projection of capture time (S-B17 precondition) ───────────────
+
+    /// The live `assets` row is projected from the **signed sidecar's** capture timestamp, as
+    /// a rebuild projects it — not from the `capture_utc` shard, which is fixed at import and
+    /// stays put through a capture-time correction. Equal at import; this test drives the two
+    /// apart the way `set_capture_timestamp` will and asserts the row follows the sidecar.
+    #[test]
+    fn the_live_index_row_projects_capture_time_from_the_sidecar() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let img = src.path().join("p.jpg");
+        fs::write(&img, b"\xFF\xD8\xFF capture projection bytes").unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("A").unwrap();
+        let id = ws.import_asset(album, &img).unwrap();
+
+        // At import the shard and the sidecar name the same instant.
+        let asset = ws.assets.get(&id).unwrap();
+        let row = asset_row_from_state(asset);
+        assert_eq!(row.capture_timestamp, asset.capture_utc);
+        assert_eq!(row.capture_utc, Some(asset.capture_utc));
+        assert_eq!(
+            rfc3339_to_secs(&asset.sidecar.capture_timestamp),
+            asset.capture_utc
+        );
+
+        // Drive them apart in memory: the sidecar says 2001, the shard still says now.
+        let corrected = 1_000_000_000;
+        ws.assets.get_mut(&id).unwrap().sidecar.capture_timestamp = capture_rfc3339(corrected);
+        let asset = ws.assets.get(&id).unwrap();
+        assert_ne!(asset.capture_utc, corrected, "the shard is untouched");
+        let row = asset_row_from_state(asset);
+        assert_eq!(
+            row.capture_timestamp, corrected,
+            "the row follows the sidecar"
+        );
+        assert_eq!(row.capture_utc, Some(corrected));
+
+        // An unparseable sidecar timestamp indexes as the epoch, as `rebuild_index` does.
+        ws.assets.get_mut(&id).unwrap().sidecar.capture_timestamp = "not a timestamp".into();
+        let row = asset_row_from_state(ws.assets.get(&id).unwrap());
+        assert_eq!(row.capture_timestamp, 0);
+        assert_eq!(row.capture_utc, Some(0));
     }
 }

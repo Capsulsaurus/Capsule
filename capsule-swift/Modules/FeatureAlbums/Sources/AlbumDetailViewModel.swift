@@ -19,7 +19,7 @@ public final class AlbumDetailViewModel {
 
     /// Load the album's assets. Call on appear.
     public func load() async {
-        assets = (try? await albumProvider.assets(in: album.id)) ?? []
+        assets = await (try? albumProvider.assets(in: album.id)) ?? []
         isLoading = false
     }
 }

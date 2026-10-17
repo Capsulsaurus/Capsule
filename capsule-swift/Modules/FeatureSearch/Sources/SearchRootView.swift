@@ -17,42 +17,44 @@ public struct SearchRootView: View {
     private let albumProvider: any AlbumProvider
     private let thumbnails: any ThumbnailProvider
     private let mediaLoader: ViewerMediaLoader
+    private let captionStore: (any CaptionStore)?
+    private let placeNames: any PlaceNameResolver
 
     public init(
         assetProvider: any AssetProvider,
         albumProvider: any AlbumProvider,
         thumbnails: any ThumbnailProvider,
-        mediaLoader: ViewerMediaLoader
+        mediaLoader: ViewerMediaLoader,
+        captionStore: (any CaptionStore)? = nil,
+        placeNames: any PlaceNameResolver = NoPlaceNameResolver()
     ) {
         _model = State(wrappedValue: SearchViewModel(provider: assetProvider))
         self.assetProvider = assetProvider
         self.albumProvider = albumProvider
         self.thumbnails = thumbnails
         self.mediaLoader = mediaLoader
+        self.captionStore = captionStore
+        self.placeNames = placeNames
     }
 
     public var body: some View {
-        NavigationStack {
-            content
-                .navigationTitle("ios.tab.search")
-                .navigationBarTitleDisplayMode(.inline)
-                .searchable(
-                    text: $model.query,
-                    placement: .navigationBarDrawer(displayMode: .always),
-                    prompt: "ios.search.prompt"
+        content
+            .navigationTitle("app.tab.search")
+            .capsuleNavigationBarInline()
+            .capsuleSearchable(text: $model.query, prompt: "app.search.prompt")
+            .searchSuggestions { suggestionList }
+            .task { await model.load() }
+            .capsuleFullScreenCover(item: $viewerSelection) { selection in
+                AssetViewerView(
+                    assets: selection.assets,
+                    startIndex: selection.startIndex,
+                    provider: assetProvider,
+                    mediaLoader: mediaLoader,
+                    albumProvider: albumProvider,
+                    captionStore: captionStore,
+                    placeNames: placeNames
                 )
-                .searchSuggestions { suggestionList }
-        }
-        .task { await model.load() }
-        .fullScreenCover(item: $viewerSelection) { selection in
-            AssetViewerView(
-                assets: selection.assets,
-                startIndex: selection.startIndex,
-                provider: assetProvider,
-                mediaLoader: mediaLoader,
-                albumProvider: albumProvider
-            )
-        }
+            }
     }
 
     @ViewBuilder
@@ -71,17 +73,17 @@ public struct SearchRootView: View {
     private var browseView: some View {
         List {
             if !model.recentSearches.isEmpty {
-                Section("ios.search.section.recent") {
+                Section("app.search.section.recent") {
                     ForEach(model.recentSearches, id: \.self) { term in
                         Button { model.applyRecent(term) } label: {
                             Label(term, systemImage: "clock.arrow.circlepath")
                         }
                     }
-                    Button("ios.search.clear_recents", role: .destructive) { model.clearRecents() }
+                    Button("app.search.clear_recents", role: .destructive) { model.clearRecents() }
                         .font(.footnote)
                 }
             }
-            Section("ios.search.section.categories") {
+            Section("app.search.section.categories") {
                 ForEach(model.allSuggestions) { suggestion in
                     Button { model.apply(suggestion) } label: {
                         Label(suggestion.title, systemImage: suggestion.systemImage)
@@ -108,9 +110,9 @@ public struct SearchRootView: View {
             Divider()
             if model.results.isEmpty {
                 ContentUnavailableView(
-                    "ios.search.empty.title",
+                    "app.search.empty.title",
                     systemImage: "magnifyingglass",
-                    description: Text("ios.search.empty.description")
+                    description: Text("app.search.empty.description")
                 )
             } else {
                 PhotoGridView(
@@ -147,7 +149,7 @@ public struct SearchRootView: View {
                 Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
             }
             .accessibilityLabel(String(
-                localized: "ios.search.clear_facet",
+                localized: "app.search.clear_facet",
                 defaultValue: "Clear \(title)"
             ))
         }

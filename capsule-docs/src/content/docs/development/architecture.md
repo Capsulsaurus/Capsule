@@ -1,6 +1,7 @@
 ---
 title: Server Architecture
-description: The planned Kynos REST/OpenAPI server and generated client architecture
+description: The Kynos REST/OpenAPI server and generated client architecture
+status: draft
 ---
 
 Capsule exposes one REST/OpenAPI contract. GraphQL and gRPC were removed because they duplicated
@@ -12,7 +13,7 @@ schemas and conflicted with the encrypted, offline-first client model.
 Native client
   ├─ capsule-core: plaintext, keys, media policy, sidecars, provenance
   ├─ Rawshift: media processing
-  ├─ Chromahash v1: encrypted LQIP input
+  ├─ Chromahash 0.7.1: encrypted LQIP input
   └─ Spargen SDK: ciphertext REST transport
                       ↓
 Kynos server
@@ -46,7 +47,7 @@ does not exist, and Windows and Linux users are served by the CLI and the web cl
 - Kynos replaces the previous HTTP framework and owns Tokio/runtime policy.
 - Spargen replaces the previous client generator.
 - Rawshift replaces in-repository codecs and metadata extraction.
-- Capsule calls Chromahash directly after v1.
+- Capsule calls Chromahash **0.7.1** directly.
 - Blob storage, resumable upload, provenance, crypto, CRDTs, asset lifecycle, and application state
   ports stay in Capsule.
 

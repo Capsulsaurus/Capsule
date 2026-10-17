@@ -1,0 +1,15 @@
+# Endpoint citations that deliberately do not resolve to capsule-server/openapi.json.
+#
+# Format, tab-separated:
+#   <repo-relative file>	<METHOD /path or bare /path>	<reason>
+#
+# Keyed on the citation, not a line number, so reflowing a paragraph does not
+# churn this file.
+#
+# There is exactly one legitimate reason to be here: the doc names a surface in
+# order to say it does not exist. A surface that is merely unbuilt does not
+# belong — that is what the slice tracker is for, and an entry added to quiet a
+# real drift turns this file into a place where drift hides.
+
+capsule-docs/src/content/docs/design/authentication.md	POST /v1/auth/validate	Named as deliberately not ported from the retired surface; the session ledger (S-C48) makes validation the request itself.
+capsule-docs/src/content/docs/design/api-surfaces.md	/v1/library	The removed async-graphql schema, named by the section recording its removal (ADR-0001).

@@ -329,9 +329,11 @@ async fn the_handshake_gates_every_upload_request() {
     let (_, _, whole) = blob();
     let id = fixture.open_session(&whole, "original", &bearer).await;
 
-    // Missing: a coded 400, on every operation.
+    // Missing: a coded 400, on every operation — the gate's, not this surface's, which is why
+    // the code is the request-level one. `raw()` is the only way the fixture sends no handshake.
     let missing = fixture
         .client
+        .raw()
         .post("/v1/upload")
         .header("authorization", &bearer)
         .json(&create_request(&fixture.clock, &whole, "original"))
@@ -340,18 +342,21 @@ async fn the_handshake_gates_every_upload_request() {
     missing.assert_status(StatusCode::BAD_REQUEST);
     assert_eq!(
         code(&missing.json::<serde_json::Value>()),
-        "error.upload.malformed_request"
+        "error.request.malformed"
     );
 
     let head = fixture
         .client
+        .raw()
         .head(&format!("/v1/upload/{id}"))
         .header("authorization", &bearer)
         .send()
         .await;
     head.assert_status(StatusCode::BAD_REQUEST);
 
-    // Out of the window: `426`, carrying the window a client can act on.
+    // Out of the window: `426`, carrying the window a client can act on — **on the headers**,
+    // which is where `capsule-sdk/src/upload.rs` reads it (issue #404). The body carries the
+    // code and no second spelling of the window.
     let refused = fixture
         .client
         .post("/v1/upload")
@@ -361,10 +366,38 @@ async fn the_handshake_gates_every_upload_request() {
         .send()
         .await;
     refused.assert_status(StatusCode::UPGRADE_REQUIRED);
+    refused.assert_header("x-capsule-protocol-min", "2026-01-01");
+    refused.assert_header("x-capsule-protocol-max", "2026-12-31");
+    refused.assert_header("x-capsule-min-client-build", "0.0.0");
     let body: serde_json::Value = refused.json();
     assert_eq!(code(&body), "error.protocol.version_unsupported");
-    assert_eq!(body["protocol_min"], "2026-01-01");
-    assert_eq!(body["protocol_max"], "2026-12-31");
+    assert!(
+        body.get("protocol_min").is_none() && body.get("protocol_max").is_none(),
+        "the window has one spelling, the headers: {body}"
+    );
+
+    // The gate runs before authentication: a client learns it must update without a token.
+    fixture
+        .client
+        .raw()
+        .post("/v1/upload")
+        .header("x-capsule-protocol", "2020-01-01")
+        .json(&create_request(&fixture.clock, &whole, "original"))
+        .send()
+        .await
+        .assert_status(StatusCode::UPGRADE_REQUIRED);
+
+    // And a read is admitted at any protocol date: the same client can still ask where its
+    // session got to, and learns the window from the headers rather than from a refusal.
+    let progress = fixture
+        .client
+        .head(&format!("/v1/upload/{id}"))
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", "2020-01-01")
+        .send()
+        .await;
+    progress.assert_status(StatusCode::OK);
+    progress.assert_header("x-capsule-protocol-min", "2026-01-01");
 }
 
 // ===========================================================================================
@@ -876,6 +909,40 @@ async fn a_closed_album_stops_a_transfer_that_was_already_in_flight() {
 }
 
 #[tokio::test]
+async fn unsharing_a_member_stops_a_transfer_that_was_already_in_flight() {
+    // Finalization re-asks the authority for the *uploader*, so a writer removed from the roster
+    // between the first chunk and the last is refused where a closed album is refused.
+    use capsule_server::membership::MemberRole;
+
+    let (fixture, bearer) = with_bob(Some(MemberRole::Writer)).await;
+    let (first, second, whole) = blob();
+    let id = fixture
+        .open_session_with(&bobs_request(&fixture, &whole), &bearer)
+        .await;
+
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    fixture
+        .authority
+        .unshare(&album(), &capsule_server::store::UserId::new(BOB));
+
+    let response = fixture.chunk(&id, 4096, &second, &bearer).send().await;
+    response.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(
+        code(&response.json::<serde_json::Value>()),
+        "error.upload.envelope_rejected"
+    );
+    assert_eq!(
+        fixture.blobs.blob_count_for_test().await,
+        0,
+        "a write refused at finalization commits nothing"
+    );
+}
+
+#[tokio::test]
 async fn losing_the_finalize_claim_is_a_race_rather_than_a_failure() {
     let fixture = Fixture::working();
     let bearer = fixture.bearer().await;
@@ -1078,4 +1145,417 @@ async fn an_authority_that_cannot_answer_refuses_rather_than_assuming() {
         code(&response.json::<serde_json::Value>()),
         "error.upload.unavailable"
     );
+}
+
+// ===========================================================================================
+// The crash boundary
+// ===========================================================================================
+
+/// **E2E case 11.** A crash between the blob rename and the index commit leaves no dangling
+/// reference, and the retry recovers.
+///
+/// The order finalization runs in is the contract, and it is the way round it is *because* of
+/// this case (`upload/finalize.rs`): the blob is committed onto its content address — a rename
+/// and an fsync, irreversible — and only then is it recorded against its asset. A crash in that
+/// window leaves a blob nothing references, which is the **safe** half of the trade: an orphan
+/// is what refcount GC exists to collect, while an asset row naming a blob the store does not
+/// hold is a dangling reference the feed would serve and the scrub would report as an integrity
+/// error that is never auto-repaired.
+///
+/// What is asserted, in the order a recovering operator would look at it:
+///
+/// 1. the session is terminal and **failed**, not left claimed forever;
+/// 2. the bytes are at their content address — custody was taken, and telling the client
+///    otherwise would be a lie about something the server holds;
+/// 3. the asset row is still `Pending` and holds no sequence number, so nothing was published
+///    and there is no zombie visible row;
+/// 4. **nothing references the blob** — `find_reference` is `None` and `reference_count` is 0 —
+///    which is the property the whole ordering exists to guarantee;
+/// 5. the collector marks it, so the orphan is reclaimable rather than permanent;
+/// 6. and the retry publishes, because `BlobStore::commit` is idempotent on identical ciphertext.
+///
+/// The crash is injected through the `AssetIndex` port itself (`support::fault`), so no
+/// production code carries a test hook. A *process*-level restart — a real kill and a second
+/// process over the same blob root and database — belongs to the binary-smoke tier and is filed
+/// with the remaining durable adapters.
+#[tokio::test]
+async fn finalization_crash_between_rename_and_commit_leaves_no_dangling_reference() {
+    use capsule_server::blob::ContentAddress;
+    use capsule_server::gc::{CollectionContext, Mode, collect};
+    use capsule_server::index::{AssetIndex, AssetState};
+    use capsule_server::store::{AssetId, OwnerId};
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, second, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+    let address = ContentAddress::parse(&checksum(&whole)).expect("the digest is an address");
+    // The asset the suite's manifests name; the session reserved its row when it opened.
+    let asset = AssetId::new("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e61");
+
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    // The last chunk completes the declared size, so this request is the one that finalizes.
+    fixture.index_fault.arm();
+    let crashed = fixture.chunk(&id, 4096, &second, &bearer).send().await;
+    crashed.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        fixture.index_fault.fired(),
+        1,
+        "the fault never fired, so everything below is describing an ordinary upload"
+    );
+
+    // 1. Terminal and failed. A claimed session that is never driven anywhere is the state the
+    //    finalization state machine exists to make unreachable.
+    let record = fixture
+        .uploads
+        .read_for_test(&id)
+        .await
+        .expect("the session survives as a receipt");
+    assert_eq!(record.status.as_str(), "failed_processing");
+
+    // 2. Custody was taken: the rename happened before the index call that was lost.
+    assert_eq!(
+        fixture.blobs.blob_for_test(&checksum(&whole)).await,
+        Some(whole.clone()),
+        "the bytes committed before the crash window are the bytes the server holds"
+    );
+
+    // 3. No zombie row: the asset is exactly where it was before the transfer.
+    let row = fixture
+        .index
+        .read(&asset)
+        .await
+        .expect("the index answers")
+        .expect("the session reserved a row when it opened");
+    assert_eq!(row.state, AssetState::Pending);
+    assert_eq!(row.sync_seq, None, "a lost transaction published nothing");
+    assert!(row.blobs.is_empty(), "and recorded no blob");
+
+    // 4. The property the ordering exists for. A dangling reference is the failure mode the
+    //    other order would produce, and it is the one nothing can repair automatically.
+    assert_eq!(
+        fixture
+            .index
+            .find_reference(&address)
+            .await
+            .expect("the index answers"),
+        None,
+        "a blob nothing references must not be reachable through the serving path"
+    );
+    assert_eq!(
+        fixture
+            .index
+            .reference_count(&address)
+            .await
+            .expect("the index answers"),
+        0,
+    );
+    assert!(
+        fixture
+            .index
+            .feed_page(&OwnerId::new(owner().as_str()), 0, 10)
+            .await
+            .expect("the index answers")
+            .is_empty(),
+        "nothing was published, so nothing reaches a client's feed"
+    );
+
+    // 5. The orphan is reclaimable. The collector marks a zero-reference blob on one pass and
+    //    sweeps it on a later one once the grace window has passed, so a mark is the whole of
+    //    what a first pass should do — and it is what makes "an orphan GC collects" true rather
+    //    than a hope.
+    let collection = CollectionContext::new(
+        fixture.index.clone(),
+        fixture.blobs.clone(),
+        fixture.marks.clone(),
+        fixture.quotas.clone(),
+        fixture.clock.clone(),
+        capsule_server::gc::DEFAULT_GRACE_WINDOW,
+    );
+    let report = collect(&collection, Mode::Apply)
+        .await
+        .expect("a collection pass runs");
+    assert!(
+        report.marked.contains(&address),
+        "the crashed upload's blob must be collectable, got {report:?}"
+    );
+    assert!(
+        report.dangling.is_empty(),
+        "a crash in this window must never produce a dangling reference: {report:?}"
+    );
+
+    // 6. And the client retries. `BlobStore::commit` is idempotent on identical ciphertext, so
+    //    the second transfer lands on the occupied address and the asset finally publishes.
+    let retry = fixture.open_session(&whole, "original", &bearer).await;
+    fixture
+        .chunk(&retry, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    fixture
+        .chunk(&retry, 4096, &second, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(
+        fixture
+            .uploads
+            .read_for_test(&retry)
+            .await
+            .expect("the retry's session survives")
+            .status
+            .as_str(),
+        "completed",
+    );
+    let recovered = fixture
+        .index
+        .read(&asset)
+        .await
+        .expect("the index answers")
+        .expect("the row is still there");
+    assert_eq!(
+        recovered.address_for(capsule_server::store::BlobRole::Original),
+        Some(&address),
+        "the retry recorded the blob the crash lost",
+    );
+    assert_eq!(
+        fixture
+            .index
+            .reference_count(&address)
+            .await
+            .expect("the index answers"),
+        1,
+        "and the orphan is an orphan no longer",
+    );
+    assert_eq!(
+        fixture.blobs.blob_for_test(&checksum(&whole)).await,
+        Some(whole),
+        "the bytes are unchanged: an identical ciphertext is one object",
+    );
+}
+
+// ===========================================================================================
+// Member writes (`S-C51`)
+// ===========================================================================================
+
+/// A second account, on the seeded album's roster in whatever role a case puts it.
+const BOB: &str = "01937b7c-0000-7000-8000-0000000000b0";
+
+/// Bob's own device, in Bob's own directory: invariant 7 is answered from the *uploader's*
+/// directory, whoever the album belongs to.
+fn bobs_device() -> uuid::Uuid {
+    uuid::Uuid::parse_str("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5eb0").expect("a uuid")
+}
+
+/// A create request for `bytes`, as Bob's device would sign it.
+fn bobs_request(fixture: &Fixture, bytes: &[u8]) -> serde_json::Value {
+    let mut body = create_request(&fixture.clock, bytes, "original");
+    body["manifest_envelope"]["created_by_user"] = BOB.into();
+    body["manifest_envelope"]["created_by_device"] = bobs_device().to_string().into();
+    body
+}
+
+/// A fixture where Bob has a device and, when `role` is given, a seat on the seeded album.
+async fn with_bob(role: Option<capsule_server::membership::MemberRole>) -> (Fixture, String) {
+    let fixture = Fixture::working();
+    let bob = capsule_server::store::UserId::new(BOB);
+    fixture.authority.add_device(
+        &bob,
+        bobs_device(),
+        capsule_server::store::Clock::now(&*fixture.clock),
+    );
+    if let Some(role) = role {
+        fixture.authority.share(&album(), &bob, role);
+    }
+    let bearer = fixture.other_bearer(BOB).await;
+    (fixture, bearer)
+}
+
+#[tokio::test]
+async fn a_writer_member_uploads_into_the_owners_album_and_pays_for_it() {
+    use capsule_server::membership::MemberRole;
+    use capsule_server::quota::QuotaStore as _;
+
+    let (fixture, bearer) = with_bob(Some(MemberRole::Writer)).await;
+    let bytes = payload(b'm', 8192);
+
+    // No declared owner: the session is filed under the album's owner, because that is whose
+    // feed every member's devices read — and it is billed to the uploader, who spent the bytes.
+    let body: serde_json::Value = fixture
+        .client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .json(&bobs_request(&fixture, &bytes))
+        .send()
+        .await
+        .assert_status(StatusCode::CREATED)
+        .json();
+    let record = fixture
+        .uploads
+        .read_for_test(body["id"].as_str().expect("a session id"))
+        .await
+        .expect("the session is in the store");
+    assert_eq!(record.owner_id, owner(), "filed under the album owner");
+    assert_eq!(
+        record.upload_user_id,
+        capsule_server::store::UserId::new(BOB),
+        "uploaded by the member"
+    );
+    assert_eq!(
+        fixture
+            .quotas
+            .usage(&capsule_server::store::UserId::new(BOB))
+            .await
+            .expect("the ledger answers")
+            .used,
+        bytes.len() as u64,
+        "the uploader pays"
+    );
+    assert_eq!(
+        fixture
+            .quotas
+            .usage(&support::user())
+            .await
+            .expect("the ledger answers")
+            .used,
+        0,
+        "and the owner does not"
+    );
+
+    // Declaring the album owner explicitly agrees with the authority and is accepted.
+    let mut agreeing = bobs_request(&fixture, &payload(b'n', 8192));
+    agreeing["owner_id"] = owner().as_str().into();
+    fixture
+        .client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .json(&agreeing)
+        .send()
+        .await
+        .assert_status(StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn a_member_may_not_declare_anyone_but_the_album_owner_as_owner() {
+    use capsule_server::membership::MemberRole;
+
+    let (fixture, bearer) = with_bob(Some(MemberRole::Writer)).await;
+    let bytes = payload(b'o', 8192);
+    // Themselves included: a member's asset under the member's own namespace would be one the
+    // album owner's feed never carries.
+    for declared in [BOB, "01937b7c-0000-7000-8000-0000000000c0"] {
+        let mut body = bobs_request(&fixture, &bytes);
+        body["owner_id"] = declared.into();
+        let problem: serde_json::Value = fixture
+            .client
+            .post("/v1/upload")
+            .header("authorization", &bearer)
+            .json(&body)
+            .send()
+            .await
+            .assert_status(StatusCode::FORBIDDEN)
+            .json();
+        assert_eq!(problem["code"], "error.upload.owner_not_permitted");
+    }
+}
+
+/// Bob's create, refused with the album's one `403`.
+async fn refused(fixture: &Fixture, bearer: &str) -> serde_json::Value {
+    fixture
+        .client
+        .post("/v1/upload")
+        .header("authorization", bearer)
+        .json(&bobs_request(fixture, &payload(b'r', 8192)))
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN)
+        .json()
+}
+
+#[tokio::test]
+async fn a_reader_a_former_member_and_a_stranger_get_the_one_album_refusal() {
+    use capsule_server::membership::MemberRole;
+
+    // A reader: may fetch, may not add.
+    let (fixture, bearer) = with_bob(Some(MemberRole::Reader)).await;
+    let reader = refused(&fixture, &bearer).await;
+    assert_eq!(reader["code"], "error.upload.album_access_denied");
+
+    // A former writer: once on the roster, since removed. Same answer.
+    let (fixture, bearer) = with_bob(Some(MemberRole::Writer)).await;
+    fixture
+        .authority
+        .unshare(&album(), &capsule_server::store::UserId::new(BOB));
+    let former = refused(&fixture, &bearer).await;
+
+    // A stranger whose envelope is the same well-formed one the writer case above is admitted
+    // with: the authority refuses before the device or the battery is consulted, so a good
+    // envelope from a non-member buys nothing.
+    let (fixture, bearer) = with_bob(None).await;
+    let stranger = refused(&fixture, &bearer).await;
+
+    assert_eq!(reader, former, "one body for every refusal");
+    assert_eq!(former, stranger, "one body for every refusal");
+}
+
+#[tokio::test]
+async fn a_members_upload_is_still_checked_against_the_members_own_directory() {
+    use capsule_server::membership::MemberRole;
+
+    // Invariant 7 does not move with the namespace: Bob writes under the owner's album, but the
+    // device on the envelope has to be in *Bob's* directory — naming the owner's device is a
+    // device Bob has not published.
+    let (fixture, bearer) = with_bob(Some(MemberRole::Writer)).await;
+    let mut body = bobs_request(&fixture, &payload(b'd', 8192));
+    body["manifest_envelope"]["created_by_device"] = device().to_string().into();
+    let problem: serde_json::Value = fixture
+        .client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .json(&body)
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN)
+        .json();
+    assert_eq!(problem["code"], "error.upload.device_not_authorized");
+}
+
+/// **An upload is attributed to the account that made it.** The manifest envelope's
+/// `created_by_user` is stored and served back as the asset's provenance and nothing later
+/// re-derives it, so a writer member could otherwise file an asset into the owner's album under
+/// a third account's name. Invariant 7's device half is already bound to the *uploader's* own
+/// directory; this is the account half of the same rule.
+#[tokio::test]
+async fn an_upload_attributed_to_another_account_is_refused() {
+    use capsule_server::membership::MemberRole;
+
+    let (fixture, bearer) = with_bob(Some(MemberRole::Writer)).await;
+
+    let mut forged = bobs_request(&fixture, &payload(b'x', 8192));
+    forged["manifest_envelope"]["created_by_user"] = support::user().as_str().into();
+    let problem: serde_json::Value = fixture
+        .client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .json(&forged)
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST)
+        .json();
+    assert_eq!(problem["code"], "error.upload.envelope_mismatch");
+
+    // The matching arm: Bob's own create, under Bob's own name, still opens a session.
+    fixture
+        .client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .json(&bobs_request(&fixture, &payload(b'y', 8192)))
+        .send()
+        .await
+        .assert_status(StatusCode::CREATED);
 }

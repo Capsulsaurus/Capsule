@@ -12,8 +12,10 @@
 //!   `capsule-android`, `capsule-desktop`, `capsule-cli`, `capsule-web`, or an out-of-repo
 //!   client's own stable id).
 //! - `commit` — the git commit of the client's own source tree (a `≥ 12`-hex prefix), embedded
-//!   at build time by [`build.rs`](../build.rs) as [`BUILD_COMMIT`].
-//! - `.dirty` — appended ([`BUILD_DIRTY_SUFFIX`]) when built from a modified tree.
+//!   at build time by [`build.rs`](../build.rs) as
+//!   [`BUILD_COMMIT`](crate::client_build::BUILD_COMMIT).
+//! - `.dirty` — appended ([`BUILD_DIRTY_SUFFIX`](crate::client_build::BUILD_DIRTY_SUFFIX)) when
+//!   built from a modified tree.
 //!
 //! The value is **audit-only** and never load-bearing for authorization: `verify_asset` does not
 //! gate on the grammar (a nonconforming string still verifies), so this module is producer

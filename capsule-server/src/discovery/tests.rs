@@ -1,19 +1,15 @@
 //! The registry's remaining records, and the rule a peer reads them by.
 
-use std::sync::Arc;
-
 use jiff::{SignedDuration, Timestamp};
 
 use super::revocation::{
-    InMemoryRevocations, MAX_STALENESS, MAX_TOKEN_TTL, PublishedRevocations, RevocationList,
-    RevocationVerdict, RevokeError, RevokedToken, check_revocation,
+    MAX_STALENESS, MAX_TOKEN_TTL, PublishedRevocations, RevocationVerdict, RevokedToken,
+    check_revocation,
 };
 use super::{
     AnnouncementError, DEFAULT_ANNOUNCEMENT_WINDOW, DeprecationAnnouncement, ProtocolWindow,
     ServerInfo,
 };
-use crate::store::Clock;
-use crate::store::memory::ManualClock;
 
 fn window() -> ProtocolWindow {
     ProtocolWindow {
@@ -125,90 +121,6 @@ fn a_cutoff_in_the_past_is_refused_as_such() {
         .expect_err("a cutoff before its own announcement is refused");
 
     assert!(matches!(error, AnnouncementError::AlreadyPassed { .. }));
-}
-
-#[tokio::test]
-async fn a_revocation_beyond_the_ttl_ceiling_is_refused() {
-    // The published list is bounded *because* a capability token cannot outlive 24 hours. One
-    // accepted long-lived entry and the list grows without bound while the peer-side staleness
-    // math silently stops applying — so the ceiling is the port's invariant, not a convention.
-    let clock = Arc::new(ManualClock::default());
-    let list = InMemoryRevocations::new(clock.clone());
-
-    let error = list
-        .revoke(RevokedToken {
-            jti: "beyond".to_owned(),
-            expires_at: crate::store::deadline(clock.now(), SignedDuration::from_hours(25)),
-        })
-        .await
-        .expect_err("an entry past the ceiling is refused");
-
-    assert!(matches!(error, RevokeError::Refused(_)));
-    let published = list.published().await.expect("the list reads back");
-    assert!(published.revoked.is_empty());
-}
-
-#[tokio::test]
-async fn revoking_the_same_token_twice_is_one_entry() {
-    let clock = Arc::new(ManualClock::default());
-    let list = InMemoryRevocations::new(clock.clone());
-    let entry = RevokedToken {
-        jti: "repeated".to_owned(),
-        expires_at: crate::store::deadline(clock.now(), SignedDuration::from_hours(1)),
-    };
-
-    list.revoke(entry.clone()).await.expect("first revocation");
-    list.revoke(entry).await.expect("a retry is not a new fact");
-
-    let published = list.published().await.expect("the list reads back");
-    assert_eq!(published.revoked.len(), 1);
-}
-
-#[tokio::test]
-async fn an_entry_is_pruned_once_the_token_it_names_has_expired() {
-    // An expired token is rejected whether or not it appears here, so the entry carries no
-    // information — and dropping it is what keeps the list bounded by 24 hours of revocations.
-    let clock = Arc::new(ManualClock::default());
-    let list = InMemoryRevocations::new(clock.clone());
-    list.revoke(RevokedToken {
-        jti: "short".to_owned(),
-        expires_at: crate::store::deadline(clock.now(), SignedDuration::from_hours(1)),
-    })
-    .await
-    .expect("revocation recorded");
-
-    assert_eq!(
-        list.published().await.expect("reads back").revoked.len(),
-        1,
-        "live while the token it names could still be presented"
-    );
-
-    clock.advance(SignedDuration::from_hours(2));
-    let published = list.published().await.expect("reads back");
-    assert!(published.revoked.is_empty());
-    assert_eq!(published.generated_at, clock.now());
-}
-
-#[tokio::test]
-async fn the_published_list_orders_by_expiry() {
-    let clock = Arc::new(ManualClock::default());
-    let list = InMemoryRevocations::new(clock.clone());
-    for (jti, hours) in [("later", 6), ("sooner", 2), ("middle", 4)] {
-        list.revoke(RevokedToken {
-            jti: jti.to_owned(),
-            expires_at: crate::store::deadline(clock.now(), SignedDuration::from_hours(hours)),
-        })
-        .await
-        .expect("revocation recorded");
-    }
-
-    let published = list.published().await.expect("reads back");
-    let order: Vec<&str> = published
-        .revoked
-        .iter()
-        .map(|token| token.jti.as_str())
-        .collect();
-    assert_eq!(order, ["sooner", "middle", "later"]);
 }
 
 #[test]

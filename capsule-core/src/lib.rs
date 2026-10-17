@@ -19,6 +19,13 @@ pub mod sharing;
 /// build-embedded git commit (S-D15). Always compiled: pure string formatting, no native deps.
 pub mod client_build;
 
+/// The closed set of still-derivative formats and the structural check over it — the tier
+/// table's format column as a type. Always compiled, and for the same reason [`lqip`] is: the
+/// crates that *receive* a `DerivativeManifest` (`capsule-server`, `capsule-wasm`) build with
+/// `default-features = false`, so a check they cannot link is a check that never runs. Depends
+/// only on [`crypto::provenance`]; `media` re-exports it.
+pub mod derivative_format;
+
 /// LQIP — the chromahash placeholder carried in the signed sidecar's `lqip` field (S-B14).
 /// Always compiled, and deliberately so: the placeholder is produced by the import pipeline,
 /// read by the apps through the uniffi FFI, and read by the browser through `capsule-wasm`, so
@@ -54,12 +61,26 @@ pub mod import;
 pub mod library;
 #[cfg(feature = "native")]
 pub mod lifecycle;
+/// Still decode, orientation, metadata normalisation and derivative generation over
+/// `rawshift-image` (`media` feature, implied by `native`; slices `S-B1`/`S-B13`). Feature-gated
+/// rather than `native`-gated so the codec stack is one manifest edit away from being dropped
+/// from a size-constrained build, and so the `wasm32-unknown-unknown` sealing surface provably
+/// does not link it. See [`media`].
+#[cfg(feature = "media")]
+pub mod media;
 #[cfg(feature = "native")]
 pub mod metadata;
 #[cfg(feature = "native")]
 pub mod ml;
+// `notify` — alert classes and their trigger predicates (`S-D29`): one shared decision
+// function every platform evaluates, so the taxonomy is not reimplemented per client.
+// `native`-gated because an alert is composed from *decrypted device state*, and the
+// un-gated surface here is the key-free guest sealing path, which holds none of it. The
+// rationale lives as a plain comment rather than a doc comment because rustdoc merges an
+// outer `mod` doc with the module's own `//!` block and then resolves the whole thing at
+// the declaration site — which would break every short intra-doc link in `notify/mod.rs`.
 #[cfg(feature = "native")]
-pub mod models;
+pub mod notify;
 #[cfg(feature = "native")]
 pub mod sidecar;
 #[cfg(feature = "native")]

@@ -13,7 +13,7 @@
 
 mod support;
 
-use capsule_core::crypto::keys::hybrid_sig::HybridSigningKey;
+use capsule_core::crypto::keys::HybridSigningKey;
 use capsule_server::store::Clock as _;
 use jiff::SignedDuration;
 use kynos::http::StatusCode;

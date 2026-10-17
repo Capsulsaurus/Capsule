@@ -1,9 +1,9 @@
 import AssetKit
 import AVKit
+import CapsuleFoundation
 import CapsuleUI
 import ImagePipeline
 import Photos
-import PhotosUI
 import SwiftUI
 
 /// One page of the viewer, dispatched by media type.
@@ -29,15 +29,17 @@ private struct PhotoPage: View {
     let asset: Asset
     let mediaLoader: ViewerMediaLoader
     @Environment(\.displayScale) private var displayScale
-    @State private var image: UIImage?
+    @State private var image: PlatformImage?
 
     var body: some View {
         GeometryReader { geometry in
             ZStack {
                 if let image {
                     ZoomableImageView(image: image)
+                        .accessibilityIdentifier("viewer.image")
                 } else {
                     ProgressView().tint(.white)
+                        .accessibilityIdentifier("viewer.loading")
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -60,14 +62,24 @@ private struct LivePhotoPage: View {
     let mediaLoader: ViewerMediaLoader
     @Environment(\.displayScale) private var displayScale
     @State private var livePhoto: PHLivePhoto?
+    @State private var playbackTicket = 0
 
     var body: some View {
         GeometryReader { geometry in
             ZStack {
                 if let livePhoto {
-                    LivePhotoView(livePhoto: livePhoto)
+                    LivePhotoView(livePhoto: livePhoto, playbackTicket: playbackTicket)
                 } else {
                     ProgressView().tint(.white)
+                }
+            }
+            // Over the media, where the convention puts a playback control —
+            // and where it was missing entirely: the motion played once on
+            // appear and there was no way, anywhere in the app, to see it
+            // again.
+            .overlay(alignment: .topLeading) {
+                if livePhoto != nil {
+                    liveBadge
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -80,28 +92,34 @@ private struct LivePhotoPage: View {
             }
         }
     }
-}
 
-/// A `PHLivePhotoView` bridged into SwiftUI; plays the motion hint on appear.
-private struct LivePhotoView: UIViewRepresentable {
-    let livePhoto: PHLivePhoto
-
-    func makeUIView(context _: Context) -> PHLivePhotoView {
-        let view = PHLivePhotoView()
-        view.contentMode = .scaleAspectFit
-        return view
-    }
-
-    func updateUIView(_ view: PHLivePhotoView, context _: Context) {
-        guard view.livePhoto !== livePhoto else { return }
-        view.livePhoto = livePhoto
-        view.startPlayback(with: .hint)
+    /// Apple's own badge, made live: tapping it replays the motion.
+    private var liveBadge: some View {
+        Button { playbackTicket += 1 } label: {
+            Label("app.viewer.live.replay", systemImage: "livephoto")
+                .font(.caption.weight(.semibold))
+                .labelStyle(.titleAndIcon)
+                .foregroundStyle(CapsuleTheme.Colors.onMedia)
+                .padding(.horizontal, CapsuleTheme.Spacing.small)
+                .padding(.vertical, CapsuleTheme.Spacing.xSmall)
+                .background(.black.opacity(0.35), in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("app.viewer.live.replay.accessibility")
+        .accessibilityIdentifier("viewer.live.replay")
+        .padding(CapsuleTheme.Spacing.large)
     }
 }
 
 // MARK: - Video
 
 private struct VideoPage: View {
+    /// Roughly the height of the viewer's floating action bar plus its bottom
+    /// padding. Approximate on purpose: the exact figure depends on Dynamic
+    /// Type, and the cost of a few points too many is whitespace while the cost
+    /// of too few is a buried scrubber.
+    static let chromeClearance: CGFloat = 88
+
     let asset: Asset
     let mediaLoader: ViewerMediaLoader
     @State private var player: AVPlayer?
@@ -110,6 +128,13 @@ private struct VideoPage: View {
         ZStack {
             if let player {
                 VideoPlayer(player: player)
+                    // AVKit lays its transport controls against the bottom of
+                    // its own bounds, and the viewer's action bar floats over
+                    // that same strip — so the scrubber and the play button
+                    // were rendering *underneath* the chrome. Reserving the
+                    // chrome's height pushes AVKit's controls clear of it
+                    // rather than fighting it with a bespoke transport.
+                    .safeAreaPadding(.bottom, Self.chromeClearance)
             } else {
                 ProgressView().tint(.white)
             }

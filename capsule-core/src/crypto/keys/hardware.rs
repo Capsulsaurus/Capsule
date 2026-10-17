@@ -51,7 +51,7 @@ pub trait HardwareSigner: Send + Sync {
 /// [`HardwareSigner`], implemented by native code (Swift/Kotlin) over the uniffi foreign-trait
 /// boundary. It backs the hardware-bound classical half of the device **encryption** key (DEK):
 /// shipping secure elements expose **ECDH-P256** (Secure Enclave `P256.KeyAgreement`, StrongBox
-/// ECDH, TPM 2.0 ECDH), so the DEK's X25519 half of [the X-Wing KEM](super::kem) is replaced by a
+/// ECDH, TPM 2.0 ECDH), so the DEK's X25519 half of [the X-Wing KEM](super::DekKeypair) is replaced by a
 /// hardware-held P-256 static key while the ML-KEM-768 half stays software-sealed. The element
 /// holds the P-256 private key and performs the ECDH so it never leaves hardware; Rust drives the
 /// ML-KEM half and the hybrid combiner (SSoT: [Cryptography — Keys § Device Keys], slice `S-F5`).

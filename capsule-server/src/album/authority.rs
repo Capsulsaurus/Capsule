@@ -8,10 +8,12 @@
 //! # Invariant 6, from the album store (`S-C25`)
 //!
 //! An album is writable by the account it was provisioned to, pinned to the protocol the server
-//! spoke when it was created. Sharing widens that set — an album writable by a *member* rather
-//! than only its owner — and that is `S-C4`/`S-C5`'s to add. Until then an unprovisioned or
-//! somebody-else's album is [`AlbumWriteAccess::Denied`], which is the safe direction: a write
-//! that should have been allowed is refused, never the reverse.
+//! spoke when it was created — and, since `S-C51`, by a **writer** on its current roster
+//! ([`crate::membership`]). Either way the write is filed under the *owner's* namespace, which is
+//! the one every member's devices read. A reader, a former member, a stranger and an
+//! unprovisioned id are all [`AlbumWriteAccess::Denied`], one answer, which is the safe direction:
+//! a write that should have been allowed is refused, never the reverse, and the refusal says
+//! nothing about which of the four it was.
 //!
 //! # Invariant 7, from the published device directory (`S-C20`)
 //!
@@ -40,14 +42,16 @@ use uuid::Uuid;
 
 use super::AlbumStore;
 use crate::directory::DeviceDirectoryStore;
-use crate::store::{AlbumId, OwnerId, UserId};
-use crate::upload::{AlbumWriteAccess, AuthorityError, AuthorityFuture, WriteAuthority};
+use crate::membership::{MemberRole, Membership, MembershipStore};
+use crate::store::{AlbumId, UserId};
+use crate::upload::{AlbumWriteAccess, AuthorityError, AuthorityFuture, WriteAuthority, WriteRole};
 
 /// The write authority the server runs on.
 #[derive(Debug, Clone)]
 pub struct ProvisionedAuthority {
     albums: Arc<dyn AlbumStore>,
     directories: Arc<dyn DeviceDirectoryStore>,
+    members: Arc<dyn MembershipStore>,
     clock: Arc<dyn crate::store::Clock>,
 }
 
@@ -60,11 +64,13 @@ impl ProvisionedAuthority {
     pub fn new(
         albums: Arc<dyn AlbumStore>,
         directories: Arc<dyn DeviceDirectoryStore>,
+        members: Arc<dyn MembershipStore>,
         clock: Arc<dyn crate::store::Clock>,
     ) -> Self {
         Self {
             albums,
             directories,
+            members,
             clock,
         }
     }
@@ -78,33 +84,74 @@ fn unavailable(error: &crate::store::StoreError) -> AuthorityError {
     AuthorityError::unavailable(error.to_string())
 }
 
+impl ProvisionedAuthority {
+    /// The capacity `caller`'s roster seat gives them on `album`, if any.
+    ///
+    /// Only a *writer* member writes; a reader, a former member and a stranger are one `None`,
+    /// which the caller renders as the same `Denied` an unprovisioned album gets.
+    async fn member_role(
+        &self,
+        album: &AlbumId,
+        caller: &UserId,
+    ) -> Result<Option<WriteRole>, AuthorityError> {
+        let membership = self
+            .members
+            .membership(album, caller)
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, %album, "the membership store could not answer");
+                unavailable(&error)
+            })?;
+        Ok(match membership {
+            Membership::Member {
+                role: MemberRole::Writer,
+                ..
+            } => Some(WriteRole::Member),
+            Membership::Member { .. } | Membership::Revoked(_) | Membership::Never => None,
+        })
+    }
+}
+
 impl WriteAuthority for ProvisionedAuthority {
     fn album_write_access<'a>(
         &'a self,
-        owner: &'a OwnerId,
+        caller: &'a UserId,
         album: &'a AlbumId,
     ) -> AuthorityFuture<'a, AlbumWriteAccess> {
         Box::pin(async move {
-            let record = self.albums.read(album).await.map_err(|error| {
+            let Some(record) = self.albums.read(album).await.map_err(|error| {
                 tracing::error!(%error, %album, "the album store could not answer");
                 unavailable(&error)
-            })?;
+            })?
+            else {
+                // Unprovisioned. One answer with every other refusal: the id is client-derived
+                // and unguessable, and distinguishing would say whether it is taken.
+                return Ok(AlbumWriteAccess::Denied);
+            };
+
+            let role = if record.owner_id.as_str() == caller.as_str() {
+                WriteRole::Owner
+            } else {
+                // Somebody else's album: the roster decides (`S-C51`).
+                match self.member_role(album, caller).await? {
+                    Some(role) => role,
+                    None => return Ok(AlbumWriteAccess::Denied),
+                }
+            };
+
             let now = self.clock.now();
-            Ok(match record {
-                Some(record) if &record.owner_id == owner => AlbumWriteAccess::Writable {
-                    // `S-C24`: an expired ceremony is reported as none, because the deadline
-                    // passing *is* the abort. Nothing has to run to clear it, which is what stops
-                    // a proposer who vanished from freezing an album forever.
-                    quiescing_under: record
-                        .upgrade
-                        .as_ref()
-                        .filter(|quiescence| !quiescence.is_expired(now))
-                        .map(|quiescence| quiescence.intent.intent_id),
-                    protocol_pin: record.protocol_version,
-                },
-                // Unprovisioned, or somebody else's. One answer: the id is client-derived and
-                // unguessable, and distinguishing the two would say whether it is taken.
-                _ => AlbumWriteAccess::Denied,
+            Ok(AlbumWriteAccess::Writable {
+                owner_id: record.owner_id,
+                role,
+                // `S-C24`: an expired ceremony is reported as none, because the deadline
+                // passing *is* the abort. Nothing has to run to clear it, which is what stops
+                // a proposer who vanished from freezing an album forever.
+                quiescing_under: record
+                    .upgrade
+                    .as_ref()
+                    .filter(|quiescence| !quiescence.is_expired(now))
+                    .map(|quiescence| quiescence.intent.intent_id),
+                protocol_pin: record.protocol_version,
             })
         })
     }

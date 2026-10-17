@@ -104,7 +104,7 @@ The repo-root `SLICES.md` (a plain repository file, not part of this site) is th
 
 ### Review Status
 
-Separately from per-surface implementation status, every design doc carries a `status` frontmatter field tracking **human design review**, validated by the site schema:
+Separately from per-surface implementation status, every page on this site carries a `status` frontmatter field tracking **human review**, required by the site schema and therefore by the docs build:
 
 - `draft` — the doc's current content has not passed a human re-review since the last substantive design change.
 - `stable` — a human reviewed the doc as written and signed off; substantive edits flip it back to `draft`.
@@ -116,7 +116,7 @@ The field is review-queue metadata, not publication state (drafts still build an
 The three test tiers a design doc may reference:
 
 - **Unit** — In-module tests against the doc's contract surface, with peer modules and external dependencies mocked. Deterministic, fast, run on every change. Example: signing and verifying a manifest against fixed test vectors inside `capsule-core::crypto`.
-- **Smoke** — Single-module end-to-end with the module's real implementation but its peers mocked. Uses real I/O and real backing services (e.g. testcontainers for Postgres or Valkey). Example: the upload-server full session lifecycle (`POST /upload` → `PATCH` → finalization) against a real Postgres, with no client process — the client side is mocked at the HTTP boundary.
+- **Smoke** — Single-module end-to-end with the module's real implementation but its peers mocked. Uses real I/O and real backing services (e.g. testcontainers for Postgres or Valkey). Example: the upload-server full session lifecycle (`POST /v1/upload` → `PATCH` → finalization) against a real Postgres, with no client process — the client side is mocked at the HTTP boundary.
 - **E2E** — Multiple modules wired together against real infrastructure. The list is **bounded** in [Module Map — E2E Test Surface](/design/module-map/#e2e-test-surface). Any addition requires updating that list — E2E surface growing past the bound is a signal the design has unwanted coupling worth examining.
 
 The split is enforced by **what is mocked, not by location in the source tree**. A test under `crate/tests/integration/` that mocks every peer is still a unit test for the purposes of this taxonomy.

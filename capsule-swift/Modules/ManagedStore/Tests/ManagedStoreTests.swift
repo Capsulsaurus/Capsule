@@ -12,14 +12,14 @@ struct ManagedLibraryLayoutTests {
     @Test("media files are partitioned by the capture date's UTC month")
     func mediaPartitioning() {
         // 1_720_000_000 → 2024-07-03 12:26:40 UTC.
-        let date = Date(timeIntervalSince1970: 1_720_000_000)
+        let date = Date(timeIntervalSince1970: 1720000000)
         let url = layout.mediaFile(uuid: "abc", fileExtension: "heic", captureDate: date)
         #expect(url.path.hasSuffix("/media/2024/2024-07/abc.heic"))
     }
 
     @Test("the sidecar is the media file's sibling with a .cbor extension")
     func sidecarSibling() {
-        let date = Date(timeIntervalSince1970: 1_720_000_000)
+        let date = Date(timeIntervalSince1970: 1720000000)
         let media = layout.mediaFile(uuid: "abc", fileExtension: "heic", captureDate: date)
         let sidecar = layout.sidecarFile(forMediaFile: media)
         #expect(sidecar.lastPathComponent == "abc.cbor")
@@ -55,7 +55,7 @@ struct CryptoKitHasherTests {
     @Test("streamed file hashing matches in-memory hashing for a large file")
     func streamedMatchesBuffer() async throws {
         let hasher = CryptoKitHasher()
-        let bytes = Data((0 ..< 5_000_000).map { UInt8($0 & 0xFF) })
+        let bytes = Data((0 ..< 5000000).map { UInt8($0 & 0xFF) })
         let url = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try bytes.write(to: url)
         defer { try? FileManager.default.removeItem(at: url) }
@@ -139,5 +139,60 @@ struct MockFileStoreTests {
         try await store.moveItem(at: source, to: destination)
         #expect(await store.fileExists(at: destination))
         #expect(await store.fileExists(at: source) == false)
+    }
+}
+
+@Suite("ManagedLibrary.removeAssetFiles")
+struct ManagedLibraryPurgeTests {
+    private let layout = ManagedLibraryLayout(root: URL(filePath: "/capsule/Library"))
+    // 1_720_000_000 → 2024-07-03 UTC, so the partition is media/2024/2024-07.
+    private let captureDate = Date(timeIntervalSince1970: 1720000000)
+
+    private func makeLibrary(_ fileStore: MockFileStore) -> ManagedLibrary {
+        ManagedLibrary(layout: layout, fileStore: fileStore, catalog: MockCatalog())
+    }
+
+    @Test("removes the media file and its sidecar, whatever the extension")
+    func removesMediaAndSidecar() async throws {
+        let store = MockFileStore()
+        let media = layout.mediaFile(uuid: "asset-1", fileExtension: "heic", captureDate: captureDate)
+        let sidecar = layout.sidecarFile(uuid: "asset-1", captureDate: captureDate)
+        try await store.write(Data("bytes".utf8), to: media)
+        try await store.write(Data("sidecar".utf8), to: sidecar)
+
+        try await makeLibrary(store).removeAssetFiles(uuid: "asset-1", captureDate: captureDate)
+
+        #expect(await store.fileExists(at: media) == false)
+        #expect(await store.fileExists(at: sidecar) == false)
+    }
+
+    @Test("leaves every other asset in the same partition alone")
+    func sparesNeighbours() async throws {
+        let store = MockFileStore()
+        let mine = layout.mediaFile(uuid: "asset-1", fileExtension: "jpg", captureDate: captureDate)
+        let theirs = layout.mediaFile(uuid: "asset-2", fileExtension: "jpg", captureDate: captureDate)
+        try await store.write(Data("mine".utf8), to: mine)
+        try await store.write(Data("theirs".utf8), to: theirs)
+
+        try await makeLibrary(store).removeAssetFiles(uuid: "asset-1", captureDate: captureDate)
+
+        #expect(await store.fileExists(at: mine) == false)
+        #expect(await store.fileExists(at: theirs))
+    }
+
+    @Test("a second purge, and a purge of nothing, both succeed")
+    func idempotentAndTolerantOfAbsence() async throws {
+        let store = MockFileStore()
+        let library = makeLibrary(store)
+        let media = layout.mediaFile(uuid: "asset-1", fileExtension: "png", captureDate: captureDate)
+        try await store.write(Data("bytes".utf8), to: media)
+
+        try await library.removeAssetFiles(uuid: "asset-1", captureDate: captureDate)
+        // Converging on "the bytes are gone" must not depend on running once.
+        try await library.removeAssetFiles(uuid: "asset-1", captureDate: captureDate)
+        // A partition that was never written at all is not an error either.
+        try await library.removeAssetFiles(uuid: "never-imported", captureDate: Date(timeIntervalSince1970: 0))
+
+        #expect(await store.fileCount == 0)
     }
 }

@@ -8,15 +8,15 @@
 //! uniffi FFI, and read by the browser through `capsule-wasm`. A placeholder that differed by
 //! which client imported the photo would be a visible defect, so there is exactly **one**
 //! implementation and it must be reachable from all three. That rules out
-//! `capsule_core::media`, which is gated behind the `media` feature (implying `native`) and
-//! retires to `legacy-review/` with the rest of the decode/encode stack. It equally rules out
+//! `capsule_core::media`, the retired decode/encode stack that lives in `legacy-review/`
+//! and is `native`-only wherever it is restored. It equally rules out
 //! Rawshift, which `AGENTS.md` forbids from wrapping Chromahash — Capsule imports it directly.
 //!
 //! This module is therefore **unconditional**: no feature gate, no `native`, and it compiles
 //! for `wasm32-unknown-unknown` (chromahash has zero runtime dependencies and ships a
 //! `simd128` backend). The one part that cannot be unconditional is the bridge to the sidecar
-//! record, because `crate::sidecar` is itself `native`-gated; that lives in [`sidecar`], behind
-//! the same gate, over this same encoder.
+//! record, because `crate::sidecar` is itself `native`-gated; that lives in
+//! [`sidecar`](crate::lqip::sidecar), behind the same gate, over this same encoder.
 //!
 //! # The contract
 //!
@@ -27,10 +27,10 @@
 //!
 //! | Call | Role here |
 //! | --- | --- |
-//! | `encode(w, h, &rgba, gamut)` | [`Lqip::encode`] — generation at the default tier. |
-//! | `decode_capped(max_w, max_h)` | [`Lqip::decode_capped`] — the band-limited render. |
-//! | `average_color()` | [`Lqip::dominant_color`] — the DC-only fallback fill. |
-//! | `from_bytes` / `as_bytes` | [`Lqip::from_bytes`] / [`Lqip::as_bytes`] — the sidecar round trip. |
+//! | `encode(w, h, &rgba, gamut)` | [`Lqip::encode`](crate::lqip::Lqip::encode) — generation at the default tier. |
+//! | `decode_capped(max_w, max_h)` | [`Lqip::decode_capped`](crate::lqip::Lqip::decode_capped) — the band-limited render. |
+//! | `average_color()` | [`Lqip::dominant_color`](crate::lqip::Lqip::dominant_color) — the DC-only fallback fill. |
+//! | `from_bytes` / `as_bytes` | [`Lqip::from_bytes`](crate::lqip::Lqip::from_bytes) / [`Lqip::as_bytes`](crate::lqip::Lqip::as_bytes) — the sidecar round trip. |
 //!
 //! Notably absent: any pre-resize of the source. The 100 px downscale the retired ThumbHash
 //! implementation performed before hashing was a ThumbHash artifact — chromahash takes the full
@@ -39,11 +39,12 @@
 //!
 //! # Versioned fallback
 //!
-//! [`LQIP_FORMAT_V1`] tags the payload inside the sidecar. A reader that does not recognize the
-//! version — or that holds bytes `from_bytes` rejects — paints the solid `dominant_color` fill
-//! instead of misrendering (see [`render`]). That is the mechanism that makes a future
-//! chromahash revision a versioned change rather than a silent break, and it is also what makes
-//! any stale non-chromahash payload degrade to a flat colour rather than to noise.
+//! [`LQIP_FORMAT_V1`](crate::lqip::LQIP_FORMAT_V1) tags the payload inside the sidecar. A reader
+//! that does not recognize the version — or that holds bytes `from_bytes` rejects — paints the
+//! solid `dominant_color` fill instead of misrendering (see [`render`](crate::lqip::render)).
+//! That is the mechanism that makes a future chromahash revision a versioned change rather than a
+//! silent break, and it is also what makes any stale non-chromahash payload degrade to a flat
+//! colour rather than to noise.
 
 use thiserror::Error;
 
