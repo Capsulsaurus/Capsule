@@ -362,6 +362,30 @@ mod tests {
     }
 
     #[test]
+    fn options_carry_the_requested_retention_and_the_default_album() {
+        const FAST_KDF: capsule_core::crypto::primitives::Argon2Params =
+            capsule_core::crypto::primitives::Argon2Params {
+                mem_kib: 64,
+                t_cost: 1,
+                p_cost: 1,
+            };
+        let dir = std::env::temp_dir().join(format!("capsule-cli-migrate-{}", nanoid::nanoid!()));
+        let lib = dir.join("lib");
+        std::fs::create_dir_all(&lib).expect("scratch library dir");
+        let ws = Workspace::create_with_params(&lib, b"pw", FAST_KDF).expect("create workspace");
+
+        for retain_days in [0, 7, DEFAULT_RETAIN_DAYS, 365] {
+            let opts = options(&ws, retain_days);
+            assert_eq!(opts.trash_retain_days, retain_days);
+            assert_eq!(opts.fallback_album, ws.default_album_id());
+        }
+        assert_ne!(ws.default_album_id(), Uuid::nil());
+
+        drop(ws);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_run_that_left_sidecars_behind_reports_a_summary_not_nothing() {
         let page = render(&en(), &UnsignedMigrationReport::default(), 3);
         assert!(
