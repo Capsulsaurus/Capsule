@@ -14,9 +14,18 @@
 //! for any code short enough for a human to compare. The ceremony therefore orders the reveal:
 //! the enrollee sends [`key_commitment`] of its keys first, the initiator then reveals its own,
 //! and only then does the enrollee reveal the keys it committed to (which the initiator checks
-//! against the commitment with [`commitment_matches`]). Every key a man in the middle shows
-//! either side is then fixed before it learns the other side's keys, so it gets exactly one
-//! blind guess at the code: `1 / 10^SAFETY_CODE_DIGITS`.
+//! against the commitment with [`commitment_matches`]).
+//!
+//! Ordering alone is not enough, because device keys are **static**: the initiator's are already
+//! published in the directory, and an enrollee's become known the first time it reveals them. A
+//! man in the middle that can predict one side's input finishes the other side first, then
+//! grinds offline for the keys it commits to. So each side's input also carries a **fresh
+//! per-ceremony random nonce** (the `nonce` field of the enrollment payloads), and the code and
+//! the commitment both cover it. The initiator's nonce is unknown until after the man in the
+//! middle has committed toward the initiator; the enrollee's is hidden under its commitment until
+//! after the man in the middle has revealed toward the enrollee. Every input it controls is then
+//! fixed before it learns an input it needs, so it gets exactly one blind guess at the code:
+//! `1 / 10^SAFETY_CODE_DIGITS`.
 //!
 //! ## Inputs are bytes, by design
 //!
@@ -38,8 +47,9 @@ const SAFETY_CODE_DOMAIN: &[u8] = b"capsule/enrollment/safety-code/v1";
 /// Domain separator for the enrollee's key commitment.
 const COMMITMENT_DOMAIN: &[u8] = b"capsule/enrollment/key-commitment/v1";
 
-/// How many decimal digits a safety code carries. Under the commit-then-reveal ordering a man in
-/// the middle gets one blind guess, so twelve digits bound it at one in 10^12.
+/// How many decimal digits a safety code carries. Under the commit-then-reveal ordering over
+/// nonce-bearing inputs a man in the middle gets one blind guess, so twelve digits bound it at one
+/// in 10^12.
 pub const SAFETY_CODE_DIGITS: usize = 12;
 
 /// The digits per displayed chunk. Both devices render the code in the same chunked,
@@ -58,6 +68,9 @@ fn absorb(hasher: &mut Sha256, field: &[u8]) {
 
 /// The safety code both devices display, over the **initiator's** and the **enrollee's**
 /// canonical advertised-key bytes, in that order.
+///
+/// Each input must include that side's fresh per-ceremony nonce: over static keys alone the code
+/// is grindable whatever the reveal order (see the module docs).
 ///
 /// The result is [`SAFETY_CODE_DIGITS`] decimal digits in groups of [`SAFETY_CODE_CHUNK`]
 /// separated by single spaces (e.g. `0412 7730 9958`), zero-padded so it is always the same

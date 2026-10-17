@@ -50,8 +50,8 @@ use uuid::Uuid;
 
 use self::drops::{InboxEntry, IssuedLink};
 pub use self::enrollment::{
-    ENROLLMENT_PAYLOAD_VERSION, EnrolleeKeys, EnrollmentPayload, EnrollmentPayloadError,
-    InitiatorKeys, MAX_ENROLLMENT_PAYLOAD_CHARS, enrollment_safety_code,
+    ENROLLMENT_NONCE_LEN, ENROLLMENT_PAYLOAD_VERSION, EnrolleeKeys, EnrollmentPayload,
+    EnrollmentPayloadError, InitiatorKeys, MAX_ENROLLMENT_PAYLOAD_CHARS, enrollment_safety_code,
 };
 pub use self::migrate_unsigned::{
     LEGACY_FOLD_KEY, MigrationSkip, UnmigratedShape, UnmigratedSidecar, UnsignedMigrationOptions,

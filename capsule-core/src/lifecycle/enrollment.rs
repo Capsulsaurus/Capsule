@@ -5,15 +5,18 @@
 //! module defines what goes inside them. The ceremony, in relay order:
 //!
 //! 1. enrollee B → initiator A: [`EnrollmentPayload::Commitment`] to B's [`EnrolleeKeys`];
-//! 2. A → B: [`EnrollmentPayload::InitiatorKeys`];
+//! 2. A → B: [`EnrollmentPayload::InitiatorKeys`], carrying a fresh nonce;
 //! 3. B → A: [`EnrollmentPayload::EnrolleeKeys`], which A checks against the commitment
 //!    ([`EnrolleeKeys::matches_commitment`]);
 //! 4. both display [`enrollment_safety_code`] over what they hold and the user compares them;
 //! 5. A admits B with [`Workspace::cross_sign_device`] and sends
 //!    [`EnrollmentPayload::Directory`], which B verifies under the user IK.
 //!
-//! The commit-before-reveal order in steps 1–3 is what makes a twelve-digit code sound against a
-//! man in the middle (see [the safety-code module](mod@crate::crypto::keys::safety_code)). The master-key transfer under a
+//! The commit-before-reveal order in steps 1–3, over inputs that each carry a fresh per-ceremony
+//! nonce, is what makes a twelve-digit code sound against a man in the middle (see
+//! [the safety-code module](mod@crate::crypto::keys::safety_code)). Each side therefore draws its
+//! bundle **once per ceremony** and keeps the one it sent: a second call draws a new nonce, and
+//! so a different code. The master-key transfer under a
 //! channel key (design step 5) is not here: the channel's ephemeral key agreement is not yet
 //! defined.
 //!
@@ -35,6 +38,7 @@ use crate::crypto::keys::{
     DekPublic, DeviceDirectory, DeviceEntry, HybridVerifyingKey, KEY_COMMITMENT_LEN,
     commitment_matches, key_commitment, safety_code,
 };
+use crate::crypto::rng;
 
 /// The payload format version this build writes and the only one it reads.
 pub const ENROLLMENT_PAYLOAD_VERSION: u8 = 1;
@@ -42,6 +46,11 @@ pub const ENROLLMENT_PAYLOAD_VERSION: u8 = 1;
 /// The longest encoded payload this build writes or reads, in characters — the relay's own
 /// per-payload ceiling, so a payload this side accepts is one the relay would have carried.
 pub const MAX_ENROLLMENT_PAYLOAD_CHARS: usize = 64 * 1024;
+
+/// The length of each side's per-ceremony nonce. Device keys are static — the initiator's are
+/// already published — so without fresh randomness on both sides a man in the middle could
+/// predict one side's input and grind the code offline.
+pub const ENROLLMENT_NONCE_LEN: usize = 32;
 
 /// What the **initiator** (the enrolled device A) advertises: the account it is adding to, the
 /// identity key the directory it will send verifies under, and its own device signing key.
@@ -55,6 +64,11 @@ pub struct InitiatorKeys {
     pub device_id: Uuid,
     /// The initiator's device signing public key.
     pub dsk_public: HybridVerifyingKey,
+    /// Fresh random bytes drawn for this ceremony alone, which the safety code covers. Revealed
+    /// only after the enrollee has committed, so a man in the middle commits toward A before it
+    /// can know what A's input to the code will be.
+    #[serde(with = "serde_bytes")]
+    pub nonce: [u8; ENROLLMENT_NONCE_LEN],
 }
 
 impl InitiatorKeys {
@@ -77,6 +91,11 @@ pub struct EnrolleeKeys {
     pub dsk_public: HybridVerifyingKey,
     /// The enrollee's device encryption public key.
     pub dek_public: DekPublic,
+    /// Fresh random bytes drawn for this ceremony alone, which the commitment and the safety code
+    /// cover. Hidden under the commitment until A has revealed, so B's input stays unpredictable
+    /// even when its keys are known (a retried ceremony has already revealed them).
+    #[serde(with = "serde_bytes")]
+    pub nonce: [u8; ENROLLMENT_NONCE_LEN],
 }
 
 impl EnrolleeKeys {
@@ -209,23 +228,29 @@ impl EnrollmentPayload {
 }
 
 impl Workspace {
-    /// What this device advertises as the **initiator** of a cross-device add.
+    /// What this device advertises as the **initiator** of a cross-device add, with a nonce
+    /// freshly drawn by this call. Call it once per ceremony and keep the result: it is both what
+    /// A sends and what A computes its safety code over.
     pub fn enrollment_initiator_keys(&self) -> InitiatorKeys {
         InitiatorKeys {
             user_id: self.account.user_id,
             user_ik_public: self.account.user_ik.verifying_key(),
             device_id: self.account.device.device_id,
             dsk_public: self.device_signer.verifying_key(),
+            nonce: rng::random_array(),
         }
     }
 
     /// What this device advertises as the **enrollee** of a cross-device add: the signing key it
-    /// actually signs with (a hardware signer's, when one was supplied) and its DEK.
+    /// actually signs with (a hardware signer's, when one was supplied), its DEK, and a nonce
+    /// freshly drawn by this call. Call it once per ceremony and keep the result: B commits to,
+    /// reveals, and computes its safety code over this one bundle.
     pub fn enrollment_enrollee_keys(&self) -> EnrolleeKeys {
         EnrolleeKeys {
             device_id: self.account.device.device_id,
             dsk_public: self.device_signer.verifying_key(),
             dek_public: DekPublic(self.account.device.dek.public_bytes()),
+            nonce: rng::random_array(),
         }
     }
 
@@ -294,15 +319,16 @@ mod tests {
         let (_la, _lb, mut a, b) = two_devices();
         let before = a.device_directory().core.directory_version;
 
+        let a_keys = a.enrollment_initiator_keys();
         let b_keys = b.enrollment_enrollee_keys();
         let EnrollmentPayload::Commitment(commitment) =
             relay(&EnrollmentPayload::Commitment(b_keys.commitment()))
         else {
             panic!("commitment did not round-trip");
         };
-        let EnrollmentPayload::InitiatorKeys(a_seen_by_b) = relay(
-            &EnrollmentPayload::InitiatorKeys(a.enrollment_initiator_keys()),
-        ) else {
+        let EnrollmentPayload::InitiatorKeys(a_seen_by_b) =
+            relay(&EnrollmentPayload::InitiatorKeys(a_keys.clone()))
+        else {
             panic!("initiator keys did not round-trip");
         };
         let EnrollmentPayload::EnrolleeKeys(b_seen_by_a) =
@@ -312,7 +338,8 @@ mod tests {
         };
         assert!(b_seen_by_a.matches_commitment(&commitment));
 
-        let code_on_a = enrollment_safety_code(&a.enrollment_initiator_keys(), &b_seen_by_a);
+        assert_eq!(a_seen_by_b, a_keys);
+        let code_on_a = enrollment_safety_code(&a_keys, &b_seen_by_a);
         let code_on_b = enrollment_safety_code(&a_seen_by_b, &b_keys);
         assert_eq!(code_on_a, code_on_b);
 
@@ -365,6 +392,39 @@ mod tests {
             enrollment_safety_code(&mallory.enrollment_initiator_keys(), &b_keys),
             enrollment_safety_code(&a_keys, &b_keys)
         );
+    }
+
+    /// **The offline-grinding defence.** A's device keys are already published, so a man in the
+    /// middle knows them before it commits toward A. A fresh nonce per ceremony means it still
+    /// cannot predict the code A will show: the same static keys under another nonce give
+    /// another code. Likewise B's nonce rides under its commitment, so B's revealed keys from an
+    /// earlier attempt do not predict the next attempt's code or open its commitment.
+    #[test]
+    fn each_ceremony_draws_fresh_nonces_that_the_code_and_commitment_cover() {
+        let (_la, _lb, a, b) = two_devices();
+        let a_first = a.enrollment_initiator_keys();
+        let a_second = a.enrollment_initiator_keys();
+        let b_first = b.enrollment_enrollee_keys();
+        let b_second = b.enrollment_enrollee_keys();
+
+        // The static keys are the same; only the nonce is fresh.
+        assert_eq!(a_first.dsk_public, a_second.dsk_public);
+        assert_eq!(b_first.dsk_public, b_second.dsk_public);
+        assert_ne!(a_first.nonce, a_second.nonce);
+        assert_ne!(b_first.nonce, b_second.nonce);
+
+        // A man in the middle holding A's published keys and an old nonce mispredicts the code.
+        assert_ne!(
+            enrollment_safety_code(&a_first, &b_first),
+            enrollment_safety_code(&a_second, &b_first)
+        );
+        assert_ne!(
+            enrollment_safety_code(&a_first, &b_first),
+            enrollment_safety_code(&a_first, &b_second)
+        );
+        // B's commitment binds its nonce, not just its keys.
+        assert_ne!(b_first.commitment(), b_second.commitment());
+        assert!(!b_second.matches_commitment(&b_first.commitment()));
     }
 
     /// A refused cross-sign surfaces the directory's reason and leaves A's directory as it was.
