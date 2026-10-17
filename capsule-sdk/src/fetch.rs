@@ -25,8 +25,8 @@
 //!   id and the nonce prefix — after running the closed still-format check a receiver
 //!   owes a manifest it did not author. An AEAD failure is a corrupt blob: it is
 //!   discarded and the open degrades so the caller regenerates from the original. A
-//!   tier whose manifest carries the
-//!   `format = "original"` sentinel is satisfied by the original and is never fetched.
+//!   tier whose manifest carries the `format = "original"` sentinel is satisfied by the
+//!   original and is never fetched.
 //!
 //! The [`BlobSource`] seam abstracts the wire so the resume loop and degrade ladder
 //! are driven by deterministic mocks; [`HttpBlobSource`] is the production
@@ -691,6 +691,10 @@ where
             on_authorization_change().await;
             match fetch_representation(source, asset, desired, opening).await {
                 Ok(bytes) => landed(desired, opening, bytes),
+                // The re-sync admitted the fetch; the bytes themselves would not open.
+                Err(FetchError::Corrupt { .. }) => {
+                    degrade(desired, locally_held, DegradeReason::Corrupt)
+                }
                 Err(_) => degrade(desired, locally_held, DegradeReason::AuthorizationChanged),
             }
         }

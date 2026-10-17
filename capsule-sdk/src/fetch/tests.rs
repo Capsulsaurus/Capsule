@@ -832,6 +832,44 @@ async fn authentication_failure_is_a_corrupt_blob() {
     );
 }
 
+/// A blob that would not open after a `403` re-sync admitted the fetch is corrupt, not an
+/// authorization change.
+#[tokio::test]
+async fn corrupt_after_resync_is_reported_as_corrupt() {
+    let ciphertext = seal(&Amk::from_bytes([0x11; 32]), b"other key");
+    let asset = thumbnail_asset(
+        &ciphertext,
+        vec![manifest(
+            DerivativeRole::Thumbnail,
+            "image/jxl",
+            &ciphertext,
+        )],
+    );
+    let source = ForbiddenThenServes {
+        data: ciphertext.clone(),
+        deny: Mutex::new(1),
+    };
+    let held = BTreeSet::from([Representation::Lqip]);
+
+    let resolution = open_representation(
+        &source,
+        &asset,
+        Representation::Thumbnail,
+        &held,
+        &reader_keys(),
+        async || {},
+    )
+    .await;
+
+    assert!(matches!(
+        resolution,
+        FetchResolution::Degraded {
+            reason: DegradeReason::Corrupt,
+            ..
+        }
+    ));
+}
+
 /// **The `original` sentinel is not a fetch.** A tier whose signed manifest carries
 /// `format = "original"` is satisfied by the original, and no request is made.
 #[tokio::test]
