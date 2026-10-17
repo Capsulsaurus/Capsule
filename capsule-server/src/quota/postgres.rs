@@ -22,6 +22,10 @@
 //! (`state_of` treats "over with no recorded crossing" as newly over rather than expired,
 //! deliberately, so the missing timestamp cannot lock somebody out of the writes that free
 //! space) — but leaving it reachable when one statement away is a choice, not a fallback.
+//!
+//! The transaction also holds the account's `quota_usage` row (`FOR UPDATE`) from the debit to
+//! the commit, so concurrent charges for one account total it one after another rather than
+//! each in a snapshot that misses the others (#513).
 
 use jiff::Timestamp;
 use sea_orm::{
@@ -195,6 +199,27 @@ impl QuotaStore for PostgresQuota {
                 ))
                 .await
                 .map_err(PORT.failing("opening an account's usage row"))?;
+
+            // Serialise this account's charges on its usage row (#513). Without the lock, two
+            // charges for different addresses each total the account in a snapshot that misses
+            // the other's uncommitted debit: both report a total under the limit, the upload
+            // path admits both, and neither stamps the crossing their sum made. Holding the row
+            // until commit means the total below is read only after every earlier charge for
+            // this account has committed — a READ COMMITTED statement takes its snapshot when it
+            // starts, which is after this lock is granted.
+            //
+            // Taken *after* the attribution insert, and that order is what keeps it free of
+            // deadlock: the insert can wait on another transaction's uncommitted attribution, but
+            // a transaction holding this lock waits on nothing further, so no cycle can form.
+            transaction
+                .execute(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "SELECT 1 FROM quota_usage WHERE user_id = $1 FOR UPDATE",
+                    [Value::from(user.as_str().to_owned())],
+                ))
+                .await
+                .map_err(PORT.failing("locking an account's usage row"))?;
+            tracing::trace!(%user, "holding an account's usage row for a charge");
 
             let used = usage_of(&transaction, user).await?.used;
             if used >= limits.hard_limit {

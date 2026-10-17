@@ -395,6 +395,93 @@ pub async fn a_collector_release_clears_the_over_limit_clock(h: &dyn Harness) {
 }
 
 // ===========================================================================================
+// Concurrency
+// ===========================================================================================
+
+/// Parallel charges for one account are serialised: none is admitted past the hard limit, and
+/// the crossing is stamped once, by the charge that made it (issue #513).
+///
+/// Eight sessions for one account, each a distinct 50-byte blob, all in flight at once against
+/// a 200-byte hard limit. A ledger that totals the account without serialising its charges lets
+/// each one read a total that misses the others' uncommitted debits: several report the same
+/// `used`, all of them under the limit, so the upload path admits every one and the account
+/// ends at 400 bytes with no `over_since` at all. Serialised, the totals each charge reports are
+/// exactly 50, 100, ... 400 — one per charge — and the clock holds the instant of the charge
+/// that reported 200.
+///
+/// The futures are joined on one task, which is enough: each one holds its own connection, so
+/// the store sees eight concurrent transactions whichever task polls them.
+pub async fn parallel_charges_cannot_overshoot_the_hard_limit(h: &dyn Harness) {
+    let owner = user("parallel", 1);
+    let addresses: Vec<ContentAddress> = (0..8).map(|n| address("parallel", n)).collect();
+    let charge = |n: u8| {
+        h.quotas().charge(
+            &owner,
+            &addresses[usize::from(n)],
+            50,
+            day(i64::from(n)),
+            limits(),
+        )
+    };
+    let outcomes = tokio::join!(
+        charge(0),
+        charge(1),
+        charge(2),
+        charge(3),
+        charge(4),
+        charge(5),
+        charge(6),
+        charge(7),
+    );
+    let outcomes = [
+        outcomes.0, outcomes.1, outcomes.2, outcomes.3, outcomes.4, outcomes.5, outcomes.6,
+        outcomes.7,
+    ];
+
+    let mut totals: Vec<(u64, Timestamp)> = outcomes
+        .into_iter()
+        .zip(0_i64..)
+        .map(
+            |(outcome, n)| match ok(outcome, "charge an address in parallel") {
+                ChargeOutcome::Charged { used } => (used, day(n)),
+                ChargeOutcome::AlreadyAttributed => {
+                    panic!("every parallel charge is a distinct address, so none is a merge")
+                }
+            },
+        )
+        .collect();
+    totals.sort_unstable();
+    assert_eq!(
+        totals.iter().map(|(used, _)| *used).collect::<Vec<_>>(),
+        [50, 100, 150, 200, 250, 300, 350, 400],
+        "each charge must see every charge serialised before it"
+    );
+
+    let admitted: u64 = totals
+        .iter()
+        .map(|(used, _)| *used)
+        .filter(|used| *used < limits().hard_limit)
+        .count()
+        .try_into()
+        .expect("eight fits in a u64");
+    assert!(
+        admitted * 50 < limits().hard_limit,
+        "the upload path admitted {admitted} charges, past the hard limit"
+    );
+
+    let crossing = totals
+        .iter()
+        .find(|(used, _)| *used >= limits().hard_limit)
+        .map(|(_, at)| *at);
+    let usage = ok(h.quotas().usage(&owner).await, "read usage");
+    assert_eq!(usage.used, 400);
+    assert_eq!(
+        usage.over_since, crossing,
+        "the clock is stamped once, by the charge that crossed the limit"
+    );
+}
+
+// ===========================================================================================
 // The whole suite
 // ===========================================================================================
 
@@ -412,6 +499,8 @@ pub async fn run_all(h: &dyn Harness) {
 
     the_crossing_is_stamped_once_and_cleared_by_going_under(h).await;
     a_collector_release_clears_the_over_limit_clock(h).await;
+
+    parallel_charges_cannot_overshoot_the_hard_limit(h).await;
 }
 
 #[cfg(test)]
@@ -457,6 +546,7 @@ mod tests {
         releasing_an_unattributed_address_is_none_rather_than_an_error,
         the_crossing_is_stamped_once_and_cleared_by_going_under,
         a_collector_release_clears_the_over_limit_clock,
+        parallel_charges_cannot_overshoot_the_hard_limit,
     }
 
     /// The whole suite, in one pass on one ledger.
