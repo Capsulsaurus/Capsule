@@ -173,9 +173,10 @@ impl fmt::Debug for SecretBytes {
 pub enum Backends {
     /// Every deterministic in-crate adapter, over a real filesystem blob store.
     ///
-    /// An explicit operator act (`--memory`, or `CAPSULE_PROFILE=memory`) and **never** a
-    /// fallback: a deployment that forgets `VALKEY_URL` must fail closed rather than come up
-    /// holding state it will lose on the next restart.
+    /// An explicit operator act — the `--memory` flag, and nothing in the environment — and
+    /// **never** a fallback: a deployment that forgets `VALKEY_URL` must fail closed rather than
+    /// come up holding state it will lose on the next restart. Boot logs a `WARN` every time it
+    /// assembles this family.
     Memory,
     /// Postgres and Valkey, selected by `DATABASE_URL` and `VALKEY_URL`.
     Durable,
@@ -558,11 +559,16 @@ impl Config {
         let valkey_url = env.var("VALKEY_URL");
 
         // ── Backend family ──────────────────────────────────────────────────────────────
-        let backends = if overrides.memory
-            || env
-                .var("CAPSULE_PROFILE")
-                .is_some_and(|profile| profile.eq_ignore_ascii_case("memory"))
-        {
+        // Only the flag selects the in-memory family. The environment is where a deployment's
+        // settings live, so a variable that could select it would let a forgotten line in a
+        // deployment's environment bring a server up holding state it loses on restart (#521).
+        if env.var("CAPSULE_PROFILE").is_some() {
+            tracing::warn!(
+                "CAPSULE_PROFILE is no longer read; pass --memory to select the in-memory \
+                 adapters"
+            );
+        }
+        let backends = if overrides.memory {
             Backends::Memory
         } else {
             Backends::Durable
@@ -1204,12 +1210,18 @@ mod tests {
     }
 
     #[test]
-    fn the_memory_profile_is_also_reachable_from_the_environment() {
+    fn the_memory_profile_is_not_reachable_from_the_environment() {
+        // Only `--memory` selects it (#521): the retired variable is ignored, so a serve that
+        // names it and not the flag is the durable one, refused for the Valkey it lacks.
         let mut environment = serveable();
-        environment.insert("CAPSULE_PROFILE".to_owned(), "Memory".to_owned());
+        environment.insert("CAPSULE_PROFILE".to_owned(), "memory".to_owned());
+        let error = Config::load(&environment, &Overrides::default(), Demands::Serve)
+            .expect_err("it refuses");
+        assert!(error.names("VALKEY_URL"), "{error}");
+
         let config =
-            Config::load(&environment, &Overrides::default(), Demands::Serve).expect("it loads");
-        assert_eq!(config.backends, Backends::Memory);
+            Config::load(&environment, &Overrides::default(), Demands::Nothing).expect("it loads");
+        assert_eq!(config.backends, Backends::Durable);
     }
 
     #[test]
