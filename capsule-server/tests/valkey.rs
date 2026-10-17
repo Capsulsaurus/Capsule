@@ -316,6 +316,109 @@ async fn the_progress_sweep_drops_an_expired_session_from_the_view() {
     assert!(!indexed(after), "and the collector's sweep is that walk");
 }
 
+/// The sweep pages by score cursor across many pages, ties and drops alike (#519).
+///
+/// Every session opens at one instant, so every member shares one score and each page resumes
+/// by skipping the kept members already seen at it; every third record is deleted under the
+/// walk, so pages also shrink as it heals. A cursor that skipped too few would answer a member
+/// twice, and one that skipped too many would leave a dead member in the view.
+#[tokio::test]
+async fn the_progress_sweep_pages_by_score_cursor_across_ties_and_drops() {
+    use capsule_server::gc::ProgressSweep;
+
+    let Some(server) = server().await else {
+        return;
+    };
+    let harness = ValkeyHarness::connect(&server.url).await;
+    // Scoped to this run, so a server still holding a previous run's sessions changes nothing.
+    let run = uuid::Uuid::now_v7();
+    let ids: Vec<UploadId> = (0..100)
+        .map(|n| UploadId::new(format!("valkey-progress-cursor-{run}-{n:03}")))
+        .collect();
+    for id in &ids {
+        harness
+            .uploads
+            .open(UploadSessionRecord {
+                upload_id: id.clone(),
+                asset_id: AssetId::new(format!("{id}-asset")),
+                owner_id: OwnerId::new("valkey-progress-cursor-owner"),
+                upload_user_id: UserId::new("valkey-progress-cursor-uploader"),
+                album_id: None,
+                content_type: None,
+                expected_hash: "e".repeat(64),
+                crypto_suite_id: 1,
+                protocol_version: "2026-08-29".to_owned(),
+                blob_role: BlobRole::Original,
+                intent_id: None,
+                manifest_envelope: "{}".to_owned(),
+                received_bytes: 0,
+                total_size: 1,
+                status: UploadSessionStatus::Pending,
+                created_at: harness.clock.now(),
+                last_progress_at: harness.clock.now(),
+            })
+            .await
+            .expect("the session opens");
+    }
+
+    let client = redis::Client::open(server.url.as_str()).expect("the URL opens");
+    let mut connection = client
+        .get_multiplexed_async_connection()
+        .await
+        .expect("a second connection");
+    let (dropped, kept): (Vec<_>, Vec<_>) = ids.iter().enumerate().partition(|(n, _)| n % 3 == 0);
+    for (_, id) in &dropped {
+        let _: i64 = redis::cmd("DEL")
+            .arg(format!("capsule:upload:session:{id}"))
+            .query_async(&mut connection)
+            .await
+            .expect("DEL answers");
+    }
+
+    let swept = harness
+        .uploads
+        .least_recently_progressed(harness.clock.now(), usize::MAX)
+        .await
+        .expect("the walk answers");
+    let mine: Vec<&UploadId> = swept.iter().filter(|id| ids.contains(id)).collect();
+    let mut unique = mine.clone();
+    unique.sort_by_key(ToString::to_string);
+    unique.dedup();
+    assert_eq!(unique.len(), mine.len(), "no member is answered twice");
+    assert_eq!(mine.len(), kept.len(), "every live member is answered");
+    for (_, id) in &kept {
+        assert!(mine.contains(id), "{id} is answered");
+    }
+
+    let score = |id: &UploadId| {
+        let mut command = redis::cmd("ZSCORE");
+        command.arg("capsule:upload:progress").arg(id.to_string());
+        command
+    };
+    for (_, id) in &dropped {
+        let left: Option<f64> = score(id)
+            .query_async(&mut connection)
+            .await
+            .expect("answers");
+        assert!(
+            left.is_none(),
+            "{id}'s dead member is healed out of the view"
+        );
+    }
+    harness
+        .uploads
+        .sweep_progress(harness.clock.now())
+        .await
+        .expect("the sweep answers");
+    for (_, id) in &kept {
+        let left: Option<f64> = score(id)
+            .query_async(&mut connection)
+            .await
+            .expect("answers");
+        assert!(left.is_some(), "{id}'s live member stays in the view");
+    }
+}
+
 /// The whole counter suite, including the race, on one server.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_counter_suite_passes_against_valkey() {

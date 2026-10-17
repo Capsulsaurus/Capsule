@@ -1027,17 +1027,27 @@ return {gone, mismatched, count}"
 // KEYS: progress zset. ARGV: now, inclusive score bound, limit. Returns
 // {gone, {{upload_id, last_progress_at}…}}, least recently progressed first; a member whose
 // record is gone or no longer evictable is dropped from the view here.
+//
+// Paged by a score cursor, not a growing offset: each page resumes at the last kept member's
+// score, inclusive, skipping only the kept members already seen at that one score (ties sort by
+// member, and a dropped member is gone from the set). A `LIMIT` offset is walked node by node, so
+// an offset that grew with every page made a K-member walk cost O(K²); this cursor makes each
+// page O(log N + T + 32), T being the kept members sharing the cursor's microsecond, and the
+// whole walk O(K log N) while T stays small. The reply still carries every kept member (#519).
 script!(
     LEAST_RECENTLY_PROGRESSED,
     "local gone = 0
 local found = {}
-local offset = 0
+local min = '-inf'
+local cursor = nil
+local skip = 0
 local limit = tonumber(ARGV[3])
 while #found < limit do
-  local page = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[2], 'LIMIT', offset, 32)
+  local page = redis.call('ZRANGEBYSCORE', KEYS[1], min, ARGV[2], 'WITHSCORES', 'LIMIT', skip, 32)
   if #page == 0 then break end
-  local kept = 0
-  for _, id in ipairs(page) do
+  for i = 1, #page, 2 do
+    local id = page[i]
+    local score = page[i + 1]
     local key = 'capsule:upload:session:' .. id
     local keep = false
     local r
@@ -1046,15 +1056,20 @@ while #found < limit do
       keep = r[1] == 'pending' or r[1] == 'uploading'
     end
     if keep then
-      kept = kept + 1
       found[#found + 1] = {id, r[2]}
+      if score == cursor then
+        skip = skip + 1
+      else
+        cursor = score
+        skip = 1
+      end
     else
       redis.call('ZREM', KEYS[1], id)
       gone = gone + 1
     end
   end
-  offset = offset + kept
-  if #page < 32 then break end
+  if cursor ~= nil then min = cursor end
+  if #page < 64 then break end
 end
 return {gone, found}"
 );
