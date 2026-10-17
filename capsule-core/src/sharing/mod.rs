@@ -140,8 +140,8 @@ impl ScopeMaterial {
     /// For an [`Album`](ScopeMaterial::Album) scope the AMK of `core.amk_version` recovers it
     /// through [`recover_file_key`](crate::crypto::encryption::recover_file_key): a `derived`
     /// original re-derives, a `wrapped` one (an adopted web-upload drop) unwraps
-    /// `wrapped_file_key`. A file/epoch this material does not cover is
-    /// [`SharingError::ScopeUnavailable`]; a wrapped key that does not open is
+    /// `wrapped_file_key`. A file, album, or epoch this material does not cover is
+    /// [`SharingError::ScopeUnavailable`]; a wrapped key that does not open, or is missing, is
     /// [`SharingError::Crypto`].
     pub fn file_key_for_manifest(
         &self,
@@ -151,7 +151,12 @@ impl ScopeMaterial {
             ScopeMaterial::Asset { .. } => {
                 self.file_key_for(&core.file_id, core.amk_version.0, &core.nonce_prefix)
             }
-            ScopeMaterial::Album { amks, .. } => {
+            ScopeMaterial::Album { album_id, amks } => {
+                // Epoch numbers are per album, so another album's manifest at the same epoch
+                // would otherwise be handed a key this grant does not cover.
+                if core.album_id != *album_id {
+                    return Err(SharingError::ScopeUnavailable);
+                }
                 let amk = amks
                     .get(&core.amk_version.0)
                     .ok_or(SharingError::ScopeUnavailable)?;
