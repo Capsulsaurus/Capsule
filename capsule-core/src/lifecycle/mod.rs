@@ -55,7 +55,7 @@ pub use self::enrollment::{
 };
 pub use self::migrate_unsigned::{
     LEGACY_FOLD_KEY, MigrationSkip, UnmigratedShape, UnmigratedSidecar, UnsignedMigrationOptions,
-    UnsignedMigrationReport,
+    UnsignedMigrationReport, unmigrated_sidecars,
 };
 pub use self::open::HardwareDekBinding;
 pub use self::sync_apply::{QuarantineReason, RemoteAssetFacts, RemoteEntry, SyncApplyOutcome};
