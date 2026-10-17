@@ -39,9 +39,9 @@ than failing.
 **Transitional.** The gateway drains the Kynos REST sync feed (`GET /v1/sync`)
 through `RestSyncTransport`, a hand-written transport in `src/data/server/sync/`.
 The gRPC-web feed it used to read is retired along with the Salvo server. The
-target is the same feed consumed through the Spargen-generated SDK, which
-replaces the hand-written transport without changing `CapsuleGateway`. Until
-then this path works and is tested; it is not dead code.
+target is the same feed consumed through a Spargen-generated TypeScript client,
+which replaces the hand-written transport without changing `CapsuleGateway`.
+Until then this path works and is tested; it is not dead code.
 
 ## Development
 
