@@ -7,10 +7,11 @@
 //! on is a primary key, not a value somebody decodes: a link serves what its rows name and
 //! nothing else.
 //!
-//! # `issue` is one transaction, and a re-issue replaces
+//! # `issue` is one transaction, `resolve` one statement, and a re-issue replaces
 //!
-//! The link row and its serve set are written together, so no reader ever resolves a link whose
-//! serve set is half-written. Issuing an opaque id that is already held **replaces** the record,
+//! The link row and its serve set are written together, and `resolve` reads them back in one
+//! joined `SELECT` that sees one snapshot, so no reader ever resolves a link whose serve set is
+//! half-written or belongs to another issue of the same id. Issuing an opaque id that is already held **replaces** the record,
 //! exactly as the in-memory adapter's map insert does — the conformance suite holds both
 //! adapters to one behaviour, and the port does not yet say otherwise.
 //!
@@ -174,18 +175,25 @@ impl ShareStore for PostgresShares {
 
     fn resolve<'a>(&'a self, opaque_id: &'a str) -> StoreFuture<'a, Option<ShareRecord>> {
         Box::pin(async move {
-            let Some(row) = self
+            // One statement, so the row and its serve set come from one snapshot: a concurrent
+            // re-issue cannot hand back one record's row with another record's serve set. The
+            // join yields one row per served address, one row with a NULL address for a link
+            // that serves nothing, and no row for an unknown id.
+            let rows = self
                 .connection
-                .query_one(Statement::from_sql_and_values(
+                .query_all(Statement::from_sql_and_values(
                     DbBackend::Postgres,
-                    "SELECT owner_id, scope_kind, scope_id, metadata, wrapped_secret, \
-                            expires_at, revoked_at \
-                     FROM shares WHERE opaque_id = $1",
+                    "SELECT s.owner_id, s.scope_kind, s.scope_id, s.metadata, s.wrapped_secret, \
+                            s.expires_at, s.revoked_at, v.address \
+                     FROM shares s \
+                     LEFT JOIN share_serves v ON v.opaque_id = s.opaque_id \
+                     WHERE s.opaque_id = $1 \
+                     ORDER BY v.address COLLATE \"C\"",
                     [Value::from(opaque_id.to_owned())],
                 ))
                 .await
-                .map_err(PORT.failing("resolving a share link"))?
-            else {
+                .map_err(PORT.failing("resolving a share link"))?;
+            let Some(row) = rows.first() else {
                 return Ok(None);
             };
             let failed = PORT.failing("resolving a share link");
@@ -198,20 +206,12 @@ impl ShareStore for PostgresShares {
             let expires_at: Option<i64> = row.try_get("", "expires_at").map_err(&failed)?;
             let revoked_at: Option<i64> = row.try_get("", "revoked_at").map_err(&failed)?;
 
-            let rows = self
-                .connection
-                .query_all(Statement::from_sql_and_values(
-                    DbBackend::Postgres,
-                    "SELECT address FROM share_serves WHERE opaque_id = $1 \
-                     ORDER BY address COLLATE \"C\"",
-                    [Value::from(opaque_id.to_owned())],
-                ))
-                .await
-                .map_err(PORT.failing("reading a share link's serve set"))?;
             let mut serves = BTreeSet::new();
             for row in &rows {
-                let address: String = row.try_get("", "address").map_err(&failed)?;
-                serves.insert(address_from(&address)?);
+                let address: Option<String> = row.try_get("", "address").map_err(&failed)?;
+                if let Some(address) = address {
+                    serves.insert(address_from(&address)?);
+                }
             }
 
             Ok(Some(ShareRecord {
