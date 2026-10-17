@@ -331,7 +331,7 @@ impl DerivativeSealer for AlbumSealer<'_> {
                 // decision 22 degrades to `DecodeFailed` rather than propagating.
                 SealerFault::Refuse => {
                     return Err(MediaError::Encode {
-                        format: crate::media::DerivativeFormat::Jxl,
+                        format: crate::derivative_format::DerivativeFormat::Jxl,
                         detail: "injected codec refusal".into(),
                     });
                 }
@@ -648,7 +648,8 @@ mod tests {
     use super::*;
     use crate::crypto::hash;
     use crate::crypto::provenance::DerivativeManifest;
-    use crate::media::{Decoder as _, DerivativeFormat, verify_still_format};
+    use crate::derivative_format::{DerivativeFormat, verify_still_format};
+    use crate::media::Decoder as _;
     use crate::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1};
 
     /// A deterministic RGB gradient, `width` x `height`, as interleaved RGB `u16`.
