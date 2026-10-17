@@ -7,7 +7,8 @@ use uuid::Uuid;
 
 use super::{AssetState, Workspace, now_rfc3339};
 use crate::crypto::encryption::{
-    blob_ciphertext_hash, decrypt_asset_vec, seal_file_key, seal_metadata_blob,
+    blob_ciphertext_hash, decrypt_asset_vec, encrypt_asset_vec_with_prefix, seal_file_key,
+    seal_metadata_blob,
 };
 use crate::crypto::hash;
 use crate::crypto::keys::{Amk, AmkVersion, DekKeypair};
@@ -274,6 +275,31 @@ impl crate::drop::DropAdopter for Workspace {
         // plaintext hash and preview; the bulk ciphertext itself never moves.
         let plaintext = decrypt_asset_vec(&file_key, &descriptor.nonce_prefix, &ciphertext)
             .map_err(|_| DropError::Crypto("staged drop ciphertext failed to decrypt"))?;
+
+        // The library keeps the plaintext and regenerates the ciphertext from it (`verify`,
+        // `upload_bundle`), so the staged bytes must be exactly the canonical re-encryption
+        // under K and the descriptor's nonce prefix. STREAM decryption alone admits encodings
+        // that do not round-trip (a trailing empty last chunk on a chunk-multiple plaintext),
+        // and the descriptor's sizes are guest-asserted; either would register an asset that
+        // then fails its own `verify` and can never be pushed.
+        let (canonical, canonical_bytes) =
+            encrypt_asset_vec_with_prefix(&file_key, descriptor.nonce_prefix, &plaintext);
+        if canonical_bytes != ciphertext
+            || canonical.plaintext_size != descriptor.plaintext_size
+            || canonical.chunk_size != descriptor.chunk_size
+        {
+            tracing::warn!(
+                drop_id = %drop.0,
+                staged_len = ciphertext.len(),
+                canonical_len = canonical_bytes.len(),
+                declared_plaintext_size = descriptor.plaintext_size,
+                plaintext_len = plaintext.len(),
+                "refusing a non-canonical guest drop"
+            );
+            return Err(DropError::Crypto(
+                "staged drop is not the canonical encryption of its plaintext",
+            ));
+        }
 
         // Author + sign the sidecar. `created_by`/author is the adopter — the guest is never
         // a signer; its origin is an unverified, self-asserted descriptive note.
@@ -631,6 +657,80 @@ mod tests {
         assert_eq!(adopted_extension(Some("a.j-g")), "bin");
         assert_eq!(adopted_extension(Some("a.abcdefghijk")), "bin");
         assert_eq!(adopted_extension(Some("a.ünï")), "bin");
+    }
+
+    /// A drop whose staged bytes decrypt but are not the canonical re-encryption of their
+    /// plaintext — here, a chunk-multiple plaintext sealed with a trailing empty last chunk,
+    /// which STREAM decryption accepts — is refused before anything is registered, and the
+    /// drop stays in the inbox; so is a drop whose descriptor misstates `plaintext_size`.
+    #[test]
+    fn a_non_canonical_drop_is_refused_and_stays_in_the_inbox() {
+        use aes_gcm::aead::KeyInit;
+        use aes_gcm::aead::generic_array::GenericArray;
+        use aes_gcm::aead::stream::EncryptorBE32;
+        use aes_gcm::{Aes256Gcm, Key};
+
+        use crate::crypto::encryption::PLAINTEXT_CHUNK;
+        use crate::crypto::keys::ESEED_LEN;
+        use crate::drop::{DropAdopter, UploadLinkIssuer, seal_drop_derand};
+
+        let lib = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Guests").unwrap();
+        let link = UploadLinkIssuer::create_link(&mut ws, LinkCaps::default(), None).unwrap();
+        let k = [0x42; 32];
+        let nonce_prefix = [0x07; 7];
+        let seal = |plaintext: &[u8]| {
+            seal_drop_derand(
+                plaintext,
+                &link.drop_pubkey,
+                "image/jpeg",
+                &k,
+                &nonce_prefix,
+                &[0x11; ESEED_LEN],
+                &[0x22; 12],
+            )
+            .unwrap()
+        };
+
+        // A one-chunk plaintext, re-sealed as a full chunk followed by an empty last chunk.
+        let plaintext = vec![0xAB; PLAINTEXT_CHUNK];
+        let mut trailing = seal(&plaintext);
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&k));
+        let mut enc =
+            EncryptorBE32::<Aes256Gcm>::from_aead(cipher, GenericArray::from_slice(&nonce_prefix));
+        let mut bytes = enc.encrypt_next(plaintext.as_slice()).unwrap();
+        bytes.extend(enc.encrypt_last(&[][..]).unwrap());
+        assert_eq!(
+            decrypt_asset_vec(&k, &nonce_prefix, &bytes).unwrap(),
+            plaintext,
+            "STREAM decryption accepts the trailing empty chunk"
+        );
+        assert_ne!(bytes, trailing.ciphertext);
+        trailing.descriptor.ciphertext_hash = hash::hash_bytes(&bytes);
+        trailing.ciphertext = bytes;
+
+        // A canonical ciphertext whose descriptor overstates the plaintext size.
+        let mut misstated = seal(b"a short guest photo");
+        misstated.descriptor.plaintext_size += 1;
+
+        for sealed in [trailing, misstated] {
+            let drop_id = ws.receive_drop(link.link_id, sealed).unwrap();
+            assert!(matches!(
+                DropAdopter::adopt(&mut ws, drop_id, album),
+                Err(DropError::Crypto(
+                    "staged drop is not the canonical encryption of its plaintext"
+                ))
+            ));
+            assert!(
+                DropAdopter::list_inbox(&ws)
+                    .unwrap()
+                    .iter()
+                    .any(|p| p.drop_id == drop_id),
+                "a refused drop stays adoptable-or-discardable in the inbox"
+            );
+        }
+        assert!(ws.asset_ids().is_empty(), "nothing was registered");
     }
 
     /// S-A6: a rejected drop is discarded — removed from the inbox with no library trace.
