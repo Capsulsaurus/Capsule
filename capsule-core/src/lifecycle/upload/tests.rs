@@ -181,26 +181,6 @@ fn walk_find(root: &std::path::Path, name: &str) -> bool {
 /// derivative path is exercised rather than the `original` sentinel.
 ///
 /// A 512x384 PNG, built here rather than committed: the repository carries no binary fixtures.
-/// How many derivative blobs the 512x384 fixture of [`library_with_a_thumbnailed_asset`] yields
-/// in this build: every generated tier times every encodable delivery format. One (the
-/// thumbnail JXL) without `media-linked-codecs`; four (thumbnail and preview, JXL and AVIF) with
-/// it. The thumbnail JXL is always first.
-fn blobs_per_thumbnailed_asset() -> usize {
-    crate::media::DerivativeTier::GENERATED.len()
-        * crate::derivative_format::DerivativeFormat::STILL_DELIVERY_ORDER
-            .iter()
-            .filter(|f| f.is_encodable())
-            .count()
-}
-
-/// Whether the bundle still ships the thumbnail tier's JXL.
-fn ships_the_thumbnail_jxl(bundle: &UploadBundle) -> bool {
-    bundle
-        .derivatives
-        .iter()
-        .any(|d| d.role == DerivativeRole::Thumbnail && d.format == "image/jxl")
-}
-
 fn library_with_a_thumbnailed_asset(lib: &TempDir, src: &TempDir) -> (Uuid, Uuid) {
     use rawshift_image::core::metadata::ImageMetadata;
     use rawshift_image::core::{BitDepth, MetadataEmbedOptions};
@@ -243,6 +223,26 @@ fn library_with_a_thumbnailed_asset(lib: &TempDir, src: &TempDir) -> (Uuid, Uuid
     ws.ensure_album(album, "Imports").unwrap();
     let asset = ws.import_asset(album, &img).unwrap();
     (album, asset)
+}
+
+/// How many derivative blobs the 512x384 fixture of [`library_with_a_thumbnailed_asset`] yields
+/// in this build: every generated tier times every encodable delivery format. One (the
+/// thumbnail JXL) without `media-linked-codecs`; four (thumbnail and preview, JXL and AVIF) with
+/// it. The thumbnail JXL is always first.
+fn blobs_per_thumbnailed_asset() -> usize {
+    crate::media::DerivativeTier::GENERATED.len()
+        * crate::derivative_format::DerivativeFormat::STILL_DELIVERY_ORDER
+            .iter()
+            .filter(|f| f.is_encodable())
+            .count()
+}
+
+/// Whether the bundle still ships the thumbnail tier's JXL.
+fn ships_the_thumbnail_jxl(bundle: &UploadBundle) -> bool {
+    bundle
+        .derivatives
+        .iter()
+        .any(|d| d.role == DerivativeRole::Thumbnail && d.format == "image/jxl")
 }
 
 /// The derivative round trip, end to end: the plaintext the library holds is **not** what the
