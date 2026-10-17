@@ -35,7 +35,7 @@
 //! **Removal reclaims nothing, by design, and this call is where an operator would expect it
 //! to.** What a removed writer member uploaded stays in the owner's album and stays charged to
 //! the removed member's quota; only the refcount collector releases an attribution, and only
-//! once the owner deletes the asset. That is the "Departed album members" decision in
+//! once the owner or a current writer member deletes the asset. That is the "Departed album members" decision in
 //! design/quota.md (issue #473): removal is a key rotation, not a data event, so this endpoint
 //! records who may read and write and touches no quota ledger.
 //!
