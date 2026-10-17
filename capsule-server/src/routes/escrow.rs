@@ -160,7 +160,7 @@ pub async fn store_escrow(
     // the instant every adapter keeps: the durable one holds microseconds, and a `stored_at`
     // that disagreed with the held one would manufacture the false stale-cache verdict the
     // field exists to prevent.
-    let stored_at = to_the_microsecond(escrow.clock().now());
+    let stored_at = crate::postgres::time::stored(escrow.clock().now());
     let replaced = escrow
         .escrows()
         .store(EscrowRecord {
@@ -212,17 +212,6 @@ pub async fn fetch_escrow(
 
     tracing::debug!(%user, bytes = held.blob.len(), "serving an escrow");
     Ok(Binary::new(held.blob))
-}
-
-/// `at`, truncated to whole microseconds — the finest grain every escrow adapter keeps, and the
-/// same truncation (`Timestamp::as_microsecond`) the durable adapter's column conversion makes.
-///
-/// A jiff truncation here rather than the Postgres adapter's `stored`: a route has no business
-/// naming a backend, and the property it needs is the port's — "what I echo is what is held" —
-/// not any one adapter's. Truncating rather than rounding keeps the instant from moving later.
-fn to_the_microsecond(at: jiff::Timestamp) -> jiff::Timestamp {
-    let micros = at.as_microsecond();
-    jiff::Timestamp::from_microsecond(micros).unwrap_or(at)
 }
 
 impl StoreEscrowRejection {
