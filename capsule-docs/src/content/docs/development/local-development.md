@@ -43,7 +43,7 @@ mise run hooks-install # installs the git hooks (hk)
 
 ### The ones you run most
 
-- **Rust:** `format-rust` (`cargo fmt`), `lint-rust` / `lint-check-rust` (`cargo clippy --workspace` with the shared `$CLIPPY_FLAGS` set — lints are configured once in `mise.toml`, never per crate), `test-rust` (`cargo nextest run`, three invocations: the workspace, then `capsule-core` and `capsule-sdk` with `--features ffi`), `test-rust-release` (the `#[cfg(not(debug_assertions))]` tests, which every test-profile build compiles out: `cargo nextest run --cargo-profile release` over the crates listed in `RELEASE_TEST_CRATES`, after a guard that fails when such a test appears in any other crate — CI's test job and pre-push both run it), `build-rust`, `test-coverage-rust`.
+- **Rust:** `format-rust` (`cargo fmt`), `lint-rust` / `lint-check-rust` (`cargo clippy --workspace` with the shared `$CLIPPY_FLAGS` set — lints are configured once in `mise.toml`, never per crate), `test-rust` (`cargo nextest run`, three invocations: the workspace, then `capsule-core` and `capsule-sdk` with `--features ffi`), `test-rust-release` (the `#[cfg(not(debug_assertions))]` tests, which every test-profile build compiles out: `cargo nextest run --cargo-profile release` over the crates listed in `RELEASE_TEST_CRATES`, after a guard that fails when such a test appears in any other crate — CI's test job and pre-push both run it), `test-rust-containers` (the Postgres and Valkey container tiers `test-rust` skips, failing on any skip — see [The container tiers](#the-container-tiers)), `build-rust`, `test-coverage-rust`.
 - **Web:** `format-web` / `lint-web` (biome), `test-web` (bun; depends on `build-wasm`, `share-kat`, and `drop-kat`, which generate the WASM glue and the cross-language KAT fixtures the tests load), `build-web`.
 - **Docs:** `format-docs` / `lint-docs` (biome over `capsule-docs`), `build-docs` (Astro/Starlight).
 - **Markdown:** `lint-md` / `lint-check-md`.
@@ -204,13 +204,29 @@ To read the served contract without running anything:
 mise run openapi-kynos      # regenerate capsule-server/openapi.json
 ```
 
-### Nothing here needs a container
+### The container tiers
 
-No test in the workspace starts a container, so `mise run test-rust` has no podman prerequisite
-and cannot leak one. `mise run serve-deps` is the only task that starts anything, and it is never
-a dependency of another task. (The `containers` nextest group is kept, empty, for the first real
-adapter — the one-thread rule it encodes was learned by watching CI flake, and that is the
-expensive way to learn it.)
+`mise run test-rust` has no podman prerequisite and cannot leak a container: every case that
+needs a real Postgres or Valkey is gated on `CAPSULE_TEST_POSTGRES=1` / `CAPSULE_TEST_VALKEY=1`
+and, without its variable, prints one `skipping <case>:` (or `skipped:`) line and passes.
+
+`mise run test-rust-containers` is the other half. It admits both tiers itself and runs every
+gated case — the Postgres adapter conformance suites, the migration up/down round trip, the
+durable boot arm and process cases (all under a `postgres_conformance` test module) and
+`capsule-server/tests/valkey.rs` — one container per case, one case at a time, in the
+`containers` nextest group. It **fails when any case prints a skip line**, because a tier that
+silently ran nothing reads exactly like one that passed. CI runs it as the blocking
+`rust-containers` job on the runner's Docker. Locally, point it at rootless podman:
+
+```bash
+systemctl --user start podman.socket
+export DOCKER_HOST=unix:///run/user/$(id -u)/podman/podman.sock
+export CAPSULE_TEST_CONTAINER_USERNS=keep-id
+mise run test-rust-containers
+```
+
+`mise run serve-deps` is the only task that starts a long-lived container, and it is never a
+dependency of another task.
 
 ## Git hooks
 

@@ -48,6 +48,10 @@ path = "junit.xml"
 # suites against a `valkey/valkey` container when `CAPSULE_TEST_VALKEY=1`. One thread, for the
 # same reason and one more: each test starts its own container and the eviction view is one
 # global sorted set.
+#
+# The two filtersets below are also the selection `mise run test-rust-containers` runs (#514),
+# with both variables set and a guard that fails on any skip line — the `rust-containers` CI job.
+# Keep the task's `-E` expression and these overrides naming the same cases.
 [test-groups.containers]
 max-threads = 1
 

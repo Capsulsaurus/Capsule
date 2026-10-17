@@ -234,9 +234,10 @@ jobs:
     runs-on: ubuntu-latest
     # Blocking as of `S-C59`. It was non-blocking because the Salvo auth crate's integration
     # tests needed testcontainers (Docker), which is slower and flakier; that crate is now
-    # review material and no test in the workspace starts a container — every port has a
-    # deterministic in-memory adapter and Kynos's `TestClient` drives a built service
-    # in-process. A gate that is allowed to fail is not a gate.
+    # review material. Every case this job runs uses a deterministic in-memory adapter, and
+    # Kynos's `TestClient` drives a built service in-process; the container-gated cases skip
+    # here and run against real Postgres and Valkey containers in `rust-containers`. A gate
+    # that is allowed to fail is not a gate.
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust toolchain
@@ -262,6 +263,38 @@ jobs:
         env:
           NEXTEST_PROFILE: ci
         run: mise run test-rust-release
+
+  # The container tiers `rust-test` skips (#514). Every Postgres adapter conformance suite, the
+  # migration round trip, the durable boot arm and process cases, and the Valkey suite are gated
+  # on CAPSULE_TEST_POSTGRES / CAPSULE_TEST_VALKEY and pass as skipped without them — so before
+  # this job none of them had ever run in CI, and a broken adapter reported green. The task
+  # admits both tiers and fails on any skip line, so a runner that lost its container runtime
+  # fails here instead of passing vacuously. Each case starts its own container through
+  # testcontainers on the runner's Docker socket; no `services:` block, because a shared
+  # service would break the one-container-per-case isolation the suites rely on.
+  rust-containers:
+    name: Rust (container tiers)
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: Install nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - name: Set up mise (task runner)
+        uses: jdx/mise-action@v2
+        with:
+          install: false
+      - name: Test (Postgres + Valkey containers)
+        env:
+          NEXTEST_PROFILE: ci
+        run: mise run test-rust-containers
 
   # Verify capsule-core cross-compiles to the formally supported targets (mobile +
   # desktop). Tier 1 (Apple, Android) gates; Tier 2 (Windows MSVC, aarch64 Linux)
@@ -531,8 +564,8 @@ jobs:
   # Single aggregated status check. Mark THIS ("CI / required") as the required
   # check in branch protection — path-filtered jobs report "skipped", which this
   # treats as a pass. Every job in `needs` is verified below: the loop covers the
-  # nine gates (`rust-test` included — it became blocking with `S-C59`, see the
-  # note on that job), and `changes` is checked ahead of it under a stricter rule,
+  # ten gates (`rust-test` included — it became blocking with `S-C59`, see the
+  # note on that job — and `rust-containers`, blocking from the start, #514), and `changes` is checked ahead of it under a stricter rule,
   # because "skipped" is only trustworthy when the filter that skipped it ran.
   # A job in `needs` but absent from both checks is a gate that cannot fail.
   required:
@@ -540,7 +573,7 @@ jobs:
     if: always()
     # TODO(track:deferred): re-add `kotlin` and `swift` here and to the loop below when mobile
     # resumes — see #389 (Android) and #391–#393 (Apple). Both jobs are disabled (`if: false`).
-    needs: [changes, commit-lint, rust, rust-test, rust-cross, web, docs, docs-truth, vision, markdown]
+    needs: [changes, commit-lint, rust, rust-test, rust-containers, rust-cross, web, docs, docs-truth, vision, markdown]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs succeeded
@@ -559,7 +592,8 @@ jobs:
             exit 1
           fi
           for r in "${{ needs.commit-lint.result }}" "${{ needs.rust.result }}" \
-                   "${{ needs.rust-test.result }}" "${{ needs.rust-cross.result }}" \
+                   "${{ needs.rust-test.result }}" "${{ needs.rust-containers.result }}" \
+                   "${{ needs.rust-cross.result }}" \
                    "${{ needs.web.result }}" \
                    "${{ needs.docs.result }}" "${{ needs.docs-truth.result }}" "${{ needs.vision.result }}" \
                    "${{ needs.markdown.result }}"; do
