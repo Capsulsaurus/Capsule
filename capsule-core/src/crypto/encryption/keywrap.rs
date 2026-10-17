@@ -84,7 +84,7 @@ pub fn unseal_file_key(amk: &Amk, file_id: &Uuid, wrapped: &[u8]) -> Result<[u8;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::encryption::stream::{decrypt_asset_vec, encrypt_asset_vec_with_prefix};
+    use crate::crypto::encryption::{decrypt_asset_vec, encrypt_asset_vec_with_prefix};
 
     const K: [u8; 32] = [0x77; 32];
 

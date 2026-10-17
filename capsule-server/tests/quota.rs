@@ -191,7 +191,7 @@ async fn the_grace_window_stops_metadata_growth_but_never_a_delete() {
             owner_id: owner(),
             album_id: album(),
             protocol_version: PROTOCOL_VERSION.to_owned(),
-            crypto_suite_id: capsule_core::crypto::CRYPTO_SUITE_ID,
+            crypto_suite_id: capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
             created_at: Timestamp::UNIX_EPOCH,
         })
         .await
@@ -311,7 +311,7 @@ fn bundle(fixture: &Fixture, action: &str, seed: &str, prior: &str, metadata: bo
     let blob = metadata.then(|| payload(b'n', 32));
     json!({
         "manifest_envelope": {
-            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
             "protocol_version": PROTOCOL_VERSION,
             "album_id": album().as_str(),
             "file_id": "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e61",

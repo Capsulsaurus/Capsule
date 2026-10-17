@@ -11,12 +11,13 @@ use std::sync::{Arc, Mutex};
 
 use uuid::Uuid;
 
+use crate::crypto::CryptoError;
 use crate::crypto::keys::{
     HardwareBackedSigner, HardwareKeyAgreement, HardwareSigner, HybridVerifyingKey, P256HybridDek,
     P256HybridSigningKey, encapsulate_to_p256_public,
 };
 use crate::crypto::primitives::DeviceTier;
-use crate::crypto::{CryptoError, VerifyOutcome};
+use crate::crypto::verify_asset::VerifyOutcome;
 use crate::lifecycle::{LifecycleError, Workspace};
 
 /// Result alias for the FFI layer (every fallible call surfaces a [`LifecycleError`]).

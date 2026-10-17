@@ -67,7 +67,7 @@ While we will still accept PRs with unsigned commits, to maintain transparent ow
 ## Coding Standards
 
 * Linting: If you have LSPs configured in your editor for the various languages in your repo, it should lint using the appropriate tool with correct versions by default.
-* Tests: Rust tests run on [nextest](https://nexte.st) (`mise run test-rust`). Note nextest does **not** run doctests — if you add one, also run `cargo test --doc`.
+* Tests: Rust tests run on [nextest](https://nexte.st) (`mise run test-rust`). Note nextest does **not** run doctests: `test-rust` runs them in a separate `cargo test --doc` step, so a crate that adds one is added to that step.
 * Commit messaging: **Semantic Commits** (e.g., `feat:`, `fix:`, `docs:`, `test:`) are **required** — they drive version bumps and the changelog, and are enforced by `convco` on commit, push, and in CI.
 * Development Patterns: Refer to [Development](capsule-docs/src/content/docs/development/).
 * AI usage: Refer to [AI.md](./AI.md).

@@ -32,12 +32,10 @@
 
 use capsule_core::crypto::hash::Hash32;
 use capsule_core::crypto::keys::AmkVersion;
-use capsule_core::crypto::provenance::action::Action;
-use capsule_core::crypto::provenance::manifest::{ASSET_MANIFEST_VERSION, KeyMode, ManifestCore};
-use capsule_core::validation::protocol::check_suite;
-use capsule_core::validation::structural::{content_type_allowed, hash_length_ok, size_in_bounds};
+use capsule_core::crypto::provenance::{ASSET_MANIFEST_VERSION, Action, KeyMode, ManifestCore};
 use capsule_core::validation::{
-    EnvelopeContext, EnvelopeReject, HandshakeReject, check_manifest_envelope, protocol_gate,
+    EnvelopeContext, EnvelopeReject, HandshakeReject, check_manifest_envelope, check_suite,
+    content_type_allowed, hash_length_ok, protocol_gate, size_in_bounds,
 };
 use jiff::Timestamp;
 use kynos::prelude::*;
@@ -585,8 +583,7 @@ fn is_lower_hex(text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use capsule_core::crypto::CRYPTO_SUITE_ID;
-    use capsule_core::crypto::primitives::PROTOCOL_VERSION;
+    use capsule_core::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
 
     use super::*;
 

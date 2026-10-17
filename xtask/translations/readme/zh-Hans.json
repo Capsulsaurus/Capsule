@@ -12,16 +12,24 @@
     "target": "> 免责声明：本项目仍在积极开发中。为本仓库加星标以获取最新动态！\n>\n> Alpha 状态：`master` 分支是主要开发分支。GitHub 上的正式发布将在以下条件满足后进行：1. 功能/API 已在内部趋于稳定；2. 内部测试小组已充分测试。\n>\n> 项目进展（2026 年 4 月）：我们正在向 E2E 加密和离线优先理念迁移，因此距离再次进入 Alpha 阶段还需要几个月时间。\n>\n> 项目进展（2026 年 6 月）：开发者仍在积极推进，但只能利用业余时间进行。在独立仓库中构建可移植的纯 Rust 库这一大量前置工作一直是瓶颈（例如图像编解码、元数据处理、地理坐标逻辑、针对特定用例微调的设备端 ML 模型）。然而，在 Rust 生态系统中补齐这些缺失的基础模块，对打造一款可靠的产品至关重要。\n>\n> 项目进展（2026 年 10 月）：双向传输协议以及加密/存储层已接近稳定。在高延迟、易丢包的连接上进行压力测试实验后，我们做出了多项重要更新。"
   },
   {
+    "source": "**Where it stands today:** Capsule is not yet usable with real data. The Rust core, the `capsule-cli` and the server are being stabilized first. `capsule-server` builds as one binary and runs entirely in memory (`mise run serve-memory`), but a durable deployment backed by PostgreSQL does not boot yet, so nothing survives a restart. The native apps are deferred until the server and CLI are done, and the web client cannot yet decrypt what it syncs, so it shows placeholders. The [roadmap](ROADMAP.md) gives the state of every package.",
+    "target": "**当前状态：** Capsule 目前还不能用于真实数据。我们正优先稳定 Rust 核心、`capsule-cli` 和服务器。`capsule-server` 构建为单个二进制文件，完全在内存中运行（`mise run serve-memory`），但基于 PostgreSQL 的持久化部署尚无法启动，因此重启后不会保留任何数据。原生应用推迟到服务器和 CLI 完成之后再做；Web 客户端还无法解密它同步的内容，因此只显示占位内容。[路线图](ROADMAP.md)列出了每个软件包的状态。"
+  },
+  {
     "source": "## Features",
     "target": "## 功能特性"
+  },
+  {
+    "source": "Items marked *(planned)* are goals the current tree does not yet demonstrate.",
+    "target": "标有 *（计划中）* 的条目是当前代码尚未实现的目标。"
   },
   {
     "source": "- **Native and cross-platform**: Capsule is built as a real native app per platform rather than one web app in several wrappers, so each one is fast and idiomatic where it runs. Every native client is intended to be fully featured and platform-integrated; the table below says what exists today.",
     "target": "- **原生与跨平台**：Capsule 为每个平台构建真正的原生应用，而不是把一个 Web 应用套上多层外壳，因此每个应用在其运行的平台上都快速且符合平台习惯。每个原生客户端最终都应功能完整并与平台深度集成；当前已有哪些，见下表。"
   },
   {
-    "source": "- **Broadest format support**: Capsule supports the majority of image and video formats from ones in common smartphones to professional RAW formats. View any content on any device just like your smartphone photos and videos!",
-    "target": "- **最广泛的格式支持**：Capsule 支持绝大多数图像和视频格式，从常见智能手机格式到专业 RAW 格式一应俱全。在任何设备上查看任何内容，就像浏览手机里的照片和视频一样！"
+    "source": "- **Broadest format support** *(planned)*: Capsule aims to support the majority of image and video formats, from those of common smartphones to professional RAW formats. Today the import pipeline decodes JPEG, PNG, JPEG XL, TIFF and GIF stills; HEIC, AVIF, RAW and video are not supported yet.",
+    "target": "- **最广泛的格式支持** *（计划中）*：Capsule 的目标是支持绝大多数图像和视频格式，从常见智能手机格式到专业 RAW 格式。目前导入管线可解码 JPEG、PNG、JPEG XL、TIFF 和 GIF 静态图像；HEIC、AVIF、RAW 和视频尚不支持。"
   },
   {
     "source": "- **Data is always optimized**: Capsule rigorously caches and optimizes any heavy content for seamless delivery (our methodology is [documented](https://capsule.justinchung.net/design/thumbnails/)). If something feels slow, let us know.",
@@ -32,12 +40,12 @@
     "target": "- **隐私保护**：您的数据完全属于您，并采用端到端加密。"
   },
   {
-    "source": "- **Fully-featured access**: Capsule implements several powerful features like real-time viewing, semantic search, AI organization, and more.",
-    "target": "- **功能齐全的访问体验**：Capsule 实现了多项强大功能，如实时查看、语义搜索、AI 整理等。"
+    "source": "- **Fully-featured access** *(planned)*: Real-time viewing, semantic search and AI organization are planned; none of them ships today.",
+    "target": "- **功能齐全的访问体验** *（计划中）*：实时查看、语义搜索和 AI 整理均在计划中，目前都尚未提供。"
   },
   {
-    "source": "- **Federated**: Capsule users can share their assets with users of other servers seamlessly. Think of it like [Matrix](https://en.wikipedia.org/wiki/Matrix_(protocol)) for photos.",
-    "target": "- **联邦式**：Capsule 用户可以与其他服务器上的用户无缝共享资源。可以将其理解为照片领域的 [Matrix](https://en.wikipedia.org/wiki/Matrix_(protocol))。"
+    "source": "- **Federated** *(planned)*: Capsule users will be able to share their assets with users of other servers seamlessly. Think of it like [Matrix](https://en.wikipedia.org/wiki/Matrix_(protocol)) for photos. The server and SDK implement federated pull, but it has not yet run between two real deployments.",
+    "target": "- **联邦式** *（计划中）*：Capsule 用户将能够与其他服务器上的用户无缝共享资源。可以将其理解为照片领域的 [Matrix](https://en.wikipedia.org/wiki/Matrix_(protocol))。服务器和 SDK 已实现联邦拉取，但尚未在两个真实部署之间运行过。"
   },
   {
     "source": "- **Open-source**: Capsule is open-source forever and you can host your own server.",

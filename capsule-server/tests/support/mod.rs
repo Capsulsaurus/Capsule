@@ -26,7 +26,7 @@
 pub(crate) mod fault;
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use base64::Engine as _;
@@ -138,7 +138,7 @@ pub(crate) fn op_bundle(
     let manifest = format!("signed-lifecycle-manifest-{seed}").into_bytes();
     serde_json::json!({
         "manifest_envelope": {
-            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
             "protocol_version": PROTOCOL_VERSION,
             "album_id": album().as_str(),
             "file_id": OPS_ASSET,
@@ -234,6 +234,30 @@ pub(crate) const CURSOR_KEY: [u8; CURSOR_KEY_LEN] = [0x5C; CURSOR_KEY_LEN];
 /// The authorization code the double redeems; every other code is `invalid_grant`.
 pub(crate) const GOOD_CODE: &str = "good-code";
 
+/// The binding secret the suite's OIDC client holds (issue #517): presented as the callback's
+/// `binding_verifier`, and hashed into the authorize's `binding_challenge`.
+pub(crate) const OIDC_BINDING: &str = "suite-client-binding-secret-0000000000000000";
+
+/// The S256 hash of [`OIDC_BINDING`], the `binding_challenge` every suite authorize carries.
+pub(crate) fn oidc_binding_challenge() -> String {
+    capsule_server::auth::oidc::code_challenge(&capsule_server::store::PkceVerifier::new(
+        OIDC_BINDING,
+    ))
+}
+
+/// An authorize body for `redirect_uri`, bound to the suite's client.
+pub(crate) fn oidc_authorize_body(redirect_uri: &str) -> serde_json::Value {
+    serde_json::json!({
+        "redirect_uri": redirect_uri,
+        "binding_challenge": oidc_binding_challenge(),
+    })
+}
+
+/// A callback body for `state` and `code`, presenting the suite client's binding.
+pub(crate) fn oidc_callback_body(state: &serde_json::Value, code: &str) -> serde_json::Value {
+    serde_json::json!({ "state": state, "code": code, "binding_verifier": OIDC_BINDING })
+}
+
 /// An identity provider that answers whatever the test told it to.
 ///
 /// The routes are tested against this; the real [`HttpIdentityProvider`] is tested against the
@@ -247,6 +271,8 @@ pub(crate) struct SwitchableIdentityProvider {
     token_rejected: AtomicBool,
     /// Every authorization request the server built, for a case that reads the ceremony back.
     requests: Mutex<Vec<RecordedAuthorization>>,
+    /// How many codes the server asked this double to redeem, whatever it answered.
+    redemptions: AtomicUsize,
 }
 
 /// One authorization request as the double saw it.
@@ -271,7 +297,13 @@ impl SwitchableIdentityProvider {
             }),
             token_rejected: AtomicBool::new(false),
             requests: Mutex::new(Vec::new()),
+            redemptions: AtomicUsize::new(0),
         }
+    }
+
+    /// How many codes the server has asked to redeem so far.
+    pub(crate) fn redemptions(&self) -> usize {
+        self.redemptions.load(Ordering::SeqCst)
     }
 
     /// Whether the deployment has a provider at all.
@@ -363,6 +395,7 @@ impl IdentityProvider for SwitchableIdentityProvider {
         redemption: &'a Redemption<'a>,
     ) -> ProviderFuture<'a, VerifiedIdentity> {
         Box::pin(async move {
+            self.redemptions.fetch_add(1, Ordering::SeqCst);
             if !self.configured.load(Ordering::SeqCst) {
                 return Err(ProviderError::NotConfigured);
             }
@@ -3538,12 +3571,12 @@ pub(crate) fn create_request(clock: &ManualClock, bytes: &[u8], role: &str) -> s
         "size": bytes.len(),
         "hash": hash,
         "content_type": if role == "original" { "image/jpeg" } else { "application/octet-stream" },
-        "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+        "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
         "protocol_version": PROTOCOL_VERSION,
         "blob_role": role,
         "album_id": album().as_str(),
         "manifest_envelope": {
-            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
             "protocol_version": PROTOCOL_VERSION,
             "album_id": album().as_str(),
             "file_id": "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e61",
@@ -3723,8 +3756,8 @@ pub(crate) fn signed_upgrade_intent(
         intent_id,
         from_protocol_version: PROTOCOL_VERSION.to_owned(),
         to_protocol_version: to_protocol_version.to_owned(),
-        from_suite_id: capsule_core::crypto::CRYPTO_SUITE_ID,
-        to_suite_id: capsule_core::crypto::CRYPTO_SUITE_ID,
+        from_suite_id: capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
+        to_suite_id: capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
         proposer_user: Uuid::parse_str(user().as_str()).expect("the seeded account id is a uuid"),
         proposer_device: device_id,
         deadline_secs,

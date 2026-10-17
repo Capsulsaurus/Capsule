@@ -19,37 +19,109 @@ use crate::crypto::encryption::{blob_ciphertext_hash, encrypt_asset_rekey, seal_
 use crate::crypto::hash;
 use crate::crypto::keys::{Amk, AmkVersion};
 use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
-use crate::crypto::provenance::action::Action;
-use crate::crypto::provenance::manifest::{ASSET_MANIFEST_VERSION, KeyMode, ManifestCore};
-use crate::crypto::provenance::{ProvenanceChain, ProvenanceRecord};
+use crate::crypto::provenance::{
+    ASSET_MANIFEST_VERSION, Action, KeyMode, ManifestCore, ProvenanceChain, ProvenanceRecord,
+};
 use crate::crypto::verify_asset::{
     MetadataBinding, VerifyOutcome, verify_asset, verify_metadata_binding,
 };
 use crate::db::{AssetRow, CachedRepresentationRow};
-use crate::exif::extract::extract_exif;
-use crate::exif::timezone::resolve_timezone;
+use crate::exif::{extract_exif, resolve_timezone};
 use crate::metadata::crdt::{Lww, OrSet};
 use crate::sidecar::sidecar_v1::{
     Gps, GpsSource, SIDECAR_SCHEMA_V1, SidecarV1, StackMembership, StackRole,
 };
 use crate::utils::paths::tmp_path;
 
-// A fault injected between the signed sidecar's `.tmp` write and its rename into place — the
-// crash the single-file atomic rename exists to survive (maintenance doc, Atomic Writes).
+/// A rename in [`Workspace::write_signed_artifacts`] a test can make fail after its `.tmp`
+/// write — the crash the temp-then-rename writes exist to survive (maintenance doc, Atomic
+/// Writes).
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum WriteFault {
+    /// Before the signed sidecar is renamed into place.
+    SidecarRename,
+    /// Before the provenance chain is renamed into place — the sidecar and blob already are.
+    ChainRename,
+}
+
+// The armed fault and how many matching renames to let through before it fires.
 // `#[cfg(test)]` and thread-local for the same reasons as `derivatives::SealerFault`: absent
 // from a release build, and a test seam that stays out of a production signature.
 #[cfg(test)]
 thread_local! {
-    static SIDECAR_RENAME_FAULT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static WRITE_FAULT: std::cell::Cell<Option<(WriteFault, u32)>> =
+        const { std::cell::Cell::new(None) };
 }
 
-/// Run `body` with the sidecar rename failing after the `.tmp` write, restoring after.
+/// Run `body` with the `skip + 1`-th rename at `point` failing after its `.tmp` write (the
+/// earlier ones succeed), disarming after.
+#[cfg(test)]
+pub(super) fn with_write_fault<T>(point: WriteFault, skip: u32, body: impl FnOnce() -> T) -> T {
+    WRITE_FAULT.with(|slot| slot.set(Some((point, skip))));
+    let out = body();
+    WRITE_FAULT.with(|slot| slot.set(None));
+    out
+}
+
+/// Run `body` with the first sidecar rename failing after the `.tmp` write.
 #[cfg(test)]
 pub(super) fn with_sidecar_rename_fault<T>(body: impl FnOnce() -> T) -> T {
-    SIDECAR_RENAME_FAULT.with(|slot| slot.set(true));
-    let out = body();
-    SIDECAR_RENAME_FAULT.with(|slot| slot.set(false));
-    out
+    with_write_fault(WriteFault::SidecarRename, 0, body)
+}
+
+/// Whether the armed fault fires at `point` now; counts down the renames it lets through.
+#[cfg(test)]
+fn write_fault_fires(point: WriteFault) -> bool {
+    WRITE_FAULT.with(|slot| match slot.get() {
+        Some((armed, 0)) if armed == point => {
+            slot.set(None);
+            true
+        }
+        Some((armed, n)) if armed == point => {
+            slot.set(Some((armed, n - 1)));
+            false
+        }
+        _ => false,
+    })
+}
+
+/// Fail with an injected-fault error when the armed fault fires at `point`.
+#[cfg(test)]
+fn inject_write_fault(point: WriteFault) -> Result<()> {
+    if write_fault_fires(point) {
+        return Err(LifecycleError::Io(format!(
+            "injected fault: crashed before the {point:?} rename"
+        )));
+    }
+    Ok(())
+}
+
+/// A file written to `{target}.tmp`, waiting to be renamed over `target`.
+#[must_use = "a staged file lands only when committed"]
+struct Staged {
+    tmp: std::path::PathBuf,
+    target: std::path::PathBuf,
+}
+
+impl Staged {
+    /// Rename the staged file into place: atomic on one filesystem, so `target` holds either
+    /// its previous bytes or the new ones, never a torn mix.
+    fn commit(self) -> Result<()> {
+        fs::rename(&self.tmp, &self.target)
+            .map_err(|e| LifecycleError::Io(format!("rename into {}: {e}", self.target.display())))
+    }
+}
+
+/// Write `bytes` to `{target}.tmp` without touching `target`.
+fn stage(target: &Path, bytes: &[u8]) -> Result<Staged> {
+    let tmp = tmp_path(target);
+    fs::write(&tmp, bytes)
+        .map_err(|e| LifecycleError::Io(format!("stage {}: {e}", tmp.display())))?;
+    Ok(Staged {
+        tmp,
+        target: target.to_path_buf(),
+    })
 }
 
 /// Render a Unix-second capture time as the sidecar's RFC 3339 `capture_timestamp`.
@@ -302,37 +374,49 @@ impl Workspace {
     /// right call for a writer whose plaintext is already on disk and unchanged (a metadata
     /// edit), which then needs neither to read nor to write the original.
     ///
-    /// The sidecar is staged to `{uuid}.cbor.tmp` and renamed into place (the single-file
-    /// atomic write of the maintenance doc), so a crash mid-write leaves the previous sidecar
-    /// intact rather than a torn one — for the migration, that previous sidecar is the legacy
-    /// record itself. The stale `.tmp` is the startup scrub's to remove. The per-asset
-    /// *bundle* (sidecar, chain, blob renamed together) remains its own slice.
+    /// Every file is staged to `{name}.tmp` and renamed into place (the single-file atomic
+    /// write of the maintenance doc), so a crash mid-write leaves the previous file intact
+    /// rather than a torn one — for the migration, the previous sidecar is the legacy record
+    /// itself. All three are staged before any is renamed, and the renames run sidecar, then
+    /// sealed metadata blob, then provenance chain: the chain is what anchors an asset
+    /// ([`find_unanchored`](super::migrate_unsigned::find_unanchored)), so it lands last, and a
+    /// crash before it leaves a chainless signed sidecar the migration resumes from rather than
+    /// a torn chain that counts as anchored and hides the asset. A stale `.tmp` is the startup
+    /// scrub's to remove. The per-asset *bundle* (sidecar, chain, blob renamed as one unit)
+    /// remains its own slice.
     pub(super) fn write_signed_artifacts(&self, asset: &AssetState) -> Result<()> {
         let dir = media_dir(&self.root, asset.capture_utc);
         fs::create_dir_all(&dir).map_err(|e| LifecycleError::Io(e.to_string()))?;
-        let sidecar_path = self.sidecar_path(asset);
-        let staged = tmp_path(&sidecar_path);
-        fs::write(&staged, asset.sidecar.to_canonical_vec())
-            .map_err(|e| LifecycleError::Io(e.to_string()))?;
-        #[cfg(test)]
-        if SIDECAR_RENAME_FAULT.with(std::cell::Cell::get) {
-            return Err(LifecycleError::Io(
-                "injected fault: crashed before renaming the sidecar into place".into(),
-            ));
-        }
-        fs::rename(&staged, &sidecar_path).map_err(|e| LifecycleError::Io(e.to_string()))?;
         let prov = cbor::to_canonical_vec(&asset.chain.records().to_vec())
             .map_err(|e| LifecycleError::Cbor(e.to_string()))?;
-        fs::write(self.provenance_path(asset), prov)
-            .map_err(|e| LifecycleError::Io(e.to_string()))?;
+        let sidecar = stage(&self.sidecar_path(asset), &asset.sidecar.to_canonical_vec())?;
         // The sealed metadata blob (`S-A10`). Un-regenerable (its nonce is folded into the blob
         // key), AMK ciphertext, and required by `export_backup` and upload — so it is written
         // beside the chain rather than held only in memory. An action that mints no blob
         // (`delete` / `trash-restore`) leaves the previous file in place.
-        if !asset.metadata_blob.is_empty() {
-            fs::write(self.metadata_blob_path(asset), &asset.metadata_blob)
-                .map_err(|e| LifecycleError::Io(e.to_string()))?;
+        let blob = if asset.metadata_blob.is_empty() {
+            None
+        } else {
+            Some(stage(
+                &self.metadata_blob_path(asset),
+                &asset.metadata_blob,
+            )?)
+        };
+        let chain = stage(&self.provenance_path(asset), &prov)?;
+
+        #[cfg(test)]
+        inject_write_fault(WriteFault::SidecarRename)?;
+        sidecar.commit()?;
+        if let Some(blob) = blob {
+            blob.commit()?;
         }
+        #[cfg(test)]
+        inject_write_fault(WriteFault::ChainRename)?;
+        chain.commit()?;
+        tracing::trace!(
+            asset_id = %asset.asset_id,
+            "signed artifacts renamed into place: sidecar, blob, chain"
+        );
         Ok(())
     }
 

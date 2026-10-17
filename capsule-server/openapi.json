@@ -22688,11 +22688,16 @@
           "redirect_uri": {
             "type": "string",
             "description": "Where the provider should send the person back: the client's own callback.\n\nAdmitted if it is the deployment's configured redirect URL exactly, or a loopback IP\nliteral (`http://127.0.0.1:{port}/…`, `http://[::1]:{port}/…`) on any port when the\ndeployment allows loopback redirects — the shape a CLI's or desktop app's listener has\n(RFC 8252 §7.3). Stored with the ceremony and replayed byte for byte to the token endpoint."
+          },
+          "binding_challenge": {
+            "type": "string",
+            "description": "The client's binding to this ceremony: the S256 hash — unpadded base64url of the SHA-256,\n43 characters — of a fresh secret of at least 256 bits that the client generates, keeps,\nand presents as `binding_verifier` at the callback.\n\nThe server's own PKCE verifier binds the code to this server; this binds the callback to\nthe client that began the ceremony, so a `state` and `code` carried to another client — a\nlogin-CSRF victim's — are refused there. Anything but 43 base64url characters is a `400`."
           }
         },
         "type": "object",
         "required": [
-          "redirect_uri"
+          "redirect_uri",
+          "binding_challenge"
         ],
         "description": "The `POST /v1/auth/oidc/authorize` body."
       },
@@ -22731,6 +22736,10 @@
             "type": "string",
             "description": "The authorization `code` the redirect carried."
           },
+          "binding_verifier": {
+            "type": "string",
+            "description": "The secret whose S256 hash the authorize carried as `binding_challenge`. A callback whose\nsecret does not hash to it is refused as an unknown `state` is, and burns the `state`."
+          },
           "cohort_hash": {
             "type": [
               "string",
@@ -22749,7 +22758,8 @@
         "type": "object",
         "required": [
           "state",
-          "code"
+          "code",
+          "binding_verifier"
         ],
         "description": "The `POST /v1/auth/oidc/callback` body: what the provider's redirect carried, plus the two\nadvisory identifiers a client may volunteer for the session this request opens.\n\nStrict, like [`OidcAuthorizeRequest`]: a client that forwards the provider's whole redirect\nquery — `error`, `error_description`, `iss` (RFC 9207) — gets a `422` naming the field rather\nthan a callback that quietly ignored what the provider said."
       },

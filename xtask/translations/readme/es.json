@@ -12,16 +12,24 @@
     "target": "> Aviso: Este proyecto continúa en desarrollo activo. ¡Dale una estrella a este repositorio para recibir las últimas actualizaciones!\n>\n> Estado alfa: La rama `master` es la rama principal de desarrollo. Se publicarán versiones en GitHub una vez que: 1. Las funciones/API se hayan estabilizado internamente; 2. El grupo de pruebas interno las haya probado lo suficiente.\n>\n> Actualización del proyecto (abril de 2026): Estamos migrando al cifrado E2E y a la filosofía offline-first, por lo que faltarán algunos meses más para volver a alcanzar la fase alfa.\n>\n> Actualización del proyecto (junio de 2026): El desarrollador sigue trabajando activamente, pero solo en su tiempo libre. Gran parte del trabajo previo necesario para establecer bibliotecas Rust puras y portables en repositorios independientes ha sido un cuello de botella (por ejemplo, la codificación/decodificación de imágenes, el procesamiento de metadatos, la lógica de geocoordenadas y los modelos de ML en el dispositivo ajustados para casos de uso concretos). Sin embargo, desarrollar estos componentes básicos que faltan en el ecosistema Rust es fundamental para lograr un producto sólido.\n>\n> Actualización del proyecto (octubre de 2026): El protocolo de transferencia bidireccional y las capas criptográfica y de almacenamiento están cerca de estabilizarse. Se han introducido varias mejoras notables tras experimentos de estrés con conexiones de alta latencia y con pérdidas."
   },
   {
+    "source": "**Where it stands today:** Capsule is not yet usable with real data. The Rust core, the `capsule-cli` and the server are being stabilized first. `capsule-server` builds as one binary and runs entirely in memory (`mise run serve-memory`), but a durable deployment backed by PostgreSQL does not boot yet, so nothing survives a restart. The native apps are deferred until the server and CLI are done, and the web client cannot yet decrypt what it syncs, so it shows placeholders. The [roadmap](ROADMAP.md) gives the state of every package.",
+    "target": "**Estado actual:** Capsule todavía no se puede usar con datos reales. Primero se están estabilizando el núcleo en Rust, `capsule-cli` y el servidor. `capsule-server` se compila como un único binario y funciona por completo en memoria (`mise run serve-memory`), pero un despliegue persistente respaldado por PostgreSQL aún no arranca, así que nada sobrevive a un reinicio. Las aplicaciones nativas quedan aplazadas hasta que el servidor y la CLI estén terminados, y el cliente web todavía no puede descifrar lo que sincroniza, así que muestra marcadores de posición. La [hoja de ruta](ROADMAP.md) indica el estado de cada paquete."
+  },
+  {
     "source": "## Features",
     "target": "## Características"
+  },
+  {
+    "source": "Items marked *(planned)* are goals the current tree does not yet demonstrate.",
+    "target": "Los elementos marcados como *(previsto)* son objetivos que el código actual aún no demuestra."
   },
   {
     "source": "- **Native and cross-platform**: Capsule is built as a real native app per platform rather than one web app in several wrappers, so each one is fast and idiomatic where it runs. Every native client is intended to be fully featured and platform-integrated; the table below says what exists today.",
     "target": "- **Nativo y multiplataforma**: Capsule se construye como una aplicación nativa real por plataforma en lugar de una sola aplicación web dentro de varios envoltorios, así que cada una es rápida e idiomática allí donde se ejecuta. Todos los clientes nativos están pensados para acabar siendo completos e integrados en su plataforma; la tabla de abajo indica lo que existe hoy."
   },
   {
-    "source": "- **Broadest format support**: Capsule supports the majority of image and video formats from ones in common smartphones to professional RAW formats. View any content on any device just like your smartphone photos and videos!",
-    "target": "- **La mayor compatibilidad de formatos**: Capsule admite la mayoría de los formatos de imagen y video, desde los habituales en smartphones hasta los formatos RAW profesionales. ¡Visualiza cualquier contenido en cualquier dispositivo, igual que las fotos y videos de tu smartphone!"
+    "source": "- **Broadest format support** *(planned)*: Capsule aims to support the majority of image and video formats, from those of common smartphones to professional RAW formats. Today the import pipeline decodes JPEG, PNG, JPEG XL, TIFF and GIF stills; HEIC, AVIF, RAW and video are not supported yet.",
+    "target": "- **La mayor compatibilidad de formatos** *(previsto)*: Capsule aspira a admitir la mayoría de los formatos de imagen y video, desde los habituales en smartphones hasta los formatos RAW profesionales. Hoy la canalización de importación decodifica imágenes fijas JPEG, PNG, JPEG XL, TIFF y GIF; HEIC, AVIF, RAW y video aún no son compatibles."
   },
   {
     "source": "- **Data is always optimized**: Capsule rigorously caches and optimizes any heavy content for seamless delivery (our methodology is [documented](https://capsule.justinchung.net/design/thumbnails/)). If something feels slow, let us know.",
@@ -32,12 +40,12 @@
     "target": "- **Privacidad**: Tus datos son tuyos y están cifrados de extremo a extremo."
   },
   {
-    "source": "- **Fully-featured access**: Capsule implements several powerful features like real-time viewing, semantic search, AI organization, and more.",
-    "target": "- **Acceso con todas las funciones**: Capsule implementa varias funciones potentes, como la visualización en tiempo real, la búsqueda semántica, la organización con IA y mucho más."
+    "source": "- **Fully-featured access** *(planned)*: Real-time viewing, semantic search and AI organization are planned; none of them ships today.",
+    "target": "- **Acceso con todas las funciones** *(previsto)*: La visualización en tiempo real, la búsqueda semántica y la organización con IA están previstas; ninguna está disponible hoy."
   },
   {
-    "source": "- **Federated**: Capsule users can share their assets with users of other servers seamlessly. Think of it like [Matrix](https://en.wikipedia.org/wiki/Matrix_(protocol)) for photos.",
-    "target": "- **Federado**: Los usuarios de Capsule pueden compartir sus archivos con usuarios de otros servidores sin problemas. Piénsalo como [Matrix](https://en.wikipedia.org/wiki/Matrix_(protocol)) para fotos."
+    "source": "- **Federated** *(planned)*: Capsule users will be able to share their assets with users of other servers seamlessly. Think of it like [Matrix](https://en.wikipedia.org/wiki/Matrix_(protocol)) for photos. The server and SDK implement federated pull, but it has not yet run between two real deployments.",
+    "target": "- **Federado** *(previsto)*: Los usuarios de Capsule podrán compartir sus archivos con usuarios de otros servidores sin problemas. Piénsalo como [Matrix](https://en.wikipedia.org/wiki/Matrix_(protocol)) para fotos. El servidor y el SDK implementan la extracción federada, pero todavía no se ha ejecutado entre dos despliegues reales."
   },
   {
     "source": "- **Open-source**: Capsule is open-source forever and you can host your own server.",

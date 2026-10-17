@@ -337,7 +337,7 @@ lives.
 | S-D9 | capsule-sdk uniffi FFI bindings | sdk/clients | S-F1, S-D7 | M | RETIRED | ready | Swift harness → `S-P8`; Kotlin harness → owed-CI |
 | S-D10 | Adverse-network hardening | sdk/clients | S-D1, S-D2 | M | MIXED | done | |
 | S-D11 | Client cohort emission + devices grouping UI | sdk/clients | S-C13, S-D7 | M | MIXED | done\* | iOS reader → `S-P6`; devices screen → post-v1; device_id → `S-N3` |
-| S-D12 | Recovery verification cadence + guided re-wrap | sdk/clients | S-C12 | M | MIXED | done | `store_escrow` discards `stored_at`/`replaced` → issue #442 |
+| S-D12 | Recovery verification cadence + guided re-wrap | sdk/clients | S-C12 | M | MIXED | done | |
 | S-D13 | Culling workflow client UX | sdk/clients | — | M | ACTIVE | done | |
 | S-D14 | Local-gallery security gates | sdk/clients | — | S | ACTIVE | done | |
 | S-D15 | Exact client build identification | sdk/clients | — | S | MIXED | done | |
@@ -4459,9 +4459,11 @@ Kynos server, which cannot be written until `S-C53` gives the server a way to cr
   and `capsule-server/tests/sdk_client.rs` asserts the route against the real router from both
   ends — what the SDK stored is read back at `/v1/auth/escrow`, and a rotation seeded there is
   what the SDK fetches next.
-- **Owed:** `store_escrow` logs `stored_at`/`replaced` instead of returning them, so the
-  stale-cache rule still refreshes on a failed compare rather than on a known-stale timestamp
-  and `guided_rewrap` cannot tell a first enrollment from a rotation → issue #442.
+- **Closed** (issue #442): `store_escrow` returns `EscrowStored { stored_at, replaced }`
+  instead of only logging the pair. `EscrowCache` carries the `stored_at` it knows, `verify`
+  takes the newest `stored_at` the caller has seen and refreshes a known-stale cache before
+  the compare, and `guided_rewrap` surfaces the old-artifact guidance only when the store
+  `replaced` an escrow, so a first enrollment is told apart from a rotation.
 
 ### S-D13 — Culling workflow client UX
 
@@ -5377,7 +5379,11 @@ lands on Kynos rather than on Salvo.
 - **Part landed (issue #407):** `capsule_sdk::auth::AuthClient::begin_oidc_login` /
   `complete_oidc_login` — the two server legs, answering the same `LoginOutcome` a
   password login does, with the cohort riding the completing request and the
-  `error.auth.oidc_*` refusals typed on `AuthError`. **Remainder (#461):** the CLI's
+  `error.auth.oidc_*` refusals typed on `AuthError`. Issue #517 bound the ceremony to
+  the client: `begin_oidc_login` mints a secret the `OidcAuthorization` keeps and sends
+  its S256 hash as `binding_challenge`; `complete_oidc_login(pending, redirect_state,
+  code)` refuses a redirect for another ceremony locally and presents the secret as
+  `binding_verifier`, which the server compares before redeeming. **Remainder (#461):** the CLI's
   loopback listener and `--oidc` arm, the browser-open policy the docs do not carry, and
   the device authorization grant (RFC 8628) with its own ceremony store.
 

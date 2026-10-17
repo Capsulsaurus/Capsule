@@ -16,7 +16,7 @@ fn attestation_key() -> LocalAttestationKey {
 /// A draft for `upload` of `bytes`.
 fn draft(upload: &str, asset: &str, bytes: &[u8]) -> ReceiptDraft {
     ReceiptDraft {
-        crypto_suite_id: capsule_core::crypto::CRYPTO_SUITE_ID,
+        crypto_suite_id: capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
         protocol_version: capsule_core::crypto::primitives::PROTOCOL_VERSION.to_owned(),
         upload_id: UploadId::new(upload),
         asset_id: AssetId::new(asset),

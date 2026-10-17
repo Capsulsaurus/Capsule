@@ -19,8 +19,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::crypto::encryption::stream::NONCE_PREFIX_LEN;
-use crate::crypto::encryption::{open_blob, seal_blob_with_nonce, stream};
+use crate::crypto::encryption::{
+    NONCE_PREFIX_LEN, encrypt_asset_vec_with_prefix, open_blob, seal_blob_with_nonce,
+};
 use crate::crypto::hash::Hash32;
 use crate::crypto::keys::{
     DEK_CIPHERTEXT_LEN, DekKeypair, ESEED_LEN, encapsulate_to_public_derand,
@@ -297,7 +298,7 @@ pub fn seal_drop_derand(
     blob_nonce: &[u8; 12],
 ) -> Result<SealedDrop, DropError> {
     // 1. STREAM-encrypt the asset under K with the given nonce prefix, hashing the ciphertext.
-    let (enc, ciphertext) = stream::encrypt_asset_vec_with_prefix(k, *nonce_prefix, plaintext);
+    let (enc, ciphertext) = encrypt_asset_vec_with_prefix(k, *nonce_prefix, plaintext);
 
     // 2. Encapsulate K to the Drop Key public half (KEM-DEM): X-Wing ciphertext ‖ seal(ss, K).
     let (kem_ct, ss) = encapsulate_to_public_derand(drop_pubkey, eseed)
@@ -352,15 +353,13 @@ mod tests {
     use super::*;
     use crate::cbor;
     use crate::crypto::authority::ReferenceAuthority;
-    use crate::crypto::encryption::keywrap::{seal_file_key, unseal_file_key};
-    use crate::crypto::encryption::stream::decrypt_asset_vec;
+    use crate::crypto::encryption::{decrypt_asset_vec, seal_file_key, unseal_file_key};
     use crate::crypto::hash;
     use crate::crypto::keys::directory::{DeviceEntry, DirectoryCore};
     use crate::crypto::keys::{Amk, AmkVersion, DekKeypair, HybridSigningKey};
     use crate::crypto::primitives::{Argon2Params, CRYPTO_SUITE_ID, PROTOCOL_VERSION};
-    use crate::crypto::provenance::action::Action;
-    use crate::crypto::provenance::manifest::{
-        ASSET_MANIFEST_VERSION, KeyMode, ManifestCore, WrappedFileKey,
+    use crate::crypto::provenance::{
+        ASSET_MANIFEST_VERSION, Action, KeyMode, ManifestCore, WrappedFileKey,
     };
     use crate::crypto::verify_asset::{VerifyOutcome, verify_asset};
 

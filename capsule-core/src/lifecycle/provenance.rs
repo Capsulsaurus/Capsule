@@ -6,12 +6,12 @@ use std::fs;
 use uuid::Uuid;
 
 use super::{AlbumKeys, LifecycleError, Result, Workspace, now_rfc3339};
-use crate::crypto::encryption::{blob_ciphertext_hash, blob_nonce, seal_metadata_blob, stream};
+use crate::crypto::encryption::{
+    blob_ciphertext_hash, blob_nonce, encrypt_asset_vec_with_prefix, seal_metadata_blob,
+};
 use crate::crypto::hash::Hash32;
 use crate::crypto::keys::Amk;
-use crate::crypto::provenance::action::Action;
-use crate::crypto::provenance::manifest::ManifestCore;
-use crate::crypto::provenance::{AssetManifest, ProvenanceRecord};
+use crate::crypto::provenance::{Action, AssetManifest, ManifestCore, ProvenanceRecord};
 use crate::crypto::verify_asset::{
     MetadataBinding, VerifyOutcome, verify_asset, verify_metadata_binding,
 };
@@ -94,7 +94,7 @@ impl Workspace {
             &head.core.nonce_prefix,
         );
         let (_, ciphertext) =
-            stream::encrypt_asset_vec_with_prefix(&file_key, head.core.nonce_prefix, &plaintext);
+            encrypt_asset_vec_with_prefix(&file_key, head.core.nonce_prefix, &plaintext);
 
         // Walk the whole chain forward; the head is what enters the trusted set.
         let prior = asset

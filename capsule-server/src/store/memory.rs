@@ -1403,6 +1403,7 @@ mod tests {
             nonce: OidcNonce::new(format!("{tag}-nonce")),
             verifier: PkceVerifier::new(format!("{tag}-verifier")),
             redirect_uri: "http://127.0.0.1:1/cb".to_owned(),
+            binding_challenge: format!("{tag}-binding"),
             issued_at: clock.now(),
         };
         store

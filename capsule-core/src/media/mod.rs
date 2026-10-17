@@ -10,7 +10,7 @@
 //! module owns:
 //!
 //! - **the closed format sets** — [`StillFormat`](crate::media::StillFormat) (what Capsule
-//!   models as a still) and [`DerivativeFormat`](crate::media::DerivativeFormat) (what a signed
+//!   models as a still) and [`DerivativeFormat`](crate::derivative_format::DerivativeFormat) (what a signed
 //!   `DerivativeManifest.format` may say);
 //! - **the pixel budget and the panic guard**, because a third-party pre-1.0 decoder is fed
 //!   untrusted bytes on the import path;
@@ -69,10 +69,9 @@ pub use self::derivative::{
 pub use self::detect::{MAX_DECODE_PIXELS, SUPPORTED_STILL_FORMATS, StillFormat};
 pub use self::error::{FormatOp, MediaError};
 pub use self::resize::{capped_dimensions, downscale_rgba8};
-// Re-exported so `media::DerivativeFormat` keeps resolving, but *owned* by the unconditional
-// module: the closed set has to be linkable by the crates that receive a manifest, and they
-// build without this feature. See [`crate::derivative_format`].
-pub use crate::derivative_format::{DerivativeFormat, verify_still_format};
+// `DerivativeFormat` and `verify_still_format` are deliberately *not* re-exported here: they are
+// owned by the unconditional `crate::derivative_format`, because the crates that receive a
+// manifest build without this feature, and that module is their one public path.
 
 #[cfg(test)]
 mod tests;

@@ -20,7 +20,7 @@ use std::path::Path;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use capsule_core::crypto::encryption::stream::{NONCE_PREFIX_LEN, encrypt_asset_vec_with_prefix};
+use capsule_core::crypto::encryption::{NONCE_PREFIX_LEN, encrypt_asset_vec_with_prefix};
 use capsule_core::crypto::primitives::Argon2Params;
 use capsule_core::sharing::{
     LINK_SECRET_LEN, OPAQUE_ID_LEN, ScopeMaterial, WrappedScope, encapsulate_scope,

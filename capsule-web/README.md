@@ -36,12 +36,12 @@ verify boundary lands *below* `CapsuleGateway`. That boundary is post-v1. With n
 reachable server the store stays empty and the app renders empty states rather
 than failing.
 
-**Transitional.** The gateway currently drains the `capsule.sync.v1` gRPC-web
-feed served by the Salvo server. That transport is retired: it is replaced by the
-Kynos REST sync surface consumed through the Spargen-generated SDK, and the
-gateway's transport layer (`src/data/server/sync/`) is rewritten against it in
-the same change that moves the server. Until then this path works and is tested;
-it is not dead code.
+**Transitional.** The gateway drains the Kynos REST sync feed (`GET /v1/sync`)
+through `RestSyncTransport`, a hand-written transport in `src/data/server/sync/`.
+The gRPC-web feed it used to read is retired along with the Salvo server. The
+target is the same feed consumed through a Spargen-generated TypeScript client,
+which replaces the hand-written transport without changing `CapsuleGateway`.
+Until then this path works and is tested; it is not dead code.
 
 ## Development
 
@@ -81,12 +81,13 @@ the generated catalogs by hand.
 
 ## API
 
-Today the client reads the `capsule.sync.v1` gRPC-web feed directly, through the
-hand-written transport in `src/data/server/sync/`. That is transitional: the
-target is the checked-in Kynos REST/OpenAPI contract consumed through the
-Spargen-generated SDK, which replaces `sync/transport.ts` without changing
-`CapsuleGateway` or anything above it. The Kynos server and its regenerated SDK
-do not exist yet, so the current path stands until they do.
+Today the client reads the Kynos REST sync feed (`GET /v1/sync`) directly,
+through the hand-written transport and wire types in `src/data/server/sync/`.
+That is transitional: the target is the checked-in Kynos REST/OpenAPI contract
+(`capsule-server/openapi.json`) consumed through a Spargen-generated TypeScript
+client, which replaces `sync/transport.ts` and `sync/wire.ts` without changing
+`CapsuleGateway` or anything above it. No TypeScript client is generated yet, so
+the hand-written path stands until one is.
 
 Guest drops and the share-link viewer do not go through this gateway at all —
 they seal and open in the browser via `capsule-wasm`, and are unaffected by the

@@ -23,7 +23,8 @@ pub mod client_build;
 /// table's format column as a type. Always compiled, and for the same reason [`lqip`] is: the
 /// crates that *receive* a `DerivativeManifest` (`capsule-server`, `capsule-wasm`) build with
 /// `default-features = false`, so a check they cannot link is a check that never runs. Depends
-/// only on [`crypto::provenance`]; `media` re-exports it.
+/// only on [`crypto::provenance`]. The one public path to its items: `media` does not
+/// re-export them.
 pub mod derivative_format;
 
 /// LQIP — the chromahash placeholder carried in the signed sidecar's `lqip` field (S-B14).

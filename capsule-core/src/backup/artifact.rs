@@ -28,7 +28,7 @@ use uuid::Uuid;
 
 use super::{ARTIFACT_FORMAT_VERSION, BackupError};
 use crate::cbor;
-use crate::crypto::encryption::stream;
+use crate::crypto::encryption::decrypt_asset_vec;
 use crate::crypto::hash::{self, Hash32};
 use crate::crypto::keys::{Amk, HybridVerifyingKey, Signer};
 use crate::crypto::primitives::{Argon2Params, CRYPTO_SUITE_ID, PROTOCOL_VERSION, info};
@@ -642,7 +642,7 @@ impl BackupArtifact {
             })?;
         let amk = Amk::from_bytes(*amk_bytes);
         let file_key = amk.derive_file_key(&head.core.file_id, &head.core.nonce_prefix);
-        let plaintext = stream::decrypt_asset_vec(&file_key, &head.core.nonce_prefix, ct)
+        let plaintext = decrypt_asset_vec(&file_key, &head.core.nonce_prefix, ct)
             .map_err(|_| BackupError::Auth("asset decryption failed"))?;
 
         let metadata_blob = self
@@ -728,9 +728,8 @@ mod tests {
     use super::*;
     use crate::crypto::keys::{Amk, AmkVersion, HybridSigningKey};
     use crate::crypto::primitives::PROTOCOL_VERSION;
-    use crate::crypto::provenance::action::Action;
-    use crate::crypto::provenance::manifest::{
-        ASSET_MANIFEST_VERSION, KeyMode, ManifestCore as MCore,
+    use crate::crypto::provenance::{
+        ASSET_MANIFEST_VERSION, Action, KeyMode, ManifestCore as MCore,
     };
 
     const ALBUM: u128 = 0xA1;
