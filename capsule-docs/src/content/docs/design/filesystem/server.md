@@ -20,6 +20,12 @@ The durable/volatile split is design, not a tuning knob: the hot upload path —
 
 Required means required. The server refuses to start without `VALKEY_URL` — it is a startup variable the environment loader demands, not a scaling knob a small deployment can leave unset — and there is no profile, measured or otherwise, in which Valkey is optional. Each state port keeps an **in-memory adapter for tests only**: a deterministic test double, never a deployment mode. The alternative considered and rejected was a Postgres fallback that would let a single-node deployment skip Valkey; it fails on exactly the ground the split above rests on, since emulating TTL and expiry in SQL is the generic TTL abstraction the [server module map](/design/module-map/#server-modules) declines to introduce.
 
+Each state port therefore has **two adapters**, and which two is a property of the port: the volatile stores get Valkey and the in-memory double, and the device-cohort map — the one auth record with no expiry, kept beside the accounts — gets Postgres and the double. The adapter map is stated in `capsule-server::store`'s module docs, and the boot that binds it is `capsule-server::boot`.
+
+### Schema migrations
+
+`serve` **never migrates**. On a durable boot it opens `DATABASE_URL`, reads `seaql_migrations`, and refuses a schema behind the one it was built for, naming `capsule-server-migration up`; an operator runs that command explicitly, before the rollout. A schema *ahead* of the binary is not fatal, because during a rolling deploy the migration runs first and the old replicas keep serving on it — so a migration that removes something an older binary reads has to be split in two. Migrating on start would instead race once per replica, and the server crate cannot link the migrator in any case (its `chrono` gate, [Dependencies](/design/dependencies/)). The check is `capsule-server::postgres::assert_schema_current`.
+
 ## Blob Store Layout
 
 ```text
