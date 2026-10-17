@@ -258,6 +258,13 @@ impl Workspace {
     /// Fails with [`CryptoError::Auth`] (before anything is written under `root`) when
     /// `sealed_identity` was not sealed under `master` — which is also the check that `master`
     /// is this account's key at all.
+    ///
+    /// The directory this returns lists only the new device, at `directory_version` 1. That is
+    /// **not** publishable on an account that already has a directory: the server refuses it as
+    /// stale, and accepting it would drop every other device. Before publishing, fetch the
+    /// account's signed directory and pass it to
+    /// [`extend_account_directory`](Self::extend_account_directory), then publish what that
+    /// returns.
     #[tracing::instrument(skip_all, fields(root = %root.display(), user_id = %user_id))]
     pub fn create_from_master(
         root: &Path,
@@ -338,6 +345,85 @@ impl Workspace {
             "account rebound to the server-assigned id"
         );
         Ok(())
+    }
+
+    /// Build this device's directory on the account's **published** one instead of replacing it
+    /// (#550): the step a device that joined an existing account — a recovered device from
+    /// [`create_from_master`](Self::create_from_master) — takes before it publishes.
+    ///
+    /// `published` is the account's current signed directory as the server serves it. It is
+    /// verified under this workspace's user IK (the one opened from the sealed identity) and must
+    /// name this workspace's account; then this device's own entry is appended at
+    /// `published.directory_version + 1`, the result is re-signed under the user IK, adopted as
+    /// this workspace's directory, and returned for publication. Every device `published` lists
+    /// is kept, revoked entries included.
+    ///
+    /// Returns `Ok(None)` when `published` already lists this device under the signing key it
+    /// signs with: the published directory is adopted unchanged and there is nothing to publish.
+    /// A reopened recovered device lands here, since [`open`](Self::open) rebuilds the
+    /// session-scoped directory.
+    ///
+    /// Refused, leaving this workspace's directory unchanged, with
+    /// [`LifecycleError::UntrustedDirectory`] when `published` does not verify or names another
+    /// account, and with [`LifecycleError::Directory`] when it lists this device's id under
+    /// another key (or revoked), lists this device's signing key under another id, or its version
+    /// cannot advance.
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            user_id = %self.account.user_id,
+            device_id = %self.account.device.device_id,
+            published_version = published.core.directory_version,
+        )
+    )]
+    pub fn extend_account_directory(
+        &mut self,
+        published: &DeviceDirectory,
+    ) -> Result<Option<DeviceDirectory>> {
+        if !published.verify(&self.account.user_ik.verifying_key()) {
+            tracing::warn!("account directory refused: it does not verify under the user IK");
+            return Err(LifecycleError::UntrustedDirectory(
+                "the signature does not verify under this account's user identity key".into(),
+            ));
+        }
+        if published.core.user_id != self.account.user_id {
+            tracing::warn!(
+                published_user = %published.core.user_id,
+                "account directory refused: it names another account"
+            );
+            return Err(LifecycleError::UntrustedDirectory(format!(
+                "it names account {}, not {}",
+                published.core.user_id, self.account.user_id
+            )));
+        }
+
+        let device_id = self.account.device.device_id;
+        let own = self.directory.device(&device_id).cloned().ok_or_else(|| {
+            LifecycleError::NotFound(format!("device {device_id} in its own directory"))
+        })?;
+        if published.device(&device_id).is_some_and(|listed| {
+            listed.dsk_public == own.dsk_public && listed.revoked_at.is_none()
+        }) {
+            self.directory = published.clone();
+            tracing::info!(
+                directory_version = published.core.directory_version,
+                devices = published.core.devices.len(),
+                "account directory already lists this device; adopted unchanged"
+            );
+            return Ok(None);
+        }
+
+        let mut core = published.core.clone();
+        core.add_device(own, now_rfc3339()).inspect_err(|e| {
+            tracing::warn!(error = %e, "account directory refused: this device cannot be appended");
+        })?;
+        self.directory = core.sign(&self.account.user_ik);
+        tracing::info!(
+            directory_version = self.directory.core.directory_version,
+            devices = self.directory.core.devices.len(),
+            "account directory extended with this device"
+        );
+        Ok(Some(self.directory.clone()))
     }
 
     fn create_inner(
@@ -1180,6 +1266,169 @@ mod tests {
             !root_b.exists(),
             "no library is initialised for a refused key"
         );
+    }
+
+    /// Account A with a second device cross-signed in (so its directory is past version 1 and
+    /// lists more than one device), plus a library recovered onto a new device of that account.
+    fn account_with_two_devices_and_a_recovered_one(
+        lib_a: &Path,
+        lib_b: &Path,
+    ) -> (Workspace, Workspace, DeviceEntry) {
+        use crate::crypto::keys::{HybridSigningKey, MasterKey};
+
+        let mut a = fast_workspace(lib_a);
+        let other = DeviceEntry {
+            device_id: Uuid::now_v7(),
+            dsk_public: HybridSigningKey::generate().verifying_key(),
+            dek_public: None,
+            added_at: DEVICE_ADDED_AT.into(),
+            revoked_at: None,
+        };
+        a.cross_sign_device(other.clone()).unwrap();
+        let master = MasterKey::from_bytes(*a.account.master.as_bytes());
+        let b = Workspace::create_from_master(
+            lib_b,
+            b"device b passphrase",
+            FAST_PARAMS,
+            master,
+            a.user_id(),
+            &a.sealed_identity(),
+        )
+        .unwrap();
+        (a, b, other)
+    }
+
+    /// **#550.** A recovered device builds on the account's published directory: it keeps every
+    /// device already listed, appends its own entry at `stored + 1`, and signs under the account's
+    /// IK — so the result is both fresh (the server's stale-version check passes) and complete.
+    #[test]
+    fn a_recovered_device_extends_the_published_directory_at_the_next_version() {
+        let lib_a = TempDir::new().unwrap();
+        let lib_b = TempDir::new().unwrap();
+        let (a, mut b, other) =
+            account_with_two_devices_and_a_recovered_one(lib_a.path(), lib_b.path());
+        let published = a.device_directory().clone();
+        assert!(published.core.directory_version >= 1);
+        assert_eq!(
+            b.device_directory().core.directory_version,
+            1,
+            "before extending, B holds only the version-1 directory naming itself"
+        );
+
+        let extended = b
+            .extend_account_directory(&published)
+            .unwrap()
+            .expect("B is not yet listed, so there is a new version to publish");
+        assert_eq!(
+            extended.core.directory_version,
+            published.core.directory_version + 1
+        );
+        assert!(
+            extended.verify(&a.user_ik_public()),
+            "signed under the account's IK"
+        );
+        assert_eq!(extended.core.user_id, a.user_id());
+        assert_eq!(extended.core.devices.len(), 3);
+        assert_eq!(
+            extended.device(&a.device_id()),
+            published.device(&a.device_id())
+        );
+        assert_eq!(extended.device(&other.device_id), Some(&other));
+        let own = extended.device(&b.device_id()).expect("B lists itself");
+        assert!(own.dek_public.is_some(), "B's entry carries its DEK");
+        assert_eq!(
+            b.device_directory(),
+            &extended,
+            "B adopted what it returned"
+        );
+    }
+
+    /// **#550.** Extending again from a directory that already lists this device under its own
+    /// key adopts it unchanged and has nothing to publish — the reopened-recovered-device case.
+    #[test]
+    fn extending_a_directory_that_already_lists_this_device_adopts_it_unchanged() {
+        let lib_a = TempDir::new().unwrap();
+        let lib_b = TempDir::new().unwrap();
+        let (a, mut b, _) =
+            account_with_two_devices_and_a_recovered_one(lib_a.path(), lib_b.path());
+        let extended = b
+            .extend_account_directory(a.device_directory())
+            .unwrap()
+            .unwrap();
+
+        let device_b = b.device_id();
+        drop(b);
+        let mut reopened =
+            Workspace::open(lib_b.path(), b"device b passphrase", FAST_PARAMS).unwrap();
+        assert_eq!(reopened.device_id(), device_b);
+        assert_eq!(reopened.extend_account_directory(&extended).unwrap(), None);
+        assert_eq!(reopened.device_directory(), &extended);
+    }
+
+    /// **#550.** A directory that does not verify under the account's IK, or that names another
+    /// account, is refused and nothing is adopted: building on it would let whoever served it
+    /// choose the devices this account trusts.
+    #[test]
+    fn extending_an_untrusted_directory_is_refused_and_changes_nothing() {
+        let lib_a = TempDir::new().unwrap();
+        let lib_b = TempDir::new().unwrap();
+        let lib_x = TempDir::new().unwrap();
+        let (a, mut b, _) =
+            account_with_two_devices_and_a_recovered_one(lib_a.path(), lib_b.path());
+        let before = b.device_directory().clone();
+
+        // Another account's directory, signed under its own IK.
+        let foreign = fast_workspace(lib_x.path()).device_directory().clone();
+        assert!(matches!(
+            b.extend_account_directory(&foreign),
+            Err(LifecycleError::UntrustedDirectory(_))
+        ));
+
+        // A's directory with its core tampered after signing.
+        let mut tampered = a.device_directory().clone();
+        tampered.core.devices.pop();
+        assert!(matches!(
+            b.extend_account_directory(&tampered),
+            Err(LifecycleError::UntrustedDirectory(_))
+        ));
+
+        // Correctly signed under the account's IK, but naming another account id.
+        let mut core = a.device_directory().core.clone();
+        core.user_id = Uuid::now_v7();
+        let misnamed = core.sign(&a.account.user_ik);
+        assert!(matches!(
+            b.extend_account_directory(&misnamed),
+            Err(LifecycleError::UntrustedDirectory(_))
+        ));
+
+        assert_eq!(b.device_directory(), &before, "nothing was adopted");
+    }
+
+    /// **#550.** A published directory that lists this device's id under a different signing key
+    /// is a conflict, not something to paper over: refused, nothing adopted.
+    #[test]
+    fn extending_a_directory_listing_this_device_under_another_key_is_refused() {
+        use crate::crypto::keys::{DirectoryError, HybridSigningKey};
+
+        let lib_a = TempDir::new().unwrap();
+        let lib_b = TempDir::new().unwrap();
+        let (mut a, mut b, _) =
+            account_with_two_devices_and_a_recovered_one(lib_a.path(), lib_b.path());
+        let impostor = DeviceEntry {
+            device_id: b.device_id(),
+            dsk_public: HybridSigningKey::generate().verifying_key(),
+            dek_public: None,
+            added_at: DEVICE_ADDED_AT.into(),
+            revoked_at: None,
+        };
+        let published = a.cross_sign_device(impostor).unwrap();
+        let before = b.device_directory().clone();
+
+        assert!(matches!(
+            b.extend_account_directory(&published),
+            Err(LifecycleError::Directory(DirectoryError::DeviceAlreadyListed(id))) if id == b.device_id()
+        ));
+        assert_eq!(b.device_directory(), &before);
     }
 
     /// **#467.** A fresh library adopts the server's account id: the account file, the in-memory
