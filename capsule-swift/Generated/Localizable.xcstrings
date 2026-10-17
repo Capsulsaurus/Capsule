@@ -30981,6 +30981,38 @@
         }
       }
     },
+    "cli.library.info.migrate_hint": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Run `capsule library migrate` to admit the unsigned sidecar."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Run `capsule library migrate` to admit the %lld unsigned sidecars."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "cli.library.info.unmigrated_sidecars": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unmigrated sidecars: %@"
+          }
+        }
+      }
+    },
     "cli.library.migrate.failed": {
       "localizations": {
         "en": {

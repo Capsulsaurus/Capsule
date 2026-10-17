@@ -1815,6 +1815,8 @@
   "cli.import.provider_notice": "Reading the source as a {provider} export.",
   "cli.import.scan_failed": "Scanning the source files failed: {reason}",
   "cli.import.scanning": "Scanning source files…",
+  "cli.library.info.migrate_hint": "{count, plural, one {Run `capsule library migrate` to admit the unsigned sidecar.} other {Run `capsule library migrate` to admit the # unsigned sidecars.}}",
+  "cli.library.info.unmigrated_sidecars": "Unmigrated sidecars: {count}",
   "cli.library.migrate.failed": "Migration failed: {reason}",
   "cli.library.migrate.in_progress": "Migrating the unsigned sidecars in {library} ({count} found)…",
   "cli.library.migrate.migrated_row": "Migrated {asset_id}",

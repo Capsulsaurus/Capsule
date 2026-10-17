@@ -189,4 +189,7 @@ pub mod keys {
     pub const LIBRARY_MIGRATE_SKIP_ALBUM_READ_ONLY: &str =
         "cli.library.migrate.skip.album_read_only";
     pub const LIBRARY_MIGRATE_SKIP_STRANDED: &str = "cli.library.migrate.skip.stranded";
+    // `capsule library info` — the keyless unmigrated-sidecar count (issue #549).
+    pub const LIBRARY_INFO_UNMIGRATED_SIDECARS: &str = "cli.library.info.unmigrated_sidecars";
+    pub const LIBRARY_INFO_MIGRATE_HINT: &str = "cli.library.info.migrate_hint";
 }
