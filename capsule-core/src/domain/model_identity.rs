@@ -56,7 +56,7 @@ impl TaskKind {
 /// A model identifier (stable across versions; e.g. `mobileclip-b`). Declared in exactly one
 /// [`ModelRow`](crate::ml::ModelRow). Serializes transparently as its string so it interoperates
 /// with the `model_id` fields on [`AiTag`](crate::sidecar::AiTag) and
-/// [`DerivativeCore`](crate::crypto::provenance::manifest::DerivativeCore).
+/// [`DerivativeCore`](crate::crypto::provenance::DerivativeCore).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ModelId(pub String);

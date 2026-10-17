@@ -1001,3 +1001,112 @@ async fn e2e_case_4_a_peer_pulls_a_shared_album_through_the_sdk_over_a_socket() 
         Err(FederationError::Revoked)
     ));
 }
+
+/// **The release gate's receipt fetch, against the real route** (issue #441).
+///
+/// `GET /v1/upload/{id}/receipt` serves the signed receipt as raw `application/cbor`. The SDK's
+/// `StorageVerifyClient::fetch_receipt` used to decode it as base64-in-JSON — and its unit mock
+/// served JSON, so the mock encoded the same wrong belief as the client and nothing caught it.
+/// Only a socket shows the two ends agree: an upload is finalized through the router, the SDK
+/// fetches its receipt over the wire, and the receipt verifies under the server's own
+/// attestation key with the fields the uploader sent.
+#[tokio::test]
+async fn the_sdk_fetches_a_custody_receipt_and_verifies_it_under_the_attestation_key() {
+    use capsule_core::crypto::hash::hash_bytes;
+    use capsule_core::crypto::keys::HybridSigningKey;
+    use capsule_core::library::{BlobRole, ReceiptExpectations, verify_receipt};
+    use capsule_sdk::verify::{StorageVerifyClient, VerifyError, VerifyTransport};
+
+    let fixture = Fixture::working();
+    let bearer = format!("Bearer {}", fixture.login().await.access_token);
+
+    // ── Finalize one upload through the router ────────────────────────────────────────────
+    let first = support::payload(b'a', 4096);
+    let second = support::payload(b'b', 4096);
+    let whole: Vec<u8> = first.iter().chain(second.iter()).copied().collect();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(kynos::http::StatusCode::NO_CONTENT);
+    fixture
+        .chunk(&id, 4096, &second, &bearer)
+        .send()
+        .await
+        .assert_status(kynos::http::StatusCode::NO_CONTENT);
+
+    // The bytes the log holds, read in-process — what the wire must carry verbatim.
+    let held = fixture
+        .client
+        .get(&format!("/v1/upload/{id}/receipt"))
+        .header("authorization", &bearer)
+        .send()
+        .await;
+    held.assert_status(kynos::http::StatusCode::OK);
+    let held = held.bytes().to_vec();
+
+    // ── The SDK's own client, over the socket ─────────────────────────────────────────────
+    let base_url = serve(&fixture).await;
+    let live = session(&base_url).await;
+    let client = StorageVerifyClient::new(VerifyTransport::with_session(
+        live,
+        format!("{base_url}/v1"),
+    ));
+    let upload_id = uuid::Uuid::parse_str(&id).expect("an upload id is a UUID");
+    let receipt = client
+        .fetch_receipt(upload_id)
+        .await
+        .expect("the SDK decodes the receipt the route serves");
+
+    assert_eq!(
+        receipt.to_canonical_cbor(),
+        held,
+        "the SDK holds the exact bytes the server signed"
+    );
+    assert_eq!(receipt.core.upload_id, id);
+
+    let expectations = ReceiptExpectations {
+        ciphertext_hash: hash_bytes(&whole),
+        size: whole.len() as u64,
+        role: BlobRole::Original,
+        envelope_hash: receipt.core.envelope_hash,
+    };
+    let at = receipt
+        .core
+        .received_at
+        .parse::<Timestamp>()
+        .expect("an instant")
+        .as_second();
+    assert_eq!(
+        verify_receipt(
+            &receipt,
+            &[fixture.attestation_key.verifying_key()],
+            &expectations,
+            at
+        ),
+        Ok(()),
+        "the fetched receipt verifies under the pinned attestation key"
+    );
+
+    // The pin is load-bearing: the same receipt under any other key does not verify.
+    let stranger = HybridSigningKey::generate().verifying_key();
+    assert!(
+        verify_receipt(&receipt, &[stranger], &expectations, at).is_err(),
+        "a receipt verifies only under the key that signed it"
+    );
+
+    // A session that never finalized has no receipt, and the SDK reports the stable code.
+    let pending = fixture
+        .open_session(&support::payload(b'c', 4096), "original", &bearer)
+        .await;
+    let err = client
+        .fetch_receipt(uuid::Uuid::parse_str(&pending).expect("a UUID"))
+        .await
+        .expect_err("an unfinalized session has no receipt");
+    let VerifyError::Status { status, code } = err else {
+        panic!("expected a status refusal, got {err:?}");
+    };
+    assert_eq!(status, 409);
+    assert_eq!(code.as_deref(), Some("error.upload.receipt_not_available"));
+}

@@ -95,9 +95,7 @@
 
 use std::convert::Infallible;
 
-use capsule_core::validation::protocol::{
-    HandshakeReject, check_sidecar_schema, check_suite, protocol_gate,
-};
+use capsule_core::validation::{HandshakeReject, check_sidecar_schema, check_suite, protocol_gate};
 use capsule_i18n::error_codes;
 use kynos::di::Provides;
 use kynos::error::rejection::HeaderRejection;

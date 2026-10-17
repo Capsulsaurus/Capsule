@@ -456,7 +456,7 @@ mod tests {
         let key = HybridSigningKey::generate();
         let core = CustodyReceiptCore {
             version: "custody-receipt/v1".to_owned(),
-            crypto_suite_id: capsule_core::crypto::CRYPTO_SUITE_ID,
+            crypto_suite_id: capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
             protocol_version: capsule_core::crypto::primitives::PROTOCOL_VERSION.to_owned(),
             server_id: "capsule.example".to_owned(),
             server_key_id: Hash32([0x11; 32]),

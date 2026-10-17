@@ -50,6 +50,7 @@ use capsule_core::crypto::primitives::{Argon2Params, DeviceTier};
 use capsule_core::crypto::pwkdf::{self, WrappedSecret};
 use capsule_core::crypto::rng;
 use capsule_i18n::error_codes;
+use jiff::Timestamp;
 use tracing::instrument;
 
 use crate::auth::Session;
@@ -125,6 +126,11 @@ pub enum RecoveryError {
     /// The escrow bytes could not be (de)serialized as the canonical `WrappedSecret`.
     #[error("escrow blob codec error: {0}")]
     Codec(String),
+    /// A success answer this client could not read — a `stored_at` that is not an RFC 3339
+    /// instant. The server *did* answer `200`, so the escrow may well be stored; this is the
+    /// answer being unreadable, not the write being refused.
+    #[error("the escrow endpoint's answer could not be read: {0}")]
+    InvalidResponse(String),
     /// The (re-)wrap of the master key under the fresh secret failed in core.
     #[error("re-wrapping the master key failed: {0}")]
     Wrap(String),
@@ -161,22 +167,68 @@ impl RecoveryError {
     }
 }
 
+/// What storing an escrow did: the server's `StoreEscrowResponse`, read.
+///
+/// Both members are for a client. [`stored_at`](Self::stored_at) is what lets it tell
+/// whether a cached copy is current (the [stale-cache rule](RecoveryClient::verify));
+/// [`replaced`](Self::replaced) separates a first escrow, which completes account setup,
+/// from a replacement, which means the *previous* recovery secret has stopped working.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EscrowStored {
+    /// When the server accepted the blob, on the server's clock.
+    pub stored_at: Timestamp,
+    /// Whether this displaced an earlier escrow.
+    pub replaced: bool,
+}
+
+impl EscrowStored {
+    /// The guidance about backup artifacts under the old secret that this store calls for:
+    /// [`ReexportOrDestroy`](OldArtifactGuidance::ReexportOrDestroy) when it displaced an
+    /// earlier escrow, and none for a first enrollment — there was no earlier secret for an
+    /// artifact to be bound to.
+    #[must_use]
+    pub fn old_artifact_guidance(&self) -> Option<OldArtifactGuidance> {
+        self.replaced
+            .then_some(OldArtifactGuidance::ReexportOrDestroy)
+    }
+}
+
 /// A client-side cached copy of the server escrow blob.
 ///
 /// Fetched at enrollment and refreshed opportunistically (SSoT § Local Verification);
 /// the [stale-cache rule](RecoveryClient::verify) refreshes it before ever recording a
 /// verification failure, so a rotation on another device can never manufacture a false
 /// failure here.
+///
+/// It carries the blob's [`stored_at`](Self::stored_at) when this client knows it — from
+/// its own [`store_escrow`](RecoveryClient::store_escrow), or from a
+/// [`verify`](RecoveryClient::verify) that refreshed against a known instant. A blob
+/// fetched with `GET /v1/auth/escrow` alone has none: that operation serves the bytes and
+/// nothing else.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EscrowCache {
     blob: WrappedSecret,
+    stored_at: Option<Timestamp>,
 }
 
 impl EscrowCache {
-    /// Wrap an already-decoded escrow blob as the local cache.
+    /// Wrap an already-decoded escrow blob as the local cache, with no known `stored_at`.
     #[must_use]
     pub fn new(blob: WrappedSecret) -> Self {
-        Self { blob }
+        Self {
+            blob,
+            stored_at: None,
+        }
+    }
+
+    /// Wrap an escrow blob whose server `stored_at` is known — the blob this client just
+    /// stored, paired with the [`EscrowStored::stored_at`] the server answered.
+    #[must_use]
+    pub fn with_stored_at(blob: WrappedSecret, stored_at: Timestamp) -> Self {
+        Self {
+            blob,
+            stored_at: Some(stored_at),
+        }
     }
 
     /// The cached wrapped-master-key escrow blob.
@@ -185,11 +237,24 @@ impl EscrowCache {
         &self.blob
     }
 
+    /// When the server stored the cached blob, when this client knows it.
+    #[must_use]
+    pub fn stored_at(&self) -> Option<Timestamp> {
+        self.stored_at
+    }
+
+    /// Whether an escrow stored at `latest` is newer than this copy. A copy with no known
+    /// `stored_at` cannot prove it is current, so it counts as older.
+    #[must_use]
+    pub fn is_older_than(&self, latest: Timestamp) -> bool {
+        self.stored_at.is_none_or(|stored_at| stored_at < latest)
+    }
+
     /// Decode an escrow cache from the opaque canonical-CBOR wire bytes.
     fn from_wire(bytes: &[u8]) -> Result<Self, RecoveryError> {
         let blob: WrappedSecret = capsule_core::cbor::from_slice(bytes)
             .map_err(|e| RecoveryError::Codec(e.to_string()))?;
-        Ok(Self { blob })
+        Ok(Self::new(blob))
     }
 }
 
@@ -291,14 +356,19 @@ pub struct GuidedRewrap {
     /// The freshly minted recovery secret — present once, confirm via the type-back
     /// gate ([`MintedSecret::matches`]), then let it drop.
     pub secret: MintedSecret,
-    /// The new escrow blob (already stored on the server), cached locally.
+    /// The new escrow blob (already stored on the server), cached locally with the
+    /// server's `stored_at`.
     pub new_escrow: EscrowCache,
+    /// What the store did — in particular whether it displaced an earlier escrow.
+    pub stored: EscrowStored,
     /// Re-issued Shamir shares, when the account had social recovery enrolled.
     pub shamir: Option<ShamirReissue>,
     /// Whether the client must run the setup-style type-back gate (always `true`).
     pub type_back_required: bool,
-    /// Guidance about backup artifacts exported under the old secret.
-    pub old_artifact_guidance: OldArtifactGuidance,
+    /// Guidance about backup artifacts exported under the old secret: present only when the
+    /// store [replaced](EscrowStored::replaced) an earlier escrow. A re-wrap on an account
+    /// that had none retired no secret, so there is no old artifact to warn about.
+    pub old_artifact_guidance: Option<OldArtifactGuidance>,
 }
 
 /// The networked recovery client: escrow cache/refresh, stale-cache-aware local
@@ -361,11 +431,16 @@ impl RecoveryClient {
     /// Store or replace the caller's escrow blob (`PUT /v1/auth/escrow`). Single active
     /// escrow: the server overwrites any prior blob in the same transaction (S-C12).
     ///
-    /// The canonical CBOR goes on the wire verbatim; `replaced` and `stored_at` are logged
-    /// rather than returned, because no caller has asked for them yet and a return type is
-    /// harder to widen than a log line.
+    /// The canonical CBOR goes on the wire verbatim. The answer comes back as
+    /// [`EscrowStored`]: `stored_at` for the stale-cache rule, `replaced` to tell a first
+    /// enrollment from a rotation.
+    ///
+    /// # Errors
+    ///
+    /// The refusals `store_escrow_error` maps, and [`RecoveryError::InvalidResponse`] when
+    /// the server's `stored_at` is not an RFC 3339 instant.
     #[instrument(skip_all)]
-    pub async fn store_escrow(&self, blob: &WrappedSecret) -> Result<(), RecoveryError> {
+    pub async fn store_escrow(&self, blob: &WrappedSecret) -> Result<EscrowStored, RecoveryError> {
         let body = capsule_core::cbor::to_canonical_vec(blob)
             .map_err(|e| RecoveryError::Codec(e.to_string()))?;
         let stored = self
@@ -378,12 +453,26 @@ impl RecoveryClient {
             .await
             .map_err(store_escrow_error)?
             .into_inner();
+        let stored_at = stored.stored_at.parse::<Timestamp>().map_err(|error| {
+            tracing::warn!(
+                stored_at = %stored.stored_at,
+                %error,
+                "escrow stored, but the server's stored_at is not an RFC 3339 instant"
+            );
+            RecoveryError::InvalidResponse(format!(
+                "stored_at {:?} is not an RFC 3339 instant: {error}",
+                stored.stored_at
+            ))
+        })?;
         tracing::info!(
-            stored_at = %stored.stored_at,
+            %stored_at,
             replaced = stored.replaced,
             "escrow blob stored (single active escrow: any prior blob replaced)"
         );
-        Ok(())
+        Ok(EscrowStored {
+            stored_at,
+            replaced: stored.replaced,
+        })
     }
 
     /// Local recovery-secret verification with the **stale-cache rule** (SSoT § Local
@@ -392,15 +481,37 @@ impl RecoveryClient {
     /// returning a failure — so a rotation on another device cannot manufacture a false
     /// failure here.
     ///
+    /// `latest_stored_at` is the newest escrow `stored_at` the caller has seen — an
+    /// [`EscrowStored`] from any device, however it reached this one. When the cache is
+    /// [older](EscrowCache::is_older_than) than it, the cache is known stale: it is refreshed
+    /// **before** the compare and stamped with `latest_stored_at`, and the compare against
+    /// the fresh blob is the answer, with no second fetch on a failure. `None`, or a cache at
+    /// least that new, keeps the refresh-on-failure rule above.
+    ///
     /// Purely local crypto (`capsule_core::backup::verify_recovery_secret`); the only
     /// network I/O is the single conditional refresh. Never blocks anything.
-    #[instrument(skip_all)]
+    #[instrument(skip_all, fields(cache_stored_at = ?cache.stored_at(), ?latest_stored_at))]
     pub async fn verify(
         &self,
         cache: &mut EscrowCache,
         passphrase: &[u8],
         device_master: &[u8; 32],
+        latest_stored_at: Option<Timestamp>,
     ) -> Result<VerifyOutcome, RecoveryError> {
+        if let Some(latest) = latest_stored_at.filter(|latest| cache.is_older_than(*latest)) {
+            // Known stale: refresh before comparing, so the compare is against the current
+            // blob and a failure is genuine on the first try.
+            tracing::info!(%latest, "cached escrow predates the latest stored_at; refreshing first");
+            let refreshed = self.fetch_escrow().await?;
+            *cache = EscrowCache::with_stored_at(refreshed.blob, latest);
+            let outcome = verify_recovery_secret(cache.blob(), passphrase, device_master);
+            tracing::debug!(
+                ?outcome,
+                "verified against the proactively refreshed escrow"
+            );
+            return Ok(outcome);
+        }
+
         if verify_recovery_secret(cache.blob(), passphrase, device_master)
             == VerifyOutcome::Verified
         {
@@ -412,9 +523,11 @@ impl RecoveryClient {
         // Refresh once and retry before recording a failure.
         tracing::info!("cached-escrow verify failed; refreshing escrow and retrying once");
         let refreshed = self.fetch_escrow().await?;
-        let changed = refreshed != *cache;
-        *cache = refreshed;
+        let changed = refreshed.blob != cache.blob;
         if changed {
+            // A different blob: the cached `stored_at` described the old one, and `GET` does
+            // not say when this one was stored, so the refreshed copy carries none.
+            *cache = refreshed;
             let outcome = verify_recovery_secret(cache.blob(), passphrase, device_master);
             tracing::debug!(?outcome, "retried verify against refreshed escrow");
             Ok(outcome)
@@ -429,11 +542,14 @@ impl RecoveryClient {
     /// recovery secret, **re-wrap the same master key** under it, replace the server
     /// escrow (single active — the old blob is deleted, so the lost secret unwraps
     /// nothing), re-issue Shamir shares when enrolled, and surface the old-artifact
-    /// guidance. Wrap rotation, not key rotation: no data re-encryption, no blob-hash
-    /// changes.
+    /// guidance when the store displaced an earlier escrow. Wrap rotation, not key
+    /// rotation: no data re-encryption, no blob-hash changes.
     ///
     /// After this succeeds, the caller should
-    /// [`rearm`](RecoveryCadence::rearm)`(now, RearmTrigger::SecretRotated)` its cadence.
+    /// [`rearm`](RecoveryCadence::rearm)`(now, RearmTrigger::SecretRotated)` its cadence
+    /// when [`GuidedRewrap::stored`] says it [replaced](EscrowStored::replaced) an escrow; a
+    /// store that replaced nothing is a first enrollment, which arms a fresh ladder with
+    /// [`RecoveryCadence::armed_at_setup`].
     #[instrument(skip_all)]
     pub async fn guided_rewrap(
         &self,
@@ -462,8 +578,12 @@ impl RecoveryClient {
             .map_err(|e| RecoveryError::Wrap(e.to_string()))?;
 
         // Replace the server escrow (single active escrow — the old ciphertext is gone).
-        self.store_escrow(&new_blob).await?;
-        tracing::info!("guided re-wrap: server escrow replaced with the new-secret wrap");
+        let stored = self.store_escrow(&new_blob).await?;
+        tracing::info!(
+            stored_at = %stored.stored_at,
+            replaced = stored.replaced,
+            "guided re-wrap: server escrow set to the new-secret wrap"
+        );
 
         // Re-issue Shamir shares of the NEW seed when the account had them enrolled.
         let shamir = shamir_enrolled.then(|| ShamirReissue {
@@ -473,10 +593,11 @@ impl RecoveryClient {
 
         Ok(GuidedRewrap {
             secret,
-            new_escrow: EscrowCache::new(new_blob),
+            new_escrow: EscrowCache::with_stored_at(new_blob, stored.stored_at),
+            stored,
             shamir,
             type_back_required: true,
-            old_artifact_guidance: OldArtifactGuidance::ReexportOrDestroy,
+            old_artifact_guidance: stored.old_artifact_guidance(),
         })
     }
 }
@@ -647,6 +768,7 @@ where
 mod tests {
     use std::future::Future;
     use std::pin::Pin;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
 
     use capsule_core::backup::recover_master_key;
@@ -685,6 +807,36 @@ mod tests {
     #[derive(Clone, Default)]
     struct EscrowStore {
         blob: Arc<Mutex<Option<Vec<u8>>>>,
+        /// `PUT`s answered so far; the `n`-th is stamped `n` seconds past [`STORED_AT_BASE`],
+        /// so every store has a strictly later `stored_at` than the one before it.
+        puts: Arc<AtomicU64>,
+        /// `GET`s answered so far — how a test sees whether `verify` refreshed.
+        fetches: Arc<AtomicU64>,
+    }
+
+    impl EscrowStore {
+        /// Serve the slot for a `GET`, counting it.
+        fn fetch(&self) -> Option<Vec<u8>> {
+            self.fetches.fetch_add(1, Ordering::SeqCst);
+            self.blob.lock().unwrap().clone()
+        }
+
+        /// How many `GET`s the mock has answered.
+        fn fetch_count(&self) -> u64 {
+            self.fetches.load(Ordering::SeqCst)
+        }
+    }
+
+    /// The instant the mock stamps its first `PUT` with.
+    const STORED_AT_BASE: &str = "2026-01-01T00:00:00Z";
+
+    /// The `stored_at` the mock answers its `n`-th `PUT` with (zero-based).
+    fn mock_stored_at(n: u64) -> Timestamp {
+        STORED_AT_BASE
+            .parse::<Timestamp>()
+            .unwrap()
+            .checked_add(jiff::SignedDuration::from_secs(n as i64))
+            .unwrap()
     }
 
     struct MockRequest {
@@ -846,15 +998,16 @@ mod tests {
                 match req.method.as_str() {
                     "PUT" => {
                         let replaced = store.blob.lock().unwrap().replace(req.body).is_some();
+                        let n = store.puts.fetch_add(1, Ordering::SeqCst);
                         MockResponse::json(
                             200,
                             serde_json::json!({
-                                "stored_at": "2026-01-01T00:00:00Z",
+                                "stored_at": mock_stored_at(n).to_string(),
                                 "replaced": replaced,
                             }),
                         )
                     }
-                    "GET" => match store.blob.lock().unwrap().clone() {
+                    "GET" => match store.fetch() {
                         Some(bytes) => MockResponse::bytes(200, bytes),
                         None => MockResponse::problem(
                             404,
@@ -918,9 +1071,84 @@ mod tests {
         let cache = client.fetch_escrow().await.unwrap();
         assert_eq!(cache.blob(), &blob, "fetched blob equals stored blob");
         assert_eq!(
+            cache.stored_at(),
+            None,
+            "GET serves only the bytes, so a fetched copy cannot claim a stored_at"
+        );
+        assert_eq!(
             recover_master_key(cache.blob(), b"correct horse battery staple").unwrap(),
             master
         );
+    }
+
+    /// `store_escrow` returns what the server answered: a first escrow is not a replacement,
+    /// the next one is, and each carries the server's `stored_at` parsed as an instant.
+    #[tokio::test]
+    async fn store_escrow_returns_stored_at_and_replaced() {
+        let base = start_mock(escrow_handler(EscrowStore::default())).await;
+        let client = RecoveryClient::new(session_for(&base), &base).unwrap();
+        let master = [0x12u8; 32];
+
+        let first = client.store_escrow(&wrap(&master, b"one")).await.unwrap();
+        assert_eq!(
+            first,
+            EscrowStored {
+                stored_at: mock_stored_at(0),
+                replaced: false,
+            }
+        );
+        assert_eq!(first.old_artifact_guidance(), None);
+
+        let second = client.store_escrow(&wrap(&master, b"two")).await.unwrap();
+        assert_eq!(
+            second,
+            EscrowStored {
+                stored_at: mock_stored_at(1),
+                replaced: true,
+            }
+        );
+        assert_eq!(
+            second.old_artifact_guidance(),
+            Some(OldArtifactGuidance::ReexportOrDestroy)
+        );
+    }
+
+    /// A `200` whose `stored_at` is not an instant is an unreadable answer, not a silent
+    /// success with a made-up time and not a refusal of the blob.
+    #[tokio::test]
+    async fn an_unparseable_stored_at_is_an_invalid_response() {
+        let handler: Handler = Arc::new(|_req| {
+            Box::pin(async move {
+                MockResponse::json(
+                    200,
+                    serde_json::json!({ "stored_at": "yesterday", "replaced": false }),
+                )
+            })
+        });
+        let base = start_mock(handler).await;
+        let client = RecoveryClient::new(session_for(&base), &base).unwrap();
+        let error = client
+            .store_escrow(&wrap(&[0x13u8; 32], b"whatever"))
+            .await
+            .expect_err("`yesterday` is not RFC 3339");
+        assert!(
+            matches!(error, RecoveryError::InvalidResponse(_)),
+            "got {error:?}"
+        );
+        assert_eq!(error.error_code(), None);
+    }
+
+    /// `is_older_than` is a strict compare, and a copy with no known `stored_at` cannot prove
+    /// it is current.
+    #[test]
+    fn cache_staleness_against_a_latest_stored_at() {
+        let blob = wrap(&[0x14u8; 32], b"s");
+        let at = mock_stored_at(5);
+        let known = EscrowCache::with_stored_at(blob.clone(), at);
+        assert!(known.is_older_than(mock_stored_at(6)));
+        assert!(!known.is_older_than(at), "the same instant is current");
+        assert!(!known.is_older_than(mock_stored_at(4)));
+        assert!(EscrowCache::new(blob).is_older_than(at));
     }
 
     /// Fetch with nothing stored is a typed `NotEnrolled`, not a panic or opaque error.
@@ -939,7 +1167,7 @@ mod tests {
     #[tokio::test]
     async fn verify_correct_secret_against_cache() {
         let store = EscrowStore::default();
-        let base = start_mock(escrow_handler(store)).await;
+        let base = start_mock(escrow_handler(store.clone())).await;
         let client = RecoveryClient::new(session_for(&base), &base).unwrap();
 
         let master = [0x22u8; 32];
@@ -947,13 +1175,164 @@ mod tests {
         client.store_escrow(&blob).await.unwrap();
         let mut cache = client.fetch_escrow().await.unwrap();
 
+        let fetches = store.fetch_count();
         assert_eq!(
             client
-                .verify(&mut cache, b"the-right-secret", &master)
+                .verify(&mut cache, b"the-right-secret", &master, None)
                 .await
                 .unwrap(),
             VerifyOutcome::Verified
         );
+        assert_eq!(
+            store.fetch_count(),
+            fetches,
+            "a verify that passes fetches nothing"
+        );
+    }
+
+    /// A cache stamped by this client's own store, verified against that same `stored_at`,
+    /// is current: the compare runs offline and nothing is fetched.
+    #[tokio::test]
+    async fn verify_against_a_current_stored_at_fetches_nothing() {
+        let store = EscrowStore::default();
+        let base = start_mock(escrow_handler(store.clone())).await;
+        let client = RecoveryClient::new(session_for(&base), &base).unwrap();
+
+        let master = [0x23u8; 32];
+        let blob = wrap(&master, b"the-right-secret");
+        let stored = client.store_escrow(&blob).await.unwrap();
+        let mut cache = EscrowCache::with_stored_at(blob, stored.stored_at);
+
+        assert_eq!(
+            client
+                .verify(
+                    &mut cache,
+                    b"the-right-secret",
+                    &master,
+                    Some(stored.stored_at)
+                )
+                .await
+                .unwrap(),
+            VerifyOutcome::Verified
+        );
+        assert_eq!(store.fetch_count(), 0);
+    }
+
+    /// **The stale-cache rule, read from `stored_at`.** Another device rotated the escrow and
+    /// this one has seen the newer `stored_at`: verify refreshes *before* comparing, so the
+    /// new secret passes on the first compare, the cache takes the newer instant, and a
+    /// wrong secret fails with one fetch — not the compare-fail-fetch-compare round the
+    /// failure-driven rule costs.
+    #[tokio::test]
+    async fn verify_refreshes_first_when_a_newer_stored_at_is_known() {
+        let store = EscrowStore::default();
+        let base = start_mock(escrow_handler(store.clone())).await;
+        let client = RecoveryClient::new(session_for(&base), &base).unwrap();
+
+        let master = [0x34u8; 32];
+        let old_blob = wrap(&master, b"old-secret");
+        let old = client.store_escrow(&old_blob).await.unwrap();
+        let mut cache = EscrowCache::with_stored_at(old_blob, old.stored_at);
+
+        // Another device rotates; this device learns the rotation's stored_at.
+        let new_blob = wrap(&master, b"new-secret");
+        let rotated = client.store_escrow(&new_blob).await.unwrap();
+        assert!(rotated.stored_at > old.stored_at);
+
+        assert_eq!(
+            client
+                .verify(&mut cache, b"new-secret", &master, Some(rotated.stored_at))
+                .await
+                .unwrap(),
+            VerifyOutcome::Verified
+        );
+        assert_eq!(cache.blob(), &new_blob);
+        assert_eq!(cache.stored_at(), Some(rotated.stored_at));
+        assert_eq!(store.fetch_count(), 1, "one proactive refresh");
+
+        // Now current: no proactive refresh runs, so a wrong secret fails the cached
+        // compare and the failure-driven refresh runs once before the genuine failure.
+        assert_eq!(
+            client
+                .verify(&mut cache, b"wrong", &master, Some(rotated.stored_at))
+                .await
+                .unwrap(),
+            VerifyOutcome::NotVerified
+        );
+        assert_eq!(
+            store.fetch_count(),
+            2,
+            "the failure-driven refresh still runs once"
+        );
+    }
+
+    /// A known-stale cache verified with a wrong secret fails after exactly one fetch: the
+    /// proactive refresh already made the cache current, so no second round trip follows.
+    #[tokio::test]
+    async fn a_known_stale_cache_fails_a_wrong_secret_with_one_fetch() {
+        let store = EscrowStore::default();
+        let base = start_mock(escrow_handler(store.clone())).await;
+        let client = RecoveryClient::new(session_for(&base), &base).unwrap();
+
+        let master = [0x35u8; 32];
+        let old_blob = wrap(&master, b"old-secret");
+        let old = client.store_escrow(&old_blob).await.unwrap();
+        let mut cache = EscrowCache::with_stored_at(old_blob, old.stored_at);
+        let rotated = client
+            .store_escrow(&wrap(&master, b"new-secret"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            client
+                .verify(&mut cache, b"old-secret", &master, Some(rotated.stored_at))
+                .await
+                .unwrap(),
+            VerifyOutcome::NotVerified,
+            "the rotated-away secret no longer verifies"
+        );
+        assert_eq!(store.fetch_count(), 1);
+    }
+
+    /// The failure-driven refresh's `stored_at` handling, from a stamped cache with no
+    /// `latest_stored_at`: an unchanged blob keeps the cache's `stored_at`, and a changed
+    /// blob drops it, because `GET` does not say when the new blob was stored.
+    #[tokio::test]
+    async fn fallback_refresh_keeps_stored_at_only_when_the_blob_is_unchanged() {
+        let store = EscrowStore::default();
+        let base = start_mock(escrow_handler(store.clone())).await;
+        let client = RecoveryClient::new(session_for(&base), &base).unwrap();
+
+        let master = [0x36u8; 32];
+        let old_blob = wrap(&master, b"old-secret");
+        let old = client.store_escrow(&old_blob).await.unwrap();
+        let mut cache = EscrowCache::with_stored_at(old_blob.clone(), old.stored_at);
+
+        // Unchanged refresh: a wrong secret fetches the same blob, and the stamp survives.
+        assert_eq!(
+            client
+                .verify(&mut cache, b"wrong", &master, None)
+                .await
+                .unwrap(),
+            VerifyOutcome::NotVerified
+        );
+        assert_eq!(store.fetch_count(), 1);
+        assert_eq!(cache.blob(), &old_blob);
+        assert_eq!(cache.stored_at(), Some(old.stored_at));
+
+        // Changed refresh: another device rotates, and the refreshed copy carries no stamp.
+        let new_blob = wrap(&master, b"new-secret");
+        client.store_escrow(&new_blob).await.unwrap();
+        assert_eq!(
+            client
+                .verify(&mut cache, b"new-secret", &master, None)
+                .await
+                .unwrap(),
+            VerifyOutcome::Verified
+        );
+        assert_eq!(store.fetch_count(), 2);
+        assert_eq!(cache.blob(), &new_blob);
+        assert_eq!(cache.stored_at(), None);
     }
 
     /// SSoT § Local Verification stale-cache rule: a rotation on another device makes
@@ -980,7 +1359,7 @@ mod tests {
         // fails, the stale-cache refresh pulls the new blob, and the retry passes.
         assert_eq!(
             client
-                .verify(&mut cache, b"new-secret", &master)
+                .verify(&mut cache, b"new-secret", &master, None)
                 .await
                 .unwrap(),
             VerifyOutcome::Verified
@@ -1004,7 +1383,7 @@ mod tests {
 
         assert_eq!(
             client
-                .verify(&mut cache, b"totally-wrong", &master)
+                .verify(&mut cache, b"totally-wrong", &master, None)
                 .await
                 .unwrap(),
             VerifyOutcome::NotVerified
@@ -1054,7 +1433,24 @@ mod tests {
         // The new escrow (as stored on the server) unwraps with the NEW secret to the
         // SAME master key.
         let refetched = client.fetch_escrow().await.unwrap();
-        assert_eq!(refetched, rewrap.new_escrow, "server holds the new escrow");
+        assert_eq!(
+            refetched.blob(),
+            rewrap.new_escrow.blob(),
+            "server holds the new escrow"
+        );
+        assert_eq!(
+            rewrap.stored,
+            EscrowStored {
+                stored_at: mock_stored_at(1),
+                replaced: true,
+            },
+            "the re-wrap displaced the enrolled escrow"
+        );
+        assert_eq!(
+            rewrap.new_escrow.stored_at(),
+            Some(rewrap.stored.stored_at),
+            "the cached copy carries the server's stored_at"
+        );
         let recovered = recover_master_key(refetched.blob(), rewrap.secret.as_bytes()).unwrap();
         assert_eq!(recovered, master, "master key is UNCHANGED after re-wrap");
 
@@ -1082,8 +1478,23 @@ mod tests {
         assert!(!rewrap.secret.matches(b"something-else"));
         assert_eq!(
             rewrap.old_artifact_guidance,
-            OldArtifactGuidance::ReexportOrDestroy
+            Some(OldArtifactGuidance::ReexportOrDestroy)
         );
+    }
+
+    /// A re-wrap on an account with no escrow yet replaced nothing, so it retired no secret
+    /// and surfaces no old-artifact guidance — noise for a first enrollment.
+    #[tokio::test]
+    async fn guided_rewrap_without_a_prior_escrow_has_no_old_artifact_guidance() {
+        let base = start_mock(escrow_handler(EscrowStore::default())).await;
+        let client = RecoveryClient::new(session_for(&base), &base).unwrap();
+
+        let rewrap = client
+            .guided_rewrap_with_params(&[0x56u8; 32], fast_params(), false)
+            .await
+            .unwrap();
+        assert!(!rewrap.stored.replaced);
+        assert_eq!(rewrap.old_artifact_guidance, None);
     }
 
     /// When Shamir was never enrolled, the re-wrap re-issues no shares.

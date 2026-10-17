@@ -289,7 +289,7 @@ impl Workspace {
 
     fn decode_restored_sidecar(
         &self,
-        restored: &backup::artifact::RestoredAsset,
+        restored: &backup::RestoredAsset,
         head: &AssetManifest,
     ) -> Result<SidecarV1> {
         // Minimal sidecar reconstructed from the head manifest (the full encrypted metadata

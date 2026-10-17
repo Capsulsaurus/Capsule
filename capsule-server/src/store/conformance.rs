@@ -193,6 +193,7 @@ fn pending(case: &str, offset: i64) -> PendingAuthorization {
         nonce: OidcNonce::new(format!("{case}-nonce")),
         verifier: PkceVerifier::new(format!("{case}-verifier")),
         redirect_uri: format!("http://127.0.0.1:4242/{case}"),
+        binding_challenge: format!("{case}-binding"),
         issued_at: deadline(base(), SignedDuration::from_secs(offset)),
     }
 }

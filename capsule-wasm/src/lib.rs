@@ -59,7 +59,7 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use capsule_core::crypto::encryption::stream::{NONCE_PREFIX_LEN, decrypt_asset_vec};
+use capsule_core::crypto::encryption::{NONCE_PREFIX_LEN, decrypt_asset_vec};
 use capsule_core::crypto::primitives::Argon2Params;
 use capsule_core::crypto::pwkdf;
 use capsule_core::drop::{SealedDrop, seal_drop, seal_drop_derand};

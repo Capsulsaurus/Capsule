@@ -30,6 +30,9 @@
 //! [`rest::Client`] — every body and every response parsed by generated code, with only the
 //! mapping into [`LoginOutcome`] and [`AuthError`] written here. The browser leg between the
 //! two is the platform's: a loopback listener on the CLI, `ASWebAuthenticationSession` on iOS.
+//! The ceremony is bound to the client that began it: the begin leg mints a secret the
+//! [`OidcAuthorization`] keeps and sends only its hash, and the complete leg presents the secret
+//! and refuses a redirect carrying a `state` it did not begin (issue #517).
 //!
 //! ## Testing
 //!
@@ -415,17 +418,45 @@ impl AuthEndpoints {
 /// A begun sign-in through the identity provider (`S-N2`).
 ///
 /// The platform sends the person to `authorization_url`, receives the provider's redirect at
-/// the `redirect_uri` it named, and hands the redirect's `code` with this `state` to
+/// the `redirect_uri` it named, and hands this value with the redirect's `state` and `code` to
 /// [`AuthClient::complete_oidc_login`]. Good once, and until `expires_by`.
 ///
-/// No `Debug`: the state is the key to the pending ceremony and the URL carries it.
+/// It is the client's half of the ceremony, and the client must keep it — in memory, or in the
+/// platform's secure storage where the browser leg can outlive the process — because the
+/// callback is refused without its `binding` (issue #517). Never send any of it anywhere but
+/// back to [`AuthClient::complete_oidc_login`].
+///
+/// No `Debug`: the state is the key to the pending ceremony, the URL carries it, and the binding
+/// is the secret that proves this client began it.
 pub struct OidcAuthorization {
     /// Where to send the person. Carries the whole authorization request in its query.
     pub authorization_url: String,
     /// The `state` the provider's redirect will echo.
     pub state: SecretString,
+    /// The secret binding the ceremony to this client: 256 random bits, unpadded base64url.
+    ///
+    /// Only its S256 hash went to the server, at the authorize; the callback presents the
+    /// secret itself, so a `state` and `code` that some other client began — an attacker's,
+    /// carried to this one — cannot be completed here.
+    pub binding: SecretString,
     /// The absolute Unix-seconds instant the ceremony stops being redeemable.
     pub expires_by: u64,
+}
+
+/// A fresh client binding for one OIDC ceremony: 256 random bits, unpadded base64url.
+fn fresh_oidc_binding() -> SecretString {
+    use base64::Engine as _;
+    let bytes = capsule_core::crypto::rng::random_array::<32>();
+    SecretString::from(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
+}
+
+/// The S256 hash of `binding` — unpadded base64url of its SHA-256 (RFC 7636 §4.2's derivation),
+/// the `binding_challenge` the authorize carries.
+fn oidc_binding_challenge(binding: &SecretString) -> String {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+    let digest = sha2::Sha256::digest(binding.expose_secret().as_bytes());
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
 }
 
 /// What a password login answered with (`S-C55`).
@@ -588,7 +619,8 @@ impl AuthClient {
     /// `redirect_uri` is where the provider will send the person back — this client's own
     /// callback, which the server admits if it is the deployment's configured one or a loopback
     /// IP literal on any port (the shape a CLI's or desktop app's listener has). What comes back
-    /// is where to send the person and the `state` to present with the resulting `code`.
+    /// is where to send the person, the `state` the redirect will echo, and the secret `binding`
+    /// this client keeps: a fresh one per ceremony, of which only the hash is sent.
     ///
     /// # Errors
     ///
@@ -600,6 +632,7 @@ impl AuthClient {
         redirect_uri: &str,
     ) -> Result<OidcAuthorization, AuthError> {
         tracing::info!("beginning a sign-in through the identity provider");
+        let binding = fresh_oidc_binding();
         let body = self
             .rest
             .begin_oidc_login(
@@ -607,6 +640,7 @@ impl AuthClient {
                 None,
                 &rest::types::OidcAuthorizeRequest {
                     redirect_uri: redirect_uri.to_owned(),
+                    binding_challenge: oidc_binding_challenge(&binding),
                 },
             )
             .await
@@ -627,6 +661,7 @@ impl AuthClient {
         Ok(OidcAuthorization {
             authorization_url: body.authorization_url,
             state: SecretString::from(body.state),
+            binding,
             expires_by: u64::try_from(body.expires_by).unwrap_or(0),
         })
     }
@@ -637,29 +672,48 @@ impl AuthClient {
     /// second-factor challenge for an account that enrolled one — and the configured cohort hash
     /// rides this request, because this is the one that opens the session.
     ///
+    /// `pending` is what [`begin_oidc_login`](AuthClient::begin_oidc_login) answered;
+    /// `redirect_state` and `code` are what the provider's redirect carried. A redirect whose
+    /// `state` is not the one this client began is refused here, before anything is sent: it is
+    /// someone else's ceremony arriving at this client (RFC 6749 §10.12). The server makes the
+    /// same refusal on the `binding`, which is what holds when a client skips this check.
+    ///
     /// # Errors
     ///
-    /// [`AuthError::OidcRejected`] for a spent or expired `state`, a refused exchange or a
-    /// refused ID token (start again); [`AuthError::OidcAddressTaken`] when the provider asserted
-    /// an address that already has a local account.
+    /// [`AuthError::OidcRejected`] for a redirect carrying another ceremony's `state`, a spent or
+    /// expired `state`, a refused exchange or a refused ID token (start again);
+    /// [`AuthError::OidcAddressTaken`] when the provider asserted an address that already has a
+    /// local account.
     #[instrument(skip_all)]
     pub async fn complete_oidc_login(
         &self,
-        state: &SecretString,
+        pending: &OidcAuthorization,
+        redirect_state: &str,
         code: &str,
     ) -> Result<LoginOutcome, AuthError> {
         tracing::info!(
             cohort_emitted = self.cohort().is_some(),
             "completing a sign-in through the identity provider"
         );
+        if redirect_state != pending.state.expose_secret() {
+            // The code the server gives a `state` it does not hold for this client: the remedy
+            // is the same, and a client localizes one code rather than two.
+            tracing::warn!(
+                "an identity provider redirect carried a state this client did not begin; refused"
+            );
+            return Err(AuthError::OidcRejected {
+                code: Some(error_codes::AUTH_OIDC_STATE_INVALID.to_owned()),
+            });
+        }
         let answer = self
             .rest
             .complete_oidc_login(
                 PROTOCOL_VERSION.to_owned(),
                 None,
                 &rest::types::OidcCallbackRequest {
-                    state: state.expose_secret().to_owned(),
+                    state: pending.state.expose_secret().to_owned(),
                     code: code.to_owned(),
+                    binding_verifier: pending.binding.expose_secret().to_owned(),
                     cohort_hash: self.cohort().map(str::to_owned),
                     device_id: None,
                 },
@@ -1879,10 +1933,13 @@ mod tests {
 
     /// A server with an identity provider, answering the two OIDC routes and recording what
     /// the callback received.
-    fn oidc_handler(captured: Arc<std::sync::Mutex<Option<serde_json::Value>>>) -> Handler {
+    fn oidc_handler(captured: Arc<std::sync::Mutex<Vec<serde_json::Value>>>) -> Handler {
         Arc::new(move |req: MockRequest| {
             let captured = captured.clone();
             Box::pin(async move {
+                if let Ok(body) = serde_json::from_str(&req.body) {
+                    captured.lock().unwrap().push(body);
+                }
                 match req.path.as_str() {
                     "/v1/auth/oidc/authorize" => MockResponse::json(
                         200,
@@ -1899,7 +1956,6 @@ mod tests {
                             req.headers.get("x-capsule-protocol").map(String::as_str),
                             Some(PROTOCOL_VERSION)
                         );
-                        *captured.lock().unwrap() = serde_json::from_str(&req.body).ok();
                         MockResponse::json(200, token_json("access-1", "refresh-1", far_future()))
                     }
                     _ => MockResponse::json(404, r#"{"error":"x"}"#),
@@ -1908,10 +1964,21 @@ mod tests {
         })
     }
 
-    /// The two legs round-trip, and the cohort rides the callback rather than the authorize.
+    /// A begun ceremony as a test that never ran the begin leg would hold it.
+    fn pending(state: &str) -> OidcAuthorization {
+        OidcAuthorization {
+            authorization_url: "https://idp.test/authorize".to_owned(),
+            state: SecretString::from(state.to_owned()),
+            binding: fresh_oidc_binding(),
+            expires_by: 1_893_456_000,
+        }
+    }
+
+    /// The two legs round-trip, the cohort rides the callback rather than the authorize, and the
+    /// callback presents the secret whose hash the authorize carried (issue #517).
     #[tokio::test]
     async fn an_oidc_login_begins_completes_and_carries_the_cohort_on_the_callback() {
-        let captured = Arc::new(std::sync::Mutex::new(None));
+        let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
         let server = start_mock(oidc_handler(captured.clone())).await;
         let client = AuthClient::new(&server.base_url)
             .unwrap()
@@ -1930,20 +1997,68 @@ mod tests {
 
         let session = finished(
             client
-                .complete_oidc_login(&begun.state, "code-1")
+                .complete_oidc_login(&begun, "state-1", "code-1")
                 .await
                 .unwrap(),
         );
         assert!(session.is_authenticated().await);
 
-        let body = captured
-            .lock()
-            .unwrap()
-            .clone()
-            .expect("callback body captured");
-        assert_eq!(body["state"], "state-1");
-        assert_eq!(body["code"], "code-1");
-        assert_eq!(body["cohort_hash"], "a-particular-machine");
+        let bodies = captured.lock().unwrap().clone();
+        let [authorize, callback] = bodies.as_slice() else {
+            panic!("one authorize and one callback body, got {bodies:?}");
+        };
+        // Only the hash left on the authorize; the secret itself rides only the callback.
+        let binding = begun.binding.expose_secret();
+        assert_eq!(binding.len(), 43, "256 bits, unpadded base64url");
+        assert_eq!(
+            authorize["binding_challenge"],
+            oidc_binding_challenge(&begun.binding)
+        );
+        assert!(!authorize.to_string().contains(binding));
+        assert_eq!(callback["binding_verifier"], binding);
+        assert_eq!(callback["state"], "state-1");
+        assert_eq!(callback["code"], "code-1");
+        assert_eq!(callback["cohort_hash"], "a-particular-machine");
+        assert!(authorize.get("cohort_hash").is_none());
+
+        // A second ceremony gets a binding of its own.
+        let again = client
+            .begin_oidc_login("http://127.0.0.1:4242/callback")
+            .await
+            .unwrap();
+        assert_ne!(again.binding.expose_secret(), binding);
+    }
+
+    /// The binding challenge is the S256 of the binding: RFC 7636 Appendix B's vector.
+    #[test]
+    fn the_binding_challenge_is_the_s256_of_the_binding() {
+        assert_eq!(
+            oidc_binding_challenge(&SecretString::from(
+                "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk".to_owned()
+            )),
+            "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+        );
+    }
+
+    /// A redirect carrying a `state` this client did not begin — another client's ceremony, a
+    /// login-CSRF — is refused before anything reaches the server.
+    #[tokio::test]
+    async fn a_redirect_for_another_ceremony_is_refused_without_a_request() {
+        let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let server = start_mock(oidc_handler(captured.clone())).await;
+        let client = AuthClient::new(&server.base_url).unwrap();
+
+        let error = expect_login_err(
+            client
+                .complete_oidc_login(&pending("state-1"), "the-attackers-state", "code-1")
+                .await,
+        );
+        assert!(matches!(error, AuthError::OidcRejected { .. }), "{error:?}");
+        assert_eq!(
+            error.error_code(),
+            Some(error_codes::AUTH_OIDC_STATE_INVALID)
+        );
+        assert!(captured.lock().unwrap().is_empty(), "nothing was sent");
     }
 
     /// The callback's `202` is a second-factor challenge, as the password login's is.
@@ -1963,7 +2078,7 @@ mod tests {
         let server = start_mock(handler).await;
         let client = AuthClient::new(&server.base_url).unwrap();
         let outcome = client
-            .complete_oidc_login(&SecretString::from("state-1"), "code-1")
+            .complete_oidc_login(&pending("state-1"), "state-1", "code-1")
             .await
             .unwrap();
         assert!(matches!(outcome, LoginOutcome::SecondFactorRequired { .. }));
@@ -2016,7 +2131,7 @@ mod tests {
 
         let error = expect_login_err(
             client
-                .complete_oidc_login(&SecretString::from("state-1"), "taken")
+                .complete_oidc_login(&pending("state-1"), "state-1", "taken")
                 .await,
         );
         assert!(matches!(error, AuthError::OidcAddressTaken), "{error:?}");
@@ -2027,7 +2142,7 @@ mod tests {
 
         let error = expect_login_err(
             client
-                .complete_oidc_login(&SecretString::from("state-1"), "code-1")
+                .complete_oidc_login(&pending("state-1"), "state-1", "code-1")
                 .await,
         );
         assert!(matches!(error, AuthError::OidcRejected { .. }), "{error:?}");

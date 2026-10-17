@@ -74,7 +74,7 @@ pub fn check_sidecar_schema(schema: u16, max_known: u16) -> Result<(), Handshake
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::CRYPTO_SUITE_ID;
+    use crate::crypto::primitives::CRYPTO_SUITE_ID;
 
     #[test]
     fn protocol_in_range_accepts() {

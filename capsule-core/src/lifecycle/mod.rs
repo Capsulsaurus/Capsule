@@ -21,7 +21,7 @@
 //! ([`rotate_epoch`](Workspace::rotate_epoch)); the MLS membership ceremony (`Welcome`,
 //! add/remove) remains deferred (see `SLICES.md`).
 //!
-//! [`verify_asset`]: fn@crate::crypto::verify_asset
+//! [`verify_asset`]: crate::crypto::verify_asset::verify_asset
 //! [`ReferenceAuthority`]: crate::crypto::authority::ReferenceAuthority
 
 mod album;
@@ -62,8 +62,7 @@ use crate::crypto::hash::Hash32;
 use crate::crypto::keys::albumstore::AlbumStoreError;
 use crate::crypto::keys::{Account, DeviceDirectory, HybridSigningKey, HybridVerifyingKey, Signer};
 use crate::crypto::primitives::Argon2Params;
-use crate::crypto::provenance::ProvenanceChain;
-use crate::crypto::provenance::action::Action;
+use crate::crypto::provenance::{Action, ProvenanceChain};
 use crate::crypto::verify_asset::{MetadataBinding, VerifyOutcome};
 use crate::db::DatabaseDriver;
 use crate::drop::{DropId, UploadLinkId};

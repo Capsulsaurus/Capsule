@@ -14,12 +14,24 @@
 //! callback route, or a CLI's loopback listener — which is why the redirect URI is a request
 //! field the client names and the policy admits, rather than a server route.
 //!
+//! # Bound to the client that began it
+//!
+//! The server's PKCE verifier never leaves the server, so on its own it binds the code to this
+//! relying party and to nothing about the client: whoever posts a `state` and its `code` is
+//! signed in. That is login CSRF — an attacker begins a ceremony, signs in at the provider as
+//! themselves, and carries their `state` and `code` to a victim's client, which completes it into
+//! the attacker's library. So the client binds itself too (issue #517): it sends the S256 hash of
+//! a secret it keeps as `binding_challenge` at the authorize, the hash is held with the ceremony,
+//! and the callback is refused unless its `binding_verifier` hashes to it. The victim's client
+//! does not hold the attacker's secret, and the attacker's secret never reaches the victim.
+//!
 //! # What the callback checks, and what it says
 //!
 //! Every rejection reason is logged with its detail and collapsed on the wire, so the callback
 //! is not an oracle over which checks the relying party runs: a foreign signature, a wrong
 //! audience, an expired token and a replayed nonce all render `error.auth.oidc_token_invalid`.
-//! A burned, expired or unknown `state` is one code, as `error.auth.totp_challenge_invalid` is.
+//! A burned, expired or unknown `state` is one code, as `error.auth.totp_challenge_invalid` is,
+//! and a `state` presented without its client's binding is that same code.
 //! What *does* reach the caller distinctly is the remedy: the provider refused the exchange
 //! (start again), the provider is down (wait), the address already has an account here (sign in
 //! with the password instead).
@@ -78,6 +90,14 @@ pub struct OidcAuthorizeRequest {
     /// deployment allows loopback redirects — the shape a CLI's or desktop app's listener has
     /// (RFC 8252 §7.3). Stored with the ceremony and replayed byte for byte to the token endpoint.
     pub redirect_uri: String,
+    /// The client's binding to this ceremony: the S256 hash — unpadded base64url of the SHA-256,
+    /// 43 characters — of a fresh secret of at least 256 bits that the client generates, keeps,
+    /// and presents as `binding_verifier` at the callback.
+    ///
+    /// The server's own PKCE verifier binds the code to this server; this binds the callback to
+    /// the client that began the ceremony, so a `state` and `code` carried to another client — a
+    /// login-CSRF victim's — are refused there. Anything but 43 base64url characters is a `400`.
+    pub binding_challenge: String,
 }
 
 /// A begun ceremony: where to send the person, and the `state` that comes back.
@@ -119,6 +139,9 @@ pub struct OidcCallbackRequest {
     pub state: String,
     /// The authorization `code` the redirect carried.
     pub code: String,
+    /// The secret whose S256 hash the authorize carried as `binding_challenge`. A callback whose
+    /// secret does not hash to it is refused as an unknown `state` is, and burns the `state`.
+    pub binding_verifier: String,
     /// An advisory device-cohort hash (slice `S-C13`). Legibility metadata only; an unusable
     /// value is dropped rather than refused.
     pub cohort_hash: Option<String>,
@@ -128,11 +151,12 @@ pub struct OidcCallbackRequest {
 }
 
 impl fmt::Debug for OidcCallbackRequest {
-    /// Redacted: the state and the code are the two halves of a live credential.
+    /// Redacted: the state, the code and the binding secret are the parts of a live credential.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("OidcCallbackRequest")
             .field("state", &"<redacted>")
             .field("code", &"<redacted>")
+            .field("binding_verifier", &"<redacted>")
             .field("cohort_hash", &self.cohort_hash)
             .field("device_id", &self.device_id)
             .finish()
@@ -150,6 +174,15 @@ pub enum OidcAuthorizeRejection {
     #[error("the redirect URI is not one this server will send a person back to")]
     #[problem(status = 400, title = "Redirect not admitted")]
     RedirectInvalid {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// The `binding_challenge` is not an S256 hash: 43 unpadded base64url characters.
+    #[error("the binding challenge is not an unpadded base64url SHA-256 hash")]
+    #[problem(status = 400, title = "Binding challenge malformed")]
+    BindingMalformed {
         /// The stable catalog code.
         #[problem(extension)]
         code: &'static str,
@@ -267,6 +300,13 @@ impl OidcAuthorizeRejection {
         }
     }
 
+    /// A client bug, not something a person can fix: the generic malformed-request code.
+    fn binding_malformed() -> Self {
+        Self::BindingMalformed {
+            code: error_codes::REQUEST_MALFORMED,
+        }
+    }
+
     fn not_configured() -> Self {
         Self::NotConfigured {
             code: error_codes::AUTH_OIDC_NOT_CONFIGURED,
@@ -365,6 +405,14 @@ pub async fn begin_oidc_login(
     async move {
         let redirect_uri = request.redirect_uri.trim();
 
+        // Shape-checked before anything is charged or written: a pure function of the body, like
+        // the extractor's own `422`, and a value of fixed length is what the store then holds.
+        let binding_challenge = request.binding_challenge.trim();
+        if !is_s256_challenge(binding_challenge) {
+            tracing::info!("an OIDC sign-in carried a binding challenge that is not an S256 hash");
+            return Err(OidcAuthorizeRejection::binding_malformed());
+        }
+
         // The redirect is validated *before* the budget is charged, and the order is the
         // security property rather than a preference. `redirect_uri` is caller-supplied and
         // unbounded; charging a counter keyed on its host before the policy has looked at it
@@ -447,6 +495,7 @@ pub async fn begin_oidc_login(
                     nonce,
                     verifier,
                     redirect_uri: redirect_uri.to_owned(),
+                    binding_challenge: binding_challenge.to_owned(),
                     issued_at,
                 },
             )
@@ -509,6 +558,17 @@ pub async fn complete_oidc_login(
             tracing::info!("an OIDC callback presented an unknown, spent or expired state");
             return Err(OidcCallbackRejection::state_invalid());
         };
+
+        // Bound to the client that began the ceremony (issue #517), checked before the provider
+        // is asked anything: a `state` and `code` carried to another client — the login-CSRF that
+        // would sign a victim into the attacker's account — are refused here, with the code an
+        // unknown `state` gets, and the `state` is already burned.
+        if !binding_matches(&pending.binding_challenge, &request.binding_verifier) {
+            tracing::warn!(
+                "an OIDC callback did not present the binding of the client that began it"
+            );
+            return Err(OidcCallbackRejection::state_invalid());
+        }
 
         let code = AuthorizationCode::new(request.code.trim());
         let identity = oidc
@@ -618,6 +678,32 @@ fn store_unavailable(error: &StoreError, doing: &'static str) {
     tracing::error!(%error, operation = doing, "a store could not answer");
 }
 
+/// The length of an S256 hash: 32 bytes of SHA-256, unpadded base64url.
+const S256_CHALLENGE_LEN: usize = 43;
+
+/// Whether `challenge` has the shape of an S256 hash: 43 unpadded base64url characters.
+///
+/// The shape, not the content — any 43-character base64url string could be one, and the
+/// callback's comparison is what decides whether it is the hash of the presented secret.
+fn is_s256_challenge(challenge: &str) -> bool {
+    challenge.len() == S256_CHALLENGE_LEN
+        && challenge
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
+/// Whether `verifier` hashes to the stored `challenge`, compared in constant time.
+///
+/// The same S256 derivation PKCE uses (RFC 7636 §4.2), so one function is the definition on
+/// both sides of this server. Comparing hashes already denies a timing attacker any byte of the
+/// secret; it is constant time anyway, as the drop link's passphrase proof is compared, and
+/// both sides are 43-character hashes, so the length check leaks nothing either.
+fn binding_matches(challenge: &str, verifier: &str) -> bool {
+    use subtle::ConstantTimeEq as _;
+    let presented = code_challenge(&crate::store::PkceVerifier::new(verifier));
+    bool::from(presented.as_bytes().ct_eq(challenge.as_bytes()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -627,12 +713,15 @@ mod tests {
         let request = OidcCallbackRequest {
             state: "live-state".to_owned(),
             code: "live-code".to_owned(),
+            binding_verifier: "live-binding".to_owned(),
             cohort_hash: Some("cohort-1".to_owned()),
             device_id: None,
         };
         let printed = format!("{request:?}");
         assert!(
-            !printed.contains("live-state") && !printed.contains("live-code"),
+            !printed.contains("live-state")
+                && !printed.contains("live-code")
+                && !printed.contains("live-binding"),
             "{printed}"
         );
         assert!(printed.contains("cohort-1"), "{printed}");
@@ -648,7 +737,46 @@ mod tests {
     }
 
     #[test]
+    fn a_binding_matches_only_the_secret_it_was_hashed_from() {
+        let secret = "a-client-held-secret-of-enough-length-000000";
+        let challenge = code_challenge(&crate::store::PkceVerifier::new(secret));
+        assert!(is_s256_challenge(&challenge), "{challenge}");
+        assert!(binding_matches(&challenge, secret));
+        assert!(!binding_matches(&challenge, "another-client's-secret"));
+        assert!(!binding_matches(&challenge, ""));
+        // A challenge is not its own verifier: presenting the hash is not presenting the secret.
+        assert!(!binding_matches(&challenge, &challenge));
+    }
+
+    #[test]
+    fn only_the_shape_of_an_s256_hash_is_a_binding_challenge() {
+        assert!(is_s256_challenge(&"A".repeat(S256_CHALLENGE_LEN)));
+        // Every character class of the url-safe alphabet: 2 + 40 + 1 = 43.
+        assert!(is_s256_challenge(&format!("-_{}0", "z9".repeat(20))));
+        assert!(!is_s256_challenge(""));
+        assert!(!is_s256_challenge(&"A".repeat(S256_CHALLENGE_LEN - 1)));
+        assert!(!is_s256_challenge(&"A".repeat(S256_CHALLENGE_LEN + 1)));
+        // Padded or standard-alphabet base64 is not the unpadded url-safe form.
+        assert!(!is_s256_challenge(&format!(
+            "{}=",
+            "A".repeat(S256_CHALLENGE_LEN - 1)
+        )));
+        assert!(!is_s256_challenge(&format!(
+            "{}+",
+            "A".repeat(S256_CHALLENGE_LEN - 1)
+        )));
+        assert!(!is_s256_challenge(&format!(
+            "{}é",
+            "A".repeat(S256_CHALLENGE_LEN - 2)
+        )));
+    }
+
+    #[test]
     fn every_rejection_publishes_its_catalog_code() {
+        assert!(matches!(
+            OidcAuthorizeRejection::binding_malformed(),
+            OidcAuthorizeRejection::BindingMalformed { code } if code == error_codes::REQUEST_MALFORMED
+        ));
         assert!(matches!(
             OidcAuthorizeRejection::redirect_invalid(),
             OidcAuthorizeRejection::RedirectInvalid { code } if code == error_codes::AUTH_OIDC_REDIRECT_INVALID

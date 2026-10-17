@@ -21,7 +21,7 @@
 
 use capsule_core::crypto::keys::MasterKey;
 use capsule_core::crypto::primitives::DeviceTier;
-use capsule_core::crypto::provenance::record::ProvenanceChain;
+use capsule_core::crypto::provenance::ProvenanceChain;
 use capsule_core::lifecycle::{LifecycleError, Workspace};
 use capsule_e2e::fixtures::synthetic_jpeg;
 use capsule_e2e::{Device, FAST_KDF, PASSPHRASE, Server};

@@ -76,6 +76,16 @@ impl fmt::Display for Value<'_> {
 /// The locale-free entry point, for a template that did not come from a bundle. Use
 /// [`format_message_in`] — or [`crate::Bundle::format`], which does — whenever the
 /// message's locale is known, because the plural arm a count selects depends on it.
+///
+/// ```
+/// use capsule_i18n::{Value, format_message};
+///
+/// let template = "{count, plural, one {# photo} other {# photos}}";
+/// assert_eq!(
+///     format_message(template, &[("count", Value::Int(0))]),
+///     "0 photos"
+/// );
+/// ```
 #[must_use]
 pub fn format_message(template: &str, args: &[(&str, Value<'_>)]) -> String {
     format_message_in("en", template, args)
@@ -86,6 +96,19 @@ pub fn format_message(template: &str, args: &[(&str, Value<'_>)]) -> String {
 /// `locale` may be a full tag (`pt-BR`); only its language subtag reaches the plural
 /// rules. See the module docs for the supported ICU subset and for what a construct
 /// outside it does.
+///
+/// The entry point for a template already in hand rather than a catalog key — the same
+/// renderer [`crate::Bundle::format`] calls. The locale decides the arm: French puts zero in
+/// `one`, English does not.
+///
+/// ```
+/// use capsule_i18n::{Value, format_message_in};
+///
+/// let template = "{count, plural, one {# photo} other {# photos}}";
+/// let zero = [("count", Value::Int(0))];
+/// assert_eq!(format_message_in("fr-CA", template, &zero), "0 photo");
+/// assert_eq!(format_message_in("en", template, &zero), "0 photos");
+/// ```
 #[must_use]
 pub fn format_message_in(locale: &str, template: &str, args: &[(&str, Value<'_>)]) -> String {
     let mut out = String::with_capacity(template.len());

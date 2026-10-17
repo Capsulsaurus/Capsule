@@ -2,7 +2,7 @@
 //! (SSoT: [Threat Model — Server-Side Validation Invariants]). The server holds no keys,
 //! so it cannot verify signatures — but it validates *structure* refuse-by-default. These
 //! are pure predicates over the manifest core and server-known state; the client mirrors
-//! them via [`verify_asset`](fn@crate::crypto::verify_asset).
+//! them via [`verify_asset`](crate::crypto::verify_asset::verify_asset).
 //!
 //! [Threat Model — Server-Side Validation Invariants]: https://docs/design/threat-model/validation/#server-side-validation-invariants
 
@@ -69,7 +69,7 @@ pub fn prior_hash_matches(
 }
 
 /// Invariant 18: `amk_version` never regresses for an album (server's structural backstop;
-/// MLS is the authority on the ceiling — see [`verify_asset`](fn@crate::crypto::verify_asset)).
+/// MLS is the authority on the ceiling — see [`verify_asset`](crate::crypto::verify_asset::verify_asset)).
 pub fn amk_version_monotonic(new: u32, stored: Option<u32>) -> bool {
     match stored {
         None => true,
@@ -84,7 +84,7 @@ pub fn amk_version_monotonic(new: u32, stored: Option<u32>) -> bool {
 /// when the manifest commits to no hash — a bundle carrying a blob must be committed to.
 ///
 /// This is the value half of the client-side round-trip check
-/// ([`verify_metadata_binding`](crate::crypto::verify_metadata_binding)); the server never
+/// ([`verify_metadata_binding`](crate::crypto::verify_asset::verify_metadata_binding)); the server never
 /// decrypts, so it checks only the content address.
 pub fn metadata_blob_hash_matches(committed: Option<Hash32>, metadata_blob: &[u8]) -> bool {
     committed.is_some_and(|h| blob_ciphertext_hash(metadata_blob) == h)
@@ -184,11 +184,9 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::crypto::CRYPTO_SUITE_ID;
     use crate::crypto::keys::{AmkVersion, HybridSigningKey};
-    use crate::crypto::primitives::PROTOCOL_VERSION;
-    use crate::crypto::provenance::action::Action;
-    use crate::crypto::provenance::manifest::{ASSET_MANIFEST_VERSION, KeyMode, ManifestCore};
+    use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
+    use crate::crypto::provenance::{ASSET_MANIFEST_VERSION, Action, KeyMode, ManifestCore};
 
     #[test]
     fn hash_length_and_size_and_content_type() {

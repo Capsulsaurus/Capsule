@@ -1087,7 +1087,7 @@ mod tests {
             config.protocol_max,
             crate::upload::policy::DEFAULT_PROTOCOL_MAX
         );
-        let spoken = capsule_core::crypto::PROTOCOL_VERSION;
+        let spoken = capsule_core::crypto::primitives::PROTOCOL_VERSION;
         assert!(config.protocol_min.as_str() < spoken && spoken < config.protocol_max.as_str());
         assert_eq!(
             config.min_client_build,

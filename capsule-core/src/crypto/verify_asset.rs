@@ -276,15 +276,15 @@ mod tests {
 
     use super::*;
     use crate::crypto::authority::ReferenceAuthority;
-    use crate::crypto::encryption::stream::{decrypt_asset_vec, encrypt_asset_vec_with_prefix};
-    use crate::crypto::encryption::{seal_file_key, unseal_file_key};
+    use crate::crypto::encryption::{
+        decrypt_asset_vec, encrypt_asset_vec_with_prefix, seal_file_key, unseal_file_key,
+    };
     use crate::crypto::hash::Hash32;
     use crate::crypto::keys::directory::{DeviceEntry, DirectoryCore};
     use crate::crypto::keys::{Amk, AmkVersion, HybridSigningKey};
     use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
-    use crate::crypto::provenance::action::Action;
-    use crate::crypto::provenance::manifest::{
-        ASSET_MANIFEST_VERSION, KeyMode, ManifestCore, WrappedFileKey,
+    use crate::crypto::provenance::{
+        ASSET_MANIFEST_VERSION, Action, KeyMode, ManifestCore, WrappedFileKey,
     };
 
     const USER: u128 = 0x05E2;

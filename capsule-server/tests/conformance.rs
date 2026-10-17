@@ -1736,7 +1736,7 @@ async fn every_declared_response_is_exercised() {
             owner_id: support::owner(),
             album_id: support::album(),
             protocol_version: PROTOCOL_VERSION.to_owned(),
-            crypto_suite_id: capsule_core::crypto::CRYPTO_SUITE_ID,
+            crypto_suite_id: capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
             created_at: jiff::Timestamp::UNIX_EPOCH,
         })
         .await
@@ -4211,7 +4211,7 @@ async fn drops_block(
         .json(&serde_json::json!({
             "opaque_id": "too-short",
             "drop_pubkey": "AAAA",
-            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
         }))
         .send()
         .await
@@ -4226,7 +4226,7 @@ async fn drops_block(
         .json(&serde_json::json!({
             "opaque_id": drop_link,
             "drop_pubkey": "AAAA",
-            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
             "max_file_size": 4096,
             "max_file_count": 2,
         }))
@@ -4351,7 +4351,7 @@ async fn drops_block(
             "size": dropped.len(),
             "hash": checksum(&dropped),
             "content_type": "image/jpeg",
-            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
             "protocol_version": PROTOCOL_VERSION,
             "key_mode": "smuggled",
             "manifest_envelope": create_request(&fixture.clock, &dropped, "original")
@@ -4369,7 +4369,7 @@ async fn drops_block(
             "size": dropped.len(),
             "hash": checksum(&dropped),
             "content_type": "image/jpeg",
-            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
             "protocol_version": PROTOCOL_VERSION,
             "key_mode": "wrapped",
             "manifest_envelope": create_request(&fixture.clock, &dropped, "original")
@@ -4388,7 +4388,7 @@ async fn drops_block(
             "size": dropped.len(),
             "hash": checksum(&dropped),
             "content_type": "image/jpeg",
-            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
             "protocol_version": PROTOCOL_VERSION,
             "key_mode": "wrapped",
             "manifest_envelope": create_request(&fixture.clock, &dropped, "original")
@@ -4490,7 +4490,7 @@ async fn drops_block(
         .json(&serde_json::json!({
             "opaque_id": unbounded,
             "drop_pubkey": "AAAA",
-            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
         }))
         .send()
         .await
@@ -4532,7 +4532,7 @@ async fn drops_block(
         .json(&serde_json::json!({
             "opaque_id": drop_link,
             "drop_pubkey": "AAAA",
-            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
         }))
         .send()
         .await
@@ -4572,7 +4572,7 @@ async fn drops_block(
             "size": dropped.len(),
             "hash": checksum(&dropped),
             "content_type": "image/jpeg",
-            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
             "protocol_version": PROTOCOL_VERSION,
             "key_mode": "wrapped",
             "manifest_envelope": create_request(&fixture.clock, &dropped, "original")
@@ -4982,7 +4982,7 @@ async fn oidc_block(client: &support::Client, fixture: &Fixture) {
     fixture.oidc_authorizations.set_full(true);
     client
         .post("/v1/auth/oidc/authorize")
-        .json(&json!({ "redirect_uri": REDIRECT }))
+        .json(&support::oidc_authorize_body(REDIRECT))
         .send()
         .await
         .assert_status(StatusCode::SERVICE_UNAVAILABLE);
@@ -4990,19 +4990,19 @@ async fn oidc_block(client: &support::Client, fixture: &Fixture) {
     for _ in 0..60 {
         client
             .post("/v1/auth/oidc/authorize")
-            .json(&json!({ "redirect_uri": "http://[::1]:4242/budget" }))
+            .json(&support::oidc_authorize_body("http://[::1]:4242/budget"))
             .send()
             .await;
     }
     client
         .post("/v1/auth/oidc/authorize")
-        .json(&json!({ "redirect_uri": "http://[::1]:4242/budget" }))
+        .json(&support::oidc_authorize_body("http://[::1]:4242/budget"))
         .send()
         .await
         .assert_status(StatusCode::TOO_MANY_REQUESTS);
     let begun: serde_json::Value = client
         .post("/v1/auth/oidc/authorize")
-        .json(&json!({ "redirect_uri": REDIRECT }))
+        .json(&support::oidc_authorize_body(REDIRECT))
         .send()
         .await
         .assert_status(StatusCode::OK)
@@ -5010,7 +5010,7 @@ async fn oidc_block(client: &support::Client, fixture: &Fixture) {
     fixture.idp.set_configured(false);
     client
         .post("/v1/auth/oidc/authorize")
-        .json(&json!({ "redirect_uri": REDIRECT }))
+        .json(&support::oidc_authorize_body(REDIRECT))
         .send()
         .await
         .assert_status(StatusCode::NOT_FOUND);
@@ -5018,7 +5018,7 @@ async fn oidc_block(client: &support::Client, fixture: &Fixture) {
     fixture.idp.set_unavailable(true);
     client
         .post("/v1/auth/oidc/authorize")
-        .json(&json!({ "redirect_uri": REDIRECT }))
+        .json(&support::oidc_authorize_body(REDIRECT))
         .send()
         .await
         .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
@@ -5026,13 +5026,16 @@ async fn oidc_block(client: &support::Client, fixture: &Fixture) {
     fixture.oidc_authorizations.set_unavailable(true);
     client
         .post("/v1/auth/oidc/authorize")
-        .json(&json!({ "redirect_uri": REDIRECT }))
+        .json(&support::oidc_authorize_body(REDIRECT))
         .send()
         .await
         .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
     client
         .post("/v1/auth/oidc/callback")
-        .json(&json!({ "state": begun["state"], "code": support::GOOD_CODE }))
+        .json(&support::oidc_callback_body(
+            &begun["state"],
+            support::GOOD_CODE,
+        ))
         .send()
         .await
         .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
@@ -5041,14 +5044,20 @@ async fn oidc_block(client: &support::Client, fixture: &Fixture) {
     // callback: 401 (unknown state), 500 (the provider), 200, then 409 and 202.
     client
         .post("/v1/auth/oidc/callback")
-        .json(&json!({ "state": "never-issued", "code": support::GOOD_CODE }))
+        .json(&support::oidc_callback_body(
+            &json!("never-issued"),
+            support::GOOD_CODE,
+        ))
         .send()
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
     fixture.idp.set_unavailable(true);
     client
         .post("/v1/auth/oidc/callback")
-        .json(&json!({ "state": begun["state"], "code": support::GOOD_CODE }))
+        .json(&support::oidc_callback_body(
+            &begun["state"],
+            support::GOOD_CODE,
+        ))
         .send()
         .await
         .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
@@ -5056,14 +5065,17 @@ async fn oidc_block(client: &support::Client, fixture: &Fixture) {
 
     let begun: serde_json::Value = client
         .post("/v1/auth/oidc/authorize")
-        .json(&json!({ "redirect_uri": REDIRECT }))
+        .json(&support::oidc_authorize_body(REDIRECT))
         .send()
         .await
         .assert_status(StatusCode::OK)
         .json();
     let signed: TokenResponse = client
         .post("/v1/auth/oidc/callback")
-        .json(&json!({ "state": begun["state"], "code": support::GOOD_CODE }))
+        .json(&support::oidc_callback_body(
+            &begun["state"],
+            support::GOOD_CODE,
+        ))
         .send()
         .await
         .assert_status(StatusCode::OK)
@@ -5080,14 +5092,17 @@ async fn oidc_block(client: &support::Client, fixture: &Fixture) {
         });
     let begun: serde_json::Value = client
         .post("/v1/auth/oidc/authorize")
-        .json(&json!({ "redirect_uri": REDIRECT }))
+        .json(&support::oidc_authorize_body(REDIRECT))
         .send()
         .await
         .assert_status(StatusCode::OK)
         .json();
     client
         .post("/v1/auth/oidc/callback")
-        .json(&json!({ "state": begun["state"], "code": support::GOOD_CODE }))
+        .json(&support::oidc_callback_body(
+            &begun["state"],
+            support::GOOD_CODE,
+        ))
         .send()
         .await
         .assert_status(StatusCode::CONFLICT);
@@ -5128,14 +5143,17 @@ async fn oidc_block(client: &support::Client, fixture: &Fixture) {
         .assert_status(StatusCode::NO_CONTENT);
     let begun: serde_json::Value = client
         .post("/v1/auth/oidc/authorize")
-        .json(&json!({ "redirect_uri": REDIRECT }))
+        .json(&support::oidc_authorize_body(REDIRECT))
         .send()
         .await
         .assert_status(StatusCode::OK)
         .json();
     client
         .post("/v1/auth/oidc/callback")
-        .json(&json!({ "state": begun["state"], "code": support::GOOD_CODE }))
+        .json(&support::oidc_callback_body(
+            &begun["state"],
+            support::GOOD_CODE,
+        ))
         .send()
         .await
         .assert_status(StatusCode::ACCEPTED);

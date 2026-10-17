@@ -15,7 +15,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use capsule_core::crypto::hash::hash_bytes;
 use capsule_core::crypto::primitives::CRYPTO_SUITE_ID;
-use capsule_core::crypto::provenance::manifest::KeyMode;
+use capsule_core::crypto::provenance::KeyMode;
 use capsule_core::drop::{DropAdopter as _, LinkCaps, UploadLinkIssuer as _, seal_drop};
 use capsule_e2e::fixtures::synthetic_jpeg;
 use capsule_e2e::push::wire_envelope;
