@@ -1286,6 +1286,8 @@ async fn a_signed_report_from_a_pinned_peer_is_filed_and_changes_nothing_about_t
     let (signer, public) = support::peer_keypair();
     pin(&fixture, public).await;
     let hash = support::checksum(b"the reported bytes");
+    // A sub-microsecond tail on the server's clock, which a durable report store cannot hold.
+    fixture.clock.advance(SignedDuration::from_nanos(1_001));
 
     let accepted: Value = file(&fixture, report(&signer, &hash, Some("csam")))
         .await
@@ -1309,6 +1311,20 @@ async fn a_signed_report_from_a_pinned_peer_is_filed_and_changes_nothing_about_t
     assert!(
         !pending[0].signature.is_empty(),
         "the signature is kept so an operator can re-verify it"
+    );
+    // The instant the answer echoes is the one the queue holds, at the precision every adapter
+    // can store — the Postgres one keeps microseconds, so a nanosecond echo would disagree with
+    // the row an operator reads.
+    let echoed: Timestamp = accepted["received_at"]
+        .as_str()
+        .expect("a received_at")
+        .parse()
+        .expect("an RFC 3339 instant");
+    assert_eq!(echoed, pending[0].received_at);
+    assert_eq!(
+        echoed.subsec_nanosecond() % 1_000,
+        0,
+        "the echoed instant must be whole microseconds: {echoed}"
     );
 
     // A report is an input to a decision, never a decision: nothing was done to the account.

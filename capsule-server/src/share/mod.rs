@@ -48,6 +48,14 @@
 //! This port resolves authoritatively on every request, so the 60-second fail-closed cache has
 //! nothing to be stale about. It becomes real with the first multi-replica deployment, and the
 //! fail-closed rule is what it must be written to.
+//!
+//! # Adapters
+//!
+//! [`InMemoryShares`] is the deterministic double and [`PostgresShares`] the durable adapter;
+//! both pass the one suite in [`conformance`].
+
+pub mod conformance;
+pub mod postgres;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
@@ -55,6 +63,7 @@ use std::sync::{Arc, Mutex};
 use capsule_core::sharing::{OPAQUE_ID_LEN, ShareScope};
 use jiff::Timestamp;
 
+pub use self::postgres::PostgresShares;
 use crate::blob::ContentAddress;
 use crate::store::{StoreFuture, UserId};
 

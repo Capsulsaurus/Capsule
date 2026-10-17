@@ -49,8 +49,8 @@
 //! is missing is durability, which is what makes it the development profile
 //! ([`Backends::Memory`](crate::config::Backends)) rather than a deployment.
 //!
-//! The Postgres adapter is still owed (#402), and it is written against this contract and the
-//! suite over it rather than against this type.
+//! The durable adapter is [`postgres::PostgresTotp`], one row per account in which each of the
+//! three properties is a single statement; [`conformance`] is the suite both adapters pass.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -458,6 +458,12 @@ impl TotpStore for InMemoryTotp {
         Box::pin(async move { Ok(self.enrollments().remove(user).is_some()) })
     }
 }
+
+pub mod conformance;
+pub mod postgres;
+
+pub use self::postgres::PostgresTotp;
+
 #[cfg(test)]
 mod tests {
     use jiff::Timestamp;

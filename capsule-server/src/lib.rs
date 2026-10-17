@@ -53,10 +53,9 @@
 //! real adapter is written *against*, and a port with two implementations before it has one
 //! suite is a port whose two implementations will disagree.
 //!
-//! Four ports now have the second implementation (#402) — [`index`]'s asset index, [`auth`]'s
-//! account cluster, [`store`]'s device-cohort map and [`quota`]'s ledger — each passing the same
-//! case list as its double. The remaining durable ports are #446's and the volatile ones are
-//! Valkey's (#403).
+//! Every durable port now has the second implementation on Postgres (#402, #446) and every
+//! volatile one on Valkey (#403), each passing the same case list as its double. The two OIDC
+//! stores are the exception (#460), and a durable boot that configures OIDC is refused.
 //!
 //! **The suite still runs without a container.** Every Postgres case is gated on
 //! `CAPSULE_TEST_POSTGRES=1` and prints one line naming itself when it is skipped, so

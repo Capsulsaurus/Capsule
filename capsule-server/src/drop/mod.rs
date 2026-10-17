@@ -39,12 +39,22 @@
 //! Invariant 31 wants the same two limiters the share-link serve path wants, and they need the
 //! same counter port `S-C32` owns. The `429` is **not declared** (`S-C28`). The caps are not a
 //! substitute — they bound total damage, not request rate — and saying so is the point.
+//!
+//! # Adapters
+//!
+//! [`InMemoryDrops`] is the deterministic double and [`PostgresDrops`] the durable adapter;
+//! both pass the one suite in [`conformance`]. The cap rule itself is one function, [`admit`],
+//! which each adapter runs under its own lock.
+
+pub mod conformance;
+pub mod postgres;
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use jiff::Timestamp;
 
+pub use self::postgres::PostgresDrops;
 use crate::blob::ContentAddress;
 use crate::store::{StoreFuture, UploadId, UserId};
 
@@ -282,6 +292,51 @@ pub trait DropStore: std::fmt::Debug + Send + Sync {
     fn discard<'a>(&'a self, owner: &'a UserId, drop_id: &'a str) -> StoreFuture<'a, bool>;
 }
 
+/// Decide whether `link` admits a `size`-byte drop at `at`, and reserve it if so.
+///
+/// The one copy of the cap rule, shared by every adapter: each calls it on the link it holds
+/// under its own lock — the in-memory mutex, the Postgres row lock — so the decision and the
+/// reservation are one operation wherever the link lives. A refusal leaves `link` untouched.
+pub(crate) fn admit(link: &mut UploadLinkRecord, size: u64, at: Timestamp) -> Admission {
+    if !link.is_live_at(at) {
+        return Admission::NotLive;
+    }
+
+    // Invariant 28, before the cumulative caps: a file the link could never accept is that
+    // answer whatever room is left, and telling a guest "the link is full" about a file that was
+    // simply too big would send them to the wrong remedy.
+    if let Some(limit) = link.caps.max_file_size
+        && size > limit
+    {
+        return Admission::FileTooLarge { limit };
+    }
+
+    if let Some(cap) = link.caps.max_file_count
+        && link.used_files >= cap
+    {
+        return Admission::CapExhausted;
+    }
+    if let Some(cap) = link.caps.max_total_bytes
+        && link.used_bytes.saturating_add(size) > cap
+    {
+        return Admission::CapExhausted;
+    }
+
+    link.used_bytes = link.used_bytes.saturating_add(size);
+    link.used_files = link.used_files.saturating_add(1);
+    tracing::info!(
+        owner = %link.owner_id,
+        used_bytes = link.used_bytes,
+        used_files = link.used_files,
+        "an upload link admitted a drop"
+    );
+    Admission::Admitted {
+        owner_id: link.owner_id.clone(),
+        crypto_suite_id: link.crypto_suite_id,
+        protocol_version: link.protocol_version.clone(),
+    }
+}
+
 /// A deterministic in-memory adapter.
 #[derive(Debug, Default)]
 pub struct InMemoryDrops {
@@ -355,43 +410,7 @@ impl DropStore for InMemoryDrops {
             let Some(link) = inner.links.get_mut(opaque_id) else {
                 return Ok(Admission::NotLive);
             };
-            if !link.is_live_at(at) {
-                return Ok(Admission::NotLive);
-            }
-
-            // Invariant 28, before the cumulative caps: a file the link could never accept is
-            // that answer whatever room is left, and telling a guest "the link is full" about a
-            // file that was simply too big would send them to the wrong remedy.
-            if let Some(limit) = link.caps.max_file_size
-                && size > limit
-            {
-                return Ok(Admission::FileTooLarge { limit });
-            }
-
-            if let Some(cap) = link.caps.max_file_count
-                && link.used_files >= cap
-            {
-                return Ok(Admission::CapExhausted);
-            }
-            if let Some(cap) = link.caps.max_total_bytes
-                && link.used_bytes.saturating_add(size) > cap
-            {
-                return Ok(Admission::CapExhausted);
-            }
-
-            link.used_bytes = link.used_bytes.saturating_add(size);
-            link.used_files = link.used_files.saturating_add(1);
-            tracing::info!(
-                owner = %link.owner_id,
-                used_bytes = link.used_bytes,
-                used_files = link.used_files,
-                "an upload link admitted a drop"
-            );
-            Ok(Admission::Admitted {
-                owner_id: link.owner_id.clone(),
-                crypto_suite_id: link.crypto_suite_id,
-                protocol_version: link.protocol_version.clone(),
-            })
+            Ok(admit(link, size, at))
         })
     }
 
