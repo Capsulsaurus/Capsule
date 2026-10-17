@@ -9,26 +9,28 @@
 //! verify under" are all properties of *this function*, and they are asserted below rather than
 //! discovered on a deployment.
 //!
-//! # The seam, and what #446 still changes
+//! # The seam
 //!
 //! Selection is a two-arm `match` on [`Backends`] and not a trait. The `Arc<dyn Port>` fields in
 //! [`Modules`] already **are** the abstraction; a second one over the top would abstract the
-//! composition root from itself. The Postgres (#402) and Valkey (#403) adapters fill both halves
-//! of the [`Backends::Durable`] arm, and nothing else here moves.
+//! composition root from itself. Each arm fills one `Ports` value and one `Stores` value, and
+//! [`compose`] builds the application out of them identically, so the two profiles cannot drift
+//! into serving different applications.
 //!
-//! Both halves of that arm are real. [`open_durable_database`] demands `DATABASE_URL`, opens the
-//! pool, and refuses to continue against a database whose schema is not the one this binary was
-//! built for — naming the command that fixes it, never the URL. [`valkey`] then connects to
-//! `VALKEY_URL` and proves it answers `PING`; a server that cannot be reached is
-//! [`BootError::Valkey`] — the refusal `store/mod.rs` has said since `S-C29` a required service
-//! earns: *"Valkey is required; the server refuses to boot without `VALKEY_URL`"*.
+//! Both halves of the [`Backends::Durable`] arm are real. [`open_durable_database`] demands
+//! `DATABASE_URL`, opens the pool, and refuses to continue against a database whose schema is not
+//! the one this binary was built for — naming the command that fixes it, never the URL.
+//! [`valkey`] then connects to `VALKEY_URL` and proves it answers `PING`; a server that cannot be
+//! reached is [`BootError::Valkey`] — the refusal `store/mod.rs` has said since `S-C29` a
+//! required service earns: *"Valkey is required; the server refuses to boot without
+//! `VALKEY_URL`"*. Every durable port is then on one of the two (#402, #403, #446): Postgres for
+//! every record a restart must not lose, Valkey for the volatile state.
 //!
-//! And then the arm **still refuses**, because five durable ports have an adapter on neither
-//! side: they are #446's. Refusing there rather than filling them with in-memory adapters is the
-//! whole point. design/filesystem/server.md is explicit — *"Required means required"* — and a
-//! server that came up holding state it will lose on the next restart is worse than one that does
-//! not start. So the arm proves everything it honestly can, says exactly what is missing, and
-//! #446 turns the last `Err` into an `Ok`.
+//! The one exception is OIDC, whose ceremony and federated-account stores have in-memory
+//! adapters only (#460). A durable boot that configures it is refused before either probe runs
+//! rather than given an in-memory store beside a real Valkey. design/filesystem/server.md is
+//! explicit — *"Required means required"* — and a server that came up holding state it will lose
+//! on the next restart is worse than one that does not start.
 //!
 //! No `VALKEY_URL` and no `--memory` is a configuration fault naming the variable
 //! ([`Config::load`]). Nothing here ever silently becomes an in-memory server.
@@ -43,53 +45,74 @@
 //!   written. It also makes the profile useful to `scrub`, which compares those two halves and
 //!   will honestly report every blob as an orphan.
 //! - **The collector's marks do not survive either.** [`crate::gc::collect`] marks a blob on one
-//!   pass and sweeps it on a later pass once the grace window has passed, so a fresh process can
-//!   only ever mark. Sweeping needs a durable `CollectionStore`, which is #446's — #402 landed
-//!   the durable index the collector *reads*, not the marks it writes.
+//!   pass and sweeps it on a later pass once the grace window has passed, so a fresh `--memory`
+//!   process can only ever mark. The durable profile keeps the marks in Postgres beside the index,
+//!   which is what lets `gc` run as one process per pass.
 
 use std::sync::Arc;
 
 use jiff::Timestamp;
+use sea_orm::DatabaseConnection;
 
 use crate::album::authority::ProvisionedAuthority;
-use crate::album::{AlbumContext, InMemoryAlbums};
+use crate::album::postgres::PostgresAlbums;
+use crate::album::{AlbumContext, AlbumStore, InMemoryAlbums};
 use crate::app::{App, Modules};
-use crate::attestation::{AttestationContext, InMemoryReceipts, LocalAttestationKey};
+use crate::attestation::postgres::PostgresReceipts;
+use crate::attestation::{AttestationContext, InMemoryReceipts, LocalAttestationKey, ReceiptLog};
 use crate::auth::oidc::{
     HttpIdentityProvider, IdentityProvider, InMemoryFederatedAccounts, OidcCollaborators,
     OidcContext, OidcSettings,
 };
+use crate::auth::totp::postgres::PostgresTotp;
 use crate::auth::{
-    AuthCollaborators, AuthContext, Credentials, InMemoryAccounts, InMemoryTotp, SessionTokens,
-    TotpCodes, TotpContext,
+    AccountDirectory, AccountProfiles, AccountRegistry, AuthCollaborators, AuthContext,
+    Credentials, InMemoryAccounts, InMemoryTotp, PasswordChange, PostgresAccounts, SessionTokens,
+    TotpCodes, TotpContext, TotpStore,
 };
 use crate::blob::FilesystemBlobStore;
 use crate::config::{Backends, Config};
-use crate::counter::{CounterContext, InMemoryCounters};
-use crate::directory::{DeviceDirectoryContext, InMemoryDeviceDirectory};
+use crate::counter::valkey::ValkeyCounters;
+use crate::counter::{CounterContext, CounterStore, InMemoryCounters};
+use crate::directory::postgres::PostgresDeviceDirectory;
+use crate::directory::{DeviceDirectoryContext, DeviceDirectoryStore, InMemoryDeviceDirectory};
+use crate::discovery::revocation::RevocationList;
 use crate::discovery::{DiscoveryContext, ProtocolWindow, ServerInfo};
-use crate::drop::{DropContext, InMemoryDrops};
+use crate::drop::postgres::PostgresDrops;
+use crate::drop::{DropContext, DropStore, InMemoryDrops};
 use crate::enrollment::EnrollmentContext;
-use crate::escrow::{EscrowContext, InMemoryEscrow};
+use crate::escrow::postgres::PostgresEscrow;
+use crate::escrow::{EscrowContext, EscrowStore, InMemoryEscrow};
+use crate::federation::postgres::{PostgresCapabilities, PostgresPeers};
 use crate::federation::{
-    CapabilityCodec, FederationCollaborators, FederationContext, InMemoryCapabilities,
-    InMemoryPeers,
+    CapabilityCodec, CapabilityStore, FederationCollaborators, FederationContext,
+    InMemoryCapabilities, InMemoryPeers, PeerStore,
 };
-use crate::gc::CollectionContext;
 use crate::gc::memory::InMemoryCollection;
+use crate::gc::postgres::PostgresCollection;
+use crate::gc::{CollectionContext, CollectionStore};
+use crate::index::AssetIndex;
 use crate::index::memory::InMemoryAssetIndex;
-use crate::membership::{InMemoryMembership, MembershipContext};
-use crate::moderation::{InMemoryModeration, ModerationContext};
-use crate::quota::{InMemoryQuota, QuotaContext, QuotaLimits};
+use crate::index::postgres::PostgresAssetIndex;
+use crate::membership::{
+    InMemoryMembership, MembershipContext, MembershipStore, PostgresMembership,
+};
+use crate::moderation::postgres::PostgresModeration;
+use crate::moderation::{InMemoryModeration, ModerationContext, ModerationStore};
+use crate::quota::{InMemoryQuota, PostgresQuota, QuotaContext, QuotaLimits, QuotaStore};
 use crate::scrub::ScrubContext;
 use crate::serve::ServeContext;
-use crate::share::{InMemoryShares, ShareContext};
-use crate::store::SystemClock;
+use crate::share::postgres::PostgresShares;
+use crate::share::{InMemoryShares, ShareContext, ShareStore};
 use crate::store::memory::{
     InMemoryAuthState, InMemoryChallenges, InMemoryChannels, InMemoryCohorts, InMemoryEnrollments,
     InMemoryOidcAuthorizations, InMemoryUploadSessions,
 };
 use crate::store::valkey::ValkeyStores;
+use crate::store::{
+    AuthStateStore, ChallengeStore, ChannelStore, CohortStore, EnrollmentStore, PostgresCohorts,
+    SystemClock, UploadSessionStore,
+};
 use crate::sync::{CursorCodec, SyncContext};
 use crate::upload::{UploadContext, UploadPolicy};
 use crate::verify::VerifyContext;
@@ -176,25 +199,6 @@ pub enum BootError {
         /// The adapter's own description of the failure.
         detail: String,
     },
-    /// An operator command was run without `--memory` and one of the stores it reads has no
-    /// durable adapter.
-    ///
-    /// Deliberately not [`Self::AdapterUnavailable`]: that one names `DATABASE_URL`, which an
-    /// operator running `capsule-server scrub` has typically never set, and pointing them at a
-    /// variable that would not have helped is worse than saying nothing.
-    ///
-    /// The durable **index** exists as of #402, so this no longer says otherwise. What is still
-    /// missing is on the worker's own side: the collector marks a blob on one pass and sweeps it
-    /// on a later one, so a volatile `CollectionStore` means a process can only ever mark; and
-    /// the scrub reads the upload-session store to tell a live transfer apart from an orphan.
-    #[error(
-        "this command needs `--memory`: it reads stores that have no durable adapter yet — the \
-         collector's marks and the upload sessions the scrub reconciles against (see {issue})"
-    )]
-    MaintenanceNeedsMemory {
-        /// Where the work is tracked.
-        issue: &'static str,
-    },
     /// The router's own types do not describe a buildable server.
     ///
     /// Unreachable in practice — the conformance suite builds the same router on every test run
@@ -257,9 +261,13 @@ impl Assembled {
 /// Returns [`BootError`] for any of the startup failures above. Nothing is left half-built: the
 /// blob root is the only side effect, and it is idempotent.
 pub async fn assemble(config: &Config) -> Result<Assembled, BootError> {
-    let stores = stores(config).await?;
+    let base = base(config).await?;
     match config.backends {
-        Backends::Memory => memory(config, stores),
+        Backends::Memory => {
+            let stores = base.in_memory();
+            let ports = memory_ports(config, &stores.clock)?;
+            compose(config, stores, ports, "the in-memory adapters")
+        }
         Backends::Durable => {
             // Checked before anything else the durable arm does, so it survives the adapters
             // filling that arm: the OIDC ceremony store and the federated-account directory have
@@ -274,17 +282,13 @@ pub async fn assemble(config: &Config) -> Result<Assembled, BootError> {
             }
             // Both probes run for real, in the order the ports are declared: `DATABASE_URL` is
             // demanded and the pool opened first — a schema that is not the one this binary was
-            // built for refuses here — and then Valkey must answer `PING`. The arm still refuses
-            // afterwards, because the ports it cannot fill are the ones a server loses state
-            // without. See the module docs.
-            //
-            // Neither handle is passed on. Constructing the adapters and throwing them away
-            // would be theatre in production code; that they *do* compose out of exactly what
-            // this function has is asserted in `tests::postgres_conformance` instead, which is
-            // where an assertion belongs.
-            let _connection = open_durable_database(config).await?;
-            let _valkey = valkey(config).await?;
-            Err(durable_ports_owed())
+            // built for refuses here — and then Valkey must answer `PING`. Only then is any
+            // module assembled, and every port it is assembled from is on one of the two.
+            let connection = open_durable_database(config).await?;
+            let valkey = valkey(config).await?;
+            let stores = base.durable(&connection, &valkey);
+            let ports = durable_ports(config, &stores.clock, &connection, &valkey)?;
+            compose(config, stores, ports, "the Postgres and Valkey adapters")
         }
     }
 }
@@ -322,35 +326,39 @@ async fn open_durable_database(config: &Config) -> Result<sea_orm::DatabaseConne
 ///
 /// # Errors
 ///
-/// Returns [`BootError`] for the blob root or an unimplemented durable backend. It cannot fail
-/// on key material, because it asks for none.
+/// Returns [`BootError`] for the blob root or a durable backend that cannot be opened. It cannot
+/// fail on key material, because it asks for none.
 pub async fn assemble_maintenance(config: &Config) -> Result<Maintenance, BootError> {
-    let stores = stores(config).await?;
-    match config.backends {
-        Backends::Memory => {
-            let maintenance = stores.maintenance(config.grace_window);
-            tracing::info!(
-                blob_root = %stores.root.display(),
-                grace_window = %config.grace_window,
-                "assembled the operator workers on the in-memory adapters"
-            );
-            Ok(maintenance)
-        }
-        // **Not** `durable_ports_owed()`. A maintenance command reaching here has almost always
-        // set no backend variable at all — `gc`/`purge`/`scrub` never demand `VALKEY_URL`, so
-        // naming it would send an operator to configure a variable that would not have helped.
+    let base = base(config).await?;
+    let (stores, adapters) = match config.backends {
+        Backends::Memory => (base.in_memory(), "the in-memory adapters"),
+        // The same two probes, in the same order, as `serve`'s durable arm — and the same
+        // stores, so a `gc` pass reads the index the server writes and the marks the previous
+        // pass left. That last part is the reason the arm exists: the collector marks a blob on
+        // one pass and sweeps it on a later one, so a mark store that forgets is a collector that
+        // can only ever mark.
         //
-        // The durable index exists as of #402, and it is not what is missing. The collector
-        // marks a blob on one pass and sweeps it on a later one, so a `CollectionStore` that
-        // forgets is a collector that can only ever mark — and it has no durable adapter at all,
-        // which is #446's. The upload-session store the scrub reconciles against (how it tells a
-        // live transfer apart from an orphan) does have one as of #403, but it is on Valkey and
-        // these commands deliberately never demand `VALKEY_URL`; opening a connection they were
-        // built not to need is its own decision, and #446 is where it belongs.
-        Backends::Durable => Err(BootError::MaintenanceNeedsMemory {
-            issue: "#446 (the collector's marks, and a durable read path for these commands)",
-        }),
-    }
+        // `VALKEY_URL` is demanded too, after `DATABASE_URL`. The scrub reads the upload-session
+        // store to tell a live transfer from an orphan, and that store is Valkey's (#403); a
+        // scrub over the durable index that consulted an empty in-memory session table instead
+        // would report every in-flight upload as an orphan.
+        Backends::Durable => {
+            let connection = open_durable_database(config).await?;
+            let valkey = valkey(config).await?;
+            (
+                base.durable(&connection, &valkey),
+                "the Postgres and Valkey adapters",
+            )
+        }
+    };
+    let maintenance = stores.maintenance(config.grace_window);
+    tracing::info!(
+        blob_root = %stores.root.display(),
+        grace_window = %config.grace_window,
+        adapters,
+        "assembled the operator workers"
+    );
+    Ok(maintenance)
 }
 
 /// Connect to `VALKEY_URL` and prove it answers, before any module is assembled.
@@ -396,35 +404,21 @@ fn oidc_roots(path: &std::path::Path) -> Result<Vec<reqwest::Certificate>, BootE
     Ok(roots)
 }
 
-/// The refusal `store/mod.rs` documents, now reached only for the ports neither #402 nor #403
-/// landed.
-///
-/// `Config::load` already turned "no `VALKEY_URL` and no `--memory`" into a configuration fault
-/// naming the variable, so reaching here means the operator *did* set it — and both probes have
-/// run by this point: the pool is open, the schema has been checked, and Valkey has answered
-/// `PING`. A durable deployment therefore fails on the ports that are genuinely absent rather
-/// than on the first one anybody happened to write.
-fn durable_ports_owed() -> BootError {
-    BootError::AdapterUnavailable {
-        key: "DATABASE_URL",
-        issue: "#446 (the remaining durable ports)",
-    }
-}
-
-/// The stores every subcommand shares, and the only one of them that is durable.
+/// The stores every subcommand shares.
 ///
 /// A struct rather than six locals because [`assemble`] and [`assemble_maintenance`] must build
 /// the *same* stores: two functions each opening their own index is two servers that disagree
-/// about what is in it.
+/// about what is in it. The fields are ports rather than adapters, so the two backend arms fill
+/// one shape and everything downstream of it is shared.
 #[derive(Debug)]
 struct Stores {
     root: std::path::PathBuf,
     clock: Arc<SystemClock>,
     blobs: Arc<FilesystemBlobStore>,
-    index: Arc<InMemoryAssetIndex>,
-    uploads: Arc<InMemoryUploadSessions>,
-    marks: Arc<InMemoryCollection>,
-    quotas: Arc<InMemoryQuota>,
+    index: Arc<dyn AssetIndex>,
+    uploads: Arc<dyn UploadSessionStore>,
+    marks: Arc<dyn CollectionStore>,
+    quotas: Arc<dyn QuotaStore>,
 }
 
 impl Stores {
@@ -444,18 +438,53 @@ impl Stores {
     }
 }
 
-/// Open the blob root and build the stores over it.
+/// The half of [`Stores`] that is the same on both arms: the blob root and the clock.
+#[derive(Debug)]
+struct Base {
+    root: std::path::PathBuf,
+    clock: Arc<SystemClock>,
+    blobs: Arc<FilesystemBlobStore>,
+}
+
+impl Base {
+    /// The shared stores on the deterministic in-crate adapters.
+    fn in_memory(self) -> Stores {
+        Stores {
+            index: Arc::new(InMemoryAssetIndex::new()),
+            uploads: Arc::new(InMemoryUploadSessions::with_default_ttl(self.clock.clone())),
+            marks: Arc::new(InMemoryCollection::new()),
+            quotas: Arc::new(InMemoryQuota::new()),
+            root: self.root,
+            clock: self.clock,
+            blobs: self.blobs,
+        }
+    }
+
+    /// The shared stores on Postgres, and the upload sessions on Valkey.
+    fn durable(self, connection: &DatabaseConnection, valkey: &ValkeyStores) -> Stores {
+        Stores {
+            index: Arc::new(PostgresAssetIndex::new(connection.clone())),
+            uploads: valkey.uploads(),
+            marks: Arc::new(PostgresCollection::new(connection.clone())),
+            quotas: Arc::new(PostgresQuota::new(connection.clone())),
+            root: self.root,
+            clock: self.clock,
+            blobs: self.blobs,
+        }
+    }
+}
+
+/// Open the blob root.
 ///
 /// The blob root is the one thing on this path that touches the filesystem, and it is refused
 /// rather than deferred: a store that cannot be created now is a store every upload will fail
 /// against at write time, and a server that accepts bytes it cannot keep is worse than one that
 /// does not start.
-async fn stores(config: &Config) -> Result<Stores, BootError> {
+async fn base(config: &Config) -> Result<Base, BootError> {
     let root = config
         .blob_root
         .clone()
         .ok_or(BootError::Missing { key: "BLOB_ROOT" })?;
-    let clock = Arc::new(SystemClock);
     let blobs =
         Arc::new(
             FilesystemBlobStore::open(&root)
@@ -465,23 +494,161 @@ async fn stores(config: &Config) -> Result<Stores, BootError> {
                     detail: error.to_string(),
                 })?,
         );
-    Ok(Stores {
+    Ok(Base {
         root,
-        index: Arc::new(InMemoryAssetIndex::new()),
-        uploads: Arc::new(InMemoryUploadSessions::with_default_ttl(clock.clone())),
-        marks: Arc::new(InMemoryCollection::new()),
-        quotas: Arc::new(InMemoryQuota::new()),
+        clock: Arc::new(SystemClock),
         blobs,
-        clock,
     })
 }
 
-/// The development profile: every in-crate adapter, over a real blob store and a real clock.
+/// The four account ports, which every adapter family implements on one object.
+#[derive(Debug, Clone)]
+struct AccountPorts {
+    accounts: Arc<dyn AccountDirectory>,
+    registry: Arc<dyn AccountRegistry>,
+    profiles: Arc<dyn AccountProfiles>,
+    passwords: Arc<dyn PasswordChange>,
+}
+
+impl AccountPorts {
+    /// All four, out of one store.
+    fn of<A>(store: Arc<A>) -> Self
+    where
+        A: AccountDirectory + AccountRegistry + AccountProfiles + PasswordChange + 'static,
+    {
+        Self {
+            accounts: store.clone(),
+            registry: store.clone(),
+            profiles: store.clone(),
+            passwords: store,
+        }
+    }
+}
+
+/// Every application port beyond [`Stores`], chosen by one backend arm.
+///
+/// The two arms differ **only** in what they put here; [`compose`] builds the seventeen module
+/// contexts out of it identically. That is what makes "the durable profile serves the same
+/// application as the memory profile" a property of one function rather than of two copies.
+#[derive(Debug)]
+struct Ports {
+    accounts: AccountPorts,
+    sessions: Arc<dyn AuthStateStore>,
+    challenges: Arc<dyn ChallengeStore>,
+    cohorts: Arc<dyn CohortStore>,
+    totp: Arc<dyn TotpStore>,
+    albums: Arc<dyn AlbumStore>,
+    members: Arc<dyn MembershipStore>,
+    directories: Arc<dyn DeviceDirectoryStore>,
+    receipts: Arc<dyn ReceiptLog>,
+    /// The capability store **is** the revocation list `revoked-jti` serves: one object, handed
+    /// to discovery as the list and to federation as the store (design/federation.md).
+    capabilities: Arc<dyn CapabilityStore>,
+    peers: Arc<dyn PeerStore>,
+    escrow: Arc<dyn EscrowStore>,
+    enrollments: Arc<dyn EnrollmentStore>,
+    channels: Arc<dyn ChannelStore>,
+    moderation: Arc<dyn ModerationStore>,
+    shares: Arc<dyn ShareStore>,
+    drops: Arc<dyn DropStore>,
+    counters: Arc<dyn CounterStore>,
+}
+
+/// The credential verifier, built once.
+///
+/// Building it costs an Argon2id hash (the timing-equalized miss's decoy), and that is a startup
+/// cost rather than a per-request one.
+fn credentials() -> Result<Credentials, BootError> {
+    Credentials::new().map_err(|error| BootError::Credentials {
+        detail: error.detail,
+    })
+}
+
+/// The development profile's ports: every deterministic in-crate adapter.
+fn memory_ports(config: &Config, clock: &Arc<SystemClock>) -> Result<Ports, BootError> {
+    Ok(Ports {
+        accounts: AccountPorts::of(Arc::new(InMemoryAccounts::new(
+            credentials()?,
+            clock.clone(),
+            config.lockout_attempts,
+            config.lockout_window,
+        ))),
+        sessions: Arc::new(InMemoryAuthState::with_default_ttl(clock.clone())),
+        challenges: Arc::new(InMemoryChallenges::with_default_ttl(clock.clone())),
+        cohorts: Arc::new(InMemoryCohorts::new()),
+        totp: Arc::new(InMemoryTotp::new()),
+        albums: Arc::new(InMemoryAlbums::new()),
+        members: Arc::new(InMemoryMembership::new()),
+        directories: Arc::new(InMemoryDeviceDirectory::new()),
+        receipts: Arc::new(InMemoryReceipts::new()),
+        capabilities: Arc::new(InMemoryCapabilities::new(clock.clone())),
+        peers: Arc::new(InMemoryPeers::new()),
+        escrow: Arc::new(InMemoryEscrow::new()),
+        enrollments: Arc::new(InMemoryEnrollments::with_default_ttl(clock.clone())),
+        channels: Arc::new(InMemoryChannels::with_default_ttl(clock.clone())),
+        moderation: Arc::new(InMemoryModeration::new()),
+        shares: Arc::new(InMemoryShares::new()),
+        drops: Arc::new(InMemoryDrops::new()),
+        counters: Arc::new(InMemoryCounters::new()),
+    })
+}
+
+/// The durable profile's ports: Postgres for every record a restart must not lose, Valkey for
+/// the volatile state design/filesystem/server.md assigns it.
+///
+/// Nothing here is in-memory. The two OIDC adapters are the only ports with no durable
+/// implementation (#460), and [`assemble`] refuses a durable boot that configures OIDC before
+/// reaching here, so [`compose`] never builds them on this path.
+fn durable_ports(
+    config: &Config,
+    clock: &Arc<SystemClock>,
+    connection: &DatabaseConnection,
+    valkey: &ValkeyStores,
+) -> Result<Ports, BootError> {
+    let db = || connection.clone();
+    Ok(Ports {
+        accounts: AccountPorts::of(Arc::new(PostgresAccounts::new(
+            db(),
+            credentials()?,
+            clock.clone(),
+            config.lockout_attempts,
+            config.lockout_window,
+        ))),
+        sessions: valkey.auth(),
+        challenges: valkey.challenges(),
+        // Postgres rather than `valkey.cohorts()`: the cohort map has no expiry and is the one
+        // auth record design/filesystem/server.md puts beside the accounts (#402).
+        cohorts: Arc::new(PostgresCohorts::new(db())),
+        totp: Arc::new(PostgresTotp::new(db())),
+        albums: Arc::new(PostgresAlbums::new(db())),
+        members: Arc::new(PostgresMembership::new(db())),
+        directories: Arc::new(PostgresDeviceDirectory::new(db())),
+        receipts: Arc::new(PostgresReceipts::new(db())),
+        capabilities: Arc::new(PostgresCapabilities::new(db(), clock.clone())),
+        peers: Arc::new(PostgresPeers::new(db())),
+        escrow: Arc::new(PostgresEscrow::new(db())),
+        enrollments: valkey.enrollments(),
+        channels: valkey.channels(),
+        moderation: Arc::new(PostgresModeration::new(db())),
+        shares: Arc::new(PostgresShares::new(db())),
+        drops: Arc::new(PostgresDrops::new(db())),
+        counters: Arc::new(ValkeyCounters::new(valkey.valkey().clone())),
+    })
+}
+
+/// Build the application out of `stores` and `ports`, whichever arm chose them.
+///
+/// `adapters` names the family for the one log line an operator reads at boot.
 #[allow(
     clippy::too_many_lines,
     reason = "seventeen module contexts, named once each; splitting it would hide the shape"
 )]
-fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
+fn compose(
+    config: &Config,
+    stores: Stores,
+    ports: Ports,
+    adapters: &'static str,
+) -> Result<Assembled, BootError> {
     let der = config.signing_key_der.as_ref().ok_or(BootError::Missing {
         key: "JWT_ED25519_DER",
     })?;
@@ -514,21 +681,26 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
         })?,
     );
 
-    // One verifier, shared: building it costs an Argon2id hash (the timing-equalized miss's
-    // decoy), and that is a startup cost rather than a per-request one.
-    let credentials = Credentials::new().map_err(|error| BootError::Credentials {
-        detail: error.detail,
-    })?;
-    let accounts = Arc::new(InMemoryAccounts::new(
-        credentials,
-        clock.clone(),
-        config.lockout_attempts,
-        config.lockout_window,
-    ));
-
-    let albums = Arc::new(InMemoryAlbums::new());
-    let members = Arc::new(InMemoryMembership::new());
-    let directories = Arc::new(InMemoryDeviceDirectory::new());
+    let Ports {
+        accounts,
+        sessions,
+        challenges,
+        cohorts,
+        totp,
+        albums,
+        members,
+        directories,
+        receipts,
+        capabilities: issued,
+        peers,
+        escrow,
+        enrollments,
+        channels,
+        moderation,
+        shares,
+        drops,
+        counters,
+    } = ports;
     // The production write authority (`S-C19`/`S-C20`), not a permissive double: it reads the
     // album's own pin and the account's published device directory, so invariants 6 and 7 mean
     // what they say even in the development profile.
@@ -538,7 +710,6 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
         members.clone(),
         clock.clone(),
     ));
-    let receipts = Arc::new(InMemoryReceipts::new());
     // Distinct from the token signer, as the design requires: a receipt that verified under the
     // operational key would let anything holding that key manufacture custody evidence.
     //
@@ -562,10 +733,6 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
                 detail: error.detail,
             })?,
     );
-    // The capability store **is** the revocation list `revoked-jti` serves: one object, handed
-    // to discovery as the list and to federation as the store (design/federation.md).
-    let issued = Arc::new(InMemoryCapabilities::new(clock.clone()));
-    let peers = Arc::new(InMemoryPeers::new());
 
     let mut server_info = ServerInfo::new(
         config.server_domain.clone(),
@@ -584,6 +751,8 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
         server_info = server_info.with_federation(url.clone());
     }
     let server_info = Arc::new(server_info);
+    // The same object as `issued`, seen through the port discovery publishes it under.
+    let revocations: Arc<dyn RevocationList> = issued.clone();
 
     // The relying party, or the null object. Discovery is lazy: nothing here reaches the
     // provider, so an identity provider that is down does not stop a server from serving local
@@ -624,18 +793,18 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
 
     let app = App::new(Modules {
         auth: AuthContext::new(AuthCollaborators {
-            sessions: Arc::new(InMemoryAuthState::with_default_ttl(clock.clone())),
-            accounts: accounts.clone(),
-            registry: accounts.clone(),
-            profiles: accounts.clone(),
-            passwords: accounts.clone(),
-            challenges: Arc::new(InMemoryChallenges::with_default_ttl(clock.clone())),
-            cohorts: Arc::new(InMemoryCohorts::new()),
+            sessions,
+            accounts: accounts.accounts,
+            registry: accounts.registry,
+            profiles: accounts.profiles,
+            passwords: accounts.passwords,
+            challenges,
+            cohorts,
             tokens: tokens.clone(),
             clock: clock.clone(),
         }),
         totp: TotpContext::new(
-            Arc::new(InMemoryTotp::new()),
+            totp,
             // The issuer is what an authenticator app shows beside the code, so it is this
             // deployment's own name rather than a constant every deployment shares.
             Arc::new(TotpCodes::new(config.server_domain.clone())),
@@ -683,8 +852,8 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
             // Publishing a rotation history is `ATTESTATION_KEY_HISTORY`'s job and nobody's yet.
             Timestamp::UNIX_EPOCH,
         ),
-        discovery: DiscoveryContext::new(server_info, issued.clone()),
-        escrow: EscrowContext::new(Arc::new(InMemoryEscrow::new()), clock.clone()),
+        discovery: DiscoveryContext::new(server_info, revocations),
+        escrow: EscrowContext::new(escrow, clock.clone()),
         federation: FederationContext::new(FederationCollaborators {
             codec: capabilities,
             capabilities: issued,
@@ -692,24 +861,11 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
             clock: clock.clone(),
             federation_url: config.federation_url.clone(),
         }),
-        enrollment: EnrollmentContext::new(
-            Arc::new(InMemoryEnrollments::with_default_ttl(clock.clone())),
-            Arc::new(InMemoryChannels::with_default_ttl(clock.clone())),
-            clock.clone(),
-        ),
-        moderation: ModerationContext::new(Arc::new(InMemoryModeration::new())),
-        share: ShareContext::new(
-            Arc::new(InMemoryShares::new()),
-            blobs.clone(),
-            clock.clone(),
-        ),
-        drops: DropContext::new(
-            Arc::new(InMemoryDrops::new()),
-            uploads.clone(),
-            blobs.clone(),
-            clock.clone(),
-        ),
-        counters: CounterContext::new(Arc::new(InMemoryCounters::new()), clock.clone()),
+        enrollment: EnrollmentContext::new(enrollments, channels, clock.clone()),
+        moderation: ModerationContext::new(moderation),
+        share: ShareContext::new(shares, blobs.clone(), clock.clone()),
+        drops: DropContext::new(drops, uploads.clone(), blobs.clone(), clock.clone()),
+        counters: CounterContext::new(counters, clock.clone()),
     });
 
     tracing::info!(
@@ -717,7 +873,8 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
         server_id = %config.server_domain,
         protocol_min = %config.protocol_min,
         protocol_max = %config.protocol_max,
-        "assembled a server on the in-memory adapters"
+        adapters,
+        "assembled a server"
     );
 
     Ok(Assembled {
@@ -887,18 +1044,10 @@ mod tests {
 
     /// What a durable boot does once it can actually reach a database.
     mod postgres_conformance {
-        use std::sync::Arc;
-
         use super::{
             BTreeMap, BootError, Config, Demands, Overrides, assemble, durable_environment,
         };
-        use crate::auth::{Credentials, PostgresAccounts};
-        use crate::federation::postgres::{PostgresCapabilities, PostgresPeers};
-        use crate::index::postgres::PostgresAssetIndex;
-        use crate::membership::PostgresMembership;
         use crate::postgres::testing;
-        use crate::quota::PostgresQuota;
-        use crate::store::{PostgresCohorts, SystemClock};
 
         /// A config pointing at `url`, with everything else a durable `serve` needs.
         fn config_for(root: &std::path::Path, url: &str) -> Config {
@@ -962,91 +1111,136 @@ mod tests {
             );
         }
 
-        /// The seven Postgres adapters compose out of exactly what the boot path has.
+        /// A Valkey for a case that drives the whole durable arm, or `None` — logged — when the
+        /// Valkey tier is not admitted.
         ///
-        /// Asserted here rather than by constructing them in `assemble` and throwing them away:
-        /// production code that builds something it cannot use is theatre, and what #446 needs
-        /// to know is that its one hunk will type-check. Every constructor takes the shared
-        /// connection plus values `Config` already carries.
+        /// The same gate and the same image tag as `tests/valkey.rs`, so one environment admits
+        /// both. The container is returned so the caller holds it for the length of the case.
+        async fn valkey(
+            case: &str,
+        ) -> Option<(
+            String,
+            testcontainers::ContainerAsync<testcontainers_modules::valkey::Valkey>,
+        )> {
+            use testcontainers::ImageExt as _;
+            use testcontainers::runners::AsyncRunner as _;
+
+            if std::env::var("CAPSULE_TEST_VALKEY").ok().as_deref() != Some("1") {
+                eprintln!("skipping {case}: set CAPSULE_TEST_VALKEY=1 to admit the Valkey tier");
+                return None;
+            }
+            let mut request =
+                testcontainers_modules::valkey::Valkey::default().with_tag(VALKEY_TAG);
+            if let Ok(userns) = std::env::var("CAPSULE_TEST_CONTAINER_USERNS") {
+                request = request.with_userns_mode(&userns);
+            }
+            let container = request.start().await.expect("the Valkey container starts");
+            let host = container.get_host().await.expect("a host");
+            let port = container
+                .get_host_port_ipv4(testcontainers_modules::valkey::VALKEY_PORT)
+                .await
+                .expect("a mapped port");
+            Some((format!("redis://{host}:{port}"), container))
+        }
+
+        /// The image tag `capsule-server/compose.yaml` runs, as `tests/valkey.rs` pins it.
+        const VALKEY_TAG: &str = "9.0.4";
+
+        /// A durable `serve` assembles a whole server on Postgres and Valkey, and what it wrote
+        /// is there for the next one.
+        ///
+        /// The property #446 exists for: the arm used to refuse after both probes because some
+        /// ports had no durable adapter. Now it builds every module context, and an account
+        /// registered through the first assembly signs in through a second one built over the same
+        /// two backends — the in-process half of a restart. The process half is
+        /// `tests/binary.rs`'s.
         #[tokio::test]
-        async fn every_postgres_adapter_composes_from_the_boot_configuration() {
-            let Some(database) = testing::start("the durable adapter set").await else {
+        async fn the_durable_arm_assembles_a_server_whose_state_outlives_it() {
+            let Some(database) = testing::start("the durable boot arm, whole").await else {
+                return;
+            };
+            let Some((valkey_url, _valkey)) = valkey("the durable boot arm, whole").await else {
                 return;
             };
             let root = tempfile::tempdir().expect("a scratch directory");
-            let config = config_for(root.path(), database.url());
-            let connection = crate::postgres::connect(&config.database_url.clone().expect("set"))
+            let mut config = config_for(root.path(), database.url());
+            config.valkey_url = Some(valkey_url);
+
+            let first = assemble(&config).await.expect("the durable arm assembles");
+            let client = kynos::test::TestClient::new(first.service().expect("the router builds"));
+            super::register(&client, "correct horse battery staple").await;
+            assert_eq!(
+                super::login(&client, "correct horse battery staple").await,
+                kynos::http::StatusCode::OK
+            );
+            drop(client);
+            drop(first);
+
+            let second = assemble(&config).await.expect("it assembles again");
+            let client = kynos::test::TestClient::new(second.service().expect("the router builds"));
+            assert_eq!(
+                super::login(&client, "correct horse battery staple").await,
+                kynos::http::StatusCode::OK,
+                "an account the first assembly registered is the second one's to sign in to"
+            );
+        }
+
+        /// A durable `gc` keeps its marks between processes, so a later pass can sweep.
+        ///
+        /// The reason the maintenance arm exists: the collector marks a blob on one pass and
+        /// sweeps it on a later one, so a mark store that forgets is a collector that can only
+        /// ever mark. Each pass here assembles its own workers, as each `gc` invocation does.
+        #[tokio::test]
+        async fn a_durable_collection_sweeps_what_an_earlier_pass_marked() {
+            use crate::gc::{Mode, collect};
+
+            let Some(database) = testing::start("the durable maintenance arm").await else {
+                return;
+            };
+            let Some((valkey_url, _valkey)) = valkey("the durable maintenance arm").await else {
+                return;
+            };
+            let root = tempfile::tempdir().expect("a scratch directory");
+            let address = "b".repeat(64);
+            let shard = root.path().join("blobs").join("bb").join("bb");
+            std::fs::create_dir_all(&shard).expect("the shard is created");
+            let blob = shard.join(format!("{address}.bin"));
+            std::fs::write(&blob, b"an orphan a crashed finalization left").expect("written");
+
+            let mut environment: BTreeMap<String, String> = [
+                ("BLOB_ROOT".to_owned(), root.path().display().to_string()),
+                ("DATABASE_URL".to_owned(), database.url().to_owned()),
+                ("VALKEY_URL".to_owned(), valkey_url),
+            ]
+            .into_iter()
+            .collect();
+            // No grace at all, so the second pass is the first one past the window.
+            environment.insert("GC_GRACE_WINDOW_HOURS".to_owned(), "0".to_owned());
+            let config = Config::load(&environment, &Overrides::default(), Demands::Maintenance)
+                .expect("it is well-formed");
+
+            let first = super::super::assemble_maintenance(&config)
                 .await
-                .expect("the pool opens");
-            let credentials = Credentials::new().expect("the platform hashes");
-            let clock = Arc::new(SystemClock);
+                .expect("the durable maintenance arm assembles");
+            let report = collect(&first.collection, Mode::Apply)
+                .await
+                .expect("a pass runs");
+            assert_eq!(report.marked.len(), 1, "{report:?}");
+            assert!(report.swept.is_empty(), "{report:?}");
+            drop(first);
 
-            let index: Arc<dyn crate::index::AssetIndex> =
-                Arc::new(PostgresAssetIndex::new(connection.clone()));
-            let accounts = Arc::new(PostgresAccounts::new(
-                connection.clone(),
-                credentials,
-                clock,
-                config.lockout_attempts,
-                config.lockout_window,
-            ));
-            let cohorts: Arc<dyn crate::store::CohortStore> =
-                Arc::new(PostgresCohorts::new(connection.clone()));
-            let quotas: Arc<dyn crate::quota::QuotaStore> =
-                Arc::new(PostgresQuota::new(connection.clone()));
-            let members: Arc<dyn crate::membership::MembershipStore> =
-                Arc::new(PostgresMembership::new(connection.clone()));
-            let capabilities: Arc<dyn crate::federation::CapabilityStore> = Arc::new(
-                PostgresCapabilities::new(connection.clone(), Arc::new(SystemClock)),
-            );
-            let peers: Arc<dyn crate::federation::PeerStore> =
-                Arc::new(PostgresPeers::new(connection));
-
-            // Each one answers through its port, which is what makes this a boot check rather
-            // than a compile check: the schema the migration applied is the schema the adapters
-            // query.
-            let owner = crate::store::OwnerId::new("boot-probe-owner");
-            assert_eq!(index.head_seq(&owner).await.expect("the index answers"), 0);
-            let user = crate::store::UserId::new("boot-probe-user");
-            assert!(
-                crate::auth::AccountProfiles::read(accounts.as_ref(), &user)
-                    .await
-                    .expect("the account store answers")
-                    .is_none()
-            );
-            assert!(
-                cohorts
-                    .cohorts_for_user(&user)
-                    .await
-                    .expect("the cohort map answers")
-                    .is_empty()
-            );
+            let second = super::super::assemble_maintenance(&config)
+                .await
+                .expect("it assembles again");
+            let report = collect(&second.collection, Mode::Apply)
+                .await
+                .expect("a pass runs");
             assert_eq!(
-                quotas.usage(&user).await.expect("the ledger answers").used,
-                0
+                report.swept.len(),
+                1,
+                "a later process sweeps what an earlier one marked: {report:?}"
             );
-            let album = crate::store::AlbumId::new("boot-probe-album");
-            assert_eq!(
-                members
-                    .membership(&album, &user)
-                    .await
-                    .expect("the membership store answers"),
-                crate::membership::Membership::Never
-            );
-            assert!(
-                capabilities
-                    .find("boot-probe-jti")
-                    .await
-                    .expect("the capability store answers")
-                    .is_none()
-            );
-            assert!(
-                peers
-                    .read(&crate::federation::PeerId::new("boot-probe.test"))
-                    .await
-                    .expect("the peer store answers")
-                    .is_none()
-            );
+            assert!(!blob.exists(), "the orphan is reclaimed");
         }
     }
 
@@ -1408,10 +1602,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_maintenance_command_is_told_it_needs_memory_and_not_valkey() {
-        // An operator running `capsule-server scrub` has typically set no backend variable at
-        // all. Naming `VALKEY_URL` would send them to configure something that would not have
-        // helped; what is missing is the durable index these workers read.
+    async fn a_durable_maintenance_command_without_a_database_url_refuses_by_name() {
+        // An operator running `capsule-server scrub` without `--memory` is asking for the
+        // durable stores, and the first one those workers read is the index. Naming
+        // `VALKEY_URL` first would send them to configure the second thing before the first.
         let root = tempfile::tempdir().expect("a scratch directory");
         let environment: BTreeMap<String, String> =
             [("BLOB_ROOT".to_owned(), root.path().display().to_string())]
@@ -1423,11 +1617,15 @@ mod tests {
             .await
             .expect_err("it refuses");
         assert!(
-            matches!(error, BootError::MaintenanceNeedsMemory { .. }),
+            matches!(
+                error,
+                BootError::Missing {
+                    key: "DATABASE_URL"
+                }
+            ),
             "{error:?}"
         );
         let message = format!("{error}");
-        assert!(message.contains("--memory"), "{message}");
         assert!(!message.contains("VALKEY_URL"), "{message}");
     }
 
