@@ -5565,7 +5565,7 @@ rebuild is stale: the rebuilt server is what these cases run against. What still
 case's full wording is a seam in the tree rather than a transport, each filed: a `Workspace` cannot open as a
 server account (#467), the backup artifact carries no album authority (#468), a library's
 adopt registers nothing to publish (#469), and there is no cross-sign or safety-code seam
-(#471). Three seams closed on the way in and no longer bound a case: the push ladder now ships
+(#471). Four seams closed on the way in and no longer bound a case: the push ladder now ships
 the provenance rung and `sync_apply` decodes the record bytes the feed serves (#464, #465),
 the upload policy accepts `image/jxl` (#470), and the SDK's directory publish sends the
 identity-key header (#466).
