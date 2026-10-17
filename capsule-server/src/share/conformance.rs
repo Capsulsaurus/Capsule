@@ -10,6 +10,9 @@
 //!   listing needs the revoked link.
 //! - **Revocation is the owner's, once.** Only the owner revokes; a second revocation, another
 //!   account's, or one of an unknown id changes nothing and answers `false`.
+//! - **A re-issue replaces.** Issuing under an id already held replaces the whole record, and
+//!   the earlier serve set with it, as the in-memory map insert does (the flaw this keeps is
+//!   #553).
 //! - **The opaque bytes are opaque.** A wrapped secret reads back byte for byte.
 //! - **Instants are not moved.** `expires_at` and `revoked_at` may lose sub-microsecond
 //!   precision and nothing more — an expiry that moved later is a link live past its owner's
@@ -197,6 +200,36 @@ pub async fn instants_read_back_at_microsecond_precision(h: &dyn Harness) {
     }
 }
 
+/// Issuing under an opaque id already held replaces the whole record, serve set included: no
+/// address the earlier issue enumerated survives, and no field of it leaks into the new one.
+pub async fn reissuing_a_held_id_replaces_the_record_and_its_serve_set(h: &dyn Harness) {
+    let case = "reissue";
+    let alice = user(case, "alice");
+    let bob = user(case, "bob");
+    let first = link(case, 1, &alice);
+    issue(h, first.clone()).await;
+
+    let mut second = link(&format!("{case}/again"), 2, &bob);
+    second.opaque_id = first.opaque_id.clone();
+    second.wrapped_secret = None;
+    second.expires_at = None;
+    second.scope = ShareScope::Asset(Uuid::from_u128(0xBEEF));
+    assert!(
+        first.serves.is_disjoint(&second.serves),
+        "the case needs two disjoint serve sets"
+    );
+    issue(h, second.clone()).await;
+
+    let held = resolve(h, &first.opaque_id).await.expect("issued");
+    for old in &first.serves {
+        assert!(
+            !held.serves(old),
+            "a re-issued link must not keep serving an address the earlier issue enumerated"
+        );
+    }
+    assert_eq!(held, second);
+}
+
 // ===========================================================================================
 // Revoking
 // ===========================================================================================
@@ -278,6 +311,7 @@ pub async fn run_all(h: &dyn Harness) {
     a_link_serves_exactly_what_it_enumerates(h).await;
     the_wrapped_secret_is_returned_byte_for_byte(h).await;
     instants_read_back_at_microsecond_precision(h).await;
+    reissuing_a_held_id_replaces_the_record_and_its_serve_set(h).await;
 
     the_owner_revokes_and_the_link_still_resolves_revoked(h).await;
     a_second_revocation_changes_nothing(h).await;
@@ -321,6 +355,7 @@ mod tests {
         a_link_serves_exactly_what_it_enumerates,
         the_wrapped_secret_is_returned_byte_for_byte,
         instants_read_back_at_microsecond_precision,
+        reissuing_a_held_id_replaces_the_record_and_its_serve_set,
         the_owner_revokes_and_the_link_still_resolves_revoked,
         a_second_revocation_changes_nothing,
         only_the_owner_can_revoke,

@@ -15,6 +15,9 @@
 //!   it.
 //! - **The inbox is the owner's, oldest first**, ties broken by id, and never shows another
 //!   account's drops.
+//! - **A write under a held key replaces.** Re-provisioning a link, re-declaring an upload
+//!   session and re-depositing a drop id each replace the earlier row whole, as the in-memory
+//!   map inserts do (the link-overwrite flaw this keeps is #553).
 //! - **Instants are not moved.** They may lose sub-microsecond precision and nothing more.
 //!
 //! # Reusing a harness
@@ -163,6 +166,40 @@ pub async fn a_provisioned_link_resolves_to_its_whole_record(h: &dyn Harness) {
     let bare = link(case, 2, &user(case, "alice"), LinkCaps::default());
     provision(h, bare.clone()).await;
     assert_eq!(resolve(h, &bare.opaque_id).await, Some(bare));
+}
+
+/// Provisioning under an opaque id already held replaces the whole record: caps, totals, owner
+/// and revocation are the new record's, and nothing of the earlier one survives.
+pub async fn reprovisioning_a_held_id_replaces_the_link(h: &dyn Harness) {
+    let case = "reprovision";
+    let first = link(
+        case,
+        1,
+        &user(case, "alice"),
+        LinkCaps {
+            expires_at: Some(at(3_600)),
+            max_total_bytes: Some(1 << 30),
+            max_file_count: Some(10),
+            max_file_size: Some(1 << 20),
+            single_use: true,
+        },
+    );
+    provision(h, first.clone()).await;
+    assert!(matches!(
+        charge(h, &first.opaque_id, 4096, at(0)).await,
+        Admission::Admitted { .. }
+    ));
+
+    let mut second = link(case, 1, &user(case, "bob"), LinkCaps::default());
+    second.drop_pubkey = vec![9; 32];
+    second.crypto_suite_id = 2;
+    "2026-09-01".clone_into(&mut second.protocol_version);
+    second.passphrase_verifier = Some(b"$argon2id$v=19$other".to_vec());
+    second.used_bytes = 7;
+    second.used_files = 3;
+    second.revoked_at = Some(at(5));
+    provision(h, second.clone()).await;
+    assert_eq!(resolve(h, &first.opaque_id).await, Some(second));
 }
 
 /// An admission reserves one file and its bytes, and names the link's owner and pins.
@@ -557,6 +594,31 @@ pub async fn a_discard_is_the_owners(h: &dyn Harness) {
     assert!(inbox_ids(h, &alice).await.is_empty());
 }
 
+/// Depositing under a drop id already held replaces the whole entry, its hold included: the
+/// earlier owner's inbox no longer shows it, and the new owner sees the new entry, unheld.
+pub async fn redepositing_a_held_drop_id_replaces_the_entry(h: &dyn Harness) {
+    let case = "redeposit";
+    let alice = user(case, "alice");
+    let bob = user(case, "bob");
+    let first = entry(case, "drop", &alice, at(0));
+    ok(h.drops().deposit(first.clone()).await, "deposit");
+    ok(h.drops().claim(&alice, &first.drop_id).await, "claim").expect("claimed");
+
+    let second = InboxEntry {
+        drop_id: first.drop_id.clone(),
+        opaque_id: opaque(case, 2),
+        address: address(&format!("{case}/again")),
+        size: 1,
+        content_type: "image/png".to_owned(),
+        kem_ct: vec![9, 9],
+        suggested_filename: None,
+        ..entry(case, "drop", &bob, at(7))
+    };
+    ok(h.drops().deposit(second.clone()).await, "deposit again");
+    assert!(inbox_ids(h, &alice).await.is_empty());
+    assert_eq!(ok(h.drops().inbox(&bob).await, "list"), vec![second]);
+}
+
 /// Instants lose at most sub-microsecond precision and are never moved later.
 pub async fn instants_read_back_at_microsecond_precision(h: &dyn Harness) {
     let case = "precise";
@@ -608,6 +670,7 @@ pub async fn instants_read_back_at_microsecond_precision(h: &dyn Harness) {
 pub async fn run_all(h: &dyn Harness) {
     an_unknown_link_resolves_to_none_and_is_not_live(h).await;
     a_provisioned_link_resolves_to_its_whole_record(h).await;
+    reprovisioning_a_held_id_replaces_the_link(h).await;
     an_admission_reserves_one_file_and_its_bytes(h).await;
     a_file_past_the_size_limit_is_refused_first_and_reserves_nothing(h).await;
     the_file_count_cap_is_never_exceeded(h).await;
@@ -625,6 +688,7 @@ pub async fn run_all(h: &dyn Harness) {
     a_released_row_can_be_claimed_again(h).await;
     a_settled_row_leaves_the_inbox(h).await;
     a_discard_is_the_owners(h).await;
+    redepositing_a_held_drop_id_replaces_the_entry(h).await;
     instants_read_back_at_microsecond_precision(h).await;
 }
 
@@ -660,6 +724,7 @@ mod tests {
     conformance_cases! {
         an_unknown_link_resolves_to_none_and_is_not_live,
         a_provisioned_link_resolves_to_its_whole_record,
+        reprovisioning_a_held_id_replaces_the_link,
         an_admission_reserves_one_file_and_its_bytes,
         a_file_past_the_size_limit_is_refused_first_and_reserves_nothing,
         the_file_count_cap_is_never_exceeded,
@@ -675,6 +740,7 @@ mod tests {
         a_released_row_can_be_claimed_again,
         a_settled_row_leaves_the_inbox,
         a_discard_is_the_owners,
+        redepositing_a_held_drop_id_replaces_the_entry,
         instants_read_back_at_microsecond_precision,
     }
 
