@@ -378,7 +378,8 @@ pub enum FfiSyncApplyOutcome {
     /// Refused. `reason` is a stable, switchable code; `detail` is English developer text.
     Quarantined {
         /// A stable code, dotted where a sub-reason applies — e.g. `Rejected.ForgedChain`,
-        /// `Binding.BlobHashMismatch`, `SidecarSignature`.
+        /// `Binding.BlobHashMismatch`, `SidecarSignature`, `LegacyInheritedDevice` (a pre-fix
+        /// continuation attributed to the wrong device of the same account; not a forgery).
         reason: String,
         /// English detail, when the refusal carries one (a parse message, an album id).
         detail: Option<String>,
@@ -403,6 +404,17 @@ impl From<SyncApplyOutcome> for FfiSyncApplyOutcome {
                         ("UnknownAlbum".to_string(), Some(album.to_string()))
                     }
                     QuarantineReason::Rejected(reject) => (format!("Rejected.{reject:?}"), None),
+                    QuarantineReason::LegacyInheritedDevice {
+                        named_device,
+                        signing_device,
+                        record_hash,
+                    } => (
+                        "LegacyInheritedDevice".to_string(),
+                        Some(format!(
+                            "record {record_hash} names device {named_device} but was signed by \
+                             device {signing_device}; the chain stalls at this record"
+                        )),
+                    ),
                     QuarantineReason::Binding(binding) => (format!("Binding.{binding:?}"), None),
                     QuarantineReason::MalformedSidecar(detail) => {
                         ("MalformedSidecar".to_string(), Some(detail))
