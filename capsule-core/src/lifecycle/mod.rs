@@ -21,7 +21,7 @@
 //! ([`rotate_epoch`](Workspace::rotate_epoch)); the MLS membership ceremony (`Welcome`,
 //! add/remove) remains deferred (see `SLICES.md`).
 //!
-//! [`verify_asset`]: fn@crate::crypto::verify_asset
+//! [`verify_asset`]: crate::crypto::verify_asset::verify_asset
 //! [`ReferenceAuthority`]: crate::crypto::authority::ReferenceAuthority
 
 mod album;
