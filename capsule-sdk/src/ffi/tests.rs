@@ -267,6 +267,23 @@ fn ffi_client_rejects_invalid_base_url() {
     }
 }
 
+/// A derivative's role/format pair survives both `FfiManifestEnvelope` conversions, so a
+/// derivative upload that crosses the FFI still declares what the server's gate requires.
+#[test]
+fn ffi_manifest_envelope_carries_the_derivative_pair_both_ways() {
+    let mut ffi = ffi_request(4096).manifest_envelope;
+    ffi.derivative_role = Some("thumbnail".into());
+    ffi.derivative_format = Some("image/jxl".into());
+
+    let sdk = ManifestEnvelope::from(ffi);
+    assert_eq!(sdk.derivative_role.as_deref(), Some("thumbnail"));
+    assert_eq!(sdk.derivative_format.as_deref(), Some("image/jxl"));
+
+    let back = FfiManifestEnvelope::from(sdk);
+    assert_eq!(back.derivative_role.as_deref(), Some("thumbnail"));
+    assert_eq!(back.derivative_format.as_deref(), Some("image/jxl"));
+}
+
 // ─── S-P1: the workspace verbs ───────────────────────────────────────────────
 
 /// The app's build identity every manifest this workspace authors reports (S-D15).
