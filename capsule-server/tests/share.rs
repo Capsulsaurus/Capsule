@@ -302,6 +302,49 @@ async fn revocation_takes_effect_immediately_and_is_only_the_owners() {
 }
 
 #[tokio::test]
+async fn a_held_opaque_id_cannot_be_reissued_and_the_refusal_is_one_answer() {
+    // #553: every recipient of a link knows its opaque id. Were a re-issue a replace, any
+    // account could take the link over and re-point it at its own blobs.
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (id, metadata, original) = live_link(&fixture, &bearer, 8).await;
+    let stranger = fixture
+        .other_bearer("01937b7c-0000-7000-8000-0000000000ff")
+        .await;
+    let hostile = store(&fixture, &payload(b'h', 64)).await;
+    let takeover = json!({
+        "opaque_id": id,
+        "metadata_hash": hostile.as_str(),
+        "serves": [hostile.as_str()],
+    });
+
+    let from_stranger = issue(&fixture, &stranger, &takeover, StatusCode::BAD_REQUEST).await;
+    let from_owner = issue(&fixture, &bearer, &takeover, StatusCode::BAD_REQUEST).await;
+    assert_eq!(
+        from_stranger, from_owner,
+        "the refusal must not say whose the id is"
+    );
+    assert_eq!(from_stranger["code"], "error.share.malformed");
+
+    let body: Value = fetch(&fixture, &format!("/s/{id}"), StatusCode::OK)
+        .await
+        .json();
+    assert_eq!(body["metadata_hash"], metadata.as_str());
+    fetch(
+        &fixture,
+        &format!("/s/{id}/blob/{original}"),
+        StatusCode::OK,
+    )
+    .await;
+    fetch(
+        &fixture,
+        &format!("/s/{id}/blob/{hostile}"),
+        StatusCode::NOT_FOUND,
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn an_unreachable_store_refuses_rather_than_answering_not_found() {
     // Fail-closed, and the one place this surface distinguishes anything: answering `404` here
     // would be indistinguishable from "revoked" to a client that would then stop retrying a

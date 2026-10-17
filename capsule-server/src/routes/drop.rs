@@ -51,7 +51,10 @@ use uuid::Uuid;
 use crate::auth::AccessToken;
 use crate::blob::ContentAddress;
 use crate::counter::{CounterContext, CounterKey, Verdict, budgets, unix_seconds};
-use crate::drop::{Admission, DropContext, InboxEntry, LinkCaps, UploadLinkRecord, is_opaque_id};
+use crate::drop::{
+    Admission, DropContext, InboxEntry, LinkCaps, LinkProvisionOutcome, UploadLinkRecord,
+    is_opaque_id,
+};
 use crate::store::{BlobRole, OwnerId, UploadId, UploadSessionRecord, UploadSessionStatus, UserId};
 use crate::upload::body::ChunkBody;
 use crate::upload::chunk::{self, parse_checksum, parse_offset};
@@ -563,7 +566,7 @@ pub async fn provision_link(
         ),
     };
 
-    drops
+    let outcome = drops
         .drops()
         .provision(UploadLinkRecord {
             opaque_id: request.opaque_id.clone(),
@@ -588,6 +591,11 @@ pub async fn provision_link(
             tracing::error!(%error, %owner, "the drop store could not provision a link");
             LinkRejection::unavailable()
         })?;
+    if outcome == LinkProvisionOutcome::Conflict {
+        // One answer whoever holds the id, the caller included, so this is no oracle over
+        // whose a known id is — and never a replace, which would hand the link over (#553).
+        return Err(LinkRejection::malformed(OPAQUE_ID_HELD));
+    }
 
     Ok(ProvisionLinkReply::Created(ProvisionLinkResponse {
         opaque_id: request.opaque_id,
@@ -1401,6 +1409,13 @@ fn describe(entry: InboxEntry) -> InboxEntryResponse {
         adopting: entry.adopting,
     }
 }
+
+/// The refusal for an opaque id that is already held.
+///
+/// A `400` under the existing malformed code rather than a new `409`: a client's CSPRNG never
+/// repeats 128 bits, so this answers only a replayed or hostile request, and it is the same
+/// answer whoever holds the id.
+const OPAQUE_ID_HELD: &str = "opaque_id is already in use";
 
 impl LinkRejection {
     /// The body cannot be a link.

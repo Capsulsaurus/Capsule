@@ -103,7 +103,10 @@ fn liveness_covers_expiry_and_revocation_the_same_way() {
 async fn a_revocation_is_the_owners_and_happens_once() {
     let store = InMemoryShares::new();
     let id = opaque(1);
-    store.issue(record(&id)).await.expect("the store issues");
+    assert_eq!(
+        store.issue(record(&id)).await.expect("the store issues"),
+        IssueOutcome::Issued
+    );
 
     let stranger = UserId::new("01937b7c-0000-7000-8000-0000000000ff");
     assert!(
@@ -151,7 +154,10 @@ async fn resolve_returns_dead_links_too() {
     // or an owner's own listing could never show a link they revoked.
     let store = InMemoryShares::new();
     let id = opaque(1);
-    store.issue(record(&id)).await.expect("the store issues");
+    assert_eq!(
+        store.issue(record(&id)).await.expect("the store issues"),
+        IssueOutcome::Issued
+    );
     store
         .revoke(&owner(), &id, at(1))
         .await

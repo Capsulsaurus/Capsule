@@ -34,6 +34,14 @@
 //! if the write is refused. A crash between leaves a row visibly `Adopting` — recoverable, and
 //! neither lost nor silently duplicated.
 //!
+//! # An opaque id is provisioned once
+//!
+//! The id comes from the owner's client, and every guest the URL reaches knows it. So
+//! provisioning under an id already held is refused ([`LinkProvisionOutcome::Conflict`])
+//! rather than replacing the link: a replace would let any account holding the URL swap in its own
+//! `drop_pubkey` and take the guests' deposits, or reset the running totals past a spent cap
+//! (#553). The refusal is one answer whoever holds the id.
+//!
 //! # Rate limiting is absent, and named
 //!
 //! Invariant 31 wants the same two limiters the share-link serve path wants, and they need the
@@ -222,10 +230,29 @@ pub struct InboxEntry {
     pub adopting: bool,
 }
 
+/// What provisioning a link did.
+#[must_use]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkProvisionOutcome {
+    /// The link was recorded.
+    Provisioned,
+    /// The opaque id is already held. Nothing was written.
+    ///
+    /// Whoever holds it — another account or the caller itself. A re-provision is refused even
+    /// from the owner: it would reset `used_bytes` and `used_files` and so lift a spent cap,
+    /// and a distinct answer for "it is yours" would let a caller learn whose a known id is.
+    Conflict,
+}
+
 /// Where links and pending drops live.
 pub trait DropStore: std::fmt::Debug + Send + Sync {
-    /// Record a link the owner provisioned.
-    fn provision(&self, record: UploadLinkRecord) -> StoreFuture<'_, ()>;
+    /// Record a link the owner provisioned, if its opaque id is not already held.
+    ///
+    /// The check and the write are one operation, for the reason [`DropStore::charge`]'s are:
+    /// a look-up-then-write lets a concurrent provision land between the two, and the later
+    /// write would replace the link — its owner, its `drop_pubkey` and its running totals —
+    /// which is the overwrite this refuses (#553).
+    fn provision(&self, record: UploadLinkRecord) -> StoreFuture<'_, LinkProvisionOutcome>;
 
     /// The link `opaque_id` names, whatever its state.
     fn resolve<'a>(&'a self, opaque_id: &'a str) -> StoreFuture<'a, Option<UploadLinkRecord>>;
@@ -365,13 +392,21 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 impl DropStore for InMemoryDrops {
-    fn provision(&self, record: UploadLinkRecord) -> StoreFuture<'_, ()> {
+    fn provision(&self, record: UploadLinkRecord) -> StoreFuture<'_, LinkProvisionOutcome> {
         Box::pin(async move {
+            let mut inner = lock(&self.inner);
+            let std::collections::btree_map::Entry::Vacant(slot) =
+                inner.links.entry(record.opaque_id.clone())
+            else {
+                tracing::info!(
+                    owner = %record.owner_id,
+                    "an upload link was refused: its opaque id is already held"
+                );
+                return Ok(LinkProvisionOutcome::Conflict);
+            };
             tracing::info!(owner = %record.owner_id, "an upload link was provisioned");
-            lock(&self.inner)
-                .links
-                .insert(record.opaque_id.clone(), record);
-            Ok(())
+            slot.insert(record);
+            Ok(LinkProvisionOutcome::Provisioned)
         })
     }
 
