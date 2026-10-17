@@ -17,9 +17,12 @@
 //! its skew of expiry, before the request leaves. That cannot cover a token the server stops
 //! honouring early — a revocation mid-flight, or a clock the two ends disagree about — so
 //! [`RefreshOn401`] is the **reactive** half: an [`rest::HttpBackend`] wrapping
-//! [`rest::ReqwestBackend`] that, on a `401`, refreshes once through the session and replays
-//! the request exactly once. The two are complementary and neither duplicates the other; the
-//! refresh itself is still `auth`'s single-flight gate.
+//! [`rest::ReqwestBackend`] that, on a `401` whose problem code says the access token was
+//! refused (`error.request.unauthenticated`), refreshes once through the session and replays
+//! the request exactly once. A `401` carrying any other code is a refused *credential* — a
+//! wrong password or second-factor code — and is surfaced untouched. The two are
+//! complementary and neither duplicates the other; the refresh itself is still `auth`'s
+//! single-flight gate.
 //!
 //! It sits at the transport seam rather than in each caller, so **every** generated operation
 //! is covered by one layer that survives regeneration — no generated code is touched, and
@@ -128,7 +131,8 @@ impl Deref for AuthenticatedClient {
 const BEARER_PREFIX: &str = "Bearer ";
 
 /// The reactive half of the refresh contract (slice `S-D17`): an [`rest::HttpBackend`] that,
-/// on a `401`, refreshes the session once and replays the request exactly once.
+/// on a `401` coded [`EXPIRED_TOKEN_CODE`], refreshes the session once and replays the request
+/// exactly once. Any other `401` is returned as the server sent it.
 ///
 /// # Why the transport seam and not [`rest::Middleware`]
 ///
@@ -184,6 +188,19 @@ impl rest::HttpBackend for RefreshOn401 {
                 return Ok(response);
             };
 
+            // Only the bearer scheme's own refusal is a stale token. A `401` an operation
+            // answers about its *payload* — a wrong password on `reauthenticate`, a wrong code
+            // on `totp_disable` — is a refused credential: replaying it charges the lockout
+            // twice and spends the refresh token for nothing (issue #511).
+            let (code, response) = problem_code_of(response).await?;
+            if code.as_deref() != Some(EXPIRED_TOKEN_CODE) {
+                tracing::debug!(
+                    code = code.as_deref().unwrap_or("<none>"),
+                    "a 401 that is not an expired token; not retrying"
+                );
+                return Ok(response);
+            }
+
             let fresh = match session.refresh_rejected(&stale).await {
                 Ok(fresh) => fresh,
                 // Deliberately the *original* `401`, not a synthetic transport error: the
@@ -209,6 +226,42 @@ impl rest::HttpBackend for RefreshOn401 {
             inner.execute(replay).await
         })
     }
+}
+
+/// The one `401` problem code [`RefreshOn401`] refreshes and replays: the code the server's
+/// coded-problem interceptor gives the bearer scheme's own refusal — a token that does not
+/// verify, has expired, or names a session the ledger no longer holds
+/// (`capsule_server::problem::code_for`). Every route-level `401` carries its own `error.*`
+/// code, and none of those is a stale token.
+const EXPIRED_TOKEN_CODE: &str = capsule_i18n::error_codes::REQUEST_UNAUTHENTICATED;
+
+/// The `code` member of an RFC 9457 problem body; every other member is the generated
+/// operation's to parse.
+#[derive(serde::Deserialize)]
+struct ProblemCode {
+    code: Option<String>,
+}
+
+/// Read `response`'s problem `code`, then rebuild the response from the bytes read so the
+/// generated operation still maps it to its typed error. A body that is not a problem yields
+/// `None`, which [`RefreshOn401`] treats as "not an expired token": it fails closed, never
+/// replaying a `401` it cannot classify.
+async fn problem_code_of(
+    response: reqwest::Response,
+) -> Result<(Option<String>, reqwest::Response), rest::TransportError> {
+    let status = response.status();
+    let version = response.version();
+    let headers = response.headers().clone();
+    let body = response.bytes().await.map_err(rest::TransportError::new)?;
+    let code = serde_json::from_slice::<ProblemCode>(&body)
+        .ok()
+        .and_then(|problem| problem.code);
+
+    let mut rebuilt = http::Response::new(body);
+    *rebuilt.status_mut() = status;
+    *rebuilt.version_mut() = version;
+    *rebuilt.headers_mut() = headers;
+    Ok((code, reqwest::Response::from(rebuilt)))
 }
 
 /// The bearer token a prepared request carries, if any. `None` for an unauthenticated
@@ -721,8 +774,7 @@ mod tests {
 
     /// When the refresh itself fails, the caller gets the **server's** `401` back rather than
     /// a synthesized transport error — so the typed `Status401` mapping still fires and the
-    /// `error.*` code survives. That code is the only thing separating an expired token from
-    /// an unreadable revocation ledger, which the server also renders as `401`.
+    /// `error.*` code the *operation* answered survives, not the refresh's.
     #[tokio::test]
     async fn a_401_whose_refresh_fails_keeps_the_servers_own_401() {
         let handler: Handler = Arc::new(|path| {
@@ -735,7 +787,7 @@ mod tests {
                     },
                     "/v1/quota" => MockResponse {
                         status: 401,
-                        body: problem(401, capsule_i18n::error_codes::AUTH_UNAVAILABLE),
+                        body: problem(401, capsule_i18n::error_codes::REQUEST_UNAUTHENTICATED),
                     },
                     _ => MockResponse {
                         status: 404,
@@ -760,14 +812,92 @@ mod tests {
         };
         assert_eq!(
             problem.code,
-            capsule_i18n::error_codes::AUTH_UNAVAILABLE,
+            capsule_i18n::error_codes::REQUEST_UNAUTHENTICATED,
             "the code the caller reads is the one the *operation* answered, not the refresh's"
+        );
+        assert_eq!(
+            hits(&server, "/refresh"),
+            1,
+            "the expired token was refreshed"
         );
         assert_eq!(
             hits(&server, "/v1/quota"),
             1,
             "a refresh that failed produces nothing worth replaying"
         );
+    }
+
+    /// Serve `/v1/quota` a `401` with `body` and a refresh that would succeed, call it once,
+    /// and return the server so the caller can count what the layer did.
+    async fn quota_answering_401(body: String) -> (MockServer, rest::Error<rest::GetQuotaError>) {
+        let handler: Handler = Arc::new(move |path| {
+            let body = body.clone();
+            Box::pin(async move {
+                match path.as_str() {
+                    "/refresh" => MockResponse {
+                        status: 200,
+                        body: token_json("access-2", "refresh-2", far_future()),
+                    },
+                    "/v1/quota" => MockResponse { status: 401, body },
+                    _ => MockResponse {
+                        status: 404,
+                        body: "{}".to_string(),
+                    },
+                }
+            })
+        });
+        let server = start_mock(handler).await;
+        let session = session_with(&server.base_url, "access-1", "refresh-1", far_future());
+        let client = AuthenticatedClient::new(&server.base_url, session).unwrap();
+        let error = client
+            .get_quota(capsule_core::crypto::primitives::PROTOCOL_VERSION, None)
+            .await
+            .expect_err("the mock refuses the operation");
+        (server, error)
+    }
+
+    /// **Issue #511's Done-when.** A `401` an operation answers about the credential in its
+    /// payload — a wrong password on `reauthenticate`, a wrong code on `totp_disable` — is not
+    /// an expired token. Replaying it would charge the lockout twice and spend the refresh
+    /// token, so it reaches the caller untouched, as the operation's typed `401` carrying the
+    /// server's own code, after exactly one request and no refresh. The ledger-outage code is
+    /// in the set for the same reason: refreshing cannot cure an outage.
+    #[tokio::test]
+    async fn a_credential_401_is_neither_refreshed_nor_replayed() {
+        for code in [
+            capsule_i18n::error_codes::AUTH_INVALID_CREDENTIALS,
+            capsule_i18n::error_codes::AUTH_SESSION_EXPIRED,
+            capsule_i18n::error_codes::AUTH_UNAVAILABLE,
+        ] {
+            let (server, error) = quota_answering_401(problem(401, code)).await;
+            let rest::Error::Api(response) = &error else {
+                panic!("{code}: expected the operation's typed API error, got {error:?}");
+            };
+            let rest::GetQuotaError::Status401(problem) = response.inner() else {
+                panic!("{code}: expected a typed 401, got {:?}", response.inner());
+            };
+            assert_eq!(
+                problem.code, code,
+                "the server's own code survives the read"
+            );
+            assert_eq!(hits(&server, "/v1/quota"), 1, "{code}: no replay");
+            assert_eq!(hits(&server, "/refresh"), 0, "{code}: no refresh");
+        }
+    }
+
+    /// A `401` whose body carries no problem code cannot be classified as an expired token,
+    /// so the layer fails closed: no refresh, no replay.
+    #[tokio::test]
+    async fn an_uncoded_401_is_neither_refreshed_nor_replayed() {
+        for body in [
+            String::new(),
+            "not json".to_string(),
+            r#"{"type":"about:blank","status":401}"#.to_string(),
+        ] {
+            let (server, _) = quota_answering_401(body.clone()).await;
+            assert_eq!(hits(&server, "/v1/quota"), 1, "{body:?}: no replay");
+            assert_eq!(hits(&server, "/refresh"), 0, "{body:?}: no refresh");
+        }
     }
 
     /// An unauthenticated operation's `401` is the server's answer about the request, not

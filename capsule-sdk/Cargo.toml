@@ -65,6 +65,9 @@ reqwest = { version = "0.12.28", default-features = false, features = [
     "stream",
     "multipart",
 ] }
+# Rebuilds a `401` the reactive refresh layer (`client::RefreshOn401`) read the problem code
+# out of; `reqwest::Response` is constructible only from an `http::Response`.
+http = { workspace = true }
 
 # ── LAN peering (S-E3) ───────────────────────────────────────────────────────
 # The peering channel is mutually-authenticated TLS 1.3 with no CA (the device keys
