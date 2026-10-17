@@ -293,7 +293,10 @@ async fn paging_resumes_without_gaps_or_repeats() {
         }
     }
 
-    let expected: Vec<String> = expected.iter().map(|id| id.to_string()).collect();
+    let expected: Vec<String> = expected
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
     assert_eq!(seen, expected);
 }
 

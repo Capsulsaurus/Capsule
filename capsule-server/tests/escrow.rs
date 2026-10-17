@@ -180,3 +180,39 @@ async fn the_escrow_surface_requires_a_credential() {
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
 }
+
+#[tokio::test]
+async fn the_stored_at_a_put_echoes_is_the_stored_at_the_store_holds() {
+    // The durable adapter keeps microseconds. A route that echoed the clock's nanoseconds would
+    // tell the client one `stored_at` and hold another, and the stale-cache comparison the field
+    // exists for would call a current escrow stale.
+    use capsule_server::escrow::EscrowStore as _;
+    use capsule_server::store::UserId;
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    fixture
+        .clock
+        .advance(jiff::SignedDuration::from_nanos(123_456_789));
+
+    let body: Value = store(&fixture, &bearer, wrapped(0x77, 64), StatusCode::OK)
+        .await
+        .json();
+    let echoed: jiff::Timestamp = body["stored_at"]
+        .as_str()
+        .expect("stored_at is a string")
+        .parse()
+        .expect("stored_at is RFC 3339");
+    assert_eq!(
+        echoed.subsec_nanosecond() % 1_000,
+        0,
+        "the echoed instant must carry no precision an adapter drops: {echoed}"
+    );
+    let held = fixture
+        .escrows
+        .fetch(&UserId::new(support::owner().as_str()))
+        .await
+        .expect("the store answers")
+        .expect("an escrow is held");
+    assert_eq!(held.stored_at, echoed);
+}

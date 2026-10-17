@@ -212,7 +212,6 @@ fn library_with_a_thumbnailed_asset(lib: &TempDir, src: &TempDir) -> (Uuid, Uuid
                 metadata: MetadataEmbedOptions::none(),
                 bit_depth: BitDepth::Eight,
             },
-            ..ZunePngEncodeConfig::default()
         }),
     )
     .expect("the fixture PNG encodes");

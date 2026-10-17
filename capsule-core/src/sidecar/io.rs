@@ -80,7 +80,7 @@ mod tests {
         let cfg = LibraryConfigCbor {
             schema_version: 1,
             library_name: "Test".to_string(),
-            last_opened_at: 1720000000,
+            last_opened_at: 1_720_000_000,
             last_scrubbed_at: None,
         };
         write_library_config(&path, &cfg).unwrap();
@@ -95,8 +95,8 @@ mod tests {
         let cfg = LibraryConfigCbor {
             schema_version: 1,
             library_name: "My Library".to_string(),
-            last_opened_at: 1720000000,
-            last_scrubbed_at: Some(1719990000),
+            last_opened_at: 1_720_000_000,
+            last_scrubbed_at: Some(1_719_990_000),
         };
         write_library_config(&path, &cfg).unwrap();
         let read_back = read_library_config(&path).unwrap();

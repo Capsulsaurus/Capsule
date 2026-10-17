@@ -112,7 +112,7 @@ fn bundle(
             "plaintext_size": 4096,
             "chunk_size": 65_536,
             "key_mode": "derived",
-            "metadata_blob_hash": metadata.map(|b| support::checksum(b)),
+            "metadata_blob_hash": metadata.map(support::checksum),
             "created_by_user": user().as_str(),
             "created_by_device": device().to_string(),
             "client_version": "capsule-cli/0.1.0",

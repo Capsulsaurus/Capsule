@@ -42,6 +42,11 @@
 //! **An admin surface.** design/moderation.md names an admin queue and an admin who acts on it,
 //! and specifies no way for that admin to authenticate. [`ModerationStore::pending_reports`] is
 //! the queue; reading it over HTTP is what waits for an admin authentication model.
+//!
+//! # Adapters
+//!
+//! [`InMemoryModeration`] is the deterministic double and [`PostgresModeration`] the durable
+//! store (#446); both pass the one suite in [`conformance`].
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -226,8 +231,8 @@ pub trait ModerationStore: std::fmt::Debug + Send + Sync {
 /// works by hand and far below anything that matters to a process.
 ///
 /// **Eviction is oldest-first and loud.** A dropped report is a moderation input nobody will
-/// ever see, so it is a `warn`, not a silent trim; the durable adapter (#476) is where a queue
-/// that must not lose anything belongs.
+/// ever see, so it is a `warn`, not a silent trim; the durable adapter ([`PostgresModeration`])
+/// is where a queue that must not lose anything belongs, and it evicts nothing.
 pub const MAX_IN_MEMORY_REPORTS: usize = 10_000;
 
 /// A deterministic in-memory adapter.
@@ -353,6 +358,11 @@ impl ModerationContext {
         self.store.as_ref()
     }
 }
+
+pub mod conformance;
+pub mod postgres;
+
+pub use postgres::PostgresModeration;
 
 #[cfg(test)]
 mod tests;

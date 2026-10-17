@@ -767,7 +767,11 @@ mod tests {
             vec![asset(0x10, 300), asset(0x11, 100)],
         );
         // Override to the older asset — honored because it is included.
-        let view = render_aggregate(gid, &[alice.clone()], Some(Uuid::from_u128(0x11)));
+        let view = render_aggregate(
+            gid,
+            std::slice::from_ref(&alice),
+            Some(Uuid::from_u128(0x11)),
+        );
         assert_eq!(view.cover, Some(Uuid::from_u128(0x11)));
         // An override that names an asset NOT in the aggregate falls back to the newest.
         let view = render_aggregate(gid, &[alice], Some(Uuid::from_u128(0xDEAD)));

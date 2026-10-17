@@ -674,7 +674,8 @@ mod tests {
         };
         // A key that does not open leaves nothing to regenerate, so the content check rejects;
         // a `wrapped` head without a key breaks the structural key-mode coupling first.
-        let tampers: [(&dyn Fn(&mut crate::crypto::provenance::AssetManifest), _); 2] = [
+        type Tamper<'a> = &'a dyn Fn(&mut crate::crypto::provenance::AssetManifest);
+        let tampers: [(Tamper<'_>, _); 2] = [
             (&flipped, RejectReason::CiphertextHashMismatch),
             (&stripped, RejectReason::Structural),
         ];
