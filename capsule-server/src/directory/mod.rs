@@ -3,7 +3,8 @@
 //! [`InMemoryDeviceDirectory`] is the deterministic double and [`PostgresDeviceDirectory`] the
 //! durable store (#446); both pass the one suite in [`conformance`].
 //!
-//! A user publishes a master-signed [`DeviceDirectory`] as opaque canonical CBOR; any
+//! A user publishes a master-signed
+//! [`DeviceDirectory`](capsule_core::crypto::keys::DeviceDirectory) as opaque canonical CBOR; any
 //! authenticated caller fetches it to pin and to verify manifests against. Nothing downstream
 //! of this works without it: a sync consumer cannot check who signed a manifest, and `S-C23`'s
 //! revoke-all has no identity to anchor against.

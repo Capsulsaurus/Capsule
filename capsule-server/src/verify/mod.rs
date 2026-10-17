@@ -388,7 +388,7 @@ const REHASH_CHUNK_BYTES: usize = 1024 * 1024;
 
 /// Re-read `address` and compare what it hashes to against the address it is filed under.
 ///
-/// Streams through [`BlobStore::read_at`](crate::blob::BlobStore::read_at) a megabyte at a time
+/// Streams through [`BlobStore::read_at`] a megabyte at a time
 /// and never holds the whole blob. A short read ends the walk: the store is append-only and
 /// committed, so fewer bytes than the address implies is itself corruption, and the digest will
 /// say so.

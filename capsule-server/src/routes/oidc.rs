@@ -7,7 +7,7 @@
 //! there; the provider sends them back to the client's own redirect with a `code`; the client
 //! posts `state` and `code` here, and gets exactly what a password sign-in gets — a
 //! [`LoginReply`]: a token pair, or a second-factor challenge. The session is opened by the same
-//! [`open_session_for`] the password path calls, which is the whole of "identical to the
+//! `open_session_for` the password path calls, which is the whole of "identical to the
 //! password path" (design/authentication.md, "Choosing an Auth Path").
 //!
 //! The server never sees the person's browser. The redirect lands at the *client* — a web app's

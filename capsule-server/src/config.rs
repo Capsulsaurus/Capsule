@@ -317,7 +317,7 @@ pub struct OidcConfig {
 ///
 /// `Debug` is written by hand rather than derived: `Config` is logged at startup, and every
 /// secret it holds — the key material, and the credentials a connection URL can carry — is
-/// formatted redacted. See [`redacted_url`].
+/// formatted redacted. See `redacted_url`.
 #[derive(Clone)]
 pub struct Config {
     /// Where the process accepts connections.

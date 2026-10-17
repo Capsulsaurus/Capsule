@@ -43,7 +43,7 @@
 //! # Adapters
 //!
 //! [`InMemoryDrops`] is the deterministic double and [`PostgresDrops`] the durable adapter;
-//! both pass the one suite in [`conformance`]. The cap rule itself is one function, [`admit`],
+//! both pass the one suite in [`conformance`]. The cap rule itself is one function, `admit`,
 //! which each adapter runs under its own lock.
 
 pub mod conformance;

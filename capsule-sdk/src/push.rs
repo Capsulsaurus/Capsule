@@ -9,7 +9,7 @@
 //!
 //! **Resume derives from server truth.** There is no push-side state file: pull the sync feed,
 //! fold it with [`held_from_feed`](crate::staged::held_from_feed) into the set of blob content
-//! addresses the server durably holds, and [`remaining_tiers`](crate::staged::remaining_tiers)
+//! addresses the server durably holds, and [`remaining_tiers`]
 //! rebuilds exactly the outstanding work. Within a blob, `POST /upload`'s idempotent re-create
 //! returns the authoritative offset; across an asset's blobs, a `duplicate_blob` answer is a
 //! merge, not an error. Re-running a push against an unchanged library is therefore a no-op.

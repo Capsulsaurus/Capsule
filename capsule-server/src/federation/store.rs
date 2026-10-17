@@ -141,7 +141,7 @@ pub const MAX_GRANT_LIFETIME: SignedDuration = SignedDuration::from_hours(24 * 9
 ///
 /// # Errors
 ///
-/// Returns [`StoreError::Rejected`](crate::store::StoreError::Rejected) when the token's own
+/// Returns [`StoreError::Rejected`]when the token's own
 /// window is past [`MAX_TOKEN_TTL`], when it runs past the grant's absolute deadline, when that
 /// deadline is further out than [`MAX_GRANT_LIFETIME`], or when its `granted_epoch` is wider
 /// than every adapter can hold.
@@ -203,7 +203,7 @@ pub fn admissible(record: &CapabilityRecord) -> Result<(), StoreError> {
 ///
 /// # Errors
 ///
-/// Returns [`StoreError::Rejected`](crate::store::StoreError::Rejected) naming which of them
+/// Returns [`StoreError::Rejected`]naming which of them
 /// moved. Every one is a bug in the caller, never a peer's request.
 pub fn continues(
     predecessor: &str,
@@ -284,7 +284,7 @@ pub trait CapabilityStore: RevocationList + fmt::Debug + Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns [`StoreError::Rejected`](crate::store::StoreError::Rejected) if a capability with
+    /// Returns [`StoreError::Rejected`]if a capability with
     /// the same `jti` is already recorded — a `jti` is a fresh UUIDv7 per mint, so a collision is
     /// a bug rather than a retry — or if the record would live past the TTL ceiling, which the
     /// published list is bounded by. The codec clamps at mint, so the second is a bug too.
@@ -312,7 +312,7 @@ pub trait CapabilityStore: RevocationList + fmt::Debug + Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns [`StoreError::Corrupt`](crate::store::StoreError::Corrupt), from
+    /// Returns [`StoreError::Corrupt`], from
     /// [`broken_chain`], when a link names a successor that is not recorded or one already
     /// visited.
     fn revoke_issued<'a>(&'a self, jti: &'a str, at: Timestamp) -> StoreFuture<'a, RevokeOutcome>;
@@ -326,7 +326,7 @@ pub trait CapabilityStore: RevocationList + fmt::Debug + Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns [`StoreError::Rejected`](crate::store::StoreError::Rejected) if `successor` names
+    /// Returns [`StoreError::Rejected`]if `successor` names
     /// a different peer, album or member than the predecessor, **carries a different
     /// `not_after` or one its own `expires_at` runs past**, or would live past the ceiling, or
     /// reuses a recorded `jti`. Every one is a bug in the caller, never a peer's request — and

@@ -5,13 +5,18 @@
 //! # Surface
 //!
 //! [`FfiCapsuleClient`] is the unauthenticated entry point (auth + upload endpoints
-//! and the protocol pin). [`FfiCapsuleClient::login`]/[`register`](FfiCapsuleClient::register)
+//! and the protocol pin). [`FfiCapsuleClient::login`]/[`register`](crate::ffi::FfiCapsuleClient::register)
 //! return an [`FfiSession`] **handle** — an opaque object that owns the token store
-//! internally. Every subsequent call ([`upload`](FfiSession::upload),
-//! [`upload_status`](FfiSession::upload_status), [`sync_pull`](FfiSession::sync_pull),
-//! [`logout`](FfiSession::logout)) rides that handle. **Tokens never cross the FFI
+//! internally. Every subsequent call ([`upload`](crate::ffi::FfiSession::upload),
+//! [`upload_status`](crate::ffi::FfiSession::upload_status),
+//! [`sync_pull`](crate::ffi::FfiSession::sync_pull),
+//! [`logout`](crate::ffi::FfiSession::logout)) rides that handle. **Tokens never cross the FFI
 //! boundary raw**: the S-D7 session store injects and auto-refreshes the bearer
 //! behind the handle, so foreign code never sees access/refresh token material.
+//!
+//! [`FfiCapsuleClient`]: crate::ffi::FfiCapsuleClient
+//! [`FfiCapsuleClient::login`]: crate::ffi::FfiCapsuleClient::login
+//! [`FfiSession`]: crate::ffi::FfiSession
 //!
 //! # Async
 //!
