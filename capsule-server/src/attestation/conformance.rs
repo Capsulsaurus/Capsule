@@ -128,17 +128,17 @@ pub async fn the_chain_is_monotonic_and_each_entry_names_its_predecessor(h: &dyn
 pub async fn concurrent_issues_do_not_fork_the_chain(h: &dyn Harness) {
     let case = "race";
     let signer = key();
-    let (a, b, c, d) = tokio::join!(
+    let (first, second, third, fourth) = tokio::join!(
         h.receipts().issue(draft(case, "a", "asset", b"a"), &signer),
         h.receipts().issue(draft(case, "b", "asset", b"b"), &signer),
         h.receipts().issue(draft(case, "c", "asset", b"c"), &signer),
         h.receipts().issue(draft(case, "d", "asset", b"d"), &signer),
     );
     let mut issued = vec![
-        ok(a, "issue a"),
-        ok(b, "issue b"),
-        ok(c, "issue c"),
-        ok(d, "issue d"),
+        ok(first, "issue a"),
+        ok(second, "issue b"),
+        ok(third, "issue c"),
+        ok(fourth, "issue d"),
     ];
     issued.sort_by_key(|receipt| receipt.core.receipt_seq);
     for pair in issued.windows(2) {
