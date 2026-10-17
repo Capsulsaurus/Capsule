@@ -57,6 +57,13 @@ async fn concurrent_hits_admit_exactly_the_budget() {
     conformance::concurrent_hits_admit_exactly_the_budget(counters()).await;
 }
 
+/// The ceiling case, on a store whose every partition is bounded at the suite's own number.
+#[tokio::test]
+async fn a_full_partition_refuses_only_a_new_key_in_that_partition() {
+    let counters = InMemoryCounters::new().with_ceiling(conformance::CEILING);
+    conformance::a_full_partition_refuses_only_a_new_key_in_that_partition(&counters).await;
+}
+
 /// The whole suite, in one pass on one store.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_whole_suite_passes_in_one_pass() {

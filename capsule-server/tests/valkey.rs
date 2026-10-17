@@ -258,6 +258,65 @@ async fn the_counter_suite_passes_against_valkey() {
     counters::run_all(store).await;
 }
 
+/// The partition ceiling, against a real server (#519).
+#[tokio::test]
+async fn a_full_counter_partition_refuses_a_new_key_against_valkey() {
+    let Some(server) = server().await else {
+        return;
+    };
+    let harness = ValkeyHarness::connect(&server.url).await;
+    let store =
+        ValkeyCounters::new(harness.stores.valkey().clone()).with_ceiling(counters::CEILING);
+    counters::a_full_partition_refuses_only_a_new_key_in_that_partition(&store).await;
+}
+
+/// First hits racing into one partition admit exactly its ceiling of new keys.
+///
+/// The check and the open are one script, so a burst of first hits cannot all read the same
+/// under-ceiling occupancy — the race a read-then-`ZADD` adapter loses.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn first_hits_race_to_the_partition_ceiling() {
+    let Some(server) = server().await else {
+        return;
+    };
+    let harness = ValkeyHarness::connect(&server.url).await;
+    let store: Arc<dyn CounterStore> = Arc::new(
+        ValkeyCounters::new(harness.stores.valkey().clone()).with_ceiling(counters::CEILING),
+    );
+    let keys: Vec<CounterKey> = (0..24)
+        .map(|n| CounterKey::DropSource(format!("valkey-race-ceiling-{n}")))
+        .collect();
+    for key in &keys {
+        store.reset(key).await.expect("resets");
+    }
+    // Far past every other case's instants, so nothing they left in the partition is live.
+    let at = jiff::Timestamp::from_second(4_000_000_000).expect("a valid instant");
+    let budget = Budget::new(5, SignedDuration::from_mins(1));
+    let mut tasks = tokio::task::JoinSet::new();
+    for key in keys.clone() {
+        let store = Arc::clone(&store);
+        tasks.spawn(async move { store.hit(&key, budget, at).await });
+    }
+    let (mut admitted, mut refused) = (0, 0);
+    while let Some(outcome) = tasks.join_next().await {
+        match outcome.expect("a hit task completes") {
+            Ok(verdict) if verdict.admits() => admitted += 1,
+            Ok(verdict) => panic!("a first hit is never rate-limited: {verdict:?}"),
+            Err(error) => {
+                assert!(capsule_server::counter::is_at_capacity(&error), "{error}");
+                refused += 1;
+            }
+        }
+    }
+    assert_eq!(
+        (admitted, refused),
+        (counters::CEILING, 24 - counters::CEILING)
+    );
+    for key in &keys {
+        store.reset(key).await.expect("cleans up");
+    }
+}
+
 /// Sixteen finalizers race for one session; exactly one wins.
 ///
 /// The property `finalization_is_claimed_exactly_once` asserts in sequence, contested for real:
