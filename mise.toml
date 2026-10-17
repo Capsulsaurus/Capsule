@@ -130,11 +130,13 @@ run = "cargo fmt"
 [tasks.format-check-rust]
 run = "cargo fmt --check"
 
+# `--all-targets` lints every unit-test module, integration test, bench and example too, not
+# only lib and bin targets (issue #474).
 [tasks.lint-rust]
-run = "cargo clippy --workspace --fix --allow-dirty -- $CLIPPY_FLAGS"
+run = "cargo clippy --workspace --all-targets --fix --allow-dirty -- $CLIPPY_FLAGS"
 
 [tasks.lint-check-rust]
-run = "cargo clippy --workspace -- $CLIPPY_FLAGS"
+run = "cargo clippy --workspace --all-targets -- $CLIPPY_FLAGS"
 
 # The rustdoc gate for the frozen crates (issue #399): a broken intra-doc link or an ambiguous
 # one is an error, not a warning. Scoped to the four crates whose public API is frozen; the rest
@@ -361,8 +363,8 @@ run = [
 
 [tasks.lint-check-ffi]
 run = [
-  "cargo clippy -p capsule-core --features ffi -- $CLIPPY_FLAGS",
-  "cargo clippy -p capsule-sdk --features ffi -- $CLIPPY_FLAGS",
+  "cargo clippy -p capsule-core --features ffi --all-targets -- $CLIPPY_FLAGS",
+  "cargo clippy -p capsule-sdk --features ffi --all-targets -- $CLIPPY_FLAGS",
 ]
 
 # gen-bindings, verify-examples → mise-tasks/ (shebang scripts).

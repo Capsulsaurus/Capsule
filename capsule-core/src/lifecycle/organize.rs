@@ -457,7 +457,7 @@ mod tests {
 
         let bytes = ws.read_plaintext(&a).unwrap();
         ws.set_hidden(&a, true).unwrap();
-        assert!(ws.db().query_hidden(0, 100).unwrap().len() == 1);
+        assert_eq!(ws.db().query_hidden(0, 100).unwrap().len(), 1);
 
         ws.set_hidden(&a, false).unwrap();
         assert!(!ws.is_hidden(&a));

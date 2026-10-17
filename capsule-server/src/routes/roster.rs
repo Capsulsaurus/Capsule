@@ -32,12 +32,12 @@
 //! which the member vanished — the stored fact a former member's blob-route `403` is rendered
 //! from once that route consults membership.
 //!
-//! **Removal reclaims nothing, and this call is where an operator would expect it to.** What a
-//! removed writer member uploaded stays in the owner's album and stays charged to the removed
-//! member's quota; only the refcount collector releases an attribution, and only once the owner
-//! deletes the asset. Whether that is right is a product question no design document answers
-//! (issue #473); what this endpoint does is exactly what it says — it records who may read and
-//! write, and nothing else.
+//! **Removal reclaims nothing, by design, and this call is where an operator would expect it
+//! to.** What a removed writer member uploaded stays in the owner's album and stays charged to
+//! the removed member's quota; only the refcount collector releases an attribution, and only
+//! once the owner or a current writer member deletes the asset. That is the "Departed album members" decision in
+//! design/quota.md (issue #473): removal is a key rotation, not a data event, so this endpoint
+//! records who may read and write and touches no quota ledger.
 //!
 //! **Idempotent under `(album_id, roster_version)`.** The same bytes again are a `200` with
 //! `replayed: true`; the same version with different bytes is the `409`.

@@ -404,8 +404,8 @@ fn every_budget_is_declared_in_one_place() {
     // time one was tuned.
     assert_eq!(budgets::LOGIN_ATTEMPTS.limit, 5);
     assert_eq!(budgets::ENROLLMENT_REDEMPTION.window.as_mins(), 10);
-    assert!(budgets::SHARE_SOURCE.limit > budgets::SHARE_LINK.limit);
-    assert!(budgets::DROP_SOURCE.limit > budgets::DROP_LINK.limit);
+    const { assert!(budgets::SHARE_SOURCE.limit > budgets::SHARE_LINK.limit) };
+    const { assert!(budgets::DROP_SOURCE.limit > budgets::DROP_LINK.limit) };
     assert_eq!(budgets::DEEP_VERIFY.window.as_hours(), 1);
 }
 

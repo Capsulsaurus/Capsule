@@ -81,6 +81,8 @@ fn ffi_request(size: u64) -> FfiUploadRequest {
             chunk_size: 65536,
             key_mode: "derived".into(),
             metadata_blob_hash: None,
+            derivative_role: None,
+            derivative_format: None,
             created_by_user: "user-1".into(),
             created_by_device: "device-1".into(),
             client_version: "capsule-test/0".into(),
@@ -263,6 +265,23 @@ fn ffi_client_rejects_invalid_base_url() {
         Err(other) => panic!("expected InvalidArgument, got {other:?}"),
         Ok(_) => panic!("expected an invalid-base-url rejection"),
     }
+}
+
+/// A derivative's role/format pair survives both `FfiManifestEnvelope` conversions, so a
+/// derivative upload that crosses the FFI still declares what the server's gate requires.
+#[test]
+fn ffi_manifest_envelope_carries_the_derivative_pair_both_ways() {
+    let mut ffi = ffi_request(4096).manifest_envelope;
+    ffi.derivative_role = Some("thumbnail".into());
+    ffi.derivative_format = Some("image/jxl".into());
+
+    let sdk = ManifestEnvelope::from(ffi);
+    assert_eq!(sdk.derivative_role.as_deref(), Some("thumbnail"));
+    assert_eq!(sdk.derivative_format.as_deref(), Some("image/jxl"));
+
+    let back = FfiManifestEnvelope::from(sdk);
+    assert_eq!(back.derivative_role.as_deref(), Some("thumbnail"));
+    assert_eq!(back.derivative_format.as_deref(), Some("image/jxl"));
 }
 
 // ─── S-P1: the workspace verbs ───────────────────────────────────────────────

@@ -1258,7 +1258,11 @@ pub async fn submit_federated_report(
     )
     .await?;
 
-    let received_at = federation.clock().now();
+    // At the precision the report store holds, so the instant this answer echoes is the one an
+    // operator later reads off the queue. Taken *before* the hosted branch, so the dropped answer
+    // has the same shape as the filed one — a sub-microsecond tail on only one of them would say
+    // whether the account exists.
+    let received_at = crate::postgres::time::stored(federation.clock().now());
     if !hosted {
         // Logged at `warn` rather than `info`: a peer repeatedly reporting accounts this server
         // does not host is either misrouting or probing, and both are things an operator wants

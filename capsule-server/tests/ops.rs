@@ -112,7 +112,7 @@ fn bundle(
             "plaintext_size": 4096,
             "chunk_size": 65_536,
             "key_mode": "derived",
-            "metadata_blob_hash": metadata.map(|b| support::checksum(b)),
+            "metadata_blob_hash": metadata.map(support::checksum),
             "created_by_user": user().as_str(),
             "created_by_device": device().to_string(),
             "client_version": "capsule-cli/0.1.0",
@@ -419,6 +419,32 @@ async fn an_unknown_action_is_refused() {
     )
     .await;
     assert_eq!(problem["code"], "error.upload.envelope_mismatch");
+}
+
+/// The derivative pair belongs to a derivative upload; a lifecycle write moves no blob bytes, so
+/// a manifest that declares either half of it is refused rather than accepted unchecked.
+#[tokio::test]
+async fn a_lifecycle_write_may_not_declare_a_derivative() {
+    let fixture = Fixture::working();
+    let bearer = token(&fixture).await;
+    publish(&fixture).await;
+
+    for (field, value) in [
+        ("derivative_role", "thumbnail"),
+        ("derivative_format", "image/jxl"),
+    ] {
+        let mut body = bundle(&fixture, "delete", "d1", Some(&created_head()), None);
+        body["manifest_envelope"][field] = json!(value);
+
+        let problem = apply(&fixture, &bearer, &body, StatusCode::BAD_REQUEST).await;
+        assert_eq!(problem["code"], "error.upload.envelope_mismatch", "{field}");
+        assert!(
+            problem["detail"]
+                .as_str()
+                .is_some_and(|detail| detail.contains(field)),
+            "the problem names {field}: {problem}"
+        );
+    }
 }
 
 /// Invariant 25: a metadata blob must be the one its manifest committed to.
