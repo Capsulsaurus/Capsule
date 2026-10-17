@@ -201,6 +201,40 @@ run = [
   'cargo nextest run $(printf -- "-p %s " $RELEASE_TEST_CRATES) --cargo-profile release',
 ]
 
+# The container tiers `test-rust` skips (#514): every Postgres adapter conformance suite, the
+# migration up/down round trip and the durable boot arm (all under a `postgres_conformance`
+# test module), the durable process cases in `tests/binary.rs`, and the Valkey suite in
+# `tests/valkey.rs`. The filterset is the one `.config/nextest.toml` puts in the one-thread
+# `containers` group, so a new suite joins both by being named like the others.
+#
+# The task admits both tiers itself, so it means the same thing locally and in CI: each case
+# starts its own container through testcontainers (Docker's socket on CI; locally, `DOCKER_HOST`
+# at the podman socket and `CAPSULE_TEST_CONTAINER_USERNS=keep-id` for rootless podman).
+#
+# A gated case that cannot reach its tier prints a `skipping <case>:` / `skipped:` line and
+# passes, which is exactly how these suites reported green in CI while never running. So the
+# successful cases' output is kept (`--success-output final`) and the task fails when any of it
+# carries a skip line — a container tier that silently ran nothing is a failure here, never a
+# pass. `--no-tests=fail` covers the other way to run nothing: a filterset that matches no test.
+# CI runs this in the `rust-containers` job.
+[tasks.test-rust-containers]
+description = "Run the Postgres and Valkey container tiers; fail if any case skipped"
+shell = "bash -c"
+env = { CAPSULE_TEST_POSTGRES = "1", CAPSULE_TEST_VALKEY = "1" }
+run = '''
+set -euo pipefail
+log="${CARGO_TARGET_DIR:-target}/nextest/containers.log"
+mkdir -p "$(dirname "$log")"
+cargo nextest run -p capsule-server \
+  -E 'test(postgres_conformance) or binary(valkey)' \
+  --no-tests=fail --success-output final 2>&1 | tee "$log"
+if grep -nE 'skipping [^:]+: |skipped: ' "$log" >&2; then
+  echo "test-rust-containers: the cases above skipped instead of running against a container." >&2
+  echo "A skipped container tier is a failure here; check the container runtime (DOCKER_HOST)." >&2
+  exit 1
+fi
+'''
+
 [tasks.test-coverage-rust]
 run = "cargo llvm-cov nextest --workspace --fail-under-lines 0"
 
