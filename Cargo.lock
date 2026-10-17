@@ -981,6 +981,7 @@ dependencies = [
  "capsule-core",
  "capsule-i18n",
  "hex",
+ "http",
  "jiff",
  "p256",
  "rcgen",
