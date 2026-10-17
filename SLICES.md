@@ -5562,13 +5562,13 @@ real composition root over the real SDK and a real library — no container, no 
 lands with #447; in-process shape = 5 and the ceremony half of 8; 4 has no route (federation
 is post-v1, #406). The earlier note that every server-side case was suspended for the Kynos
 rebuild is stale: the rebuilt server is what these cases run against. What still blocks a
-case's full wording is a seam in the tree rather than a transport, each filed: the SDK's
-directory publish omits the identity-key header (#466), a `Workspace` cannot open as a server
-account (#467), a recovered device has not adopted the account's published directory (#550), a library's adopt
-registers nothing to publish (#469), and there is no cross-sign or safety-code seam (#471).
-Two seams closed on the way in and no longer bound a case: the push ladder now ships the
-provenance rung and `sync_apply` decodes the record bytes the feed serves (#464, #465), and
-the upload policy accepts `image/jxl` (#470).
+case's full wording is a seam in the tree rather than a transport, each filed: a `Workspace`
+cannot open as a server account (#467), a recovered device has not adopted the account's
+published directory (#550), a library's adopt registers nothing to publish (#469), and there
+is no cross-sign or safety-code seam (#471). Four seams closed on the way in and no longer
+bound a case: the push ladder now ships the provenance rung and `sync_apply` decodes the
+record bytes the feed serves (#464, #465), the upload policy accepts `image/jxl` (#470), and
+the SDK's directory publish sends the identity-key header (#466).
 
 ### S-Q1 — Mark/complete E2E cases 2, 3, 11
 

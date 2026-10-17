@@ -1106,3 +1106,74 @@ async fn the_sdk_fetches_a_custody_receipt_and_verifies_it_under_the_attestation
     assert_eq!(status, 409);
     assert_eq!(code.as_deref(), Some("error.upload.receipt_not_available"));
 }
+
+/// The SDK's device-directory publish, over a socket, against the server that anchors and
+/// verifies it (`S-P1` over `S-C9`/`S-C42`).
+///
+/// A mock cannot prove this: the server requires the user identity verifying key beside the
+/// document (`X-Capsule-Identity-Key`), anchors it on first publish, and verifies the document
+/// under it — invariant 23's second clause. So what is asserted is that the SDK's publish
+/// names the key the way the server reads it, that what it stored the SDK's fetch verifies
+/// under the same key, and that the server's two refusals arrive as their typed variants.
+#[tokio::test]
+async fn the_sdk_publishes_and_fetches_a_device_directory_over_a_socket() {
+    use capsule_core::crypto::keys::DeviceDirectory;
+    use capsule_sdk::directory::{DirectoryClient, DirectoryError};
+    use support::{device, identity_key, signed_directory_with_device, user};
+    use uuid::Uuid;
+
+    let fixture = Fixture::working();
+    let base_url = serve(&fixture).await;
+    let client = DirectoryClient::new(session(&base_url).await, &format!("{base_url}/v1/auth"));
+    let identity = identity_key();
+    let device_key = identity_key();
+    let directory = |ik: &capsule_core::crypto::keys::HybridSigningKey, version: u64| {
+        capsule_core::cbor::from_slice::<DeviceDirectory>(&signed_directory_with_device(
+            ik,
+            version,
+            device(),
+            &device_key,
+            "2026-01-01T00:00:00Z",
+        ))
+        .expect("the fixture directory decodes")
+    };
+
+    let published = directory(&identity, 1);
+    let version = client
+        .publish(&published, &identity.verifying_key())
+        .await
+        .expect("a directory signed under the presented identity key is accepted");
+    assert_eq!(version, 1);
+
+    // What the server stored is the signed document, and it verifies under the anchored key.
+    let user_id = Uuid::parse_str(user().as_str()).expect("the seeded account id is a uuid");
+    let fetched = client
+        .fetch(user_id, &identity.verifying_key())
+        .await
+        .expect("the published directory is served and verifies");
+    assert_eq!(fetched, published, "the document round-trips verbatim");
+
+    // Invariant 23's first clause: a version that does not advance is the typed conflict.
+    let err = client
+        .publish(&published, &identity.verifying_key())
+        .await
+        .expect_err("an unchanged version does not advance");
+    assert!(matches!(err, DirectoryError::VersionConflict), "{err:?}");
+
+    // Its second clause: once anchored, a document under any other key is refused, however
+    // well it verifies under that key.
+    let stranger = identity_key();
+    let err = client
+        .publish(&directory(&stranger, 2), &stranger.verifying_key())
+        .await
+        .expect_err("a key other than the anchored one is refused");
+    assert!(matches!(err, DirectoryError::IdentityMismatch), "{err:?}");
+    assert_eq!(err.error_code(), Some("error.directory.identity_mismatch"));
+
+    // And a document that does not verify under the key presented beside it is malformed.
+    let err = client
+        .publish(&directory(&stranger, 2), &identity.verifying_key())
+        .await
+        .expect_err("a document signed under another key does not verify");
+    assert!(matches!(err, DirectoryError::Malformed), "{err:?}");
+}
