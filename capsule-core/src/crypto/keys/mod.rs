@@ -22,6 +22,7 @@ pub(crate) mod kem_p256;
 pub(crate) mod keystore;
 pub(crate) mod master;
 pub(crate) mod p256;
+pub(crate) mod safety_code;
 pub(crate) mod signer;
 pub(crate) mod software;
 // The Windows TPM 2.0 `HardwareSigner` over TBS (slice `S-F4`). The pure wire codec compiles on
@@ -35,7 +36,7 @@ pub(crate) mod tpm;
 pub use album::{Amk, AmkVersion};
 #[cfg(feature = "native")]
 pub use albumstore::{AlbumStore, AlbumStoreError, AmkRow, PersistedAlbum, PersistedAuthority};
-pub use directory::{DekPublic, DeviceDirectory, DeviceEntry, DirectoryCore};
+pub use directory::{DekPublic, DeviceDirectory, DeviceEntry, DirectoryCore, DirectoryError};
 pub use hardware::{
     HardwareBackedSigner, HardwareKeyAgreement, HardwareSigner, HardwareSignerError,
 };
@@ -50,6 +51,10 @@ pub use kem_p256::{
 pub use keystore::{Account, AccountFile, DekBinding, DeviceDek, DeviceKeys};
 pub use master::MasterKey;
 pub use p256::P256HybridSigningKey;
+pub use safety_code::{
+    KEY_COMMITMENT_LEN, SAFETY_CODE_CHUNK, SAFETY_CODE_DIGITS, commitment_matches, key_commitment,
+    safety_code,
+};
 pub use signer::Signer;
 pub use software::SoftwareSigner;
 #[cfg(windows)]
