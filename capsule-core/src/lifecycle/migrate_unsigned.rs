@@ -21,7 +21,7 @@
 //! This module owns the only decoder of the legacy shape, and it is private: the verb reads
 //! the handful of fields it projects and carries the rest as an opaque map.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -422,6 +422,9 @@ struct StackMember {
     /// A candidate of this run, which needs a placement — as opposed to an asset an earlier
     /// run already placed, which only counts toward the group and its numbering.
     this_run: bool,
+    /// The `member_index` an earlier run's placement holds, which no candidate of this run
+    /// may be given. Always `None` for this run's candidates.
+    held_index: Option<u32>,
 }
 
 // ── candidates ──────────────────────────────────────────────────────────────
@@ -811,8 +814,14 @@ impl Workspace {
     /// them, a run that crashed mid-stack would resume the remaining members as a group of
     /// one and leave the admitted member alone in its stack forever. An earlier member placed
     /// in no stack (its group was a singleton then) or since moved by the user is not counted,
-    /// so its register is never contradicted. `member_index` is the position in the
-    /// asset-id-sorted union, which reproduces the interrupted run's own numbering.
+    /// so its register is never contradicted.
+    ///
+    /// An earlier member keeps the `member_index` its register holds. This run's candidates,
+    /// in asset-id order, take the lowest indices no earlier member holds. After a crash
+    /// mid-stack that reproduces the interrupted run's own numbering (the free indices are
+    /// exactly the unplaced members' positions in the sorted union); a member that joins a
+    /// stack an earlier run completed without it is numbered after the placed members, so no
+    /// two members of a stack share an index.
     fn legacy_stack_memberships(
         &self,
         candidates: &[Candidate],
@@ -828,6 +837,7 @@ impl Workspace {
                         asset_id: c.asset_id,
                         hint: hint.clone(),
                         this_run: true,
+                        held_index: None,
                     });
             }
         }
@@ -852,18 +862,27 @@ impl Workspace {
                 .stack_membership
                 .get()
                 .and_then(Option::as_ref)
-                .is_some_and(|m| m.stack_id == stack_id);
-            if placed {
+                .filter(|m| m.stack_id == stack_id);
+            if let Some(placed) = placed {
                 tracing::debug!(
                     asset_id = %asset.asset_id,
                     stack_id = %stack_id,
+                    member_index = ?placed.member_index,
                     "unsigned migration: an earlier run's stack member joins its group"
                 );
                 members.push(StackMember {
                     asset_id: asset.asset_id,
                     hint,
                     this_run: false,
+                    held_index: placed.member_index,
                 });
+            } else {
+                tracing::debug!(
+                    asset_id = %asset.asset_id,
+                    stack_id = %stack_id,
+                    "unsigned migration: an earlier asset sharing the hint is outside the \
+                     derived stack; not counted"
+                );
             }
         }
         let mut out = BTreeMap::new();
@@ -875,10 +894,12 @@ impl Workspace {
             let stack_id = legacy_stack_id(&user_id, &method, &key);
             let stack_type = members[0].hint.stack_type;
             let earlier = members.iter().filter(|m| !m.this_run).count();
-            for (index, member) in members.iter().enumerate() {
-                if !member.this_run {
-                    continue;
-                }
+            let held: BTreeSet<u32> = members.iter().filter_map(|m| m.held_index).collect();
+            let mut free = (0u32..).filter(|i| !held.contains(i));
+            for member in members.iter().filter(|m| m.this_run) {
+                let index = free
+                    .next()
+                    .expect("an unbounded range always has a free index");
                 let role = match member.hint.member_role.as_str() {
                     "primary" => StackRole::Primary,
                     "proxy" => StackRole::Proxy,
@@ -890,7 +911,7 @@ impl Workspace {
                         stack_id,
                         stack_type,
                         role,
-                        member_index: Some(index as u32),
+                        member_index: Some(index),
                     },
                 );
             }
@@ -2168,6 +2189,169 @@ mod tests {
                 .len(),
             2,
             "the stack holds both members, not one"
+        );
+    }
+
+    /// The `member_index` of a stack's member, from its signed sidecar.
+    fn member_index(ws: &Workspace, id: &Uuid) -> Option<u32> {
+        read_signed(ws, id)
+            .stack_membership
+            .get()
+            .and_then(Option::as_ref)
+            .and_then(|m| m.member_index)
+    }
+
+    /// A member whose sidecar appears only after an earlier run completed its stack without
+    /// it joins that stack under an index no placed member holds, even where its asset id
+    /// sorts between theirs; the placed members keep the indices they were signed with.
+    #[test]
+    fn a_late_member_joins_a_completed_stack_without_reusing_an_index() {
+        let lib = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Imports").unwrap();
+        let first = Uuid::from_u128(0xF1);
+        let late = Uuid::from_u128(0xF2);
+        let last = Uuid::from_u128(0xF3);
+        write_legacy(
+            lib.path(),
+            first,
+            b"\xFF\xD8\xFF completed stack primary",
+            vec![("stack_hint", stack_hint("img_0123", "primary"))],
+        );
+        write_legacy(
+            lib.path(),
+            last,
+            b"\xFF\xD8\xFF completed stack raw",
+            vec![("stack_hint", stack_hint("img_0123", "raw"))],
+        );
+        ws.migrate_unsigned_sidecars(&opts(album)).unwrap();
+        let expected = legacy_stack_id(&ws.user_id(), "filename_stem", "img_0123");
+        assert_eq!(member_index(&ws, &first), Some(0));
+        assert_eq!(member_index(&ws, &last), Some(1));
+
+        // The member skipped then (its sidecar was not there) sorts between the two.
+        write_legacy(
+            lib.path(),
+            late,
+            b"\xFF\xD8\xFF late stack member",
+            vec![("stack_hint", stack_hint("img_0123", "raw"))],
+        );
+        drop(ws);
+        let mut ws = Workspace::open(lib.path(), b"passphrase", fast_params()).unwrap();
+        let report = ws.migrate_unsigned_sidecars(&opts(album)).unwrap();
+        assert_eq!(report.migrated, vec![late]);
+        assert_eq!(report.stacks, vec![expected]);
+        let sidecar = read_signed(&ws, &late);
+        let membership = sidecar
+            .stack_membership
+            .get()
+            .and_then(Option::as_ref)
+            .expect("the late member joins the stack");
+        assert_eq!(membership.stack_id, expected);
+        assert_eq!(membership.member_index, Some(2), "after the placed members");
+        assert_eq!(member_index(&ws, &first), Some(0), "untouched");
+        assert_eq!(member_index(&ws, &last), Some(1), "untouched");
+        assert_eq!(
+            ws.db()
+                .list_stack_members(&expected.to_string())
+                .unwrap()
+                .len(),
+            3
+        );
+    }
+
+    /// An earlier-migrated asset sharing the hint but outside the derived stack — admitted as
+    /// a singleton (no register), or moved by the user to another stack — is not pulled into
+    /// the stack a later run derives, and its register is left as it was.
+    #[test]
+    fn an_earlier_asset_outside_the_derived_stack_is_not_pulled_in() {
+        let lib = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Imports").unwrap();
+
+        // A singleton: its partner was not there when it was admitted.
+        let single = Uuid::from_u128(0xF4);
+        write_legacy(
+            lib.path(),
+            single,
+            b"\xFF\xD8\xFF earlier singleton",
+            vec![("stack_hint", stack_hint("img_0200", "primary"))],
+        );
+        // A completed stack whose primary the user then moves to a stack of their own.
+        let moved = Uuid::from_u128(0xF5);
+        let stayed = Uuid::from_u128(0xF6);
+        write_legacy(
+            lib.path(),
+            moved,
+            b"\xFF\xD8\xFF user-moved member",
+            vec![("stack_hint", stack_hint("img_0300", "primary"))],
+        );
+        write_legacy(
+            lib.path(),
+            stayed,
+            b"\xFF\xD8\xFF member left in place",
+            vec![("stack_hint", stack_hint("img_0300", "raw"))],
+        );
+        ws.migrate_unsigned_sidecars(&opts(album)).unwrap();
+        assert_eq!(read_signed(&ws, &single).stack_membership.get(), None);
+        let derived = legacy_stack_id(&ws.user_id(), "filename_stem", "img_0300");
+        for id in [moved, stayed] {
+            let sidecar = read_signed(&ws, &id);
+            assert_eq!(
+                sidecar
+                    .stack_membership
+                    .get()
+                    .and_then(Option::as_ref)
+                    .map(|m| m.stack_id),
+                Some(derived),
+                "{id} was placed in the derived stack first"
+            );
+        }
+        let user_stack = StackMembership {
+            stack_id: Uuid::from_u128(0xBEEF),
+            stack_type: StackType::RawJpeg,
+            role: StackRole::Primary,
+            member_index: Some(0),
+        };
+        ws.set_stack_membership(&moved, Some(user_stack.clone()))
+            .unwrap();
+        // Then the user takes the other member out of the derived stack too.
+        ws.set_stack_membership(&stayed, None).unwrap();
+
+        // The singleton's partner, and a newcomer to the stack both earlier members left.
+        let partner = Uuid::from_u128(0xF7);
+        let newcomer = Uuid::from_u128(0xF8);
+        write_legacy(
+            lib.path(),
+            partner,
+            b"\xFF\xD8\xFF singleton's late partner",
+            vec![("stack_hint", stack_hint("img_0200", "raw"))],
+        );
+        write_legacy(
+            lib.path(),
+            newcomer,
+            b"\xFF\xD8\xFF newcomer to a left stack",
+            vec![("stack_hint", stack_hint("img_0300", "raw"))],
+        );
+        drop(ws);
+        let mut ws = Workspace::open(lib.path(), b"passphrase", fast_params()).unwrap();
+        let report = ws.migrate_unsigned_sidecars(&opts(album)).unwrap();
+        let mut migrated = report.migrated.clone();
+        migrated.sort();
+        assert_eq!(migrated, vec![partner, newcomer]);
+        assert!(report.stacks.is_empty(), "{:?}", report.stacks);
+        for id in [single, partner, stayed, newcomer] {
+            let sidecar = read_signed(&ws, &id);
+            assert_eq!(
+                sidecar.stack_membership.get().and_then(Option::as_ref),
+                None,
+                "{id} is in no stack"
+            );
+        }
+        assert_eq!(
+            read_signed(&ws, &moved).stack_membership.get(),
+            Some(&Some(user_stack)),
+            "the user's move is respected"
         );
     }
 
