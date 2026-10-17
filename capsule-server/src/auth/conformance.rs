@@ -450,7 +450,7 @@ const CANCELLED_ATTEMPT_POLLS: u32 = 1_000;
 /// reservation is a network round trip it may still be in flight, and dropping it there would
 /// cancel the charge itself — a different event from cancelling a verification, and one this
 /// case does not assert about. Between polls the case yields, so a driver that needs the
-/// runtime to make progress gets it; [`CANCELLED_ATTEMPT_POLLS`] bounds the wait.
+/// runtime to make progress gets it; a fixed poll budget bounds the wait.
 pub async fn a_cancelled_attempt_keeps_its_charge(h: &dyn Harness) {
     let (address, _) = seed(h, "cancelled").await;
     let ceiling = h.lockout_attempts();
