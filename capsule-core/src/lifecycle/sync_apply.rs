@@ -77,7 +77,8 @@ use crate::crypto::hash::Hash32;
 use crate::crypto::keys::Amk;
 use crate::crypto::provenance::{Action, AssetManifest, ProvenanceRecord};
 use crate::crypto::verify_asset::{
-    BindingReject, PendingReason, RejectReason, VerifyOutcome, verify_asset,
+    BindingReject, PendingReason, RejectReason, VerifyOutcome, diagnose_misattributed_signer,
+    verify_asset,
 };
 use crate::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1};
 
@@ -121,6 +122,28 @@ pub enum QuarantineReason {
     UnknownAlbum(Uuid),
     /// [`verify_asset`] terminally rejected the manifest.
     Rejected(RejectReason),
+    /// [`verify_asset`] rejected the manifest as [`RejectReason::BadDeviceSig`], and the
+    /// rejection is the **legacy inherited-device defect** (issue #475), not a forgery: an older
+    /// client's continuation names `named_device` (inherited from the chain head) but was signed
+    /// by `signing_device`, another device of the same account, and every other step of the
+    /// chokepoint holds (see [`diagnose_misattributed_signer`]).
+    ///
+    /// Still a quarantine: the record is never accepted, the caller's chain head does not
+    /// advance, and every later record of this asset's chain is refused as
+    /// [`RejectReason::ForgedChain`] behind it. `record_hash` is this record's hash — the value
+    /// the *next* record's `prior_provenance_hash` carries — so a client can attribute that tail
+    /// to this stall rather than to an attack. SSoT: [provenance.md § Legacy Inherited-Device
+    /// Records].
+    ///
+    /// [provenance.md § Legacy Inherited-Device Records]: https://docs/design/cryptography/provenance/#legacy-inherited-device-records
+    LegacyInheritedDevice {
+        /// The device the record claims as its author (the chain head's, inherited).
+        named_device: Uuid,
+        /// The device of the same account whose DSK actually signed the record.
+        signing_device: Uuid,
+        /// The refused record's hash, where the asset's chain stalls.
+        record_hash: Hash32,
+    },
     /// The manifest verified, but its metadata blob does not bind to it.
     Binding(BindingReject),
     /// The metadata blob opened, but its plaintext is not a decodable `SidecarV1`.
@@ -210,7 +233,8 @@ impl Workspace {
     #[tracing::instrument(skip_all, fields(album_id = %entry.album_id))]
     pub fn apply_remote_entry(&self, entry: RemoteEntry<'_>) -> Result<SyncApplyOutcome> {
         use QuarantineReason::{
-            Binding, MalformedManifest, MalformedSidecar, Rejected, SidecarSignature, UnknownAlbum,
+            Binding, LegacyInheritedDevice, MalformedManifest, MalformedSidecar, Rejected,
+            SidecarSignature, UnknownAlbum,
         };
 
         // The feed serves the provenance blob's bytes, which are a *record* — see the module
@@ -281,6 +305,42 @@ impl Workspace {
             VerifyOutcome::Pending(reason) => {
                 tracing::info!(?reason, "sync-apply: held pending — AMK not yet local");
                 return Ok(SyncApplyOutcome::Pending(reason));
+            }
+            VerifyOutcome::TerminalReject(RejectReason::BadDeviceSig) => {
+                // Tell the pre-#475 continuation apart from a forgery. Either way it is refused.
+                if let Some(signing_device) = diagnose_misattributed_signer(
+                    &manifest,
+                    entry.original_ciphertext,
+                    &self.directory,
+                    authority,
+                    entry.local_chain_head,
+                ) {
+                    let record_hash = ProvenanceRecord {
+                        asset_id: core.file_id,
+                        manifest,
+                        prior_provenance_hash: core.prior_provenance_hash,
+                    }
+                    .record_hash();
+                    tracing::warn!(
+                        asset_id = %core.file_id,
+                        named_device = %core.created_by_device,
+                        %signing_device,
+                        %record_hash,
+                        "sync-apply: quarantined a legacy inherited-device record; the chain stalls here"
+                    );
+                    return Ok(SyncApplyOutcome::Quarantined(LegacyInheritedDevice {
+                        named_device: core.created_by_device,
+                        signing_device,
+                        record_hash,
+                    }));
+                }
+                tracing::warn!(
+                    reason = ?RejectReason::BadDeviceSig,
+                    "sync-apply: quarantined by verify_asset"
+                );
+                return Ok(SyncApplyOutcome::Quarantined(Rejected(
+                    RejectReason::BadDeviceSig,
+                )));
             }
             VerifyOutcome::TerminalReject(reason) => {
                 tracing::warn!(?reason, "sync-apply: quarantined by verify_asset");
@@ -643,6 +703,142 @@ mod tests {
                 SyncApplyOutcome::Quarantined(QuarantineReason::MalformedManifest(_))
             ),
             "a divergent mirror is malformed, not applied"
+        );
+    }
+
+    /// Publish a second device of the same account and make it this workspace's signer — the
+    /// laptop to the creator's phone.
+    fn become_second_device(ws: &mut Workspace) -> Uuid {
+        use crate::crypto::keys::{DeviceEntry, HybridSigningKey};
+
+        let second = Uuid::from_u128(0xD2);
+        let dsk = HybridSigningKey::from_seed_bytes(&[31; 32], &[32; 32]);
+        let mut core = ws.directory.core.clone();
+        core.directory_version += 1;
+        core.devices.push(DeviceEntry {
+            device_id: second,
+            dsk_public: dsk.verifying_key(),
+            dek_public: None,
+            added_at: "2020-01-01T00:00:00Z".into(),
+            revoked_at: None,
+        });
+        ws.directory = core.sign(&ws.account.user_ik);
+        ws.account.device.device_id = second;
+        ws.device_signer = Box::new(dsk);
+        second
+    }
+
+    /// Sign `core` with this workspace's current device and the album's write-tier key, and
+    /// wrap it as the record the feed would serve.
+    fn signed_record(
+        ws: &Workspace,
+        album: Uuid,
+        core: crate::crypto::provenance::ManifestCore,
+    ) -> ProvenanceRecord {
+        let keys = ws.album(&album).unwrap();
+        let manifest = core
+            .sign(ws.device_signer.as_ref(), keys.write_tier_signer().unwrap())
+            .unwrap();
+        ProvenanceRecord {
+            asset_id: manifest.core.file_id,
+            prior_provenance_hash: manifest.core.prior_provenance_hash,
+            manifest,
+        }
+    }
+
+    /// **A chain an old client already wrote** (issue #475): the creator's device imports, a
+    /// second device of the same account deletes, and the pre-fix `sign_lifecycle` attributed
+    /// that delete to the creator while signing with the second device.
+    ///
+    /// The decision this pins (provenance.md § Legacy Inherited-Device Records): the record is
+    /// quarantined in place — never accepted, never re-signed — under a signal distinct from a
+    /// forgery, and the rest of the chain stalls behind it as `ForgedChain` whose
+    /// `prior_provenance_hash` names the stalled record.
+    #[test]
+    fn a_legacy_inherited_device_chain_stalls_with_a_distinct_signal() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let (mut ws, album, asset, create) = seeded(&lib, &src);
+        let creator = ws.device_id();
+
+        // The receiving catalog holds the create.
+        let create_head = ws
+            .apply_remote_entry(entry(album, &create, None))
+            .unwrap()
+            .facts()
+            .expect("the create applies")
+            .provenance_head;
+
+        // The second device deletes; a fixed client names itself. Rewrite that record as the
+        // old client wrote it: the creator inherited as author, the second device still signing.
+        let second = become_second_device(&mut ws);
+        ws.soft_delete(&asset, 30).unwrap();
+        let mut legacy_core = ws
+            .asset(&asset)
+            .unwrap()
+            .chain
+            .records()
+            .last()
+            .unwrap()
+            .manifest
+            .core
+            .clone();
+        assert_eq!(legacy_core.prior_provenance_hash, Some(create_head));
+        legacy_core.created_by_device = creator;
+        let legacy = signed_record(&ws, album, legacy_core.clone());
+        let legacy_hash = legacy.record_hash();
+        let legacy_wire = Wire {
+            manifest_cbor: cbor::to_canonical_vec(&legacy).unwrap(),
+            metadata_blob: Vec::new(),
+            ciphertext: create.ciphertext.clone(),
+        };
+
+        assert_eq!(
+            ws.apply_remote_entry(entry(album, &legacy_wire, Some(create_head)))
+                .unwrap(),
+            SyncApplyOutcome::Quarantined(QuarantineReason::LegacyInheritedDevice {
+                named_device: creator,
+                signing_device: second,
+                record_hash: legacy_hash,
+            }),
+            "the legacy record is refused, and named as the legacy defect rather than a forgery"
+        );
+
+        // The tail: a correctly attributed restore chained onto the legacy record. The catalog's
+        // head never advanced past the create, so it stalls — and it points at the stall.
+        let mut tail_core = legacy_core;
+        tail_core.action = Action::TrashRestore;
+        tail_core.retention_until = None;
+        tail_core.prior_provenance_hash = Some(legacy_hash);
+        tail_core.created_by_device = second;
+        let tail = signed_record(&ws, album, tail_core);
+        let tail_wire = Wire {
+            manifest_cbor: cbor::to_canonical_vec(&tail).unwrap(),
+            metadata_blob: Vec::new(),
+            ciphertext: create.ciphertext.clone(),
+        };
+        assert_eq!(
+            ws.apply_remote_entry(entry(album, &tail_wire, Some(create_head)))
+                .unwrap(),
+            SyncApplyOutcome::Quarantined(QuarantineReason::Rejected(RejectReason::ForgedChain)),
+            "nothing behind the stalled record applies"
+        );
+        assert_eq!(tail.prior_provenance_hash, Some(legacy_hash));
+
+        // A device signature under no published key is still the plain forgery verdict.
+        let mut forged = legacy.clone();
+        forged.manifest.device_sig =
+            crate::crypto::keys::HybridSigningKey::from_seed_bytes(&[66; 32], &[67; 32])
+                .sign(&forged.manifest.signing_bytes());
+        let forged_wire = Wire {
+            manifest_cbor: cbor::to_canonical_vec(&forged).unwrap(),
+            metadata_blob: Vec::new(),
+            ciphertext: create.ciphertext.clone(),
+        };
+        assert_eq!(
+            ws.apply_remote_entry(entry(album, &forged_wire, Some(create_head)))
+                .unwrap(),
+            SyncApplyOutcome::Quarantined(QuarantineReason::Rejected(RejectReason::BadDeviceSig)),
         );
     }
 
