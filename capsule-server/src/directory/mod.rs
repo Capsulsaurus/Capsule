@@ -82,8 +82,8 @@ use crate::store::{StoreFuture, UserId};
 /// The largest signed directory this server will accept.
 ///
 /// A hybrid-signed directory is a few kilobytes per device; a few hundred devices is already
-/// implausible. The bound is here rather than only on the router's body limit because it is a
-/// property of the document, not of the deployment.
+/// implausible. The bound is here rather than only on its route group's body-size cap because it
+/// is a property of the document, not of the deployment.
 pub const MAX_DIRECTORY_BYTES: usize = 512 * 1024;
 
 /// A user's currently published directory.

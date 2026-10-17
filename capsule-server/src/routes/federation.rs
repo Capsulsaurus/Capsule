@@ -1058,9 +1058,10 @@ impl ReportRejection {
 /// `reported_user` is a string the peer chooses and a peer cycling accounts would otherwise mint
 /// itself a fresh allowance each time.
 ///
-/// What is *not* bounded is bytes parsed per request: a per-operation body cap cannot be
-/// expressed against this framework, and the reason is recorded on
-/// [`MAX_FEDERATION_BODY_BYTES`](crate::limits::MAX_FEDERATION_BODY_BYTES) (issue #478).
+/// Before any of that, the bytes parsed are bounded too: the federation group's body cap,
+/// [`MAX_FEDERATION_BODY_BYTES`](crate::limits::MAX_FEDERATION_BODY_BYTES), refuses a body past
+/// 16 KiB with `413` before it is read — far above any real report, far below the upload
+/// backstop every other group carries.
 ///
 /// # What accepting one does
 ///
