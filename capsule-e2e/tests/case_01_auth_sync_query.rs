@@ -12,18 +12,7 @@ use capsule_e2e::push::push_asset;
 use capsule_e2e::{Device, PROTOCOL_VERSION, Server};
 use migration::{Migrator, MigratorTrait as _};
 
-// Blocked by #467, and only this tree could show it. `capsule-core` mints the library's
-// account id locally (`keystore.rs`, `Uuid::now_v7()`) and writes it into every signed
-// manifest as `created_by_user`; the server mints its own at registration
-// (`auth/registry.rs`). #405 (merged here) refuses an upload whose `created_by_user` is not
-// the authenticated caller — correctly: the design keeps **one** account namespace, the
-// server's, and `verify_asset` step 6 and `directory::project_version` both enforce it. What
-// is missing is the client seam that would let a library open *as* a server account, which is
-// exactly what #467 is filed for. Neither #405's branch nor #409's had the other, so neither
-// could see this. Un-ignore when #467 lands its constructor.
 #[tokio::test]
-#[ignore = "#467: a Workspace has no seam to adopt the server's account id, so the \
-           real SDK push path cannot satisfy #405's created_by_user == caller rule"]
 async fn e2e_case_1_sign_in_sync_and_a_local_query_lists_the_album() {
     let server = Server::boot().await;
     let mut device = Device::register(&server, "cli-user").await;

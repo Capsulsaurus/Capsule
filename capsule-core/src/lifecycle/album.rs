@@ -273,6 +273,41 @@ impl Workspace {
         let amk = Amk::from_bytes(album.amks[&epoch]);
         amk.derive_file_key(file_id, nonce_prefix)
     }
+
+    /// The file key of the **original** a manifest describes, honouring its `key_mode`.
+    ///
+    /// A `derived` original re-derives through [`file_key`](Self::file_key). A `wrapped` one —
+    /// an adopted web-upload drop, whose key a guest chose and nobody can derive — unwraps
+    /// `wrapped_file_key` under the epoch's AMK (`asset-keywrap/v1`). Every reader that
+    /// regenerates an original's ciphertext from the plaintext the library holds goes through
+    /// here, so an adopted asset verifies and uploads exactly as an imported one does.
+    pub(super) fn original_file_key(
+        &self,
+        album: &AlbumKeys,
+        core: &crate::crypto::provenance::ManifestCore,
+    ) -> Result<[u8; 32]> {
+        use crate::crypto::provenance::KeyMode;
+        let epoch = core.amk_version.0;
+        match core.key_mode {
+            KeyMode::Derived => Ok(self.file_key(album, epoch, &core.file_id, &core.nonce_prefix)),
+            KeyMode::Wrapped => {
+                let wrapped = core.wrapped_file_key.as_ref().ok_or_else(|| {
+                    LifecycleError::Crypto(crate::crypto::CryptoError::Malformed(
+                        "wrapped key mode without a wrapped_file_key",
+                    ))
+                })?;
+                let amk_bytes = album
+                    .amks
+                    .get(&epoch)
+                    .ok_or_else(|| LifecycleError::NotFound(format!("album epoch {epoch} key")))?;
+                Ok(crate::crypto::encryption::unseal_file_key(
+                    &Amk::from_bytes(*amk_bytes),
+                    &core.file_id,
+                    &wrapped.0,
+                )?)
+            }
+        }
+    }
 }
 
 #[cfg(test)]

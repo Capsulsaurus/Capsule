@@ -91,6 +91,8 @@ The user fetches a pending drop, decapsulates `kem_ct` with the Drop Key private
 3. Build an `AssetManifest` with `action = create`, `ciphertext_hash = drop.ciphertext_hash`, `nonce_prefix = drop.nonce_prefix`, the freshly authored `metadata_blob_hash`, `key_mode = wrapped`, and `wrapped_file_key`; set `created_by_user`/`created_by_device` to the **adopter** (the cryptographic author); sign `device_sig` + `write_sig` and append the `create` provenance record. See [Provenance — Asset Manifest](/design/cryptography/provenance/#asset-manifest).
 4. Submit the `create` write. Its `ciphertext_hash` references the **already-stored drop blob**, so only the small metadata blob is uploaded. The server validates the manifest envelope (invariants 1–8, 16–18, 25 — invariant 14, the ciphertext-hash recomputation, already ran at the drop's own finalization, which is why adoption need not re-hash the referenced blob) **and** that the referenced blob is a drop in the caller's own inbox, then **atomically promotes** the blob from inbox to album asset — writing the asset row, the provenance record, and the refcount — and deletes the inbox row, in one transaction. The bulk bytes never move and their charge is unchanged (same user); only the small metadata and provenance blobs are new quota, as for any metadata write.
 
+On the adopting client the asset enters the library when step 3 self-verifies: its one-record provenance chain, signed sidecar, sealed metadata blob, held plaintext, and index row are written exactly as an import writes them, and the local inbox row is dropped only after they land, so a failed write leaves the drop to adopt again. Adoption hands back the signed manifest, the sealed metadata blob, and the provenance record — the index tier step 4 uploads — because the blob cannot be regenerated. The client holds the plaintext, as for every asset, and regenerates the guest's ciphertext from it under the unwrapped `K` whenever it verifies or uploads.
+
 From this point the asset is an ordinary library asset: it syncs, it `verify_asset`-accepts on every other album member's device, and any later edit (`replace`, `metadata-update`) follows the standard **derived-key** path. `key_mode = wrapped` is set only by this adopting `create`.
 
 ### 5. Discard
@@ -122,8 +124,16 @@ struct LinkCaps {
 
 trait DropAdopter {
     fn list_inbox() -> Result<Vec<PendingDrop>, Error>;
-    fn adopt(drop_id: DropId, into_album: AlbumId) -> Result<AssetId, Error>; // decapsulate K → rewrap under AMK → create
+    fn adopt(drop_id: DropId, into_album: AlbumId) -> Result<AdoptedDrop, Error>; // decapsulate K → rewrap under AMK → create → register
     fn discard(drop_id: DropId) -> Result<(), Error>;
+}
+
+// What adoption hands back: the asset is already registered in the library (one-record chain,
+// sealed metadata blob, index row); these are what publishing it uploads (step 4).
+struct AdoptedDrop {
+    manifest:      AssetManifest,     // the signed adopting `create`; `file_id` is the asset id
+    metadata_blob: Vec<u8>,           // the exact sealed bytes `metadata_blob_hash` commits to
+    record:        ProvenanceRecord,  // the `create` that heads the asset's chain
 }
 
 // in capsule-core::drop  (sealing; compiled to WASM for capsule-web)

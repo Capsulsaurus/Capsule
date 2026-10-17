@@ -52,6 +52,17 @@ impl Workspace {
         Ok(blob)
     }
 
+    /// This account's user identity key sealed under its master key — the blob a new device
+    /// passes to [`create_from_master`](Self::create_from_master) beside the recovered master
+    /// key, so it opens as the same account under the same identity the server has pinned.
+    ///
+    /// Like [`escrow_master_key`](Self::escrow_master_key), the private key never leaves the
+    /// workspace in the clear: only the holder of the master key can open what this returns.
+    pub fn sealed_identity(&self) -> Vec<u8> {
+        tracing::debug!("sealed the user identity key under the master key");
+        self.account.sealed_identity()
+    }
+
     /// Local, network-free check that `recovery_secret` still opens `blob` **to this device's
     /// master key** — the derived-tag compare that backs the recovery verification cadence
     /// (`S-D12`).

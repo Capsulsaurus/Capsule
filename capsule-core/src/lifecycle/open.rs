@@ -239,6 +239,107 @@ impl Workspace {
         Self::create_inner(root, passphrase, params, device_signer, dek_binding)
     }
 
+    /// Create a fresh library on a **new device** that opens *as an existing account*: the
+    /// recovery path ("bootstrap a new device via passphrase and escrow", design/backup-recovery).
+    ///
+    /// - `master` is the account master key, e.g. from
+    ///   [`recover_master_key`](crate::backup::recover_master_key) over the server escrow;
+    /// - `user_id` is the account's id — the **server's** id for a registered account, so the
+    ///   directory and every manifest this library authors name the account the server knows;
+    /// - `sealed_identity` is the account's user identity key sealed under `master`
+    ///   ([`Workspace::sealed_identity`] on a device that has it). The IK is random, not derived
+    ///   from the master key, and the server pins it on first publish, so a recovered device
+    ///   must carry the same one rather than mint its own.
+    ///
+    /// The device is new — a fresh `device_id`, software DSK and software DEK — and the default
+    /// album id is the account's, since it derives from `master`. Album keys are not here: they
+    /// arrive through [`import_backup`](Self::import_backup) or MLS, exactly as on any new device.
+    ///
+    /// Fails with [`CryptoError::Auth`] (before anything is written under `root`) when
+    /// `sealed_identity` was not sealed under `master` — which is also the check that `master`
+    /// is this account's key at all.
+    #[tracing::instrument(skip_all, fields(root = %root.display(), user_id = %user_id))]
+    pub fn create_from_master(
+        root: &Path,
+        passphrase: &[u8],
+        params: crate::crypto::primitives::Argon2Params,
+        master: crate::crypto::keys::MasterKey,
+        user_id: Uuid,
+        sealed_identity: &[u8],
+    ) -> Result<Self> {
+        let user_ik = Account::open_sealed_identity(&master, sealed_identity).inspect_err(|e| {
+            tracing::warn!(error = %e, "workspace create from master: the sealed identity did not open");
+        })?;
+        let account = Account::from_parts(
+            user_id,
+            master,
+            user_ik,
+            crate::crypto::keys::DeviceDek::Software(crate::crypto::keys::DekKeypair::generate()),
+        );
+        let library = crate::library::init::init_library(root, "Capsule")
+            .map_err(|e| LifecycleError::Io(format!("init library: {e}")))?;
+        tracing::info!(
+            device = %account.device.device_id,
+            "workspace create from master: a new device of an existing account"
+        );
+        Self::finish_create(root, library, passphrase, params, account, None)
+    }
+
+    /// Rebind this library to the account id the **server** assigned at registration.
+    ///
+    /// A library mints its own `user_id` when it is created; a server mints another when the
+    /// account registers, and refuses a device directory or a manifest that names any id but its
+    /// own. This adopts the server's id: the account file is rewritten (the id is stored beside
+    /// the wrapped keys, not inside them, so no passphrase is needed) and the device directory is
+    /// re-signed at the next `directory_version` naming it.
+    ///
+    /// Refused with [`LifecycleError::AccountRebind`] once the library holds any asset: every
+    /// manifest already signed names the old id as `created_by_user`, and rebinding under them
+    /// would leave a library whose history contradicts its own account. Binding the same id again
+    /// is a no-op.
+    #[tracing::instrument(skip_all, fields(from = %self.account.user_id, to = %user_id))]
+    pub fn bind_account_id(&mut self, user_id: Uuid) -> Result<()> {
+        if self.account.user_id == user_id {
+            tracing::debug!("account id already bound; nothing to do");
+            return Ok(());
+        }
+        if !self.assets.is_empty() {
+            tracing::warn!(
+                assets = self.assets.len(),
+                "account rebind refused: the library already authored assets under its old id"
+            );
+            return Err(LifecycleError::AccountRebind(format!(
+                "{} asset(s) already name {} as created_by_user",
+                self.assets.len(),
+                self.account.user_id
+            )));
+        }
+        let path = self.root.join(".library").join("account.cbor");
+        let bytes = fs::read(&path).map_err(|e| LifecycleError::Io(e.to_string()))?;
+        let mut file: AccountFile =
+            cbor::from_slice(&bytes).map_err(|e| LifecycleError::Cbor(e.to_string()))?;
+        file.user_id = user_id;
+        let bytes =
+            cbor::to_canonical_vec(&file).map_err(|e| LifecycleError::Cbor(e.to_string()))?;
+        // Temp-then-rename: this file is the only local wrapped copy of the master and identity
+        // keys, so a crash mid-write must leave the old file intact rather than truncated.
+        let tmp = crate::utils::paths::tmp_path(&path);
+        fs::write(&tmp, &bytes).map_err(|e| LifecycleError::Io(e.to_string()))?;
+        fs::rename(&tmp, &path).map_err(|e| LifecycleError::Io(e.to_string()))?;
+
+        self.account.user_id = user_id;
+        let mut core = self.directory.core.clone();
+        core.user_id = user_id;
+        core.directory_version += 1;
+        core.updated_at = now_rfc3339();
+        self.directory = core.sign(&self.account.user_ik);
+        tracing::info!(
+            directory_version = self.directory.core.directory_version,
+            "account rebound to the server-assigned id"
+        );
+        Ok(())
+    }
+
     fn create_inner(
         root: &Path,
         passphrase: &[u8],
@@ -267,6 +368,20 @@ impl Workspace {
             }
             None => Account::create(),
         };
+        Self::finish_create(root, library, passphrase, params, account, device_signer)
+    }
+
+    /// The tail every `create*` constructor shares once it holds an initialised `library` and an
+    /// unlocked `account`: persist the account and an empty album keystore, sign the device
+    /// directory, and assemble the workspace.
+    fn finish_create(
+        root: &Path,
+        library: crate::library::Library,
+        passphrase: &[u8],
+        params: crate::crypto::primitives::Argon2Params,
+        account: Account,
+        device_signer: Option<Box<dyn Signer>>,
+    ) -> Result<Self> {
         let file = account.to_file_with(passphrase, params)?;
         let acct_bytes =
             cbor::to_canonical_vec(&file).map_err(|e| LifecycleError::Cbor(e.to_string()))?;
@@ -992,6 +1107,136 @@ mod tests {
         // Resolve-or-create is the safe verb.
         assert_eq!(ws.ensure_album(id, "Imports").unwrap(), id);
         assert_eq!(ws.albums(), vec![(id, "Imports".to_string())]);
+    }
+
+    /// **#467.** A library created from a recovered master key, the account id, and the sealed
+    /// identity *is* that account on a new device: the same id, default album and identity key,
+    /// a fresh device, a directory that verifies under the account's IK — and all of it survives
+    /// a reopen under the new device's passphrase.
+    #[test]
+    fn a_library_created_from_the_master_key_opens_as_the_account() {
+        use crate::crypto::keys::MasterKey;
+
+        let lib_a = TempDir::new().unwrap();
+        let lib_b = TempDir::new().unwrap();
+        let a = fast_workspace(lib_a.path());
+        let master = MasterKey::from_bytes(*a.account.master.as_bytes());
+
+        let b = Workspace::create_from_master(
+            lib_b.path(),
+            b"device b passphrase",
+            FAST_PARAMS,
+            master,
+            a.user_id(),
+            &a.sealed_identity(),
+        )
+        .unwrap();
+        assert_eq!(b.user_id(), a.user_id());
+        assert_eq!(b.default_album_id(), a.default_album_id());
+        assert_eq!(b.user_ik_public(), a.user_ik_public());
+        assert_ne!(
+            b.device_id(),
+            a.device_id(),
+            "a recovered device is a new device"
+        );
+
+        let directory = b.device_directory();
+        assert!(directory.verify(&a.user_ik_public()));
+        assert_eq!(directory.core.user_id, a.user_id());
+        assert!(directory.device(&b.device_id()).is_some());
+
+        let device_b = b.device_id();
+        drop(b);
+        let reopened = Workspace::open(lib_b.path(), b"device b passphrase", FAST_PARAMS).unwrap();
+        assert_eq!(reopened.user_id(), a.user_id());
+        assert_eq!(reopened.device_id(), device_b);
+        assert_eq!(reopened.user_ik_public(), a.user_ik_public());
+    }
+
+    /// **#467.** A master key that did not seal the identity is refused before anything is
+    /// written: the sealed identity is also the proof that the master key is the account's.
+    #[test]
+    fn creating_from_a_foreign_master_key_is_refused_and_writes_nothing() {
+        use crate::crypto::keys::MasterKey;
+
+        let lib_a = TempDir::new().unwrap();
+        let lib_b = TempDir::new().unwrap();
+        let a = fast_workspace(lib_a.path());
+        let root_b = lib_b.path().join("library");
+
+        let result = Workspace::create_from_master(
+            &root_b,
+            b"pw",
+            FAST_PARAMS,
+            MasterKey::generate(),
+            a.user_id(),
+            &a.sealed_identity(),
+        );
+        assert!(matches!(
+            result,
+            Err(LifecycleError::Crypto(CryptoError::Auth(_)))
+        ));
+        assert!(
+            !root_b.exists(),
+            "no library is initialised for a refused key"
+        );
+    }
+
+    /// **#467.** A fresh library adopts the server's account id: the account file, the in-memory
+    /// account, and a re-signed directory at the next version all name it, and a reopen keeps it.
+    #[test]
+    fn binding_the_server_account_id_persists_and_re_signs_the_directory() {
+        let lib = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let before = ws.device_directory().core.directory_version;
+        let server_id = Uuid::now_v7();
+
+        ws.bind_account_id(server_id).unwrap();
+        assert_eq!(ws.user_id(), server_id);
+        let account_path = lib.path().join(".library").join("account.cbor");
+        assert!(
+            !crate::utils::paths::tmp_path(&account_path).exists(),
+            "the staged account file was renamed into place, not left beside it"
+        );
+        let directory = ws.device_directory();
+        assert_eq!(directory.core.user_id, server_id);
+        assert_eq!(directory.core.directory_version, before + 1);
+        assert!(directory.verify(&ws.user_ik_public()));
+        assert!(directory.device(&ws.device_id()).is_some());
+
+        // Binding the same id again changes nothing.
+        ws.bind_account_id(server_id).unwrap();
+        assert_eq!(ws.device_directory().core.directory_version, before + 1);
+
+        drop(ws);
+        let reopened = Workspace::open(lib.path(), b"passphrase", FAST_PARAMS).unwrap();
+        assert_eq!(reopened.user_id(), server_id);
+        assert_eq!(reopened.device_directory().core.user_id, server_id);
+    }
+
+    /// **#467.** Once an asset's manifest names the library's id, rebinding is refused — and the
+    /// refusal changes nothing, on disk or in memory.
+    #[test]
+    fn rebinding_after_an_import_is_refused() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let img = src.path().join("photo.jpg");
+        fs::write(&img, b"\xFF\xD8\xFF authored before the rebind").unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Trip").unwrap();
+        let asset = ws.import_asset(album, &img).unwrap();
+        let original = ws.user_id();
+
+        assert!(matches!(
+            ws.bind_account_id(Uuid::now_v7()),
+            Err(LifecycleError::AccountRebind(_))
+        ));
+        assert_eq!(ws.user_id(), original);
+        assert_eq!(ws.device_directory().core.user_id, original);
+        assert_eq!(ws.verify(&asset).unwrap(), VerifyOutcome::Accept);
+        drop(ws);
+        let reopened = Workspace::open(lib.path(), b"passphrase", FAST_PARAMS).unwrap();
+        assert_eq!(reopened.user_id(), original);
     }
 
     /// **S-A9.** A reopened library must never reissue an `add_id` counter it has already
