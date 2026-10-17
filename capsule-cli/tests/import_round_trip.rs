@@ -341,10 +341,30 @@ fn an_import_is_reconstructed_by_a_later_process_from_disk_alone() {
         .flatten()
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
+    // The CLI builds capsule-core with `media-linked-codecs`, so the preview tier is generated
+    // too. It has no long-edge cap and is never the sentinel, so it writes its JXL and AVIF
+    // bytes whatever the source's size. The sentinel is the thumbnail tier's.
+    let mut preview_files: Vec<&String> = derivative_files
+        .iter()
+        .filter(|name| name.contains(".preview."))
+        .collect();
+    preview_files.sort();
     assert_eq!(
-        derivative_files,
-        vec![format!("{simple}.derivatives.cbor")],
-        "the sentinel writes its manifest and no derivative bytes"
+        preview_files,
+        vec![
+            &format!("{simple}.preview.avif"),
+            &format!("{simple}.preview.jxl")
+        ],
+        "the preview tier is a lossy re-encode in both delivery formats"
+    );
+    let thumbnail_side: Vec<&String> = derivative_files
+        .iter()
+        .filter(|name| !name.contains(".preview."))
+        .collect();
+    assert_eq!(
+        thumbnail_side,
+        vec![&format!("{simple}.derivatives.cbor")],
+        "the thumbnail sentinel writes its manifest and no derivative bytes"
     );
 
     // ── The signed sidecar, decoded from disk. ──

@@ -1,7 +1,7 @@
 //! **E2E case 2** — full import + upload + finalize.
 //!
 //! Local import → the library's upload bundle → the SDK's staged ladder (the index tier's
-//! provenance and metadata blobs, then the JXL thumbnail, then the original) → every blob
+//! provenance and metadata blobs, then the JXL/AVIF thumbnail and preview, then the original) → every blob
 //! finalized at its content address under the server's blob root, byte for byte → the server's
 //! storage-verify answer is durable → the asset is on the feed with its original held, its
 //! derivative referenced and its metadata blob named.
@@ -30,9 +30,14 @@ async fn e2e_case_2_import_upload_finalize_lands_every_blob_at_its_content_addre
         !bundle.derivatives.is_empty(),
         "a still past the thumbnail cap yields derivative bytes"
     );
+    // The workspace build links `media-linked-codecs` through capsule-cli, so both delivery
+    // formats are encoded; a pure-Rust `media` build would yield JXL alone.
     assert!(
-        bundle.derivatives.iter().all(|d| d.format == "image/jxl"),
-        "this build encodes thumbnails as JXL: {:?}",
+        bundle
+            .derivatives
+            .iter()
+            .all(|d| d.format == "image/jxl" || d.format == "image/avif"),
+        "this build encodes derivatives as JXL and AVIF: {:?}",
         bundle
             .derivatives
             .iter()
