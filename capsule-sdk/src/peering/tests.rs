@@ -18,8 +18,9 @@ use capsule_core::crypto::keys::{
     Amk, AmkVersion, DeviceDirectory, DeviceEntry, DirectoryCore, HybridSigningKey,
 };
 use capsule_core::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
-use capsule_core::crypto::provenance::manifest::{ASSET_MANIFEST_VERSION, KeyMode, ManifestCore};
-use capsule_core::crypto::provenance::{Action, ProvenanceRecord};
+use capsule_core::crypto::provenance::{
+    ASSET_MANIFEST_VERSION, Action, KeyMode, ManifestCore, ProvenanceRecord,
+};
 use tokio::net::{TcpListener, TcpStream};
 use uuid::Uuid;
 

@@ -70,7 +70,10 @@ pub enum RearmTrigger {
     /// A new device enrolled — the prompt lands on the *new* device, which has never
     /// seen the passphrase.
     DeviceEnrolled,
-    /// The recovery secret rotated (e.g. after a guided re-wrap).
+    /// The recovery secret rotated: an escrow store that
+    /// [replaced](crate::recovery::EscrowStored::replaced) an earlier one, e.g. a guided
+    /// re-wrap. A store that replaced nothing is a first enrollment, which is
+    /// [`RecoveryCadence::armed_at_setup`], not a re-arm.
     SecretRotated,
     /// A restore-from-escrow completed on this device.
     RestoredFromEscrow,

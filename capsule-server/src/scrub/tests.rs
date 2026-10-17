@@ -59,8 +59,7 @@ fn chained_manifest_bytes(
     seed: u8,
 ) -> Vec<u8> {
     use capsule_core::crypto::keys::HybridSigningKey;
-    use capsule_core::crypto::provenance::action::Action;
-    use capsule_core::crypto::provenance::manifest::AssetManifest;
+    use capsule_core::crypto::provenance::{Action, AssetManifest};
 
     let mut core = decoded(&manifest_bytes(name, metadata)).core;
     core.action = Action::MetadataUpdate;
@@ -75,7 +74,7 @@ fn chained_manifest_bytes(
 }
 
 /// The manifest `bytes` decode to.
-fn decoded(bytes: &[u8]) -> capsule_core::crypto::provenance::manifest::AssetManifest {
+fn decoded(bytes: &[u8]) -> capsule_core::crypto::provenance::AssetManifest {
     capsule_core::cbor::from_slice(bytes).expect("a manifest decodes")
 }
 
@@ -86,10 +85,7 @@ fn decoded(bytes: &[u8]) -> capsule_core::crypto::provenance::manifest::AssetMan
 /// asserting against a shape rather than against the artifact.
 fn manifest_bytes(name: &str, metadata: &ContentAddress) -> Vec<u8> {
     use capsule_core::crypto::keys::{AmkVersion, HybridSigningKey};
-    use capsule_core::crypto::provenance::action::Action;
-    use capsule_core::crypto::provenance::manifest::{
-        ASSET_MANIFEST_VERSION, KeyMode, ManifestCore,
-    };
+    use capsule_core::crypto::provenance::{ASSET_MANIFEST_VERSION, Action, KeyMode, ManifestCore};
 
     let core = ManifestCore {
         version: ASSET_MANIFEST_VERSION.to_owned(),

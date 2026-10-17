@@ -284,9 +284,9 @@ impl Workspace {
     pub(super) fn original_file_key(
         &self,
         album: &AlbumKeys,
-        core: &crate::crypto::provenance::manifest::ManifestCore,
+        core: &crate::crypto::provenance::ManifestCore,
     ) -> Result<[u8; 32]> {
-        use crate::crypto::provenance::manifest::KeyMode;
+        use crate::crypto::provenance::KeyMode;
         let epoch = core.amk_version.0;
         match core.key_mode {
             KeyMode::Derived => Ok(self.file_key(album, epoch, &core.file_id, &core.nonce_prefix)),
@@ -300,7 +300,7 @@ impl Workspace {
                     .amks
                     .get(&epoch)
                     .ok_or_else(|| LifecycleError::NotFound(format!("album epoch {epoch} key")))?;
-                Ok(crate::crypto::encryption::keywrap::unseal_file_key(
+                Ok(crate::crypto::encryption::unseal_file_key(
                     &Amk::from_bytes(*amk_bytes),
                     &core.file_id,
                     &wrapped.0,

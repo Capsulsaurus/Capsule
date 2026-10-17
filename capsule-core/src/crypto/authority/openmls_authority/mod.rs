@@ -2,7 +2,7 @@
 //! X-Wing PQ ciphersuite `MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519` (`0x004D`) via the
 //! formally-verified libcrux provider. This is the design-target authority the offline
 //! [`ReferenceAuthority`](super::ReferenceAuthority) stands in for — it drops in behind the same
-//! `&dyn AlbumAuthority` seam without touching [`verify_asset`](fn@crate::crypto::verify_asset).
+//! `&dyn AlbumAuthority` seam without touching [`verify_asset`](crate::crypto::verify_asset::verify_asset).
 //!
 //! **Slice S-X1** landed the backend/authority layer: single-member (self) group creation, the
 //! epoch-ledger semantics `verify_asset` consumes (monotonic ceiling, per-epoch write-tier key,

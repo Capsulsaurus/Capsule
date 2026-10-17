@@ -59,7 +59,7 @@ impl Amk {
     /// same-epoch [`replace`] (constant `file_id`) re-rolls the **key**, not merely the
     /// nonce — no `(file_key, nonce_prefix)` pair is ever reused, which is what lets the
     /// STREAM counter safely start at zero. The re-keying writers in
-    /// [`crate::crypto::encryption::rekey`] draw the nonce and derive together (the salt
+    /// `crypto::encryption`'s re-keying writers draw the nonce and derive together (the salt
     /// depends on the nonce). SSoT: [Encryption § Asset Key Derivation].
     ///
     /// [`replace`]: https://docs/design/cryptography/encryption/#re-keying-on-rewrite

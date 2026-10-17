@@ -36,7 +36,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use capsule_core::crypto::keys::{DeviceDirectory, DeviceEntry, DirectoryCore, HybridSigningKey};
 use capsule_core::crypto::primitives::Argon2Params;
-use capsule_core::crypto::provenance::record::ProvenanceRecord;
+use capsule_core::crypto::provenance::ProvenanceRecord;
 use capsule_core::lifecycle::Workspace;
 use capsule_sdk::albums::{AlbumClient, AlbumTransport};
 use capsule_sdk::auth::{AuthClient, Session};

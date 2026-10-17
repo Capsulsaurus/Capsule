@@ -1,7 +1,7 @@
 //! The portable backup artifact and recovery mechanisms (SSoT: [Backup and Recovery]).
 //!
 //! Two distinct things are kept separate:
-//! - the **[backup artifact](artifact)** — a deterministic, self-describing, signed tar of a
+//! - the **backup artifact** — a deterministic, self-describing, signed tar of a
 //!   library's encrypted blobs, metadata blobs, provenance chains, and the AMK ledger needed
 //!   to decrypt them;
 //! - the **[master-key escrow](escrow_master_key)** — a small passphrase-wrapped blob that
@@ -12,11 +12,11 @@
 //!
 //! [Backup and Recovery]: https://docs/design/backup-recovery/
 
-pub mod artifact;
+mod artifact;
 
 pub use artifact::{
-    BackupArtifact, BackupAsset, BackupInput, RestoreMode, RestoreReport, WRAP_PARAMS, export,
-    export_with_salt,
+    BackupArtifact, BackupAsset, BackupInput, RestoreMode, RestoreReport, RestoredAsset,
+    WRAP_PARAMS, export, export_with_salt,
 };
 /// The caller-chosen-cost export entry points. Gated identically to their definitions: a weak
 /// Argon2id cost yields a brute-forceable artifact, so reaching one takes `cfg(test)` or an

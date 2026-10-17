@@ -41,8 +41,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::db::{DatabaseDriver, EmbeddingInsert, KnnHit, VectorIndexError};
-use crate::ml::runner::{Embedding, Frame, ModelRunner, RunnerError};
-use crate::ml::{ModelId, Registry, TaskKind};
+use crate::ml::{Embedding, Frame, ModelId, ModelRunner, Registry, RunnerError, TaskKind};
 use crate::sidecar::AiTag;
 
 /// The store the orchestrator reads asset pixels from and indexes vectors into.
