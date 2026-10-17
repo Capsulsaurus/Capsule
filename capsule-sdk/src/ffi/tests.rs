@@ -942,10 +942,12 @@ fn ffi_ed25519_hardware_enrollment_failures_are_typed() {
 /// A software stand-in for a P-256 **key-agreement** element behind
 /// [`FfiHardwareKeyAgreement`]: uncompressed SEC1 public key, raw 32-byte ECDH x-coordinate —
 /// the shapes Secure Enclave `P256.KeyAgreement` and StrongBox ECDH emit. `corrupt` flips the
-/// shared secret, standing in for an element whose ECDH disagrees with its published key.
+/// shared secret, standing in for an element whose ECDH disagrees with its published key;
+/// `unavailable` makes enrollment fail, standing in for a device with no key-agreement element.
 struct MockKeyAgreement {
     sk: p256::SecretKey,
     corrupt: bool,
+    unavailable: bool,
 }
 
 impl MockKeyAgreement {
@@ -953,6 +955,14 @@ impl MockKeyAgreement {
         Self {
             sk: p256::SecretKey::from_slice(&[7u8; 32]).expect("valid P-256 scalar"),
             corrupt,
+            unavailable: false,
+        }
+    }
+
+    fn unavailable() -> Self {
+        Self {
+            unavailable: true,
+            ..Self::new(false)
         }
     }
 }
@@ -964,6 +974,9 @@ impl FfiHardwareKeyAgreement for MockKeyAgreement {
 
     fn public_key(&self, _key_alias: String) -> Result<Vec<u8>, FfiHardwareSignerError> {
         use p256::elliptic_curve::sec1::ToEncodedPoint as _;
+        if self.unavailable {
+            return Err(FfiHardwareSignerError::Unavailable);
+        }
         Ok(self
             .sk
             .public_key()
@@ -994,7 +1007,7 @@ impl FfiHardwareKeyAgreement for MockKeyAgreement {
 
 /// The hardware DEK round-trip reports `true` only when the element's ECDH composes into the
 /// hybrid KEM: an honest element recovers the sender's secret, a disagreeing one does not, and
-/// a short ML seed is a typed error rather than a panic.
+/// a short ML seed is a typed error rather than a panic, as is an element that fails enrollment.
 #[test]
 fn ffi_p256_hardware_dek_round_trip_tracks_the_element() {
     assert!(
@@ -1020,6 +1033,17 @@ fn ffi_p256_hardware_dek_round_trip_tracks_the_element() {
     ) {
         Err(FfiError::InvalidArgument { .. }) => {}
         other => panic!("expected InvalidArgument for a short ml_seed, got {other:?}"),
+    }
+    match p256_hardware_dek_round_trip(
+        Arc::new(MockKeyAgreement::unavailable()),
+        "device-dek".into(),
+        vec![9u8; 32],
+    ) {
+        Err(FfiError::Workspace { message }) => assert!(
+            message.contains("hardware P-256 DEK enrollment failed"),
+            "unexpected enrollment error message: {message}"
+        ),
+        other => panic!("expected Workspace for a failing element enrollment, got {other:?}"),
     }
 }
 
