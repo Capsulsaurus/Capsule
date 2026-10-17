@@ -68,7 +68,9 @@
 //! | `capsule:upload:uploader:{uid}` | set | refreshed on open |
 //! | `capsule:upload:album:{album}` | set | refreshed on open |
 //! | `capsule:upload:pending:{uploader}:{hash}` | set | refreshed on open |
-//! | `capsule:upload:progress` | zset (score = `last_progress_at` µs) | none — heals only when the pressure sweep (`least_recently_progressed`) runs |
+//! | `capsule:upload:progress` | zset (score = `last_progress_at` µs) | none — heals when the pressure sweep (`least_recently_progressed`) walks it, which every `gc --apply` pass does over the whole set (#519) |
+//! | `capsule:counter:{kind}:{scope}` | hash (`hits`, `opened_at`) | the counter's window |
+//! | `capsule:counter_index:{kind}` | zset (score = window end µs), the partition its ceiling bounds | raised to the longest window, never lowered |
 //! | `capsule:challenge:{token}` | hash | challenge TTL |
 //! | `capsule:enroll:code:{spelling}` | hash, written under both spellings | code TTL |
 //! | `capsule:enroll:channel:{id}` | hash | channel TTL |
@@ -79,6 +81,18 @@
 //! user's index on close, for instance) rather than taking them as `KEYS`. That is legal on a
 //! standalone server, which is the only topology this adapter supports; Redis Cluster is out of
 //! scope by the #403 decision record.
+//!
+//! # The server must run `maxmemory-policy noeviction`
+//!
+//! Every key above is correctness state, not cache. An evicting policy picks keys without
+//! regard to which fact they carry: `volatile-lru` drops any key with a TTL, and the index sets
+//! carry one, so it can remove `capsule:user_sessions:{uid}` while the sessions it lists live on
+//! — and *revoke all sessions* then revokes none of them — or remove a counter partition's index
+//! and so reopen its ceiling. Under `noeviction` a full server refuses the write instead, which
+//! every port reports as a failure and every consumer treats as a refusal. That is the
+//! fail-closed answer; silently forgetting state is not. The ceilings on the counter partitions
+//! and the collector's sweep of the progress set are what keep the key space bounded, so memory
+//! pressure is a sizing question rather than something eviction has to answer (#519).
 //!
 //! # Encoding
 //!
@@ -1013,17 +1027,27 @@ return {gone, mismatched, count}"
 // KEYS: progress zset. ARGV: now, inclusive score bound, limit. Returns
 // {gone, {{upload_id, last_progress_at}…}}, least recently progressed first; a member whose
 // record is gone or no longer evictable is dropped from the view here.
+//
+// Paged by a score cursor, not a growing offset: each page resumes at the last kept member's
+// score, inclusive, skipping only the kept members already seen at that one score (ties sort by
+// member, and a dropped member is gone from the set). A `LIMIT` offset is walked node by node, so
+// an offset that grew with every page made a K-member walk cost O(K²); this cursor makes each
+// page O(log N + T + 32), T being the kept members sharing the cursor's microsecond, and the
+// whole walk O(K log N) while T stays small. The reply still carries every kept member (#519).
 script!(
     LEAST_RECENTLY_PROGRESSED,
     "local gone = 0
 local found = {}
-local offset = 0
+local min = '-inf'
+local cursor = nil
+local skip = 0
 local limit = tonumber(ARGV[3])
 while #found < limit do
-  local page = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[2], 'LIMIT', offset, 32)
+  local page = redis.call('ZRANGEBYSCORE', KEYS[1], min, ARGV[2], 'WITHSCORES', 'LIMIT', skip, 32)
   if #page == 0 then break end
-  local kept = 0
-  for _, id in ipairs(page) do
+  for i = 1, #page, 2 do
+    local id = page[i]
+    local score = page[i + 1]
     local key = 'capsule:upload:session:' .. id
     local keep = false
     local r
@@ -1032,15 +1056,20 @@ while #found < limit do
       keep = r[1] == 'pending' or r[1] == 'uploading'
     end
     if keep then
-      kept = kept + 1
       found[#found + 1] = {id, r[2]}
+      if score == cursor then
+        skip = skip + 1
+      else
+        cursor = score
+        skip = 1
+      end
     else
       redis.call('ZREM', KEYS[1], id)
       gone = gone + 1
     end
   end
-  offset = offset + kept
-  if #page < 32 then break end
+  if cursor ~= nil then min = cursor end
+  if #page < 64 then break end
 end
 return {gone, found}"
 );
