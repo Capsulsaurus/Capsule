@@ -65,7 +65,7 @@ fn upload(case: &str, name: &str) -> UploadId {
 /// A draft for `case`'s upload `name` into asset `asset_name`, over `bytes`.
 fn draft(case: &str, name: &str, asset_name: &str, bytes: &[u8]) -> ReceiptDraft {
     ReceiptDraft {
-        crypto_suite_id: capsule_core::crypto::CRYPTO_SUITE_ID,
+        crypto_suite_id: capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
         protocol_version: capsule_core::crypto::primitives::PROTOCOL_VERSION.to_owned(),
         upload_id: upload(case, name),
         asset_id: asset(case, asset_name),
