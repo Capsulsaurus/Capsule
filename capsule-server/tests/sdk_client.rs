@@ -402,6 +402,105 @@ async fn the_sdk_stores_and_fetches_an_escrow_over_a_socket() {
     );
 }
 
+/// The sealed identity round trip (#544), over a socket, pinned to the contract's route the same
+/// way the escrow case above is: what the SDK stored is read back at
+/// `/v1/auth/escrow/identity`, and what was seeded there is what the SDK fetches.
+#[tokio::test]
+async fn the_sdk_stores_and_fetches_a_sealed_identity_over_a_socket() {
+    use capsule_sdk::recovery::{RecoveryClient, RecoveryError};
+
+    const PATH: &str = "/v1/auth/escrow/identity";
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let base_url = serve(&fixture).await;
+    let client =
+        RecoveryClient::new(session(&base_url).await, &base_url).expect("an API root parses");
+
+    // Nothing stored yet: its own typed state and its own code, not the escrow's.
+    let missing = client
+        .fetch_sealed_identity()
+        .await
+        .expect_err("a fresh account has stored no sealed identity");
+    assert!(
+        matches!(missing, RecoveryError::IdentityNotStored),
+        "got {missing:?}"
+    );
+    assert_eq!(
+        missing.error_code(),
+        Some(capsule_i18n::error_codes::ESCROW_IDENTITY_NOT_STORED)
+    );
+
+    // The SDK writes; the contract's route is where it landed.
+    let sealed = b"\x00 sealed identity \xff".to_vec();
+    let stored = client
+        .store_sealed_identity(&sealed)
+        .await
+        .expect("the sealed identity stores");
+    assert!(!stored.replaced, "the account's first");
+    let response = fixture
+        .client
+        .get(PATH)
+        .header("authorization", &bearer)
+        .send()
+        .await;
+    let seen = response.assert_status(kynos::http::StatusCode::OK).bytes();
+    assert_eq!(seen.as_ref(), sealed.as_slice());
+    assert_eq!(
+        client
+            .fetch_sealed_identity()
+            .await
+            .expect("and comes back"),
+        sealed
+    );
+
+    // A reseal seeded at the contract's route is the one the SDK sees next, and storing one
+    // more through the SDK reports the replacement.
+    let resealed = b"resealed under a rotated master key".to_vec();
+    fixture
+        .client
+        .put(PATH)
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .body("application/octet-stream", resealed.clone())
+        .send()
+        .await
+        .assert_status(kynos::http::StatusCode::OK);
+    assert_eq!(
+        client
+            .fetch_sealed_identity()
+            .await
+            .expect("the reseal comes back"),
+        resealed
+    );
+    assert!(
+        client
+            .store_sealed_identity(&sealed)
+            .await
+            .expect("stores again")
+            .replaced
+    );
+
+    // An empty seal is refused like an empty escrow, with the server's code.
+    let refused = client
+        .store_sealed_identity(&[])
+        .await
+        .expect_err("an empty body cannot be a sealed identity");
+    assert!(
+        matches!(&refused, RecoveryError::Malformed { .. }),
+        "got {refused:?}"
+    );
+    assert_eq!(
+        refused.error_code(),
+        Some(capsule_i18n::error_codes::ESCROW_MALFORMED)
+    );
+
+    // The escrow slot was never touched.
+    assert!(matches!(
+        client.fetch_escrow().await,
+        Err(RecoveryError::NotEnrolled)
+    ));
+}
+
 /// **`S-D17`'s Done-when, against the server that decides.** A token the client still believes
 /// in and the server has stopped honouring is refreshed once and the call replayed once.
 ///
