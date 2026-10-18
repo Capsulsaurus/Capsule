@@ -374,6 +374,36 @@ async fn the_purge_honours_the_signed_retention_floor() {
 }
 
 #[tokio::test]
+async fn a_purged_tombstone_is_not_reported_again_nor_holds_a_bounded_pass_back() {
+    let h = Harness::new();
+    h.publish("first", b"deleted first").await;
+    h.delete("first", Some(Timestamp::UNIX_EPOCH), 1).await;
+    h.clock.advance(days(1));
+    let report = purge_expired(&h.context, Mode::Apply, 1)
+        .await
+        .expect("a pass");
+    assert_eq!(report.purged, vec![AssetId::new("first")]);
+
+    // A later deletion, behind the purged one in the oldest-first listing.
+    h.publish("second", b"deleted later").await;
+    h.delete("second", Some(Timestamp::UNIX_EPOCH), 2).await;
+    h.clock.advance(days(1));
+    let report = purge_expired(&h.context, Mode::Apply, 1)
+        .await
+        .expect("a pass");
+    assert_eq!(
+        report.purged,
+        vec![AssetId::new("second")],
+        "a page of one goes to the tombstone still holding bytes, not the one already emptied"
+    );
+
+    let report = purge_expired(&h.context, Mode::Apply, 10)
+        .await
+        .expect("a pass");
+    assert_eq!(report, PurgeReport::default(), "nothing is left to purge");
+}
+
+#[tokio::test]
 async fn a_tombstone_with_no_signed_retention_is_never_purged() {
     let h = Harness::new();
     h.publish("floorless", b"a delete whose manifest carried no floor")
@@ -790,6 +820,11 @@ async fn a_restore_between_listing_and_purge_keeps_its_bytes() {
     assert!(
         report.purged.is_empty(),
         "the listing saw a tombstone, but the row was restored before the purge took its lock"
+    );
+    assert_eq!(
+        report.skipped,
+        vec![id.clone()],
+        "the report accounts for the listed row the re-check kept"
     );
 
     let row = h.index.read(&id).await.expect("read").expect("row");

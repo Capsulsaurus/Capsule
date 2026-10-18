@@ -139,6 +139,12 @@ pub struct PurgeReport {
     /// Reported so a dry run shows what is *waiting*, which is what an operator asking "why has
     /// this not gone yet" wants to see.
     pub retained: Vec<AssetId>,
+    /// Listed tombstones the purge re-check found were no longer tombstones — restored since
+    /// the listing — or no longer existed. Nothing was dropped for them.
+    ///
+    /// Reported rather than only logged, so the report accounts for every row the pass listed:
+    /// a listed asset that is in none of the three would be one the pass lost track of.
+    pub skipped: Vec<AssetId>,
 }
 
 /// Where the collectable marks live.
@@ -454,6 +460,8 @@ pub async fn purge_expired(
             );
             if refusal == PurgeOutcome::Retained {
                 report.retained.push(row.asset_id);
+            } else {
+                report.skipped.push(row.asset_id);
             }
             continue;
         }
@@ -465,29 +473,41 @@ pub async fn purge_expired(
         // is a preservation obligation and must outlast a delete — is a legal question about
         // what a hold obliges an operator to do, not an engineering one, and guessing it in
         // either direction here would be worse than recording that it is open.
-        tracing::info!(
-            asset = %row.asset_id,
-            retention_until = ?row.retention_until,
-            blobs = row.blobs.len(),
-            "purging a tombstoned asset's blob references"
-        );
         if !mode.applies() {
+            tracing::info!(
+                asset = %row.asset_id,
+                retention_until = ?row.retention_until,
+                blobs = row.blobs.len(),
+                "a dry run would purge a tombstoned asset's blob references"
+            );
             report.purged.push(row.asset_id);
             continue;
         }
         // The listing is a snapshot; the index re-checks state and retention under the row
-        // lock, because a restore that committed since the listing must keep its bytes.
+        // lock, because a restore that committed since the listing must keep its bytes. So the
+        // purge is logged once the re-check has answered, not before: a line saying "purging"
+        // for an asset the re-check then kept would be a false record of a deletion.
         match context.index.purge(&row.asset_id, now).await? {
-            PurgeOutcome::Purged(_) => report.purged.push(row.asset_id),
+            PurgeOutcome::Purged(_) => {
+                tracing::info!(
+                    asset = %row.asset_id,
+                    retention_until = ?row.retention_until,
+                    blobs = row.blobs.len(),
+                    "purged a tombstoned asset's blob references"
+                );
+                report.purged.push(row.asset_id);
+            }
             PurgeOutcome::Retained => {
                 tracing::info!(asset = %row.asset_id, "a tombstone was re-deleted under a later retention floor since it was listed");
                 report.retained.push(row.asset_id);
             }
             PurgeOutcome::NotTombstoned => {
                 tracing::info!(asset = %row.asset_id, "an asset was restored after it was listed for purge; its bytes are kept");
+                report.skipped.push(row.asset_id);
             }
             PurgeOutcome::Unknown => {
                 tracing::warn!(asset = %row.asset_id, "a listed tombstone has no row by the time it is purged");
+                report.skipped.push(row.asset_id);
             }
         }
     }
@@ -495,6 +515,7 @@ pub async fn purge_expired(
     tracing::info!(
         purged = report.purged.len(),
         retained = report.retained.len(),
+        skipped = report.skipped.len(),
         "a retention purge pass finished"
     );
     Ok(report)

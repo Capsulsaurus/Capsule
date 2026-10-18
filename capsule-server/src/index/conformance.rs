@@ -1602,6 +1602,16 @@ pub async fn purging_drops_the_references_and_keeps_the_tombstone(index: &dyn As
         "removing the row would make the deletion invisible to a client that has not synced \
          since it, rather than final",
     );
+    assert!(
+        !ok(
+            index.tombstoned(10).await,
+            "list tombstones after the purge"
+        )
+        .iter()
+        .any(|row| row.asset_id == asset),
+        "a purged tombstone holds nothing to purge; listing it again would re-report it on \
+         every pass and, oldest first, starve a bounded pass of the tombstones still waiting",
+    );
     assert_eq!(
         ok(
             index

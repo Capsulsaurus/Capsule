@@ -485,7 +485,11 @@ impl AssetIndex for InMemoryAssetIndex {
             let mut rows: Vec<AssetRow> = inner
                 .rows
                 .values()
-                .filter(|row| row.state == AssetState::Tombstoned)
+                // A purged tombstone holds nothing left to purge (see the port's docs).
+                .filter(|row| {
+                    row.state == AssetState::Tombstoned
+                        && !(row.blobs.is_empty() && row.superseded.is_empty())
+                })
                 .cloned()
                 .collect();
             // Oldest change first, so a bounded pass makes progress on the oldest deletions

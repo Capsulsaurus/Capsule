@@ -1124,14 +1124,18 @@ impl AssetIndex for PostgresAssetIndex {
         Box::pin(async move {
             // Oldest change first, so a bounded pass makes progress on the oldest deletions
             // rather than revisiting the same page. The asset id breaks ties so the order is
-            // total and a resumed pass is deterministic.
+            // total and a resumed pass is deterministic. A tombstone a purge already emptied
+            // holds no reference and is not listed (see the port's docs).
             let snapshot = begin_read_snapshot(&self.connection).await?;
             let found = snapshot
                 .query_all(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     format!(
-                        "SELECT {ASSET_COLUMNS} FROM assets WHERE state = 'tombstoned' \
-                         ORDER BY updated_at, asset_id COLLATE \"C\" LIMIT $1"
+                        "SELECT {ASSET_COLUMNS} FROM assets a WHERE a.state = 'tombstoned' \
+                         AND (EXISTS (SELECT 1 FROM asset_blobs b WHERE b.asset_id = a.asset_id) \
+                              OR EXISTS (SELECT 1 FROM asset_superseded s \
+                                         WHERE s.asset_id = a.asset_id)) \
+                         ORDER BY a.updated_at, a.asset_id COLLATE \"C\" LIMIT $1"
                     ),
                     [Value::from(limit as i64)],
                 ))
