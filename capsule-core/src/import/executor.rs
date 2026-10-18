@@ -498,13 +498,15 @@ mod tests {
     }
 
     /// A RAW-only candidate — no same-stem JPEG to fall back on — still lands as a signed,
-    /// self-verifying original. RAW has no decoder in this build, which is exactly why this
+    /// self-verifying original even when no derivative can be made from it, which is why this
     /// needs pinning: the archive is the whole point, the derivative is a bonus (slice `S-B13`).
     ///
+    /// ARW decodes in this build (issue #589), so the deferral here is not "RAW has no decoder".
     /// A Sony ARW is a TIFF container, so its *header* says TIFF and only the extension names
-    /// the family. This fixture is not a real ARW, so the classification here rests on the
-    /// extension fallback — which is the path a real one would also take for the family, and
-    /// either way the outcome is the same expected deferral.
+    /// the family. This fixture is not a real ARW, so its classification rests on the extension
+    /// fallback, and its `DeferredNoCodec` outcome rests on `rawshift-image` reporting these
+    /// non-TIFF bytes as `RawError::Unsupported`, which the media layer maps to
+    /// `MediaError::UnsupportedFormat` rather than a decode failure.
     #[test]
     fn raw_only_candidate_lands_as_a_signed_original() {
         use crate::lifecycle::DerivativeStatus;

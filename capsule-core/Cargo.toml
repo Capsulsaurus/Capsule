@@ -146,6 +146,13 @@ kamadak-exif = "0.5"
 #                     backend is the opt-in `media-linked-codecs` feature above; `jxl` stays on
 #                     for the jxl-oxide decoder either way.
 # - `tiff-decode` / `gif-decode` — pure Rust, no encoder needed.
+# - `arw-decode` / `dng-decode` — the two RAW families upstream calls `raw-stabilizing` (issue
+#                     #589), decoded through `RawFile::open(..).process(..)`: rawshift's own TIFF
+#                     parser (`binrw`, MIT) plus its lossless-JPEG and JXL tile decoders. Pure
+#                     Rust. **Decode only**: the `arw` / `dng` umbrellas would add `dng-encode`,
+#                     which nothing a user does needs and which the fixtures do not use either —
+#                     they are written with the parser's own `tiff::TiffWriter`, because
+#                     `export_dng` writes a photometric-RGB IFD that `dng-decode` cannot read back.
 #
 # **`webp` is deliberately absent, and it is not a preference.** It does not compile for any
 # aarch64 target: `codecs/webp.rs:164,177,190` pass `b"EXIF".as_ptr() as *const i8` to
@@ -157,7 +164,8 @@ kamadak-exif = "0.5"
 #
 # Also absent: `heic` (libheif + libde265, both LGPL-3.0), AVIF *decode* (image's `avif-native` ->
 # system libdav1d), AVIF *encode* and lossy JXL by default (both in `media-linked-codecs`), `svg`, and the
-# RAW families (`experimental`; CR3 pixel decode unimplemented upstream). Each is a typed
+# other five RAW families (`raw-incomplete`: CR2, CR3, CRW, NEF, RAF; CR3 pixel decode is
+# unimplemented upstream). Each is a typed
 # `media::MediaError::UnsupportedFormat` today rather than a silent gap. MPL-2.0, already
 # allow-listed in `deny.toml`; see the Media row in design/dependencies.md.
 rawshift-image = { version = "0.1.1", default-features = false, features = [
@@ -166,6 +174,8 @@ rawshift-image = { version = "0.1.1", default-features = false, features = [
     "jxl",
     "tiff-decode",
     "gif-decode",
+    "arw-decode",
+    "dng-decode",
 ], optional = true }
 # The AVIF frame-size pre-flight (`media-avif-decode` only): the versions `image` 0.25's
 # `avif-native` already resolves, so the graph gains no crate. See `media::decode`.
