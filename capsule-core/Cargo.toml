@@ -55,13 +55,26 @@ media = ["dep:rawshift-image"]
 # source-resolution still is only worth its bytes in a lossy codec.
 #
 # HEIC decode is **not** here and cannot be by policy rather than toolchain: libheif and its HEVC
-# decoder libde265 are both LGPL-3.0, which CLAUDE.md and `deny.toml` exclude outright. AVIF
-# decode needs a system libdav1d (`image`'s `avif-native`), which no vendored build exists for.
+# decoder libde265 are both LGPL-3.0, which CLAUDE.md and `deny.toml` exclude outright (issue
+# #588; the decision is recorded in the Dependencies design doc). AVIF decode is its own feature,
+# `media-avif-decode`, below.
 media-linked-codecs = [
     "media",
     "rawshift-image/jxl-encode-libjxl-vendored",
     "rawshift-image/avif-encode-ravif",
 ]
+# `media-avif-decode` adds the AVIF still **decoder** (issue #588): `rawshift-image`'s
+# `avif-decode-image`, which is `image` 0.25's `avif-native` — `mp4parse` (MPL-2.0) for the
+# container and `dav1d` for the AV1 bitstream. `dav1d-sys` links a **system** libdav1d (BSD-2)
+# through pkg-config and has no vendored build, so the build host needs `libdav1d-dev` (Debian /
+# Ubuntu), `dav1d` (Homebrew) or `libdav1d-devel` (Fedora), and the binary links it dynamically.
+# **Opt-in and never in `default`**, for the same reason as `media-linked-codecs`: `default` is
+# what the mobile FFI and every `rust-cross` target build, and a pkg-config dependency on a
+# cross-compiled C library is exactly what those builds must not grow. A separate feature rather
+# than a third arm of `media-linked-codecs`, because the two need different build hosts (cmake +
+# nasm versus a system library) and a caller may want one without the other. `capsule-cli`
+# enables it on every host but Windows.
+media-avif-decode = ["media", "rawshift-image/avif-decode-image"]
 # `mls` links the live OpenMLS group backend (`crypto::authority::OpenMlsAuthority`, slice
 # S-X1) pinned to the X-Wing PQ ciphersuite `MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519`
 # (`0x004D`) via its formally-verified libcrux provider. Implied by `native` so the default

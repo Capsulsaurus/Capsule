@@ -81,9 +81,11 @@ pub enum StillFormat {
     /// photo library holds, so recognising it and deferring is the honest outcome — and it costs
     /// one fewer dependency than a codec nobody's library needs.
     Ppm,
-    /// AVIF. Recognised, not decoded — the backend needs system libdav1d.
+    /// AVIF. Decoded by `image`'s `avif-native` (`mp4parse` + system libdav1d) under the opt-in
+    /// `media-avif-decode` feature; recognised and refused without it.
     Avif,
-    /// HEIC / HEIF. Recognised, not decoded — the backend needs system libheif.
+    /// HEIC / HEIF. Recognised, never decoded: libheif and its HEVC decoder libde265 are
+    /// LGPL-3.0, which licence policy excludes (issue #588).
     Heic,
     /// Sony ARW.
     Arw,
@@ -104,12 +106,16 @@ pub enum StillFormat {
 /// Every format this build can read pixels out of — the codec-coverage table, in one place.
 ///
 /// Logged verbatim on a deferral so the gap is legible in the field rather than only in a doc.
+/// AVIF is a member only under the opt-in `media-avif-decode` feature, which links a system
+/// libdav1d and which the mobile FFI and the cross builds therefore never enable.
 pub const SUPPORTED_STILL_FORMATS: &[StillFormat] = &[
     StillFormat::Jpeg,
     StillFormat::Png,
     StillFormat::Jxl,
     StillFormat::Tiff,
     StillFormat::Gif,
+    #[cfg(feature = "media-avif-decode")]
+    StillFormat::Avif,
 ];
 
 /// The RAW families, all of them recognised and none of them decodable here.
