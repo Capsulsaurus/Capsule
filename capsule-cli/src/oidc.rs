@@ -79,6 +79,9 @@ const MAX_REQUEST_BYTES: usize = 16 * 1024;
 /// unanswered: a browser opens a handful, and nothing legitimate opens more.
 const MAX_IN_FLIGHT: usize = 16;
 
+/// How long the listener pauses after a failed accept before it accepts again.
+const ACCEPT_ERROR_PAUSE: Duration = Duration::from_millis(50);
+
 /// Why an OIDC sign-in from the terminal did not finish.
 #[derive(Debug, Error)]
 pub enum OidcLoginError {
@@ -241,8 +244,12 @@ impl LoopbackListener {
                         tracing::debug!(%peer, "the OIDC loopback listener is saturated; closed a connection");
                     }
                     // A failed accept (a connection reset before it was taken) is the client's
-                    // problem, not the listener's: keep listening.
-                    Err(error) => tracing::debug!(%error, "the OIDC loopback listener failed an accept"),
+                    // problem, not the listener's: keep listening. A short pause first, so an
+                    // error that repeats (out of file descriptors) cannot spin this loop.
+                    Err(error) => {
+                        tracing::debug!(%error, "the OIDC loopback listener failed an accept");
+                        tokio::time::sleep(ACCEPT_ERROR_PAUSE).await;
+                    }
                 },
                 Some((mut stream, target)) = in_flight.next() => {
                     let verdict = target.as_deref().map(|target| judge(target, expected_state));
