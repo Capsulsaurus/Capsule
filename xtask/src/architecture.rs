@@ -370,6 +370,11 @@ fn transitive_retired_paths(lock: &str, members: &BTreeSet<String>) -> Result<Ve
             queue.push_back(start.clone());
         }
         while let Some(current) = queue.pop_front() {
+            // Another member's graph is that member's own walk to judge; walking on through it
+            // here would report every path below it a second time.
+            if !starts.contains(&current) && members.contains(&name_of(&current)) {
+                continue;
+            }
             for entry in graph.get(&current).into_iter().flatten() {
                 let next = resolve(entry)?;
                 if parents.contains_key(&next) {
@@ -380,12 +385,12 @@ fn transitive_retired_paths(lock: &str, members: &BTreeSet<String>) -> Result<Ve
             }
         }
         // Judged per edge rather than per reached crate, so a retired crate a sanctioned edge
-        // brings in does not hide a second, unsanctioned edge to it. A member's own edges are
-        // `check_dependencies`'s, and a retired crate's own edges are not judged at all: its
-        // presence is what was judged.
+        // brings in does not hide a second, unsanctioned edge to it. Any member's own edges —
+        // this one's or another's it reaches — are `check_dependencies`'s, and a retired
+        // crate's own edges are not judged at all: its presence is what was judged.
         for via in parents.keys() {
             let via_name = name_of(via);
-            if starts.contains(via) || RETIRED_DEPENDENCIES.contains(&via_name.as_str()) {
+            if members.contains(&via_name) || RETIRED_DEPENDENCIES.contains(&via_name.as_str()) {
                 continue;
             }
             for entry in graph.get(via).into_iter().flatten() {
@@ -873,6 +878,42 @@ version = "0.13.0"
         assert!(
             found[0].contains("capsule-core -> rpc-shim -> prost"),
             "{found:?}"
+        );
+    }
+
+    #[test]
+    fn a_path_through_another_member_is_reported_once_by_that_member() {
+        let lock = r#"
+[[package]]
+name = "capsule-sdk"
+version = "0.1.0"
+dependencies = ["capsule-core"]
+
+[[package]]
+name = "capsule-core"
+version = "0.1.0"
+dependencies = ["prost", "rpc-shim"]
+
+[[package]]
+name = "rpc-shim"
+version = "0.1.0"
+dependencies = ["prost"]
+
+[[package]]
+name = "prost"
+version = "0.13.0"
+"#;
+        let members = BTreeSet::from(["capsule-sdk".to_owned(), "capsule-core".to_owned()]);
+        let found = transitive_retired_paths(lock, &members).expect("the lock parses");
+        assert_eq!(
+            found,
+            [
+                "active package `capsule-core` depends on retired or not-yet-approved `prost` \
+                 transitively (capsule-core -> rpc-shim -> prost); remove the path, or add \
+                 `rpc-shim` -> `prost` to SANCTIONED_TRANSITIVE_EDGES with a reason"
+            ],
+            "`capsule-core` -> `prost` is check_dependencies's, and nothing below \
+             `capsule-core` is reported again from `capsule-sdk`"
         );
     }
 
