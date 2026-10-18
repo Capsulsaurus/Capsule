@@ -14,7 +14,8 @@
 //! - `000016` (#460): federated accounts on the account table — a nullable credential and
 //!   address, and the `(issuer, subject)` link;
 //! - `000017` (#524): the checksum ledger's backfill (below);
-//! - `000018` (#544): the sealed user identity key beside the escrow.
+//! - `000018` (#544): the sealed user identity key beside the escrow;
+//! - `000019` (#659): an index on `share_serves (address)`, for the collector's live-link check.
 //!
 //! # Every instant is a `BIGINT` of microseconds since the Unix epoch
 //!
@@ -89,6 +90,7 @@ migrations![
     m20260902_000016_federated_accounts,
     m20260902_000017_migration_checksums,
     m20260902_000018_sealed_identities,
+    m20260902_000019_share_serves_address_index,
 ];
 
 /// The content checksum of one migration's source: lowercase hex SHA-256.
