@@ -59,8 +59,9 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use capsule_core::crypto::encryption::{NONCE_PREFIX_LEN, decrypt_asset_vec};
+use capsule_core::crypto::encryption::{NONCE_PREFIX_LEN, WRAPPED_FILE_KEY_LEN, decrypt_asset_vec};
 use capsule_core::crypto::primitives::Argon2Params;
+use capsule_core::crypto::provenance::{KeyMode, WrappedFileKey};
 use capsule_core::crypto::pwkdf;
 use capsule_core::drop::{SealedDrop, seal_drop, seal_drop_derand};
 use capsule_core::lqip::{RgbaImage, render as lqip_render};
@@ -98,6 +99,16 @@ fn sharing_code(e: &SharingError) -> &'static str {
         SharingError::WrongPassphrase => err::WRONG_SECRET,
         SharingError::ScopeUnavailable => err::SCOPE_UNAVAILABLE,
         SharingError::NotFound | SharingError::Crypto(_) => err::MALFORMED,
+    }
+}
+
+/// Map a per-asset key-recovery failure to its boundary code. The length and hex of a wrapped
+/// key are checked before recovery runs, so a [`SharingError::Crypto`] here is a wrapped key
+/// that did not open: an authentication failure, reported as `tampered` like the ciphertext's.
+fn recovery_code(e: &SharingError) -> &'static str {
+    match e {
+        SharingError::Crypto(_) => err::TAMPERED,
+        other => sharing_code(other),
     }
 }
 
@@ -192,9 +203,14 @@ impl ShareScope {
     ///   asset-scoped grant the file key is carried directly and both are unused; for an
     ///   album-scoped grant the key is derived from the epoch AMK with the nonce prefix folded in.
     /// - `ciphertext` — the octets from `/s/{opaque-id}/blob/{hash}`.
+    /// - `wrapped_file_key_hex` — lowercase hex of the asset's AMK-sealed `wrapped_file_key`,
+    ///   passed **only** when its `key_mode` is `wrapped` (an adopted web-upload drop, whose key
+    ///   a guest chose and no AMK derives). Omitted (or `null`) means `key_mode = derived`. A
+    ///   trailing optional argument, so an existing three-plus-ciphertext call is unchanged.
     ///
     /// Throws: `scope_unavailable` (the scope does not cover this asset/epoch), `tampered` (the
-    /// AEAD tag failed — tamper/truncation/wrong key), or `malformed` (bad `file_id`/prefix).
+    /// AEAD tag failed — tamper/truncation/wrong key — or the wrapped key did not open), or
+    /// `malformed` (bad `file_id`/prefix/wrapped-key hex or length).
     #[wasm_bindgen(js_name = decryptBlob)]
     pub fn decrypt_blob(
         &self,
@@ -202,13 +218,30 @@ impl ShareScope {
         amk_version: u32,
         nonce_prefix_hex: &str,
         ciphertext: &[u8],
+        wrapped_file_key_hex: Option<String>,
     ) -> Result<Vec<u8>, JsError> {
         let file_id = Uuid::parse_str(file_id.trim()).map_err(|_| JsError::new(err::MALFORMED))?;
         let nonce_prefix: [u8; NONCE_PREFIX_LEN] = hex_array(nonce_prefix_hex)?;
+        let wrapped = wrapped_file_key_hex
+            .as_deref()
+            .map(hex_array::<WRAPPED_FILE_KEY_LEN>)
+            .transpose()?
+            .map(|bytes| WrappedFileKey(bytes.to_vec()));
+        let key_mode = if wrapped.is_some() {
+            KeyMode::Wrapped
+        } else {
+            KeyMode::Derived
+        };
         let file_key = self
             .material
-            .file_key_for(&file_id, amk_version, &nonce_prefix)
-            .map_err(|e| JsError::new(sharing_code(&e)))?;
+            .file_key_for_key_mode(
+                &file_id,
+                amk_version,
+                &nonce_prefix,
+                key_mode,
+                wrapped.as_ref(),
+            )
+            .map_err(|e| JsError::new(recovery_code(&e)))?;
         decrypt_asset_vec(&file_key, &nonce_prefix, ciphertext)
             .map_err(|_| JsError::new(err::TAMPERED))
     }
@@ -573,6 +606,11 @@ mod tests {
                 "open_code({e:?}) = {:?} is not a declared boundary code",
                 open_code(e)
             );
+            assert!(
+                DECLARED_CODES.contains(&recovery_code(e)),
+                "recovery_code({e:?}) = {:?} is not a declared boundary code",
+                recovery_code(e)
+            );
         }
 
         // `every_sharing_error` is hand-written, so guard it against silently listing the same
@@ -585,6 +623,23 @@ mod tests {
             all.len(),
             "every_sharing_error repeats a variant"
         );
+    }
+
+    /// #598: a wrapped key that does not open is an authentication failure, so the viewer
+    /// reports it as it reports a tampered blob; every other recovery error keeps its
+    /// `sharing_code`.
+    #[test]
+    fn recovery_code_reports_a_wrapped_key_that_does_not_open_as_tampered() {
+        assert_eq!(
+            recovery_code(&SharingError::Crypto("asset file key recovery failed")),
+            err::TAMPERED
+        );
+        for e in every_sharing_error()
+            .iter()
+            .filter(|e| !matches!(e, SharingError::Crypto(_)))
+        {
+            assert_eq!(recovery_code(e), sharing_code(e), "{e:?}");
+        }
     }
 
     #[test]

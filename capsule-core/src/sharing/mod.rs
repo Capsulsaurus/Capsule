@@ -165,6 +165,47 @@ impl ScopeMaterial {
             }
         }
     }
+
+    /// [`file_key_for_manifest`](Self::file_key_for_manifest) over the four manifest fields it
+    /// reads, for a recipient that is served those fields rather than the signed manifest: the
+    /// browser share viewer, through `capsule-wasm`.
+    ///
+    /// An [`Asset`](ScopeMaterial::Asset) scope carries its key directly, as in
+    /// [`file_key_for`](Self::file_key_for). For an [`Album`](ScopeMaterial::Album) scope the
+    /// AMK of `amk_version` recovers it through
+    /// [`recover_file_key_parts`](crate::crypto::encryption::recover_file_key_parts), which
+    /// follows `key_mode`. There is no album id to check: the caller names no album, and a
+    /// grant's material covers only its own. A wrapped key from another album does not open
+    /// under this grant's AMK, and fails closed here.
+    ///
+    /// Errors are those of `file_key_for_manifest`: an epoch the grant does not hold is
+    /// [`SharingError::ScopeUnavailable`], and a wrapped key that is missing or does not open is
+    /// [`SharingError::Crypto`].
+    pub fn file_key_for_key_mode(
+        &self,
+        file_id: &Uuid,
+        amk_version: u32,
+        nonce_prefix: &[u8],
+        key_mode: crate::crypto::provenance::KeyMode,
+        wrapped_file_key: Option<&crate::crypto::provenance::WrappedFileKey>,
+    ) -> Result<[u8; 32], SharingError> {
+        match self {
+            ScopeMaterial::Asset { .. } => self.file_key_for(file_id, amk_version, nonce_prefix),
+            ScopeMaterial::Album { amks, .. } => {
+                let amk = amks
+                    .get(&amk_version)
+                    .ok_or(SharingError::ScopeUnavailable)?;
+                crate::crypto::encryption::recover_file_key_parts(
+                    &Amk::from_bytes(*amk),
+                    file_id,
+                    nonce_prefix,
+                    key_mode,
+                    wrapped_file_key,
+                )
+                .map_err(|_| SharingError::Crypto("asset file key recovery failed"))
+            }
+        }
+    }
 }
 
 /// The server-held, **opaque** encapsulation of a link's [`ScopeMaterial`]. The server
