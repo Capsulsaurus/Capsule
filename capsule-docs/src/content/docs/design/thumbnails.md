@@ -59,7 +59,12 @@ itself, and an ARW or DNG variant it has no decoder for defers like a missing co
 each TIFF entry's value at the count the entry claims while it parses, Capsule first walks the
 IFD chain itself (IFD0 and its successors, SubIFDs, the EXIF and GPS IFDs, and the Sony SR2 IFD)
 without allocating, and refuses as a decode failure any entry whose value needs more bytes than
-the file holds ([#644](https://github.com/Capsulsaurus/Capsule/issues/644)). **HEIC, WebP and the other RAW
+the file holds ([#644](https://github.com/Capsulsaurus/Capsule/issues/644)). The same walk
+refuses a file whose IFDs nest more than 16 levels deep through SubIFD, EXIF, GPS and SR2
+pointers, because the reader recurses into each nested IFD with no depth limit and a stack
+overflow aborts the process; real ARW and DNG files nest two or three levels, and a pointer loop
+among those IFDs counts as unbounded nesting
+([#647](https://github.com/Capsulsaurus/Capsule/issues/647)). **HEIC, WebP and the other RAW
 families (CR2, CR3, CRW, NEF, RAF) are recognised and refused**, and so is AVIF in a build
 without that feature. HEIC is refused by decision, not by toolchain: libheif and libde265 are both LGPL-3.0
 and excluded by the licensing policy, and the permissive paths are recorded in the

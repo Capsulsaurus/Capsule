@@ -46,7 +46,7 @@ use super::derivative::{
 use super::detect::{MAX_DECODE_PIXELS, SUPPORTED_STILL_FORMATS, StillFormat};
 use super::error::{FormatOp, MediaError};
 use super::resize::{capped_dimensions, downscale_rgba8};
-use super::tiff_bounds::check_ifd_value_counts;
+use super::tiff_bounds::{IfdRefusal, MAX_IFD_DEPTH, OversizedEntry, TooDeep, check_ifd_bounds};
 use crate::crypto::encryption::encrypt_asset_rekey;
 use crate::crypto::hash::Hash32;
 use crate::crypto::keys::{Amk, AmkVersion, HybridSigningKey};
@@ -1876,9 +1876,9 @@ fn a_subifds_count_past_the_file_is_refused_whatever_its_type() {
     // 4-byte offsets fit in the file's 26 bytes, but the reader would reserve 32 for them.
     let fits = hand_tiff(&[&[(sub_ifds, T_LONG, 3, 8)]]);
     assert_eq!(fits.len(), 26);
-    assert!(check_ifd_value_counts(&fits).is_ok());
+    assert!(check_ifd_bounds(&fits).is_ok());
     let over = hand_tiff(&[&[(sub_ifds, T_LONG, 4, 8)]]);
-    assert!(check_ifd_value_counts(&over).is_err());
+    assert!(check_ifd_bounds(&over).is_err());
 }
 
 /// Every offset in a `SubIFDs` list is followed, not only the first: an oversized entry in the
@@ -1905,7 +1905,7 @@ fn every_subifd_in_a_list_is_walked() {
         TiffTag::StripByteCounts.as_u16(),
     );
     assert_eq!(
-        check_ifd_value_counts(&with_list([first, 0])).map(|w| w.ifds),
+        check_ifd_bounds(&with_list([first, 0])).map(|w| w.ifds),
         Ok(2)
     );
 }
@@ -1926,7 +1926,7 @@ fn only_the_top_level_chain_follows_next_pointers() {
 
     let mut chained = hand_tiff(&[&[make], &[oversized]]);
     assert!(
-        check_ifd_value_counts(&chained).is_ok(),
+        check_ifd_bounds(&chained).is_ok(),
         "unchained, IFD1 is unreached"
     );
     set_next_ifd(&mut chained, 8, 1, hand_ifd_offset(&[1, 1], 1));
@@ -1942,7 +1942,7 @@ fn only_the_top_level_chain_follows_next_pointers() {
         ]);
         set_next_ifd(&mut bytes, child, 1, beyond);
         assert_eq!(
-            check_ifd_value_counts(&bytes).map(|w| w.ifds),
+            check_ifd_bounds(&bytes).map(|w| w.ifds),
             Ok(2),
             "{pointer:?}'s next pointer must not be followed"
         );
@@ -1977,31 +1977,34 @@ fn an_oversized_count_is_refused_in_every_directory_the_reader_parses() {
         assert_ifd_count_refused(&bytes, oversized.0);
         // The same entry where the reader never looks — no pointer reaches it — is not refused.
         let unreached = hand_tiff(&[&[make, (0x9998, T_LONG, 1, child)], &[oversized]]);
-        assert!(check_ifd_value_counts(&unreached).is_ok());
+        assert!(check_ifd_bounds(&unreached).is_ok());
     }
 }
 
-/// The walk refuses only what would allocate: real fixtures pass and are walked in full, a value
-/// that fits but sits past the end of the file is left to the reader, and a pointer cycle ends.
+/// The walk refuses only what would allocate or recurse too deep: real fixtures pass and are
+/// walked in full, a value that fits but sits past the end of the file is left to the reader, and
+/// a next-IFD cycle along the top-level chain ends.
 #[test]
 fn the_ifd_walk_passes_what_would_not_allocate() {
     let arw = decodable_arw();
-    assert_eq!(check_ifd_value_counts(&arw).map(|w| w.ifds), Ok(2));
+    assert_eq!(
+        check_ifd_bounds(&arw).map(|w| (w.ifds, w.depth)),
+        Ok((2, 1))
+    );
     let dng = dng_cfa(16, 8, &split_cfa(16, 8, 50_000, 5_000), |_| {});
-    assert_eq!(check_ifd_value_counts(&dng).map(|w| w.ifds), Ok(1));
+    assert_eq!(
+        check_ifd_bounds(&dng).map(|w| (w.ifds, w.depth)),
+        Ok((1, 0))
+    );
 
     let past_the_end = hand_tiff(&[&[(0x9999, T_DOUBLE, 2, 10_000)]]);
-    assert!(check_ifd_value_counts(&past_the_end).is_ok());
+    assert!(check_ifd_bounds(&past_the_end).is_ok());
 
-    // IFD0 lists itself as its SubIFD, its EXIF IFD and its next IFD.
-    let cycle = hand_tiff(&[&[
-        (TiffTag::SubIFDs.as_u16(), T_LONG, 1, 8),
-        (TiffTag::ExifIFDPointer.as_u16(), T_LONG, 1, 8),
-    ]]);
-    let mut cycle = cycle;
+    // IFD0 lists itself as its next IFD: the reader iterates the chain, so this is no nesting.
+    let mut cycle = hand_tiff(&[&[(0x9998, T_LONG, 1, 0)]]);
     let next = cycle.len() - 4;
     cycle[next..].copy_from_slice(&8u32.to_le_bytes());
-    assert_eq!(check_ifd_value_counts(&cycle).map(|w| w.ifds), Ok(1));
+    assert_eq!(check_ifd_bounds(&cycle).map(|w| w.ifds), Ok(1));
     for (ext, format) in [("arw", StillFormat::Arw), ("dng", StillFormat::Dng)] {
         match RawshiftDecoder.probe(&cycle, ext) {
             Err(MediaError::Decode { detail, .. }) => {
@@ -2013,12 +2016,9 @@ fn the_ifd_walk_passes_what_would_not_allocate() {
     }
 
     // Not a TIFF, and a header whose IFD0 is out of range: nothing to walk.
-    assert_eq!(
-        check_ifd_value_counts(b"not a tiff"),
-        Ok(Default::default())
-    );
+    assert_eq!(check_ifd_bounds(b"not a tiff"), Ok(Default::default()));
     let truncated = b"II\x2A\x00\xFF\xFF\x00\x00";
-    assert_eq!(check_ifd_value_counts(truncated).map(|w| w.ifds), Ok(0));
+    assert_eq!(check_ifd_bounds(truncated).map(|w| w.ifds), Ok(0));
 }
 
 /// Big-endian classic TIFF and BigTIFF are walked too, and a BigTIFF count whose byte size
@@ -2031,7 +2031,7 @@ fn the_ifd_walk_covers_big_endian_and_bigtiff() {
     be.extend_from_slice(&u32::MAX.to_be_bytes());
     be.extend_from_slice(&8u32.to_be_bytes());
     be.extend_from_slice(&0u32.to_be_bytes());
-    let refused = check_ifd_value_counts(&be).expect_err("big-endian count");
+    let refused = oversized(check_ifd_bounds(&be).expect_err("big-endian count"));
     assert_eq!((refused.tag, refused.count), (0x9999, u64::from(u32::MAX)));
     assert_ifd_count_refused(&be, 0x9999);
 
@@ -2046,10 +2046,148 @@ fn the_ifd_walk_covers_big_endian_and_bigtiff() {
         out.extend_from_slice(&0u64.to_le_bytes()); // next IFD
         out
     };
-    assert!(check_ifd_value_counts(&bigtiff(2)).is_ok());
+    assert!(check_ifd_bounds(&bigtiff(2)).is_ok());
     for count in [1 << 40, u64::MAX] {
-        let refused = check_ifd_value_counts(&bigtiff(count)).expect_err("BigTIFF count");
+        let refused = oversized(check_ifd_bounds(&bigtiff(count)).expect_err("BigTIFF count"));
         assert_eq!(refused.count, count);
+    }
+}
+
+/// The oversized entry a refusal names, failing the test where the walk refused for depth.
+fn oversized(refusal: IfdRefusal) -> OversizedEntry {
+    match refusal {
+        IfdRefusal::Oversized(entry) => entry,
+        IfdRefusal::TooDeep(deep) => panic!("expected an oversized entry, got {deep:?}"),
+    }
+}
+
+/// The over-deep IFD a refusal names, failing the test where the walk refused an entry.
+fn too_deep(refusal: IfdRefusal) -> TooDeep {
+    match refusal {
+        IfdRefusal::TooDeep(deep) => deep,
+        IfdRefusal::Oversized(entry) => panic!("expected a depth refusal, got {entry:?}"),
+    }
+}
+
+// ── RAW IFD nesting depth (issue #647) ───────────────────────────────────────
+
+/// A classic little-endian TIFF whose IFD0 holds one inline `SubIFDs` offset to IFD1, IFD1 one
+/// to IFD2, and so on down to IFD`levels`, which holds a single plain entry: each IFD sits one
+/// level below its parent, about 18 bytes a level.
+fn sub_ifd_nest(levels: u32) -> Vec<u8> {
+    let at = |level: u32| 8 + 18 * level;
+    let mut out = b"II\x2A\x00\x08\x00\x00\x00".to_vec();
+    for level in 0..=levels {
+        let (tag, value) = if level < levels {
+            (TiffTag::SubIFDs.as_u16(), at(level + 1))
+        } else {
+            (0x9998, 0)
+        };
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.extend_from_slice(&tag.to_le_bytes());
+        out.extend_from_slice(&T_LONG.to_le_bytes());
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&value.to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+    }
+    assert_eq!(out.len(), at(levels + 1) as usize);
+    out
+}
+
+/// A nest exactly [`MAX_IFD_DEPTH`] levels deep passes the walk, every level walked, and reaches
+/// the reader: whatever it then reports is not the IFD bounds refusal.
+#[test]
+fn an_ifd_nest_at_the_depth_bound_passes_the_walk() {
+    let at_bound = sub_ifd_nest(MAX_IFD_DEPTH);
+    let walk = check_ifd_bounds(&at_bound).expect("a nest at the bound passes");
+    assert_eq!(walk.depth, MAX_IFD_DEPTH);
+    assert_eq!(walk.ifds, MAX_IFD_DEPTH as usize + 1);
+    for ext in ["arw", "dng"] {
+        if let Err(MediaError::Decode { detail, .. }) = RawshiftDecoder.probe(&at_bound, ext) {
+            assert!(!detail.contains("IFD bounds"), "{ext}: {detail}");
+        }
+    }
+}
+
+/// One level past the bound, and a nest of a few KB far past it, are refused before the reader
+/// recurses into them, as a decode failure naming the IFD bounds, at probe and at decode.
+#[test]
+fn an_ifd_nest_past_the_depth_bound_is_refused_before_the_raw_reader_recurses() {
+    for levels in [MAX_IFD_DEPTH + 1, 300] {
+        let bytes = sub_ifd_nest(levels);
+        let refused = too_deep(check_ifd_bounds(&bytes).expect_err("past the bound"));
+        assert_eq!(refused.depth, MAX_IFD_DEPTH + 1);
+        assert_eq!(refused.ifd_offset, 8 + 18 * u64::from(MAX_IFD_DEPTH + 1));
+        let needle = "RAW IFD bounds: TIFF IFD at offset";
+        assert_raw_decode_failure(&bytes, "arw", StillFormat::Arw, needle);
+        assert_raw_decode_failure(&bytes, "dng", StillFormat::Dng, needle);
+    }
+    assert!(sub_ifd_nest(300).len() > 4096, "a nest of a few KB");
+}
+
+/// The depth is the deepest pointer path to an IFD, not the first one the walk happens on: IFD0's
+/// EXIF pointer reaches X at level 1, and is walked first, but its SubIFD chain reaches X again
+/// 8 levels down, so X's nest runs past the bound along that longer path even though it is
+/// within it along the short one. EXIF and GPS pointers count as nesting like SubIFDs.
+#[test]
+fn the_ifd_depth_is_measured_along_the_deepest_path() {
+    // IFD0, then A1..A7 (the chain to X), then X and its nest X1..X`below_x`.
+    let nest = |exif_to_x: bool, below_x: u32| {
+        let mut counts = vec![2];
+        counts.extend(std::iter::repeat_n(1, 7 + 1 + below_x as usize));
+        let offset = |index: usize| hand_ifd_offset(&counts, index);
+        let x = offset(8);
+        let mut ifds: Vec<Vec<HandEntry>> = vec![vec![
+            (TiffTag::SubIFDs.as_u16(), T_LONG, 1, offset(1)),
+            if exif_to_x {
+                (TiffTag::ExifIFDPointer.as_u16(), T_LONG, 1, x)
+            } else {
+                (0x9998, T_LONG, 1, 0)
+            },
+        ]];
+        for index in 1..counts.len() {
+            ifds.push(vec![if index + 1 < counts.len() {
+                let pointer = if index % 2 == 0 {
+                    TiffTag::GPSInfoIFDPointer
+                } else {
+                    TiffTag::SubIFDs
+                };
+                (pointer.as_u16(), T_LONG, 1, offset(index + 1))
+            } else {
+                (0x9998, T_LONG, 1, 0)
+            }]);
+        }
+        let refs: Vec<&[HandEntry]> = ifds.iter().map(Vec::as_slice).collect();
+        (hand_tiff(&refs), offset(counts.len() - 1))
+    };
+    for exif_to_x in [false, true] {
+        // X's last IFD sits 8 + `below_x` levels down the long path.
+        let (at_bound, _) = nest(exif_to_x, MAX_IFD_DEPTH - 8);
+        assert_eq!(
+            check_ifd_bounds(&at_bound).map(|w| w.depth),
+            Ok(MAX_IFD_DEPTH),
+            "exif_to_x: {exif_to_x}"
+        );
+        // Along the EXIF pointer alone this nest is 10 levels deep, well within the bound.
+        let (past, last) = nest(exif_to_x, MAX_IFD_DEPTH - 7);
+        let refused = too_deep(check_ifd_bounds(&past).expect_err("past the bound along A"));
+        assert_eq!(
+            (refused.ifd_offset, refused.depth),
+            (u64::from(last), MAX_IFD_DEPTH + 1),
+            "exif_to_x: {exif_to_x}"
+        );
+    }
+}
+
+/// A loop through child pointers nests without end, so the walk refuses it rather than trusting
+/// the reader's visited set to cut it: IFD0 listing itself as its own SubIFD or EXIF IFD.
+#[test]
+fn a_child_pointer_loop_is_refused_as_too_deep() {
+    for pointer in [TiffTag::SubIFDs, TiffTag::ExifIFDPointer] {
+        let bytes = hand_tiff(&[&[(pointer.as_u16(), T_LONG, 1, 8)]]);
+        let refused = too_deep(check_ifd_bounds(&bytes).expect_err("a pointer loop"));
+        assert_eq!((refused.ifd_offset, refused.depth), (8, MAX_IFD_DEPTH + 1));
+        assert_raw_decode_failure(&bytes, "dng", StillFormat::Dng, "RAW IFD bounds");
     }
 }
 

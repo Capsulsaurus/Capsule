@@ -1,4 +1,5 @@
-//! A no-allocation pre-check of a TIFF's IFD value counts, run before `RawFile::open` (issue #644).
+//! A no-allocation pre-check of a TIFF's IFD value counts (issue #644) and IFD nesting depth
+//! (issue #647), run before `RawFile::open`.
 //!
 //! # Why this exists
 //!
@@ -14,7 +15,7 @@
 //!
 //! # What it checks
 //!
-//! [`check_ifd_value_counts`] walks exactly the directories `RawFile::open` parses — the IFD0
+//! [`check_ifd_bounds`] walks exactly the directories `RawFile::open` parses — the IFD0
 //! chain, every IFD's `SubIFDs` (recursively), EXIF and GPS IFDs, and the Sony SR2 IFD the ARW
 //! reader follows from IFD0's tag `0x02BC` — and refuses the first entry whose value would need
 //! more bytes than the whole file holds — a `SubIFDs` list counted at the 8-byte `u64` the reader
@@ -23,8 +24,32 @@
 //! reader allocates is then never larger than the bytes Capsule already holds.
 //!
 //! It reads the file in place and allocates nothing proportional to a count: the only memory it
-//! grows is the set of IFD offsets it has visited and its work stack, both bounded by the number
-//! of distinct IFDs, and a `SubIFDs` list is iterated lazily from the file rather than collected.
+//! grows is the map of IFD offsets it has visited, bounded by the number of distinct IFDs, and
+//! its work stack, bounded by the pointers it has read, and a `SubIFDs` list is iterated lazily
+//! from the file rather than collected.
+//!
+//! # The nesting bound
+//!
+//! `TiffParser::parse_ifd_at` follows each `SubIFDs` offset, the EXIF IFD and the GPS IFD by
+//! calling itself, with no depth limit. Its visited-offset set stops a cycle but not a chain of
+//! distinct IFDs, and one level costs a file about 18 bytes (a one-entry IFD holding an inline
+//! `SubIFDs` offset), so a few hundred KB can nest tens of thousands of levels. Overflowing the
+//! stack aborts the process rather than unwinding, which `decode_guarded` cannot catch either,
+//! and an import worker's smaller stack overflows sooner.
+//!
+//! So the walk also refuses a TIFF whose directories nest deeper than [`MAX_IFD_DEPTH`] levels:
+//! 16, where IFD0 and every other top-level chain member are level 0 and each SubIFD, EXIF, GPS or
+//! SR2 IFD is one level below the IFD that points at it. Real ARW and DNG files nest two or three
+//! levels deep; 16 leaves room for an unusual writer and keeps the reader's recursion to 17 nested
+//! `parse_ifd_at` frames at worst, a negligible slice of any thread's stack.
+//!
+//! The depth is measured soundly rather than by imitating the reader's visiting order, which is
+//! upstream's to change: an IFD is walked again whenever a pointer reaches it at a level deeper
+//! than any it was walked at before, so every pointer path the reader could recurse along is
+//! measured at its full length. Each IFD is then walked at most `MAX_IFD_DEPTH + 1` times. The
+//! cost of that soundness is that a pointer loop among SubIFD, EXIF and GPS pointers — which the
+//! reader cuts with its visited set — nests without end here and is refused. No camera writes one;
+//! a next-IFD pointer loop along the top-level chain is iteration, not recursion, and still passes.
 //!
 //! # What it deliberately does not do
 //!
@@ -40,7 +65,8 @@
 //! crates.io, so an upstream bound in `read_value` reaches this tree only with a release; this
 //! walker is the guard until then, and becomes redundant (not wrong) once that release lands.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
+use std::collections::hash_map::Entry as Slot;
 use std::fmt;
 
 use rawshift_image::tiff::{BIGTIFF_MAGIC, TIFF_MAGIC, TiffTag, TiffType};
@@ -54,6 +80,47 @@ const SUBIFD_ELEMENT_SIZE: u64 = std::mem::size_of::<u64>() as u64;
 
 /// The most entries `TiffParser::parse_ifd_at` accepts in one IFD before it refuses the IFD.
 const MAX_IFD_ENTRIES: u64 = 65_535;
+
+/// The deepest level an IFD may sit at, IFD0 being level 0; see the module docs.
+pub(super) const MAX_IFD_DEPTH: u32 = 16;
+
+/// Why [`check_ifd_bounds`] refused a TIFF.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum IfdRefusal {
+    /// An entry's value needs more bytes than the file holds.
+    Oversized(OversizedEntry),
+    /// The directories nest deeper than [`MAX_IFD_DEPTH`].
+    TooDeep(TooDeep),
+}
+
+impl fmt::Display for IfdRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Oversized(entry) => entry.fmt(f),
+            Self::TooDeep(deep) => deep.fmt(f),
+        }
+    }
+}
+
+/// The first IFD found deeper than [`MAX_IFD_DEPTH`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct TooDeep {
+    /// The offset of the IFD a pointer reached past the bound.
+    pub ifd_offset: u64,
+    /// The level it was reached at, one past [`MAX_IFD_DEPTH`].
+    pub depth: u32,
+}
+
+impl fmt::Display for TooDeep {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "TIFF IFD at offset {} sits {} levels deep through SubIFD, EXIF, GPS and SR2 \
+             pointers, past the limit of {MAX_IFD_DEPTH} (a pointer loop nests without end)",
+            self.ifd_offset, self.depth
+        )
+    }
+}
 
 /// The first entry found whose value needs more bytes than the file holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,23 +153,27 @@ impl fmt::Display for OversizedEntry {
 pub(super) struct IfdWalk {
     /// Distinct IFDs whose entry table was read.
     pub ifds: usize,
-    /// Entries checked across them.
+    /// Entries checked across them, counting an IFD walked again at a deeper level again.
     pub entries: u64,
+    /// The deepest level any IFD was reached at.
+    pub depth: u32,
 }
 
 /// One unit of pending work on the walk's stack.
 #[derive(Debug, Clone, Copy)]
 enum Work {
-    /// Read the IFD at `offset`. `chain` marks the top-level IFD0 chain, the only place the
-    /// reader follows a next-IFD pointer; `first` marks IFD0 itself, the only IFD whose SR2
-    /// pointer the ARW reader follows.
+    /// Read the IFD at `offset`, `depth` levels below the top-level chain. `chain` marks the
+    /// top-level IFD0 chain, the only place the reader follows a next-IFD pointer; `first` marks
+    /// IFD0 itself, the only IFD whose SR2 pointer the ARW reader follows.
     Ifd {
         offset: u64,
+        depth: u32,
         chain: bool,
         first: bool,
     },
-    /// `remaining` more `SubIFDs` offsets, the next one stored at `at`.
-    SubIfds { at: u64, remaining: u64 },
+    /// `remaining` more `SubIFDs` offsets, the next one stored at `at`, each naming an IFD at
+    /// `depth`.
+    SubIfds { at: u64, remaining: u64, depth: u32 },
 }
 
 /// A TIFF read in place.
@@ -194,10 +265,11 @@ impl Entry {
 }
 
 /// Refuse a TIFF whose IFD chain holds an entry that would make `rawshift-image`'s parser
-/// allocate more than the file's length. Allocates nothing proportional to any count.
+/// allocate more than the file's length, or whose IFDs nest deeper than [`MAX_IFD_DEPTH`].
+/// Allocates nothing proportional to any count.
 ///
 /// Bytes that are not a TIFF at all pass: the reader refuses them without allocating.
-pub(super) fn check_ifd_value_counts(bytes: &[u8]) -> Result<IfdWalk, OversizedEntry> {
+pub(super) fn check_ifd_bounds(bytes: &[u8]) -> Result<IfdWalk, IfdRefusal> {
     let little = match bytes.get(0..2) {
         Some(b"II") => true,
         Some(b"MM") => false,
@@ -221,15 +293,22 @@ pub(super) fn check_ifd_value_counts(bytes: &[u8]) -> Result<IfdWalk, OversizedE
     };
 
     let mut walk = IfdWalk::default();
-    let mut visited = HashSet::new();
+    // Each IFD's deepest level walked so far: one reached deeper is walked again, so its
+    // children are measured from the deepest path to it.
+    let mut deepest = HashMap::new();
     let mut stack = vec![Work::Ifd {
         offset: ifd0,
+        depth: 0,
         chain: true,
         first: true,
     }];
     while let Some(work) = stack.pop() {
         match work {
-            Work::SubIfds { at, remaining } => {
+            Work::SubIfds {
+                at,
+                remaining,
+                depth,
+            } => {
                 // The reader fails the whole list at the first unreadable element, so the rest
                 // are never parsed.
                 let Some(offset) = tiff.offset_at(at) else {
@@ -239,11 +318,13 @@ pub(super) fn check_ifd_value_counts(bytes: &[u8]) -> Result<IfdWalk, OversizedE
                     stack.push(Work::SubIfds {
                         at: at + tiff.offset_size(),
                         remaining: remaining - 1,
+                        depth,
                     });
                 }
                 if offset != 0 {
                     stack.push(Work::Ifd {
                         offset,
+                        depth,
                         chain: false,
                         first: false,
                     });
@@ -251,28 +332,71 @@ pub(super) fn check_ifd_value_counts(bytes: &[u8]) -> Result<IfdWalk, OversizedE
             }
             Work::Ifd {
                 offset,
+                depth,
                 chain,
                 first,
             } => {
-                if offset == 0 || !visited.insert(offset) {
+                if offset == 0 {
                     continue;
                 }
-                walk_ifd(&tiff, offset, chain, first, &mut walk, &mut stack)?;
+                // Refused on the pointer alone, before the IFD is read: the reader recurses into
+                // the offset whether or not a table is there.
+                if depth > MAX_IFD_DEPTH {
+                    return Err(IfdRefusal::TooDeep(TooDeep {
+                        ifd_offset: offset,
+                        depth,
+                    }));
+                }
+                let new = match deepest.entry(offset) {
+                    Slot::Occupied(slot) if *slot.get() >= depth => continue,
+                    Slot::Occupied(mut slot) => {
+                        slot.insert(depth);
+                        false
+                    }
+                    Slot::Vacant(slot) => {
+                        slot.insert(depth);
+                        true
+                    }
+                };
+                let at = Visit {
+                    offset,
+                    depth,
+                    chain,
+                    first,
+                    new,
+                };
+                walk_ifd(&tiff, at, &mut walk, &mut stack).map_err(IfdRefusal::Oversized)?;
             }
         }
     }
     Ok(walk)
 }
 
+/// One IFD about to be walked: [`Work::Ifd`]'s fields, and `new` where it was never walked
+/// before at any level.
+#[derive(Debug, Clone, Copy)]
+struct Visit {
+    offset: u64,
+    depth: u32,
+    chain: bool,
+    first: bool,
+    new: bool,
+}
+
 /// Check one IFD's entries and push the directories the reader would parse from it.
 fn walk_ifd(
     tiff: &Tiff<'_>,
-    offset: u64,
-    chain: bool,
-    first: bool,
+    visit: Visit,
     walk: &mut IfdWalk,
     stack: &mut Vec<Work>,
 ) -> Result<(), OversizedEntry> {
+    let Visit {
+        offset,
+        depth,
+        chain,
+        first,
+        new,
+    } = visit;
     let (count_size, entry_size) = if tiff.big { (8, 20) } else { (2, 12) };
     let entry_count = if tiff.big {
         tiff.u64_at(offset)
@@ -292,8 +416,9 @@ fn walk_ifd(
     let Some(next) = tiff.offset_at(next_at) else {
         return Ok(());
     };
-    walk.ifds += 1;
+    walk.ifds += usize::from(new);
     walk.entries += entry_count;
+    walk.depth = walk.depth.max(depth);
 
     let file_len = tiff.file_len();
     for index in 0..entry_count {
@@ -316,14 +441,16 @@ fn walk_ifd(
             field: at + 4 + if tiff.big { 8 } else { 4 },
         };
         check_entry(offset, &entry, file_len)?;
-        follow(tiff, &entry, first, stack);
+        follow(tiff, &entry, depth + 1, first, stack);
     }
     // Pushed last, so popped first: the whole top-level chain is walked before any child, and an
-    // IFD that is both a chain member and some IFD's child is visited as the chain member, whose
-    // next pointer is then followed.
+    // IFD that is both a chain member and some IFD's child is visited as the chain member first,
+    // so its next pointer is followed; a later, deeper child visit walks its children again but
+    // not its next pointer, which the reader follows only along the chain.
     if chain && next != 0 {
         stack.push(Work::Ifd {
             offset: next,
+            depth: 0,
             chain: true,
             first: false,
         });
@@ -360,11 +487,13 @@ fn check_entry(ifd_offset: u64, entry: &Entry, file_len: u64) -> Result<(), Over
     }
 }
 
-/// Push the IFDs the reader parses from `entry`, read the way the reader reads them.
-fn follow(tiff: &Tiff<'_>, entry: &Entry, first: bool, stack: &mut Vec<Work>) {
+/// Push the IFDs the reader parses from `entry`, read the way the reader reads them, each at
+/// `depth`.
+fn follow(tiff: &Tiff<'_>, entry: &Entry, depth: u32, first: bool, stack: &mut Vec<Work>) {
     let child = |offset: Option<u64>| {
         offset.map(|offset| Work::Ifd {
             offset,
+            depth,
             chain: false,
             first: false,
         })
@@ -378,6 +507,7 @@ fn follow(tiff: &Tiff<'_>, entry: &Entry, first: bool, stack: &mut Vec<Work>) {
             tiff.offset_at(entry.field).map(|at| Work::SubIfds {
                 at,
                 remaining: entry.count,
+                depth,
             })
         }
     } else if entry.tag == TiffTag::ExifIFDPointer.as_u16()
