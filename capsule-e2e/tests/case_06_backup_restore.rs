@@ -388,13 +388,14 @@ async fn e2e_case_6_the_cli_escrow_command_sets_up_what_recover_restores() {
     let jpeg = used_root.path().join("keepsake.jpg");
     std::fs::write(&jpeg, synthetic_jpeg()).expect("the fixture writes");
     used.import_asset(album, &jpeg).expect("the file imports");
+    // Refused before a secret is minted: the user is never shown one the bind would discard.
     let Err(rebind) = remote::auth_escrow(
         &remote,
         &store,
         &mut used,
         false,
         DeviceTier::LowRam,
-        |_| true,
+        |_| panic!("a library with assets is refused before a recovery secret is shown"),
     )
     .await
     else {

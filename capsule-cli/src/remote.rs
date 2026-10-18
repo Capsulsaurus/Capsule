@@ -473,14 +473,16 @@ pub struct EscrowSetup {
 ///
 /// The flow, every network leg over the SDK:
 ///
-/// 1. resume the stored session and read the account's server id (`GET /v1/auth/profile`);
+/// 1. resume the stored session and read the account's server id (`GET /v1/auth/profile`),
+///    then refuse with [`LifecycleError::AccountRebind`] when the library's id differs from it
+///    and the library already holds assets, so no secret is minted that the bind would discard;
 /// 2. unless `replace`, refuse with [`RemoteError::EscrowAlreadyStored`] when the account
 ///    already has an escrow (`GET /v1/auth/escrow`): storing another would retire the secret
 ///    that opens it, and that may belong to another library of the same account;
 /// 3. mint a recovery secret and hand it to `confirm`, which shows it once and runs the
 ///    type-back gate; `false` is [`RemoteError::RecoverySecretNotConfirmed`];
-/// 4. bind the library to the server's id (`Workspace::bind_account_id`), refused with
-///    [`LifecycleError::AccountRebind`] once the library holds assets;
+/// 4. bind the library to the server's id (`Workspace::bind_account_id`), which keeps its own
+///    [`LifecycleError::AccountRebind`] refusal as the authority behind step 1's early one;
 /// 5. wrap the master key under the secret at `tier` and store it (`PUT /v1/auth/escrow`),
 ///    then store the sealed identity beside it (`PUT /v1/auth/escrow/identity`).
 ///
@@ -518,6 +520,23 @@ async fn escrow_with(
 ) -> Result<EscrowSetup, RemoteError> {
     let api_root = &remote.sync_endpoint;
     let user_id = account_id(api_root, session.clone()).await?;
+    // The bind in step 4 refuses a library that already authored assets under its own id. Ask
+    // the same question here, before a secret is minted, so the user is never shown and made to
+    // record a secret that is then discarded.
+    let assets = workspace.asset_ids().len();
+    if workspace.user_id() != user_id && assets > 0 {
+        tracing::warn!(
+            %user_id,
+            library_user = %workspace.user_id(),
+            assets,
+            "escrow: refused before minting, the library already authored assets under its own id"
+        );
+        return Err(LifecycleError::AccountRebind(format!(
+            "{assets} asset(s) already name {} as created_by_user",
+            workspace.user_id()
+        ))
+        .into());
+    }
     let recovery = RecoveryClient::new(session, api_root)?;
     if !replace {
         match recovery.fetch_escrow().await {
