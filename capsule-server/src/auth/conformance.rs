@@ -651,7 +651,7 @@ pub async fn a_profile_reads_back_what_registration_wrote_and_takes_an_edit(h: &
         "the account's profile",
     );
     assert_eq!(profile.user_id, id);
-    assert_eq!(profile.email, address);
+    assert_eq!(profile.email, Some(address));
     assert_eq!(profile.display_name, None);
     assert_eq!(profile.created_at, Timestamp::UNIX_EPOCH);
 
@@ -986,12 +986,13 @@ pub async fn a_null_credential_never_authenticates(h: &dyn Harness) {
     );
 }
 
-/// A federated account with a verified address has a profile row, and takes an edit.
+/// Every federated account has a profile row and takes an edit, with or without an address.
 ///
 /// One account table: the profile is the same row the link is on. An account whose provider
-/// asserted no verified address has none — [`ProfileRecord::email`] is not optional — and takes
-/// no edit, so `read` and `update` agree that it is absent.
-pub async fn a_federated_account_has_a_profile_when_it_has_an_address(h: &dyn Harness) {
+/// asserted a verified address reads it back; one whose provider asserted an unverified address,
+/// or none at all, reads back [`ProfileRecord::email`] `None` — never the unverified claim — and
+/// still takes a display name (#603).
+pub async fn a_federated_account_has_a_profile_with_or_without_an_address(h: &dyn Harness) {
     let case = "fed-profile";
     let address = email(case);
     let id = user(case, 0);
@@ -1001,7 +1002,7 @@ pub async fn a_federated_account_has_a_profile_when_it_has_an_address(h: &dyn Ha
         "a federated account's profile",
     );
     assert_eq!(profile.user_id, id);
-    assert_eq!(profile.email, address);
+    assert_eq!(profile.email, Some(address));
     assert_eq!(profile.display_name, None);
     assert_eq!(profile.created_at, Timestamp::UNIX_EPOCH);
     let named = present(
@@ -1020,34 +1021,47 @@ pub async fn a_federated_account_has_a_profile_when_it_has_an_address(h: &dyn Ha
     );
     assert_eq!(named.display_name.as_deref(), Some("Ada Lovelace"));
 
-    let addressless = user(case, 1);
-    resolve(
-        h,
-        &unverified(identity(case, "addressless", Some(&email("fed-profile-u")))),
-        &addressless,
-    )
-    .await;
-    assert!(
-        ok(
-            h.profiles().read(&addressless).await,
-            "read an addressless profile"
-        )
-        .is_none()
-    );
-    assert!(
-        ok(
-            h.profiles()
-                .update(
-                    &addressless,
-                    &ProfileUpdate {
-                        display_name: Some(Some("Nobody".to_owned())),
-                    },
-                )
-                .await,
-            "name an addressless account",
-        )
-        .is_none()
-    );
+    // An unverified claim is never recorded, so it is never served back as the address; an
+    // identity that asserted no address at all is the same row.
+    let unverified_claim = unverified(identity(case, "unverified", Some(&email("fed-profile-u"))));
+    let no_claim = identity(case, "no-address", None);
+    for (n, addressless) in [(1, &unverified_claim), (2, &no_claim)] {
+        let id = user(case, n);
+        resolve(h, addressless, &id).await;
+        let profile = present(
+            ok(h.profiles().read(&id).await, "read an addressless profile"),
+            "an addressless federated account's profile",
+        );
+        assert_eq!(profile.user_id, id);
+        assert_eq!(profile.email, None, "{}", addressless.subject);
+        assert_eq!(profile.display_name, None);
+        assert_eq!(profile.created_at, Timestamp::UNIX_EPOCH);
+
+        let named = present(
+            ok(
+                h.profiles()
+                    .update(
+                        &id,
+                        &ProfileUpdate {
+                            display_name: Some(Some("Nobody".to_owned())),
+                        },
+                    )
+                    .await,
+                "name an addressless account",
+            ),
+            "the updated addressless profile",
+        );
+        assert_eq!(named.email, None);
+        assert_eq!(named.display_name.as_deref(), Some("Nobody"));
+        assert_eq!(
+            ok(
+                h.profiles().read(&id).await,
+                "re-read an addressless profile"
+            ),
+            Some(named),
+            "read and update agree on the addressless profile"
+        );
+    }
 }
 
 /// Unwrap the harness's own seam, which speaks `StoreError` rather than `DirectoryError`.
@@ -1094,7 +1108,7 @@ pub async fn run_all(h: &dyn Harness) {
     an_unverified_address_neither_blocks_nor_reserves(h).await;
     addressless_identities_are_accounts_too(h).await;
     a_null_credential_never_authenticates(h).await;
-    a_federated_account_has_a_profile_when_it_has_an_address(h).await;
+    a_federated_account_has_a_profile_with_or_without_an_address(h).await;
 }
 
 #[cfg(test)]

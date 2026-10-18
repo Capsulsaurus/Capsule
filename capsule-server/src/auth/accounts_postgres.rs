@@ -271,16 +271,16 @@ impl PostgresAccounts {
 
     /// The profile of `user`, read through whatever connection the caller has.
     ///
-    /// `email IS NOT NULL` because [`ProfileRecord::email`] is not optional: a federated account
-    /// whose provider asserted no verified address has no profile to show (the OIDC accounts
-    /// module docs), and the in-memory adapter answers the same.
+    /// Every row has one: a federated account whose provider asserted no verified address reads
+    /// back with [`ProfileRecord::email`] `None` (the OIDC accounts module docs), and the
+    /// in-memory adapter answers the same.
     async fn profile(&self, user: &UserId) -> Result<Option<ProfileRecord>, StoreError> {
         let found = self
             .connection
             .query_one(Statement::from_sql_and_values(
                 DbBackend::Postgres,
                 "SELECT user_id, email, display_name, created_at FROM accounts \
-                 WHERE user_id = $1 AND email IS NOT NULL",
+                 WHERE user_id = $1",
                 [Value::from(user.as_str().to_owned())],
             ))
             .await
@@ -345,7 +345,7 @@ enum Reservation {
 fn profile_from(row: &sea_orm::QueryResult) -> Result<ProfileRecord, StoreError> {
     let failed = PORT.failing("reading a profile row");
     let user_id: String = row.try_get("", "user_id").map_err(&failed)?;
-    let email: String = row.try_get("", "email").map_err(&failed)?;
+    let email: Option<String> = row.try_get("", "email").map_err(&failed)?;
     let display_name: Option<String> = row.try_get("", "display_name").map_err(&failed)?;
     let created_at: i64 = row.try_get("", "created_at").map_err(&failed)?;
     Ok(ProfileRecord {
@@ -554,7 +554,7 @@ impl AccountProfiles for PostgresAccounts {
                 .query_one(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "UPDATE accounts SET display_name = $2, updated_at = $3 \
-                     WHERE user_id = $1 AND email IS NOT NULL \
+                     WHERE user_id = $1 \
                      RETURNING user_id, email, display_name, created_at",
                     [
                         Value::from(user.as_str().to_owned()),

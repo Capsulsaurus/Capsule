@@ -68,8 +68,13 @@ pub const MAX_DISPLAY_NAME_CHARS: usize = 128;
 pub struct ProfileRecord {
     /// The account's identifier — the same one every manifest and every session names.
     pub user_id: UserId,
-    /// The address the account signs in with. Fixed at registration; see the module docs.
-    pub email: String,
+    /// The address the account signs in with, if it has one. Fixed at registration; see the
+    /// module docs.
+    ///
+    /// `None` for a federated account whose provider asserted no verified address: that account
+    /// exists and has a profile, it just has no address to show. Every password account has
+    /// one, because the account table refuses a password row without it.
+    pub email: Option<String>,
     /// The name the account chose to be shown as, if it chose one.
     ///
     /// `None` and an empty string are the same state and the port stores the former: a client

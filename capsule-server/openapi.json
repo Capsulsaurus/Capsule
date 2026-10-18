@@ -23133,8 +23133,11 @@
             "description": "The account identifier every manifest and every session names."
           },
           "email": {
-            "type": "string",
-            "description": "The address this account signs in with.\n\nRead-only on this surface. Changing it needs proof that the caller controls the new\naddress, and this server has no way to obtain one; see [`crate::auth::profile`]."
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The address this account signs in with, if it has one.\n\nRead-only on this surface. Changing it needs proof that the caller controls the new\naddress, and this server has no way to obtain one; see [`crate::auth::profile`].\n\nAbsent for a federated account whose provider asserted no verified address. A client\nrendering the profile falls back to the display name, and from that to the account id."
           },
           "display_name": {
             "type": [
@@ -23151,7 +23154,6 @@
         "type": "object",
         "required": [
           "user_id",
-          "email",
           "created_at"
         ],
         "description": "An account's profile as it is served.\n\n`Deserialize` is derived so the suite reads it back through the same type the server wrote —\na test pulling `display_name` out of a `serde_json::Value` would still pass if the field were\nrenamed on the way out."
