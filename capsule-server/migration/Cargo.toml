@@ -33,3 +33,9 @@ tokio = { workspace = true }
 # — the server's schema is PostgreSQL's, and the TLS rule is rustls only. See the ORM row in
 # design/dependencies.md; this crate opens no new dependency domain.
 sea-orm-migration = { workspace = true }
+# The per-migration content checksum (#524): SHA-256 of each migration's source, hex-encoded.
+# Both are already workspace dependencies, so this opens no new dependency domain, and neither
+# reaches `capsule-server`'s normal graph — the server compares the recorded hex against a
+# compiled-in copy and hashes nothing itself.
+sha2 = { workspace = true }
+hex = { workspace = true }

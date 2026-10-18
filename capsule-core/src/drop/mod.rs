@@ -150,6 +150,18 @@ pub struct AdoptedDrop {
     pub metadata_blob: Vec<u8>,
     /// The asset's one provenance record — the `create` that heads its chain.
     pub record: ProvenanceRecord,
+    /// Whether the import still pipeline produced thumbnail derivatives, dimensions and an
+    /// LQIP for the adopted bytes, and if not, why — the same report an import returns.
+    /// Adoption never fails over unreadable pixels, so this is a report, not a rejection.
+    ///
+    /// Native-only: the pipeline lives in `lifecycle`, which the WASM sealing build omits,
+    /// and only a native client adopts.
+    #[cfg(feature = "native")]
+    pub derivatives: crate::lifecycle::DerivativeStatus,
+    /// How many `(tier, format)` pairs the tier table commits to and this build cannot
+    /// encode; zero when the still did not decode, because nothing was attempted.
+    #[cfg(feature = "native")]
+    pub deferred_formats: u32,
 }
 
 impl AdoptedDrop {
@@ -265,10 +277,11 @@ pub trait DropAdopter {
 
     /// Adopt a drop into `album_id` in place (no byte re-upload). The drop becomes a
     /// library asset — registered with its one-record provenance chain and sealed metadata
-    /// blob, exactly as an import registers one — and the returned [`AdoptedDrop`] carries
-    /// what publishing it needs: the signed adopting `create` manifest (whose
-    /// `ciphertext_hash` references the inbox blob), the sealed metadata blob, and the
-    /// provenance record.
+    /// blob, exactly as an import registers one, including the import's still pipeline
+    /// (header-derived `content_type`, pixel dimensions, LQIP, signed thumbnail derivatives)
+    /// — and the returned [`AdoptedDrop`] carries what publishing it needs: the signed
+    /// adopting `create` manifest (whose `ciphertext_hash` references the inbox blob), the
+    /// sealed metadata blob, and the provenance record.
     fn adopt(&mut self, drop: DropId, album_id: Uuid) -> Result<AdoptedDrop, DropError>;
 
     /// Discard a pending drop; its bytes are GC'd and the quota freed.

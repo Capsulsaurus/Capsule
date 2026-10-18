@@ -1165,7 +1165,9 @@ dependencies = [
 name = "capsule-server-migration"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "sea-orm-migration",
+ "sha2",
  "tokio",
 ]
 
