@@ -7667,6 +7667,10 @@
     "message": "yes",
     "context": "CLI boolean value in `capsule show` rows (hidden, in trash)."
   },
+  "cli.stdin.empty": {
+    "message": "{flag} was given but stdin was empty",
+    "context": "CLI error when a `--*-stdin` flag asked for a secret on stdin and the first line was empty. {flag} is the flag the user passed, verbatim (e.g. --password-stdin, --passphrase-stdin, --recovery-secret-stdin)."
+  },
   "cli.sync.complete": {
     "message": "Sync complete: applied {applied} change(s) across {albums} album(s) in {pages} page(s).",
     "context": "CLI summary after `capsule sync`. {applied}, {albums}, {pages} are counts."
@@ -8232,8 +8236,8 @@
     "context": "HTTP 400 on the enrollment relay channel (slice S-C7): the request named an unknown direction or carried a missing/oversized opaque payload. The server never inspects the payload contents; this is a structural rejection only."
   },
   "error.escrow.identity_not_stored": {
-    "message": "This account's recovery backup is missing its identity key. Set up recovery again from a device that is still signed in.",
-    "context": "HTTP 404 on GET /v1/auth/escrow/identity (#544): this account has never stored its user identity key sealed under the master key, so a recovered device cannot open as the same account even if the master-key escrow is present. Distinct from error.escrow.not_stored because the remedy differs: the escrow exists, and only a device that still holds the identity can complete the backup."
+    "message": "This account's recovery backup does not include its identity key, so this device cannot be recovered as the same account. Keep using a device where this account's library still opens.",
+    "context": "HTTP 404 on GET /v1/auth/escrow/identity (#544): this account has never stored its user identity key sealed under the master key, so a recovered device cannot open as the same account even if the master-key escrow is present. Distinct from error.escrow.not_stored because the remedy differs: the escrow exists but is not enough on its own. No shipped client flow stores the sealed identity yet (the CLI recovery-setup step is #624), so the message names no setup step the user cannot take; reword it to point at that step once it ships."
   },
   "error.escrow.malformed": {
     "message": "The recovery backup could not be saved.",

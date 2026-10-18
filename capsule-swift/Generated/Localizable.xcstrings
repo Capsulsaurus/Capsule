@@ -32447,6 +32447,16 @@
         }
       }
     },
+    "cli.stdin.empty": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ was given but stdin was empty"
+          }
+        }
+      }
+    },
     "cli.sync.complete": {
       "localizations": {
         "ar": {
@@ -41446,7 +41456,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "This account's recovery backup is missing its identity key. Set up recovery again from a device that is still signed in."
+            "value": "This account's recovery backup does not include its identity key, so this device cannot be recovered as the same account. Keep using a device where this account's library still opens."
           }
         }
       }

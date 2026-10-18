@@ -781,25 +781,37 @@ fn flag_or_prompt(value: Option<String>, prompt: String) -> Result<String> {
     }
 }
 
-/// Read the password from stdin (`--password-stdin`) or prompt for it.
+/// Read a secret from stdin when `stdin_flag` names the `--*-stdin` flag that asked for it,
+/// or prompt for it.
 ///
-/// The stdin form takes the first line and trims the trailing newline only, so a password
-/// containing spaces survives; it is the same convention `docker login --password-stdin` uses.
-fn read_password(from_stdin: bool, prompt: String) -> Result<String> {
-    if from_stdin {
-        let mut line = String::new();
-        std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut line)
-            .map_err(|e| eyre!("Failed to read password from stdin: {e}"))?;
-        let password = line.trim_end_matches(['\n', '\r']).to_string();
-        if password.is_empty() {
-            return Err(eyre!("--password-stdin was given but stdin was empty"));
-        }
-        return Ok(password);
+/// The flag is passed through so an empty stdin is reported against the flag this command
+/// actually has (`--password-stdin`, `--passphrase-stdin`, `--recovery-secret-stdin`).
+fn read_password(stdin_flag: Option<&str>, prompt: String) -> Result<String> {
+    if let Some(flag) = stdin_flag {
+        return read_stdin_secret(&mut std::io::stdin().lock(), flag);
     }
     Password::new()
         .with_prompt(prompt)
         .interact()
         .map_err(|e| eyre!("Failed to read password: {e}"))
+}
+
+/// The stdin half of [`read_password`]: the first line of `reader`, with only the trailing
+/// newline trimmed so a secret containing spaces survives (the convention
+/// `docker login --password-stdin` uses). An empty line is refused, naming `flag`.
+fn read_stdin_secret(reader: &mut impl std::io::BufRead, flag: &str) -> Result<String> {
+    let mut line = String::new();
+    reader
+        .read_line(&mut line)
+        .map_err(|e| eyre!("Failed to read password from stdin: {e}"))?;
+    let secret = line.trim_end_matches(['\n', '\r']).to_string();
+    if secret.is_empty() {
+        return Err(eyre!(
+            "{}",
+            i18n::cli_bundle().format(keys::STDIN_EMPTY, &[("flag", Value::Str(flag))])
+        ));
+    }
+    Ok(secret)
 }
 
 /// `capsule auth register`: create an account over the SDK and persist the session.
@@ -814,7 +826,7 @@ async fn auth_register(email: Option<String>, password_stdin: bool) -> Result<()
     // not asking.
     let email = flag_or_prompt(email, bundle.format(keys::AUTH_LOGIN_EMAIL_PROMPT, &[]))?;
     let password = read_password(
-        password_stdin,
+        password_stdin.then_some("--password-stdin"),
         bundle.format(keys::AUTH_LOGIN_PASSWORD_PROMPT, &[]),
     )?;
 
@@ -857,7 +869,7 @@ async fn auth_login(email: Option<String>, password_stdin: bool) -> Result<()> {
 
     let email = flag_or_prompt(email, bundle.format(keys::AUTH_LOGIN_EMAIL_PROMPT, &[]))?;
     let password = read_password(
-        password_stdin,
+        password_stdin.then_some("--password-stdin"),
         bundle.format(keys::AUTH_LOGIN_PASSWORD_PROMPT, &[]),
     )?;
 
@@ -922,11 +934,11 @@ async fn auth_recover(
     let store = session_store()?;
 
     let secret = read_password(
-        recovery_secret_stdin,
+        recovery_secret_stdin.then_some("--recovery-secret-stdin"),
         bundle.format(keys::AUTH_RECOVER_SECRET_PROMPT, &[]),
     )?;
     let passphrase = if passphrase_stdin {
-        read_password(true, String::new())?
+        read_password(Some("--passphrase-stdin"), String::new())?
     } else {
         Password::new()
             .with_prompt(bundle.format(keys::AUTH_RECOVER_PASSPHRASE_PROMPT, &[]))
@@ -1109,7 +1121,10 @@ fn open_workspace(library: &Path, passphrase_stdin: bool) -> Result<Workspace> {
 /// [`open_workspace`] without the unmigrated-sidecar notice: for `capsule library migrate`,
 /// which reports the same count as the work it is about to do.
 fn open_workspace_quiet(library: &Path, passphrase_stdin: bool) -> Result<Workspace> {
-    let passphrase = read_password(passphrase_stdin, "Library passphrase".to_string())?;
+    let passphrase = read_password(
+        passphrase_stdin.then_some("--passphrase-stdin"),
+        "Library passphrase".to_string(),
+    )?;
     let mut ws = as_capsule_cli(
         Workspace::open(library, passphrase.as_bytes(), DeviceTier::Normal.params())
             .map_err(|e| eyre!("Failed to open signed workspace: {e}"))?,
@@ -1345,6 +1360,39 @@ mod library_info_tests {
             hint.as_deref(),
             Some("Run `capsule library migrate` to admit the 3 unsigned sidecars.")
         );
+    }
+}
+
+#[cfg(test)]
+mod stdin_secret_tests {
+    use super::read_stdin_secret;
+
+    /// Only the trailing newline is trimmed, so inner and leading spaces survive.
+    #[test]
+    fn the_first_line_is_read_with_only_its_newline_trimmed() {
+        let mut input = std::io::Cursor::new(" two words \r\nsecond line\n");
+        let secret = read_stdin_secret(&mut input, "--password-stdin").unwrap();
+        assert_eq!(secret, " two words ");
+    }
+
+    /// An empty line is refused against the flag the command was given, not a fixed one:
+    /// `capsule auth recover` has no `--password-stdin` (#618 D2).
+    #[test]
+    fn an_empty_line_names_the_flag_that_asked_for_it() {
+        for flag in ["--recovery-secret-stdin", "--passphrase-stdin"] {
+            let mut input = std::io::Cursor::new("\n");
+            let err = read_stdin_secret(&mut input, flag).unwrap_err().to_string();
+            assert!(err.starts_with(flag), "{flag}: got {err}");
+            assert!(!err.contains("--password-stdin"), "{flag}: got {err}");
+        }
+    }
+
+    /// End of input with nothing read is the same refusal as an empty line.
+    #[test]
+    fn no_input_at_all_is_refused() {
+        let mut input = std::io::Cursor::new("");
+        let err = read_stdin_secret(&mut input, "--passphrase-stdin").unwrap_err();
+        assert!(err.to_string().contains("--passphrase-stdin"));
     }
 }
 

@@ -1907,6 +1907,7 @@
     <string name="cli_show_value_stack">%1$s (%2$s)</string>
     <string name="cli_show_value_unset">(unset)</string>
     <string name="cli_show_value_yes">yes</string>
+    <string name="cli_stdin_empty">%s was given but stdin was empty</string>
     <string name="cli_sync_complete">Sync complete: applied %1$s change(s) across %2$s album(s) in %3$s page(s).</string>
     <string name="cli_sync_dry_run_notice">Dry run: no changes will be persisted.</string>
     <string name="cli_sync_failed">Sync failed: %s</string>
@@ -2046,7 +2047,7 @@
     <string name="error_enrollment_local_auth_required">Confirm it\'s you on this device to add another device.</string>
     <string name="error_enrollment_rate_limited">Too many device-add attempts. Please wait and try again.</string>
     <string name="error_enrollment_relay_malformed">The device-add request could not be read.</string>
-    <string name="error_escrow_identity_not_stored">This account\'s recovery backup is missing its identity key. Set up recovery again from a device that is still signed in.</string>
+    <string name="error_escrow_identity_not_stored">This account\'s recovery backup does not include its identity key, so this device cannot be recovered as the same account. Keep using a device where this account\'s library still opens.</string>
     <string name="error_escrow_malformed">The recovery backup could not be saved.</string>
     <string name="error_escrow_not_stored">No recovery backup is saved for this account.</string>
     <string name="error_escrow_unavailable">Capsule couldn\'t reach the recovery backup. Please try again.</string>

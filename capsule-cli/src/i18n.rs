@@ -64,6 +64,8 @@ pub mod keys {
     pub const AUTH_RECOVER_SUCCESS: &str = "cli.auth.recover.success";
     pub const AUTH_RECOVER_FAILED: &str = "cli.auth.recover.failed";
     pub const AUTH_RECOVER_WRONG_SECRET: &str = "cli.auth.recover.wrong_secret";
+    /// A `--*-stdin` flag was given and stdin's first line was empty; `{flag}` names it.
+    pub const STDIN_EMPTY: &str = "cli.stdin.empty";
     pub const SYNC_IN_PROGRESS: &str = "cli.sync.in_progress";
     pub const SYNC_DRY_RUN_NOTICE: &str = "cli.sync.dry_run_notice";
     pub const SYNC_UP_TO_DATE: &str = "cli.sync.up_to_date";
