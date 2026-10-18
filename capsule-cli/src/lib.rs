@@ -978,7 +978,7 @@ async fn auth_login_oidc(no_browser: bool) -> Result<()> {
             bundle.format(
                 keys::AUTH_LOGIN_OIDC_WAITING,
                 &[(
-                    "minutes",
+                    "count",
                     Value::Int(i64::try_from(waited.as_secs().div_ceil(60)).unwrap_or(i64::MAX))
                 )]
             )
@@ -1798,12 +1798,12 @@ mod oidc_login_tests {
         let bundle = Bundle::for_locale("en");
         assert!(
             bundle
-                .format(keys::AUTH_LOGIN_OIDC_WAITING, &[("minutes", Value::Int(1))])
+                .format(keys::AUTH_LOGIN_OIDC_WAITING, &[("count", Value::Int(1))])
                 .contains("1 minute ")
         );
         assert!(
             bundle
-                .format(keys::AUTH_LOGIN_OIDC_WAITING, &[("minutes", Value::Int(5))])
+                .format(keys::AUTH_LOGIN_OIDC_WAITING, &[("count", Value::Int(5))])
                 .contains("5 minutes ")
         );
     }

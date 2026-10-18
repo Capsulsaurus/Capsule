@@ -6904,8 +6904,8 @@
     "context": "CLI `capsule auth login --oidc` (S-N2): printed on the line before the identity provider's authorization address. The CLI also tries to open it in a browser itself unless --no-browser was given."
   },
   "cli.auth.login.oidc_waiting": {
-    "message": "{minutes, plural, one {Waiting up to # minute for the sign-in to finish…} other {Waiting up to # minutes for the sign-in to finish…}}",
-    "context": "CLI `capsule auth login --oidc` (S-N2): printed while the CLI waits for the browser to come back from the identity provider. {minutes} is the whole number of minutes it will wait."
+    "message": "{count, plural, one {Waiting up to # minute for the sign-in to finish…} other {Waiting up to # minutes for the sign-in to finish…}}",
+    "context": "CLI `capsule auth login --oidc` (S-N2): printed while the CLI waits for the browser to come back from the identity provider. {count} is the whole number of minutes it will wait."
   },
   "cli.auth.login.password_prompt": {
     "message": "Password",

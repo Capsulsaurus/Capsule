@@ -1725,7 +1725,7 @@
   "cli.auth.login.oidc_success": "Signed in through your identity provider.",
   "cli.auth.login.oidc_timed_out": "No sign-in came back in time. Run the command again to start a new one.",
   "cli.auth.login.oidc_visit": "To sign in, open this address in a browser:",
-  "cli.auth.login.oidc_waiting": "{minutes, plural, one {Waiting up to # minute for the sign-in to finish…} other {Waiting up to # minutes for the sign-in to finish…}}",
+  "cli.auth.login.oidc_waiting": "{count, plural, one {Waiting up to # minute for the sign-in to finish…} other {Waiting up to # minutes for the sign-in to finish…}}",
   "cli.auth.login.password_prompt": "Password",
   "cli.auth.login.second_factor_required": "This account has two-factor authentication switched on.",
   "cli.auth.login.success": "Logged in as {email}.",
