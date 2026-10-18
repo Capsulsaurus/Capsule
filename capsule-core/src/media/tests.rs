@@ -28,6 +28,8 @@ use rawshift_image::formats::export::{
 };
 use uuid::Uuid;
 
+#[cfg(feature = "media-avif-decode")]
+use super::decode::check_avif_frames;
 use super::decode::{Decoder, RawshiftDecoder, decode_guarded};
 use super::derivative::{
     DerivativeContext, DerivativeSealer, DerivativeTier, SealedDerivative, StillDerivatives,
@@ -501,10 +503,39 @@ fn is_decodable_matches_the_supported_table() {
         assert!(format.is_decodable(), "{format} is in the supported table");
         assert!(!format.is_raw(), "no RAW family decodes in this build");
     }
+    // AVIF decodes exactly where the opt-in libdav1d feature is linked (issue #588), and the
+    // pure-Rust default — what the mobile FFI and the cross builds compile — never claims it.
+    assert_eq!(
+        StillFormat::Avif.is_decodable(),
+        cfg!(feature = "media-avif-decode"),
+        "AVIF is decodable iff `media-avif-decode` links libdav1d"
+    );
+    assert_eq!(
+        SUPPORTED_STILL_FORMATS.to_vec(),
+        if cfg!(feature = "media-avif-decode") {
+            vec![
+                StillFormat::Jpeg,
+                StillFormat::Png,
+                StillFormat::Jxl,
+                StillFormat::Tiff,
+                StillFormat::Gif,
+                StillFormat::Avif,
+            ]
+        } else {
+            vec![
+                StillFormat::Jpeg,
+                StillFormat::Png,
+                StillFormat::Jxl,
+                StillFormat::Tiff,
+                StillFormat::Gif,
+            ]
+        },
+        "the supported table is pinned per build"
+    );
+    // HEIC never decodes, under any feature: libheif and libde265 are LGPL-3.0 (issue #588).
     for format in [
         StillFormat::Ppm,
         StillFormat::WebP,
-        StillFormat::Avif,
         StillFormat::Heic,
         StillFormat::Arw,
         StillFormat::Cr2,
@@ -611,6 +642,9 @@ fn png_alpha_is_flattened_to_opaque() {
 fn a_format_with_no_codec_refuses_with_a_typed_error() {
     let cases: &[(Vec<u8>, &str, StillFormat)] = &[
         (isobmff(b"heic"), "heic", StillFormat::Heic),
+        // With `media-avif-decode` an AVIF passes the gate and is a decode case instead; see
+        // `a_truncated_avif_is_a_decode_error_rather_than_a_deferral`.
+        #[cfg(not(feature = "media-avif-decode"))]
         (isobmff(b"avif"), "avif", StillFormat::Avif),
         (isobmff(b"crx "), "cr3", StillFormat::Cr3),
         (
@@ -637,6 +671,196 @@ fn a_format_with_no_codec_refuses_with_a_typed_error() {
                 op: FormatOp::Decode,
             }),
         );
+    }
+}
+
+// ── AVIF decode (`media-avif-decode`, issue #588) ────────────────────────────
+
+/// With `media-avif-decode` an AVIF is a supported format, so an `ftyp avif` box with no image
+/// behind it passes the gate and fails the header probe: a **decode failure** worth reporting,
+/// no longer a no-codec deferral — and never a panic out of the C decoder.
+#[cfg(feature = "media-avif-decode")]
+#[test]
+fn a_truncated_avif_is_a_decode_error_rather_than_a_deferral() {
+    let header = isobmff(b"avif");
+    for result in [
+        RawshiftDecoder.probe(&header, "avif").map(|_| ()),
+        decode_guarded(&RawshiftDecoder, &header, "avif").map(|_| ()),
+    ] {
+        match result {
+            Err(MediaError::Decode { format, .. }) => assert_eq!(format, StillFormat::Avif),
+            other => panic!("a header-only AVIF must be a decode failure, got {other:?}"),
+        }
+    }
+}
+
+/// Encode a frame as AVIF through ravif, optionally embedding `metadata`'s EXIF.
+///
+/// The decode tests need an AVIF source and the suite commits no binary fixtures, so the
+/// encoder `media-linked-codecs` links supplies one. It is a different codec from the one under
+/// test — rav1e encodes, libdav1d decodes — so agreement between them is evidence about the
+/// decoder rather than about a matched pair. Quality 90 for the same reason as [`jpeg_bytes`].
+#[cfg(all(feature = "media-avif-decode", feature = "media-linked-codecs"))]
+fn avif_bytes(frame: &RgbaImage, metadata: Option<&ImageMetadata>) -> Vec<u8> {
+    let embed = if metadata.is_some() {
+        MetadataEmbedOptions {
+            embed_exif: true,
+            embed_icc: false,
+            embed_xmp: false,
+        }
+    } else {
+        MetadataEmbedOptions::none()
+    };
+    let options = EncodeOptions::AvifRavif(rawshift_image::formats::export::RavifEncodeConfig {
+        common: common(embed),
+        quality: 90,
+        speed: 6,
+    });
+    let empty = ImageMetadata::default();
+    encode_rgb_image_to_vec(&to_rgb_u16(frame), metadata.unwrap_or(&empty), &options)
+        .expect("the fixture AVIF encodes")
+}
+
+/// An AVIF decodes to upright, opaque RGBA8 of the dimensions it was built with, and its
+/// pixels are the ones encoded — each flat quadrant within the lossy codec's margin.
+#[cfg(all(feature = "media-avif-decode", feature = "media-linked-codecs"))]
+#[test]
+fn an_avif_decodes_to_the_pixels_it_was_built_from() {
+    let frame = quadrants(64, 48);
+    let avif = avif_bytes(&frame, None);
+
+    let probed = RawshiftDecoder
+        .probe(&avif, "avif")
+        .expect("the AVIF probes");
+    assert_eq!(probed.format, StillFormat::Avif);
+    assert_eq!(probed.stored_dimensions, (64, 48));
+
+    let decoded = RawshiftDecoder
+        .decode(&avif, "avif")
+        .expect("the AVIF decodes");
+    assert_eq!(decoded.format, StillFormat::Avif);
+    assert_eq!((decoded.width(), decoded.height()), (64, 48));
+    assert_eq!(decoded.image.rgba.len(), 64 * 48 * 4);
+    assert!(
+        decoded.image.rgba.chunks_exact(4).all(|px| px[3] == 255),
+        "every decoded frame is opaque"
+    );
+    assert_eq!(decoded.orientation_applied, 1, "no tag, no transform");
+
+    let (tl, tr, bl, br) = quadrant_means(&decoded.image);
+    for (got, want) in [(tl, 0), (tr, 85), (bl, 170), (br, 255)] {
+        assert!(
+            got.abs_diff(want) <= 8,
+            "quadrant mean {got} is within 8 levels of {want}"
+        );
+    }
+}
+
+/// An AVIF's EXIF orientation is honoured like a JPEG's: a quarter-turn transposes the decoded
+/// frame and is reported as consumed.
+#[cfg(all(feature = "media-avif-decode", feature = "media-linked-codecs"))]
+#[test]
+fn an_avif_exif_orientation_is_applied() {
+    let avif = avif_bytes(&quadrants(64, 48), Some(&oriented(6)));
+    let probed = RawshiftDecoder
+        .probe(&avif, "avif")
+        .expect("the AVIF probes");
+    assert_eq!(probed.orientation, Some(6), "the EXIF tag is read");
+    assert_eq!(probed.upright_dimensions(), (48, 64));
+
+    let decoded = RawshiftDecoder
+        .decode(&avif, "avif")
+        .expect("the AVIF decodes");
+    assert_eq!((decoded.width(), decoded.height()), (48, 64));
+    assert_eq!(decoded.orientation_applied, 6);
+}
+
+/// Rewrite an AVIF's `ispe` box to claim `width` x `height`, leaving the AV1 frame alone.
+#[cfg(all(feature = "media-avif-decode", feature = "media-linked-codecs"))]
+fn restate_ispe(avif: &mut [u8], width: u32, height: u32) {
+    let at = avif
+        .windows(4)
+        .position(|w| w == b"ispe")
+        .expect("the fixture AVIF has an ispe box");
+    // The fourcc, then a full box's version and flags, then width and height, big-endian.
+    avif[at + 8..at + 12].copy_from_slice(&width.to_be_bytes());
+    avif[at + 12..at + 16].copy_from_slice(&height.to_be_bytes());
+}
+
+/// An AVIF whose `ispe` understates its frame fools the header probe, so the budget is checked
+/// against the AV1 frames themselves: refused by dav1d's frame-size limit before it allocates,
+/// and accepted exactly up to the real frame's pixel count.
+#[cfg(all(feature = "media-avif-decode", feature = "media-linked-codecs"))]
+#[test]
+fn an_avif_whose_ispe_understates_its_frame_is_budgeted_by_the_real_frame() {
+    let mut avif = avif_bytes(&quadrants(64, 48), None);
+    restate_ispe(&mut avif, 8, 6);
+    let probed = RawshiftDecoder
+        .probe(&avif, "avif")
+        .expect("the AVIF probes");
+    assert_eq!(
+        probed.stored_dimensions,
+        (8, 6),
+        "the probe states the ispe claim, which is why decode cannot rely on it"
+    );
+
+    // A budget the claim fits and the real frame does not: dav1d refuses from the frame header.
+    assert_eq!(
+        check_avif_frames(&avif, 8 * 6),
+        Err(MediaError::PixelBudgetExceeded {
+            pixels: 8 * 6 + 1,
+            limit: 8 * 6,
+        })
+    );
+    assert!(matches!(
+        check_avif_frames(&avif, 64 * 48 - 1),
+        Err(MediaError::PixelBudgetExceeded { .. })
+    ));
+    assert_eq!(check_avif_frames(&avif, 64 * 48), Ok(()));
+
+    // Under the real budget the decode goes ahead, and reports the frame's size, not the claim.
+    let decoded = RawshiftDecoder
+        .decode(&avif, "avif")
+        .expect("an in-budget AVIF decodes whatever its ispe says");
+    assert_eq!((decoded.width(), decoded.height()), (64, 48));
+}
+
+/// An AVIF item that holds no AV1 frame is a decode failure: `image` would read it until dav1d
+/// yielded a picture, which never comes.
+#[cfg(all(feature = "media-avif-decode", feature = "media-linked-codecs"))]
+#[test]
+fn an_avif_item_with_no_frame_is_a_decode_failure() {
+    let mut avif = avif_bytes(&quadrants(64, 48), None);
+    let coded = mp4parse::read_avif(
+        &mut std::io::Cursor::new(&avif),
+        mp4parse::ParseStrictness::Normal,
+    )
+    .expect("the fixture AVIF parses")
+    .primary_item_coded_data()
+    .expect("the fixture AVIF has a primary item")
+    .to_vec();
+    let at = avif
+        .windows(coded.len())
+        .position(|w| w == coded.as_slice())
+        .expect("the primary item's bytes are in the file");
+    // Replace the item with one AV1 padding OBU (type 15, has_size_field) of the same length.
+    let payload = coded.len() - 3;
+    assert!(
+        payload < 1 << 14,
+        "two LEB128 bytes hold the padding length"
+    );
+    let padding = &mut avif[at..at + coded.len()];
+    padding.fill(0);
+    padding[0] = (15 << 3) | 0b10;
+    padding[1] = (payload & 0x7F) as u8 | 0x80;
+    padding[2] = (payload >> 7) as u8;
+
+    match RawshiftDecoder.decode(&avif, "avif") {
+        Err(MediaError::Decode { format, detail }) => {
+            assert_eq!(format, StillFormat::Avif);
+            assert!(detail.contains("no frame"), "{detail}");
+        }
+        other => panic!("a frameless AVIF item must be a decode failure, got {other:?}"),
     }
 }
 

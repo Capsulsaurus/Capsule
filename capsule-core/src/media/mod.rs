@@ -37,15 +37,18 @@
 //! [`UnsupportedFormat`](crate::media::MediaError::UnsupportedFormat) or a recorded per-format
 //! deferral — never a silent absence, and never a panic (slice `S-B13`).
 //!
-//! **Decode** covers JPEG, PNG, JXL, TIFF and GIF. **Encode** depends on the opt-in
+//! **Decode** covers JPEG, PNG, JXL, TIFF and GIF, plus AVIF under the opt-in
+//! `media-avif-decode` feature, which links a system libdav1d and which the CLI enables on every
+//! target but Windows (issue #588). **Encode** depends on the opt-in
 //! `media-linked-codecs` feature, which the CLI enables and the mobile FFI does not. With it,
 //! the thumbnail and preview tiers are encoded as **lossy** JXL (libjxl) and AVIF (ravif).
 //! Without it, only the thumbnail is encoded, as JXL alone and losslessly: the pure-Rust backend
 //! is `zune-jpegxl`'s `JxlSimpleEncoder`, so the tier's declared `q=50` is advisory there.
 //!
-//! HEIC, AVIF, WebP and the RAW families sniff correctly and refuse to decode. HEIC needs
-//! libheif and libde265, which are LGPL-3.0 and excluded by policy. AVIF decode needs a system
-//! libdav1d. **WebP is a compile failure rather than a missing
+//! HEIC, WebP and the RAW families — and AVIF without `media-avif-decode` — sniff correctly and
+//! refuse to decode. HEIC is refused by decision: libheif and libde265 are LGPL-3.0 and excluded
+//! by policy, and no permissive backend exists in `rawshift-image`. **WebP is a compile failure
+//! rather than a missing
 //! toolchain**: `rawshift-image`'s WebP module passes `*const i8` where `libwebp-sys` declares
 //! `*const c_char`, which is `u8` on aarch64 — every mobile target — and the module is compiled
 //! by decode *or* encode, so there is no decode-only escape.

@@ -71,3 +71,13 @@ tracing-subscriber = { version = "0.3.23", features = [
 # identifier pin; the CLI simply needs to name and parse the type it prints.
 uuid = { workspace = true }
 walkdir = "2.5.0"
+
+# `media-avif-decode`: AVIF stills decode, so an AVIF original gets its dimensions, placeholder and
+# thumbnail instead of a no-codec deferral (issue #588). It links a **system** libdav1d (BSD-2)
+# through pkg-config, so the build host needs `libdav1d-dev` / `dav1d` and the binary needs the
+# shared library at run time. Gated off Windows, which has no system package that ships libdav1d
+# with a pkg-config file on the release runner, and which is a deferred platform tier: there an
+# AVIF original is still recognised and deferred with a typed no-codec status, never silently
+# skipped. Cargo unifies this with the unconditional dependency above.
+[target.'cfg(not(windows))'.dependencies]
+capsule-core = { path = "../capsule-core", features = ["media-avif-decode"] }

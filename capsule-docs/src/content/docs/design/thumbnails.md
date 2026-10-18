@@ -49,10 +49,13 @@ backend is `zune-jpegxl`'s `JxlSimpleEncoder`, which is lossless, so a thumbnail
 than the table intends. Tests assert this per build. In one build the thumbnail round-trips
 exactly. In the other it is lossy and smaller than the lossless encode.
 
-Decode is JPEG, PNG, JXL, TIFF and GIF in both builds. **HEIC, AVIF, WebP and the RAW families
-are recognised and refused.** HEIC needs libheif and libde265, which are both LGPL-3.0 and
-excluded by the licensing policy. AVIF decode needs a system libdav1d. Both are tracked in
-[#588](https://github.com/Capsulsaurus/Capsule/issues/588), and RAW is tracked in
+Decode is JPEG, PNG, JXL, TIFF and GIF in every build, plus **AVIF** under the separate opt-in
+`media-avif-decode` feature, which links a system libdav1d (BSD-2) and which the CLI enables on
+every target but Windows ([#588](https://github.com/Capsulsaurus/Capsule/issues/588)). **HEIC,
+WebP and the RAW families are recognised and refused**, and so is AVIF in a build without that
+feature. HEIC is refused by decision, not by toolchain: libheif and libde265 are both LGPL-3.0
+and excluded by the licensing policy, and the permissive paths are recorded in the
+[Dependencies](/design/dependencies/) still-decode row. RAW is tracked in
 [#589](https://github.com/Capsulsaurus/Capsule/issues/589). WebP shares the aarch64 defect above
 in both directions, because the crate compiles that module for decode *or* encode.
 

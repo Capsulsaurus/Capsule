@@ -842,6 +842,49 @@ mod tests {
         );
     }
 
+    /// **Issue #588, through the real import.** With `media-avif-decode` an AVIF original is a
+    /// decodable still: it imports `Decoded`, with pixel dimensions, a placeholder and a JXL
+    /// thumbnail, where without the feature it would be `DeferredNoCodec`. The source AVIF comes
+    /// from ravif (`media-linked-codecs`) because the suite commits no binary fixtures.
+    #[cfg(all(feature = "media-avif-decode", feature = "media-linked-codecs"))]
+    #[test]
+    fn an_avif_original_imports_with_dimensions_an_lqip_and_derivatives() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let (mut ws, album) = workspace(lib.path());
+
+        let avif = encode_rgb_image_to_vec(
+            &frame(512, 384),
+            &ImageMetadata::default(),
+            &EncodeOptions::AvifRavif(rawshift_image::formats::export::RavifEncodeConfig {
+                common: common(MetadataEmbedOptions::none()),
+                quality: 90,
+                speed: 6,
+            }),
+        )
+        .expect("the fixture AVIF encodes");
+        let receipt = import(&mut ws, album, src.path(), "photo.avif", &avif);
+        assert_eq!(receipt.derivatives, DerivativeStatus::Decoded);
+
+        let sidecar = sidecar_of(lib.path(), receipt.asset_id);
+        assert_eq!(sidecar.content_type, "image/avif");
+        let dimensions = sidecar.dimensions.as_ref().expect("pixel dimensions");
+        assert_eq!((dimensions.width, dimensions.height), (512, 384));
+        assert!(
+            sidecar.lqip.is_some(),
+            "the placeholder came from the AVIF's pixels"
+        );
+        assert!(sidecar.verify(&ws.user_ik_public()));
+
+        let stem = receipt.asset_id.simple().to_string();
+        let thumb =
+            derivatives_dir(lib.path(), receipt.asset_id).join(format!("{stem}.thumbnail.jxl"));
+        let decoded = crate::media::RawshiftDecoder
+            .decode(&fs::read(&thumb).unwrap(), "jxl")
+            .expect("the thumbnail decodes");
+        assert_eq!((decoded.width(), decoded.height()), (256, 192));
+    }
+
     /// The sidecar's dimensions are the **upright** ones. A quarter-turned JPEG's stored width
     /// is its EXIF `PixelXDimension`, transposed relative to what a viewer shows, so taking the
     /// decoded pixels rather than the tag is the whole point.
