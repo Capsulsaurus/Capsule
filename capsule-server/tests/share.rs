@@ -997,6 +997,63 @@ async fn a_failed_store_keeps_an_earlier_links_charge() {
     .await;
 }
 
+/// #662: a request cancelled between the charge and the store finishing still releases the charge
+/// a failed store owes.
+///
+/// The request is dropped while its `put` is parked, as a client that hangs up would drop it, and
+/// the `put` then fails. Had the charge and the store run inside the request's own future, the
+/// release would never run and the account would keep a charge for a blob that was never stored,
+/// which the collector cannot credit back.
+#[tokio::test]
+async fn a_cancelled_issue_still_releases_the_charge_a_failed_store_owes() {
+    use capsule_server::quota::QuotaStore as _;
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let owner = capsule_server::store::UserId::new(support::user().as_str());
+    let record = payload(b'm', 64);
+    let metadata = address_of(&record);
+    let body = json!({
+        "opaque_id": opaque(1),
+        "metadata_hash": metadata.as_str(),
+        "serves": [metadata.as_str()],
+        "metadata_blob": BASE64.encode(&record),
+    });
+
+    let hold = fixture.blobs.hold_puts();
+    tokio::select! {
+        _ = issue(&fixture, &bearer, &body, StatusCode::INTERNAL_SERVER_ERROR) => {
+            panic!("the parked `put` cannot answer before it is released");
+        }
+        () = hold.entered.notified() => {}
+    }
+    // The request future is gone. Its record was charged before the `put` it is parked in.
+    assert_eq!(
+        fixture.quotas.usage(&owner).await.expect("usage").used,
+        64,
+        "the record is charged before it is stored"
+    );
+
+    fixture.blobs.set_puts_unavailable(true);
+    hold.release.add_permits(1);
+    // The test runtime is single-threaded, so each yield lets the detached task run.
+    for _ in 0..100 {
+        if fixture.quotas.usage(&owner).await.expect("usage").used == 0 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        fixture.quotas.usage(&owner).await.expect("usage").used,
+        0,
+        "a cancelled request's failed store releases its charge"
+    );
+    assert!(
+        fixture.blobs.stat(&metadata).await.expect("stat").is_none(),
+        "the failed store left nothing behind"
+    );
+}
+
 #[tokio::test]
 async fn a_structured_or_short_opaque_id_is_refused_at_issue() {
     // 128 bits is the defense against enumeration *independent of rate limiting*, which this

@@ -323,22 +323,29 @@ pub async fn issue_share(
     admit_metadata_growth(&quota, &owner).await?;
 
     if let Some(record) = record {
-        // Charged before it is stored, as an upload session is charged before its stage opens
-        // (#662): a record refused at the hard limit never reaches the store, so an account
-        // over its limit cannot leave uncharged records behind for the collector to find.
-        let charge = charge_metadata(&quota, &owner, &metadata, record.len() as u64).await?;
         // Stored before the link is recorded, so no viewer ever resolves a link whose record is
         // not yet servable. A link refused below leaves a blob no live link names, which the
         // collector reclaims on its ordinary terms; the reverse order would leave a live link
         // pointing at nothing.
-        if let Err(error) = share.blobs().put(&metadata, &record).await {
-            tracing::error!(%error, %owner, "the blob store could not hold a share's metadata record");
-            release_metadata_charge(&quota, &owner, &metadata, charge).await;
-            return Err(IssueShareRejection::Unavailable {
+        //
+        // Run as its own task and awaited, so a request cancelled between the charge and the
+        // store finishing — a client that hangs up, a server timeout — cannot drop the future
+        // halfway: the charge, the `put`, and the release a failed `put` owes all run to the
+        // end whether or not anyone is still waiting for the answer.
+        tokio::spawn(store_metadata_record(
+            share.clone(),
+            quota.clone(),
+            owner.clone(),
+            metadata.clone(),
+            record,
+        ))
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %owner, "the task storing a share's metadata record did not finish");
+            IssueShareRejection::Unavailable {
                 code: error_codes::SHARE_UNAVAILABLE,
-            });
-        }
-        tracing::info!(%owner, size = record.len(), "stored a share's sealed metadata record");
+            }
+        })??;
     }
 
     let outcome = share
@@ -611,6 +618,36 @@ async fn admit_metadata_growth(
     Err(IssueShareRejection::QuotaGraceExpired {
         code: error_codes::QUOTA_GRACE_LOCKED,
     })
+}
+
+/// Charge a link's metadata record, then store it, releasing the charge when the store fails.
+///
+/// Charged before it is stored, as an upload session is charged before its stage opens (#662):
+/// a record refused at the hard limit never reaches the store, so an account over its limit
+/// cannot leave uncharged records behind for the collector to find.
+///
+/// Owns its arguments so [`issue_share`] can run it as a task of its own. Between the charge and
+/// the end of the `put`, a dropped future would leave a charge with no stored blob behind it,
+/// which the collector never credits back because it credits only the blobs it sweeps. A
+/// spawned task is not dropped with the request. A process that stops inside that window still
+/// leaves the charge behind, a residue share-links.md ("The order") accepts.
+async fn store_metadata_record(
+    share: ShareContext,
+    quota: QuotaContext,
+    owner: UserId,
+    metadata: ContentAddress,
+    record: Vec<u8>,
+) -> Result<(), IssueShareRejection> {
+    let charge = charge_metadata(&quota, &owner, &metadata, record.len() as u64).await?;
+    if let Err(error) = share.blobs().put(&metadata, &record).await {
+        tracing::error!(%error, %owner, "the blob store could not hold a share's metadata record");
+        release_metadata_charge(&quota, &owner, &metadata, charge).await;
+        return Err(IssueShareRejection::Unavailable {
+            code: error_codes::SHARE_UNAVAILABLE,
+        });
+    }
+    tracing::info!(%owner, size = record.len(), "stored a share's sealed metadata record");
+    Ok(())
 }
 
 /// Attribute a metadata record to the link's owner before it is stored, refusing one that would
