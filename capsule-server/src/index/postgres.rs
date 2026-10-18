@@ -837,10 +837,9 @@ impl AssetIndex for PostgresAssetIndex {
             //
             // The retry inside the critical section is what makes `Replayed` the answer either
             // way, which is what the port promises: a byte-identical resubmission has the same
-            // hash, so it is the same op however it arrived. The alternative — catching the
-            // unique-violation on the `applied_manifests` insert further down — means reaching
-            // into `sqlx::Error` to tell a constraint violation from any other execution
-            // failure, which `postgres/error.rs` refuses to do for reasons recorded there.
+            // hash, so it is the same op however it arrived. The row lock serializes two
+            // submissions **to this asset**; the `applied_manifests` insert below covers the
+            // one race the lock cannot, the same manifest hash arriving on a sibling asset.
             if let Some(sync_seq) = applied_sequence(&transaction, &op).await? {
                 return Ok(OpOutcome::Replayed { sync_seq });
             }
@@ -958,10 +957,18 @@ impl AssetIndex for PostgresAssetIndex {
 
             let sync_seq = mint(&transaction, &row.owner_id).await?;
             row.sync_seq = Some(sync_seq);
-            transaction
+            // `ON CONFLICT DO NOTHING` on the manifest hash (#523). The asset-row lock does not
+            // cover a concurrent op carrying the same hash on a *sibling* asset: both pass the
+            // look-ups above, and the loser's insert then waits on the winner's uncommitted row
+            // and, without this, failed with a unique violation the route answered as `503`.
+            // Decided by the index instead, the loser learns the hash is applied, and answers
+            // exactly as it would have had it arrived a moment later — `Replayed` with the
+            // winner's number. Dropping the transaction rolls back the number it minted.
+            let recorded = transaction
                 .execute(Statement::from_sql_and_values(
                     DbBackend::Postgres,
-                    "INSERT INTO applied_manifests (manifest_hash, sync_seq) VALUES ($1, $2)",
+                    "INSERT INTO applied_manifests (manifest_hash, sync_seq) VALUES ($1, $2) \
+                     ON CONFLICT (manifest_hash) DO NOTHING",
                     [
                         Value::from(op.manifest_hash.as_bytes().to_vec()),
                         Value::from(sync_seq as i64),
@@ -969,6 +976,18 @@ impl AssetIndex for PostgresAssetIndex {
                 ))
                 .await
                 .map_err(PORT.failing("recording an applied manifest"))?;
+            if recorded.rows_affected() == 0 {
+                // `READ COMMITTED`: this statement's snapshot is fresh, so it sees the row the
+                // conflicting insert waited on.
+                let Some(sync_seq) = applied_sequence(&transaction, &op).await? else {
+                    return Err(StoreError::Rejected {
+                        store: PORT.store,
+                        detail: "a manifest hash conflicted with a row that could not then be read"
+                            .to_owned(),
+                    });
+                };
+                return Ok(OpOutcome::Replayed { sync_seq });
+            }
             persist(&transaction, &row).await?;
             commit(transaction).await?;
 
@@ -1328,6 +1347,95 @@ mod tests {
             };
             let index = PostgresAssetIndex::new(database.connection().clone());
             conformance::run_all(&index).await;
+        }
+
+        /// A manifest hash recorded concurrently through a *sibling* asset is a replay, not a
+        /// `23505` (#523).
+        ///
+        /// The asset-row lock serializes ops on one asset only, so this is the interleaving
+        /// it leaves open: the hash is inserted by a transaction that has not committed, the op
+        /// passes both idempotency look-ups, and its own insert waits on that row. The case
+        /// forces exactly that ordering — it commits the planted row only once Postgres reports
+        /// the op's insert waiting on a lock — rather than hoping a `join!` lands on it.
+        #[tokio::test]
+        async fn a_manifest_applied_concurrently_on_a_sibling_asset_is_a_replay() {
+            use capsule_core::crypto::hash::Hash32;
+            use sea_orm::{ConnectionTrait, DbBackend, Statement, TransactionTrait, Value};
+
+            use crate::index::{AssetIndex, OpAction, OpOutcome};
+            use crate::store::OwnerId;
+
+            let Some(database) = testing::start("the Postgres sibling-manifest race").await else {
+                return;
+            };
+            let index = PostgresAssetIndex::new(database.connection().clone());
+            let case = "op-sibling";
+            let (asset, _) = conformance::publish(&index, case, 2).await;
+            let created = conformance::head_of(&index, &asset).await;
+            let owner = OwnerId::new(format!("{case}-owner"));
+            let before = conformance::ok(index.head_seq(&owner).await, "read the head");
+            let hash = Hash32([0x23; 32]);
+
+            // The winner: the same hash, recorded and not yet committed.
+            let winner = database
+                .connection()
+                .begin()
+                .await
+                .expect("open the winner's transaction");
+            winner
+                .execute(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "INSERT INTO applied_manifests (manifest_hash, sync_seq) VALUES ($1, 999)",
+                    [Value::from(hash.as_bytes().to_vec())],
+                ))
+                .await
+                .expect("plant the winner's row");
+
+            let release = async {
+                // Bounded: a few seconds at most, and a failure names what never happened.
+                for _ in 0..500 {
+                    let waiting = database
+                        .connection()
+                        .query_one(Statement::from_string(
+                            DbBackend::Postgres,
+                            "SELECT count(*) AS waiting FROM pg_stat_activity \
+                             WHERE wait_event_type = 'Lock' \
+                             AND query LIKE 'INSERT INTO applied_manifests%'",
+                        ))
+                        .await
+                        .expect("read the lock waits")
+                        .and_then(|row| row.try_get::<i64>("", "waiting").ok())
+                        .unwrap_or(0);
+                    if waiting > 0 {
+                        winner.commit().await.expect("commit the winner");
+                        return;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+                panic!("the op's insert never waited on the winner's row");
+            };
+            let (outcome, ()) = tokio::join!(
+                index.apply_op(conformance::op(
+                    case,
+                    2,
+                    OpAction::MetadataUpdate,
+                    created,
+                    hash
+                )),
+                release,
+            );
+
+            assert_eq!(
+                conformance::ok(outcome, "apply the losing op"),
+                OpOutcome::Replayed { sync_seq: 999 },
+                "a hash another transaction recorded first is a replay with that transaction's \
+                 number, never a unique violation answered as a 503",
+            );
+            assert_eq!(
+                conformance::ok(index.head_seq(&owner).await, "read the head"),
+                before,
+                "the number the losing op minted is rolled back with it",
+            );
         }
     }
 }

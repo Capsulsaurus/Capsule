@@ -2,17 +2,18 @@
 //!
 //! # Why one function and not one per adapter
 //!
-//! [`StoreError`]'s three variants are a *decision* a caller acts on — the operation certainly
-//! did not happen, the operation may or may not have happened, the stored value cannot be read
-//! back — and four adapters classifying the same `DbErr` four times is four chances to get that
+//! [`StoreError`]'s variants are a *decision* a caller acts on — the operation certainly did not
+//! happen, the operation may or may not have happened, a uniqueness constraint already holds the
+//! key, the stored value cannot be read back — and four adapters classifying the same `DbErr` four times is four chances to get that
 //! decision subtly different. The route above them maps the variant onto an `error.*` code, so a
 //! divergence here shows up as one port answering `503` where another answers `500` for the same
 //! dropped socket.
 //!
-//! # How the three variants are decided
+//! # How the variants are decided
 //!
-//! Deliberately on the `DbErr` variant alone, without reaching into `sqlx::Error`. Two reasons,
-//! and the second is the load-bearing one:
+//! On the `DbErr` variant, plus the one SQLSTATE sea-orm itself already exposes through
+//! [`DbErr::sql_err`], and without reaching into `sqlx::Error`. Two reasons, and the second is
+//! the load-bearing one:
 //!
 //! - Naming `sqlx::Error` means depending on `sqlx` directly, which is a second pin of a crate
 //!   sea-orm already owns.
@@ -25,11 +26,17 @@
 //!   acquiring a connection, opening one — and everything else that is not a decoding failure is
 //!   `Rejected`.
 //!
+//! The exception is a unique violation (SQLSTATE `23505`), which is
+//! [`StoreError::Conflict`] (#523). It is the one failed-statement outcome whose effect *is*
+//! known — Postgres refused the row, and the transaction it ran in is aborted — and reporting it
+//! as `Rejected` made a key collision read as an internal error. `sql_err` is sea-orm's own
+//! reading of the driver's code, so this still names no `sqlx` type.
+//!
 //! `DbErr::RecordNotFound` never reaches here as an error: every port in this crate models
 //! absence as an `Option` or an outcome variant, and the adapters answer it from a row count
 //! rather than from a raised error.
 
-use sea_orm::DbErr;
+use sea_orm::{DbErr, SqlErr};
 
 use crate::store::StoreError;
 
@@ -93,6 +100,15 @@ impl Port {
             | DbErr::Json(_)
             | DbErr::TryIntoErr { .. }
             | DbErr::ConvertFromU64(_) => self.undecodable(detail),
+            // The statement was sent and a unique index refused it. Nothing was written, and
+            // the key is held — a conflict, not an internal failure.
+            _ if is_unique_violation(error) => {
+                tracing::info!(store = self.store, %detail, "a Postgres unique index refused a write");
+                StoreError::Conflict {
+                    store: self.store,
+                    detail,
+                }
+            }
             // Everything else: the statement was sent and did not succeed. Whether state
             // changed is unknown, which is exactly what `Rejected` means.
             _ => {
@@ -104,6 +120,11 @@ impl Port {
             }
         }
     }
+}
+
+/// Whether `error` is Postgres refusing a row a unique index already holds (SQLSTATE `23505`).
+fn is_unique_violation(error: &DbErr) -> bool {
+    matches!(error.sql_err(), Some(SqlErr::UniqueConstraintViolation(_)))
 }
 
 #[cfg(test)]
@@ -155,5 +176,60 @@ mod tests {
         // that no longer parses — the driver cannot, because those columns are plain text.
         let error = PORT.undecodable("`elsewhere` is not an asset state");
         assert!(matches!(error, StoreError::Corrupt { .. }), "{error:?}");
+    }
+
+    /// The driver-raised half, against a real Postgres: a `23505` cannot be built without one,
+    /// because sea-orm reads the SQLSTATE off the driver's own database-error type.
+    mod postgres_conformance {
+        use sea_orm::{ConnectionTrait, DbBackend, Statement};
+
+        use super::PORT;
+        use crate::postgres::testing;
+        use crate::store::StoreError;
+
+        #[tokio::test]
+        async fn a_unique_violation_is_a_conflict_and_any_other_refusal_is_rejected() {
+            let Some(database) = testing::start("the Postgres error classification").await else {
+                return;
+            };
+            let insert = || {
+                Statement::from_string(
+                    DbBackend::Postgres,
+                    "INSERT INTO owner_sequences (owner_id, next_seq) VALUES ('owner-523', 1)",
+                )
+            };
+            database
+                .connection()
+                .execute(insert())
+                .await
+                .expect("the first row is new");
+
+            let duplicate = database
+                .connection()
+                .execute(insert())
+                .await
+                .map_err(PORT.failing("inserting a held key"))
+                .expect_err("the primary key holds the second row");
+            assert!(
+                matches!(duplicate, StoreError::Conflict { store: "test", .. }),
+                "a unique violation must be a Conflict, got {duplicate:?}"
+            );
+
+            // A statement Postgres refuses for any other reason keeps its old reading: the
+            // conflict arm is the SQLSTATE, not "the database said no".
+            let missing = database
+                .connection()
+                .execute(Statement::from_string(
+                    DbBackend::Postgres,
+                    "INSERT INTO no_such_table (id) VALUES (1)",
+                ))
+                .await
+                .map_err(PORT.failing("inserting into a missing table"))
+                .expect_err("the table does not exist");
+            assert!(
+                matches!(missing, StoreError::Rejected { .. }),
+                "a non-unique refusal must stay Rejected, got {missing:?}"
+            );
+        }
     }
 }
