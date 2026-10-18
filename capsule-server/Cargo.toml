@@ -206,6 +206,13 @@ testcontainers-modules = { workspace = true, features = ["valkey"] }
 # `capsule-core-ffi` all dev-depend on it) and already in the lock file.
 tempfile = "3"
 
+# The browser's share-open surface, driven natively by `tests/share.rs` (#614): a link issued
+# through `POST /v1/shares` is served and then opened through the very entry points the viewer
+# calls, so the serve shape and the wasm cannot drift apart unnoticed. A workspace member already
+# in the lock file; off `wasm32` its `#[wasm_bindgen]` functions are plain Rust. Dev-only: the
+# served binary links none of it.
+capsule-wasm = { path = "../capsule-wasm" }
+
 # `test-util` carries `kynos::test::TestClient`, which drives a built `Service` in-process —
 # no socket, no port, no runtime flavour — and the two conformance assertions the suite is
 # built around. `server` is on top of it for exactly one test: `tests/sdk_client.rs` binds the

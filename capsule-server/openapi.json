@@ -20433,7 +20433,7 @@
     "/s/{opaque_id}/wrapped-secret": {
       "get": {
         "summary": "The passphrase-wrapped scope material, when there is one.",
-        "description": "A link with no passphrase answers `404` rather than `204` or an empty body: whether a link is\npassphrase-protected is already disclosed by the metadata record, and a *second* way to ask\nthe same question with a different shape is a second thing to keep consistent.",
+        "description": "The octets the issuer registered as `wrapped_secret`, byte for byte. A viewer fetches this only\nfor a passphrase-protected link; a link with no passphrase carries its scope in the sealed\nmetadata blob instead.\n\nA link with no passphrase answers `404` rather than `204` or an empty body: whether a link is\npassphrase-protected is already disclosed by the metadata record, and a *second* way to ask\nthe same question with a different shape is a second thing to keep consistent.",
         "operationId": "share_wrapped_secret",
         "parameters": [
           {
@@ -23432,7 +23432,7 @@
           },
           "metadata_hash": {
             "type": "string",
-            "description": "The metadata blob a viewer starts from. Must appear in `serves`."
+            "description": "The metadata blob a viewer starts from. Must appear in `serves`.\n\nThe blob is the issuer's sealed share metadata record (`share-metadata/v1`, built by\n`capsule_core::sharing::publish_share`), opaque to this server."
           },
           "serves": {
             "items": {
@@ -23446,7 +23446,7 @@
               "string",
               "null"
             ],
-            "description": "The passphrase-wrapped scope material, base64, when the link is passphrase-protected.\n\nOpaque to this server. The passphrase never crosses the wire — unwrap is client-side."
+            "description": "The passphrase-wrapped scope material, base64, when the link is passphrase-protected.\n\nOpaque to this server. The passphrase never crosses the wire — unwrap is client-side.\nAbsent for a link with no passphrase, whose scope travels inside the sealed metadata blob."
           },
           "expires_at": {
             "type": [

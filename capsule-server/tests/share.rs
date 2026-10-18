@@ -114,6 +114,189 @@ async fn a_live_link_serves_its_metadata_and_its_blobs_without_a_credential() {
     assert_eq!(bytes.bytes().as_ref(), payload(b'o', 512).as_slice());
 }
 
+/// Lowercase hex, the encoding the browser surface takes its URL components in.
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes.iter().fold(String::new(), |mut out, b| {
+        let _ = write!(out, "{b:02x}");
+        out
+    })
+}
+
+/// #614, end to end: a link built by the issuer's own `publish_share`, registered through
+/// `POST /v1/shares`, served by the three public routes, and opened through the very
+/// `capsule-wasm` entry points the browser viewer calls — the metadata record, then the scope
+/// (from the record for a link-only link, from `wrapped-secret` for a passphrase link), then every
+/// covered asset's ciphertext. Before #614 the viewer read a shape no server produced, so this
+/// sequence could not complete for any link.
+#[tokio::test]
+async fn a_published_link_opens_through_the_browser_surface_from_what_the_server_serves() {
+    use capsule_core::crypto::encryption::{
+        NONCE_PREFIX_LEN, encrypt_asset_vec_with_prefix, seal_file_key,
+    };
+    use capsule_core::crypto::hash::hash_bytes;
+    use capsule_core::crypto::keys::Amk;
+    use capsule_core::crypto::primitives::Argon2Params;
+    use capsule_core::crypto::provenance::{KeyMode, WrappedFileKey};
+    use capsule_core::sharing::{
+        LINK_SECRET_LEN, ScopeMaterial, SharedAsset, encapsulate_scope, generate_opaque_id,
+        publish_share,
+    };
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let fast = Argon2Params {
+        mem_kib: 64,
+        t_cost: 1,
+        p_cost: 1,
+    };
+    let plaintext = payload(b'p', 5000);
+
+    // An album holding a derived asset and an adopted drop, shared without a passphrase; and a
+    // single asset shared behind one. Between them: both scope kinds, both key modes, and both
+    // places a scope can travel.
+    let amk_bytes = [0x3C; 32];
+    let amk = Amk::from_bytes(amk_bytes);
+    let derived_id = uuid::Uuid::now_v7();
+    let derived_prefix = [0x0D; NONCE_PREFIX_LEN];
+    let derived_key = amk.derive_file_key(&derived_id, &derived_prefix);
+    let dropped_id = uuid::Uuid::now_v7();
+    let dropped_prefix = [0x0F; NONCE_PREFIX_LEN];
+    let guest_key = [0x6B; 32];
+    let single_id = uuid::Uuid::now_v7();
+    let single_prefix = [0x07; NONCE_PREFIX_LEN];
+    let single_key = [0x42; 32];
+
+    let cases = [
+        (
+            ScopeMaterial::Album {
+                album_id: uuid::Uuid::now_v7(),
+                amks: std::collections::BTreeMap::from([(3, amk_bytes)]),
+            },
+            None,
+            vec![
+                (derived_id, derived_prefix, derived_key, 3, None),
+                (
+                    dropped_id,
+                    dropped_prefix,
+                    guest_key,
+                    3,
+                    Some(seal_file_key(&amk, &dropped_id, &guest_key)),
+                ),
+            ],
+        ),
+        (
+            ScopeMaterial::Asset {
+                file_id: single_id,
+                file_key: single_key,
+            },
+            Some("correct horse battery staple"),
+            vec![(single_id, single_prefix, single_key, 0, None)],
+        ),
+    ];
+
+    for (material, passphrase, assets) in cases {
+        let mut shared = Vec::new();
+        for (asset_id, nonce_prefix, key, amk_version, wrapped_file_key) in assets {
+            let (_, ciphertext) = encrypt_asset_vec_with_prefix(&key, nonce_prefix, &plaintext);
+            store(&fixture, &ciphertext).await;
+            shared.push(SharedAsset {
+                asset_id,
+                content_hash: hash_bytes(&ciphertext),
+                content_type: "image/png".to_owned(),
+                size: plaintext.len() as u64,
+                amk_version,
+                nonce_prefix,
+                key_mode: if wrapped_file_key.is_some() {
+                    KeyMode::Wrapped
+                } else {
+                    KeyMode::Derived
+                },
+                wrapped_file_key: wrapped_file_key.map(WrappedFileKey),
+            });
+        }
+
+        // The issuer's side: encapsulate, publish, upload the record, register the link.
+        let opaque_id = generate_opaque_id();
+        let fragment = capsule_core::crypto::rng::random_array::<LINK_SECRET_LEN>();
+        let wrapped = encapsulate_scope(&material, &fragment, &opaque_id, passphrase, fast)
+            .expect("encapsulate");
+        let publication =
+            publish_share(&wrapped, &fragment, &opaque_id, None, shared.clone()).expect("publish");
+        let uploaded = store(&fixture, &publication.metadata_blob).await;
+        assert_eq!(uploaded.as_str(), publication.metadata_hash.to_hex());
+        let id = hex(&opaque_id);
+        let mut body = json!({
+            "opaque_id": id,
+            "metadata_hash": publication.metadata_hash.to_hex(),
+            "serves": publication.serves.iter().map(capsule_core::crypto::hash::Hash32::to_hex).collect::<Vec<_>>(),
+        });
+        if let Some(secret) = &publication.wrapped_secret {
+            body["wrapped_secret"] = json!(BASE64.encode(secret));
+        }
+        issue(&fixture, &bearer, &body, StatusCode::CREATED).await;
+
+        // The viewer's side, with nothing but the URL.
+        let served: Value = fetch(&fixture, &format!("/s/{id}"), StatusCode::OK)
+            .await
+            .json();
+        assert_eq!(served["passphrase_protected"], passphrase.is_some());
+        let metadata_hash = served["metadata_hash"].as_str().expect("a hash");
+        let record = fetch(
+            &fixture,
+            &format!("/s/{id}/blob/{metadata_hash}"),
+            StatusCode::OK,
+        )
+        .await;
+        let view = capsule_wasm::open_share_metadata_wasm(record.bytes(), &id, &hex(&fragment))
+            .expect("the served record opens with the URL alone");
+
+        let scope = if passphrase.is_some() {
+            assert_eq!(
+                view.link_scope_b64().expect("projects"),
+                None,
+                "a passphrase link's scope must not be in the fragment-sealed record"
+            );
+            let secret = fetch(&fixture, &format!("/s/{id}/wrapped-secret"), StatusCode::OK).await;
+            BASE64.encode(secret.bytes())
+        } else {
+            fetch(
+                &fixture,
+                &format!("/s/{id}/wrapped-secret"),
+                StatusCode::NOT_FOUND,
+            )
+            .await;
+            view.link_scope_b64()
+                .expect("projects")
+                .expect("a link-only record carries its scope")
+        };
+        let scope =
+            capsule_wasm::open_share(&scope, &id, &hex(&fragment), passphrase.map(str::to_owned))
+                .expect("the scope opens");
+
+        let listed = view.assets();
+        assert_eq!(listed.len(), shared.len());
+        for asset in listed {
+            let ciphertext = fetch(
+                &fixture,
+                &format!("/s/{id}/blob/{}", asset.content_hash()),
+                StatusCode::OK,
+            )
+            .await;
+            let opened = scope
+                .decrypt_blob(
+                    &asset.asset_id(),
+                    asset.amk_version(),
+                    &asset.nonce_prefix_hex(),
+                    ciphertext.bytes(),
+                    asset.wrapped_file_key_hex(),
+                )
+                .expect("every covered asset decrypts");
+            assert_eq!(opened, plaintext, "{} asset", asset.key_mode());
+        }
+    }
+}
+
 #[tokio::test]
 async fn a_link_cannot_be_walked_into_a_blob_it_does_not_name() {
     // The enforceable half of the privacy strip. The server cannot redact ciphertext, so what

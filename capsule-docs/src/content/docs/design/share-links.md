@@ -51,13 +51,29 @@ trait ShareLinkIssuer {
     fn revoke(link_id: ShareLinkId) -> Result<(), Error>;
 }
 
-// planned in capsule-server::share
-//   GET  /s/{opaque_id}                 → metadata blob + LQIP (mandatory server-side strip — see Security Contract)
-//   GET  /s/{opaque_id}/blob/{hash}     → ciphertext blob; client decrypts using link-derived key
-//   GET  /s/{opaque_id}/wrapped-secret  → the passphrase-WRAPPED link material, when the link is
-//                                          passphrase-protected; unwrap is client-side via the password-based
-//                                          KDF. The passphrase itself is NEVER transmitted (Security Contract).
+// served by capsule-server::routes::share
+//   GET  /s/{opaque_id}                 → { metadata_hash, passphrase_protected } — nothing else about the link
+//   GET  /s/{opaque_id}/blob/{hash}     → octets of a blob the link names: the sealed metadata record, or ciphertext
+//   GET  /s/{opaque_id}/wrapped-secret  → octets of the passphrase-WRAPPED scope, when the link is
+//                                          passphrase-protected (404 otherwise); unwrap is client-side via the
+//                                          password-based KDF. The passphrase itself is NEVER transmitted.
 ```
+
+### The share metadata record
+
+The blob at a link's `metadata_hash` is a **share metadata record** (`share-metadata/v1`, `capsule-core::sharing::ShareMetadata`): canonical CBOR, sealed with `seal_blob` under `HKDF(ikm=link_secret, salt=opaque_id, info="share-metadata/v1")`. The server cannot open it. It holds:
+
+- `version`: always `share-metadata/v1`. A reader refuses any other value.
+- `expires_at`: the issuer's expiry, shown to the viewer only. The server enforces expiry on its own record and never discloses it.
+- `link_scope`: the link-only `WrappedScope`, present **iff** the link has no passphrase. A link with no passphrase has no wrapped secret on the server, so its scope has to travel here. A passphrase link's scope never does: in a record that the fragment alone opens, it would let the fragment open what the passphrase is meant to guard.
+- `assets`: one entry per covered asset, holding only key-free parameters. They are `asset_id`, `content_hash` (the ciphertext's content address), `content_type`, plaintext `size`, `amk_version`, `nonce_prefix`, `key_mode` and `wrapped_file_key`, under the same wire rules as the signed manifest (`key_mode` is absent when `derived`, and `wrapped_file_key` is present iff `wrapped`). The record carries no capture metadata, so the strip has nothing to remove from it today. Any field that adds capture metadata crosses the boundary and must be added already stripped.
+
+The issuing client builds the record with `publish_share`, which also yields the request's `metadata_hash` and `serves` (the record first, then each asset's ciphertext) and, for a passphrase link, the `wrapped_secret` (the canonical CBOR of the passphrase `WrappedScope`). The viewer's sequence follows from that:
+
+1. `GET /s/{opaque_id}` gives `metadata_hash` and `passphrase_protected`.
+2. `GET /s/{opaque_id}/blob/{hash}`, with `hash` = `metadata_hash`, gives the record, opened in the browser with the fragment (`capsule-wasm`'s `openShareMetadata`). A record that does not open is the same "unavailable" answer as a missing link.
+3. Only if `passphrase_protected`: `GET /s/{opaque_id}/wrapped-secret`, with the passphrase prompt. Otherwise the scope is the record's `link_scope`.
+4. `GET /s/{opaque_id}/blob/{hash}`, with `hash` = each asset's `content_hash`, decrypted under the opened scope.
 
 Concrete error variants are an implementation detail; the rate-limit, opaque-id entropy, privacy-strip, and revocation policies are fixed by the [Security Contract](#security-contract) above.
 

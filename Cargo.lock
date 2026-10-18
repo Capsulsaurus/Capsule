@@ -1132,6 +1132,7 @@ dependencies = [
  "capsule-i18n",
  "capsule-sdk",
  "capsule-server-migration",
+ "capsule-wasm",
  "clap",
  "color-eyre",
  "http-body-util",

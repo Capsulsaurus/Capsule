@@ -69,6 +69,9 @@ pub struct IssueShareRequest {
     /// fragment secret the id is paired with; the server checks its shape and stores it.
     pub opaque_id: String,
     /// The metadata blob a viewer starts from. Must appear in `serves`.
+    ///
+    /// The blob is the issuer's sealed share metadata record (`share-metadata/v1`, built by
+    /// `capsule_core::sharing::publish_share`), opaque to this server.
     pub metadata_hash: String,
     /// Every blob this link may serve, and nothing else.
     ///
@@ -79,6 +82,7 @@ pub struct IssueShareRequest {
     /// The passphrase-wrapped scope material, base64, when the link is passphrase-protected.
     ///
     /// Opaque to this server. The passphrase never crosses the wire — unwrap is client-side.
+    /// Absent for a link with no passphrase, whose scope travels inside the sealed metadata blob.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wrapped_secret: Option<String>,
     /// When the link stops being live, RFC 3339. Absent means no expiry.
@@ -348,6 +352,10 @@ pub async fn share_metadata(
 }
 
 /// The passphrase-wrapped scope material, when there is one.
+///
+/// The octets the issuer registered as `wrapped_secret`, byte for byte. A viewer fetches this only
+/// for a passphrase-protected link; a link with no passphrase carries its scope in the sealed
+/// metadata blob instead.
 ///
 /// A link with no passphrase answers `404` rather than `204` or an empty body: whether a link is
 /// passphrase-protected is already disclosed by the metadata record, and a *second* way to ask
