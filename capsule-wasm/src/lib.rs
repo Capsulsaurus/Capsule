@@ -18,6 +18,10 @@
 //!    and STREAM-decrypt a served ciphertext blob to plaintext, authenticated (a tampered blob is
 //!    rejected by the AEAD tag).
 //!
+//! The viewer starts from [`open_share_metadata_wasm`] (`openShareMetadata`), which opens the
+//! sealed record at the link's `metadata_hash`: the covered assets' key-free parameters and, for
+//! a link with no passphrase, the scope [`open_share`] takes.
+//!
 //! The crate also carries the **inbound** guest surface (slice `S-D3`; SSoT: [Web Upload]) — the
 //! browser half of a *guest drop*. A guest opening `https://server.tld/u/{opaque-id}#{drop_pubkey}`
 //! seals each selected asset entirely client-side and can never read anything back:
@@ -66,7 +70,8 @@ use capsule_core::crypto::pwkdf;
 use capsule_core::drop::{SealedDrop, seal_drop, seal_drop_derand};
 use capsule_core::lqip::{RgbaImage, render as lqip_render};
 use capsule_core::sharing::{
-    LINK_SECRET_LEN, OPAQUE_ID_LEN, ScopeMaterial, SharingError, WrappedScope, open_scope,
+    LINK_SECRET_LEN, OPAQUE_ID_LEN, ScopeMaterial, ShareMetadata, SharedAsset, SharingError,
+    WrappedScope, open_scope, open_share_metadata,
 };
 use uuid::Uuid;
 use wasm_bindgen::prelude::*;
@@ -98,7 +103,9 @@ fn sharing_code(e: &SharingError) -> &'static str {
         SharingError::PassphraseRequired => err::PASSPHRASE_REQUIRED,
         SharingError::WrongPassphrase => err::WRONG_SECRET,
         SharingError::ScopeUnavailable => err::SCOPE_UNAVAILABLE,
-        SharingError::NotFound | SharingError::Crypto(_) => err::MALFORMED,
+        SharingError::NotFound | SharingError::Crypto(_) | SharingError::Malformed(_) => {
+            err::MALFORMED
+        }
     }
 }
 
@@ -119,7 +126,9 @@ fn open_code(e: &SharingError) -> &'static str {
     match e {
         SharingError::PassphraseRequired => err::PASSPHRASE_REQUIRED,
         SharingError::WrongPassphrase | SharingError::Crypto(_) => err::WRONG_SECRET,
-        SharingError::ScopeUnavailable | SharingError::NotFound => err::MALFORMED,
+        SharingError::ScopeUnavailable | SharingError::NotFound | SharingError::Malformed(_) => {
+            err::MALFORMED
+        }
     }
 }
 
@@ -244,6 +253,145 @@ impl ShareScope {
             .map_err(|e| JsError::new(recovery_code(&e)))?;
         decrypt_asset_vec(&file_key, &nonce_prefix, ciphertext)
             .map_err(|_| JsError::new(err::TAMPERED))
+    }
+}
+
+// ─────────────────────────── The share metadata record (#614) ───────────────────────────────
+
+/// The opened share metadata record — what the viewer starts from, recovered client-side from the
+/// blob at the link's `metadata_hash` with the URL's opaque id and fragment.
+#[wasm_bindgen]
+pub struct ShareMetadataView {
+    record: ShareMetadata,
+}
+
+/// One covered asset of an opened [`ShareMetadataView`], in the shapes
+/// [`ShareScope::decrypt_blob`] and `/s/{opaque-id}/blob/{hash}` take.
+#[wasm_bindgen]
+pub struct SharedAssetView {
+    asset: SharedAsset,
+}
+
+/// Open the sealed share metadata record entirely in the browser.
+///
+/// - `blob` — the octets of `/s/{opaque-id}/blob/{metadata_hash}`.
+/// - `opaque_id_hex` / `fragment_hex` — the URL's path id and `#{secret}`, as for [`open_share`].
+///
+/// Throws (as `Error.message`): `wrong_secret` (the blob does not open under this URL — a wrong
+/// fragment, a wrong opaque id, or a tampered blob, indistinguishable) or `malformed` (bad hex,
+/// or a record this reader does not understand).
+#[wasm_bindgen(js_name = openShareMetadata)]
+pub fn open_share_metadata_wasm(
+    blob: &[u8],
+    opaque_id_hex: &str,
+    fragment_hex: &str,
+) -> Result<ShareMetadataView, JsError> {
+    let opaque_id: [u8; OPAQUE_ID_LEN] = hex_array(opaque_id_hex)?;
+    let fragment: [u8; LINK_SECRET_LEN] = hex_array(fragment_hex)?;
+    let record = open_share_metadata(blob, &opaque_id, &fragment)
+        .map_err(|e| JsError::new(open_code(&e)))?;
+    Ok(ShareMetadataView { record })
+}
+
+#[wasm_bindgen]
+impl ShareMetadataView {
+    /// The issuer's RFC 3339 expiry, for display; `undefined` when the link does not expire.
+    #[wasm_bindgen(js_name = expiresAt)]
+    #[must_use]
+    pub fn expires_at(&self) -> Option<String> {
+        self.record.expires_at.clone()
+    }
+
+    /// The link-only scope, base64 canonical CBOR — exactly what [`open_share`] takes. Present iff
+    /// the link has no passphrase; a passphrase link's scope is fetched from
+    /// `/s/{opaque-id}/wrapped-secret` instead.
+    #[wasm_bindgen(js_name = linkScopeB64)]
+    pub fn link_scope_b64(&self) -> Result<Option<String>, JsError> {
+        self.record
+            .link_scope
+            .as_ref()
+            .map(|scope| {
+                capsule_core::cbor::to_canonical_vec(scope)
+                    .map(|cbor| BASE64.encode(cbor))
+                    .map_err(|_| JsError::new(err::MALFORMED))
+            })
+            .transpose()
+    }
+
+    /// Every covered asset, in the issuer's order.
+    #[must_use]
+    pub fn assets(&self) -> Vec<SharedAssetView> {
+        self.record
+            .assets
+            .iter()
+            .cloned()
+            .map(|asset| SharedAssetView { asset })
+            .collect()
+    }
+}
+
+#[wasm_bindgen]
+impl SharedAssetView {
+    /// The asset's file UUID — `decryptBlob`'s `file_id`.
+    #[wasm_bindgen(getter, js_name = assetId)]
+    #[must_use]
+    pub fn asset_id(&self) -> String {
+        self.asset.asset_id.to_string()
+    }
+
+    /// The ciphertext's content address, lowercase hex — the `{hash}` to fetch.
+    #[wasm_bindgen(getter, js_name = contentHash)]
+    #[must_use]
+    pub fn content_hash(&self) -> String {
+        self.asset.content_hash.to_hex()
+    }
+
+    /// The plaintext media type.
+    #[wasm_bindgen(getter, js_name = contentType)]
+    #[must_use]
+    pub fn content_type(&self) -> String {
+        self.asset.content_type.clone()
+    }
+
+    /// The plaintext byte length, as a JS number.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn size(&self) -> f64 {
+        self.asset.size as f64
+    }
+
+    /// The AMK epoch — `decryptBlob`'s `amk_version`.
+    #[wasm_bindgen(getter, js_name = amkVersion)]
+    #[must_use]
+    pub fn amk_version(&self) -> u32 {
+        self.asset.amk_version
+    }
+
+    /// The STREAM nonce prefix, lowercase hex — `decryptBlob`'s `nonce_prefix_hex`.
+    #[wasm_bindgen(getter, js_name = noncePrefixHex)]
+    #[must_use]
+    pub fn nonce_prefix_hex(&self) -> String {
+        hex::encode(self.asset.nonce_prefix)
+    }
+
+    /// `"derived"` or `"wrapped"`.
+    #[wasm_bindgen(getter, js_name = keyMode)]
+    #[must_use]
+    pub fn key_mode(&self) -> String {
+        match self.asset.key_mode {
+            KeyMode::Derived => "derived".to_string(),
+            KeyMode::Wrapped => "wrapped".to_string(),
+        }
+    }
+
+    /// The AMK-sealed file key, lowercase hex; present iff the key mode is `wrapped`.
+    #[wasm_bindgen(getter, js_name = wrappedFileKeyHex)]
+    #[must_use]
+    pub fn wrapped_file_key_hex(&self) -> Option<String> {
+        self.asset
+            .wrapped_file_key
+            .as_ref()
+            .map(|key| hex::encode(&key.0))
     }
 }
 
@@ -524,13 +672,14 @@ mod tests {
     use super::*;
 
     /// The full variant set, written out so the exhaustive match below is meaningful.
-    fn every_sharing_error() -> [SharingError; 5] {
+    fn every_sharing_error() -> [SharingError; 6] {
         [
             SharingError::ScopeUnavailable,
             SharingError::NotFound,
             SharingError::PassphraseRequired,
             SharingError::WrongPassphrase,
             SharingError::Crypto("kem"),
+            SharingError::Malformed("record"),
         ]
     }
 
@@ -550,6 +699,10 @@ mod tests {
         );
         assert_eq!(sharing_code(&SharingError::NotFound), err::MALFORMED);
         assert_eq!(sharing_code(&SharingError::Crypto("kem")), err::MALFORMED);
+        assert_eq!(
+            sharing_code(&SharingError::Malformed("record")),
+            err::MALFORMED
+        );
     }
 
     /// The oracle property: on the open path a wrong passphrase and a wrong fragment secret
@@ -568,6 +721,12 @@ mod tests {
         );
         assert_eq!(open_code(&SharingError::ScopeUnavailable), err::MALFORMED);
         assert_eq!(open_code(&SharingError::NotFound), err::MALFORMED);
+        // A record that opened but is not understood is not a wrong secret: telling the guest
+        // their link is wrong would send them to re-check a link that is fine.
+        assert_eq!(
+            open_code(&SharingError::Malformed("record")),
+            err::MALFORMED
+        );
     }
 
     /// Every code the boundary can emit. The viewer maps exactly this set to catalog keys, so
@@ -594,7 +753,8 @@ mod tests {
                 | SharingError::NotFound
                 | SharingError::PassphraseRequired
                 | SharingError::WrongPassphrase
-                | SharingError::Crypto(_) => {}
+                | SharingError::Crypto(_)
+                | SharingError::Malformed(_) => {}
             }
             assert!(
                 DECLARED_CODES.contains(&sharing_code(e)),
@@ -741,6 +901,77 @@ mod tests {
                 "and it is black — identical to the native surface"
             );
         }
+    }
+
+    /// #614: the metadata view hands the viewer exactly the shapes `decryptBlob` and the serve
+    /// path take, and its link scope is the base64 `openShare` opens.
+    #[test]
+    fn the_metadata_view_projects_the_record_in_the_shapes_the_viewer_takes() {
+        use capsule_core::crypto::hash::Hash32;
+        use capsule_core::sharing::{encapsulate_scope, publish_share};
+
+        let fragment = [0xA1u8; LINK_SECRET_LEN];
+        let opaque_id = [0x5Eu8; OPAQUE_ID_LEN];
+        let file_id = Uuid::from_u128(7);
+        let material = ScopeMaterial::Asset {
+            file_id,
+            file_key: [0x42; 32],
+        };
+        let fast = Argon2Params {
+            mem_kib: 64,
+            t_cost: 1,
+            p_cost: 1,
+        };
+        let wrapped = encapsulate_scope(&material, &fragment, &opaque_id, None, fast).unwrap();
+        let wrapped_key = WrappedFileKey(vec![0xCD; WRAPPED_FILE_KEY_LEN]);
+        let asset = SharedAsset {
+            asset_id: file_id,
+            content_hash: Hash32([0xEE; 32]),
+            content_type: "image/png".to_owned(),
+            size: 5008,
+            amk_version: 3,
+            nonce_prefix: [0x07; NONCE_PREFIX_LEN],
+            key_mode: KeyMode::Wrapped,
+            wrapped_file_key: Some(wrapped_key.clone()),
+        };
+        let publication = publish_share(
+            &wrapped,
+            &fragment,
+            &opaque_id,
+            Some("2030-01-01T00:00:00Z".to_owned()),
+            vec![asset],
+        )
+        .unwrap();
+
+        let view = open_share_metadata_wasm(
+            &publication.metadata_blob,
+            &hex::encode(opaque_id),
+            &hex::encode(fragment),
+        )
+        .expect("the record opens under its own URL");
+        assert_eq!(view.expires_at().as_deref(), Some("2030-01-01T00:00:00Z"));
+
+        let scope = view.link_scope_b64().unwrap().expect("a link-only scope");
+        let opened = open_share(
+            &scope,
+            &hex::encode(opaque_id),
+            &hex::encode(fragment),
+            None,
+        )
+        .expect("openShare takes the projected scope");
+        assert_eq!(opened.scope_kind(), "asset");
+
+        let assets = view.assets();
+        assert_eq!(assets.len(), 1);
+        let a = &assets[0];
+        assert_eq!(a.asset_id(), file_id.to_string());
+        assert_eq!(a.content_hash(), "ee".repeat(32));
+        assert_eq!(a.content_type(), "image/png");
+        assert_eq!(a.size(), 5008.0);
+        assert_eq!(a.amk_version(), 3);
+        assert_eq!(a.nonce_prefix_hex(), "07".repeat(NONCE_PREFIX_LEN));
+        assert_eq!(a.key_mode(), "wrapped");
+        assert_eq!(a.wrapped_file_key_hex(), Some(hex::encode(&wrapped_key.0)));
     }
 
     #[test]
