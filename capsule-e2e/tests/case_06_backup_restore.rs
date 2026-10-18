@@ -11,9 +11,10 @@
 //!   only memory-hard cost this crate pays: the tier is the thing under test here, so it is
 //!   spelled out rather than made cheap.
 //! - The new device opens *as A's account* with `Workspace::create_from_master`: the recovered
-//!   master key, the server's account id, and A's sealed identity key. The sealed identity has
-//!   no server route yet, so the case hands it across in memory — the one leg of the bootstrap
-//!   not exercised over the wire.
+//!   master key, the server's account id, and A's sealed identity key. A stores the sealed
+//!   identity beside the escrow (`PUT /v1/auth/escrow/identity`, #544) and the new session
+//!   fetches it back, so every leg of the bootstrap crosses the wire: nothing but the recovery
+//!   secret and the account's credentials is carried from A to the new device.
 //! - The new device joins the account's device directory (#550): its own version-1 directory is
 //!   refused as stale against the one A already published, so it fetches A's through the SDK's
 //!   `DirectoryClient`, verifies it under the identity key it opened, appends itself with
@@ -55,27 +56,41 @@ async fn e2e_case_6_a_new_device_bootstraps_from_the_escrow_and_restores_the_bac
         .workspace
         .escrow_master_key(RECOVERY_SECRET, DeviceTier::LowRam)
         .expect("the master key wraps under the recovery secret");
-    RecoveryClient::new(a.session.clone(), server.base_url())
-        .expect("the API root parses")
+    let recovery_a =
+        RecoveryClient::new(a.session.clone(), server.base_url()).expect("the API root parses");
+    recovery_a
         .store_escrow(&escrow)
         .await
         .expect("the escrow stores");
+    let sealed = a.workspace.sealed_identity();
+    let stored = recovery_a
+        .store_sealed_identity(&sealed)
+        .await
+        .expect("the sealed identity stores beside the escrow");
+    assert!(!stored.replaced, "A's first sealed identity");
 
     // The fresh device: a new session on the account, nothing else.
     let session_b = a.login_again(&server).await;
-    let fetched = RecoveryClient::new(session_b.clone(), server.base_url())
-        .expect("the API root parses")
-        .fetch_escrow()
-        .await
-        .expect("the escrow fetches");
+    let recovery_b =
+        RecoveryClient::new(session_b.clone(), server.base_url()).expect("the API root parses");
+    let fetched = recovery_b.fetch_escrow().await.expect("the escrow fetches");
     let wire = fetched.blob().clone();
     assert_eq!(wire, escrow, "the escrow is ciphertext served verbatim");
+    let sealed_wire = recovery_b
+        .fetch_sealed_identity()
+        .await
+        .expect("the sealed identity fetches");
+    assert_eq!(
+        sealed_wire, sealed,
+        "the sealed identity is ciphertext served verbatim"
+    );
 
     let master = capsule_core::backup::recover_master_key(&wire, RECOVERY_SECRET)
         .expect("the recovery secret opens the escrow");
 
     // The new device opens as A's account: the recovered master key, the server's id for the
-    // account, and A's identity key sealed under that master key.
+    // account, and A's identity key sealed under that master key — every input but the recovery
+    // secret came over the wire.
     let root_b = tempfile::tempdir().expect("a fresh library root");
     let mut b = Workspace::create_from_master(
         root_b.path(),
@@ -83,7 +98,7 @@ async fn e2e_case_6_a_new_device_bootstraps_from_the_escrow_and_restores_the_bac
         FAST_KDF,
         MasterKey::from_bytes(master),
         a.user_id,
-        &a.workspace.sealed_identity(),
+        &sealed_wire,
     )
     .expect("the recovered master key opens A's sealed identity");
     assert_eq!(b.user_id(), a.user_id, "B is A's account");
