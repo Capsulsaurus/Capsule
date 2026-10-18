@@ -90,7 +90,7 @@ pub fn body_size() -> BodySize {
 /// | `verify_storage` | ≈ 216 KiB: 100 assets × 32 quoted 64-hex hashes | `verify::MAX_ASSETS_PER_REQUEST`, `MAX_BLOBS_PER_ASSET` |
 /// | `relay_enrollment_payload` | 64 KiB payload string plus a direction | `enrollment::MAX_RELAY_BYTES` |
 /// | `begin_album_upgrade` | 64 KiB raw CBOR intent | `routes::upgrade::MAX_INTENT_BYTES` |
-/// | `store_escrow` | 64 KiB raw blob | `escrow::MAX_ESCROW_BYTES` |
+/// | `store_escrow`, `store_sealed_identity` | 64 KiB raw blob | `escrow::MAX_ESCROW_BYTES` |
 /// | everything else | a few KiB at most: credentials, a code, a hybrid key or signature, a manifest envelope | the request type's fixed fields |
 ///
 /// 1 MiB is above the largest of them with room for the JSON a client wraps it in, so each
