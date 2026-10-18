@@ -30989,7 +30989,7 @@
               "one": {
                 "stringUnit": {
                   "state": "translated",
-                  "value": "Run `capsule library migrate` to admit the unsigned sidecar."
+                  "value": "Run `capsule library migrate` to admit the %lld unsigned sidecar."
                 }
               },
               "other": {

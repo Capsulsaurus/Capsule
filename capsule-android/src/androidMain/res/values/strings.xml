@@ -2301,7 +2301,7 @@
         <item quantity="other">%d Selected</item>
     </plurals>
     <plurals name="cli_library_info_migrate_hint">
-        <item quantity="one">Run `capsule library migrate` to admit the unsigned sidecar.</item>
+        <item quantity="one">Run `capsule library migrate` to admit the %d unsigned sidecar.</item>
         <item quantity="other">Run `capsule library migrate` to admit the %d unsigned sidecars.</item>
     </plurals>
     <plurals name="cli_library_migrate_unmigrated_notice">

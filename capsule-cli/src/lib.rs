@@ -1232,14 +1232,16 @@ mod library_info_tests {
         assert_eq!(hint, None);
     }
 
-    /// One unsigned sidecar takes the singular hint; the pointer names the verb verbatim.
+    /// One unsigned sidecar takes the singular hint, still carrying the count (every arm of
+    /// a `#` plural must, or a locale whose `one` covers other numbers drops it); the
+    /// pointer names the verb verbatim.
     #[test]
     fn one_unmigrated_sidecar_points_at_the_migrate_verb() {
         let (row, hint) = library_info_unmigrated(&en(), 1);
         assert_eq!(row, "Unmigrated sidecars: 1");
         assert_eq!(
             hint.as_deref(),
-            Some("Run `capsule library migrate` to admit the unsigned sidecar.")
+            Some("Run `capsule library migrate` to admit the 1 unsigned sidecar.")
         );
     }
 
