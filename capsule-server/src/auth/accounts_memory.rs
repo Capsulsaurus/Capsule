@@ -123,18 +123,18 @@ impl Account {
                 .is_some_and(|at| now.duration_since(at) < window)
     }
 
-    /// The profile view of this account, or `None` for an account with no address.
+    /// The profile view of this account.
     ///
-    /// [`ProfileRecord::email`] is the address an account signs in with and is not optional on
-    /// the wire, so a federated account whose provider asserted no verified address has no
-    /// profile to show — the same answer the Postgres adapter gives for the same row.
-    fn profile(&self) -> Option<ProfileRecord> {
-        Some(ProfileRecord {
+    /// Every account has one. A federated account whose provider asserted no verified address
+    /// answers with [`ProfileRecord::email`] `None` — the same answer the Postgres adapter gives
+    /// for the same row.
+    fn profile(&self) -> ProfileRecord {
+        ProfileRecord {
             user_id: self.user_id.clone(),
-            email: self.email.clone()?,
+            email: self.email.clone(),
             display_name: self.display_name.clone(),
             created_at: self.created_at,
-        })
+        }
     }
 }
 
@@ -499,7 +499,7 @@ impl FederatedAccounts for InMemoryAccounts {
 
 impl AccountProfiles for InMemoryAccounts {
     fn read<'a>(&'a self, user: &'a UserId) -> DirectoryFuture<'a, Option<ProfileRecord>> {
-        Box::pin(async move { Ok(self.by_id(user).as_ref().and_then(Account::profile)) })
+        Box::pin(async move { Ok(self.by_id(user).as_ref().map(Account::profile)) })
     }
 
     fn update<'a>(
@@ -514,15 +514,10 @@ impl AccountProfiles for InMemoryAccounts {
             let Some(held) = accounts.accounts.get_mut(user) else {
                 return Ok(None);
             };
-            // An account with no profile to show takes no edit either, so `update` and `read`
-            // never disagree about whether the profile exists.
-            if held.email.is_none() {
-                return Ok(None);
-            }
             if let Some(display_name) = update.display_name.clone() {
                 held.display_name = display_name;
             }
-            Ok(held.profile())
+            Ok(Some(held.profile()))
         })
     }
 }
@@ -930,7 +925,7 @@ mod tests {
             .await
             .expect("it answers")
             .expect("the account exists");
-        assert_eq!(profile.email, EMAIL);
+        assert_eq!(profile.email.as_deref(), Some(EMAIL));
         assert_eq!(profile.display_name, None);
         assert_eq!(profile.created_at, Timestamp::UNIX_EPOCH);
 

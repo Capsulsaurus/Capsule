@@ -50,9 +50,9 @@
 //! lets [`crate::auth::conformance`] assert both properties — and the null-credential invariant
 //! above — against both adapters with one suite.
 //!
-//! A federated account whose provider asserted no verified address has **no profile** to read:
-//! [`ProfileRecord::email`](crate::auth::ProfileRecord) is not optional, so both adapters answer
-//! `None` for that row, and `GET /v1/auth/profile` answers `404` for it.
+//! A federated account whose provider asserted no verified address still has a profile: both
+//! adapters answer it with [`ProfileRecord::email`](crate::auth::ProfileRecord) `None`, and
+//! `GET /v1/auth/profile` serves it with the `email` key absent (#603).
 
 use std::fmt;
 

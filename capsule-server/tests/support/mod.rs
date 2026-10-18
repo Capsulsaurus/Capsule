@@ -805,7 +805,7 @@ impl PasswordChange for InMemoryAccounts {
 fn profile_of(email: &str, held: &Account) -> ProfileRecord {
     ProfileRecord {
         user_id: held.user_id.clone(),
-        email: email.to_owned(),
+        email: Some(email.to_owned()),
         display_name: held.display_name.clone(),
         created_at: held.created_at,
     }
