@@ -34,9 +34,12 @@ use capsule_core::crypto::provenance::ProvenanceChain;
 use capsule_core::crypto::verify_asset::VerifyOutcome;
 use capsule_core::lifecycle::{LifecycleError, Workspace};
 use capsule_e2e::fixtures::synthetic_jpeg;
-use capsule_e2e::{Device, FAST_KDF, PASSPHRASE, PROTOCOL_VERSION, Server};
+use capsule_e2e::{Device, FAST_KDF, PASSPHRASE, PASSWORD, PROTOCOL_VERSION, Server};
+use capsule_sdk::auth::{AuthClient, Session};
+use capsule_sdk::client::AuthenticatedClient;
 use capsule_sdk::directory::{DirectoryClient, DirectoryError};
 use capsule_sdk::recovery::{MintedSecret, RecoveryClient, RecoveryError};
+use uuid::Uuid;
 
 const RECOVERY_SECRET: &[u8] = b"seven words the user wrote down somewhere safe";
 const BACKUP_PASSPHRASE: &[u8] = b"backup passphrase";
@@ -215,7 +218,8 @@ async fn e2e_case_6_a_new_device_bootstraps_from_the_escrow_and_restores_the_bac
 
 /// **`capsule auth recover`**, the CLI's leg of case 6 (#544): the orchestration the command
 /// runs — profile, escrow fetch, sealed-identity fetch, `recover_master_key`,
-/// `create_from_master` — over the CLI's own session store, against the real server.
+/// `create_from_master`, then joining the account's device directory (#625) — over the CLI's
+/// own session store, against the real server.
 ///
 /// The secret is a minted one, typed back as the hex the user was shown: the escrow is wrapped
 /// under its bytes, which is the reading the command must try. Every refusal is driven before
@@ -341,12 +345,148 @@ async fn e2e_case_6_the_cli_recover_command_opens_a_new_library_as_the_account()
         "A's master key"
     );
     assert_ne!(recovered.device_id(), a.workspace.device_id());
+
+    // #625: the new device joined the account's directory rather than replacing it. A had
+    // published its own; the command fetched it, appended the new device and published at
+    // stored + 1, keeping every device A listed.
+    let stored = a.directory();
+    let republished = a
+        .directory_client(&server)
+        .fetch(a.user_id, &a.workspace.user_ik_public())
+        .await
+        .expect("the account's directory fetches and verifies under A's identity key");
+    assert_eq!(
+        republished.core.directory_version,
+        stored.core.directory_version + 1,
+        "the recovery published at stored + 1"
+    );
+    for device in &stored.core.devices {
+        assert_eq!(
+            republished.device(&device.device_id),
+            Some(device),
+            "every device the account already had survives the recovery's publish"
+        );
+    }
+    assert!(
+        republished.device(&recovered.device_id()).is_some(),
+        "and the recovered device is listed"
+    );
+    assert_eq!(
+        republished.core.devices.len(),
+        stored.core.devices.len() + 1
+    );
+    assert_eq!(
+        recovered.device_directory(),
+        &republished,
+        "the recovered library adopted the directory it published"
+    );
+    let device = recovered.device_id();
     drop(recovered);
 
-    // It is a real library: it reopens under the passphrase chosen for it.
+    // It is a real library: it reopens under the passphrase chosen for it, holding the
+    // account's directory rather than the version-1 one it was created with.
     let reopened = Workspace::open(&library, PASSPHRASE, FAST_KDF)
         .expect("the recovered library reopens under its new passphrase");
     assert_eq!(reopened.user_id(), a.user_id);
+    assert_eq!(reopened.device_id(), device);
+    assert_eq!(reopened.device_directory(), &republished);
+}
+
+/// **`capsule auth recover` when the directory join fails** (#625): the account's published
+/// directory is signed under an identity key other than the one the escrowed sealed identity
+/// opens, so the fetched directory does not verify and the new device cannot join it. The
+/// library the recovery created is removed, leaving the path as it was — absent when the
+/// command made it, empty when the user did — so rerunning the command is the retry.
+#[tokio::test]
+async fn e2e_case_6_a_recovery_whose_directory_join_fails_leaves_nothing_behind() {
+    let server = Server::boot().await;
+    // Registers the account and publishes a directory under this library's identity key.
+    let account = Device::register(&server, "cli-recover-join").await;
+
+    let home = tempfile::tempdir().expect("a temp CLI home");
+    let store = SessionStore::new(home.path().join("session.json"));
+    let signed_in = account.login_again(&server).await;
+    store
+        .save(&signed_in.export().await.expect("a live session exports"))
+        .expect("the session persists");
+    let remote = RemoteConfig {
+        auth_endpoint: server.auth_base(),
+        sync_endpoint: server.base_url().to_owned(),
+        upload_endpoint: server.upload_base(),
+        albums_endpoint: server.albums_base(),
+        protocol_version: PROTOCOL_VERSION.to_owned(),
+    };
+
+    // A second, unrelated library escrows its own identity for the same account.
+    let root = tempfile::tempdir().expect("a library root");
+    let mut other =
+        Workspace::create_with_params(root.path(), PASSPHRASE, FAST_KDF).expect("a CLI library");
+    assert_ne!(other.user_ik_public(), account.workspace.user_ik_public());
+    let mut shown = String::new();
+    remote::auth_escrow(
+        &remote,
+        &store,
+        &mut other,
+        false,
+        DeviceTier::LowRam,
+        |secret| {
+            shown = secret.to_hex();
+            true
+        },
+    )
+    .await
+    .expect("`capsule auth escrow` completes");
+
+    // The command makes the root: a failed join removes it.
+    let created = home.path().join("recovered");
+    let Err(refused) =
+        remote::auth_recover(&remote, &store, &created, &shown, PASSPHRASE, FAST_KDF).await
+    else {
+        panic!("the account's directory does not verify under the escrowed identity");
+    };
+    assert!(
+        matches!(
+            refused,
+            RemoteError::Directory(DirectoryError::UntrustedSignature)
+        ),
+        "got {refused:?}"
+    );
+    assert!(
+        !created.exists(),
+        "the library the recovery created is gone"
+    );
+
+    // The user made the root: it stays, empty, as it was.
+    let made = home.path().join("made-by-the-user");
+    std::fs::create_dir(&made).expect("an empty directory");
+    let Err(refused) =
+        remote::auth_recover(&remote, &store, &made, &shown, PASSPHRASE, FAST_KDF).await
+    else {
+        panic!("the account's directory still does not verify");
+    };
+    assert!(
+        matches!(
+            refused,
+            RemoteError::Directory(DirectoryError::UntrustedSignature)
+        ),
+        "got {refused:?}"
+    );
+    assert!(made.is_dir(), "the user's directory stays");
+    assert_eq!(
+        std::fs::read_dir(&made).expect("it reads").count(),
+        0,
+        "and holds nothing the recovery wrote"
+    );
+
+    // Nothing was published: the account's directory is still the one it had.
+    assert_eq!(
+        account
+            .directory_client(&server)
+            .fetch(account.user_id, &account.workspace.user_ik_public())
+            .await
+            .expect("the account's directory still verifies under its own key"),
+        account.directory()
+    );
 }
 
 /// **`capsule auth escrow`** then **`capsule auth recover`** (#624): a library the CLI created
@@ -360,11 +500,12 @@ async fn e2e_case_6_the_cli_recover_command_opens_a_new_library_as_the_account()
 #[tokio::test]
 async fn e2e_case_6_the_cli_escrow_command_sets_up_what_recover_restores() {
     let server = Server::boot().await;
-    let account = Device::register(&server, "cli-escrow").await;
+    // An account no library has published a directory for: the CLI library below is its only
+    // one, so the recovery publishes the account's first directory.
+    let (signed_in, account_id) = register_without_a_directory(&server).await;
 
     let home = tempfile::tempdir().expect("a temp CLI home");
     let store = SessionStore::new(home.path().join("session.json"));
-    let signed_in = account.login_again(&server).await;
     store
         .save(&signed_in.export().await.expect("a live session exports"))
         .expect("the session persists");
@@ -408,7 +549,7 @@ async fn e2e_case_6_the_cli_escrow_command_sets_up_what_recover_restores() {
         ),
         "got {rebind:?}"
     );
-    assert_ne!(used.user_id(), account.user_id);
+    assert_ne!(used.user_id(), account_id);
     assert!(matches!(
         recovery.fetch_escrow().await,
         Err(RecoveryError::NotEnrolled)
@@ -419,7 +560,7 @@ async fn e2e_case_6_the_cli_escrow_command_sets_up_what_recover_restores() {
     let mut library =
         Workspace::create_with_params(root.path(), PASSPHRASE, FAST_KDF).expect("a CLI library");
     let minted_id = library.user_id();
-    assert_ne!(minted_id, account.user_id);
+    assert_ne!(minted_id, account_id);
 
     // The type-back gate failing stores nothing and leaves the library unbound.
     let Err(unconfirmed) = remote::auth_escrow(
@@ -459,12 +600,9 @@ async fn e2e_case_6_the_cli_escrow_command_sets_up_what_recover_restores() {
     )
     .await
     .expect("`capsule auth escrow` completes");
-    assert_eq!(
-        setup.user_id, account.user_id,
-        "the server's id for the account"
-    );
+    assert_eq!(setup.user_id, account_id, "the server's id for the account");
     assert!(!setup.replaced, "the account's first escrow");
-    assert_eq!(library.user_id(), account.user_id, "the library is bound");
+    assert_eq!(library.user_id(), account_id, "the library is bound");
     // Sealing is randomized, so the stored bytes are not compared here; the recovery below
     // opening the account's identity key is what proves they are this library's.
     recovery
@@ -504,10 +642,20 @@ async fn e2e_case_6_the_cli_escrow_command_sets_up_what_recover_restores() {
     )
     .await
     .expect("`capsule auth recover` opens what `capsule auth escrow` stored");
-    assert_eq!(recovered.user_id(), account.user_id);
+    assert_eq!(recovered.user_id(), account_id);
     assert_eq!(recovered.user_ik_public(), library.user_ik_public());
     assert_eq!(recovered.default_album_id(), library.default_album_id());
     assert_ne!(recovered.device_id(), library.device_id());
+
+    // #625: with no directory published for the account, the recovered library's own — the new
+    // device alone, at version 1 — became the account's first.
+    let published = DirectoryClient::new(signed_in.clone(), &server.auth_base())
+        .fetch(account_id, &library.user_ik_public())
+        .await
+        .expect("the account's first directory fetches and verifies");
+    assert_eq!(published.core.directory_version, 1);
+    assert_eq!(&published, recovered.device_directory());
+    assert!(published.device(&recovered.device_id()).is_some());
     drop(recovered);
 
     // --replace stores a new escrow, and the first secret stops opening it.
@@ -538,4 +686,23 @@ async fn e2e_case_6_the_cli_escrow_command_sets_up_what_recover_restores() {
         matches!(stale, RemoteError::WrongRecoverySecret),
         "got {stale:?}"
     );
+}
+
+/// Register a fresh account and read its server id, publishing no device directory for it —
+/// what `capsule auth register` leaves behind, unlike [`Device::register`].
+async fn register_without_a_directory(server: &Server) -> (Session, Uuid) {
+    let email = format!("cli-escrow-{}@e2e.capsule.test", Uuid::now_v7().simple());
+    let session = AuthClient::new(&server.auth_base())
+        .expect("the auth base parses")
+        .register(&email, PASSWORD)
+        .await
+        .expect("a fresh account registers");
+    let profile = AuthenticatedClient::new(server.base_url(), session.clone())
+        .expect("the API root parses")
+        .get_profile(PROTOCOL_VERSION, None)
+        .await
+        .expect("the profile answers")
+        .into_inner();
+    let user_id = Uuid::parse_str(&profile.user_id).expect("the account id is a UUID");
+    (session, user_id)
 }
