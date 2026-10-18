@@ -2078,6 +2078,7 @@
   "error.directory.not_published": "This account hasn't published a device list yet.",
   "error.directory.unavailable": "Capsule couldn't reach the device list. Please try again.",
   "error.directory.unsupported_media_type": "That device list couldn't be read.",
+  "error.directory.untrusted_signature": "This account's device list isn't signed by the account key this device trusts.",
   "error.directory.version_conflict": "This device list is out of date. Capsule will refresh it before continuing.",
   "error.drop.adoption_refused": "That upload could not be added to the album.",
   "error.drop.at_capacity": "This server is handling too many upload links right now. Please try again shortly.",

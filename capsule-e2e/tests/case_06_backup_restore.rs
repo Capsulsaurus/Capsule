@@ -451,6 +451,11 @@ async fn e2e_case_6_a_recovery_whose_directory_join_fails_leaves_nothing_behind(
         ),
         "got {refused:?}"
     );
+    assert_eq!(
+        refused.error_code(),
+        Some("error.directory.untrusted_signature"),
+        "the CLI localizes the failure through its catalog code"
+    );
     assert!(
         !created.exists(),
         "the library the recovery created is gone"
