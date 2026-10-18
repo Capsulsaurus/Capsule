@@ -160,8 +160,14 @@ impl ShareClient {
 
     /// Register `link` with the server, so its public path serves what `publication` names.
     ///
-    /// Re-registering the same opaque id with the same owner replaces the record, so a caller
-    /// whose request timed out may send it again.
+    /// An opaque id registers once. The server refuses any id it already holds, the caller's
+    /// own included, with the same `400 error.share.malformed` it gives a malformed record
+    /// (#553), so re-sending a request whose first attempt landed surfaces as
+    /// [`ShareError::Malformed`], not as success. That refusal is not read as success here: it
+    /// is also the answer for an id the caller revoked, and its English detail is not a stable
+    /// discriminator. A caller whose request timed out recovers by revoking the id (revoke
+    /// answers `204` whether or not the first attempt landed) and issuing a freshly minted
+    /// link.
     ///
     /// # Errors
     ///
