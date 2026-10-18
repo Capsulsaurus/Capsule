@@ -83,7 +83,25 @@ A native client builds a link from its own library in `capsule-core` and registe
 2. `Workspace::publish_link` reads each covered asset's record from its head manifest and signed sidecar, then calls `publish_share`. An album link covers every asset in the album that is not in trash, in asset-id order. Each entry keeps its manifest's epoch, key mode and wrapped key, because the viewer recovers each file key from the album's AMKs. An asset link carries the file key itself, so its one entry says `amk_version = 0` and `derived`, with no wrapped key. An asset in trash cannot be shared.
 3. The `issue` method of `capsule_sdk::share::ShareClient` sends the publication through the generated `issue_share` operation, and `revoke` sends the generated `revoke_share`. `capsule_sdk::share::share_url` builds `{origin}/s/{opaque_id}#{fragment}`. The fragment is never in a request.
 
-**Status note.** The client cannot put the record on the server yet. The only blob write surface is the asset upload, and the collector removes any blob that no asset references. A link registered today names a `metadata_hash` the server does not hold, so the viewer's first fetch is a `404`. Issue #653 tracks the server side. The `capsule share create|revoke` command and the end-to-end case wait on it, in #654.
+### Storing the record
+
+The record travels in the issue request itself, as the optional `metadata_blob` member of `POST /v1/shares` (base64). It is additive, so an older client that omits it still registers a link, which serves its metadata only if the blob is already in the store. When it is present the server:
+
+1. decodes it and refuses it with `400 error.share.malformed` if it is not base64, if it is larger than **8 MiB** decoded (`capsule_server::share::MAX_SHARE_METADATA_BYTES`), or if its SHA-256 is not `metadata_hash`;
+2. admits it as **metadata growth** under [quota](#quota), refusing with `403 error.quota.grace_locked` past the grace window;
+3. stores it under `metadata_hash`, and only then records the link, so no viewer ever resolves a link whose record is not yet servable. A link refused after the store (an opaque id already held) leaves a blob no live link names, which the collector reclaims.
+
+**The collector keeps what a live link serves.** A record has no asset row, so the asset index counts zero references to it. The collector therefore also asks the share store whether a **live** link (not revoked, and not past its expiry) names the address in its serve set, and treats a yes as a reference. The question covers the whole serve set, not only the record, because a link may serve a blob its issuer prepared for the boundary crossing that no asset names either. Once the last live link naming a blob is revoked or expires, the blob is an ordinary orphan: it is marked on the next pass and swept after the grace window, and a link issued in that window over the same blob cancels the mark.
+
+#### Quota
+
+**Decision: the record is not charged to the owner's ledger, and it is admitted as metadata growth.** This is the rule a lifecycle write's inline metadata blob already follows: it is refused only once the account is past its grace window, never by a projected total, and it adds no attribution.
+
+- *Why not charge it.* The ledger attributes bytes by content address to the first uploader, and releases them only when the collector sweeps the blob. A record is bounded at 8 MiB and is unique to its link, so it is small next to the ciphertext it points at, which is already charged to whoever uploaded it. Charging the record would give quota a second write on the issue path, and that write would have to be undone whenever the link is refused after it. That buys accuracy on the smallest blobs the server holds.
+- *Why gate it at all.* An account past its grace window is refused every write that grows storage. A share link that stored a record anyway would be a way around that.
+- *What would reverse it.* A deployment that bills per byte, where records add up to real storage. Charging then means calling `QuotaStore::charge` for `metadata_hash` before the store. The collector already credits a swept blob back through `release_attribution`, so the release side is in place.
+
+**Status note.** The server side is in place: the record is uploaded with the link, and kept for as long as the link is live. `capsule_sdk::share::issue_request` sends `metadata_blob`. The `capsule share create|revoke` command and the end-to-end case are in #654.
 
 Concrete error variants are an implementation detail; the rate-limit, opaque-id entropy, privacy-strip, and revocation policies are fixed by the [Security Contract](#security-contract) above.
 
