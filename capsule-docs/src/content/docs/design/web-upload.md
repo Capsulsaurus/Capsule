@@ -129,11 +129,14 @@ trait DropAdopter {
 }
 
 // What adoption hands back: the asset is already registered in the library (one-record chain,
-// sealed metadata blob, index row); these are what publishing it uploads (step 4).
+// sealed metadata blob, index row, and the import still pipeline's dimensions, LQIP and signed
+// thumbnail derivatives); the first three are what publishing it uploads (step 4).
 struct AdoptedDrop {
-    manifest:      AssetManifest,     // the signed adopting `create`; `file_id` is the asset id
-    metadata_blob: Vec<u8>,           // the exact sealed bytes `metadata_blob_hash` commits to
-    record:        ProvenanceRecord,  // the `create` that heads the asset's chain
+    manifest:         AssetManifest,     // the signed adopting `create`; `file_id` is the asset id
+    metadata_blob:    Vec<u8>,           // the exact sealed bytes `metadata_blob_hash` commits to
+    record:           ProvenanceRecord,  // the `create` that heads the asset's chain
+    derivatives:      DerivativeStatus,  // native only: decoded, or why there is no thumbnail
+    deferred_formats: u32,               // native only: (tier, format) pairs with no encoder here
 }
 
 // in capsule-core::drop  (sealing; compiled to WASM for capsule-web)
