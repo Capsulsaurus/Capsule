@@ -75,6 +75,16 @@ The issuing client builds the record with `publish_share`, which also yields the
 3. Only if `passphrase_protected`: `GET /s/{opaque_id}/wrapped-secret`, with the passphrase prompt. Otherwise the scope is the record's `link_scope`.
 4. `GET /s/{opaque_id}/blob/{hash}`, with `hash` = each asset's `content_hash`, decrypted under the opened scope.
 
+### Issuing a link from a native client
+
+A native client builds a link from its own library in `capsule-core` and registers it through the SDK:
+
+1. `ShareLinkIssuer::create_link` mints the opaque id, the fragment secret and the scope encapsulation.
+2. `Workspace::publish_link` reads each covered asset's record from its head manifest and signed sidecar, then calls `publish_share`. An album link covers every asset in the album that is not in trash, in asset-id order. Each entry keeps its manifest's epoch, key mode and wrapped key, because the viewer recovers each file key from the album's AMKs. An asset link carries the file key itself, so its one entry says `amk_version = 0` and `derived`, with no wrapped key. An asset in trash cannot be shared.
+3. The `issue` method of `capsule_sdk::share::ShareClient` sends the publication through the generated `issue_share` operation, and `revoke` sends the generated `revoke_share`. `capsule_sdk::share::share_url` builds `{origin}/s/{opaque_id}#{fragment}`. The fragment is never in a request.
+
+**Status note.** The client cannot put the record on the server yet. The only blob write surface is the asset upload, and the collector removes any blob that no asset references. A link registered today names a `metadata_hash` the server does not hold, so the viewer's first fetch is a `404`. Issue #653 tracks the server side. The `capsule share create|revoke` command and the end-to-end case wait on it, in #654.
+
 Concrete error variants are an implementation detail; the rate-limit, opaque-id entropy, privacy-strip, and revocation policies are fixed by the [Security Contract](#security-contract) above.
 
 ## Failure Modes
