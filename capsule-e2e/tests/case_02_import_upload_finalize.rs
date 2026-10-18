@@ -10,7 +10,7 @@
 //! it and encodes a real thumbnail, and T1 is a real upload rather than the byte-free sentinel
 //! an 8×8 still gets.
 
-use capsule_core::crypto::hash::Hash32;
+use capsule_core::crypto::hash::{Hash32, hash_bytes};
 use capsule_core::import::UploadTier;
 use capsule_e2e::fixtures::large_synthetic_jpeg;
 use capsule_e2e::push::push_asset;
@@ -45,10 +45,24 @@ async fn e2e_case_2_import_upload_finalize_lands_every_blob_at_its_content_addre
             .collect::<Vec<_>>()
     );
 
+    // Every derivative ships beside the signed manifest a receiver opens it with.
+    assert!(
+        bundle.derivative_manifests.len() >= bundle.derivatives.len(),
+        "each derivative has its manifest: {} manifests for {} derivatives",
+        bundle.derivative_manifests.len(),
+        bundle.derivatives.len()
+    );
+
     // The ladder ran every tier: two T0 rungs (provenance, then metadata), one T1 per
-    // derivative, then T2.
+    // derivative manifest and one per derivative, then T2.
     let mut expected = vec![UploadTier::Index, UploadTier::Index];
-    expected.extend(bundle.derivatives.iter().map(|_| UploadTier::Preview));
+    expected.extend(
+        bundle
+            .derivative_manifests
+            .iter()
+            .chain(bundle.derivatives.iter().map(|d| &d.bytes))
+            .map(|_| UploadTier::Preview),
+    );
     expected.push(UploadTier::Original);
     assert_eq!(pushed.report.tier_sequence(), expected);
     assert_eq!(pushed.report.deferred, 0);
@@ -66,6 +80,9 @@ async fn e2e_case_2_import_upload_finalize_lands_every_blob_at_its_content_addre
             on_disk(&derivative.ciphertext_hash.to_hex()),
             derivative.bytes
         );
+    }
+    for manifest in &bundle.derivative_manifests {
+        assert_eq!(&on_disk(&hash_bytes(manifest).to_hex()), manifest);
     }
     assert_eq!(on_disk(&pushed.provenance_hash), bundle.provenance_blob);
 
