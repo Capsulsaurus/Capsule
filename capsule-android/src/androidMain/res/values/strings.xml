@@ -1713,7 +1713,7 @@
     <string name="cli_auth_login_oidc_in_progress">Signing in to Capsule through your identity provider…</string>
     <string name="cli_auth_login_oidc_listener_failed">This computer could not listen for the sign-in to come back: %s</string>
     <string name="cli_auth_login_oidc_loopback_refused">This server does not accept sign-ins from the command line through its identity provider. Its operator can allow them by setting OIDC_ALLOW_LOOPBACK_REDIRECT=true.</string>
-    <string name="cli_auth_login_oidc_page_received">You are signed in to Capsule. You can close this tab and return to the terminal.</string>
+    <string name="cli_auth_login_oidc_page_received">Capsule received your sign-in. Return to the terminal, which finishes signing you in.</string>
     <string name="cli_auth_login_oidc_page_refused">The sign-in did not complete. Return to the terminal to see why.</string>
     <string name="cli_auth_login_oidc_success">Signed in through your identity provider.</string>
     <string name="cli_auth_login_oidc_timed_out">No sign-in came back in time. Run the command again to start a new one.</string>

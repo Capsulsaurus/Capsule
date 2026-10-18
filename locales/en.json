@@ -6884,8 +6884,8 @@
     "context": "CLI `capsule auth login --oidc` (S-N2): the server refused the CLI's loopback redirect because loopback redirects are off by default. OIDC_ALLOW_LOOPBACK_REDIRECT=true is a server configuration variable and must not be translated."
   },
   "cli.auth.login.oidc_page_received": {
-    "message": "You are signed in to Capsule. You can close this tab and return to the terminal.",
-    "context": "Browser page shown by `capsule auth login --oidc` (S-N2) on the computer's own loopback address once the identity provider has sent the person back. Plain text in a minimal HTML page."
+    "message": "Capsule received your sign-in. Return to the terminal, which finishes signing you in.",
+    "context": "Browser page shown by `capsule auth login --oidc` (S-N2) on the computer's own loopback address once the identity provider has sent the person back with a code. Shown before the terminal completes the sign-in, which can still fail or ask for a second-factor code, so it must not claim the person is signed in. Plain text in a minimal HTML page."
   },
   "cli.auth.login.oidc_page_refused": {
     "message": "The sign-in did not complete. Return to the terminal to see why.",

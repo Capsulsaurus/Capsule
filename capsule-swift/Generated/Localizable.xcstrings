@@ -29460,7 +29460,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "You are signed in to Capsule. You can close this tab and return to the terminal."
+            "value": "Capsule received your sign-in. Return to the terminal, which finishes signing you in."
           }
         }
       }
