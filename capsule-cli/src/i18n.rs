@@ -116,6 +116,26 @@ pub mod keys {
     pub const PUSH_COMPLETE: &str = "cli.push.complete";
     pub const PUSH_DRY_RUN_COMPLETE: &str = "cli.push.dry_run_complete";
     pub const PUSH_FAILED: &str = "cli.push.failed";
+    // `capsule share create|revoke` — view-only share links on the server (#654).
+    pub const SHARE_CREATE_IN_PROGRESS: &str = "cli.share.create.in_progress";
+    pub const SHARE_CREATE_LINK_PASSPHRASE_PROMPT: &str = "cli.share.create.link_passphrase_prompt";
+    pub const SHARE_CREATE_LINK_PASSPHRASE_CONFIRM: &str =
+        "cli.share.create.link_passphrase_confirm";
+    pub const SHARE_CREATE_LINK_PASSPHRASE_MISMATCH: &str =
+        "cli.share.create.link_passphrase_mismatch";
+    pub const SHARE_CREATE_SUCCESS: &str = "cli.share.create.success";
+    pub const SHARE_CREATE_PASSPHRASE_NOTICE: &str = "cli.share.create.passphrase_notice";
+    pub const SHARE_CREATE_EXPIRES_NOTICE: &str = "cli.share.create.expires_notice";
+    pub const SHARE_CREATE_REVOKE_HINT: &str = "cli.share.create.revoke_hint";
+    pub const SHARE_CREATE_INVALID_EXPIRY: &str = "cli.share.create.invalid_expiry";
+    pub const SHARE_CREATE_EXPIRY_NOT_IN_FUTURE: &str = "cli.share.create.expiry_not_in_future";
+    pub const SHARE_CREATE_EMPTY_SCOPE: &str = "cli.share.create.empty_scope";
+    pub const SHARE_CREATE_SCOPE_UNAVAILABLE: &str = "cli.share.create.scope_unavailable";
+    pub const SHARE_CREATE_NOT_HELD: &str = "cli.share.create.not_held";
+    pub const SHARE_CREATE_FAILED: &str = "cli.share.create.failed";
+    pub const SHARE_REVOKE_SUCCESS: &str = "cli.share.revoke.success";
+    pub const SHARE_REVOKE_INVALID_OPAQUE_ID: &str = "cli.share.revoke.invalid_opaque_id";
+    pub const SHARE_REVOKE_FAILED: &str = "cli.share.revoke.failed";
     // `capsule import` — the local import arm (slice `S-I5`). Import never touches the
     // network, but every line it prints and every error it surfaces still reaches a human.
     pub const IMPORT_IN_PROGRESS: &str = "cli.import.in_progress";

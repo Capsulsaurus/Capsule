@@ -7359,6 +7359,50 @@
     "message": "Capsule CLI provides tools for managing your photos and albums:\n\n- Authentication management\n- Sync local and remote data\n- Check status and list files\n- Manage albums and collections",
     "context": "clap --help: the long description of `capsule`, shown at the top of `capsule --help` instead of the one-line form. Keep the Markdown list markers: the documentation site renders this text as prose."
   },
+  "cli.help.share.about": {
+    "message": "Issue and revoke view-only share links on the server",
+    "context": "clap --help: the one-line description of `capsule share`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.share.create.about": {
+    "message": "Issue a view-only share link for an album or one asset, and print the URL to send",
+    "context": "clap --help: the one-line description of `capsule share create`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.share.create.arg.album": {
+    "message": "Share every asset of this album that is not in trash",
+    "context": "clap --help: help for the `--album` option of `capsule share create`."
+  },
+  "cli.help.share.create.arg.asset": {
+    "message": "Share this one asset",
+    "context": "clap --help: help for the `--asset` option of `capsule share create`."
+  },
+  "cli.help.share.create.arg.expires_at": {
+    "message": "When the link stops opening, as an RFC 3339 timestamp (e.g. 2026-12-31T23:59:59Z)",
+    "context": "clap --help: help for the `--expires-at` option of `capsule share create`. Keep the timestamp example verbatim: it is the format the option parses."
+  },
+  "cli.help.share.create.arg.library": {
+    "message": "Path to the Capsule library",
+    "context": "clap --help: help for the `--library` option of `capsule share create`."
+  },
+  "cli.help.share.create.arg.link_passphrase_stdin": {
+    "message": "With --protect, read the link passphrase from stdin instead of prompting (the line after the library passphrase when --passphrase-stdin is also given)",
+    "context": "clap --help: help for the `--link-passphrase-stdin` flag of `capsule share create`."
+  },
+  "cli.help.share.create.arg.passphrase_stdin": {
+    "message": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+    "context": "clap --help: help for the `--passphrase-stdin` flag of `capsule share create`."
+  },
+  "cli.help.share.create.arg.protect": {
+    "message": "Protect the link with a passphrase the recipient must enter as well as open the URL",
+    "context": "clap --help: help for the `--protect` flag of `capsule share create`."
+  },
+  "cli.help.share.revoke.about": {
+    "message": "Revoke a share link, so its URL stops opening",
+    "context": "clap --help: the one-line description of `capsule share revoke`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.share.revoke.arg.opaque_id": {
+    "message": "The link's opaque id: the 32 hex characters after /s/ in its URL",
+    "context": "clap --help: help for the `<OPAQUE_ID>` positional of `capsule share revoke`."
+  },
   "cli.help.show.about": {
     "message": "Show what an imported asset's signed sidecar records: caption, rating, tags, GPS, timestamps",
     "context": "clap --help: the one-line description of `capsule show`. Shown in the parent's command list and at the top of its own --help."
@@ -7650,6 +7694,74 @@
   "cli.repair.failed": {
     "message": "Repair failed: {reason}",
     "context": "CLI failure line for `capsule repair`. {reason} is a localized or English error detail."
+  },
+  "cli.share.create.empty_scope": {
+    "message": "Nothing to share: that album holds no assets outside trash.",
+    "context": "CLI refusal from `capsule share create --album` when the album has no asset that is not in trash; a link over it would open to an empty page."
+  },
+  "cli.share.create.expires_notice": {
+    "message": "The link stops opening at {expires_at}.",
+    "context": "CLI line after `capsule share create --expires-at`. {expires_at} is an RFC 3339 UTC timestamp."
+  },
+  "cli.share.create.expiry_not_in_future": {
+    "message": "--expires-at {value} is not in the future, so the link would never open.",
+    "context": "CLI refusal from `capsule share create`. {value} is the parsed RFC 3339 timestamp; keep `--expires-at` verbatim."
+  },
+  "cli.share.create.failed": {
+    "message": "Share link not issued: {reason}",
+    "context": "CLI failure line for `capsule share create`. {reason} is a localized or English error detail."
+  },
+  "cli.share.create.in_progress": {
+    "message": "Issuing a share link on {endpoint}…",
+    "context": "CLI status line printed while `capsule share create` runs. {endpoint} is the server URL."
+  },
+  "cli.share.create.invalid_expiry": {
+    "message": "--expires-at {value} is not an RFC 3339 timestamp (for example 2026-12-31T23:59:59Z).",
+    "context": "CLI refusal from `capsule share create`. {value} is what the user typed; keep `--expires-at` and the timestamp example verbatim."
+  },
+  "cli.share.create.link_passphrase_confirm": {
+    "message": "Repeat the link passphrase",
+    "context": "CLI prompt from `capsule share create --protect` asking for the link passphrase a second time."
+  },
+  "cli.share.create.link_passphrase_mismatch": {
+    "message": "The two link passphrases do not match.",
+    "context": "CLI error when the two link passphrases typed for `capsule share create --protect` differ."
+  },
+  "cli.share.create.link_passphrase_prompt": {
+    "message": "Link passphrase (the recipient types it to open the link)",
+    "context": "CLI prompt from `capsule share create --protect` for the passphrase protecting the link. Not the library passphrase."
+  },
+  "cli.share.create.not_held": {
+    "message": "{count, plural, one {# shared asset is not on the server yet, so the link could not show it. Run capsule push for this library first.} other {# shared assets are not on the server yet, so the link could not show them. Run capsule push for this library first.}}",
+    "context": "CLI refusal from `capsule share create` when an original the link covers has not been uploaded. {count} is a count; keep `capsule push` verbatim."
+  },
+  "cli.share.create.passphrase_notice": {
+    "message": "The link is passphrase-protected: send the passphrase separately from the URL.",
+    "context": "CLI line after `capsule share create --protect`."
+  },
+  "cli.share.create.revoke_hint": {
+    "message": "To revoke it: capsule share revoke {opaque_id}",
+    "context": "CLI hint after `capsule share create`. {opaque_id} is 32 hex characters; keep `capsule share revoke` verbatim."
+  },
+  "cli.share.create.scope_unavailable": {
+    "message": "This library does not hold that album or asset, or the asset is in trash.",
+    "context": "CLI refusal from `capsule share create` when --album or --asset names nothing shareable in the library."
+  },
+  "cli.share.create.success": {
+    "message": "{count, plural, one {Share link issued for # asset. Anyone with this URL can view it:} other {Share link issued for # assets. Anyone with this URL can view them:}}",
+    "context": "CLI line after `capsule share create` succeeds; the URL follows on its own line. {count} is a count."
+  },
+  "cli.share.revoke.failed": {
+    "message": "Share link not revoked: {reason}",
+    "context": "CLI failure line for `capsule share revoke`. {reason} is a localized or English error detail."
+  },
+  "cli.share.revoke.invalid_opaque_id": {
+    "message": "{value} is not a share link's opaque id: expected the 32 lowercase hex characters after /s/ in its URL.",
+    "context": "CLI refusal from `capsule share revoke`. {value} is what the user typed."
+  },
+  "cli.share.revoke.success": {
+    "message": "Share link {opaque_id} no longer opens for anyone.",
+    "context": "CLI line after `capsule share revoke` succeeds. {opaque_id} is 32 hex characters. The server answers the same for a link that was already revoked or never existed."
   },
   "cli.show.album": {
     "message": "  Album:           {value}",
