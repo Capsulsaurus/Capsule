@@ -234,16 +234,22 @@ tracing = { workspace = true }
 # supplies the leaf `SignatureKeyPair`; `openmls_traits` exposes the `Ciphersuite` type. All four
 # are host-only (libcrux does not target `wasm32-unknown-unknown`), so they sit behind `mls`,
 # which `native` implies and the wasm sealing build excludes. See `crypto::authority::openmls`.
-openmls = { version = "0.8.1", default-features = false, features = [
+# From 0.9 the X-Wing suite sits behind `draft-ietf-mls-pq-ciphersuites`. It is enabled on the
+# four leaf crates, not on `openmls`: openmls's own feature names `openmls_sqlite_storage?/…`, and
+# Cargo's resolver then pulls that optional crate's rusqlite 0.37 into the `links = "sqlite3"`
+# check, where it conflicts with this crate's rusqlite 0.32. openmls's feature only adds the PQ
+# suites to its *default* leaf capabilities, which `openmls_authority::pinned_capabilities` sets
+# explicitly instead.
+openmls = { version = "0.9.1", default-features = false, features = [
     "libcrux-provider",
 ], optional = true }
-openmls_traits = { version = "0.5", optional = true }
-openmls_libcrux_crypto = { version = "0.3.1", optional = true }
-openmls_basic_credential = { version = "0.5", optional = true }
+openmls_traits = { version = "0.6", features = ["draft-ietf-mls-pq-ciphersuites"], optional = true }
+openmls_libcrux_crypto = { version = "0.4.0", features = ["draft-ietf-mls-pq-ciphersuites"], optional = true }
+openmls_basic_credential = { version = "0.6", features = ["draft-ietf-mls-pq-ciphersuites"], optional = true }
 # The OpenMLS storage provider Capsule owns (rather than the libcrux provider's private one), so
 # durable group state serializes for `OpenMlsAuthority::export_state`/`import_state` (slice S-X2).
 # Same version the libcrux provider already pulls transitively; host-only alongside the rest of `mls`.
-openmls_memory_storage = { version = "0.5.0", optional = true }
+openmls_memory_storage = { version = "0.6.0", features = ["draft-ietf-mls-pq-ciphersuites"], optional = true }
 
 # ── TPM (optional; `tpm` feature) — desktop reference HardwareSigner ─────────
 # RustCrypto-adjacent bindings to the TPM 2.0 Enhanced System API (links system

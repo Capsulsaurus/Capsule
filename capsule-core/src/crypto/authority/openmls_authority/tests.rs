@@ -142,6 +142,23 @@ fn ciphersuite_is_pinned_xwing_0x004d() {
     assert_eq!(PINNED_CIPHERSUITE_ID, 0x004D);
 }
 
+/// A key package's leaf advertises exactly the pinned suite, never OpenMLS's defaults: the X-Wing
+/// suite is in those defaults only under an OpenMLS feature Capsule does not enable, so a leaf
+/// built without [`pinned_capabilities`] could not join an X-Wing group.
+#[test]
+fn key_package_leaf_advertises_only_the_pinned_suite() {
+    let key_package = Device::new(0xB1, 0xB2, 3).identity().key_package().unwrap();
+    let advertised: Vec<u16> = key_package
+        .leaf_node()
+        .capabilities()
+        .ciphersuites()
+        .iter()
+        .map(openmls_traits::types::VerifiableCiphersuite::value)
+        .collect();
+    assert_eq!(advertised, vec![PINNED_CIPHERSUITE_ID]);
+    assert_eq!(key_package.ciphersuite(), PINNED_CIPHERSUITE);
+}
+
 #[test]
 fn genesis_epoch_and_ceiling() {
     let auth = OpenMlsAuthority::create_self_group(Uuid::from_u128(0xA1)).unwrap();
