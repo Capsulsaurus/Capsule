@@ -154,9 +154,10 @@ pub struct FeedEntry {
     /// `derivative_manifest` blob, served back unchanged (#556). Empty on a tombstone.
     ///
     /// What opens a thumbnail or preview: each names its derivative's `ciphertext_hash`,
-    /// `nonce_prefix` and AMK epoch, which [`BlobManifest`] does not carry. Decode, verify, and
-    /// hand the verified manifests to [`crate::fetch::AssetBlobs::derivative_manifests`]. Never
-    /// re-encoded here, for the reason [`Self::manifest_cbor`] is not.
+    /// `nonce_prefix` and AMK epoch, which [`BlobManifest`] does not carry.
+    /// [`crate::fetch::verify_derivative_manifests`] decodes and verifies them; hand its
+    /// `accepted` list to [`crate::fetch::AssetBlobs::derivative_manifests`]. Never re-encoded
+    /// here, for the reason [`Self::manifest_cbor`] is not.
     pub derivative_manifests: Vec<Vec<u8>>,
     /// Whether the original blob is finalized on the server (`awaiting-original`
     /// derived state when `false`; staged uploads).

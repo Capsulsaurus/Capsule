@@ -27,6 +27,11 @@
 //!   discarded and the open degrades so the caller regenerates from the original. A
 //!   tier whose manifest carries the `format = "original"` sentinel is satisfied by the
 //!   original and is never fetched.
+//! - **Admitting derivative manifests.** [`verify_derivative_manifests`] decodes the exact
+//!   bytes a feed entry carries and runs each through core's `verify_derivative` chokepoint,
+//!   walking each `(asset, role)` chain from its start. Only what it accepts goes into
+//!   [`AssetBlobs::derivative_manifests`]; what fails is quarantined and returned, never
+//!   dropped.
 //!
 //! The [`BlobSource`] seam abstracts the wire so the resume loop and degrade ladder
 //! are driven by deterministic mocks; [`HttpBlobSource`] is the production
@@ -37,9 +42,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use capsule_core::cbor;
+use capsule_core::crypto::authority::AlbumAuthority;
 use capsule_core::crypto::encryption::{NONCE_PREFIX_LEN, decrypt_asset_vec};
-use capsule_core::crypto::keys::{Amk, AmkVersion};
+use capsule_core::crypto::hash::Hash32;
+use capsule_core::crypto::keys::{Amk, AmkVersion, DeviceDirectory};
 use capsule_core::crypto::provenance::{DerivativeManifest, DerivativeRole};
+use capsule_core::crypto::verify_asset::{RejectReason, VerifyOutcome};
+use capsule_core::crypto::verify_derivative::verify_derivative;
 use capsule_core::derivative_format::{DerivativeFormat, verify_still_format};
 use capsule_i18n::error_codes;
 use sha2::{Digest, Sha256};
@@ -114,9 +124,10 @@ pub struct AssetBlobs {
     pub preview: Option<RepBlob>,
     /// The original, when present (absent while `awaiting-original`).
     pub original: Option<RepBlob>,
-    /// The head `DerivativeManifest` of each derivative role this asset carries, already
-    /// signature-verified by the caller (`verify_asset` is the chokepoint; this module checks
-    /// nothing a signature covers).
+    /// The `DerivativeManifest`s of each derivative role this asset carries, already verified:
+    /// [`verify_derivative_manifests`]'s [`VerifiedDerivatives::accepted`], which ran each
+    /// through core's `verify_derivative` chokepoint. The open path checks nothing a signature
+    /// covers.
     ///
     /// A derivative's ciphertext is opened with `AMK(amk_version).derive_file_key(
     /// source_asset_id, nonce_prefix)`, and those three values live here and nowhere else: the
@@ -163,6 +174,170 @@ impl AssetBlobs {
             Representation::Preview => self.preview.as_ref(),
             Representation::Original => self.original.as_ref(),
         }
+    }
+}
+
+// ─── Admitting derivative manifests ──────────────────────────────────────────
+
+/// Why a received derivative manifest was quarantined rather than admitted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DerivativeQuarantine {
+    /// The bytes are not a `DerivativeManifest` in CBOR.
+    Undecodable,
+    /// Core's `verify_derivative` refused it. [`RejectReason::ForgedChain`] also covers a
+    /// manifest no chain from its role's start reaches, and every manifest at a fork — two
+    /// that name the same predecessor, which a receiver cannot choose between.
+    Rejected(RejectReason),
+}
+
+/// One quarantined derivative manifest: surfaced with its reason, never silently dropped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuarantinedDerivative {
+    /// The manifest blob's content address (lowercase hex of the digest of its exact bytes) —
+    /// the same address [`crate::staged::held_from_feed`] names it by.
+    pub address: String,
+    /// Why it was quarantined.
+    pub reason: DerivativeQuarantine,
+}
+
+/// The outcome of [`verify_derivative_manifests`] over one feed entry's manifests.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct VerifiedDerivatives {
+    /// Accepted manifests, in chain order per role — what [`AssetBlobs::derivative_manifests`]
+    /// takes.
+    pub accepted: Vec<DerivativeManifest>,
+    /// Manifests that verify but whose epoch AMK has not arrived locally: hold and retry once
+    /// the key lands, never quarantine. They still advance their role's chain, so a later
+    /// manifest of the same role is placed behind them.
+    pub pending: Vec<DerivativeManifest>,
+    /// Manifests that failed, each with its reason.
+    pub quarantined: Vec<QuarantinedDerivative>,
+}
+
+/// The roles walked, in a fixed order so the output is deterministic.
+const DERIVATIVE_ROLES: [DerivativeRole; 3] = [
+    DerivativeRole::Thumbnail,
+    DerivativeRole::Preview,
+    DerivativeRole::Embedding,
+];
+
+/// Decode and verify a feed entry's derivative manifests
+/// ([`FeedEntry::derivative_manifests`](crate::sync::FeedEntry::derivative_manifests)) for the
+/// asset `asset_id`, so that only verified ones reach [`AssetBlobs::derivative_manifests`].
+///
+/// The feed serves **every** manifest the asset has accumulated, in content-address order —
+/// not in chain order, and not only the heads — so each role's chain is rebuilt from its start
+/// here rather than resumed from a stored head: beginning with the manifest whose
+/// `prior_provenance_hash` is `None`, each next link is the one manifest naming the previous
+/// one's [`link_hash`](DerivativeManifest::link_hash), and each link is checked by core's
+/// `verify_derivative` against exactly that head.
+///
+/// The walk of a role stops at the first link that is refused, and at a fork. What it never
+/// reached is quarantined with the reason `verify_derivative` gives it against the head the walk
+/// stopped at. So a poisoned `derivative-replace` — one that does not chain to the role's head —
+/// is quarantined and the head it tried to displace stays accepted: the existing derivative is
+/// preserved.
+///
+/// `directory` is the published directory of the account whose devices generate this asset's
+/// derivatives (as for `verify_asset`, the caller resolves whose it is); `authority` is the
+/// album's MLS-attested authority.
+#[instrument(
+    level = "debug",
+    skip(encoded, directory, authority),
+    fields(%asset_id, manifests = encoded.len())
+)]
+pub fn verify_derivative_manifests(
+    encoded: &[Vec<u8>],
+    asset_id: uuid::Uuid,
+    directory: &DeviceDirectory,
+    authority: &dyn AlbumAuthority,
+) -> VerifiedDerivatives {
+    let mut out = VerifiedDerivatives::default();
+    let mut decoded: Vec<(String, DerivativeManifest)> = Vec::with_capacity(encoded.len());
+    for bytes in encoded {
+        let address = hash_hex(bytes);
+        match cbor::from_slice::<DerivativeManifest>(bytes) {
+            Ok(manifest) => decoded.push((address, manifest)),
+            Err(error) => {
+                tracing::warn!(%address, %error, "derivative manifest is undecodable; quarantined");
+                out.quarantined.push(QuarantinedDerivative {
+                    address,
+                    reason: DerivativeQuarantine::Undecodable,
+                });
+            }
+        }
+    }
+    for role in DERIVATIVE_ROLES {
+        let remaining: Vec<(String, DerivativeManifest)> = decoded
+            .iter()
+            .filter(|(_, manifest)| manifest.core.role == role)
+            .cloned()
+            .collect();
+        walk_role_chain(remaining, asset_id, directory, authority, &mut out);
+    }
+    tracing::debug!(
+        accepted = out.accepted.len(),
+        pending = out.pending.len(),
+        quarantined = out.quarantined.len(),
+        "derivative manifests verified"
+    );
+    out
+}
+
+/// Walk one role's chain from its start, sorting each manifest into `out`.
+fn walk_role_chain(
+    mut remaining: Vec<(String, DerivativeManifest)>,
+    asset_id: uuid::Uuid,
+    directory: &DeviceDirectory,
+    authority: &dyn AlbumAuthority,
+    out: &mut VerifiedDerivatives,
+) {
+    let quarantine = |out: &mut VerifiedDerivatives, address: String, reason: RejectReason| {
+        tracing::warn!(%address, ?reason, "derivative manifest rejected; quarantined");
+        out.quarantined.push(QuarantinedDerivative {
+            address,
+            reason: DerivativeQuarantine::Rejected(reason),
+        });
+    };
+    let mut head: Option<Hash32> = None;
+    loop {
+        let (mut next, rest): (Vec<_>, Vec<_>) = remaining
+            .into_iter()
+            .partition(|(_, manifest)| manifest.core.prior_provenance_hash == head);
+        remaining = rest;
+        let (address, manifest) = match (next.pop(), next.is_empty()) {
+            (Some(link), true) => link,
+            // No successor (the chain ends), or a fork: links naming one predecessor are all
+            // refused, since nothing a receiver holds can say which is the real one.
+            (popped, _) => {
+                for (address, _) in popped.into_iter().chain(next) {
+                    quarantine(out, address, RejectReason::ForgedChain);
+                }
+                break;
+            }
+        };
+        match verify_derivative(&manifest, asset_id, directory, authority, head) {
+            VerifyOutcome::Accept => {
+                head = Some(manifest.link_hash());
+                out.accepted.push(manifest);
+            }
+            VerifyOutcome::Pending(_) => {
+                head = Some(manifest.link_hash());
+                out.pending.push(manifest);
+            }
+            VerifyOutcome::TerminalReject(reason) => {
+                quarantine(out, address, reason);
+                break;
+            }
+        }
+    }
+    // Whatever the walk never reached: report why, against the head it stopped at.
+    for (address, manifest) in remaining {
+        let reason = match verify_derivative(&manifest, asset_id, directory, authority, head) {
+            VerifyOutcome::TerminalReject(reason) => reason,
+            VerifyOutcome::Accept | VerifyOutcome::Pending(_) => RejectReason::ForgedChain,
+        };
+        quarantine(out, address, reason);
     }
 }
 
