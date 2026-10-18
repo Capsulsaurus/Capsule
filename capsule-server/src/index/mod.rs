@@ -737,10 +737,13 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
         limit: usize,
     ) -> IndexFuture<'a, Vec<AssetRow>>;
 
-    /// Up to `limit` tombstoned rows, oldest change first.
+    /// Up to `limit` tombstoned rows that still hold a blob or superseded reference, oldest
+    /// change first.
     ///
     /// The purge worker's input. Ordered so a bounded pass makes progress on the oldest
-    /// deletions rather than revisiting the same page.
+    /// deletions rather than revisiting the same page — which is also why a row a purge has
+    /// already emptied is **not** listed: purged tombstones are the oldest, and a listing that
+    /// kept them would re-report them on every pass and fill a bounded page with them.
     fn tombstoned(&self, limit: usize) -> IndexFuture<'_, Vec<AssetRow>>;
 
     /// Drop `asset`'s blob references, keeping the tombstone — if it is still purgeable at

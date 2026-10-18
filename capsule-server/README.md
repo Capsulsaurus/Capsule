@@ -122,13 +122,15 @@ manufacture custody evidence, and a different HKDF label over the same input is 
 `serve --memory` derives it, because a development server's whole state is discarded on exit.
 
 `boot::assemble` is the one composition root. `--memory` takes every in-crate adapter over a real
-filesystem blob store; anything else refuses, so a deployment that forgot `VALKEY_URL` fails
-closed rather than coming up on state it loses at the next restart.
+filesystem blob store; anything else needs both `DATABASE_URL` and `VALKEY_URL`, and a deployment
+that forgot either is refused at startup with exit code 2, naming every missing variable at once,
+rather than coming up on state it loses at the next restart.
 
 Logs go to stderr. stdout is a data channel: `serve` writes one `listening on <url>` line there,
 which is how a `--listen 127.0.0.1:0` caller learns its port.
 
-`gc`, `purge` and `scrub` need a blob root and no key material at all. Dry run is the default for
+`gc`, `purge` and `scrub` need a blob root and no key material at all; without `--memory` they
+read the durable stores, so they need `DATABASE_URL` and `VALKEY_URL` as `serve` does. Dry run is the default for
 the two that write; `scrub` mutates nothing and exits non-zero on a non-empty report. `gc --apply`
 also sweeps the upload-progress set, the one Valkey index with no lifetime of its own, so run it
 on a schedule rather than only when blobs need collecting (#519).

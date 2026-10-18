@@ -234,8 +234,10 @@ pub fn continues(
 /// The refresh chain a revocation walked is not one: a link names a successor that is not
 /// recorded, or a successor the walk has already visited.
 ///
-/// Every adapter raises the same error for it, so the conformance suite reads one shape. Either
-/// is a store that recorded something no `refresh` could have produced.
+/// Every adapter raises the same error for it, so a caller handles one shape. Either is a store
+/// that recorded something no `refresh` could have produced — which is also why no test in
+/// `federation::conformance` reaches it: the port offers no write that leaves a chain broken, so
+/// the only way to build one is to corrupt an adapter's storage underneath it.
 #[must_use]
 pub fn broken_chain(origin: &str, link: &str, why: &str) -> StoreError {
     StoreError::Corrupt {

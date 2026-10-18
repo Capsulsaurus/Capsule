@@ -31,8 +31,8 @@
 //! `OIDC_ISSUER` runs on the same two backends as everything else and holds no state a restart,
 //! or a callback landing on another replica, would lose.
 //!
-//! No `VALKEY_URL` and no `--memory` is a configuration fault naming the variable
-//! ([`Config::load`]). Nothing here ever silently becomes an in-memory server.
+//! No `DATABASE_URL` or no `VALKEY_URL`, and no `--memory`, is a configuration fault naming every
+//! missing variable ([`Config::load`]). Nothing here ever silently becomes an in-memory server.
 //!
 //! # What the memory profile is, precisely
 //!
@@ -278,8 +278,9 @@ pub async fn assemble(config: &Config) -> Result<Assembled, BootError> {
 /// What it does instead is read `seaql_migrations` and refuse, naming the command an operator has
 /// to run.
 ///
-/// `DATABASE_URL` is demanded here rather than by [`crate::config::Demands`] because it is this
-/// *path* that needs it: `serve --memory` and the `--memory` operator commands never reach here.
+/// `DATABASE_URL` is demanded by [`crate::config::Demands`] for every durable subcommand, so an
+/// operator is refused with the configuration exit code and every missing variable at once; the
+/// demand here is the [`BootError::Missing`] backstop behind it.
 async fn open_durable_database(config: &Config) -> Result<sea_orm::DatabaseConnection, BootError> {
     let database_url = config.database_url.as_ref().ok_or(BootError::Missing {
         key: "DATABASE_URL",
@@ -1000,17 +1001,17 @@ mod tests {
 
     #[tokio::test]
     async fn a_durable_backend_without_a_database_url_refuses_by_name() {
-        // `Config::load` demands `VALKEY_URL` for a durable `serve` and deliberately does not
-        // demand `DATABASE_URL` — `gc`, `purge` and `scrub` load the same configuration under
-        // `--memory` and need neither. So the demand belongs to this *path*, and this is the
-        // assertion that it is made rather than discovered as a `None` somewhere further in.
+        // `Config::load` is the front door that demands `DATABASE_URL` for a durable boot (#520),
+        // so this path's own demand is the backstop for a `Config` that reached it without one —
+        // asserted to be made by name rather than discovered as a `None` somewhere further in.
         let root = tempfile::tempdir().expect("a scratch directory");
-        let config = Config::load(
+        let mut config = Config::load(
             &durable_environment(root.path()),
             &Overrides::default(),
             Demands::Serve,
         )
         .expect("it is well-formed");
+        config.database_url = None;
         let error = assemble(&config).await.expect_err("it refuses");
         assert!(
             matches!(
@@ -1023,11 +1024,18 @@ mod tests {
         );
     }
 
-    /// The environment a durable `serve` needs, minus the backend URLs a case adds itself.
+    /// The environment a durable `serve` needs, with backend URLs nothing answers on.
+    ///
+    /// `DATABASE_URL` names a port nothing listens on; a case that reaches a database replaces
+    /// it.
     fn durable_environment(root: &std::path::Path) -> BTreeMap<String, String> {
         [
             ("BLOB_ROOT".to_owned(), root.display().to_string()),
             ("JWT_ED25519_DER".to_owned(), EXAMPLE_DER.to_owned()),
+            (
+                "DATABASE_URL".to_owned(),
+                "postgres://127.0.0.1:1/capsule".to_owned(),
+            ),
             ("VALKEY_URL".to_owned(), "redis://127.0.0.1:1".to_owned()),
             // A durable deployment supplies its own attestation identity rather than having one
             // derived from the token signer; `config` refuses without it.
@@ -1279,11 +1287,16 @@ mod tests {
     async fn a_durable_backend_with_oidc_configured_goes_on_to_the_probes() {
         // Until #460 a durable boot with `OIDC_ISSUER` was refused before either probe, naming
         // the adapters it lacked. Both exist now, so it proceeds exactly as one without OIDC
-        // does — to the first probe, which refuses here only because no database is named.
+        // does — to the first probe, which refuses here only because no database is named. The
+        // name is dropped after loading, because `Config::load` demands it.
         let root = tempfile::tempdir().expect("a scratch directory");
         let environment: BTreeMap<String, String> = [
             ("BLOB_ROOT".to_owned(), root.path().display().to_string()),
             ("JWT_ED25519_DER".to_owned(), EXAMPLE_DER.to_owned()),
+            (
+                "DATABASE_URL".to_owned(),
+                "postgres://127.0.0.1:1/capsule".to_owned(),
+            ),
             ("VALKEY_URL".to_owned(), "redis://127.0.0.1:6379".to_owned()),
             (
                 "ATTESTATION_KEY_SEED".to_owned(),
@@ -1300,8 +1313,9 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        let config = Config::load(&environment, &Overrides::default(), Demands::Serve)
+        let mut config = Config::load(&environment, &Overrides::default(), Demands::Serve)
             .expect("it is well-formed");
+        config.database_url = None;
         assert!(config.oidc.is_some(), "the relying party is configured");
         let error = assemble(&config).await.expect_err("it refuses");
         assert!(
@@ -1665,13 +1679,23 @@ mod tests {
         // An operator running `capsule-server scrub` without `--memory` is asking for the
         // durable stores, and the first one those workers read is the index. Naming
         // `VALKEY_URL` first would send them to configure the second thing before the first.
+        // `Config::load` names both at once (#520); this is the boot path's backstop, reached by
+        // a `Config` that lost both after loading.
         let root = tempfile::tempdir().expect("a scratch directory");
-        let environment: BTreeMap<String, String> =
-            [("BLOB_ROOT".to_owned(), root.path().display().to_string())]
-                .into_iter()
-                .collect();
-        let config = Config::load(&environment, &Overrides::default(), Demands::Maintenance)
+        let environment: BTreeMap<String, String> = [
+            ("BLOB_ROOT".to_owned(), root.path().display().to_string()),
+            (
+                "DATABASE_URL".to_owned(),
+                "postgres://127.0.0.1:1/capsule".to_owned(),
+            ),
+            ("VALKEY_URL".to_owned(), "redis://127.0.0.1:1".to_owned()),
+        ]
+        .into_iter()
+        .collect();
+        let mut config = Config::load(&environment, &Overrides::default(), Demands::Maintenance)
             .expect("maintenance demands nothing else");
+        config.database_url = None;
+        config.valkey_url = None;
         let error = super::assemble_maintenance(&config)
             .await
             .expect_err("it refuses");
