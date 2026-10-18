@@ -8131,6 +8131,26 @@
     "message": "Too many sign-ins are already in progress. Please try again in a moment.",
     "context": "HTTP 503 on POST /v1/auth/oidc/authorize (slice S-N1): the server is already holding as many unfinished single sign-on ceremonies as it will hold, so this one was not begun. Retryable within minutes - pending ceremonies expire ten minutes after they start. Distinct from error.auth.unavailable, which is a 500 meaning a store could not answer at all: this one means the server answered and said 'not now', and a client may retry it on a short timer rather than surfacing an outage."
   },
+  "error.auth.oidc_device_denied": {
+    "message": "The sign-in was declined at your identity provider.",
+    "context": "HTTP 401 on POST /v1/auth/oidc/device/poll (issue #635): the person declined the device sign-in at their identity provider (RFC 8628 access_denied). The ceremony is over; the person starts again if they meant to approve it."
+  },
+  "error.auth.oidc_device_expired": {
+    "message": "That sign-in code has expired or was already used. Start again.",
+    "context": "HTTP 401 on POST /v1/auth/oidc/device/poll (issue #635): the device sign-in is unknown, finished, past its window, or the identity provider says its code expired (RFC 8628 expired_token). One answer for all of them, so the poll is not an oracle; the person starts the sign-in again."
+  },
+  "error.auth.oidc_device_pending": {
+    "message": "Waiting for you to finish signing in on your other device.",
+    "context": "HTTP 400 on POST /v1/auth/oidc/device/poll (issue #635): the person has not yet approved the device sign-in at their identity provider (RFC 8628 authorization_pending, which RFC 8628 also answers with a 400). Not a failure: the client keeps polling at its interval."
+  },
+  "error.auth.oidc_device_slow_down": {
+    "message": "Checking too often; slowing down.",
+    "context": "HTTP 429 on POST /v1/auth/oidc/device/poll (issue #635): the client polled sooner than its interval allows, or the identity provider asked it to slow down (RFC 8628 slow_down). Not a failure: the client adds five seconds to its interval and keeps polling."
+  },
+  "error.auth.oidc_device_unsupported": {
+    "message": "Signing in without a browser isn't available with this server's identity provider.",
+    "context": "HTTP 404 on POST /v1/auth/oidc/device (issue #635): the server's identity provider does not offer the device authorization grant (RFC 8628) to Capsule - it publishes no device endpoint, or refuses this client one. The person signs in with the browser flow instead, or the operator enables the grant at the provider."
+  },
   "error.auth.oidc_exchange_failed": {
     "message": "Your identity provider didn't accept that sign-in. Try again.",
     "context": "HTTP 401 on POST /v1/auth/oidc/callback (slice S-N1): the identity provider refused to exchange the authorization code (an invalid, spent or mismatched code). The person starts the sign-in again."

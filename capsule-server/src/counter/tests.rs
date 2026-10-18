@@ -364,6 +364,7 @@ async fn a_partition_is_dropped_when_its_last_window_lapses() {
 fn every_ceiling_is_sized_from_its_own_window() {
     // The two keys only one value of which can exist hold exactly one window.
     assert_eq!(CounterKey::OidcAuthorizeRefused.ceiling(), 1);
+    assert_eq!(CounterKey::OidcDevice.ceiling(), 1);
     assert_eq!(CounterKey::EnrollmentRedemptionMalformed.ceiling(), 1);
     // The redemption key is one of two spellings (issue #528), so it holds exactly two.
     assert_eq!(
@@ -402,6 +403,7 @@ fn every_ceiling_is_sized_from_its_own_window() {
         CounterKey::RegistrationSource(String::new()),
         CounterKey::OidcAuthorize(String::new()),
         CounterKey::OidcAuthorizeRefused,
+        CounterKey::OidcDevice,
     ]
     .map(|key| key.as_str());
     let unique: std::collections::BTreeSet<&str> = names.iter().copied().collect();

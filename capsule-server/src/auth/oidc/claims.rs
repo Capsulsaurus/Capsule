@@ -78,8 +78,16 @@ pub struct Expectations {
     pub issuer: String,
     /// This relying party's `client_id`; `aud` must contain it and `azp`, if present, must be it.
     pub client_id: String,
-    /// The nonce the authorization request carried; the token must echo it exactly.
-    pub nonce: String,
+    /// The nonce the authorization request carried, which the token must echo exactly — or
+    /// `None` for a grant that sends none, under which the token must carry **no** `nonce`.
+    ///
+    /// `None` is the device authorization grant (RFC 8628), which has no front channel for a
+    /// nonce to bind. What the nonce proves on the code flow — this token answers this request —
+    /// is proven there by the channel: the token arrives on the relying party's own TLS request
+    /// to the token endpoint, in answer to a device code only it holds. A token that does carry
+    /// a nonce was minted for some authorization request, so it is not the answer to this grant
+    /// and is refused (design/authentication.md, "Signing In Without a Browser").
+    pub nonce: Option<String>,
 }
 
 /// The facts a verified ID token establishes about a person.
@@ -174,7 +182,8 @@ pub enum ClaimRejection {
         /// The later of `nbf` and `iat`.
         valid_from: Timestamp,
     },
-    /// `nonce` is absent or is not the one the authorization request carried.
+    /// `nonce` is absent or is not the one the authorization request carried — or, for a grant
+    /// that sends none, is present at all.
     #[error("the ID token's nonce is not the one this ceremony issued")]
     Nonce,
     /// `sub` is empty or over [`MAX_SUBJECT_LENGTH`].
@@ -365,10 +374,11 @@ pub fn verify_id_token(
     // Compared as bytes rather than as strings with a short-circuiting `==` on purpose; the
     // nonce is high-entropy and single-use so the timing channel is academic, but the compare
     // costs nothing and the habit is worth keeping.
-    let nonce_matches = claims
-        .nonce
-        .as_deref()
-        .is_some_and(|nonce| constant_time_equal(nonce.as_bytes(), expect.nonce.as_bytes()));
+    let nonce_matches = match (claims.nonce.as_deref(), expect.nonce.as_deref()) {
+        (Some(nonce), Some(expected)) => constant_time_equal(nonce.as_bytes(), expected.as_bytes()),
+        (None, None) => true,
+        (Some(_), None) | (None, Some(_)) => false,
+    };
     if !nonce_matches {
         return Err(ClaimRejection::Nonce);
     }
@@ -472,7 +482,7 @@ mod tests {
         Expectations {
             issuer: ISSUER.to_owned(),
             client_id: CLIENT.to_owned(),
-            nonce: NONCE.to_owned(),
+            nonce: Some(NONCE.to_owned()),
         }
     }
 
@@ -774,6 +784,32 @@ mod tests {
             verify(&signer.sign(&claims), &keys(&[&signer])),
             Err(ClaimRejection::Nonce),
             "an absent nonce is a replayable token"
+        );
+    }
+
+    #[test]
+    fn a_grant_that_sends_no_nonce_admits_only_a_token_without_one() {
+        let signer = Signer::generate("k1");
+        let keys = keys(&[&signer]);
+        let device = Expectations {
+            nonce: None,
+            ..expectations()
+        };
+        let mut claims = good_claims();
+        assert_eq!(
+            verify_id_token(&signer.sign(&claims), &keys, &device, now()),
+            Err(ClaimRejection::Nonce),
+            "a token carrying a nonce was minted for an authorization request, not this grant"
+        );
+        claims.as_object_mut().expect("object").remove("nonce");
+        let identity = verify_id_token(&signer.sign(&claims), &keys, &device, now())
+            .expect("a token with no nonce answers a grant that sent none");
+        assert_eq!(identity.issuer, ISSUER);
+        // Every other check still runs.
+        claims["aud"] = json!("someone-else");
+        assert_eq!(
+            verify_id_token(&signer.sign(&claims), &keys, &device, now()),
+            Err(ClaimRejection::Audience)
         );
     }
 

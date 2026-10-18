@@ -43,6 +43,10 @@ pub struct ProviderMetadata {
     pub token_endpoint: String,
     /// Where the signing keys are published.
     pub jwks_uri: String,
+    /// Where a device authorization is requested (RFC 8628 §4). Absent means the provider does
+    /// not offer the grant, which is a typed refusal at the device route, not a fault.
+    #[serde(default)]
+    pub device_authorization_endpoint: Option<String>,
 }
 
 /// Why metadata could not be used.
@@ -114,22 +118,46 @@ pub fn admit(metadata: ProviderMetadata, issuer: &str) -> Result<ProviderMetadat
             found: super::claims::bounded(&metadata.issuer),
         });
     }
-    let loopback_issuer = is_loopback_issuer(issuer);
-    for (endpoint, url) in [
-        ("authorization_endpoint", &metadata.authorization_endpoint),
-        ("token_endpoint", &metadata.token_endpoint),
-        ("jwks_uri", &metadata.jwks_uri),
-    ] {
-        let secure = url.starts_with("https://");
-        let loopback = loopback_issuer && is_loopback_issuer(url);
-        if !secure && !loopback {
-            return Err(DiscoveryError::InsecureEndpoint {
-                endpoint,
-                url: super::claims::bounded(url),
-            });
+    let endpoints = [
+        (
+            "authorization_endpoint",
+            Some(&metadata.authorization_endpoint),
+        ),
+        ("token_endpoint", Some(&metadata.token_endpoint)),
+        ("jwks_uri", Some(&metadata.jwks_uri)),
+        (
+            "device_authorization_endpoint",
+            metadata.device_authorization_endpoint.as_ref(),
+        ),
+    ];
+    for (endpoint, url) in endpoints {
+        if let Some(url) = url {
+            admit_url(endpoint, url, issuer)?;
         }
     }
     Ok(metadata)
+}
+
+/// Whether `url`, published by the provider for `issuer`, may be used: `https`, or — under a
+/// loopback issuer — itself loopback `http`.
+///
+/// The one scheme rule, applied to every endpoint the discovery document names and to the
+/// `verification_uri` a device authorization answers with, which is an address the person is
+/// told to visit.
+///
+/// # Errors
+///
+/// [`DiscoveryError::InsecureEndpoint`] naming `endpoint`.
+pub fn admit_url(endpoint: &'static str, url: &str, issuer: &str) -> Result<(), DiscoveryError> {
+    let secure = url.starts_with("https://");
+    let loopback = is_loopback_issuer(issuer) && is_loopback_issuer(url);
+    if secure || loopback {
+        return Ok(());
+    }
+    Err(DiscoveryError::InsecureEndpoint {
+        endpoint,
+        url: super::claims::bounded(url),
+    })
 }
 
 /// One fetched document and when it was fetched.
@@ -232,7 +260,37 @@ mod tests {
             authorization_endpoint: format!("{scheme}://idp.example.test/auth"),
             token_endpoint: format!("{scheme}://idp.example.test/token"),
             jwks_uri: format!("{scheme}://idp.example.test/keys"),
+            device_authorization_endpoint: None,
         }
+    }
+
+    #[test]
+    fn a_device_endpoint_is_optional_and_held_to_the_same_scheme_rule() {
+        let issuer = "https://idp.example.test";
+        assert!(
+            admit(metadata(issuer, "https"), issuer).is_ok(),
+            "a provider without the grant is still a provider"
+        );
+        let mut offered = metadata(issuer, "https");
+        offered.device_authorization_endpoint = Some(format!("{issuer}/device/code"));
+        assert!(admit(offered.clone(), issuer).is_ok());
+        offered.device_authorization_endpoint = Some("http://idp.example.test/device".to_owned());
+        assert!(matches!(
+            admit(offered, issuer).expect_err("refused"),
+            DiscoveryError::InsecureEndpoint {
+                endpoint: "device_authorization_endpoint",
+                ..
+            }
+        ));
+
+        let parsed: ProviderMetadata = serde_json::from_value(serde_json::json!({
+            "issuer": issuer,
+            "authorization_endpoint": format!("{issuer}/auth"),
+            "token_endpoint": format!("{issuer}/token"),
+            "jwks_uri": format!("{issuer}/keys"),
+        }))
+        .expect("a document without the member parses");
+        assert_eq!(parsed.device_authorization_endpoint, None);
     }
 
     #[test]
@@ -312,6 +370,7 @@ mod tests {
                 authorization_endpoint: format!("{issuer}/auth"),
                 token_endpoint: format!("{issuer}/token"),
                 jwks_uri: "https://keys.example.test/jwks".to_owned(),
+                device_authorization_endpoint: Some(format!("{issuer}/device/code")),
             };
             assert!(admit(loopback, issuer).is_ok(), "{issuer}");
         }

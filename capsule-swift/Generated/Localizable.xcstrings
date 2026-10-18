@@ -39115,6 +39115,56 @@
         }
       }
     },
+    "error.auth.oidc_device_denied": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The sign-in was declined at your identity provider."
+          }
+        }
+      }
+    },
+    "error.auth.oidc_device_expired": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That sign-in code has expired or was already used. Start again."
+          }
+        }
+      }
+    },
+    "error.auth.oidc_device_pending": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for you to finish signing in on your other device."
+          }
+        }
+      }
+    },
+    "error.auth.oidc_device_slow_down": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking too often; slowing down."
+          }
+        }
+      }
+    },
+    "error.auth.oidc_device_unsupported": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signing in without a browser isn't available with this server's identity provider."
+          }
+        }
+      }
+    },
     "error.auth.oidc_exchange_failed": {
       "localizations": {
         "en": {

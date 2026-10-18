@@ -109,6 +109,16 @@ pub const OIDC_AUTHORIZE: Budget = Budget::new(60, SignedDuration::from_mins(1))
 /// bounded.
 pub const OIDC_AUTHORIZE_REFUSED: Budget = Budget::new(60, SignedDuration::from_mins(1));
 
+/// Begun OIDC device authorizations, deployment-wide (issue #635).
+///
+/// Sixty a minute, the authorize's number, against
+/// [`CounterKey::OidcDevice`](crate::counter::CounterKey::OidcDevice)'s one bucket: a person
+/// signing in from a terminal begins one, and a script filling the device store begins
+/// thousands. At the fifteen-minute device lifetime it holds the in-memory store under a thousand
+/// live records against its ten-thousand ceiling, and every begin it refuses is one the provider
+/// is never asked for.
+pub const OIDC_DEVICE: Budget = Budget::new(60, SignedDuration::from_mins(1));
+
 /// Deep storage verifications per account.
 ///
 /// Four an hour. The contract calls the limiter *half of the feature*: a deep verify reads and
