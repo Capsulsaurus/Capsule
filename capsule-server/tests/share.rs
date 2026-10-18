@@ -670,6 +670,106 @@ async fn a_metadata_record_from_an_account_past_its_grace_window_is_refused() {
         StatusCode::NOT_FOUND,
     )
     .await;
+
+    // A link that carries no record is refused too: past the grace window every new share
+    // link is (quota.md, "Grace expired"), not only one that brings its bytes along.
+    let held = store(&fixture, &payload(b'h', 64)).await;
+    let problem = issue(
+        &fixture,
+        &bearer,
+        &json!({
+            "opaque_id": opaque(2),
+            "metadata_hash": held.as_str(),
+            "serves": [held.as_str()],
+        }),
+        StatusCode::FORBIDDEN,
+    )
+    .await;
+    assert_eq!(problem["code"], "error.quota.grace_locked");
+    fetch(
+        &fixture,
+        &format!("/s/{}", opaque(2)),
+        StatusCode::NOT_FOUND,
+    )
+    .await;
+}
+
+/// #653: a record whose new bytes would reach the hard limit is refused, like an upload of them.
+///
+/// The bound on the grace window: without it an account over its limit could store any number
+/// of distinct records until the window closed. Bytes the ledger already attributes add
+/// nothing, so a second link over the same record is still admitted.
+#[tokio::test]
+async fn a_metadata_record_that_would_cross_the_hard_limit_is_refused() {
+    use capsule_server::quota::{DEFAULT_GRACE_WINDOW, QuotaLimits, QuotaStore as _};
+    use capsule_server::store::Clock as _;
+
+    let limits = QuotaLimits::new(4096, 12_288, DEFAULT_GRACE_WINDOW);
+    let fixture = Fixture::with_quota(limits);
+    let owner = capsule_server::store::UserId::new(support::user().as_str());
+    fixture
+        .quotas
+        .charge(
+            &owner,
+            &address_of(b"pre-existing storage"),
+            12_200,
+            fixture.clock.now(),
+            limits,
+        )
+        .await
+        .expect("the ledger accepts");
+    let bearer = fixture.bearer().await;
+
+    // 12 200 + 64 stays under the limit.
+    let (_, first, _) = live_link(&fixture, &bearer, 1).await;
+    let used = fixture.quotas.usage(&owner).await.expect("usage").used;
+    assert_eq!(used, 12_264);
+
+    // A second, distinct record would reach it.
+    let record = payload(b'n', 64);
+    let refused = address_of(&record);
+    let problem = issue(
+        &fixture,
+        &bearer,
+        &json!({
+            "opaque_id": opaque(2),
+            "metadata_hash": refused.as_str(),
+            "serves": [refused.as_str()],
+            "metadata_blob": BASE64.encode(&record),
+        }),
+        StatusCode::FORBIDDEN,
+    )
+    .await;
+    assert_eq!(problem["code"], "error.quota.exceeded", "{problem}");
+    assert_eq!(
+        fixture.quotas.usage(&owner).await.expect("usage").used,
+        used,
+        "a refused record is not charged"
+    );
+    fetch(
+        &fixture,
+        &format!("/s/{}", opaque(2)),
+        StatusCode::NOT_FOUND,
+    )
+    .await;
+
+    // The first record again, under a third link: already attributed, so admitted.
+    issue(
+        &fixture,
+        &bearer,
+        &json!({
+            "opaque_id": opaque(3),
+            "metadata_hash": first.as_str(),
+            "serves": [first.as_str()],
+            "metadata_blob": BASE64.encode(payload(b'm', 64)),
+        }),
+        StatusCode::CREATED,
+    )
+    .await;
+    assert_eq!(
+        fixture.quotas.usage(&owner).await.expect("usage").used,
+        used
+    );
 }
 
 /// #653: the collector keeps a live link's record, and reclaims it once the link is revoked.
