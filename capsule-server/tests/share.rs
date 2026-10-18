@@ -53,13 +53,22 @@ async fn issue(fixture: &Fixture, bearer: &str, body: &Value, expect: StatusCode
         .json()
 }
 
-/// A link over one metadata blob and one original.
+/// The address `bytes` would be stored under, without storing them.
+fn address_of(bytes: &[u8]) -> ContentAddress {
+    ContentAddress::parse(&support::checksum(bytes)).expect("a content address")
+}
+
+/// A link over one metadata record and one original.
+///
+/// The original is put straight into the store, standing in for an asset upload. The record
+/// travels in the issue request, as a client sends it (#653).
 async fn live_link(
     fixture: &Fixture,
     bearer: &str,
     tag: u8,
 ) -> (String, ContentAddress, ContentAddress) {
-    let metadata = store(fixture, &payload(b'm', 64)).await;
+    let record = payload(b'm', 64);
+    let metadata = address_of(&record);
     let original = store(fixture, &payload(b'o', 512)).await;
     let id = opaque(tag);
     issue(
@@ -69,6 +78,7 @@ async fn live_link(
             "opaque_id": id,
             "metadata_hash": metadata.as_str(),
             "serves": [metadata.as_str(), original.as_str()],
+            "metadata_blob": BASE64.encode(&record),
         }),
         StatusCode::CREATED,
     )
@@ -223,13 +233,14 @@ async fn a_published_link_opens_through_the_browser_surface_from_what_the_server
             .expect("encapsulate");
         let publication =
             publish_share(&wrapped, &fragment, &opaque_id, None, shared.clone()).expect("publish");
-        let uploaded = store(&fixture, &publication.metadata_blob).await;
-        assert_eq!(uploaded.as_str(), publication.metadata_hash.to_hex());
         let id = hex(&opaque_id);
+        // The record crosses the wire in the issue request; nothing puts it in the store but
+        // the server (#653).
         let mut body = json!({
             "opaque_id": id,
             "metadata_hash": publication.metadata_hash.to_hex(),
             "serves": publication.serves.iter().map(capsule_core::crypto::hash::Hash32::to_hex).collect::<Vec<_>>(),
+            "metadata_blob": BASE64.encode(&publication.metadata_blob),
         });
         if let Some(secret) = &publication.wrapped_secret {
             body["wrapped_secret"] = json!(BASE64.encode(secret));
@@ -567,6 +578,370 @@ async fn a_link_that_cannot_serve_its_own_metadata_is_refused_at_issue() {
     )
     .await;
     assert_eq!(problem["code"], "error.share.malformed");
+}
+
+/// #653: the server stores only the record `metadata_hash` names, within its bound.
+#[tokio::test]
+async fn a_metadata_record_that_is_not_the_named_one_is_refused_and_nothing_is_stored() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let record = payload(b'm', 64);
+    let metadata = address_of(&record);
+    let oversized = vec![0x5A; capsule_server::share::MAX_SHARE_METADATA_BYTES + 1];
+    let oversized_address = address_of(&oversized);
+
+    for (tag, hash, blob) in [
+        // Another record's bytes under this one's address.
+        (1, &metadata, BASE64.encode(payload(b'x', 64))),
+        // Not base64 at all.
+        (2, &metadata, "not base64!".to_owned()),
+        // The right hash, and one byte past the bound.
+        (3, &oversized_address, BASE64.encode(&oversized)),
+    ] {
+        let problem = issue(
+            &fixture,
+            &bearer,
+            &json!({
+                "opaque_id": opaque(tag),
+                "metadata_hash": hash.as_str(),
+                "serves": [hash.as_str()],
+                "metadata_blob": blob,
+            }),
+            StatusCode::BAD_REQUEST,
+        )
+        .await;
+        assert_eq!(problem["code"], "error.share.malformed", "{problem}");
+        assert!(
+            fixture.blobs.stat(hash).await.expect("stat").is_none(),
+            "a refused record must not reach the store"
+        );
+        fetch(
+            &fixture,
+            &format!("/s/{}", opaque(tag)),
+            StatusCode::NOT_FOUND,
+        )
+        .await;
+    }
+}
+
+/// #653: the record is metadata growth, refused past the quota grace window like any other.
+#[tokio::test]
+async fn a_metadata_record_from_an_account_past_its_grace_window_is_refused() {
+    use capsule_server::quota::{DEFAULT_GRACE_WINDOW, QuotaLimits, QuotaStore as _};
+    use capsule_server::store::Clock as _;
+
+    let limits = QuotaLimits::new(4096, 12_288, DEFAULT_GRACE_WINDOW);
+    let fixture = Fixture::with_quota(limits);
+    fixture
+        .quotas
+        .charge(
+            &capsule_server::store::UserId::new(support::user().as_str()),
+            &address_of(b"pre-existing storage"),
+            20_000,
+            fixture.clock.now(),
+            limits,
+        )
+        .await
+        .expect("the ledger accepts");
+    fixture
+        .clock
+        .advance(DEFAULT_GRACE_WINDOW + SignedDuration::from_hours(1));
+    let bearer = fixture.bearer().await;
+
+    let record = payload(b'm', 64);
+    let metadata = address_of(&record);
+    let problem = issue(
+        &fixture,
+        &bearer,
+        &json!({
+            "opaque_id": opaque(1),
+            "metadata_hash": metadata.as_str(),
+            "serves": [metadata.as_str()],
+            "metadata_blob": BASE64.encode(&record),
+        }),
+        StatusCode::FORBIDDEN,
+    )
+    .await;
+    assert_eq!(problem["code"], "error.quota.grace_locked");
+    assert!(fixture.blobs.stat(&metadata).await.expect("stat").is_none());
+    fetch(
+        &fixture,
+        &format!("/s/{}", opaque(1)),
+        StatusCode::NOT_FOUND,
+    )
+    .await;
+
+    // A link that carries no record is refused too: past the grace window every new share
+    // link is (quota.md, "Grace expired"), not only one that brings its bytes along.
+    let held = store(&fixture, &payload(b'h', 64)).await;
+    let problem = issue(
+        &fixture,
+        &bearer,
+        &json!({
+            "opaque_id": opaque(2),
+            "metadata_hash": held.as_str(),
+            "serves": [held.as_str()],
+        }),
+        StatusCode::FORBIDDEN,
+    )
+    .await;
+    assert_eq!(problem["code"], "error.quota.grace_locked");
+    fetch(
+        &fixture,
+        &format!("/s/{}", opaque(2)),
+        StatusCode::NOT_FOUND,
+    )
+    .await;
+}
+
+/// #653: a record whose new bytes would reach the hard limit is refused, like an upload of them.
+///
+/// The bound on the grace window: without it an account over its limit could store any number
+/// of distinct records until the window closed. Bytes the ledger already attributes add
+/// nothing, so a second link over the same record is still admitted.
+#[tokio::test]
+async fn a_metadata_record_that_would_cross_the_hard_limit_is_refused() {
+    use capsule_server::quota::{DEFAULT_GRACE_WINDOW, QuotaLimits, QuotaStore as _};
+    use capsule_server::store::Clock as _;
+
+    let limits = QuotaLimits::new(4096, 12_288, DEFAULT_GRACE_WINDOW);
+    let fixture = Fixture::with_quota(limits);
+    let owner = capsule_server::store::UserId::new(support::user().as_str());
+    fixture
+        .quotas
+        .charge(
+            &owner,
+            &address_of(b"pre-existing storage"),
+            12_200,
+            fixture.clock.now(),
+            limits,
+        )
+        .await
+        .expect("the ledger accepts");
+    let bearer = fixture.bearer().await;
+
+    // 12 200 + 64 stays under the limit.
+    let (_, first, _) = live_link(&fixture, &bearer, 1).await;
+    let used = fixture.quotas.usage(&owner).await.expect("usage").used;
+    assert_eq!(used, 12_264);
+
+    // A second, distinct record would reach it.
+    let record = payload(b'n', 64);
+    let refused = address_of(&record);
+    let problem = issue(
+        &fixture,
+        &bearer,
+        &json!({
+            "opaque_id": opaque(2),
+            "metadata_hash": refused.as_str(),
+            "serves": [refused.as_str()],
+            "metadata_blob": BASE64.encode(&record),
+        }),
+        StatusCode::FORBIDDEN,
+    )
+    .await;
+    assert_eq!(problem["code"], "error.quota.exceeded", "{problem}");
+    assert_eq!(
+        fixture.quotas.usage(&owner).await.expect("usage").used,
+        used,
+        "a refused record is not charged"
+    );
+    fetch(
+        &fixture,
+        &format!("/s/{}", opaque(2)),
+        StatusCode::NOT_FOUND,
+    )
+    .await;
+
+    // The first record again, under a third link: already attributed, so admitted.
+    issue(
+        &fixture,
+        &bearer,
+        &json!({
+            "opaque_id": opaque(3),
+            "metadata_hash": first.as_str(),
+            "serves": [first.as_str()],
+            "metadata_blob": BASE64.encode(payload(b'm', 64)),
+        }),
+        StatusCode::CREATED,
+    )
+    .await;
+    assert_eq!(
+        fixture.quotas.usage(&owner).await.expect("usage").used,
+        used
+    );
+}
+
+/// #653: the collector keeps a live link's record, and reclaims it once the link is revoked.
+#[tokio::test]
+async fn the_collector_keeps_a_live_links_record_and_reclaims_a_revoked_ones() {
+    use capsule_server::gc::{CollectionContext, DEFAULT_GRACE_WINDOW, Mode, collect};
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (id, metadata, _) = live_link(&fixture, &bearer, 1).await;
+    let collection = CollectionContext::new(
+        fixture.index.clone(),
+        fixture.blobs.clone(),
+        fixture.marks.clone(),
+        fixture.quotas.clone(),
+        fixture.shares.clone(),
+        fixture.clock.clone(),
+        DEFAULT_GRACE_WINDOW,
+    );
+
+    let report = collect(&collection, Mode::Apply).await.expect("a pass");
+    assert!(
+        !report.marked.contains(&metadata),
+        "a live link's record has no asset row and must still be held: {report:?}"
+    );
+    fixture
+        .clock
+        .advance(DEFAULT_GRACE_WINDOW + SignedDuration::from_hours(1));
+    let report = collect(&collection, Mode::Apply).await.expect("a pass");
+    assert!(!report.swept.contains(&metadata), "{report:?}");
+    let bearer = fixture.bearer().await;
+    fetch(
+        &fixture,
+        &format!("/s/{id}/blob/{metadata}"),
+        StatusCode::OK,
+    )
+    .await;
+
+    fixture
+        .client
+        .delete(&format!("/v1/shares/{id}"))
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let report = collect(&collection, Mode::Apply).await.expect("a pass");
+    assert!(report.marked.contains(&metadata), "{report:?}");
+    fixture
+        .clock
+        .advance(DEFAULT_GRACE_WINDOW + SignedDuration::from_hours(1));
+    let report = collect(&collection, Mode::Apply).await.expect("a pass");
+    assert!(report.swept.contains(&metadata), "{report:?}");
+    assert!(fixture.blobs.stat(&metadata).await.expect("stat").is_none());
+    // The record was charged to the owner at issue, and the sweep gives the bytes back.
+    let owner = capsule_server::store::UserId::new(support::user().as_str());
+    assert!(
+        report.credited.contains(&(owner, 64)),
+        "the swept record's bytes go back to the account that issued it: {report:?}"
+    );
+}
+
+/// #653: a collaborator that cannot answer is a `500`, never a link issued without its record.
+///
+/// One case per collaborator issue touches before it records the link: the quota ledger's read
+/// (the grace-window gate), the blob store's `put`, and the ledger's charge. Each leaves no link,
+/// and the charge failure leaves nothing charged.
+#[tokio::test]
+async fn a_collaborator_that_cannot_answer_issues_nothing() {
+    use capsule_server::quota::QuotaStore as _;
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let owner = capsule_server::store::UserId::new(support::user().as_str());
+    let record = payload(b'm', 64);
+    let metadata = address_of(&record);
+    let body = |tag: u8| {
+        json!({
+            "opaque_id": opaque(tag),
+            "metadata_hash": metadata.as_str(),
+            "serves": [metadata.as_str()],
+            "metadata_blob": BASE64.encode(&record),
+        })
+    };
+
+    // The quota state read.
+    fixture.quotas.set_unavailable(true);
+    let problem = issue(
+        &fixture,
+        &bearer,
+        &body(1),
+        StatusCode::INTERNAL_SERVER_ERROR,
+    )
+    .await;
+    assert_eq!(problem["code"], "error.share.unavailable", "{problem}");
+    assert!(fixture.blobs.stat(&metadata).await.expect("stat").is_none());
+    fixture.quotas.set_unavailable(false);
+
+    // The blob store's put.
+    fixture.blobs.set_puts_unavailable(true);
+    let problem = issue(
+        &fixture,
+        &bearer,
+        &body(2),
+        StatusCode::INTERNAL_SERVER_ERROR,
+    )
+    .await;
+    assert_eq!(problem["code"], "error.share.unavailable", "{problem}");
+    assert_eq!(
+        fixture.quotas.usage(&owner).await.expect("usage").used,
+        0,
+        "a record that was not stored is not charged"
+    );
+    fixture.blobs.set_puts_unavailable(false);
+
+    // The ledger's charge, after the read answered and the record was stored.
+    fixture.quotas.set_charges_unavailable(true);
+    let problem = issue(
+        &fixture,
+        &bearer,
+        &body(3),
+        StatusCode::INTERNAL_SERVER_ERROR,
+    )
+    .await;
+    assert_eq!(problem["code"], "error.share.unavailable", "{problem}");
+    fixture.quotas.set_charges_unavailable(false);
+    assert_eq!(fixture.quotas.usage(&owner).await.expect("usage").used, 0);
+
+    for tag in 1..=3 {
+        fetch(
+            &fixture,
+            &format!("/s/{}", opaque(tag)),
+            StatusCode::NOT_FOUND,
+        )
+        .await;
+    }
+}
+
+/// #653: a stored record counts against the owner's quota, once per distinct record.
+#[tokio::test]
+async fn a_metadata_record_is_charged_to_the_owner_once() {
+    use capsule_server::quota::QuotaStore as _;
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let owner = capsule_server::store::UserId::new(support::user().as_str());
+    let before = fixture.quotas.usage(&owner).await.expect("usage").used;
+
+    let (_, metadata, _) = live_link(&fixture, &bearer, 1).await;
+    let after = fixture.quotas.usage(&owner).await.expect("usage").used;
+    assert_eq!(
+        after,
+        before + 64,
+        "the 64-byte record is the owner's storage"
+    );
+
+    // The same record under a second link is the same bytes, and is not charged again.
+    issue(
+        &fixture,
+        &bearer,
+        &json!({
+            "opaque_id": opaque(2),
+            "metadata_hash": metadata.as_str(),
+            "serves": [metadata.as_str()],
+            "metadata_blob": BASE64.encode(payload(b'm', 64)),
+        }),
+        StatusCode::CREATED,
+    )
+    .await;
+    assert_eq!(
+        fixture.quotas.usage(&owner).await.expect("usage").used,
+        after
+    );
 }
 
 #[tokio::test]

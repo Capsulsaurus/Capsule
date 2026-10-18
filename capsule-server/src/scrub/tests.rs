@@ -10,20 +10,23 @@
 use std::sync::Arc;
 
 use capsule_core::crypto::hash::{Hash32, hash_bytes};
-use jiff::Timestamp;
+use jiff::{SignedDuration, Timestamp};
 
 use super::*;
 use crate::blob::{InMemoryBlobStore, QuarantineReason};
 use crate::index::memory::InMemoryAssetIndex;
 use crate::index::{BlobRecord, PendingAsset};
-use crate::store::memory::InMemoryUploadSessions;
+use crate::share::InMemoryShares;
+use crate::store::memory::{InMemoryUploadSessions, ManualClock};
 use crate::store::{AlbumId, OwnerId, SystemClock, UploadId};
 
-/// The three stores, assembled.
+/// The stores, assembled.
 struct Harness {
     context: ScrubContext,
     index: Arc<InMemoryAssetIndex>,
     blobs: Arc<InMemoryBlobStore>,
+    shares: Arc<InMemoryShares>,
+    clock: Arc<ManualClock>,
 }
 
 /// The album every scrub fixture files under, as the manifest's `album_id` must be a UUID.
@@ -126,12 +129,42 @@ impl Harness {
             Arc::new(SystemClock),
             jiff::SignedDuration::from_hours(24),
         ));
-        let context = ScrubContext::new(index.clone(), blobs.clone(), uploads);
+        let shares = Arc::new(InMemoryShares::new());
+        let clock = Arc::new(ManualClock::default());
+        let context = ScrubContext::new(
+            index.clone(),
+            blobs.clone(),
+            uploads,
+            shares.clone(),
+            clock.clone(),
+        );
         Self {
             context,
             index,
             blobs,
+            shares,
+            clock,
         }
+    }
+
+    /// Issue a link whose metadata record, and only serve, is `metadata` (#653).
+    async fn share(&self, tag: u8, metadata: &ContentAddress, expires_at: Option<Timestamp>) {
+        use crate::share::{IssueOutcome, ShareRecord, ShareStore as _};
+        let outcome = self
+            .shares
+            .issue(ShareRecord {
+                opaque_id: format!("{tag:032x}"),
+                owner_id: crate::store::UserId::new("scrub-owner"),
+                scope: capsule_core::sharing::ShareScope::Album(uuid::Uuid::nil()),
+                serves: std::iter::once(metadata.clone()).collect(),
+                metadata: metadata.clone(),
+                wrapped_secret: None,
+                expires_at,
+                revoked_at: None,
+            })
+            .await
+            .expect("the share store issues");
+        assert_eq!(outcome, IssueOutcome::Issued);
     }
 
     /// Put `bytes` in the store at their own address.
@@ -323,6 +356,33 @@ async fn an_unreferenced_blob_is_an_orphan_and_is_left_alone() {
         "reporting for the collector is the whole job; removing here would make the scrub the \
          deletion bug it exists to catch"
     );
+}
+
+#[tokio::test]
+async fn a_blob_a_live_share_link_serves_is_not_an_orphan() {
+    // #653: a share's sealed metadata record has no asset row, and the collector keeps it for
+    // as long as a live link names it. Reporting it would make every deployment with a live
+    // link fail its scrub over a finding no path will ever resolve.
+    let h = Harness::new();
+    h.publish("referenced").await;
+    let live = h.store(b"a live link's sealed metadata record").await;
+    h.share(1, &live, None).await;
+    let expiring = h.store(b"an expiring link's sealed metadata record").await;
+    h.share(
+        2,
+        &expiring,
+        Some(Timestamp::UNIX_EPOCH + SignedDuration::from_hours(1)),
+    )
+    .await;
+
+    let report = scrub(&h.context, Depth::Structural).await.expect("a pass");
+    assert!(report.is_clean(), "{:?}", report.findings);
+
+    // Past its expiry the link holds nothing, so its record is an ordinary orphan again — the
+    // collector's terms exactly, judged against the same clock.
+    h.clock.advance(SignedDuration::from_hours(2));
+    let report = scrub(&h.context, Depth::Structural).await.expect("a pass");
+    assert_eq!(report.findings, vec![Finding::Orphan { address: expiring }]);
 }
 
 #[tokio::test]

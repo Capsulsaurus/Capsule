@@ -396,6 +396,9 @@ struct Stores {
     uploads: Arc<dyn UploadSessionStore>,
     marks: Arc<dyn CollectionStore>,
     quotas: Arc<dyn QuotaStore>,
+    /// The share links: read by the application, and by the collector, which must not sweep a
+    /// blob a live link serves (#653). Here rather than in [`Ports`] so both are one store.
+    shares: Arc<dyn ShareStore>,
 }
 
 impl Stores {
@@ -407,13 +410,22 @@ impl Stores {
                 self.blobs.clone(),
                 self.marks.clone(),
                 self.quotas.clone(),
+                self.shares.clone(),
                 self.clock.clone(),
                 grace_window,
             )
             // The upload-progress view has no lifetime of its own, so `gc --apply` is what
             // keeps it from growing with every abandoned upload (#519).
             .with_progress_sweep(Arc::new(self.uploads.clone())),
-            scrub: ScrubContext::new(self.index.clone(), self.blobs.clone(), self.uploads.clone()),
+            // The same share store as the collector's, so a record the collector keeps for a
+            // live link is not one the scrub reports as an orphan (#653).
+            scrub: ScrubContext::new(
+                self.index.clone(),
+                self.blobs.clone(),
+                self.uploads.clone(),
+                self.shares.clone(),
+                self.clock.clone(),
+            ),
         }
     }
 }
@@ -434,6 +446,7 @@ impl Base {
             uploads: Arc::new(InMemoryUploadSessions::with_default_ttl(self.clock.clone())),
             marks: Arc::new(InMemoryCollection::new()),
             quotas: Arc::new(InMemoryQuota::new()),
+            shares: Arc::new(InMemoryShares::new()),
             root: self.root,
             clock: self.clock,
             blobs: self.blobs,
@@ -447,6 +460,7 @@ impl Base {
             uploads: valkey.uploads(),
             marks: Arc::new(PostgresCollection::new(connection.clone())),
             quotas: Arc::new(PostgresQuota::new(connection.clone())),
+            shares: Arc::new(PostgresShares::new(connection.clone())),
             root: self.root,
             clock: self.clock,
             blobs: self.blobs,
@@ -540,7 +554,6 @@ struct Ports {
     enrollments: Arc<dyn EnrollmentStore>,
     channels: Arc<dyn ChannelStore>,
     moderation: Arc<dyn ModerationStore>,
-    shares: Arc<dyn ShareStore>,
     drops: Arc<dyn DropStore>,
     counters: Arc<dyn CounterStore>,
     /// The pending OIDC ceremonies. Built on both arms whether or not `OIDC_ISSUER` is set, and
@@ -583,7 +596,6 @@ fn memory_ports(config: &Config, clock: &Arc<SystemClock>) -> Result<Ports, Boot
         enrollments: Arc::new(InMemoryEnrollments::with_default_ttl(clock.clone())),
         channels: Arc::new(InMemoryChannels::with_default_ttl(clock.clone())),
         moderation: Arc::new(InMemoryModeration::new()),
-        shares: Arc::new(InMemoryShares::new()),
         drops: Arc::new(InMemoryDrops::new()),
         counters: Arc::new(InMemoryCounters::new()),
         oidc_authorizations: Arc::new(InMemoryOidcAuthorizations::with_default_ttl(clock.clone())),
@@ -627,7 +639,6 @@ fn durable_ports(
         enrollments: valkey.enrollments(),
         channels: valkey.channels(),
         moderation: Arc::new(PostgresModeration::new(db())),
-        shares: Arc::new(PostgresShares::new(db())),
         drops: Arc::new(PostgresDrops::new(db())),
         counters: Arc::new(ValkeyCounters::new(valkey.valkey().clone())),
         oidc_authorizations: valkey.oidc_authorizations(),
@@ -668,6 +679,7 @@ fn compose(
     let uploads = stores.uploads.clone();
     let marks = stores.marks.clone();
     let quotas = stores.quotas.clone();
+    let shares = stores.shares.clone();
 
     // The signer is built from the private key alone and derives its own public half, which is
     // what lets `ServerInfo` below publish the key tokens actually verify under rather than one
@@ -696,7 +708,6 @@ fn compose(
         enrollments,
         channels,
         moderation,
-        shares,
         drops,
         counters,
         oidc_authorizations,
@@ -1635,6 +1646,80 @@ mod tests {
             .assert_status(kynos::http::StatusCode::OK)
             .json();
         assert!(signed_in["access_token"].is_string(), "{signed_in}");
+    }
+
+    #[tokio::test]
+    async fn the_assembled_maintenance_workers_see_the_links_the_application_issues() {
+        // #653, Decision 5: the share store lives in `Stores`, so the collector and the scrub
+        // read the very store `issue_share` writes. Two stores would mean a collector that sees
+        // no links and sweeps every record, which only an assembly-level case can catch.
+        use base64::Engine as _;
+
+        let root = tempfile::tempdir().expect("a scratch directory");
+        let assembled = assemble(&memory_config(root.path()))
+            .await
+            .expect("it assembles");
+        let client = kynos::test::TestClient::new(assembled.service().expect("the router builds"));
+
+        let registered: serde_json::Value = client
+            .post("/v1/auth/register")
+            .header(
+                "x-capsule-protocol",
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            )
+            .header("accept", "application/json")
+            .json(&serde_json::json!({
+                "email": "somebody@example.test",
+                "password": "correct horse battery staple",
+            }))
+            .send()
+            .await
+            .assert_status(kynos::http::StatusCode::OK)
+            .json();
+        let token = registered["access_token"]
+            .as_str()
+            .expect("an access token");
+
+        let record = b"a share's sealed metadata record";
+        let metadata = capsule_core::crypto::hash::hash_bytes(record).to_hex();
+        client
+            .post("/v1/shares")
+            .header(
+                "x-capsule-protocol",
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            )
+            .header("authorization", &format!("Bearer {token}"))
+            .header("accept", "application/json")
+            .json(&serde_json::json!({
+                "opaque_id": "0123456789abcdef0123456789abcdef",
+                "metadata_hash": metadata,
+                "serves": [metadata],
+                "metadata_blob": base64::engine::general_purpose::STANDARD.encode(record),
+            }))
+            .send()
+            .await
+            .assert_status(kynos::http::StatusCode::CREATED);
+
+        let address = crate::blob::ContentAddress::parse(&metadata).expect("an address");
+        let report = crate::gc::collect(&assembled.maintenance.collection, crate::gc::Mode::Apply)
+            .await
+            .expect("a collection pass");
+        assert!(
+            !report.marked.contains(&address),
+            "the collector must read the store the link was issued into: {report:?}"
+        );
+        let scrubbed = crate::scrub::scrub(
+            &assembled.maintenance.scrub,
+            crate::scrub::Depth::Structural,
+        )
+        .await
+        .expect("a scrub pass");
+        assert_eq!(
+            scrubbed.count("orphan"),
+            0,
+            "and so must the scrub: {:?}",
+            scrubbed.findings
+        );
     }
 
     #[tokio::test]

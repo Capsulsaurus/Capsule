@@ -11,6 +11,11 @@
 //! of a derivable fact, and the failure mode of a counter that drifts low is deleting a live
 //! blob — which is the one outcome this module exists to prevent.
 //!
+//! A **live share link** is the other kind of reference (#653). Its sealed metadata record —
+//! and any blob its issuer prepared for the boundary crossing — has no asset row, so the index
+//! answers zero for it, and [`ShareStore::names_live`] is asked instead. A link that is revoked
+//! or past its expiry holds nothing, so its blobs fall back to the ordinary mark-then-sweep.
+//!
 //! A **tombstoned** asset still holds its references. Deleting is not purging: the bytes stay
 //! until the retention window the user signed into the delete manifest has passed, which is
 //! what makes trash recoverable.
@@ -75,6 +80,7 @@ use jiff::{SignedDuration, Timestamp};
 
 use crate::blob::{BlobStore, ContentAddress};
 use crate::index::{AssetIndex, PurgeOutcome, purge_refusal};
+use crate::share::ShareStore;
 use crate::store::{AssetId, StoreError, StoreFuture, UploadSessionStore};
 
 /// How long a blob must sit at zero references before it is swept.
@@ -203,6 +209,8 @@ pub struct CollectionContext {
     blobs: Arc<dyn BlobStore>,
     marks: Arc<dyn CollectionStore>,
     quotas: Arc<dyn crate::quota::QuotaStore>,
+    /// The share links, whose live serve sets hold blobs no asset row names (#653).
+    shares: Arc<dyn ShareStore>,
     clock: Arc<dyn crate::store::Clock>,
     grace_window: SignedDuration,
     /// Set by [`Self::with_progress_sweep`]; `None` runs no sweep.
@@ -216,6 +224,7 @@ impl CollectionContext {
         blobs: Arc<dyn BlobStore>,
         marks: Arc<dyn CollectionStore>,
         quotas: Arc<dyn crate::quota::QuotaStore>,
+        shares: Arc<dyn ShareStore>,
         clock: Arc<dyn crate::store::Clock>,
         grace_window: SignedDuration,
     ) -> Self {
@@ -224,6 +233,7 @@ impl CollectionContext {
             blobs,
             marks,
             quotas,
+            shares,
             clock,
             grace_window,
             progress: None,
@@ -328,12 +338,21 @@ async fn visit(
     report: &mut CollectionReport,
 ) -> Result<(), StoreError> {
     let references = context.index.reference_count(address).await?;
+    // A live share link is a reference too (#653): its sealed metadata record has no asset row,
+    // and a blob a link serves must outlive the link's ability to serve it. Asked only when no
+    // asset holds the blob, which is the rare case, so the ordinary blob costs one query.
+    let shared = references == 0 && context.shares.names_live(address, now).await?;
     let marked_since = context.marks.marked_since(address).await?;
 
-    if references > 0 {
+    if references > 0 || shared {
         // Live. If it was marked, a reference reappeared during the window and the mark goes.
         if marked_since.is_some() {
-            tracing::info!(%address, references, "a mark was cancelled: a reference reappeared");
+            tracing::info!(
+                %address,
+                references,
+                shared,
+                "a mark was cancelled: a reference reappeared"
+            );
             if mode.applies() {
                 context.marks.unmark(address).await?;
             }

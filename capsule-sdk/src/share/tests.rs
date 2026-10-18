@@ -171,6 +171,10 @@ fn the_request_carries_the_publication_and_never_the_fragment() {
     assert_eq!(request.serves[0], request.metadata_hash);
     assert_eq!(request.wrapped_secret, None);
     assert_eq!(request.expires_at, link.expires_at);
+    let record = BASE64
+        .decode(request.metadata_blob.as_deref().expect("the sealed record"))
+        .unwrap();
+    assert_eq!(record, publication.metadata_blob);
 
     let wire = serde_json::to_string(&request).unwrap();
     assert!(

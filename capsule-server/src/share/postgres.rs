@@ -250,6 +250,38 @@ impl ShareStore for PostgresShares {
             Ok(revoked)
         })
     }
+
+    fn names_live<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+        now: jiff::Timestamp,
+    ) -> StoreFuture<'a, bool> {
+        Box::pin(async move {
+            // The liveness rule is `ShareRecord::is_live_at`'s, spelled in SQL: not revoked, and
+            // either no expiry or one strictly after `now`.
+            let row = self
+                .connection
+                .query_one(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "SELECT EXISTS ( \
+                       SELECT 1 FROM share_serves v \
+                       JOIN shares s ON s.opaque_id = v.opaque_id \
+                       WHERE v.address = $1 \
+                         AND s.revoked_at IS NULL \
+                         AND (s.expires_at IS NULL OR s.expires_at > $2) \
+                     ) AS named",
+                    [
+                        Value::from(address.as_str().to_owned()),
+                        Value::from(to_micros(now)),
+                    ],
+                ))
+                .await
+                .map_err(PORT.failing("asking whether a live link names an address"))?
+                .ok_or_else(|| PORT.undecodable("an EXISTS query returned no row".to_owned()))?;
+            row.try_get("", "named")
+                .map_err(PORT.failing("asking whether a live link names an address"))
+        })
+    }
 }
 
 #[cfg(test)]

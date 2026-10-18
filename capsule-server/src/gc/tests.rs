@@ -52,6 +52,7 @@ struct Harness {
     blobs: Arc<InMemoryBlobStore>,
     marks: Arc<InMemoryCollection>,
     quotas: Arc<crate::quota::InMemoryQuota>,
+    shares: Arc<crate::share::InMemoryShares>,
     clock: Arc<StepClock>,
 }
 
@@ -61,12 +62,14 @@ impl Harness {
         let blobs = Arc::new(InMemoryBlobStore::new());
         let marks = Arc::new(InMemoryCollection::new());
         let quotas = Arc::new(crate::quota::InMemoryQuota::new());
+        let shares = Arc::new(crate::share::InMemoryShares::new());
         let clock = StepClock::new();
         let context = CollectionContext::new(
             index.clone(),
             blobs.clone(),
             marks.clone(),
             quotas.clone(),
+            shares.clone(),
             clock.clone(),
             DEFAULT_GRACE_WINDOW,
         );
@@ -76,8 +79,36 @@ impl Harness {
             blobs,
             marks,
             quotas,
+            shares,
             clock,
         }
+    }
+
+    /// Issue a link that serves `serves`, the first of them its metadata record.
+    async fn share(
+        &self,
+        tag: u8,
+        serves: &[&ContentAddress],
+        expires_at: Option<Timestamp>,
+    ) -> String {
+        use crate::share::{IssueOutcome, ShareRecord, ShareStore as _};
+        let opaque_id = format!("{tag:032x}");
+        let outcome = self
+            .shares
+            .issue(ShareRecord {
+                opaque_id: opaque_id.clone(),
+                owner_id: crate::store::UserId::new("gc-owner"),
+                scope: capsule_core::sharing::ShareScope::Album(uuid::Uuid::nil()),
+                serves: serves.iter().map(|address| (*address).clone()).collect(),
+                metadata: serves[0].clone(),
+                wrapped_secret: None,
+                expires_at,
+                revoked_at: None,
+            })
+            .await
+            .expect("the share store issues");
+        assert_eq!(outcome, IssueOutcome::Issued);
+        opaque_id
     }
 
     /// Put `bytes` in the store and return their address.
@@ -265,6 +296,78 @@ async fn a_reference_reappearing_during_the_window_cancels_the_mark() {
     let report = collect(&h.context, Mode::Apply).await.expect("a pass");
     assert!(report.swept.is_empty());
     assert!(h.blobs.stat(&shared).await.expect("stat").is_some());
+}
+
+/// #653: a share link's sealed metadata record has no asset row, and a live link must keep it.
+#[tokio::test]
+async fn a_blob_a_live_share_serves_is_never_marked() {
+    let h = Harness::new();
+    let record = h.store(b"a sealed share-metadata/v1 record").await;
+    let prepared = h.store(b"a blob prepared for the boundary crossing").await;
+    h.share(1, &[&record, &prepared], None).await;
+
+    let report = collect(&h.context, Mode::Apply).await.expect("a pass");
+    assert!(report.marked.is_empty(), "{report:?}");
+    h.clock.advance(days(3));
+    let report = collect(&h.context, Mode::Apply).await.expect("a pass");
+    assert!(
+        report.marked.is_empty() && report.swept.is_empty(),
+        "{report:?}"
+    );
+    assert!(h.blobs.stat(&record).await.expect("stat").is_some());
+    assert!(h.blobs.stat(&prepared).await.expect("stat").is_some());
+}
+
+/// Once the last link naming a blob is revoked, the blob is an ordinary orphan.
+#[tokio::test]
+async fn a_revoked_shares_blob_is_marked_then_swept() {
+    use crate::share::ShareStore as _;
+    let h = Harness::new();
+    let record = h.store(b"a record whose link is revoked").await;
+    let id = h.share(2, &[&record], None).await;
+    assert!(
+        h.shares
+            .revoke(&crate::store::UserId::new("gc-owner"), &id, h.clock.now())
+            .await
+            .expect("revoke")
+    );
+
+    let report = collect(&h.context, Mode::Apply).await.expect("a pass");
+    assert_eq!(report.marked, vec![record.clone()]);
+    h.clock.advance(days(2));
+    let report = collect(&h.context, Mode::Apply).await.expect("a pass");
+    assert_eq!(report.swept, vec![record.clone()]);
+    assert!(h.blobs.stat(&record).await.expect("stat").is_none());
+}
+
+/// An expiring link holds its blob until the expiry and not after; a link issued mid-window over
+/// the same blob cancels the mark, exactly as an asset reference reappearing would.
+#[tokio::test]
+async fn an_expired_shares_blob_is_collectable_and_a_new_link_reprieves_it() {
+    let h = Harness::new();
+    let record = h.store(b"a record whose link expires").await;
+    h.share(3, &[&record], Some(h.clock.now() + days(1))).await;
+
+    let report = collect(&h.context, Mode::Apply).await.expect("a pass");
+    assert!(
+        report.marked.is_empty(),
+        "live until its expiry: {report:?}"
+    );
+
+    h.clock.advance(days(1));
+    let report = collect(&h.context, Mode::Apply).await.expect("a pass");
+    assert_eq!(
+        report.marked,
+        vec![record.clone()],
+        "not live at its expiry instant"
+    );
+
+    h.share(4, &[&record], None).await;
+    let report = collect(&h.context, Mode::Apply).await.expect("a pass");
+    assert_eq!(report.unmarked, vec![record.clone()]);
+    h.clock.advance(days(2));
+    let report = collect(&h.context, Mode::Apply).await.expect("a pass");
+    assert!(report.swept.is_empty(), "{report:?}");
 }
 
 #[tokio::test]
@@ -816,6 +919,7 @@ async fn a_restore_between_listing_and_purge_keeps_its_bytes() {
         h.blobs.clone(),
         h.marks.clone(),
         h.quotas.clone(),
+        h.shares.clone(),
         h.clock.clone(),
         DEFAULT_GRACE_WINDOW,
     );
@@ -873,6 +977,7 @@ async fn a_listed_tombstone_whose_row_is_gone_at_purge_time_is_skipped() {
         h.blobs.clone(),
         h.marks.clone(),
         h.quotas.clone(),
+        h.shares.clone(),
         h.clock.clone(),
         DEFAULT_GRACE_WINDOW,
     );

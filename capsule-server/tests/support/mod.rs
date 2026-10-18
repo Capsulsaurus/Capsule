@@ -49,8 +49,8 @@ use capsule_server::auth::{
     TotpContext, TotpEnrollment, TotpSecret, TotpStore,
 };
 use capsule_server::blob::{
-    BlobFuture, BlobPage, BlobStat, BlobStore, ContentAddress, InMemoryBlobStore, Placement,
-    QuarantineReason, QuarantinedBlob,
+    BlobError, BlobFuture, BlobPage, BlobStat, BlobStore, ContentAddress, InMemoryBlobStore,
+    Placement, QuarantineReason, QuarantinedBlob,
 };
 use capsule_server::counter::{CounterContext, InMemoryCounters};
 use capsule_server::directory::{
@@ -1453,6 +1453,17 @@ impl ShareStore for SwitchableShares {
         }
         self.inner.revoke(owner, opaque_id, at)
     }
+
+    fn names_live<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+        now: Timestamp,
+    ) -> StoreFuture<'a, bool> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.names_live(address, now)
+    }
 }
 
 /// Whether the fixture's server federates (`FEDERATION_ENABLED`, #509), switchable per request.
@@ -2170,6 +2181,8 @@ impl UploadSessionStore for SwitchableUploads {
 pub(crate) struct SwallowingBlobs {
     inner: InMemoryBlobStore,
     swallow: AtomicBool,
+    /// Refuse every [`BlobStore::put`], as a full or read-only disk would.
+    puts_unavailable: AtomicBool,
 }
 
 impl SwallowingBlobs {
@@ -2178,12 +2191,18 @@ impl SwallowingBlobs {
         Self {
             inner: InMemoryBlobStore::new(),
             swallow: AtomicBool::new(false),
+            puts_unavailable: AtomicBool::new(false),
         }
     }
 
     /// Drop the next append on the floor while telling the caller it landed.
     pub(crate) fn swallow_next_append(&self) {
         self.swallow.store(true, Ordering::SeqCst);
+    }
+
+    /// Make every subsequent `put` fail, or stop.
+    pub(crate) fn set_puts_unavailable(&self, unavailable: bool) {
+        self.puts_unavailable.store(unavailable, Ordering::SeqCst);
     }
 
     /// The staged length for `id`, or `None` when nothing is staged.
@@ -2290,6 +2309,14 @@ impl BlobStore for SwallowingBlobs {
         address: &'a ContentAddress,
         bytes: &'a [u8],
     ) -> BlobFuture<'a, Placement> {
+        if self.puts_unavailable.load(Ordering::SeqCst) {
+            return Box::pin(async {
+                Err(BlobError::Backend {
+                    operation: "put",
+                    detail: REFUSAL.to_owned(),
+                })
+            });
+        }
         self.inner.put(address, bytes)
     }
 
@@ -2525,6 +2552,8 @@ pub(crate) struct SwitchableIndex {
 pub(crate) struct SwitchableQuota {
     inner: InMemoryQuota,
     unavailable: AtomicBool,
+    /// Fail [`QuotaStore::charge`] alone, so a caller that reads usage first gets past the read.
+    charges_unavailable: AtomicBool,
 }
 
 impl SwitchableQuota {
@@ -2536,6 +2565,12 @@ impl SwitchableQuota {
     /// Make every subsequent operation fail, or stop.
     pub(crate) fn set_unavailable(&self, unavailable: bool) {
         self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    /// Make every subsequent charge fail while reads keep answering, or stop.
+    pub(crate) fn set_charges_unavailable(&self, unavailable: bool) {
+        self.charges_unavailable
+            .store(unavailable, Ordering::SeqCst);
     }
 
     fn refuse<T>() -> Result<T, StoreError> {
@@ -2566,7 +2601,7 @@ impl QuotaStore for SwitchableQuota {
         at: Timestamp,
         limits: QuotaLimits,
     ) -> StoreFuture<'a, ChargeOutcome> {
-        if self.is_down() {
+        if self.is_down() || self.charges_unavailable.load(Ordering::SeqCst) {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.charge(user, address, size, at, limits)

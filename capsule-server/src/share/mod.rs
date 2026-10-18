@@ -78,6 +78,14 @@ use crate::store::{StoreFuture, UserId};
 /// The opaque id as it travels in a URL: lowercase hex over 128 bits.
 pub const OPAQUE_ID_HEX_LEN: usize = OPAQUE_ID_LEN * 2;
 
+/// The largest sealed metadata record `POST /v1/shares` accepts inline, decoded (#653).
+///
+/// A `share-metadata/v1` record carries a few hundred bytes of key-free parameters per covered
+/// asset, so 8 MiB holds an album link over tens of thousands of assets. Its base64 is under
+/// 11 MiB, inside the 32 MiB backstop the issue route's group carries
+/// ([`crate::limits::MAX_REQUEST_BODY_BYTES`]), so the cap is this check's and not a `413`.
+pub const MAX_SHARE_METADATA_BYTES: usize = 8 * 1024 * 1024;
+
 /// One share link, as the serving path needs it.
 ///
 /// Deliberately **not** `capsule_core::sharing::ShareLinkRecord`: that is the *issuer's* record
@@ -183,6 +191,22 @@ pub trait ShareStore: std::fmt::Debug + Send + Sync {
         opaque_id: &'a str,
         at: Timestamp,
     ) -> StoreFuture<'a, bool>;
+
+    /// Whether a link that is live at `now` names `address` in its serve set (#653).
+    ///
+    /// The collector's question. A share's sealed metadata record has no asset row, so
+    /// [`crate::index::AssetIndex::reference_count`] answers zero for it, and without this the
+    /// collector would sweep the one blob every viewer starts from. A revoked or expired link
+    /// holds nothing, so once the last live link naming a blob is gone the blob is collectable
+    /// on the collector's ordinary mark-then-sweep terms.
+    ///
+    /// Asked about the whole serve set, not only the metadata address: a link may serve a blob
+    /// its issuer prepared for the boundary crossing that no asset row names either.
+    fn names_live<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+        now: Timestamp,
+    ) -> StoreFuture<'a, bool>;
 }
 
 /// A deterministic in-memory adapter.
@@ -249,6 +273,18 @@ impl ShareStore for InMemoryShares {
             record.revoked_at = Some(at);
             tracing::info!(%owner, "a share link was revoked");
             Ok(true)
+        })
+    }
+
+    fn names_live<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+        now: Timestamp,
+    ) -> StoreFuture<'a, bool> {
+        Box::pin(async move {
+            Ok(lock(&self.links)
+                .values()
+                .any(|record| record.is_live_at(now) && record.serves(address)))
         })
     }
 }
