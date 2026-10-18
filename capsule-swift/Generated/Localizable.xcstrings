@@ -41321,6 +41321,16 @@
         }
       }
     },
+    "error.escrow.identity_not_stored": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This account's recovery backup is missing its identity key. Set up recovery again from a device that is still signed in."
+          }
+        }
+      }
+    },
     "error.escrow.malformed": {
       "localizations": {
         "ar": {

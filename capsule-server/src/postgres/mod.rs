@@ -59,6 +59,7 @@ pub const EXPECTED_MIGRATIONS: &[&str] = &[
     "m20260902_000014_receipts",
     "m20260902_000015_totp",
     "m20260902_000016_federated_accounts",
+    "m20260902_000017_sealed_identities",
 ];
 
 /// The command an operator runs to apply them.

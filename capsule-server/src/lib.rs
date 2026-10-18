@@ -166,6 +166,7 @@ pub fn router() -> ServerRouter {
                     routes::devices::revoke_session,
                     routes::directory::publish_device_directory,
                     routes::escrow::store_escrow,
+                    routes::escrow::store_sealed_identity,
                 ])
                 // What an account changes about itself, its second factor, and the other way
                 // a session is opened: through an external identity provider (`S-N1`).
@@ -238,6 +239,7 @@ pub fn router() -> ServerRouter {
                     routes::devices::list_devices,
                     routes::directory::fetch_device_directory,
                     routes::escrow::fetch_escrow,
+                    routes::escrow::fetch_sealed_identity,
                     routes::profile::get_profile,
                     routes::enroll::drain_enrollment_channel,
                     routes::upgrade::album_upgrade_phase,

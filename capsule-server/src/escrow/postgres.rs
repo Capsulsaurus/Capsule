@@ -1,8 +1,10 @@
-//! [`PostgresEscrow`] — the durable master-key escrow (`S-C12`, #446).
+//! [`PostgresEscrow`] — the durable master-key escrow (`S-C12`, #446) and the sealed identity
+//! beside it (#544).
 //!
 //! # The replace is one statement
 //!
-//! `escrows` holds one row per account. [`EscrowStore::store`] is a single
+//! `escrows` holds one row per account, and so does `sealed_identities`; both are written by the
+//! same statement shape, in [`PostgresEscrow::upsert`]. [`EscrowStore::store`] is a single
 //! `INSERT … ON CONFLICT (user_id) DO UPDATE`, which is the atomicity the port owes: there is no
 //! instant at which the account has no escrow, and none at which the secret being rotated away
 //! from still unwraps anything this table holds. A delete followed by an insert would open the
@@ -17,7 +19,7 @@ use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement, Value};
 use super::{EscrowRecord, EscrowStore, Replaced};
 use crate::postgres::error::Port;
 use crate::postgres::time::{from_micros, to_micros};
-use crate::store::{StoreFuture, UserId};
+use crate::store::{StoreError, StoreFuture, UserId};
 
 /// Which port is speaking, for every error this adapter raises.
 const PORT: Port = Port {
@@ -38,70 +40,122 @@ impl PostgresEscrow {
     }
 }
 
-impl EscrowStore for PostgresEscrow {
-    fn store(&self, record: EscrowRecord) -> StoreFuture<'_, Replaced> {
-        Box::pin(async move {
-            let user = record.user_id.clone();
-            let bytes = record.blob.len();
-            let row = self
-                .connection
-                .query_one(Statement::from_sql_and_values(
-                    DbBackend::Postgres,
-                    "INSERT INTO escrows (user_id, blob, stored_at) VALUES ($1, $2, $3) \
+/// One of the two one-row-per-account tables this adapter writes.
+///
+/// The escrow and the sealed identity obey the same rules — one per account, opaque, replaced by
+/// one upsert — so they share one statement shape, and only the table and the log noun differ.
+#[derive(Debug, Clone, Copy)]
+struct Slot {
+    /// The table: `escrows` or `sealed_identities`. A compile-time constant, never input.
+    table: &'static str,
+    /// The operation a failed write names, for the error line.
+    storing: &'static str,
+    /// The operation a failed read names, for the error line.
+    reading: &'static str,
+}
+
+/// The wrapped master key.
+const ESCROW: Slot = Slot {
+    table: "escrows",
+    storing: "storing an escrow",
+    reading: "reading an escrow",
+};
+
+/// The user identity key sealed under the master key.
+const SEALED_IDENTITY: Slot = Slot {
+    table: "sealed_identities",
+    storing: "storing a sealed identity",
+    reading: "reading a sealed identity",
+};
+
+impl PostgresEscrow {
+    /// Upsert `record` into `slot`'s table, reading from the same statement whether a row was
+    /// displaced.
+    async fn upsert(&self, slot: Slot, record: EscrowRecord) -> Result<Replaced, StoreError> {
+        let user = record.user_id.clone();
+        let bytes = record.blob.len();
+        let doing = slot.storing;
+        let row = self
+            .connection
+            .query_one(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                format!(
+                    "INSERT INTO {} (user_id, blob, stored_at) VALUES ($1, $2, $3) \
                      ON CONFLICT (user_id) DO UPDATE SET \
                        blob = EXCLUDED.blob, stored_at = EXCLUDED.stored_at \
                      RETURNING (xmax = 0) AS inserted",
-                    [
-                        Value::from(user.as_str().to_owned()),
-                        Value::from(record.blob),
-                        Value::from(to_micros(record.stored_at)),
-                    ],
-                ))
-                .await
-                .map_err(PORT.failing("storing an escrow"))?
-                .ok_or_else(|| PORT.undecodable("an upsert returned no row".to_owned()))?;
-            let inserted: bool = row
-                .try_get("", "inserted")
-                .map_err(PORT.failing("storing an escrow"))?;
-            if inserted {
-                tracing::info!(%user, bytes, "an escrow was stored for the first time");
-                Ok(Replaced::No)
-            } else {
-                tracing::info!(
-                    %user,
-                    bytes,
-                    "an escrow was replaced; the previous wrapped master key is gone"
-                );
-                Ok(Replaced::Yes)
-            }
-        })
+                    slot.table
+                ),
+                [
+                    Value::from(user.as_str().to_owned()),
+                    Value::from(record.blob),
+                    Value::from(to_micros(record.stored_at)),
+                ],
+            ))
+            .await
+            .map_err(PORT.failing(doing))?
+            .ok_or_else(|| PORT.undecodable("an upsert returned no row".to_owned()))?;
+        let inserted: bool = row.try_get("", "inserted").map_err(PORT.failing(doing))?;
+        if inserted {
+            tracing::info!(%user, bytes, slot = slot.table, "stored for the first time");
+            Ok(Replaced::No)
+        } else {
+            tracing::info!(
+                %user,
+                bytes,
+                slot = slot.table,
+                "replaced; the previous blob is gone"
+            );
+            Ok(Replaced::Yes)
+        }
+    }
+
+    /// The row `slot`'s table holds for `user`, or `None`.
+    async fn select(&self, slot: Slot, user: &UserId) -> Result<Option<EscrowRecord>, StoreError> {
+        let doing = slot.reading;
+        let Some(row) = self
+            .connection
+            .query_one(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                format!(
+                    "SELECT blob, stored_at FROM {} WHERE user_id = $1",
+                    slot.table
+                ),
+                [Value::from(user.as_str().to_owned())],
+            ))
+            .await
+            .map_err(PORT.failing(doing))?
+        else {
+            return Ok(None);
+        };
+        let failed = PORT.failing(doing);
+        let blob: Vec<u8> = row.try_get("", "blob").map_err(&failed)?;
+        let stored_at: i64 = row.try_get("", "stored_at").map_err(&failed)?;
+        Ok(Some(EscrowRecord {
+            user_id: user.clone(),
+            blob,
+            stored_at: from_micros(stored_at).ok_or_else(|| {
+                PORT.undecodable(format!("{stored_at}µs is not a representable instant"))
+            })?,
+        }))
+    }
+}
+
+impl EscrowStore for PostgresEscrow {
+    fn store(&self, record: EscrowRecord) -> StoreFuture<'_, Replaced> {
+        Box::pin(self.upsert(ESCROW, record))
     }
 
     fn fetch<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, Option<EscrowRecord>> {
-        Box::pin(async move {
-            let Some(row) = self
-                .connection
-                .query_one(Statement::from_sql_and_values(
-                    DbBackend::Postgres,
-                    "SELECT blob, stored_at FROM escrows WHERE user_id = $1",
-                    [Value::from(user.as_str().to_owned())],
-                ))
-                .await
-                .map_err(PORT.failing("reading an escrow"))?
-            else {
-                return Ok(None);
-            };
-            let failed = PORT.failing("reading an escrow");
-            let blob: Vec<u8> = row.try_get("", "blob").map_err(&failed)?;
-            let stored_at: i64 = row.try_get("", "stored_at").map_err(&failed)?;
-            Ok(Some(EscrowRecord {
-                user_id: user.clone(),
-                blob,
-                stored_at: from_micros(stored_at).ok_or_else(|| {
-                    PORT.undecodable(format!("{stored_at}µs is not a representable instant"))
-                })?,
-            }))
-        })
+        Box::pin(self.select(ESCROW, user))
+    }
+
+    fn store_identity(&self, record: EscrowRecord) -> StoreFuture<'_, Replaced> {
+        Box::pin(self.upsert(SEALED_IDENTITY, record))
+    }
+
+    fn fetch_identity<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, Option<EscrowRecord>> {
+        Box::pin(self.select(SEALED_IDENTITY, user))
     }
 }
 

@@ -183,6 +183,8 @@ async fn every_declared_response_is_exercised() {
         ("POST", "/v1/auth/logout/all"),
         ("PUT", "/v1/auth/escrow"),
         ("GET", "/v1/auth/escrow"),
+        ("PUT", "/v1/auth/escrow/identity"),
+        ("GET", "/v1/auth/escrow/identity"),
         ("GET", "/v1/auth/profile"),
         ("PATCH", "/v1/auth/profile"),
         ("POST", "/v1/auth/password"),
@@ -2923,6 +2925,9 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::OK);
 
+    // ── The sealed identity beside the escrow (#544) ───────────────────────────────────────
+    sealed_identity_block(client, &fixture, &bearer, &rotated.refresh_token).await;
+
     // ── The profile surface (`S-C54`) ──────────────────────────────────────────────────────
     profile_block(client, &fixture).await;
 
@@ -3661,6 +3666,101 @@ fn the_document_declares_openapi_32() {
 /// On an account of its own, for the reason [`profile_block`] uses one: switching a second
 /// factor on for the fixture's shared account would make every later `POST /v1/auth/login` in the
 /// walk answer `202`.
+/// Every declared answer of `PUT`/`GET /v1/auth/escrow/identity`, in the escrow block's order:
+/// the `404` before anything is stored, which is why the order matters.
+async fn sealed_identity_block(
+    client: &support::Client,
+    fixture: &Fixture,
+    bearer: &str,
+    refresh_token: &str,
+) {
+    const PATH: &str = "/v1/auth/escrow/identity";
+    let refresh = format!("Bearer {refresh_token}");
+
+    // 401 without a credential; 403 with a refresh token where an access token belongs.
+    client
+        .put(PATH)
+        .body("application/octet-stream", vec![9_u8; 96])
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .get(PATH)
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .put(PATH)
+        .header("authorization", &refresh)
+        .body("application/octet-stream", vec![9_u8; 96])
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    client
+        .get(PATH)
+        .header("authorization", &refresh)
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    // 415: not octet-stream. 400: empty.
+    client
+        .put(PATH)
+        .header("authorization", bearer)
+        .body("application/json", "{}")
+        .send()
+        .await
+        .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    client
+        .put(PATH)
+        .header("authorization", bearer)
+        .body("application/octet-stream", Vec::<u8>::new())
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    // 404: the escrow above is stored, and the identity still is not — the two are independent.
+    client
+        .get(PATH)
+        .header("authorization", bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+
+    // 500 on both.
+    fixture.escrows.set_unavailable(true);
+    client
+        .put(PATH)
+        .header("authorization", bearer)
+        .body("application/octet-stream", vec![9_u8; 96])
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    client
+        .get(PATH)
+        .header("authorization", bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.escrows.set_unavailable(false);
+
+    // 200 on both.
+    client
+        .put(PATH)
+        .header("authorization", bearer)
+        .header("accept", "application/json")
+        .body("application/octet-stream", vec![9_u8; 96])
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    client
+        .get(PATH)
+        .header("authorization", bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+}
+
 async fn totp_block(client: &support::Client, fixture: &Fixture) {
     const OWN_EMAIL: &str = "totp-walk@example.test";
     const OWN_PASSWORD: &str = "correct horse battery staple";

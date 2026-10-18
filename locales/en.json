@@ -8183,6 +8183,10 @@
     "message": "The device-add request could not be read.",
     "context": "HTTP 400 on the enrollment relay channel (slice S-C7): the request named an unknown direction or carried a missing/oversized opaque payload. The server never inspects the payload contents; this is a structural rejection only."
   },
+  "error.escrow.identity_not_stored": {
+    "message": "This account's recovery backup is missing its identity key. Set up recovery again from a device that is still signed in.",
+    "context": "HTTP 404 on GET /v1/auth/escrow/identity (#544): this account has never stored its user identity key sealed under the master key, so a recovered device cannot open as the same account even if the master-key escrow is present. Distinct from error.escrow.not_stored because the remedy differs: the escrow exists, and only a device that still holds the identity can complete the backup."
+  },
   "error.escrow.malformed": {
     "message": "The recovery backup could not be saved.",
     "context": "HTTP 400 on master-key escrow store (slice S-C12): the request body failed the coarse size sanity bound (empty, or larger than any legitimate wrapped master key). The server keeps the blob opaque and never inspects the wrap format; the recovery-secret entropy floor is enforced client-side in core, not here."
