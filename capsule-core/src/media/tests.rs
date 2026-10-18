@@ -16,8 +16,15 @@
 //! 3. **Bare magic-byte headers** for the formats this build cannot decode. There is nothing to
 //!    decode there and nothing to fake: the assertion is that they are *recognised* and refused
 //!    with a typed error.
+//! 4. **Synthetic RAW files** ([`dng_cfa`], [`dng_linear_jxl`], [`sony_arw`]) for the two RAW
+//!    families that decode (issue #589). The container is written with the RAW reader's own
+//!    `tiff::TiffWriter`, which only serialises the IFDs this suite specifies; the ARW's raw
+//!    frame is a lossless-JPEG stream encoded here ([`ljpeg_encode`]), so like the hand-built
+//!    PNG its scan data owes nothing to the decoder under test. `dng-encode` is not used: its
+//!    `export_dng` writes a photometric-RGB IFD, which `dng-decode` does not read back.
 
 use std::collections::HashMap;
+use std::io::Cursor;
 
 use rawshift_image::core::metadata::{ImageInfo, ImageMetadata, URational};
 use rawshift_image::core::{BitDepth, MetadataEmbedOptions};
@@ -26,11 +33,12 @@ use rawshift_image::formats::export::{
     CommonEncodeOptions, EncodeOptions, JpegEncEncodeConfig, ZuneJxlEncodeConfig,
     ZunePngEncodeConfig,
 };
+use rawshift_image::tiff::{ByteOrder, IfdEntry, TiffTag, TiffWriter};
 use uuid::Uuid;
 
 #[cfg(feature = "media-avif-decode")]
 use super::decode::check_avif_frames;
-use super::decode::{Decoder, RawshiftDecoder, decode_guarded};
+use super::decode::{Decoder, RawshiftDecoder, decode_guarded, probe_raw};
 use super::derivative::{
     DerivativeContext, DerivativeSealer, DerivativeTier, SealedDerivative, StillDerivatives,
     generate_still_derivatives,
@@ -501,8 +509,15 @@ fn still_format_agrees_with_rawshift_detection() {
 fn is_decodable_matches_the_supported_table() {
     for format in SUPPORTED_STILL_FORMATS {
         assert!(format.is_decodable(), "{format} is in the supported table");
-        assert!(!format.is_raw(), "no RAW family decodes in this build");
     }
+    // ARW and DNG are the only RAW families that decode (issue #589), and they decode in every
+    // `media` build because their reader is pure Rust.
+    let decodable_raw: Vec<StillFormat> = SUPPORTED_STILL_FORMATS
+        .iter()
+        .copied()
+        .filter(|f| f.is_raw())
+        .collect();
+    assert_eq!(decodable_raw, vec![StillFormat::Arw, StillFormat::Dng]);
     // AVIF decodes exactly where the opt-in libdav1d feature is linked (issue #588), and the
     // pure-Rust default — what the mobile FFI and the cross builds compile — never claims it.
     assert_eq!(
@@ -519,6 +534,8 @@ fn is_decodable_matches_the_supported_table() {
                 StillFormat::Jxl,
                 StillFormat::Tiff,
                 StillFormat::Gif,
+                StillFormat::Arw,
+                StillFormat::Dng,
                 StillFormat::Avif,
             ]
         } else {
@@ -528,20 +545,21 @@ fn is_decodable_matches_the_supported_table() {
                 StillFormat::Jxl,
                 StillFormat::Tiff,
                 StillFormat::Gif,
+                StillFormat::Arw,
+                StillFormat::Dng,
             ]
         },
         "the supported table is pinned per build"
     );
     // HEIC never decodes, under any feature: libheif and libde265 are LGPL-3.0 (issue #588).
+    // The `raw-incomplete` RAW families stay refused (issue #589).
     for format in [
         StillFormat::Ppm,
         StillFormat::WebP,
         StillFormat::Heic,
-        StillFormat::Arw,
         StillFormat::Cr2,
         StillFormat::Cr3,
         StillFormat::Crw,
-        StillFormat::Dng,
         StillFormat::Nef,
         StillFormat::Raf,
     ] {
@@ -647,10 +665,12 @@ fn a_format_with_no_codec_refuses_with_a_typed_error() {
         #[cfg(not(feature = "media-avif-decode"))]
         (isobmff(b"avif"), "avif", StillFormat::Avif),
         (isobmff(b"crx "), "cr3", StillFormat::Cr3),
+        // ARW and DNG decode now (issue #589); a TIFF under a refused RAW family's name is the
+        // case that still never reaches a decoder.
         (
             b"II\x2A\x00\x08\x00\x00\x00\x00\x00\x00\x00".to_vec(),
-            "arw",
-            StillFormat::Arw,
+            "nef",
+            StillFormat::Nef,
         ),
         (b"".to_vec(), "raf", StillFormat::Raf),
         (b"P6\n8 8\n255\n".to_vec(), "ppm", StillFormat::Ppm),
@@ -1014,6 +1034,566 @@ fn an_out_of_range_orientation_tag_is_ignored() {
     assert_eq!(probed.orientation, None);
     let decoded = RawshiftDecoder.decode(&bytes, "jpg").expect("decode");
     assert_eq!(decoded.orientation_applied, 1);
+}
+
+// ── RAW decode: ARW and DNG (issue #589) ─────────────────────────────────────
+
+/// Write a little-endian TIFF: `payload` first, straight after the header, then whatever IFDs
+/// `ifds` writes. `ifds` is given the payload's offset and length and returns IFD0's offset.
+fn tiff_file(
+    payload: &[u8],
+    ifds: impl FnOnce(&mut TiffWriter<Cursor<Vec<u8>>>, u32, u32) -> u64,
+) -> Vec<u8> {
+    let mut writer = TiffWriter::new(Cursor::new(Vec::new()), ByteOrder::LittleEndian);
+    writer.write_header().expect("TIFF header");
+    // `TiffWriter` writes a payload as `u16` words in file order, so packing the bytes
+    // little-endian lands them verbatim. An odd payload gains one pad byte that the IFD's byte
+    // count does not include.
+    let words: Vec<u16> = payload
+        .chunks(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair.get(1).copied().unwrap_or(0)]))
+        .collect();
+    let (offset, _) = writer.write_image_strip_rgb16(&words).expect("payload");
+    let ifd0 = ifds(&mut writer, offset as u32, payload.len() as u32);
+    writer.update_ifd0_offset(ifd0 as u32).expect("IFD0 offset");
+    writer.finish().into_inner()
+}
+
+/// A neutral CFA scene: every site in the left half `bright`, every site in the right half
+/// `dark`. Neutral because each CFA colour carries the same value, so demosaic and tone mapping
+/// keep the halves grey and ordered — which is what makes orientation observable.
+fn split_cfa(width: u32, height: u32, bright: u16, dark: u16) -> Vec<u16> {
+    (0..height)
+        .flat_map(|_| (0..width).map(move |x| if x < width / 2 { bright } else { dark }))
+        .collect()
+}
+
+/// Replace (or add) one entry of an IFD under construction.
+fn set_entry(entries: &mut Vec<IfdEntry>, entry: IfdEntry) {
+    entries.retain(|e| e.tag != entry.tag);
+    entries.push(entry);
+}
+
+/// An uncompressed 16-bit Bayer DNG of `samples`, with `edit` applied to IFD0's entries.
+fn dng_cfa(
+    width: u32,
+    height: u32,
+    samples: &[u16],
+    edit: impl FnOnce(&mut Vec<IfdEntry>),
+) -> Vec<u8> {
+    let payload: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
+    tiff_file(&payload, |writer, offset, length| {
+        let mut entries = vec![
+            IfdEntry::long(TiffTag::ImageWidth, width),
+            IfdEntry::long(TiffTag::ImageLength, height),
+            IfdEntry::short(TiffTag::BitsPerSample, 16),
+            IfdEntry::short(TiffTag::Compression, 1),
+            IfdEntry::short(TiffTag::PhotometricInterpretation, 32803),
+            IfdEntry::short(TiffTag::SamplesPerPixel, 1),
+            IfdEntry::long(TiffTag::RowsPerStrip, height),
+            IfdEntry::long(TiffTag::StripOffsets, offset),
+            IfdEntry::long(TiffTag::StripByteCounts, length),
+            IfdEntry::shorts(TiffTag::CFARepeatPatternDim, &[2, 2]),
+            IfdEntry::bytes(TiffTag::CFAPattern, &[0, 1, 1, 2]),
+            IfdEntry::bytes(TiffTag::DNGVersion, &[1, 4, 0, 0]),
+            IfdEntry::ascii(TiffTag::Make, "Capsule"),
+            IfdEntry::ascii(TiffTag::Model, "Synthetic CFA"),
+            IfdEntry::long(TiffTag::WhiteLevel, 65535),
+            IfdEntry::rationals(TiffTag::AsShotNeutral, &[(1, 1), (1, 1), (1, 1)]),
+        ];
+        edit(&mut entries);
+        writer.write_ifd(&mut entries, 0).expect("IFD0")
+    })
+}
+
+/// A ProRAW-shaped DNG: one LinearRaw (already demosaicked) tile of `tile_size`, carried as the
+/// JPEG XL codestream of `frame`.
+fn dng_linear_jxl(tile_size: (u32, u32), frame: &RgbaImage) -> Vec<u8> {
+    let codestream = jxl_bytes(frame, None);
+    let (width, height) = tile_size;
+    tiff_file(&codestream, |writer, offset, length| {
+        let mut entries = vec![
+            IfdEntry::long(TiffTag::ImageWidth, width),
+            IfdEntry::long(TiffTag::ImageLength, height),
+            IfdEntry::shorts(TiffTag::BitsPerSample, &[16, 16, 16]),
+            IfdEntry::short(TiffTag::Compression, 52546),
+            IfdEntry::short(TiffTag::PhotometricInterpretation, 34892),
+            IfdEntry::short(TiffTag::SamplesPerPixel, 3),
+            IfdEntry::long(TiffTag::TileWidth, width),
+            IfdEntry::long(TiffTag::TileLength, height),
+            IfdEntry::long(TiffTag::TileOffsets, offset),
+            IfdEntry::long(TiffTag::TileByteCounts, length),
+            IfdEntry::bytes(TiffTag::DNGVersion, &[1, 7, 0, 0]),
+            IfdEntry::ascii(TiffTag::Make, "Capsule"),
+            IfdEntry::ascii(TiffTag::Model, "Synthetic ProRAW"),
+            IfdEntry::rationals(TiffTag::AsShotNeutral, &[(1, 1), (1, 1), (1, 1)]),
+        ];
+        writer.write_ifd(&mut entries, 0).expect("IFD0")
+    })
+}
+
+/// Append the `count` low bits of `value` to `bits`, most significant first.
+fn push_bits(bits: &mut Vec<bool>, value: u32, count: u32) {
+    for i in (0..count).rev() {
+        bits.push((value >> i) & 1 == 1);
+    }
+}
+
+/// Encode `samples` as a single-component lossless JPEG (ITU-T T.81 Annex H, SOF3, predictor 1),
+/// written from the standard rather than from the decoder: the first sample is predicted from
+/// `1 << (precision - 1)`, the rest of the first row from the left, the first column from above,
+/// and everything else from the left. The Huffman table is deliberately flat — sixteen 5-bit
+/// codes, one per difference category — so the encoder needs no code-length optimisation.
+fn ljpeg_encode(width: u32, height: u32, precision: u8, samples: &[u16]) -> Vec<u8> {
+    let (w, h) = (width as usize, height as usize);
+    let mut out = vec![0xFF, 0xD8]; // SOI
+    out.extend_from_slice(&[0xFF, 0xC3, 0x00, 0x0B, precision]); // SOF3, length 11
+    out.extend_from_slice(&(height as u16).to_be_bytes());
+    out.extend_from_slice(&(width as u16).to_be_bytes());
+    out.extend_from_slice(&[1, 1, 0x11, 0]); // one component: id 1, 1x1 sampling
+    out.extend_from_slice(&[0xFF, 0xC4, 0x00, 0x23, 0x00]); // DHT, length 35, DC table 0
+    let mut code_lengths = [0u8; 16];
+    code_lengths[4] = 16; // sixteen codes of length 5
+    out.extend_from_slice(&code_lengths);
+    out.extend(0..16u8); // the symbols: categories 0..=15
+    out.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x08, 1, 1, 0x00, 1, 0, 0]); // SOS, predictor 1
+
+    let mut bits = Vec::new();
+    let initial = 1i32 << (precision - 1);
+    let at = |x: usize, y: usize| i32::from(samples[y * w + x]);
+    for y in 0..h {
+        for x in 0..w {
+            let predicted = match (x, y) {
+                (0, 0) => initial,
+                (_, 0) => at(x - 1, 0),
+                (0, _) => at(0, y - 1),
+                _ => at(x - 1, y),
+            };
+            let diff = at(x, y) - predicted;
+            let category = 32 - diff.unsigned_abs().leading_zeros();
+            // T.81 F.1.2.1.1: a negative difference is sent as its ones' complement.
+            let magnitude = if diff >= 0 {
+                diff as u32
+            } else {
+                (diff + (1 << category) - 1) as u32
+            };
+            push_bits(&mut bits, category, 5);
+            push_bits(&mut bits, magnitude, category);
+        }
+    }
+    while bits.len() % 8 != 0 {
+        bits.push(true); // pad with ones, as T.81 F.1.2.3 requires
+    }
+    for byte in bits.chunks(8) {
+        let byte = byte
+            .iter()
+            .fold(0u8, |acc, &bit| (acc << 1) | u8::from(bit));
+        out.push(byte);
+        if byte == 0xFF {
+            out.push(0x00); // byte stuffing
+        }
+    }
+    out.extend_from_slice(&[0xFF, 0xD9]); // EOI
+    out
+}
+
+/// A Sony ARW of 14-bit `samples`: IFD0 names the camera and points at a raw SubIFD holding one
+/// lossless-JPEG strip, the layout of Sony's "lossless compressed" mode. `ifd0` and `raw` edit
+/// the two IFDs' entries.
+fn sony_arw(
+    width: u32,
+    height: u32,
+    samples: &[u16],
+    ifd0: impl FnOnce(&mut Vec<IfdEntry>),
+    raw: impl FnOnce(&mut Vec<IfdEntry>),
+) -> Vec<u8> {
+    let stream = ljpeg_encode(width, height, 14, samples);
+    tiff_file(&stream, |writer, offset, length| {
+        let mut raw_entries = vec![
+            IfdEntry::long(TiffTag::ImageWidth, width),
+            IfdEntry::long(TiffTag::ImageLength, height),
+            IfdEntry::short(TiffTag::BitsPerSample, 14),
+            IfdEntry::short(TiffTag::Compression, 7),
+            IfdEntry::short(TiffTag::PhotometricInterpretation, 32803),
+            IfdEntry::short(TiffTag::SamplesPerPixel, 1),
+            IfdEntry::long(TiffTag::StripOffsets, offset),
+            IfdEntry::long(TiffTag::StripByteCounts, length),
+            IfdEntry::bytes(TiffTag::CFAPattern, &[0, 1, 1, 2]),
+            IfdEntry::shorts(TiffTag::BlackLevel, &[0, 0, 0, 0]),
+            IfdEntry::short(TiffTag::WhiteLevel, 16383),
+        ];
+        raw(&mut raw_entries);
+        let raw_ifd = writer.write_ifd(&mut raw_entries, 0).expect("raw SubIFD");
+        let mut entries = vec![
+            IfdEntry::ascii(TiffTag::Make, "SONY"),
+            // Not a real body: `rawshift-image` looks the model up in its camera database for a
+            // colour matrix, and a real one would tint this white-balance-free neutral scene.
+            IfdEntry::ascii(TiffTag::Model, "ILCE-SYNTHETIC"),
+            IfdEntry::long(TiffTag::SubIFDs, raw_ifd as u32),
+        ];
+        ifd0(&mut entries);
+        writer.write_ifd(&mut entries, 0).expect("IFD0")
+    })
+}
+
+/// The mean luminance (red channel; the scenes are grey) of each half of a frame, as
+/// `(left, right, top, bottom)`.
+fn half_means(image: &RgbaImage) -> (u32, u32, u32, u32) {
+    let (w, h) = (image.width as usize, image.height as usize);
+    let mean = |xs: std::ops::Range<usize>, ys: std::ops::Range<usize>| -> u32 {
+        let (mut sum, mut n) = (0u64, 0u64);
+        for y in ys.clone() {
+            for x in xs.clone() {
+                sum += u64::from(image.rgba[(y * w + x) * 4]);
+                n += 1;
+            }
+        }
+        (sum / n.max(1)) as u32
+    };
+    (
+        mean(0..w / 2, 0..h),
+        mean(w / 2..w, 0..h),
+        mean(0..w, 0..h / 2),
+        mean(0..w, h / 2..h),
+    )
+}
+
+/// ARW and DNG are in the coverage table and decode through the RAW pipeline to upright, opaque
+/// RGBA8 that still shows the scene: the bright half stays brighter, and grey stays grey.
+#[test]
+fn arw_and_dng_decode_through_the_raw_pipeline() {
+    let (width, height) = (16u32, 8u32);
+    let cases = [
+        (
+            dng_cfa(
+                width,
+                height,
+                &split_cfa(width, height, 50_000, 5_000),
+                |_| {},
+            ),
+            "dng",
+            StillFormat::Dng,
+            16,
+        ),
+        (
+            sony_arw(
+                width,
+                height,
+                &split_cfa(width, height, 12_000, 1_200),
+                |_| {},
+                |_| {},
+            ),
+            "arw",
+            StillFormat::Arw,
+            14,
+        ),
+    ];
+    for (bytes, ext, format, bit_depth) in cases {
+        let probed = RawshiftDecoder
+            .probe(&bytes, ext)
+            .unwrap_or_else(|e| panic!("probing the .{ext} fixture: {e}"));
+        assert_eq!(probed.format, format);
+        assert_eq!(probed.stored_dimensions, (width, height));
+        assert_eq!(probed.bit_depth, Some(bit_depth));
+        assert_eq!(probed.gamut, Gamut::Srgb);
+        assert_eq!(
+            probed.orientation, None,
+            "the fixture carries no orientation tag"
+        );
+
+        let decoded = decode_guarded(&RawshiftDecoder, &bytes, ext)
+            .unwrap_or_else(|e| panic!("decoding the .{ext} fixture: {e}"));
+        assert_eq!(decoded.format, format);
+        assert_eq!((decoded.width(), decoded.height()), (width, height));
+        assert_eq!(decoded.image.rgba.len() as u32, width * height * 4);
+        assert!(decoded.image.rgba.chunks_exact(4).all(|px| px[3] == 255));
+        assert_eq!(decoded.orientation_applied, 1);
+        assert_eq!(decoded.gamut, Gamut::Srgb);
+
+        let (left, right, _, _) = half_means(&decoded.image);
+        assert!(
+            left > right + 40,
+            ".{ext}: the bright half ({left}) must stay brighter than the dark one ({right})"
+        );
+        // Grey away from the seam and the frame's own border: bilinear interpolates each colour
+        // from different neighbours, so the columns either side of the bright/dark edge fringe
+        // by construction, and the outermost ring has only one side to interpolate from.
+        let (w, h) = (width as usize, height as usize);
+        let interior = decoded
+            .image
+            .rgba
+            .chunks_exact(4)
+            .enumerate()
+            .filter(|(i, _)| {
+                let (x, y) = (i % w, i / w);
+                x.abs_diff(w / 2) > 2 && (1..w - 1).contains(&x) && (1..h - 1).contains(&y)
+            });
+        for (i, px) in interior {
+            assert!(
+                px[0].abs_diff(px[1]) <= 12 && px[1].abs_diff(px[2]) <= 12,
+                ".{ext}: a neutral scene decodes grey, but pixel {i} is {px:?}"
+            );
+        }
+    }
+}
+
+/// `process` applies the EXIF orientation itself, so the RAW path reports it and never applies
+/// it again: a quarter turn transposes the frame once, and the bright left half lands on top.
+#[test]
+fn a_raw_orientation_is_applied_exactly_once() {
+    let (width, height) = (16u32, 8u32);
+    let dng = dng_cfa(
+        width,
+        height,
+        &split_cfa(width, height, 50_000, 5_000),
+        |e| {
+            set_entry(e, IfdEntry::short(TiffTag::Orientation, 6));
+        },
+    );
+    let arw = sony_arw(
+        width,
+        height,
+        &split_cfa(width, height, 12_000, 1_200),
+        |e| set_entry(e, IfdEntry::short(TiffTag::Orientation, 6)),
+        |_| {},
+    );
+    for (bytes, ext) in [(dng, "dng"), (arw, "arw")] {
+        let probed = RawshiftDecoder.probe(&bytes, ext).expect("probe");
+        assert_eq!(probed.orientation, Some(6));
+        assert_eq!(probed.stored_dimensions, (width, height));
+        assert_eq!(probed.upright_dimensions(), (height, width));
+
+        let decoded = RawshiftDecoder.decode(&bytes, ext).expect("decode");
+        assert_eq!(decoded.orientation_applied, 6);
+        assert_eq!(
+            (decoded.width(), decoded.height()),
+            (height, width),
+            ".{ext}: one quarter turn, not two"
+        );
+        let (_, _, top, bottom) = half_means(&decoded.image);
+        assert!(
+            top > bottom + 40,
+            ".{ext}: rotating 90 degrees clockwise puts the left half on top ({top} vs {bottom})"
+        );
+    }
+}
+
+/// A DNG's default crop is part of the frame `process` returns, so the probe reports the
+/// cropped size as the stored dimensions rather than the sensor's.
+#[test]
+fn a_dng_default_crop_is_the_stored_frame() {
+    let (width, height) = (16u32, 8u32);
+    let dng = dng_cfa(
+        width,
+        height,
+        &split_cfa(width, height, 50_000, 5_000),
+        |e| {
+            set_entry(e, IfdEntry::longs(TiffTag::DefaultCropOrigin, &[2, 2]));
+            set_entry(e, IfdEntry::longs(TiffTag::DefaultCropSize, &[10, 4]));
+        },
+    );
+    let probed = RawshiftDecoder.probe(&dng, "dng").expect("probe");
+    assert_eq!(probed.stored_dimensions, (10, 4));
+    let decoded = RawshiftDecoder.decode(&dng, "dng").expect("decode");
+    assert_eq!((decoded.width(), decoded.height()), (10, 4));
+}
+
+/// The ProRAW shape: a LinearRaw DNG whose tile is a JPEG XL codestream decodes to the tile's
+/// pixels with no demosaic.
+#[test]
+fn a_linear_raw_dng_decodes_from_its_jpeg_xl_tile() {
+    let frame = quadrants(16, 16);
+    let dng = dng_linear_jxl((16, 16), &frame);
+    let decoded = RawshiftDecoder.decode(&dng, "dng").expect("decode");
+    assert_eq!(decoded.format, StillFormat::Dng);
+    assert_eq!((decoded.width(), decoded.height()), (16, 16));
+    let (tl, tr, bl, br) = quadrant_means(&decoded.image);
+    assert!(
+        tl < tr && tr < bl && bl < br,
+        "the quadrants keep their order through the tone curve: {:?}",
+        (tl, tr, bl, br)
+    );
+}
+
+/// The RAW budget refuses, before anything is allocated for it, every frame the file claims:
+/// the sensor, the active area, and a JPEG XL tile's own codestream header. None of these
+/// fixtures holds the pixels it claims, which is the point.
+#[test]
+fn an_oversized_raw_frame_is_refused_before_decoding() {
+    let over = MediaError::PixelBudgetExceeded {
+        pixels: 400_000_000,
+        limit: MAX_DECODE_PIXELS,
+    };
+
+    // The sensor: a 20000x20000 claim over a 32-byte strip.
+    let sensor = dng_cfa(4, 4, &[0; 16], |e| {
+        set_entry(e, IfdEntry::long(TiffTag::ImageWidth, 20_000));
+        set_entry(e, IfdEntry::long(TiffTag::ImageLength, 20_000));
+    });
+    assert_eq!(RawshiftDecoder.probe(&sensor, "dng"), Err(over.clone()));
+    assert_eq!(RawshiftDecoder.decode(&sensor, "dng"), Err(over.clone()));
+
+    // The active area: a small sensor whose crop tags claim a frame the demosaic would
+    // allocate at 20000x20000.
+    let active = sony_arw(
+        16,
+        8,
+        &split_cfa(16, 8, 12_000, 1_200),
+        |_| {},
+        |e| {
+            set_entry(e, IfdEntry::longs(TiffTag::DefaultCropOrigin, &[0, 0]));
+            set_entry(
+                e,
+                IfdEntry::longs(TiffTag::DefaultCropSize, &[20_000, 20_000]),
+            );
+        },
+    );
+    assert_eq!(RawshiftDecoder.probe(&active, "arw"), Err(over.clone()));
+    assert_eq!(RawshiftDecoder.decode(&active, "arw"), Err(over));
+
+    // A JPEG XL tile whose codestream is larger than the budget, though the tile it fills is
+    // not: the codestream header is what the tile decoder allocates from.
+    let jxl = dng_linear_jxl((16, 16), &gradient(40, 40));
+    assert_eq!(
+        probe_raw(&jxl, StillFormat::Dng, 1_000),
+        Err(MediaError::PixelBudgetExceeded {
+            pixels: 1_600,
+            limit: 1_000,
+        })
+    );
+    assert!(
+        probe_raw(&jxl, StillFormat::Dng, 2_000).is_ok(),
+        "the same file within budget probes"
+    );
+}
+
+/// A layout the reader would trust and fault on is a decode failure, not a deferral: a strip
+/// running past the end of the file, and an active area outside the sensor.
+#[test]
+fn a_raw_layout_outside_its_file_is_a_decode_failure() {
+    let samples = split_cfa(16, 8, 50_000, 5_000);
+    let past_the_end = dng_cfa(16, 8, &samples, |e| {
+        set_entry(e, IfdEntry::long(TiffTag::StripByteCounts, 1_000_000));
+    });
+    match RawshiftDecoder.probe(&past_the_end, "dng") {
+        Err(MediaError::Decode { format, detail }) => {
+            assert_eq!(format, StillFormat::Dng);
+            assert!(detail.contains("runs past"), "{detail}");
+        }
+        other => panic!("a strip past the end must be a decode failure, got {other:?}"),
+    }
+
+    let outside = sony_arw(
+        16,
+        8,
+        &split_cfa(16, 8, 12_000, 1_200),
+        |_| {},
+        |e| {
+            set_entry(e, IfdEntry::longs(TiffTag::DefaultCropOrigin, &[8, 0]));
+            set_entry(e, IfdEntry::longs(TiffTag::DefaultCropSize, &[16, 8]));
+        },
+    );
+    match RawshiftDecoder.decode(&outside, "arw") {
+        Err(MediaError::Decode { format, detail }) => {
+            assert_eq!(format, StillFormat::Arw);
+            assert!(detail.contains("outside"), "{detail}");
+        }
+        other => {
+            panic!("an active area outside the sensor must be a decode failure, got {other:?}")
+        }
+    }
+}
+
+/// A variant upstream has no decoder for defers — `DeferredNoCodec`, backfillable — rather than
+/// failing: Sony's lossy compressed ARW, and a TIFF named `.arw` or `.dng` that the RAW reader
+/// cannot place as either family.
+#[test]
+fn an_unsupported_raw_variant_defers() {
+    let defers = |format| {
+        Err(MediaError::UnsupportedFormat {
+            format,
+            op: FormatOp::Decode,
+        })
+    };
+    let lossy = sony_arw(
+        16,
+        8,
+        &split_cfa(16, 8, 12_000, 1_200),
+        |_| {},
+        |e| set_entry(e, IfdEntry::short(TiffTag::Compression, 32767)),
+    );
+    assert!(
+        RawshiftDecoder.probe(&lossy, "arw").is_ok(),
+        "the layout is sound"
+    );
+    assert_eq!(
+        RawshiftDecoder.decode(&lossy, "arw").map(|_| ()),
+        defers(StillFormat::Arw)
+    );
+
+    let bare_tiff = b"II\x2A\x00\x08\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+    for (ext, format) in [("arw", StillFormat::Arw), ("dng", StillFormat::Dng)] {
+        assert_eq!(
+            RawshiftDecoder.probe(bare_tiff, ext).map(|_| ()),
+            defers(format)
+        );
+        assert_eq!(
+            RawshiftDecoder.decode(bare_tiff, ext).map(|_| ()),
+            defers(format)
+        );
+    }
+}
+
+/// The `raw-incomplete` families stay recognised and refused at the gate, before any decoder
+/// runs. Each is fed a file the ARW reader *would* decode, so the refusal is provably the gate's
+/// and not a parse failure that happens to look like one.
+fn assert_refused_raw_family(bytes: &[u8], ext: &str, format: StillFormat) {
+    assert_eq!(StillFormat::detect(bytes, ext), Some(format), ".{ext}");
+    assert!(format.is_raw(), "{format} is a RAW family");
+    assert!(!format.is_decodable(), "{format} has no decoder here");
+    let refused = Err(MediaError::UnsupportedFormat {
+        format,
+        op: FormatOp::Decode,
+    });
+    assert_eq!(RawshiftDecoder.probe(bytes, ext).map(|_| ()), refused);
+    assert_eq!(RawshiftDecoder.decode(bytes, ext).map(|_| ()), refused);
+}
+
+/// A decodable ARW, for [`assert_refused_raw_family`] to rename.
+fn decodable_arw() -> Vec<u8> {
+    let arw = sony_arw(16, 8, &split_cfa(16, 8, 12_000, 1_200), |_| {}, |_| {});
+    assert!(
+        RawshiftDecoder.decode(&arw, "arw").is_ok(),
+        "the control decodes"
+    );
+    arw
+}
+
+#[test]
+fn canon_cr2_is_recognised_and_refused() {
+    assert_refused_raw_family(&decodable_arw(), "cr2", StillFormat::Cr2);
+}
+
+#[test]
+fn canon_cr3_is_recognised_and_refused() {
+    // CR3 is ISO-BMFF, so it is the one family named by its header rather than its extension.
+    assert_refused_raw_family(&isobmff(b"crx "), "cr3", StillFormat::Cr3);
+}
+
+#[test]
+fn canon_crw_is_recognised_and_refused() {
+    assert_refused_raw_family(&decodable_arw(), "crw", StillFormat::Crw);
+}
+
+#[test]
+fn nikon_nef_is_recognised_and_refused() {
+    assert_refused_raw_family(&decodable_arw(), "nef", StillFormat::Nef);
+    assert_refused_raw_family(&decodable_arw(), "nrw", StillFormat::Nef);
+}
+
+#[test]
+fn fujifilm_raf_is_recognised_and_refused() {
+    assert_refused_raw_family(&decodable_arw(), "raf", StillFormat::Raf);
 }
 
 // ── The panic guard ──────────────────────────────────────────────────────────

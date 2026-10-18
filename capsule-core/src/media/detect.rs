@@ -28,8 +28,10 @@
 //!
 //! 1. **RAW refinement.** ARW, CR2, DNG and NEF are TIFF containers and CR3 is ISO-BMFF; their
 //!    headers are their container's, so only the extension distinguishes a Sony ARW from a
-//!    scanner's TIFF. A misrefinement costs a deferral, never wrong pixels, because no RAW
-//!    family decodes in this build.
+//!    scanner's TIFF. A misrefinement costs a deferral, never wrong pixels: ARW and DNG are
+//!    decoded by `rawshift-image`'s RAW reader, which identifies the file again from its own
+//!    IFD0 (`DNGVersion`, then `Make`) and refuses one it cannot place as an unsupported
+//!    variant, and the other RAW families do not decode at all.
 //! 2. **Fallback.** When the header sniffs to nothing at all.
 
 use std::fmt;
@@ -87,7 +89,10 @@ pub enum StillFormat {
     /// HEIC / HEIF. Recognised, never decoded: libheif and its HEVC decoder libde265 are
     /// LGPL-3.0, which licence policy excludes (issue #588).
     Heic,
-    /// Sony ARW.
+    /// Sony ARW. Decoded by `rawshift-image`'s RAW pipeline (issue #589) where the raw frame is
+    /// lossless JPEG (compression 7, Sony's "lossless compressed" mode on current bodies); the
+    /// uncompressed and lossy "compressed RAW" modes have no upstream decoder and defer as an
+    /// unsupported variant.
     Arw,
     /// Canon CR2.
     Cr2,
@@ -95,7 +100,9 @@ pub enum StillFormat {
     Cr3,
     /// Canon CRW.
     Crw,
-    /// Adobe DNG (including Apple ProRAW).
+    /// Adobe DNG (including Apple ProRAW). Decoded by `rawshift-image`'s RAW pipeline (issue
+    /// #589) where the raw IFD is uncompressed or JPEG XL (ProRAW); lossless-JPEG DNG has no
+    /// upstream decoder and defers as an unsupported variant.
     Dng,
     /// Nikon NEF.
     Nef,
@@ -107,18 +114,22 @@ pub enum StillFormat {
 ///
 /// Logged verbatim on a deferral so the gap is legible in the field rather than only in a doc.
 /// AVIF is a member only under the opt-in `media-avif-decode` feature, which links a system
-/// libdav1d and which the mobile FFI and the cross builds therefore never enable.
+/// libdav1d and which the mobile FFI and the cross builds therefore never enable. ARW and DNG
+/// are the two RAW families upstream calls `raw-stabilizing`, pure Rust and so in every `media`
+/// build; the `raw-incomplete` five (CR2, CR3, CRW, NEF, RAF) stay recognised and refused.
 pub const SUPPORTED_STILL_FORMATS: &[StillFormat] = &[
     StillFormat::Jpeg,
     StillFormat::Png,
     StillFormat::Jxl,
     StillFormat::Tiff,
     StillFormat::Gif,
+    StillFormat::Arw,
+    StillFormat::Dng,
     #[cfg(feature = "media-avif-decode")]
     StillFormat::Avif,
 ];
 
-/// The RAW families, all of them recognised and none of them decodable here.
+/// The RAW families, all of them recognised. ARW and DNG decode; the rest are refused.
 const RAW_FORMATS: &[StillFormat] = &[
     StillFormat::Arw,
     StillFormat::Cr2,
@@ -136,8 +147,10 @@ impl StillFormat {
         SUPPORTED_STILL_FORMATS.contains(&self)
     }
 
-    /// Whether the format is one of the RAW families. RAW is recognised, never decoded here;
-    /// its container is TIFF or ISO-BMFF, so the extension is what names the family.
+    /// Whether the format is one of the RAW families, which decode through `rawshift-image`'s RAW
+    /// pipeline rather than its standard-image one. Their container is TIFF or ISO-BMFF, so the
+    /// extension is what names the family. Only ARW and DNG are also
+    /// [decodable](Self::is_decodable).
     pub fn is_raw(self) -> bool {
         RAW_FORMATS.contains(&self)
     }
