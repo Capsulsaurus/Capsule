@@ -437,7 +437,6 @@ impl Glossary {
             "capsule-desktop",
             "capsule-i18n",
             "capsule-sdk",
-            "capsule-vision",
             "gRPC",
             "GraphQL",
             "WebSockets",

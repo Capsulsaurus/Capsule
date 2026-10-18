@@ -23,7 +23,6 @@ whether something exists today, find its slice: `rg 'S-C16' SLICES.md`.
 | `capsule-cli` + its entity/migration crates | Local CLI behavior and its SQLite persistence; network commands ride the SDK |
 | `capsule-web` | The browser client: the guest-drop and share-link viewer surfaces, over `capsule-wasm` |
 | `capsule-swift`, `capsule-android` | The native applications |
-| `capsule-vision` | Model-evaluation notebooks; no shipped source |
 
 GraphQL and gRPC are retired transports and no compatibility surface will be restored
 ([ADR-0001](https://github.com/Capsulsaurus/Capsule/blob/master/adr/0001-the-public-server-surface-is-kynos-rest-only.md)).

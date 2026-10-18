@@ -45,19 +45,19 @@ CLIPPY_FLAGS = "-W clippy::pedantic -W unreachable_pub -D warnings -A clippy::mu
 
 [tasks.format]
 description = "Auto-format every toolchain"
-depends = ["format-rust", "format-web", "format-docs", "format-kotlin", "format-vision", "format-swift"]
+depends = ["format-rust", "format-web", "format-docs", "format-kotlin", "format-swift"]
 
 [tasks.format-check]
 description = "Verify formatting, every toolchain"
-depends = ["format-check-rust", "format-check-web", "format-check-docs", "format-check-kotlin", "format-check-vision", "format-check-swift"]
+depends = ["format-check-rust", "format-check-web", "format-check-docs", "format-check-kotlin", "format-check-swift"]
 
 [tasks.lint]
 description = "Auto-fix lints, every toolchain"
-depends = ["lint-rust", "lint-web", "lint-docs", "lint-kotlin", "lint-vision", "lint-swift", "lint-md"]
+depends = ["lint-rust", "lint-web", "lint-docs", "lint-kotlin", "lint-swift", "lint-md"]
 
 [tasks.lint-check]
 description = "Verify lints, every toolchain"
-depends = ["lint-check-rust", "lint-check-web", "lint-check-docs", "lint-check-kotlin", "lint-check-vision", "lint-check-swift", "lint-check-md", "check-docs-truth"]
+depends = ["lint-check-rust", "lint-check-web", "lint-check-docs", "lint-check-kotlin", "lint-check-swift", "lint-check-md", "check-docs-truth"]
 
 [tasks.test]
 description = "Run tests (rust + web + kotlin + swift + docs)"
@@ -109,10 +109,6 @@ depends = ["format-check-web", "lint-check-web", "test-web", "build-web"]
 [tasks.check-docs]
 description = "Docs CI gate"
 depends = ["format-check-docs", "lint-check-docs", "test-docs", "build-docs"]
-
-[tasks.check-vision]
-description = "Vision CI gate"
-depends = ["format-check-vision", "lint-check-vision"]
 
 [tasks.check-kotlin]
 description = "Kotlin CI gate"
@@ -586,24 +582,6 @@ run = ["mise run generate-swift"]
 description = "Build the FFI xcframework, then generate the Rust-backed workspace"
 run = ["mise run build-ffi-apple", "TUIST_FFI=1 mise run generate-swift"]
 
-# ── Vision ───────────────────────────────────────────────────────────────────
-
-[tasks.format-vision]
-dir = "capsule-vision"
-run = "uv run ruff format"
-
-[tasks.format-check-vision]
-dir = "capsule-vision"
-run = "uv run ruff format --check"
-
-[tasks.lint-vision]
-dir = "capsule-vision"
-run = "uv run ruff check --fix"
-
-[tasks.lint-check-vision]
-dir = "capsule-vision"
-run = "uv run ruff check && uv run ty check"
-
 # ── Markdown ─────────────────────────────────────────────────────────────────
 # Repo-wide Markdown linting (READMEs, design docs, root docs). markdownlint-cli2
 # is both linter and fixer; globs/ignores live in .markdownlint-cli2.jsonc.
@@ -624,7 +602,7 @@ description = "Conventional Commits check over a range (default origin/master..H
 run = "convco check --first-parent --ignore-reverts {{arg(name='base', default='origin/master')}}..HEAD"
 
 # Write one repo-wide version into every package's source of truth (Rust workspace,
-# web/docs package.json, vision pyproject, Android gradle.properties, iOS Project.swift)
+# web/docs package.json, Android gradle.properties, iOS Project.swift)
 # and bump the Android versionCode. See xtask/src/main.rs for the per-format editors.
 [tasks.set-version]
 description = "Write one version into every package (via xtask)"
@@ -650,9 +628,8 @@ run = "hk uninstall"
 # Install per-package dependencies (named `setup`, not `install`, to avoid colliding
 # with `mise install`, which installs the [tools] above).
 [tasks.setup]
-description = "Install web/docs/vision package dependencies"
+description = "Install web/docs package dependencies"
 run = [
   "cd capsule-web && bun install",
   "cd capsule-docs && bun install",
-  "cd capsule-vision && uv sync",
 ]

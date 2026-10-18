@@ -18,7 +18,6 @@ hooks {
       ["format-web"]    { glob = "capsule-web/**/*.{ts,tsx,js,jsx,json,jsonc,css}"; fix = "mise run format-web" }
       ["format-docs"]   { glob = "capsule-docs/**/*.{ts,tsx,js,jsx,json,jsonc,css,astro,md,mdx}"; fix = "mise run format-docs" }
       ["format-kotlin"] { glob = "**/*.{kt,kts}"; fix = "mise run format-kotlin" }
-      ["format-vision"] { glob = "capsule-vision/**/*.{py,ipynb}"; fix = "mise run format-vision" }
       // Swift tasks self-skip off macOS (see mise-tasks/format-swift).
       ["format-swift"]  { glob = "{capsule-swift,capsule-core-swift}/**/*.swift"; fix = "mise run format-swift" }
 
@@ -26,7 +25,6 @@ hooks {
       // skip-mismatches, and we avoid two fixers writing the same files concurrently.
       ["lint-web"]    { glob = "capsule-web/**/*.{ts,tsx,js,jsx,json,jsonc,css}"; fix = "mise run lint-web"; depends = "format-web" }
       ["lint-docs"]   { glob = "capsule-docs/**/*.{ts,tsx,js,jsx,json,jsonc,css,astro,md,mdx}"; fix = "mise run lint-docs"; depends = "format-docs" }
-      ["lint-vision"] { glob = "capsule-vision/**/*.{py,ipynb}"; fix = "mise run lint-vision"; depends = "format-vision" }
       ["lint-md"]     { glob = "**/*.md"; fix = "mise run lint-md" }
     }
   }
@@ -67,9 +65,6 @@ hooks {
 
       ["format-check-kotlin"] { glob = "**/*.{kt,kts}"; check = "mise run format-check-kotlin" }
       ["lint-check-kotlin"]   { glob = "**/*.{kt,kts}"; check = "mise run lint-check-kotlin"; depends = "format-check-kotlin" }
-
-      ["format-check-vision"] { glob = "capsule-vision/**/*.{py,ipynb}"; check = "mise run format-check-vision" }
-      ["lint-check-vision"]   { glob = "capsule-vision/**/*.{py,ipynb}"; check = "mise run lint-check-vision" }
 
       // Swift tasks self-skip off macOS (see mise-tasks/*-swift).
       ["format-check-swift"]  { glob = "{capsule-swift,capsule-core-swift}/**/*.swift"; check = "mise run format-check-swift" }

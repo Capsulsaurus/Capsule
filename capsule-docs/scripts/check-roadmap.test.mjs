@@ -221,7 +221,7 @@ describe('declaredPackages', () => {
         const r = repo({
             'capsule-core-swift/Package.swift': '// swift-tools-version:6.0\n',
             'capsule-web/package.json': '{}\n',
-            'capsule-vision/pyproject.toml': '[project]\n',
+            'example-python/pyproject.toml': '[project]\n',
             'locales/en.json': '{}\n',
             '.gitmodules': '[submodule "rawshift"]\n\tpath = rawshift\n',
             'legacy-review/server-salvo/REVIEW.md': '',
@@ -229,7 +229,7 @@ describe('declaredPackages', () => {
         const declared = declaredPackages(r);
         expect(declared.get('capsule-core-swift')).toBe('swiftpm');
         expect(declared.get('capsule-web')).toBe('bun');
-        expect(declared.get('capsule-vision')).toBe('python');
+        expect(declared.get('example-python')).toBe('python');
         expect(declared.get('locales')).toBe('catalog');
         expect(declared.get('rawshift')).toBe('submodule');
         expect(declared.get('legacy-review/server-salvo')).toBe(
