@@ -42,6 +42,10 @@
 //! protocol bound is enforced there and this stays what it is — the floor below which nothing
 //! reaches a handler at all.
 //!
+//! The backstop is now the cap only where nothing smaller is legitimate: the chunk routes and
+//! the two writes whose bodies the protocol leaves unbounded. Every other operation carries
+//! [`MAX_BOUNDED_BODY_BYTES`] and the federation surface [`MAX_FEDERATION_BODY_BYTES`] (#576).
+//!
 //! # What it is not
 //!
 //! It is not a per-field length check. Whether the `#[schema]` constraints are re-declared once
@@ -57,12 +61,48 @@ use kynos::middleware::limits::BodySize;
 /// equal to it.
 pub const MAX_REQUEST_BODY_BYTES: u64 = 32 * 1024 * 1024;
 
-/// The body-size interceptor every group but the federation group mounts.
+/// The body-size interceptor the groups whose bodies have no bound below an upload chunk mount.
+///
+/// Exactly six operations (#576): the four that carry chunk bytes or may — `create_upload`,
+/// `append_chunk`, and the guest-drop pair `create_drop` and `append_drop_chunk` — so that
+/// `413 error.upload.chunk_too_large` stays the route's to answer, and the two whose largest
+/// legitimate body the protocol does not bound at all: `apply_op`, whose `metadata-update`
+/// carries the whole encrypted sidecar inline (a blob the upload path otherwise sends as a
+/// chunk, and whose size nothing caps), and `issue_share`, whose `serves` enumerates every blob
+/// a whole-album link may serve. Every other operation mounts [`bounded_body_size`].
 ///
 /// One function rather than a literal at the mount site so the cap has a name, a place to be
 /// documented, and one value the tests assert against.
 pub fn body_size() -> BodySize {
     BodySize::new(MAX_REQUEST_BODY_BYTES)
+}
+
+/// The cap on every operation whose largest legitimate body is bounded: **1 MiB** (#576).
+///
+/// The account, enrollment, album, upgrade, roster, verification and link-management writes,
+/// and every read and exempt operation that is not a drop chunk. Their largest legitimate
+/// bodies, measured from each request type and the bound its own module enforces:
+///
+/// | Operation | Largest legitimate body | Bound |
+/// | --- | --- | --- |
+/// | `publish_album_roster` | ≈ 683 KiB: base64 of a 512 KiB roster in a one-field JSON object | `routes::roster::MAX_ROSTER_BYTES` |
+/// | `publish_device_directory` | 512 KiB raw CBOR | `directory::MAX_DIRECTORY_BYTES` |
+/// | `verify_storage` | ≈ 216 KiB: 100 assets × 32 quoted 64-hex hashes | `verify::MAX_ASSETS_PER_REQUEST`, `MAX_BLOBS_PER_ASSET` |
+/// | `relay_enrollment_payload` | 64 KiB payload string plus a direction | `enrollment::MAX_RELAY_BYTES` |
+/// | `begin_album_upgrade` | 64 KiB raw CBOR intent | `routes::upgrade::MAX_INTENT_BYTES` |
+/// | `store_escrow` | 64 KiB raw blob | `escrow::MAX_ESCROW_BYTES` |
+/// | everything else | a few KiB at most: credentials, a code, a hybrid key or signature, a manifest envelope | the request type's fixed fields |
+///
+/// 1 MiB is above the largest of them with room for the JSON a client wraps it in, so each
+/// route's own coded refusal of a document one byte past its bound stays reachable — the same
+/// reason the backstop sits above the chunk bound — and `tests` below pins that against every
+/// bound in the table. It is a thirty-second of the backstop, so an unauthenticated
+/// `register` or `login` can no longer be handed 32 MiB to parse before anything looks at it.
+pub const MAX_BOUNDED_BODY_BYTES: u64 = 1024 * 1024;
+
+/// The body-size interceptor the bounded groups mount, at [`MAX_BOUNDED_BODY_BYTES`].
+pub fn bounded_body_size() -> BodySize {
+    BodySize::new(MAX_BOUNDED_BODY_BYTES)
 }
 
 /// The cap on a federation write's body: **16 KiB** (`S-E2`, `S-C49`).
@@ -85,9 +125,10 @@ pub fn body_size() -> BodySize {
 /// ```
 ///
 /// Both answer `413`, and an operation cannot declare two producers of one status. So the cap is
-/// not mounted on the router at all (#478): every group carries exactly one, the federation
-/// group this one and every other group [`body_size`]'s backstop — the twelve operations the
-/// protocol gate exempts included, in a group that holds nothing but the cap. `413` therefore
+/// not mounted on the router at all (#478): every group carries exactly one — the federation
+/// group this one, the chunk-carrying and unbounded groups [`body_size`]'s backstop, and every
+/// other group [`bounded_body_size`] (#576) — the twelve operations the protocol gate exempts
+/// included, in groups that hold nothing but the cap. `413` therefore
 /// stays declared on every operation, which `tests/conformance.rs` pins, and no route can be
 /// mounted outside a group without losing it, which `tests/limits.rs` pins.
 ///
@@ -139,5 +180,64 @@ mod tests {
             );
         }
         assert_eq!(federation_body_size().limit, MAX_FEDERATION_BODY_BYTES);
+    }
+
+    /// The bounded cap sits strictly between the federation cap and the backstop.
+    #[test]
+    fn the_bounded_cap_is_between_the_federation_cap_and_the_backstop() {
+        const {
+            assert!(
+                MAX_FEDERATION_BODY_BYTES < MAX_BOUNDED_BODY_BYTES,
+                "the federation group's cap is the tightest one"
+            );
+            assert!(
+                MAX_BOUNDED_BODY_BYTES < MAX_REQUEST_BODY_BYTES,
+                "the bounded cap exists to be tighter than the transport backstop"
+            );
+        }
+        assert_eq!(bounded_body_size().limit, MAX_BOUNDED_BODY_BYTES);
+    }
+
+    /// Every document bound a bounded route enforces itself stays reachable under the cap.
+    ///
+    /// A document one byte past its route's own bound must reach that route, so the client gets
+    /// the route's coded refusal rather than a bare transport `413`. The roster rides as base64
+    /// inside JSON, so its body is the encoded length plus the wrapper; the others are bounded
+    /// on the bytes or the string the body carries, wrapped in at most a small JSON object.
+    #[test]
+    fn every_route_bound_under_the_bounded_cap_stays_reachable() {
+        /// Room for the JSON object and field names a bounded document is wrapped in.
+        const WRAPPER: u64 = 1024;
+        let base64 = |decoded: usize| (decoded as u64).div_ceil(3) * 4;
+        let bounds = [
+            (
+                "roster",
+                base64(crate::routes::roster::MAX_ROSTER_BYTES + 1),
+            ),
+            (
+                "directory",
+                crate::directory::MAX_DIRECTORY_BYTES as u64 + 1,
+            ),
+            ("escrow", crate::escrow::MAX_ESCROW_BYTES as u64 + 1),
+            (
+                "upgrade intent",
+                crate::routes::upgrade::MAX_INTENT_BYTES as u64 + 1,
+            ),
+            (
+                "relay payload",
+                crate::enrollment::MAX_RELAY_BYTES as u64 + 1,
+            ),
+            (
+                "storage verification",
+                (crate::verify::MAX_ASSETS_PER_REQUEST
+                    * (64 + crate::verify::MAX_BLOBS_PER_ASSET * (64 + 3))) as u64,
+            ),
+        ];
+        for (name, body) in bounds {
+            assert!(
+                body + WRAPPER < MAX_BOUNDED_BODY_BYTES,
+                "a {name} body past its own bound ({body} bytes) must reach its route"
+            );
+        }
     }
 }
