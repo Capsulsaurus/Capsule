@@ -202,8 +202,27 @@ struct IdTokenClaims {
     azp: Option<String>,
     #[serde(default)]
     email: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_bool")]
     email_verified: Option<bool>,
+}
+
+/// `email_verified` as a JSON boolean or as the string `"true"` / `"false"`.
+///
+/// OpenID Connect Core §5.1 types the claim as a boolean, but some providers (Amazon Cognito
+/// among them) send it as a string. Refusing those tokens fails the whole sign-in over a claim
+/// that only ever *grants* trust, so the string spellings are read, ASCII case-insensitively,
+/// and every other value — another string, a number, `null` — reads as absent, which
+/// [`verify_id_token`] then treats as unverified. An unparseable claim never verifies an address.
+fn lenient_bool<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(match serde_json::Value::deserialize(deserializer)? {
+        serde_json::Value::Bool(flag) => Some(flag),
+        serde_json::Value::String(text) if text.eq_ignore_ascii_case("true") => Some(true),
+        serde_json::Value::String(text) if text.eq_ignore_ascii_case("false") => Some(false),
+        _ => None,
+    })
 }
 
 /// `aud` as a single string or as an array of them.
@@ -786,5 +805,27 @@ mod tests {
         let identity = verify(&signer.sign(&claims), &keys(&[&signer])).expect("verifies");
         assert_eq!(identity.email, None);
         assert!(!identity.email_verified);
+    }
+
+    #[test]
+    fn a_string_email_verified_is_read_and_anything_else_is_unverified() {
+        let signer = Signer::generate("k1");
+        for (claim, expected) in [
+            (json!("true"), true),
+            (json!("TRUE"), true),
+            (json!("false"), false),
+            (json!("yes"), false),
+            (json!(1), false),
+            (serde_json::Value::Null, false),
+        ] {
+            let mut claims = good_claims();
+            claims["email_verified"] = claim.clone();
+            let identity = verify(&signer.sign(&claims), &keys(&[&signer]))
+                .unwrap_or_else(|error| panic!("{claim} must not fail sign-in: {error:?}"));
+            assert_eq!(
+                identity.email_verified, expected,
+                "email_verified = {claim}"
+            );
+        }
     }
 }
