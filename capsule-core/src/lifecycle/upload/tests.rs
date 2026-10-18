@@ -737,3 +737,140 @@ fn an_embedding_role_manifest_is_out_of_scope_and_skipped() {
         "and the closed-set check reports them as out of scope rather than rejecting them"
     );
 }
+
+// ── Derivative manifests travel with the bundle (#556) ───────────────────────
+
+/// Decode a bundle's `derivative_manifest` blobs back into the signed manifests they carry.
+fn shipped_manifests(bundle: &UploadBundle) -> Vec<DerivativeManifest> {
+    bundle
+        .derivative_manifests
+        .iter()
+        .map(|bytes| cbor::from_slice(bytes).expect("a shipped manifest decodes"))
+        .collect()
+}
+
+/// Every shipped derivative travels with the signed manifest that opens it: one manifest per
+/// blob, each committing to exactly that blob's address, carrying the nonce prefix and epoch a
+/// receiver derives the file key from — and encoded canonically, so the bytes are a pure
+/// function of the signed manifest the library recorded.
+#[test]
+fn every_shipped_derivative_carries_the_signed_manifest_that_opens_it() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (_album, asset_id) = library_with_a_thumbnailed_asset(&lib, &src);
+    let ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
+    let bundle = ws.upload_bundle(&asset_id).unwrap();
+
+    let manifests = shipped_manifests(&bundle);
+    assert_eq!(
+        manifests.len(),
+        bundle.derivatives.len(),
+        "one manifest per shipped derivative"
+    );
+    for (blob, manifest) in bundle.derivatives.iter().zip(&manifests) {
+        assert_eq!(manifest.core.ciphertext_hash, blob.ciphertext_hash);
+        assert_eq!(manifest.core.role, blob.role);
+        assert_eq!(manifest.core.format, blob.format);
+        assert_eq!(manifest.core.source_asset_id, asset_id);
+    }
+
+    // The receiver's half, from the shipped bytes alone: the manifest's prefix and epoch open
+    // the blob it names.
+    let asset = ws.asset(&asset_id).expect("held");
+    let album_keys = ws.album(&asset.album_id).unwrap();
+    let core = &manifests[0].core;
+    let file_key = ws.file_key(
+        album_keys,
+        core.amk_version.unwrap().0,
+        &asset_id,
+        &core.nonce_prefix,
+    );
+    crate::crypto::encryption::decrypt_asset_vec(
+        &file_key,
+        &core.nonce_prefix,
+        &bundle.derivatives[0].bytes,
+    )
+    .expect("the shipped manifest opens the shipped derivative");
+
+    // Canonical: re-encoding a decoded manifest reproduces the shipped bytes, so a re-push of
+    // an unchanged library names the same content addresses.
+    for (bytes, manifest) in bundle.derivative_manifests.iter().zip(&manifests) {
+        assert_eq!(&cbor::to_canonical_vec(manifest).unwrap(), bytes);
+    }
+    let again = ws.upload_bundle(&asset_id).unwrap();
+    assert_eq!(again.derivative_manifests, bundle.derivative_manifests);
+}
+
+/// A derivative that is skipped takes its manifest with it: nothing in
+/// `derivative_manifests` names a blob the bundle does not carry.
+#[test]
+fn a_skipped_derivative_ships_no_manifest() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (_album, asset_id) = library_with_a_thumbnailed_asset(&lib, &src);
+    let ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
+
+    let asset = ws.asset(&asset_id).expect("held");
+    let dir = media_dir(lib.path(), asset.capture_utc).join("derivatives");
+    fs::remove_file(dir.join(format!("{}.thumbnail.jxl", asset_id.simple()))).unwrap();
+
+    let bundle = ws.upload_bundle(&asset_id).unwrap();
+    let manifests = shipped_manifests(&bundle);
+    assert_eq!(manifests.len(), bundle.derivatives.len());
+    assert!(
+        manifests.iter().all(|manifest| bundle
+            .derivatives
+            .iter()
+            .any(|blob| blob.ciphertext_hash == manifest.core.ciphertext_hash)),
+        "every shipped manifest names a shipped derivative"
+    );
+}
+
+/// The `original` sentinel has no blob, and its manifest **still ships**: it is the only way a
+/// receiver learns that a tier is the original rather than missing. Out-of-scope and rejected
+/// manifests ship nothing.
+#[test]
+fn the_original_sentinel_ships_its_manifest_and_no_blob() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (_album, asset_id) = library_with_a_thumbnailed_asset(&lib, &src);
+    let ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
+
+    let sentinel = signed_derivative(
+        asset_id,
+        DerivativeRole::Preview,
+        crate::derivative_format::DerivativeFormat::Original.mime(),
+        hash::hash_bytes(b"the original"),
+    );
+    rewrite_bundle(
+        &lib,
+        &ws,
+        asset_id,
+        &[
+            sentinel.clone(),
+            signed_derivative(
+                asset_id,
+                DerivativeRole::Embedding,
+                "embedding/mobileclip-b",
+                hash::hash_bytes(b"an embedding"),
+            ),
+            signed_derivative(
+                asset_id,
+                DerivativeRole::Thumbnail,
+                "image/future-codec",
+                hash::hash_bytes(b"a future codec"),
+            ),
+        ],
+    );
+
+    let bundle = ws.upload_bundle(&asset_id).unwrap();
+    assert!(
+        bundle.derivatives.is_empty(),
+        "no tier here has bytes to ship"
+    );
+    assert_eq!(
+        shipped_manifests(&bundle),
+        vec![sentinel],
+        "the sentinel's manifest ships, and only it"
+    );
+}
