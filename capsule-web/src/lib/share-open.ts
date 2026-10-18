@@ -24,6 +24,12 @@ export interface ShareAssetCryptoParams {
     amkVersion: number;
     /** Lowercase-hex of the asset's STREAM nonce prefix (`nonce_prefix`). */
     noncePrefixHex: string;
+    /** How the asset's file key is obtained (`key_mode`). Absent means `derived`, as it is
+     *  wire-absent on a derived manifest; `wrapped` is an adopted web-upload drop. */
+    keyMode?: 'derived' | 'wrapped';
+    /** Lowercase-hex of the AMK-sealed `wrapped_file_key`; present iff `keyMode` is
+     *  `wrapped`. */
+    wrappedFileKeyHex?: string;
 }
 
 /**
@@ -31,19 +37,27 @@ export interface ShareAssetCryptoParams {
  *
  * The single decrypt path shared by the guest viewer and the cross-language KAT: it derives the
  * asset's per-file key from the opened {@link ShareScope} and STREAM-decrypts the `ciphertext`
- * (the bytes from `/s/{opaque-id}/blob/{hash}`), authenticated by the AEAD tag. Throws a stable
- * machine code (`scope_unavailable`, `tampered`, `malformed`) mapped by {@link shareOpenCode}.
+ * (the bytes from `/s/{opaque-id}/blob/{hash}`), authenticated by the AEAD tag. A `wrapped`
+ * asset's key is unwrapped from its `wrappedFileKeyHex` rather than re-derived. Throws a stable
+ * machine code (`scope_unavailable`, `tampered`, `malformed`) mapped by {@link shareOpenCode};
+ * `malformed` too when `keyMode` and `wrappedFileKeyHex` disagree, since a manifest carries the
+ * wrapped key iff its mode is `wrapped`.
  */
 export function decryptShareBlob(
     scope: ShareScope,
     params: ShareAssetCryptoParams,
     ciphertext: Uint8Array,
 ): Uint8Array {
+    const wrapped = params.keyMode === 'wrapped';
+    if (wrapped !== (params.wrappedFileKeyHex !== undefined)) {
+        throw new Error('malformed');
+    }
     return scope.decryptBlob(
         params.assetId,
         params.amkVersion,
         params.noncePrefixHex,
         ciphertext,
+        wrapped ? params.wrappedFileKeyHex : undefined,
     );
 }
 

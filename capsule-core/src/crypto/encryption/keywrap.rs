@@ -97,17 +97,34 @@ pub fn recover_file_key(
     amk: &Amk,
     core: &crate::crypto::provenance::ManifestCore,
 ) -> Result<[u8; 32], CryptoError> {
+    recover_file_key_parts(
+        amk,
+        &core.file_id,
+        &core.nonce_prefix,
+        core.key_mode,
+        core.wrapped_file_key.as_ref(),
+    )
+}
+
+/// [`recover_file_key`] over the manifest fields it reads, for a reader that holds those
+/// fields but not the manifest: the share viewer, which is served an asset's key-free crypto
+/// parameters and never its signed manifest (that would carry the device and account ids the
+/// export strip removes). Same dispatch and the same fail-closed errors.
+pub fn recover_file_key_parts(
+    amk: &Amk,
+    file_id: &Uuid,
+    nonce_prefix: &[u8],
+    key_mode: crate::crypto::provenance::KeyMode,
+    wrapped_file_key: Option<&crate::crypto::provenance::WrappedFileKey>,
+) -> Result<[u8; 32], CryptoError> {
     use crate::crypto::provenance::KeyMode;
-    match core.key_mode {
-        KeyMode::Derived => Ok(amk.derive_file_key(&core.file_id, &core.nonce_prefix)),
+    match key_mode {
+        KeyMode::Derived => Ok(amk.derive_file_key(file_id, nonce_prefix)),
         KeyMode::Wrapped => {
-            let wrapped = core
-                .wrapped_file_key
-                .as_ref()
-                .ok_or(CryptoError::Malformed(
-                    "wrapped key mode without a wrapped_file_key",
-                ))?;
-            unseal_file_key(amk, &core.file_id, &wrapped.0)
+            let wrapped = wrapped_file_key.ok_or(CryptoError::Malformed(
+                "wrapped key mode without a wrapped_file_key",
+            ))?;
+            unseal_file_key(amk, file_id, &wrapped.0)
         }
     }
 }

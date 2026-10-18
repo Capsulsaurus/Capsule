@@ -26,7 +26,8 @@ pub use blob::{
     seal_blob_with_nonce,
 };
 pub use keywrap::{
-    WRAP_NONCE_LEN, WRAPPED_FILE_KEY_LEN, recover_file_key, seal_file_key, unseal_file_key,
+    WRAP_NONCE_LEN, WRAPPED_FILE_KEY_LEN, recover_file_key, recover_file_key_parts, seal_file_key,
+    unseal_file_key,
 };
 pub use rekey::{
     encrypt_asset_rekey, encrypt_asset_rekey_with_prefix, seal_metadata_blob,

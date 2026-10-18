@@ -357,6 +357,28 @@ mod tests {
             .unwrap();
         assert!(decrypt_asset_vec(&derived, &head.nonce_prefix, &ciphertext).is_err());
 
+        // #598: the field-wise recovery the browser viewer uses agrees with the manifest path.
+        let by_fields = material
+            .file_key_for_key_mode(
+                &asset_id,
+                head.amk_version.0,
+                &head.nonce_prefix,
+                head.key_mode,
+                head.wrapped_file_key.as_ref(),
+            )
+            .unwrap();
+        assert_eq!(by_fields, key);
+        assert_eq!(
+            material.file_key_for_key_mode(
+                &asset_id,
+                99,
+                &head.nonce_prefix,
+                head.key_mode,
+                head.wrapped_file_key.as_ref(),
+            ),
+            Err(SharingError::ScopeUnavailable)
+        );
+
         // An epoch the grant holds no AMK for is not covered.
         let mut unheld = head.clone();
         unheld.amk_version = crate::crypto::keys::AmkVersion(99);
@@ -413,6 +435,16 @@ mod tests {
             core.wrapped_file_key = wrapped;
             assert_eq!(
                 material.file_key_for_manifest(&core),
+                Err(SharingError::Crypto("asset file key recovery failed"))
+            );
+            assert_eq!(
+                material.file_key_for_key_mode(
+                    &core.file_id,
+                    core.amk_version.0,
+                    &core.nonce_prefix,
+                    core.key_mode,
+                    core.wrapped_file_key.as_ref(),
+                ),
                 Err(SharingError::Crypto("asset file key recovery failed"))
             );
         }
