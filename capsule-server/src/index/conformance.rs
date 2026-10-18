@@ -40,7 +40,7 @@ use crate::store::{AlbumId, AssetId, BlobRole, OwnerId};
 
 /// Unwrap an index result, failing with the operation that was expected to work.
 #[track_caller]
-fn ok<T>(result: Result<T, crate::store::StoreError>, doing: &str) -> T {
+pub(crate) fn ok<T>(result: Result<T, crate::store::StoreError>, doing: &str) -> T {
     match result {
         Ok(value) => value,
         Err(error) => panic!("the index could not {doing}: {error}"),
@@ -105,7 +105,7 @@ async fn record(index: &dyn AssetIndex, asset: &AssetId, record: BlobRecord) -> 
 /// Publish `case`'s asset `n`: reserve it, then land its index tier.
 ///
 /// Returns the asset id and the sequence number publication minted.
-async fn publish(index: &dyn AssetIndex, case: &str, n: u32) -> (AssetId, u64) {
+pub(crate) async fn publish(index: &dyn AssetIndex, case: &str, n: u32) -> (AssetId, u64) {
     let row = pending(case, n);
     let asset = row.asset_id.clone();
     ok(index.reserve(row).await, "reserve a row");
@@ -891,12 +891,18 @@ fn manifest(seed: u8) -> Hash32 {
 }
 
 /// The chain head `asset` currently carries.
-async fn head_of(index: &dyn AssetIndex, asset: &AssetId) -> Option<Hash32> {
+pub(crate) async fn head_of(index: &dyn AssetIndex, asset: &AssetId) -> Option<Hash32> {
     ok(index.read(asset).await, "read a row").and_then(|row| row.chain_head)
 }
 
 /// A lifecycle op for `case`'s asset `n`, chaining onto `prior` and producing `hash`.
-fn op(case: &str, n: u32, action: OpAction, prior: Option<Hash32>, hash: Hash32) -> LifecycleOp {
+pub(crate) fn op(
+    case: &str,
+    n: u32,
+    action: OpAction,
+    prior: Option<Hash32>,
+    hash: Hash32,
+) -> LifecycleOp {
     LifecycleOp {
         asset_id: AssetId::new(format!("{case}-asset-{n}")),
         owner_id: OwnerId::new(format!("{case}-owner")),
