@@ -1863,8 +1863,8 @@ fn a_value_count_past_the_file_is_refused_before_the_raw_reader_reads_it() {
 }
 
 /// Allocation site two, `parse_ifd_at`'s `SubIFDs` read: `read_value_as_u64_vec` reserves
-/// `count` offsets whatever type the entry declares, so a `SubIFDs` entry of an unknown type is
-/// held to the offset size too.
+/// `count` `u64`s whatever type the entry declares, so a `SubIFDs` entry of any type, in classic
+/// TIFF too, is held to 8 bytes per element.
 #[test]
 fn a_subifds_count_past_the_file_is_refused_whatever_its_type() {
     let sub_ifds = TiffTag::SubIFDs.as_u16();
@@ -1872,12 +1872,81 @@ fn a_subifds_count_past_the_file_is_refused_whatever_its_type() {
         let bytes = hand_tiff(&[&[(sub_ifds, typ, u32::MAX / 2, 8)]]);
         assert_ifd_count_refused(&bytes, sub_ifds);
     }
-    // At the boundary: as many 4-byte offsets as the file holds passes the walk.
-    let fits = hand_tiff(&[&[(sub_ifds, T_LONG, 6, 8)]]);
+    // At the boundary: as many 8-byte `u64`s as the file holds passes the walk. Four classic
+    // 4-byte offsets fit in the file's 26 bytes, but the reader would reserve 32 for them.
+    let fits = hand_tiff(&[&[(sub_ifds, T_LONG, 3, 8)]]);
     assert_eq!(fits.len(), 26);
     assert!(check_ifd_value_counts(&fits).is_ok());
-    let over = hand_tiff(&[&[(sub_ifds, T_LONG, 7, 8)]]);
+    let over = hand_tiff(&[&[(sub_ifds, T_LONG, 4, 8)]]);
     assert!(check_ifd_value_counts(&over).is_err());
+}
+
+/// Every offset in a `SubIFDs` list is followed, not only the first: an oversized entry in the
+/// second SubIFD of a two-element list is refused, and is not once that element is 0.
+#[test]
+fn every_subifd_in_a_list_is_walked() {
+    let counts = [1, 1, 1];
+    let (first, second) = (hand_ifd_offset(&counts, 1), hand_ifd_offset(&counts, 2));
+    let list = hand_ifd_offset(&counts, 3);
+    let with_list = |elements: [u32; 2]| {
+        let mut bytes = hand_tiff(&[
+            &[(TiffTag::SubIFDs.as_u16(), T_LONG, 2, list)],
+            &[(0x9998, T_LONG, 1, 0)],
+            &[(TiffTag::StripByteCounts.as_u16(), T_LONG, u32::MAX, 8)],
+        ]);
+        assert_eq!(bytes.len(), list as usize, "the list follows the last IFD");
+        for element in elements {
+            bytes.extend_from_slice(&element.to_le_bytes());
+        }
+        bytes
+    };
+    assert_ifd_count_refused(
+        &with_list([first, second]),
+        TiffTag::StripByteCounts.as_u16(),
+    );
+    assert_eq!(
+        check_ifd_value_counts(&with_list([first, 0])).map(|w| w.ifds),
+        Ok(2)
+    );
+}
+
+/// Rewrite the next-IFD pointer of the IFD at `ifd` (holding `entries` entries) to `next`.
+fn set_next_ifd(bytes: &mut [u8], ifd: u32, entries: usize, next: u32) {
+    let at = ifd as usize + 2 + 12 * entries;
+    bytes[at..at + 4].copy_from_slice(&next.to_le_bytes());
+}
+
+/// The top-level chain is followed past IFD0: an oversized entry in IFD1 is refused. A next
+/// pointer on a SubIFD or an EXIF IFD is not, because the reader follows next pointers only along
+/// the top-level chain, so the same entry behind one is left alone.
+#[test]
+fn only_the_top_level_chain_follows_next_pointers() {
+    let oversized = (TiffTag::StripByteCounts.as_u16(), T_LONG, u32::MAX, 8);
+    let make = (TiffTag::Make.as_u16(), 2, 4, u32::from_le_bytes(*b"SON\0"));
+
+    let mut chained = hand_tiff(&[&[make], &[oversized]]);
+    assert!(
+        check_ifd_value_counts(&chained).is_ok(),
+        "unchained, IFD1 is unreached"
+    );
+    set_next_ifd(&mut chained, 8, 1, hand_ifd_offset(&[1, 1], 1));
+    assert_ifd_count_refused(&chained, oversized.0);
+
+    let counts = [2, 1, 1];
+    let (child, beyond) = (hand_ifd_offset(&counts, 1), hand_ifd_offset(&counts, 2));
+    for pointer in [TiffTag::SubIFDs, TiffTag::ExifIFDPointer] {
+        let mut bytes = hand_tiff(&[
+            &[make, (pointer.as_u16(), T_LONG, 1, child)],
+            &[(0x9998, T_LONG, 1, 0)],
+            &[oversized],
+        ]);
+        set_next_ifd(&mut bytes, child, 1, beyond);
+        assert_eq!(
+            check_ifd_value_counts(&bytes).map(|w| w.ifds),
+            Ok(2),
+            "{pointer:?}'s next pointer must not be followed"
+        );
+    }
 }
 
 /// Allocation site three, the byte reads behind strips, tiles and the MakerNote: an oversized

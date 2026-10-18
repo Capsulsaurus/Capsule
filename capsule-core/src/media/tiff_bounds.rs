@@ -17,7 +17,8 @@
 //! [`check_ifd_value_counts`] walks exactly the directories `RawFile::open` parses — the IFD0
 //! chain, every IFD's `SubIFDs` (recursively), EXIF and GPS IFDs, and the Sony SR2 IFD the ARW
 //! reader follows from IFD0's tag `0x02BC` — and refuses the first entry whose value would need
-//! more bytes than the whole file holds. Bounding by the file length is the right bound: every
+//! more bytes than the whole file holds — a `SubIFDs` list counted at the 8-byte `u64` the reader
+//! reserves per element, not the 4 bytes a classic-TIFF offset occupies. Bounding by the file length is the right bound: every
 //! byte a value occupies has to be in the file, so a real file never trips it, and a value the
 //! reader allocates is then never larger than the bytes Capsule already holds.
 //!
@@ -46,6 +47,10 @@ use rawshift_image::tiff::{BIGTIFF_MAGIC, TIFF_MAGIC, TiffTag, TiffType};
 
 /// The Sony tag the ARW reader reads as the offset of an SR2 IFD and then parses.
 const TAG_SONY_SR2_IFD: u16 = 0x02BC;
+
+/// The bytes `read_value_as_u64_vec` reserves per `SubIFDs` element: one `u64`, in classic TIFF
+/// as in BigTIFF, which is also at least every TIFF type's own size.
+const SUBIFD_ELEMENT_SIZE: u64 = std::mem::size_of::<u64>() as u64;
 
 /// The most entries `TiffParser::parse_ifd_at` accepts in one IFD before it refuses the IFD.
 const MAX_IFD_ENTRIES: u64 = 65_535;
@@ -310,7 +315,7 @@ fn walk_ifd(
             count,
             field: at + 4 + if tiff.big { 8 } else { 4 },
         };
-        check_entry(tiff, offset, &entry, file_len)?;
+        check_entry(offset, &entry, file_len)?;
         follow(tiff, &entry, first, stack);
     }
     // Pushed last, so popped first: the whole top-level chain is walked before any child, and an
@@ -328,18 +333,15 @@ fn walk_ifd(
 
 /// Refuse an entry whose value would need more bytes than the file holds.
 ///
-/// A `SubIFDs` entry is held to the offset size as well as its type size, whatever type it
-/// declares: the reader reads it through `read_value_as_u64_vec`, which ignores the type and reads
-/// `count` offsets. An entry of a type the reader does not know is otherwise skipped, because
-/// `read_value` refuses it before allocating.
-fn check_entry(
-    tiff: &Tiff<'_>,
-    ifd_offset: u64,
-    entry: &Entry,
-    file_len: u64,
-) -> Result<(), OversizedEntry> {
+/// A `SubIFDs` entry is held to [`SUBIFD_ELEMENT_SIZE`] bytes per element, whatever type it
+/// declares and whichever TIFF variant holds it: the reader reads it through
+/// `read_value_as_u64_vec`, which ignores the type and reserves `count` `u64`s before it reads a
+/// single offset. A classic-TIFF offset is 4 bytes, so a list bounded at the offset size could
+/// still reserve twice the file's length. An entry of a type the reader does not know is
+/// otherwise skipped, because `read_value` refuses it before allocating.
+fn check_entry(ifd_offset: u64, entry: &Entry, file_len: u64) -> Result<(), OversizedEntry> {
     let element = if entry.tag == TiffTag::SubIFDs.as_u16() {
-        Some(entry.type_size().unwrap_or(0).max(tiff.offset_size()))
+        Some(SUBIFD_ELEMENT_SIZE)
     } else {
         entry.type_size()
     };
