@@ -11,6 +11,10 @@
 //! | `an_echo_for_another_link_is_refused` | the server cannot confirm a link this client did not send |
 //! | `revoke_deletes_the_link` / `a_refused_revoke_carries_its_code` | the revoke path |
 //! | `the_url_puts_the_secret_in_the_fragment` | the recipient URL's shape |
+//! | `every_declared_issue_refusal_maps_to_its_class` / `every_declared_revoke_refusal_maps_to_its_class` | each documented status lands in its `ShareError` variant with its code |
+//! | `a_session_that_cannot_mint_a_bearer_is_unauthorized` | a dead session is an auth failure, and nothing reaches the share routes |
+//! | `an_unreachable_server_is_a_transport_failure` | a refused connection is not read as an auth failure |
+//! | `an_undeclared_status_is_unexpected` | a status the document does not declare keeps its number |
 
 use std::sync::{Arc, Mutex};
 
@@ -112,6 +116,39 @@ fn problem(status: u16, reason: &str, code: &str) -> MockResponse {
     .into_bytes();
     response
 }
+
+/// A session whose access token has expired and whose refresh the server refuses.
+fn dead_session_for(base: &str) -> Session {
+    AuthClient::new(base)
+        .unwrap()
+        .resume(PersistedSession {
+            access_token: "test-access".to_owned().into(),
+            refresh_token: "test-refresh".to_owned().into(),
+            access_expires_at_unix: jiff::Timestamp::now().as_second() - 3_600,
+        })
+        .unwrap()
+}
+
+/// A `401` whose code is not the access-token refusal, so the client neither refreshes nor
+/// replays it.
+const REFUSED_CREDENTIAL: &str = "error.auth.invalid_credentials";
+
+/// A refusal as the server renders it: a coded problem, or for the transport backstop's `413`
+/// (`code` is `None`) no body at all.
+fn refusal_response(status: u16, reason: &str, code: Option<&str>) -> MockResponse {
+    code.map_or_else(
+        || MockResponse::new(status, reason),
+        |code| problem(status, reason, code),
+    )
+}
+
+/// One declared refusal, and the `ShareError` class it must land in.
+type RefusalCase = (
+    u16,
+    &'static str,
+    Option<&'static str>,
+    fn(&ShareError) -> bool,
+);
 
 fn created(opaque_id: &str) -> MockResponse {
     MockResponse::new(201, "Created").json_body(format!(r#"{{"opaque_id":"{opaque_id}"}}"#))
@@ -241,6 +278,174 @@ async fn a_refused_revoke_carries_its_code() {
         recording(|_| problem(500, "Internal Server Error", error_codes::SHARE_UNAVAILABLE)).await;
     let error = client.revoke(&"a".repeat(32)).await.unwrap_err();
     assert_eq!(error.error_code(), Some(error_codes::SHARE_UNAVAILABLE));
+}
+
+#[tokio::test]
+async fn every_declared_issue_refusal_maps_to_its_class() {
+    let cases: [RefusalCase; 5] = [
+        (401, "Unauthorized", Some(REFUSED_CREDENTIAL), |e| {
+            matches!(e, ShareError::Unauthorized { .. })
+        }),
+        (
+            415,
+            "Unsupported Media Type",
+            Some(error_codes::REQUEST_UNSUPPORTED_MEDIA_TYPE),
+            |e| matches!(e, ShareError::Malformed { .. }),
+        ),
+        (
+            422,
+            "Unprocessable Entity",
+            Some(error_codes::REQUEST_UNPROCESSABLE),
+            |e| matches!(e, ShareError::Malformed { .. }),
+        ),
+        (
+            426,
+            "Upgrade Required",
+            Some(error_codes::PROTOCOL_VERSION_UNSUPPORTED),
+            |e| matches!(e, ShareError::Unexpected { status: 426, .. }),
+        ),
+        (413, "Payload Too Large", None, |e| {
+            matches!(
+                e,
+                ShareError::Unexpected {
+                    status: 413,
+                    code: None
+                }
+            )
+        }),
+    ];
+    for (status, reason, code, expected) in cases {
+        let (link, publication) = published(None);
+        let (_server, client, seen) =
+            recording(move |_| refusal_response(status, reason, code)).await;
+        let error = client.issue(&link, &publication).await.unwrap_err();
+        assert!(expected(&error), "{status}: {error:?}");
+        assert_eq!(error.error_code(), code, "{status}");
+        assert_eq!(seen.lock().unwrap().len(), 1, "{status} is not replayed");
+    }
+}
+
+#[tokio::test]
+async fn every_declared_revoke_refusal_maps_to_its_class() {
+    let cases: [RefusalCase; 5] = [
+        (
+            400,
+            "Bad Request",
+            Some(error_codes::SHARE_MALFORMED),
+            |e| matches!(e, ShareError::Malformed { .. }),
+        ),
+        (401, "Unauthorized", Some(REFUSED_CREDENTIAL), |e| {
+            matches!(e, ShareError::Unauthorized { .. })
+        }),
+        (
+            403,
+            "Forbidden",
+            Some(error_codes::REQUEST_FORBIDDEN),
+            |e| matches!(e, ShareError::Unauthorized { .. }),
+        ),
+        (
+            426,
+            "Upgrade Required",
+            Some(error_codes::PROTOCOL_VERSION_UNSUPPORTED),
+            |e| matches!(e, ShareError::Unexpected { status: 426, .. }),
+        ),
+        (413, "Payload Too Large", None, |e| {
+            matches!(
+                e,
+                ShareError::Unexpected {
+                    status: 413,
+                    code: None
+                }
+            )
+        }),
+    ];
+    for (status, reason, code, expected) in cases {
+        let (_server, client, seen) =
+            recording(move |_| refusal_response(status, reason, code)).await;
+        let error = client.revoke(&"a".repeat(32)).await.unwrap_err();
+        assert!(expected(&error), "{status}: {error:?}");
+        assert_eq!(error.error_code(), code, "{status}");
+        assert_eq!(seen.lock().unwrap().len(), 1, "{status} is not replayed");
+    }
+}
+
+#[tokio::test]
+async fn a_session_that_cannot_mint_a_bearer_is_unauthorized() {
+    let (link, publication) = published(None);
+    let seen: Arc<Mutex<Vec<MockRequest>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = seen.clone();
+    // Every request, the session's refresh included, is refused.
+    let server = MockServer::start(move |req| {
+        sink.lock().unwrap().push(req.clone());
+        problem(401, "Unauthorized", error_codes::REQUEST_UNAUTHENTICATED)
+    })
+    .await;
+    let client =
+        ShareClient::new(dead_session_for(&server.base_url()), &server.base_url()).unwrap();
+
+    let error = client.issue(&link, &publication).await.unwrap_err();
+    assert!(
+        matches!(error, ShareError::Unauthorized { code: None }),
+        "a dead session must reach the caller as an auth failure, got {error:?}"
+    );
+    let error = client.revoke(&link.opaque_id_hex()).await.unwrap_err();
+    assert!(
+        matches!(error, ShareError::Unauthorized { code: None }),
+        "{error:?}"
+    );
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .all(|request| !request.path.starts_with("/v1/shares")),
+        "nothing reaches the share routes without a bearer"
+    );
+}
+
+#[tokio::test]
+async fn an_unreachable_server_is_a_transport_failure() {
+    // Bind, read the port, then drop the listener: the address now refuses connections.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    let base = format!("http://{addr}");
+    // The access token is still valid, so the session never needs the dead origin.
+    let client = ShareClient::new(session_for(&base), &base).unwrap();
+
+    let (link, publication) = published(None);
+    let error = client.issue(&link, &publication).await.unwrap_err();
+    assert!(matches!(error, ShareError::Transport(_)), "{error:?}");
+    assert_eq!(error.error_code(), None);
+    let error = client.revoke(&link.opaque_id_hex()).await.unwrap_err();
+    assert!(matches!(error, ShareError::Transport(_)), "{error:?}");
+}
+
+#[tokio::test]
+async fn an_undeclared_status_is_unexpected() {
+    let (link, publication) = published(None);
+    let (_server, client, _) = recording(|_| MockResponse::new(502, "Bad Gateway")).await;
+    let error = client.issue(&link, &publication).await.unwrap_err();
+    assert!(
+        matches!(
+            error,
+            ShareError::Unexpected {
+                status: 502,
+                code: None
+            }
+        ),
+        "{error:?}"
+    );
+    let error = client.revoke(&link.opaque_id_hex()).await.unwrap_err();
+    assert!(
+        matches!(
+            error,
+            ShareError::Unexpected {
+                status: 502,
+                code: None
+            }
+        ),
+        "{error:?}"
+    );
 }
 
 #[test]
