@@ -77,6 +77,13 @@ pub mod info {
     ///
     /// [Share Links]: https://docs/design/share-links/
     pub const SHARE_SCOPE_WRAP_V1: &[u8] = b"share-scope-wrap/v1";
+    /// Share-link metadata key: `HKDF(ikm=link_secret, salt=opaque_id,
+    /// info=SHARE_METADATA_V1)` derives the key that seals the share metadata record a viewer
+    /// starts from — the blob at the link's `metadata_hash` (SSoT: [Share Links]). A label of its
+    /// own, so the record key and the scope-wrap key never coincide.
+    ///
+    /// [Share Links]: https://docs/design/share-links/
+    pub const SHARE_METADATA_V1: &[u8] = b"share-metadata/v1";
 }
 
 /// Device hardware tier, selecting Argon2id cost parameters at *wrap* time. The chosen
