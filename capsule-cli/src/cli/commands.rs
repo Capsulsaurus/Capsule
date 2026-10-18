@@ -285,6 +285,20 @@ pub(crate) enum AuthCommands {
         #[arg(long)]
         password_stdin: bool,
     },
+    /// Set up recovery for a library: bind it to the signed-in account and store its recovery
+    /// backup under a new recovery secret
+    Escrow {
+        /// Path to the Capsule library; it must not hold any assets yet
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// Read the library passphrase from stdin instead of prompting
+        #[arg(long)]
+        passphrase_stdin: bool,
+        /// Replace the account's existing recovery backup; the previous recovery secret stops
+        /// working
+        #[arg(long)]
+        replace: bool,
+    },
     /// Recover the signed-in account onto this machine from its recovery backup
     Recover {
         /// Directory for the recovered library; it must not hold a library yet

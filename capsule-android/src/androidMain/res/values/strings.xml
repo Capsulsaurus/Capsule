@@ -1694,6 +1694,16 @@
     <string name="auth_verify">Verify</string>
     <string name="auth_verifying">Verifying…</string>
     <string name="back">Back</string>
+    <string name="cli_auth_escrow_already_stored">This account already has recovery set up. Run the command again with --replace to store a new recovery secret; the old one will stop working.</string>
+    <string name="cli_auth_escrow_failed">Recovery setup failed: %s</string>
+    <string name="cli_auth_escrow_in_progress">Setting up recovery for the library at %s…</string>
+    <string name="cli_auth_escrow_library_has_assets">This library already holds assets created under its own account id, so it cannot be bound to your server account. Run \'capsule auth escrow\' on a fresh library instead.</string>
+    <string name="cli_auth_escrow_passphrase_prompt">Library passphrase</string>
+    <string name="cli_auth_escrow_replaced">This replaced the account\'s earlier recovery backup: the previous recovery secret no longer works. Re-export or destroy any backup made under it.</string>
+    <string name="cli_auth_escrow_secret_shown">Your recovery secret is shown once and never again. Write it down and keep it somewhere safe:\n\n    %s\n</string>
+    <string name="cli_auth_escrow_success">Recovery is set up. The library at %s is bound to your account, and \'capsule auth recover\' can restore your account on a new machine with the recovery secret you saved.</string>
+    <string name="cli_auth_escrow_typeback_mismatch">That does not match the recovery secret shown above. Nothing was stored; run the command again for a new secret.</string>
+    <string name="cli_auth_escrow_typeback_prompt">Type the recovery secret back to confirm you saved it</string>
     <string name="cli_auth_login_email_prompt">Email</string>
     <string name="cli_auth_login_failed">Login failed: %s</string>
     <string name="cli_auth_login_in_progress">Logging in to Capsule…</string>
@@ -1729,6 +1739,10 @@
     <string name="cli_cull_unknown_asset">Unknown asset %s in this library.</string>
     <string name="cli_cull_view">Cull view: %1$s pick, %2$s neutral, %3$s reject.</string>
     <string name="cli_help_auth_about">Authentication commands</string>
+    <string name="cli_help_auth_escrow_about">Set up recovery for a library: bind it to the signed-in account and store its recovery backup under a new recovery secret</string>
+    <string name="cli_help_auth_escrow_arg_library">Path to the Capsule library; it must not hold any assets yet</string>
+    <string name="cli_help_auth_escrow_arg_passphrase_stdin">Read the library passphrase from stdin instead of prompting</string>
+    <string name="cli_help_auth_escrow_arg_replace">Replace the account\'s existing recovery backup; the previous recovery secret stops working</string>
     <string name="cli_help_auth_login_about">Login to Capsule</string>
     <string name="cli_help_auth_login_arg_email">Account email (prompted when omitted)</string>
     <string name="cli_help_auth_login_arg_password_stdin">Read the password from stdin instead of prompting, so the command works in scripts and CI where there is no terminal</string>
@@ -2047,7 +2061,7 @@
     <string name="error_enrollment_local_auth_required">Confirm it\'s you on this device to add another device.</string>
     <string name="error_enrollment_rate_limited">Too many device-add attempts. Please wait and try again.</string>
     <string name="error_enrollment_relay_malformed">The device-add request could not be read.</string>
-    <string name="error_escrow_identity_not_stored">This account\'s recovery backup does not include its identity key, so this device cannot be recovered as the same account. Keep using a device where this account\'s library still opens.</string>
+    <string name="error_escrow_identity_not_stored">This account\'s recovery backup does not include its identity key, so this device cannot be recovered as the same account. Set recovery up again from a device where this account\'s library still opens, then recover with the new recovery secret.</string>
     <string name="error_escrow_malformed">The recovery backup could not be saved.</string>
     <string name="error_escrow_not_stored">No recovery backup is saved for this account.</string>
     <string name="error_escrow_unavailable">Capsule couldn\'t reach the recovery backup. Please try again.</string>

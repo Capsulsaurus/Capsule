@@ -55,6 +55,17 @@ pub mod keys {
     pub const AUTH_LOGOUT_SUCCESS: &str = "cli.auth.logout.success";
     pub const AUTH_LOGOUT_NOT_LOGGED_IN: &str = "cli.auth.logout.not_logged_in";
     pub const AUTH_NOT_AUTHENTICATED: &str = "cli.auth.not_authenticated";
+    // `capsule auth escrow` — set recovery up for a library (#624).
+    pub const AUTH_ESCROW_PASSPHRASE_PROMPT: &str = "cli.auth.escrow.passphrase_prompt";
+    pub const AUTH_ESCROW_IN_PROGRESS: &str = "cli.auth.escrow.in_progress";
+    pub const AUTH_ESCROW_SECRET_SHOWN: &str = "cli.auth.escrow.secret_shown";
+    pub const AUTH_ESCROW_TYPEBACK_PROMPT: &str = "cli.auth.escrow.typeback_prompt";
+    pub const AUTH_ESCROW_TYPEBACK_MISMATCH: &str = "cli.auth.escrow.typeback_mismatch";
+    pub const AUTH_ESCROW_ALREADY_STORED: &str = "cli.auth.escrow.already_stored";
+    pub const AUTH_ESCROW_LIBRARY_HAS_ASSETS: &str = "cli.auth.escrow.library_has_assets";
+    pub const AUTH_ESCROW_SUCCESS: &str = "cli.auth.escrow.success";
+    pub const AUTH_ESCROW_REPLACED: &str = "cli.auth.escrow.replaced";
+    pub const AUTH_ESCROW_FAILED: &str = "cli.auth.escrow.failed";
     // `capsule auth recover` — a new device of an existing account, from its escrow (#544).
     pub const AUTH_RECOVER_SECRET_PROMPT: &str = "cli.auth.recover.secret_prompt";
     pub const AUTH_RECOVER_PASSPHRASE_PROMPT: &str = "cli.auth.recover.passphrase_prompt";

@@ -29049,6 +29049,106 @@
         }
       }
     },
+    "cli.auth.escrow.already_stored": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This account already has recovery set up. Run the command again with --replace to store a new recovery secret; the old one will stop working."
+          }
+        }
+      }
+    },
+    "cli.auth.escrow.failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recovery setup failed: %@"
+          }
+        }
+      }
+    },
+    "cli.auth.escrow.in_progress": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Setting up recovery for the library at %@…"
+          }
+        }
+      }
+    },
+    "cli.auth.escrow.library_has_assets": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This library already holds assets created under its own account id, so it cannot be bound to your server account. Run 'capsule auth escrow' on a fresh library instead."
+          }
+        }
+      }
+    },
+    "cli.auth.escrow.passphrase_prompt": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Library passphrase"
+          }
+        }
+      }
+    },
+    "cli.auth.escrow.replaced": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This replaced the account's earlier recovery backup: the previous recovery secret no longer works. Re-export or destroy any backup made under it."
+          }
+        }
+      }
+    },
+    "cli.auth.escrow.secret_shown": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your recovery secret is shown once and never again. Write it down and keep it somewhere safe:\n\n    %@\n"
+          }
+        }
+      }
+    },
+    "cli.auth.escrow.success": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recovery is set up. The library at %@ is bound to your account, and 'capsule auth recover' can restore your account on a new machine with the recovery secret you saved."
+          }
+        }
+      }
+    },
+    "cli.auth.escrow.typeback_mismatch": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That does not match the recovery secret shown above. Nothing was stored; run the command again for a new secret."
+          }
+        }
+      }
+    },
+    "cli.auth.escrow.typeback_prompt": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Type the recovery secret back to confirm you saved it"
+          }
+        }
+      }
+    },
     "cli.auth.login.email_prompt": {
       "localizations": {
         "ar": {
@@ -30187,6 +30287,46 @@
           "stringUnit": {
             "state": "translated",
             "value": "Authentication commands"
+          }
+        }
+      }
+    },
+    "cli.help.auth.escrow.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Set up recovery for a library: bind it to the signed-in account and store its recovery backup under a new recovery secret"
+          }
+        }
+      }
+    },
+    "cli.help.auth.escrow.arg.library": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Path to the Capsule library; it must not hold any assets yet"
+          }
+        }
+      }
+    },
+    "cli.help.auth.escrow.arg.passphrase_stdin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read the library passphrase from stdin instead of prompting"
+          }
+        }
+      }
+    },
+    "cli.help.auth.escrow.arg.replace": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Replace the account's existing recovery backup; the previous recovery secret stops working"
           }
         }
       }
@@ -41456,7 +41596,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "This account's recovery backup does not include its identity key, so this device cannot be recovered as the same account. Keep using a device where this account's library still opens."
+            "value": "This account's recovery backup does not include its identity key, so this device cannot be recovered as the same account. Set recovery up again from a device where this account's library still opens, then recover with the new recovery secret."
           }
         }
       }

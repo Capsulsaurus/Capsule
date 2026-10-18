@@ -6807,6 +6807,46 @@
     "message": "Back",
     "context": "Navigation action that returns to the previous screen."
   },
+  "cli.auth.escrow.already_stored": {
+    "message": "This account already has recovery set up. Run the command again with --replace to store a new recovery secret; the old one will stop working.",
+    "context": "CLI `capsule auth escrow` (#624): the account already has a master-key escrow on the server, so the command refused rather than retire the recovery secret that opens it. Nothing was written. --replace is the literal flag name."
+  },
+  "cli.auth.escrow.failed": {
+    "message": "Recovery setup failed: {reason}",
+    "context": "CLI failure line for `capsule auth escrow` (#624). {reason} is a localized or English error detail."
+  },
+  "cli.auth.escrow.in_progress": {
+    "message": "Setting up recovery for the library at {path}…",
+    "context": "CLI status line printed when `capsule auth escrow` has opened the library and starts setting up recovery. {path} is the library directory."
+  },
+  "cli.auth.escrow.library_has_assets": {
+    "message": "This library already holds assets created under its own account id, so it cannot be bound to your server account. Run 'capsule auth escrow' on a fresh library instead.",
+    "context": "CLI `capsule auth escrow` (#624): binding the library to the server's account id was refused because the library already signed assets naming its locally minted id. Nothing was stored on the server. 'capsule auth escrow' is a literal command."
+  },
+  "cli.auth.escrow.passphrase_prompt": {
+    "message": "Library passphrase",
+    "context": "CLI `capsule auth escrow` interactive prompt for the passphrase that opens the library being set up for recovery."
+  },
+  "cli.auth.escrow.replaced": {
+    "message": "This replaced the account's earlier recovery backup: the previous recovery secret no longer works. Re-export or destroy any backup made under it.",
+    "context": "CLI `capsule auth escrow --replace` (#624), printed after the success line when the stored escrow displaced an earlier one."
+  },
+  "cli.auth.escrow.secret_shown": {
+    "message": "Your recovery secret is shown once and never again. Write it down and keep it somewhere safe:\n\n    {secret}\n",
+    "context": "CLI `capsule auth escrow` (#624): the one showing of the freshly minted recovery secret. {secret} is 64 hexadecimal characters and must not be translated or reformatted."
+  },
+  "cli.auth.escrow.success": {
+    "message": "Recovery is set up. The library at {path} is bound to your account, and 'capsule auth recover' can restore your account on a new machine with the recovery secret you saved.",
+    "context": "CLI success line after `capsule auth escrow` (#624). {path} is the library directory; 'capsule auth recover' is a literal command."
+  },
+  "cli.auth.escrow.typeback_mismatch": {
+    "message": "That does not match the recovery secret shown above. Nothing was stored; run the command again for a new secret.",
+    "context": "CLI `capsule auth escrow` (#624): the type-back gate failed, so neither the escrow nor the identity was stored and the library was not changed."
+  },
+  "cli.auth.escrow.typeback_prompt": {
+    "message": "Type the recovery secret back to confirm you saved it",
+    "context": "CLI `capsule auth escrow` (#624) interactive prompt: the user re-enters the recovery secret just shown, proving they recorded it before it is stored."
+  },
   "cli.auth.login.email_prompt": {
     "message": "Email",
     "context": "CLI `capsule auth login` interactive prompt for the account email."
@@ -6946,6 +6986,22 @@
   "cli.help.auth.about": {
     "message": "Authentication commands",
     "context": "clap --help: the one-line description of `capsule auth`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.auth.escrow.about": {
+    "message": "Set up recovery for a library: bind it to the signed-in account and store its recovery backup under a new recovery secret",
+    "context": "clap --help: the one-line description of `capsule auth escrow` (#624). Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.auth.escrow.arg.library": {
+    "message": "Path to the Capsule library; it must not hold any assets yet",
+    "context": "clap --help: help for the `--library` option of `capsule auth escrow`."
+  },
+  "cli.help.auth.escrow.arg.passphrase_stdin": {
+    "message": "Read the library passphrase from stdin instead of prompting",
+    "context": "clap --help: help for the `--passphrase-stdin` flag of `capsule auth escrow`."
+  },
+  "cli.help.auth.escrow.arg.replace": {
+    "message": "Replace the account's existing recovery backup; the previous recovery secret stops working",
+    "context": "clap --help: help for the `--replace` flag of `capsule auth escrow`."
   },
   "cli.help.auth.login.about": {
     "message": "Login to Capsule",
@@ -8236,8 +8292,8 @@
     "context": "HTTP 400 on the enrollment relay channel (slice S-C7): the request named an unknown direction or carried a missing/oversized opaque payload. The server never inspects the payload contents; this is a structural rejection only."
   },
   "error.escrow.identity_not_stored": {
-    "message": "This account's recovery backup does not include its identity key, so this device cannot be recovered as the same account. Keep using a device where this account's library still opens.",
-    "context": "HTTP 404 on GET /v1/auth/escrow/identity (#544): this account has never stored its user identity key sealed under the master key, so a recovered device cannot open as the same account even if the master-key escrow is present. Distinct from error.escrow.not_stored because the remedy differs: the escrow exists but is not enough on its own. No shipped client flow stores the sealed identity yet (the CLI recovery-setup step is #624), so the message names no setup step the user cannot take; reword it to point at that step once it ships."
+    "message": "This account's recovery backup does not include its identity key, so this device cannot be recovered as the same account. Set recovery up again from a device where this account's library still opens, then recover with the new recovery secret.",
+    "context": "HTTP 404 on GET /v1/auth/escrow/identity (#544): this account has never stored its user identity key sealed under the master key, so a recovered device cannot open as the same account even if the master-key escrow is present. Distinct from error.escrow.not_stored because the remedy differs: the escrow exists but is not enough on its own. Setting recovery up (the CLI's `capsule auth escrow`, #624) stores both under a new recovery secret, which is why the message says to recover with the new one. Client-neutral: every client shows this code."
   },
   "error.escrow.malformed": {
     "message": "The recovery backup could not be saved.",
