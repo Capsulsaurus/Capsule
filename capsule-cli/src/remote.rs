@@ -360,7 +360,7 @@ async fn checkpoint(store: &SessionStore, session: &Session) {
 /// 4. create the library at `library` with `Workspace::create_from_master`, which opens the
 ///    sealed identity under the recovered master key and refuses before writing anything if it
 ///    does not open;
-/// 5. join the account's device directory (#625, [`join_account_directory`]): fetch the
+/// 5. join the account's device directory (#625): fetch the
 ///    account's signed directory (`GET /v1/auth/devices/directory/{user_id}`), verify it under
 ///    the identity key the sealed identity opened, append the new device with
 ///    `Workspace::extend_account_directory` and publish it at the stored version + 1. An
@@ -498,17 +498,15 @@ async fn join_account_directory(
                 devices = published.core.devices.len(),
                 "recover: the account's directory fetched and verified"
             );
-            match workspace.extend_account_directory(&published)? {
-                Some(extended) => extended,
-                None => {
-                    tracing::info!(
-                        %user_id,
-                        directory_version = stored,
-                        "recover: the account's directory already lists this device"
-                    );
-                    return Ok(stored);
-                }
-            }
+            let Some(extended) = workspace.extend_account_directory(&published)? else {
+                tracing::info!(
+                    %user_id,
+                    directory_version = stored,
+                    "recover: the account's directory already lists this device"
+                );
+                return Ok(stored);
+            };
+            extended
         }
         Err(DirectoryError::NotPublished) => {
             tracing::info!(
