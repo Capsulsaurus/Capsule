@@ -21,7 +21,7 @@ use uuid::Uuid;
 use crate::crypto::authority::AlbumAuthority;
 use crate::crypto::encryption::{blob_ciphertext_hash, open_blob};
 use crate::crypto::hash::{self, Hash32};
-use crate::crypto::keys::DeviceDirectory;
+use crate::crypto::keys::{AmkVersion, DeviceDirectory, HybridSignature};
 use crate::crypto::primitives::SuiteId;
 use crate::crypto::provenance::AssetManifest;
 
@@ -55,6 +55,10 @@ pub enum RejectReason {
     ForgedChain,
     /// A `create` for an asset that already exists locally (replay).
     Replayed,
+    /// A derivative manifest names a `source_asset_id` other than the asset it is being
+    /// opened for — a derivative transplanted from another asset
+    /// ([`verify_derivative`](crate::crypto::verify_derivative::verify_derivative)).
+    WrongAsset,
 }
 
 /// Why a manifest is pending rather than accepted.
@@ -82,7 +86,8 @@ impl VerifyOutcome {
     }
 }
 
-fn rfc3339_le(a: &str, b: &str) -> Option<bool> {
+/// `a <= b` over two RFC 3339 timestamps; `None` when either does not parse.
+pub(super) fn rfc3339_le(a: &str, b: &str) -> Option<bool> {
     let pa = a.parse::<jiff::Timestamp>().ok()?;
     let pb = b.parse::<jiff::Timestamp>().ok()?;
     Some(pa <= pb)
@@ -180,17 +185,14 @@ fn authorize_and_place(
     local_chain_head: Option<Hash32>,
 ) -> Option<RejectReason> {
     let core = &manifest.core;
-    // 9. The epoch must be within the MLS-attested ceiling (no fabricated future epoch).
-    if core.amk_version > authority.epoch_ceiling() {
-        return Some(RejectReason::WrongEpoch);
-    }
-    // 10. The write-tier signature must verify under the epoch's attested write-tier key.
-    //     Reader-signed and removed-writer manifests both fail this check.
-    let Some(write_pub) = authority.write_tier_pubkey(core.amk_version) else {
-        return Some(RejectReason::WrongEpoch);
-    };
-    if !write_pub.verify(signing_bytes, &manifest.write_sig) {
-        return Some(RejectReason::BadWriteSig);
+    // 9–10. Epoch ceiling and write-tier signature.
+    if let Some(reason) = authorize_write(
+        core.amk_version,
+        signing_bytes,
+        &manifest.write_sig,
+        authority,
+    ) {
+        return Some(reason);
     }
     // 11. Chain placement: a create must be new; a non-create must chain to the local head.
     if core.action.is_create() {
@@ -200,6 +202,30 @@ fn authorize_and_place(
     } else if core.prior_provenance_hash.is_none() || core.prior_provenance_hash != local_chain_head
     {
         return Some(RejectReason::ForgedChain);
+    }
+    None
+}
+
+/// Steps 9–10 of [`verify_asset`], shared with
+/// [`verify_derivative`](crate::crypto::verify_derivative::verify_derivative) so a derivative
+/// is authorized by exactly the rule an asset is: the epoch must be within the MLS-attested
+/// ceiling (no fabricated future epoch), and `write_sig` must verify — both hybrid halves —
+/// under that epoch's attested write-tier key. Reader-signed and removed-writer records both
+/// fail the second check. `None` when both hold.
+pub(super) fn authorize_write(
+    amk_version: AmkVersion,
+    signing_bytes: &[u8],
+    write_sig: &HybridSignature,
+    authority: &dyn AlbumAuthority,
+) -> Option<RejectReason> {
+    if amk_version > authority.epoch_ceiling() {
+        return Some(RejectReason::WrongEpoch);
+    }
+    let Some(write_pub) = authority.write_tier_pubkey(amk_version) else {
+        return Some(RejectReason::WrongEpoch);
+    };
+    if !write_pub.verify(signing_bytes, write_sig) {
+        return Some(RejectReason::BadWriteSig);
     }
     None
 }

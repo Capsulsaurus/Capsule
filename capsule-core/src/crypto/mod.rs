@@ -11,6 +11,7 @@
 //!   └─ keys ─ membership                        (the owner-signed album roster)
 //!   └─ authority ─┐
 //!   └─ provenance ┴─ verify_asset               (the single acknowledgement chokepoint)
+//!                    └─ verify_derivative       (its derivative-manifest arm)
 //! ```
 //!
 //! The cryptographic layer is deliberately self-contained and side-effect-free
@@ -31,6 +32,7 @@ pub mod revoke;
 pub mod rng;
 pub mod upgrade;
 pub mod verify_asset;
+pub mod verify_derivative;
 
 // Every submodule above is the one public path to its items: none is re-exported here, so a
 // type has exactly one name (`crypto::hash::Hash32`, never also `crypto::Hash32`).
