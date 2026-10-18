@@ -96,6 +96,12 @@ Users who want to spread recovery across trusted parties or storage locations ca
 
 This is the social-recovery escape hatch — useful for users who would otherwise lose access from a single forgotten passphrase plus a single dead device.
 
+#### Share Wire Format
+
+A share is `x ‖ y`: one byte holding the nonzero evaluation point `x ∈ [1, 255]`, then one GF(256) byte per seed byte — **33 bytes** for the 32-byte seed. The split is byte-wise over GF(256) with the reduction polynomial `0x11d` (x⁸ + x⁴ + x³ + x² + 1), the seed byte as the constant term, and every other coefficient drawn uniformly from all 256 field elements by the OS CSPRNG. `recover_seed` accepts a set of 33-byte shares with nonzero, distinct `x`; anything else is a typed `BackupError::Format`, never a panic.
+
+The implementation is `blahaj` (see [Dependencies](/design/dependencies/#rust)). It replaced `sharks`, which drew the non-constant coefficients from `[1, 255]` (RUSTSEC-2024-0398, no patched release). The two crates share the encoding and the interpolation, so the decision is **shares issued under `sharks` stay recoverable, with no legacy decoder and no forced re-issue**: they decode and reconstruct through the same path as new ones. What the old bias cost them is bounded: with a nonzero degree-1 coefficient a single share rules out exactly one value per seed byte (`y ≠ s`), about 0.18 bits across the whole seed — not a usable break. Re-issuing under the fixed dealer is still the clean state, so the [guided rotation](#recovery-verification-cadence) re-issue, which mints fresh shares anyway, is where old ones go away.
+
 ## Recovery Verification Cadence
 
 A recovery secret that was written on a napkin thirteen months ago is a recovery secret the user *believes* they have. The client therefore occasionally asks the user to **verify** it — and the check is designed so it can never itself become a lock-out or a guessing oracle.

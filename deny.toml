@@ -92,11 +92,6 @@ allow = ["NCSA"]
 # blocker clears is how the gate proves the advisory gone.
 unmaintained = "all"
 ignore = [
-    # sharks 0.5.0 is the last release and the advisory has no fix. It splits the
-    # recovery seed for the opt-in Shamir 2-of-3 social recovery (capsule-core backup).
-    # Replacing it, and deciding the format of shares already issued, is #611.
-    { id = "RUSTSEC-2024-0398", reason = "sharks: no patched release; replacement tracked in #611" },
-
     # openmls_libcrux_crypto 0.4.0, the latest release, pins libcrux-hmac-drbg to 0.0.1
     # (`"0.0.1"`) and hpke-rs-libcrux to 0.7, which pins libcrux-kem to `=0.0.9`. The fixes
     # (0.0.2, 0.0.10) are unreachable until a provider release admits them; all three are
