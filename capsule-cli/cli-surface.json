@@ -85,6 +85,15 @@
               "repeatable": false,
               "required": false,
               "takes_value": false
+            },
+            {
+              "help": "With --oidc, sign in from another device: print an address and a code instead of using a browser here",
+              "id": "device",
+              "long": "device",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
             }
           ],
           "name": "login"

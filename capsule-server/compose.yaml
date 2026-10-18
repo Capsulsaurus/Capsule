@@ -97,6 +97,11 @@ services:
   # for that word). Development credentials in a checked-in file, like Postgres's above; the
   # port is loopback-only for the same reason.
   #
+  # The device authorization grant is named in `oauth2.grantTypes` below, beside the code flow,
+  # so `capsule auth login --oidc --device` (issue #635) runs against it too: dex publishes
+  # `/dex/device/code` in its discovery document and admits its own device callback for a public
+  # client without listing it.
+  #
   # From the CLI: `capsule auth login --oidc` (issue #461). The automated round trip is
   # `CAPSULE_TEST_DEX=1 cargo nextest run -p capsule-cli --test oidc_dex`, with this service
   # and `mise run serve-memory` (carrying the three variables above) both running.
@@ -128,6 +133,10 @@ configs:
         http: 0.0.0.0:5556
       oauth2:
         skipApprovalScreen: true
+        grantTypes:
+          - authorization_code
+          - refresh_token
+          - urn:ietf:params:oauth:grant-type:device_code
       staticClients:
         - id: capsule
           name: Capsule (development)

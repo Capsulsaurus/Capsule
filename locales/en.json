@@ -6871,6 +6871,30 @@
     "message": "The identity provider did not sign you in ({error}): {description}",
     "context": "CLI `capsule auth login --oidc` (S-N2): as cli.auth.login.oidc_denied, when the provider also sent a description. {error} is the provider's error code; {description} is the provider's own text, usually English, shown verbatim."
   },
+  "cli.auth.login.oidc_device_code": {
+    "message": "and enter this code: {code}",
+    "context": "CLI `capsule auth login --oidc --device` (issue #635): printed on the line after the verification address. {code} is the identity provider's user code, shown exactly as the provider issued it and never translated."
+  },
+  "cli.auth.login.oidc_device_complete": {
+    "message": "Or open this address, which already carries the code:",
+    "context": "CLI `capsule auth login --oidc --device` (issue #635): printed before the identity provider's verification address with the code already in it, when the provider offers one. The address itself follows on its own line."
+  },
+  "cli.auth.login.oidc_device_in_progress": {
+    "message": "Signing in to Capsule through your identity provider, from another device…",
+    "context": "CLI status line printed when `capsule auth login --oidc --device` (issue #635) starts a sign-in that the person finishes on any other device with a browser — for a terminal on a headless host or over SSH."
+  },
+  "cli.auth.login.oidc_device_timed_out": {
+    "message": "The sign-in was not approved in time. Run the command again to get a new code.",
+    "context": "CLI `capsule auth login --oidc --device` (issue #635): the person did not approve the sign-in at their identity provider before the code expired."
+  },
+  "cli.auth.login.oidc_device_visit": {
+    "message": "On any device with a browser, open this address:",
+    "context": "CLI `capsule auth login --oidc --device` (issue #635): printed on the line before the identity provider's verification address. The CLI never opens a browser in this mode; the person may use their phone or another computer."
+  },
+  "cli.auth.login.oidc_device_waiting": {
+    "message": "{count, plural, one {Waiting up to # minute for you to approve the sign-in…} other {Waiting up to # minutes for you to approve the sign-in…}}",
+    "context": "CLI `capsule auth login --oidc --device` (issue #635): printed while the CLI polls for the person to approve the sign-in on their other device. {count} is the whole number of minutes until the code expires."
+  },
   "cli.auth.login.oidc_in_progress": {
     "message": "Signing in to Capsule through your identity provider…",
     "context": "CLI status line printed when `capsule auth login --oidc` (S-N2) starts a sign-in through the server's single sign-on provider."
@@ -7054,6 +7078,10 @@
   "cli.help.auth.login.about": {
     "message": "Login to Capsule",
     "context": "clap --help: the one-line description of `capsule auth login`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.auth.login.arg.device": {
+    "message": "With --oidc, sign in from another device: print an address and a code instead of using a browser here",
+    "context": "clap --help: help for the `--device` flag of `capsule auth login` (issue #635), the OAuth device authorization grant for a terminal with no browser, such as one on a remote host over SSH."
   },
   "cli.help.auth.login.arg.email": {
     "message": "Account email (prompted when omitted)",
