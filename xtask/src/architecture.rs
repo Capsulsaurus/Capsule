@@ -55,6 +55,59 @@ const PLANNED_WORKSPACE_DEPENDENCIES: &[(&str, &str)] = &[
     ),
 ];
 
+// Lock-graph edges into a retired crate that are not the decision the retirement records, each
+// with its reason. `prost`/`tonic` are retired as **Capsule's public surface** (no gRPC; see
+// AGENTS.md), and these crates use them as an internal encoding or a container-runtime client,
+// which exposes no surface of Capsule's. An edge is sanctioned, not a crate: the same retired
+// crate arriving through anything else is still a violation.
+const SANCTIONED_TRANSITIVE_EDGES: &[(&str, &str, &str)] = &[
+    (
+        "tzf-rs",
+        "prost",
+        "the timezone finder's compiled boundary data is protobuf; no RPC surface",
+    ),
+    (
+        "prost-build",
+        "prost",
+        "build-time code generation for tzf-rs's data format",
+    ),
+    (
+        "prost-build",
+        "prost-types",
+        "build-time code generation for tzf-rs's data format",
+    ),
+    (
+        "bollard",
+        "tonic",
+        "testcontainers' Docker client (dev-dependency); BuildKit over the local daemon socket",
+    ),
+    (
+        "bollard-stubs",
+        "prost",
+        "testcontainers' Docker client (dev-dependency); Docker API message types",
+    ),
+    (
+        "bollard-buildkit-proto",
+        "tonic",
+        "testcontainers' Docker client (dev-dependency); BuildKit message types",
+    ),
+    (
+        "bollard-buildkit-proto",
+        "prost",
+        "testcontainers' Docker client (dev-dependency); BuildKit message types",
+    ),
+    (
+        "bollard-buildkit-proto",
+        "prost-types",
+        "testcontainers' Docker client (dev-dependency); BuildKit message types",
+    ),
+    (
+        "bollard-buildkit-proto",
+        "tonic-prost",
+        "testcontainers' Docker client (dev-dependency); BuildKit message types",
+    ),
+];
+
 const RETIRED_COMPONENT_NAMES: &[&str] = &[
     "capsule-api-auth",
     "capsule-api-library",
@@ -69,6 +122,7 @@ pub(crate) fn run(root: &Path) -> Result<()> {
     let mut violations = Vec::new();
     check_workspace_members(root, &mut violations)?;
     check_dependencies(root, &mut violations)?;
+    check_transitive_dependencies(root, &mut violations)?;
     check_workspace_dependencies(root, &mut violations)?;
     check_legacy_manifests(root, &mut violations)?;
     check_chrono_isolation(root, &mut violations)?;
@@ -210,6 +264,156 @@ fn check_dependencies(root: &Path, violations: &mut Vec<String>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// A retired dependency reached **through** another crate is as much a violation as a direct one.
+///
+/// [`check_dependencies`] reads each member's own manifest, so `salvo` arriving as a dependency
+/// of a dependency would pass it. This walks the resolved graph in `Cargo.lock` instead, which
+/// cargo resolves with every feature of every member enabled, so an optional path counts too.
+/// Only paths of two or more edges are reported here; a direct dependency is
+/// `check_dependencies`'s to report, and reporting it twice would read as two violations. An
+/// edge [`SANCTIONED_TRANSITIVE_EDGES`] lists is not reported.
+fn check_transitive_dependencies(root: &Path, violations: &mut Vec<String>) -> Result<()> {
+    let metadata = cargo_metadata(root)?;
+    let member_ids: BTreeSet<&str> = metadata["workspace_members"]
+        .as_array()
+        .context("cargo metadata workspace_members missing")?
+        .iter()
+        .map(|id| id.as_str().context("workspace member id missing"))
+        .collect::<Result<_>>()?;
+    let mut members = BTreeSet::new();
+    for package in metadata["packages"]
+        .as_array()
+        .context("cargo metadata packages missing")?
+    {
+        let id = package["id"].as_str().context("package id missing")?;
+        if member_ids.contains(id) {
+            members.insert(
+                package["name"]
+                    .as_str()
+                    .context("package name missing")?
+                    .to_owned(),
+            );
+        }
+    }
+    let lock_path = root.join("Cargo.lock");
+    let lock = fs::read_to_string(&lock_path)
+        .wrap_err_with(|| format!("reading {}", lock_path.display()))?;
+    violations.extend(transitive_retired_paths(&lock, &members)?);
+    Ok(())
+}
+
+/// Every unsanctioned edge into a [`RETIRED_DEPENDENCIES`] entry reachable, two or more edges
+/// out, from a package in `members` of the lock file `lock` — one violation line each, carrying
+/// a shortest path to it.
+fn transitive_retired_paths(lock: &str, members: &BTreeSet<String>) -> Result<Vec<String>> {
+    let document: DocumentMut = lock.parse().wrap_err("parsing Cargo.lock")?;
+    let packages = document
+        .get("package")
+        .and_then(toml_edit::Item::as_array_of_tables)
+        .context("Cargo.lock has no [[package]] tables")?;
+
+    // Keyed by `name version`; a lock entry names a dependency by `name` alone when only one
+    // version is locked, and by `name version` (plus a source) when several are.
+    let mut graph: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut versions_by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for package in packages {
+        let name = package
+            .get("name")
+            .and_then(toml_edit::Item::as_str)
+            .context("a Cargo.lock package has no name")?;
+        let version = package
+            .get("version")
+            .and_then(toml_edit::Item::as_str)
+            .context("a Cargo.lock package has no version")?;
+        let dependencies = package
+            .get("dependencies")
+            .and_then(toml_edit::Item::as_array)
+            .map(|array| {
+                array
+                    .iter()
+                    .filter_map(|entry| entry.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let key = format!("{name} {version}");
+        versions_by_name
+            .entry(name.to_owned())
+            .or_default()
+            .push(key.clone());
+        graph.insert(key, dependencies);
+    }
+    let resolve = |entry: &str| -> Result<String> {
+        let mut parts = entry.split_whitespace();
+        let name = parts.next().context("an empty Cargo.lock dependency")?;
+        match parts.next() {
+            Some(version) => Ok(format!("{name} {version}")),
+            None => match versions_by_name.get(name).map(Vec::as_slice) {
+                Some([only]) => Ok(only.clone()),
+                _ => bail!("Cargo.lock dependency `{name}` does not name one locked package"),
+            },
+        }
+    };
+    let name_of = |key: &str| key.split(' ').next().unwrap_or(key).to_owned();
+
+    let mut found = BTreeSet::new();
+    for member in members {
+        let Some(starts) = versions_by_name.get(member) else {
+            continue;
+        };
+        // Breadth-first, so the path reported is a shortest one.
+        let mut parents: BTreeMap<String, Option<String>> = BTreeMap::new();
+        let mut queue = std::collections::VecDeque::new();
+        for start in starts {
+            parents.insert(start.clone(), None);
+            queue.push_back(start.clone());
+        }
+        while let Some(current) = queue.pop_front() {
+            for entry in graph.get(&current).into_iter().flatten() {
+                let next = resolve(entry)?;
+                if parents.contains_key(&next) {
+                    continue;
+                }
+                parents.insert(next.clone(), Some(current.clone()));
+                queue.push_back(next);
+            }
+        }
+        // Judged per edge rather than per reached crate, so a retired crate a sanctioned edge
+        // brings in does not hide a second, unsanctioned edge to it. A member's own edges are
+        // `check_dependencies`'s, and a retired crate's own edges are not judged at all: its
+        // presence is what was judged.
+        for (via, _) in &parents {
+            let via_name = name_of(via);
+            if starts.contains(via) || RETIRED_DEPENDENCIES.contains(&via_name.as_str()) {
+                continue;
+            }
+            for entry in graph.get(via).into_iter().flatten() {
+                let retired = name_of(&resolve(entry)?);
+                if !RETIRED_DEPENDENCIES.contains(&retired.as_str())
+                    || SANCTIONED_TRANSITIVE_EDGES
+                        .iter()
+                        .any(|(from, to, _)| *from == via_name && *to == retired)
+                {
+                    continue;
+                }
+                let mut path = vec![retired.clone()];
+                let mut cursor = Some(via.clone());
+                while let Some(key) = cursor {
+                    path.push(name_of(&key));
+                    cursor = parents.get(&key).cloned().flatten();
+                }
+                path.reverse();
+                found.insert(format!(
+                    "active package `{member}` depends on retired or not-yet-approved \
+                     `{retired}` transitively ({}); remove the path, or add `{via_name}` -> \
+                     `{retired}` to SANCTIONED_TRANSITIVE_EDGES with a reason",
+                    path.join(" -> ")
+                ));
+            }
+        }
+    }
+    Ok(found.into_iter().collect())
 }
 
 /// `check_dependencies` reads `cargo metadata`, which only ever reports *member* packages, so a
@@ -570,6 +774,140 @@ mod tests {
         assert!(RETIRED_DEPENDENCIES.contains(&"thumbhash"));
         assert!(RETIRED_DEPENDENCIES.contains(&"object_store"));
         assert!(RETIRED_DEPENDENCIES.contains(&"tonic"));
+    }
+
+    #[test]
+    fn a_retired_crate_reached_through_another_is_reported_with_its_path() {
+        let lock = r#"
+version = 4
+
+[[package]]
+name = "capsule-server"
+version = "0.1.0"
+dependencies = ["kynos", "direct-only", "serde 1.0.0"]
+
+[[package]]
+name = "kynos"
+version = "0.2.0"
+dependencies = ["web-glue", "tzf-rs"]
+
+[[package]]
+name = "tzf-rs"
+version = "1.0.0"
+dependencies = ["prost"]
+
+[[package]]
+name = "prost"
+version = "0.13.0"
+
+[[package]]
+name = "web-glue"
+version = "0.3.0"
+dependencies = ["salvo", "serde 2.0.0 (registry+https://github.com/rust-lang/crates.io-index)"]
+
+[[package]]
+name = "direct-only"
+version = "0.1.0"
+
+[[package]]
+name = "salvo"
+version = "0.70.0"
+
+[[package]]
+name = "serde"
+version = "1.0.0"
+
+[[package]]
+name = "serde"
+version = "2.0.0"
+
+[[package]]
+name = "capsule-cli"
+version = "0.1.0"
+dependencies = ["tonic"]
+
+[[package]]
+name = "tonic"
+version = "0.12.0"
+"#;
+        let members = BTreeSet::from(["capsule-server".to_owned(), "capsule-cli".to_owned()]);
+        let found = transitive_retired_paths(lock, &members).expect("the lock parses");
+        assert_eq!(
+            found,
+            [
+                "active package `capsule-server` depends on retired or not-yet-approved \
+                 `salvo` transitively (capsule-server -> kynos -> web-glue -> salvo); remove \
+                 the path, or add `web-glue` -> `salvo` to SANCTIONED_TRANSITIVE_EDGES with a \
+                 reason"
+            ],
+            "a direct dependency (`capsule-cli` -> `tonic`) is check_dependencies's to report, \
+             and `tzf-rs` -> `prost` is sanctioned"
+        );
+    }
+
+    #[test]
+    fn a_sanctioned_edge_does_not_hide_another_edge_to_the_same_crate() {
+        let lock = r#"
+[[package]]
+name = "capsule-core"
+version = "0.1.0"
+dependencies = ["tzf-rs", "rpc-shim"]
+
+[[package]]
+name = "tzf-rs"
+version = "1.0.0"
+dependencies = ["prost"]
+
+[[package]]
+name = "rpc-shim"
+version = "0.1.0"
+dependencies = ["prost"]
+
+[[package]]
+name = "prost"
+version = "0.13.0"
+"#;
+        let members = BTreeSet::from(["capsule-core".to_owned()]);
+        let found = transitive_retired_paths(lock, &members).expect("the lock parses");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found[0].contains("capsule-core -> rpc-shim -> prost"),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn every_sanctioned_edge_ends_at_a_retired_crate_and_states_its_reason() {
+        for (from, to, reason) in SANCTIONED_TRANSITIVE_EDGES {
+            assert!(
+                RETIRED_DEPENDENCIES.contains(to),
+                "`{from}` -> `{to}` sanctions an edge into a crate that is not retired"
+            );
+            assert!(
+                !reason.trim().is_empty(),
+                "`{from}` -> `{to}` has no reason"
+            );
+        }
+    }
+
+    #[test]
+    fn an_ambiguous_lock_entry_is_an_error_rather_than_a_guess() {
+        let lock = r#"
+[[package]]
+name = "capsule-server"
+version = "0.1.0"
+dependencies = ["serde"]
+
+[[package]]
+name = "serde"
+version = "1.0.0"
+
+[[package]]
+name = "serde"
+version = "2.0.0"
+"#;
+        let members = BTreeSet::from(["capsule-server".to_owned()]);
+        assert!(transitive_retired_paths(lock, &members).is_err());
     }
 
     #[test]
