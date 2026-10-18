@@ -417,7 +417,15 @@ impl Stores {
             // The upload-progress view has no lifetime of its own, so `gc --apply` is what
             // keeps it from growing with every abandoned upload (#519).
             .with_progress_sweep(Arc::new(self.uploads.clone())),
-            scrub: ScrubContext::new(self.index.clone(), self.blobs.clone(), self.uploads.clone()),
+            // The same share store as the collector's, so a record the collector keeps for a
+            // live link is not one the scrub reports as an orphan (#653).
+            scrub: ScrubContext::new(
+                self.index.clone(),
+                self.blobs.clone(),
+                self.uploads.clone(),
+                self.shares.clone(),
+                self.clock.clone(),
+            ),
         }
     }
 }

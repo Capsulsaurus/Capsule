@@ -47,7 +47,8 @@ use capsule_core::crypto::hash::Sha256Hasher;
 
 use crate::blob::{BlobStore, ContentAddress};
 use crate::index::{AssetIndex, AssetState};
-use crate::store::{AssetId, BlobRole, StoreError, UploadSessionStore};
+use crate::share::ShareStore;
+use crate::store::{AssetId, BlobRole, Clock, StoreError, UploadSessionStore};
 
 /// How many bytes to hash at a time when re-hashing a blob.
 const HASH_WINDOW: usize = 1024 * 1024;
@@ -85,9 +86,11 @@ pub enum Finding {
         /// The address that is missing.
         address: ContentAddress,
     },
-    /// A blob under `blobs/` that no committed row references.
+    /// A blob under `blobs/` that no committed row references and no live share link serves.
     ///
-    /// Reported for the collector, never removed here — see [`crate::gc`].
+    /// Reported for the collector, never removed here — see [`crate::gc`]. A blob a live link
+    /// names is not one: the collector keeps it (#653), so reporting it would be a finding no
+    /// path will ever resolve.
     Orphan {
         /// The unreferenced address.
         address: ContentAddress,
@@ -242,19 +245,30 @@ pub struct ScrubContext {
     index: Arc<dyn AssetIndex>,
     blobs: Arc<dyn BlobStore>,
     uploads: Arc<dyn UploadSessionStore>,
+    /// The share links, whose live serve sets hold blobs no asset row names (#653).
+    shares: Arc<dyn ShareStore>,
+    /// What "live" is judged against.
+    clock: Arc<dyn Clock>,
 }
 
 impl ScrubContext {
-    /// Assembles the scrub over the three stores it compares.
+    /// Assembles the scrub over the stores it compares.
+    ///
+    /// Takes the same share store the collector reads, so the two agree on what an orphan is:
+    /// a blob the collector keeps for a live link is not one the scrub reports for it.
     pub fn new(
         index: Arc<dyn AssetIndex>,
         blobs: Arc<dyn BlobStore>,
         uploads: Arc<dyn UploadSessionStore>,
+        shares: Arc<dyn ShareStore>,
+        clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
             index,
             blobs,
             uploads,
+            shares,
+            clock,
         }
     }
 }
@@ -650,6 +664,7 @@ async fn blobs_are_referenced(
         Depth::Deep { budget } => budget,
     };
 
+    let now = context.clock.now();
     let mut after = None;
     loop {
         let page = context
@@ -658,7 +673,11 @@ async fn blobs_are_referenced(
             .await
             .map_err(blob_failure)?;
         for entry in &page.entries {
-            if context.index.reference_count(&entry.address).await? == 0 {
+            // The collector's own two questions, in its order (`gc::visit`): a live share link
+            // is a reference too, and is asked only when no asset holds the blob.
+            if context.index.reference_count(&entry.address).await? == 0
+                && !context.shares.names_live(&entry.address, now).await?
+            {
                 report.findings.push(Finding::Orphan {
                     address: entry.address.clone(),
                 });
