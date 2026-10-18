@@ -539,7 +539,8 @@ fn replaying_a_commit_is_rejected_and_state_is_unchanged() {
 /// **A message echoed back to its own sender.** The delivery service fans a member's own message
 /// out to it. Under openmls 0.9 that is no longer a decrypt error: `process_message` returns
 /// `Ok(OwnPrivateMessage)`, since every Capsule group uses OpenMLS's default pure-ciphertext wire
-/// format. Both receive paths turn it into a typed `UnexpectedMessage`, and the member's state is
+/// format. Each receive path (commit, key delivery, upgrade intent) turns it into a typed
+/// `UnexpectedMessage`, and the member's state is
 /// unchanged: an echoed key delivery applies nothing, and an echoed staged commit leaves the
 /// pending commit in place for `merge_pending`.
 #[test]
@@ -579,6 +580,25 @@ fn own_message_echoed_back_is_an_unexpected_message_and_changes_nothing() {
     // The pending commit survived the echo: the "my commit won" path still merges it.
     admin.merge_pending().unwrap();
     assert_eq!(admin.mls_epoch(), mls_epoch + 1);
+
+    // The upgrade-intent receive path refuses its own echoed intent the same way.
+    let proposal = admin
+        .propose_upgrade(
+            PROTOCOL_VERSION,
+            CRYPTO_SUITE_ID,
+            "2027-01-01",
+            CRYPTO_SUITE_ID,
+            DEFAULT_UPGRADE_DEADLINE,
+        )
+        .unwrap();
+    let echoed = admin.receive_upgrade_intent(to_in(proposal.message), &admin_dev.directory());
+    assert!(
+        matches!(
+            &echoed,
+            Err(OpenMlsAuthorityError::UnexpectedMessage(m)) if m.contains("own private message")
+        ),
+        "echoed own upgrade intent must be UnexpectedMessage, got {echoed:?}"
+    );
 }
 
 /// **MLS ↔ identity LeafNode binding.** A KeyPackage whose leaf is not bound to the DSK the
