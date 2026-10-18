@@ -57,10 +57,12 @@
 //! that is stable across past versions has nothing to refuse in a version it does not know.
 //! The other two are validated **when present** — a suite the inventory does not implement and
 //! a sidecar schema above [`MAX_KNOWN_SIDECAR_SCHEMA`] are each a `400` — and their absence is
-//! not refused. The design scopes `X-Capsule-Crypto-Suite` to writes and
-//! `X-Capsule-Sidecar-Schema` to metadata updates, every write already carries its suite in a
+//! not refused. The design scopes `X-Capsule-Crypto-Suite` to writes and requires
+//! `X-Capsule-Sidecar-Schema` on metadata updates, every write already carries its suite in a
 //! body the envelope gate checks, and a gate that demanded a header on a read that has no use
-//! for it would refuse every client for a value nobody reads.
+//! for it would refuse every client for a value nobody reads. A client may still send either
+//! on any request — `capsule-sdk` puts both on its transport, so they ride every request it
+//! makes — and a present value is validated wherever it arrives.
 //!
 //! They are nonetheless *declared* on every gated operation, reads included, as optional
 //! parameters: an interceptor's `Reads` type is its declaration, and one type is mounted on

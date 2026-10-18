@@ -131,7 +131,7 @@ The rules are stated once in REST terms (headers + HTTP statuses) and applied by
 | ---------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------- |
 | `X-Capsule-Protocol`         | client / peer             | `YYYY-MM-DD` protocol version the request is written against                                          |
 | `X-Capsule-Crypto-Suite`     | client / peer on writes   | `u16` suite id from the [Primitives Inventory](/design/cryptography/primitives/#primitives-inventory) |
-| `X-Capsule-Sidecar-Schema`   | client on metadata-update | `u16` schema version declared at `sidecar_schema` field 0                                             |
+| `X-Capsule-Sidecar-Schema`   | client on metadata-update | `u16` schema version declared at `sidecar_schema` field 0; a client may send it on any request, and `capsule-sdk` sends it on every one |
 | `X-Capsule-Protocol-Min`     | server on every response  | the lowest protocol version this server accepts                                                       |
 | `X-Capsule-Protocol-Max`     | server on every response  | the highest protocol version this server accepts                                                      |
 | `X-Capsule-Min-Client-Build` | server on responses       | semver deprecation cutoff; advisory unless the path is hard-deprecated                                |
