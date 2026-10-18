@@ -385,7 +385,7 @@ lives.
 | S-I7 | The Rust runtime formatter cannot do ICU plurals | i18n | — | M | ACTIVE | done | plurals evaluated; `select`/`offset:` still refused |
 | S-I8 | clap `--help` text is unreachable from the catalogs | i18n | — | S | ACTIVE | done | help is localized via `cli.help.*`; `ValueEnum` variant help stays English |
 | S-N1 | OIDC relying party (server) | auth | — | L | RETIRED | done\* | in-process mock IdP stands in for the testcontainer one; durable adapters landed (#460) |
-| S-N2 | SDK/CLI OIDC login flows | auth | S-N1 | M | MIXED | part | SDK half landed with `S-N1`; CLI loopback listener + device grant are #461 |
+| S-N2 | SDK/CLI OIDC login flows | auth | S-N1 | M | MIXED | part | SDK half landed with `S-N1`; CLI loopback `--oidc` landed (#461); device grant is #635 |
 | S-N3 | `device_id` on session listing + ceremony cohorts | auth | — | S | RETIRED | done | the wire half lands with `S-C13`; the TOTP ceremony with `S-C55`; passkeys retire on `S-C56` |
 | S-P1 | `capsule_sdk` FFI workspace verbs | iOS path | S-A10 | L | MIXED | done | feed `manifest_cbor` shape → `S-C30` |
 | S-P2 | Swift auth service + Keychain + login screen | iOS path | S-P1 | L | MIXED | ready | |
@@ -5389,9 +5389,15 @@ lands on Kynos rather than on Salvo.
   the client: `begin_oidc_login` mints a secret the `OidcAuthorization` keeps and sends
   its S256 hash as `binding_challenge`; `complete_oidc_login(pending, redirect_state,
   code)` refuses a redirect for another ceremony locally and presents the secret as
-  `binding_verifier`, which the server compares before redeeming. **Remainder (#461):** the CLI's
-  loopback listener and `--oidc` arm, the browser-open policy the docs do not carry, and
-  the device authorization grant (RFC 8628) with its own ceremony store.
+  `binding_verifier`, which the server compares before redeeming.
+- **Part landed (issue #461):** `capsule auth login --oidc` (`capsule-cli/src/oidc.rs`) — an
+  ephemeral `127.0.0.1` listener whose `/callback` is the redirect, the authorization URL
+  always printed and opened through the platform opener unless `--no-browser`, a five-minute
+  wait capped by the ceremony deadline, and the session settled through the password path's
+  own function, second factor included. Scripted-ceremony tests cover the listener and the
+  orchestration; `capsule-cli/tests/oidc_dex.rs` is the dex round trip, gated on
+  `CAPSULE_TEST_DEX=1`. **Remainder (#635):** the device authorization grant (RFC 8628) with
+  its own ceremony store, routes, contract and CLI arm.
 
 ### S-N3 — `device_id` on session listing + ceremony cohorts
 
