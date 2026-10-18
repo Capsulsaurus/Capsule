@@ -26,7 +26,9 @@ import { Label } from '@/components/ui/label';
 import {
     decryptShareBlob,
     initShareWasm,
+    loadShare,
     openShare,
+    type ShareMetadata,
     shareOpenCode,
 } from '@/lib/share-open';
 
@@ -37,35 +39,6 @@ export const Route = createFileRoute('/s/$opaqueId')({
 /** Base origin for the share serve endpoints. Empty (same-origin) in production — the home
  *  server serves both this viewer and `/s/…`; overridable for split dev deployments. */
 const SHARE_BASE = import.meta.env.PUBLIC_SHARE_URL ?? '';
-
-/** One covered asset's served (already privacy-stripped) metadata. */
-interface ShareAsset {
-    asset_id: string;
-    content_hash: string;
-    content_type: string;
-    size: number;
-    metadata_blob: string;
-    /** Lowercase-hex STREAM nonce prefix — a key-free crypto param needed to decrypt the blob. */
-    nonce_prefix: string;
-    /** The crypto-manifest AMK epoch (`0` for an asset-scoped grant). */
-    amk_version: number;
-    /** The manifest's `key_mode`; absent means `derived`. `wrapped` marks an adopted
-     *  web-upload drop, whose key an album-scoped viewer unwraps rather than derives. */
-    key_mode?: 'derived' | 'wrapped';
-    /** Lowercase-hex AMK-sealed file key; present iff `key_mode` is `wrapped`. Opaque without
-     *  the album's AMK, so as key-free as the nonce prefix beside it. */
-    wrapped_file_key?: string;
-}
-
-/** The `GET /s/{opaque-id}` response body. */
-interface ShareMetadata {
-    scope: 'album' | 'asset';
-    scope_id: string;
-    home_server: string;
-    passphrase_protected: boolean;
-    expires_at: string | null;
-    assets: ShareAsset[];
-}
 
 /** The finite view states of the guest viewer. */
 type View =
@@ -84,7 +57,9 @@ type View =
     | {
           kind: 'ready';
           meta: ShareMetadata;
-          /** Object URLs of decrypted image thumbnails, keyed by `asset_id`. */
+          /** What the opened scope grants, for the header. */
+          scopeKind: 'album' | 'asset';
+          /** Object URLs of decrypted image thumbnails, keyed by `assetId`. */
           thumbs: Record<string, string>;
       };
 
@@ -120,16 +95,17 @@ function ShareViewer() {
                     passphrase,
                 );
                 const thumbs: Record<string, string> = {};
+                const scopeKind =
+                    scope.scopeKind() === 'album' ? 'album' : 'asset';
                 try {
                     await Promise.all(
                         meta.assets.map(async (asset) => {
                             // Only decode renderable images into thumbnails; other content types
                             // stay as their (privacy-stripped) metadata card.
-                            if (!asset.content_type.startsWith('image/'))
-                                return;
+                            if (!asset.contentType.startsWith('image/')) return;
                             try {
                                 const blobRes = await fetch(
-                                    `${SHARE_BASE}/s/${opaqueId}/blob/${asset.content_hash}`,
+                                    `${SHARE_BASE}/s/${opaqueId}/blob/${asset.contentHash}`,
                                 );
                                 if (!blobRes.ok) return;
                                 const ciphertext = new Uint8Array(
@@ -137,19 +113,12 @@ function ShareViewer() {
                                 );
                                 const plaintext = decryptShareBlob(
                                     scope,
-                                    {
-                                        assetId: asset.asset_id,
-                                        amkVersion: asset.amk_version,
-                                        noncePrefixHex: asset.nonce_prefix,
-                                        keyMode: asset.key_mode,
-                                        wrappedFileKeyHex:
-                                            asset.wrapped_file_key,
-                                    },
+                                    asset,
                                     ciphertext,
                                 );
-                                thumbs[asset.asset_id] = URL.createObjectURL(
+                                thumbs[asset.assetId] = URL.createObjectURL(
                                     new Blob([plaintext], {
-                                        type: asset.content_type,
+                                        type: asset.contentType,
                                     }),
                                 );
                             } catch {
@@ -161,7 +130,7 @@ function ShareViewer() {
                 } finally {
                     scope.free();
                 }
-                setView({ kind: 'ready', meta, thumbs });
+                setView({ kind: 'ready', meta, scopeKind, thumbs });
                 return 'ok';
             } catch (err) {
                 const code = shareOpenCode(err);
@@ -182,47 +151,40 @@ function ShareViewer() {
                 return;
             }
             try {
-                const metaRes = await fetch(`${SHARE_BASE}/s/${opaqueId}`);
-                // A peer that does not host the share returns a home-server pointer (never
-                // content, never a redirect). Resolve it by reloading against the home server,
-                // carrying the same fragment.
-                if (metaRes.status === 421) {
-                    const { home_server } = (await metaRes.json()) as {
-                        home_server: string;
-                    };
-                    window.location.href = `https://${home_server}/s/${opaqueId}${window.location.hash}`;
-                    return;
-                }
-                if (!metaRes.ok) {
-                    setView({ kind: 'unavailable' });
-                    return;
-                }
-                const meta = (await metaRes.json()) as ShareMetadata;
-
-                const wrappedRes = await fetch(
-                    `${SHARE_BASE}/s/${opaqueId}/wrapped-secret`,
+                await initShareWasm();
+                const loaded = await loadShare(
+                    fetch,
+                    SHARE_BASE,
+                    opaqueId,
+                    fragment,
                 );
-                if (!wrappedRes.ok) {
+                if (cancelled) return;
+                // A peer that does not host the share returns a home-server pointer. Resolve it
+                // by reloading against the home server, carrying the same fragment.
+                if (loaded.kind === 'redirect') {
+                    window.location.href = `https://${loaded.homeServer}/s/${opaqueId}${window.location.hash}`;
+                    return;
+                }
+                if (loaded.kind === 'unavailable') {
                     setView({ kind: 'unavailable' });
                     return;
                 }
-                const { wrapped_scope } = (await wrappedRes.json()) as {
-                    wrapped_scope: string;
-                };
-                if (cancelled) return;
-
-                if (meta.passphrase_protected) {
+                if (loaded.kind === 'passphrase') {
                     setView({
                         kind: 'passphrase',
-                        meta,
-                        wrapped: wrapped_scope,
+                        meta: loaded.meta,
+                        wrapped: loaded.wrapped,
                         fragment,
                         wrong: false,
                         busy: false,
                     });
                     return;
                 }
-                const outcome = await attemptOpen(meta, wrapped_scope, null);
+                const outcome = await attemptOpen(
+                    loaded.meta,
+                    loaded.wrapped,
+                    null,
+                );
                 if (cancelled) return;
                 if (outcome === 'wrong') {
                     // A wrong fragment on an unprotected link is indistinguishable from a
@@ -283,7 +245,11 @@ function ShareViewer() {
                     />
                 )}
                 {view.kind === 'ready' && (
-                    <ShareContents meta={view.meta} thumbs={view.thumbs} />
+                    <ShareContents
+                        meta={view.meta}
+                        scopeKind={view.scopeKind}
+                        thumbs={view.thumbs}
+                    />
                 )}
             </div>
         </div>
@@ -388,9 +354,11 @@ function PassphraseGate({
 /** The read-only contents view once the scope has been opened client-side. */
 function ShareContents({
     meta,
+    scopeKind,
     thumbs,
 }: {
     meta: ShareMetadata;
+    scopeKind: 'album' | 'asset';
     thumbs: Record<string, string>;
 }) {
     const intl = useIntl();
@@ -401,7 +369,7 @@ function ShareContents({
                     <CardTitle>
                         <FormattedMessage
                             id={
-                                meta.scope === 'album'
+                                scopeKind === 'album'
                                     ? 'share.scope.album'
                                     : 'share.scope.asset'
                             }
@@ -417,13 +385,13 @@ function ShareContents({
                         id="share.items"
                         values={{ count: meta.assets.length }}
                     />
-                    {meta.expires_at && (
+                    {meta.expiresAt && (
                         <>
                             {' · '}
                             <FormattedMessage
                                 id="share.expires"
                                 values={{
-                                    date: intl.formatDate(meta.expires_at, {
+                                    date: intl.formatDate(meta.expiresAt, {
                                         dateStyle: 'medium',
                                         timeStyle: 'short',
                                     }),
@@ -436,12 +404,12 @@ function ShareContents({
             <CardContent className="grid gap-3">
                 {meta.assets.map((asset) => (
                     <div
-                        key={asset.asset_id}
+                        key={asset.assetId}
                         className="grid gap-2 rounded-md border p-3 text-sm"
                     >
-                        {thumbs[asset.asset_id] && (
+                        {thumbs[asset.assetId] && (
                             <img
-                                src={thumbs[asset.asset_id]}
+                                src={thumbs[asset.assetId]}
                                 alt={intl.formatMessage({
                                     id: 'share.scope.asset',
                                 })}
@@ -453,7 +421,7 @@ function ShareContents({
                                 <FormattedMessage id="share.asset.type" />
                             </span>
                             <span className="font-mono">
-                                {asset.content_type}
+                                {asset.contentType}
                             </span>
                         </div>
                         <div className="flex justify-between gap-2">
