@@ -339,6 +339,42 @@ fn reqwest_client() -> reqwest::Client {
         .clone()
 }
 
+/// Whether a generated-client failure is the session failing to produce a bearer.
+///
+/// `RequestConstruction` is **not** a pre-flight-only class. reqwest builds every failure of
+/// the request it executes with `error::request(..)`, so connection-refused, DNS and TLS
+/// failures land there too. The *source* discriminates them: the token provider
+/// [`build_client`] registers boxes its failure as the generated runtime's own
+/// [`rest::AuthError`], and nothing else on this path is. A dead session must reach a caller
+/// as an auth failure rather than as a transport blip, because the two have opposite remedies.
+pub(crate) fn is_token_failure<E>(error: &rest::Error<E>) -> bool
+where
+    E: std::error::Error + 'static,
+{
+    matches!(error, rest::Error::RequestConstruction(inner)
+        if std::error::Error::source(inner)
+            .and_then(|source| source.downcast_ref::<rest::AuthError>())
+            .is_some())
+}
+
+/// Render a generated-client failure together with its source chain. The taxonomy's own
+/// `Display` names the class and, for the wire classes, little else (`"transport failed"`,
+/// `"request construction failed"`); the source chain is where the reqwest/hyper reason a log
+/// reader needs actually lives.
+pub(crate) fn describe_error<E>(error: &rest::Error<E>) -> String
+where
+    E: std::error::Error + 'static,
+{
+    let mut rendered = error.to_string();
+    let mut source = std::error::Error::source(error);
+    while let Some(cause) = source {
+        rendered.push_str(": ");
+        rendered.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    rendered
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;

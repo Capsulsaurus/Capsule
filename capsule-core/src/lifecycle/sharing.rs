@@ -3,10 +3,12 @@
 
 use uuid::Uuid;
 
-use super::{Workspace, now_rfc3339};
+use super::{AssetState, Workspace, asset_is_deleted, now_rfc3339};
+use crate::crypto::provenance::KeyMode;
 use crate::sharing::{
     LINK_SECRET_LEN, RevocationRecord, ScopeMaterial, ShareLink, ShareLinkId, ShareLinkIssuer,
-    ShareLinkRecord, ShareScope, SharingError, encapsulate_scope, generate_opaque_id,
+    ShareLinkRecord, SharePublication, ShareScope, SharedAsset, SharingError, encapsulate_scope,
+    generate_opaque_id, publish_share,
 };
 
 impl Workspace {
@@ -66,6 +68,131 @@ impl Workspace {
             }
         }
     }
+
+    /// The per-asset records a link over `scope` covers (#622): for each asset, the key-free
+    /// parameters a viewer needs to fetch its original's ciphertext and decrypt it under the
+    /// opened scope, read off the asset's **head** manifest and signed sidecar.
+    ///
+    /// - **Asset scope** covers that one asset. The scope material carries its file key
+    ///   directly, so the record says `amk_version = 0`, `derived`, and no wrapped key, as
+    ///   [`SharedAsset`] documents for an asset-scoped grant: the wrapped key would be a field the
+    ///   viewer never reads.
+    /// - **Album scope** covers every asset in the album that is not in trash, in asset-id order
+    ///   so the same album publishes the same record. Each keeps its manifest's epoch, key mode
+    ///   and wrapped key, because the viewer recovers the file key from the grant's AMKs.
+    ///
+    /// An asset in trash is not shareable: asset scope refuses it with
+    /// [`SharingError::ScopeUnavailable`], and album scope leaves it out.
+    ///
+    /// # Errors
+    ///
+    /// [`SharingError::ScopeUnavailable`] when the scope is not managed by this workspace, or an
+    /// asset-scoped asset is in trash.
+    pub fn shared_assets(
+        &self,
+        scope: ShareScope,
+    ) -> std::result::Result<Vec<SharedAsset>, SharingError> {
+        let record = |asset: &AssetState, grant: Grant| {
+            let head = &asset
+                .chain
+                .records()
+                .last()
+                .expect("provenance chain is never empty")
+                .manifest
+                .core;
+            let (amk_version, key_mode, wrapped_file_key) = match grant {
+                Grant::FileKey => (0, KeyMode::Derived, None),
+                Grant::Amks => (
+                    head.amk_version.0,
+                    head.key_mode,
+                    head.wrapped_file_key.clone(),
+                ),
+            };
+            SharedAsset {
+                asset_id: asset.asset_id,
+                content_hash: head.ciphertext_hash,
+                content_type: asset.sidecar.content_type.clone(),
+                size: head.plaintext_size,
+                amk_version,
+                nonce_prefix: head.nonce_prefix,
+                key_mode,
+                wrapped_file_key,
+            }
+        };
+        match scope {
+            ShareScope::Asset(asset_id) => {
+                let asset = self
+                    .assets
+                    .get(&asset_id)
+                    .ok_or(SharingError::ScopeUnavailable)?;
+                if asset_is_deleted(asset) {
+                    tracing::info!(%asset_id, "share link: an asset in trash is not shareable");
+                    return Err(SharingError::ScopeUnavailable);
+                }
+                Ok(vec![record(asset, Grant::FileKey)])
+            }
+            ShareScope::Album(album_id) => {
+                if !self.albums.contains_key(&album_id) {
+                    return Err(SharingError::ScopeUnavailable);
+                }
+                let mut covered: Vec<&AssetState> = self
+                    .assets
+                    .values()
+                    .filter(|asset| asset.album_id == album_id && !asset_is_deleted(asset))
+                    .collect();
+                covered.sort_by_key(|asset| asset.asset_id);
+                Ok(covered
+                    .into_iter()
+                    .map(|asset| record(asset, Grant::Amks))
+                    .collect())
+            }
+        }
+    }
+
+    /// Everything the server needs to serve `link` (#622): the sealed `share-metadata/v1`
+    /// record over [`shared_assets`](Self::shared_assets), its content address, the `serves`
+    /// set, and for a passphrase link the wrapped secret — [`publish_share`] under the link's
+    /// own fragment, opaque id, scope encapsulation and expiry.
+    ///
+    /// The record is sealed with a fresh nonce on every call, so two calls for one link yield
+    /// two different `metadata_hash`es; publish once per link and register what that call
+    /// returned.
+    ///
+    /// # Errors
+    ///
+    /// What [`shared_assets`](Self::shared_assets) and [`publish_share`] return.
+    #[tracing::instrument(skip(self, link), fields(opaque_id = %link.opaque_id_hex()))]
+    pub fn publish_link(
+        &self,
+        link: &ShareLink,
+    ) -> std::result::Result<SharePublication, SharingError> {
+        let assets = self.shared_assets(link.scope)?;
+        let covered = assets.len();
+        let publication = publish_share(
+            &link.wrapped_scope,
+            &link.fragment_secret,
+            &link.opaque_id,
+            link.expires_at.clone(),
+            assets,
+        )?;
+        tracing::info!(
+            covered,
+            serves = publication.serves.len(),
+            passphrase = link.is_passphrase_protected(),
+            "share link: metadata record published"
+        );
+        Ok(publication)
+    }
+}
+
+/// How a link's scope material yields a covered asset's file key, which decides what that
+/// asset's [`SharedAsset`] record must carry.
+#[derive(Clone, Copy)]
+enum Grant {
+    /// The material is the file key itself (an asset-scoped grant).
+    FileKey,
+    /// The material is the album's AMK ledger, from which the viewer recovers the key.
+    Amks,
 }
 
 impl ShareLinkIssuer for Workspace {
@@ -525,6 +652,179 @@ mod tests {
         assert_eq!(
             ws.revoke_link(ShareLinkId(Uuid::now_v7())),
             Err(SharingError::NotFound),
+        );
+    }
+
+    /// Open what `publish_link` produced the way a viewer does, with nothing but the URL (and the
+    /// passphrase): the sealed record, then the scope from the record or from the wrapped secret,
+    /// then every covered asset's ciphertext as the server would serve it. Returns each asset's
+    /// decrypted plaintext keyed by asset id.
+    fn open_as_viewer(
+        ws: &Workspace,
+        link: &ShareLink,
+        publication: &SharePublication,
+        passphrase: Option<&str>,
+    ) -> Vec<(Uuid, Vec<u8>)> {
+        use crate::sharing::{WrappedScope, open_scope, open_share_metadata};
+
+        let record = open_share_metadata(
+            &publication.metadata_blob,
+            &link.opaque_id,
+            &link.fragment_secret,
+        )
+        .unwrap();
+        assert_eq!(record.expires_at, link.expires_at);
+        let scope = match (&record.link_scope, &publication.wrapped_secret) {
+            (Some(scope), None) => scope.clone(),
+            (None, Some(secret)) => crate::cbor::from_slice::<WrappedScope>(secret).unwrap(),
+            other => panic!("the scope travels in exactly one place, got {other:?}"),
+        };
+        let material = open_scope(&scope, &link.opaque_id, &link.fragment_secret, passphrase)
+            .expect("the scope opens");
+
+        record
+            .assets
+            .iter()
+            .map(|asset| {
+                let served = ws.upload_bundle(&asset.asset_id).unwrap().ciphertext;
+                assert_eq!(
+                    crate::crypto::hash::hash_bytes(&served),
+                    asset.content_hash,
+                    "the record names the original the push uploads"
+                );
+                assert!(publication.serves.contains(&asset.content_hash));
+                let key = material
+                    .file_key_for_key_mode(
+                        &asset.asset_id,
+                        asset.amk_version,
+                        &asset.nonce_prefix,
+                        asset.key_mode,
+                        asset.wrapped_file_key.as_ref(),
+                    )
+                    .unwrap();
+                let plaintext = decrypt_asset_vec(&key, &asset.nonce_prefix, &served).unwrap();
+                assert_eq!(plaintext.len() as u64, asset.size);
+                (asset.asset_id, plaintext)
+            })
+            .collect()
+    }
+
+    /// #622: an album link published from the workspace opens with the URL alone and decrypts
+    /// every covered asset — one derived import written before an epoch rotation, one written
+    /// after it, and one adopted guest drop in `wrapped` mode — and leaves out an asset in trash.
+    #[test]
+    fn a_published_album_link_opens_every_covered_asset() {
+        let lib = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let (album_id, adopted, _) = adopted_drop(&mut ws, b"\xFF\xD8\xFF guest photo");
+
+        let src = TempDir::new().unwrap();
+        let import = |ws: &mut Workspace, name: &str, bytes: &[u8]| {
+            let path = src.path().join(name);
+            fs::write(&path, bytes).unwrap();
+            ws.import_asset(album_id, &path).unwrap()
+        };
+        let before = import(&mut ws, "before.jpg", b"\xFF\xD8\xFF before rotation");
+        ws.rotate_epoch(album_id).unwrap();
+        let after = import(&mut ws, "after.jpg", b"\xFF\xD8\xFF after rotation");
+        let trashed = import(&mut ws, "trashed.jpg", b"\xFF\xD8\xFF in trash");
+        ws.soft_delete(&trashed, 30).unwrap();
+
+        let expiry = (Timestamp::now() + jiff::SignedDuration::from_hours(24)).to_string();
+        let link = ws
+            .create_link(ShareScope::Album(album_id), Some(expiry), None)
+            .unwrap();
+        let publication = ws.publish_link(&link).unwrap();
+        assert_eq!(
+            publication.wrapped_secret, None,
+            "no passphrase, no wrapped secret"
+        );
+        assert_eq!(
+            publication.serves[0], publication.metadata_hash,
+            "the record leads the serves set"
+        );
+        assert_eq!(
+            publication.metadata_hash,
+            crate::crypto::hash::hash_bytes(&publication.metadata_blob)
+        );
+
+        let mut expected = vec![
+            (adopted, b"\xFF\xD8\xFF guest photo".to_vec()),
+            (before, b"\xFF\xD8\xFF before rotation".to_vec()),
+            (after, b"\xFF\xD8\xFF after rotation".to_vec()),
+        ];
+        expected.sort_by_key(|(id, _)| *id);
+        assert_eq!(open_as_viewer(&ws, &link, &publication, None), expected);
+        assert_eq!(publication.serves.len(), 1 + expected.len());
+
+        let records = ws.shared_assets(ShareScope::Album(album_id)).unwrap();
+        let guest = records.iter().find(|a| a.asset_id == adopted).unwrap();
+        assert_eq!(guest.key_mode, crate::crypto::provenance::KeyMode::Wrapped);
+        assert!(guest.wrapped_file_key.is_some());
+        let epochs: Vec<u32> = [before, after]
+            .iter()
+            .map(|id| {
+                records
+                    .iter()
+                    .find(|a| a.asset_id == *id)
+                    .unwrap()
+                    .amk_version
+            })
+            .collect();
+        assert_ne!(epochs[0], epochs[1], "each asset keeps its own epoch");
+    }
+
+    /// #622: an asset link behind a passphrase carries its scope only in the wrapped secret, and
+    /// its record is the asset-scoped shape: epoch `0`, `derived`, no wrapped key — also for an
+    /// adopted drop, whose file key the scope carries directly.
+    #[test]
+    fn a_published_asset_link_opens_behind_its_passphrase() {
+        let lib = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let plaintext = b"\xFF\xD8\xFF a single adopted photo";
+        let (_, asset_id, _) = adopted_drop(&mut ws, plaintext);
+
+        let link = ws
+            .create_link(ShareScope::Asset(asset_id), None, Some("hunter2"))
+            .unwrap();
+        let publication = ws.publish_link(&link).unwrap();
+        assert!(publication.wrapped_secret.is_some());
+        assert_eq!(publication.serves.len(), 2);
+
+        let records = ws.shared_assets(ShareScope::Asset(asset_id)).unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].amk_version, 0);
+        assert_eq!(
+            records[0].key_mode,
+            crate::crypto::provenance::KeyMode::Derived
+        );
+        assert_eq!(records[0].wrapped_file_key, None);
+
+        assert_eq!(
+            open_as_viewer(&ws, &link, &publication, Some("hunter2")),
+            vec![(asset_id, plaintext.to_vec())]
+        );
+    }
+
+    /// An asset in trash cannot be shared on its own, and a scope the workspace does not manage
+    /// publishes nothing.
+    #[test]
+    fn publishing_refuses_a_trashed_asset_and_an_unknown_scope() {
+        let lib = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let (_, asset_id) = imported_asset(&mut ws, b"\xFF\xD8\xFF trash me");
+        ws.soft_delete(&asset_id, 30).unwrap();
+        assert_eq!(
+            ws.shared_assets(ShareScope::Asset(asset_id)),
+            Err(SharingError::ScopeUnavailable)
+        );
+        assert_eq!(
+            ws.shared_assets(ShareScope::Album(Uuid::now_v7())),
+            Err(SharingError::ScopeUnavailable)
+        );
+        assert_eq!(
+            ws.shared_assets(ShareScope::Asset(Uuid::now_v7())),
+            Err(SharingError::ScopeUnavailable)
         );
     }
 
