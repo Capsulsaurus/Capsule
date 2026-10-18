@@ -383,7 +383,7 @@ fn transitive_retired_paths(lock: &str, members: &BTreeSet<String>) -> Result<Ve
         // brings in does not hide a second, unsanctioned edge to it. A member's own edges are
         // `check_dependencies`'s, and a retired crate's own edges are not judged at all: its
         // presence is what was judged.
-        for (via, _) in &parents {
+        for via in parents.keys() {
             let via_name = name_of(via);
             if starts.contains(via) || RETIRED_DEPENDENCIES.contains(&via_name.as_str()) {
                 continue;
