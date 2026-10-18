@@ -284,6 +284,13 @@ pub(crate) enum AuthCommands {
         /// works in scripts and CI where there is no terminal.
         #[arg(long)]
         password_stdin: bool,
+        /// Sign in through the server's identity provider in a browser instead of with a
+        /// password. The server must allow loopback redirects (OIDC_ALLOW_LOOPBACK_REDIRECT=true).
+        #[arg(long, conflicts_with_all = ["email", "password_stdin"])]
+        oidc: bool,
+        /// With --oidc, print the sign-in address without opening a browser
+        #[arg(long, requires = "oidc")]
+        no_browser: bool,
     },
     /// Set up recovery for a library: bind it to the signed-in account and store its recovery
     /// backup under a new recovery secret

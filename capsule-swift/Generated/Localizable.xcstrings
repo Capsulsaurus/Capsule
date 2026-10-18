@@ -29395,6 +29395,138 @@
         }
       }
     },
+    "cli.auth.login.oidc_browser_unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No browser could be opened from here. Open the address above in any browser."
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_denied": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The identity provider did not sign you in (%@)."
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_denied_described": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The identity provider did not sign you in (%1$@): %2$@"
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_in_progress": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signing in to Capsule through your identity provider…"
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_listener_failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This computer could not listen for the sign-in to come back: %@"
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_loopback_refused": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This server does not accept sign-ins from the command line through its identity provider. Its operator can allow them by setting OIDC_ALLOW_LOOPBACK_REDIRECT=true."
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_page_received": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule received your sign-in. Return to the terminal, which finishes signing you in."
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_page_refused": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The sign-in did not complete. Return to the terminal to see why."
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_success": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signed in through your identity provider."
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_timed_out": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No sign-in came back in time. Run the command again to start a new one."
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_visit": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "To sign in, open this address in a browser:"
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_waiting": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Waiting up to %lld minute for the sign-in to finish…"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Waiting up to %lld minutes for the sign-in to finish…"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "cli.auth.login.password_prompt": {
       "localizations": {
         "ar": {
@@ -30347,6 +30479,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "Account email (prompted when omitted)"
+          }
+        }
+      }
+    },
+    "cli.help.auth.login.arg.no_browser": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "With --oidc, print the sign-in address without opening a browser"
+          }
+        }
+      }
+    },
+    "cli.help.auth.login.arg.oidc": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign in through the server's identity provider in a browser instead of with a password. The server must allow loopback redirects (OIDC_ALLOW_LOOPBACK_REDIRECT=true)"
           }
         }
       }

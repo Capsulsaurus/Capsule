@@ -70,6 +70,10 @@ tracing-subscriber = { version = "0.3.23", features = [
 # Asset ids on the `capsule cull` argument surface (S-D16). Already the workspace-wide
 # identifier pin; the CLI simply needs to name and parse the type it prints.
 uuid = { workspace = true }
+# `capsule auth login --oidc` (S-N2): decoding the provider's redirect query on the loopback
+# listener. Already in the graph under reqwest; named here so the listener does not hand-roll
+# percent-decoding.
+url = "2.5.8"
 walkdir = "2.5.0"
 
 # `media-avif-decode`: AVIF stills decode, so an AVIF original gets its dimensions, placeholder and
@@ -81,3 +85,12 @@ walkdir = "2.5.0"
 # skipped. Cargo unifies this with the unconditional dependency above.
 [target.'cfg(not(windows))'.dependencies]
 capsule-core = { path = "../capsule-core", features = ["media-avif-decode"] }
+
+[dev-dependencies]
+# `tests/oidc_dex.rs` plays the person at the browser against dex (S-N2): it follows the
+# authorization URL, submits dex's password form, and follows the redirect to the CLI's loopback
+# listener. The workspace pin, already in the graph through capsule-sdk.
+reqwest = { workspace = true }
+# `test-util` gives the OIDC loopback listener's tests a paused clock, so its ten-second read
+# timeout is exercised without the test waiting ten seconds.
+tokio = { workspace = true, features = ["test-util"] }

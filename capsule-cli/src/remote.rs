@@ -184,15 +184,27 @@ pub async fn auth_login(
     password: &str,
 ) -> Result<LoginStep, RemoteError> {
     let client = AuthClient::new(&remote.auth_endpoint)?;
-    match client.login(email, password).await? {
+    let outcome = client.login(email, password).await?;
+    settle_login(store, outcome).await
+}
+
+/// Act on what a sign-in answered: persist a session, or hand back the second-factor challenge.
+///
+/// One place for the password path and the identity-provider path (`capsule auth login
+/// --oidc`), so the two ways a sign-in can answer cannot be settled differently.
+pub(crate) async fn settle_login(
+    store: &SessionStore,
+    outcome: LoginOutcome,
+) -> Result<LoginStep, RemoteError> {
+    match outcome {
         LoginOutcome::Session(session) => {
             persist(store, session).await?;
             tracing::info!("login persisted to the session store");
             Ok(LoginStep::Complete)
         }
-        // The password verified and the sign-in is not finished (`S-C55`). Nothing is persisted:
-        // there is no session yet, and writing a half-authentication to the store would leave a
-        // later command believing it was signed in.
+        // The sign-in is not finished (`S-C55`). Nothing is persisted: there is no session yet,
+        // and writing a half-authentication to the store would leave a later command believing
+        // it was signed in.
         LoginOutcome::SecondFactorRequired { mfa_token, .. } => {
             tracing::info!("login needs a second factor");
             Ok(LoginStep::SecondFactorRequired { mfa_token })

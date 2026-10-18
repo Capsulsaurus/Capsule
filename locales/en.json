@@ -6859,6 +6859,54 @@
     "message": "Logging in to Capsule…",
     "context": "CLI status line printed while `capsule auth login` authenticates."
   },
+  "cli.auth.login.oidc_browser_unavailable": {
+    "message": "No browser could be opened from here. Open the address above in any browser.",
+    "context": "CLI `capsule auth login --oidc` (S-N2): the platform's browser opener could not be started (for example on a host with no graphical session). The authorization address has already been printed on the line before."
+  },
+  "cli.auth.login.oidc_denied": {
+    "message": "The identity provider did not sign you in ({error}).",
+    "context": "CLI `capsule auth login --oidc` (S-N2): the identity provider redirected back with an OAuth error instead of a sign-in. {error} is the provider's error code, e.g. access_denied, verbatim and untranslated."
+  },
+  "cli.auth.login.oidc_denied_described": {
+    "message": "The identity provider did not sign you in ({error}): {description}",
+    "context": "CLI `capsule auth login --oidc` (S-N2): as cli.auth.login.oidc_denied, when the provider also sent a description. {error} is the provider's error code; {description} is the provider's own text, usually English, shown verbatim."
+  },
+  "cli.auth.login.oidc_in_progress": {
+    "message": "Signing in to Capsule through your identity provider…",
+    "context": "CLI status line printed when `capsule auth login --oidc` (S-N2) starts a sign-in through the server's single sign-on provider."
+  },
+  "cli.auth.login.oidc_listener_failed": {
+    "message": "This computer could not listen for the sign-in to come back: {reason}",
+    "context": "CLI `capsule auth login --oidc` (S-N2): binding the local loopback port the identity provider redirects to failed. {reason} is an English operating-system error."
+  },
+  "cli.auth.login.oidc_loopback_refused": {
+    "message": "This server does not accept sign-ins from the command line through its identity provider. Its operator can allow them by setting OIDC_ALLOW_LOOPBACK_REDIRECT=true.",
+    "context": "CLI `capsule auth login --oidc` (S-N2): the server refused the CLI's loopback redirect because loopback redirects are off by default. OIDC_ALLOW_LOOPBACK_REDIRECT=true is a server configuration variable and must not be translated."
+  },
+  "cli.auth.login.oidc_page_received": {
+    "message": "Capsule received your sign-in. Return to the terminal, which finishes signing you in.",
+    "context": "Browser page shown by `capsule auth login --oidc` (S-N2) on the computer's own loopback address once the identity provider has sent the person back with a code. Shown before the terminal completes the sign-in, which can still fail or ask for a second-factor code, so it must not claim the person is signed in. Plain text in a minimal HTML page."
+  },
+  "cli.auth.login.oidc_page_refused": {
+    "message": "The sign-in did not complete. Return to the terminal to see why.",
+    "context": "Browser page shown by `capsule auth login --oidc` (S-N2) when the identity provider sent the person back with an error instead of a sign-in. Plain text in a minimal HTML page."
+  },
+  "cli.auth.login.oidc_success": {
+    "message": "Signed in through your identity provider.",
+    "context": "CLI success line after `capsule auth login --oidc` (S-N2) has stored the session."
+  },
+  "cli.auth.login.oidc_timed_out": {
+    "message": "No sign-in came back in time. Run the command again to start a new one.",
+    "context": "CLI `capsule auth login --oidc` (S-N2): the browser never returned from the identity provider before the wait (at most five minutes) ran out."
+  },
+  "cli.auth.login.oidc_visit": {
+    "message": "To sign in, open this address in a browser:",
+    "context": "CLI `capsule auth login --oidc` (S-N2): printed on the line before the identity provider's authorization address. The CLI also tries to open it in a browser itself unless --no-browser was given."
+  },
+  "cli.auth.login.oidc_waiting": {
+    "message": "{count, plural, one {Waiting up to # minute for the sign-in to finish…} other {Waiting up to # minutes for the sign-in to finish…}}",
+    "context": "CLI `capsule auth login --oidc` (S-N2): printed while the CLI waits for the browser to come back from the identity provider. {count} is the whole number of minutes it will wait."
+  },
   "cli.auth.login.password_prompt": {
     "message": "Password",
     "context": "CLI `capsule auth login` interactive prompt for the account password."
@@ -7010,6 +7058,14 @@
   "cli.help.auth.login.arg.email": {
     "message": "Account email (prompted when omitted)",
     "context": "clap --help: help for the `--email` option of `capsule auth login`."
+  },
+  "cli.help.auth.login.arg.no_browser": {
+    "message": "With --oidc, print the sign-in address without opening a browser",
+    "context": "clap --help: help for the `--no-browser` flag of `capsule auth login`."
+  },
+  "cli.help.auth.login.arg.oidc": {
+    "message": "Sign in through the server's identity provider in a browser instead of with a password. The server must allow loopback redirects (OIDC_ALLOW_LOOPBACK_REDIRECT=true)",
+    "context": "clap --help: help for the `--oidc` flag of `capsule auth login`. OIDC_ALLOW_LOOPBACK_REDIRECT=true is a server configuration variable and must not be translated."
   },
   "cli.help.auth.login.arg.password_stdin": {
     "message": "Read the password from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",

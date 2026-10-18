@@ -48,6 +48,19 @@ pub mod keys {
     pub const AUTH_LOGIN_IN_PROGRESS: &str = "cli.auth.login.in_progress";
     pub const AUTH_LOGIN_SUCCESS: &str = "cli.auth.login.success";
     pub const AUTH_LOGIN_FAILED: &str = "cli.auth.login.failed";
+    // `capsule auth login --oidc` — the identity-provider sign-in over a loopback listener (S-N2).
+    pub const AUTH_LOGIN_OIDC_IN_PROGRESS: &str = "cli.auth.login.oidc_in_progress";
+    pub const AUTH_LOGIN_OIDC_VISIT: &str = "cli.auth.login.oidc_visit";
+    pub const AUTH_LOGIN_OIDC_BROWSER_UNAVAILABLE: &str = "cli.auth.login.oidc_browser_unavailable";
+    pub const AUTH_LOGIN_OIDC_WAITING: &str = "cli.auth.login.oidc_waiting";
+    pub const AUTH_LOGIN_OIDC_SUCCESS: &str = "cli.auth.login.oidc_success";
+    pub const AUTH_LOGIN_OIDC_PAGE_RECEIVED: &str = "cli.auth.login.oidc_page_received";
+    pub const AUTH_LOGIN_OIDC_PAGE_REFUSED: &str = "cli.auth.login.oidc_page_refused";
+    pub const AUTH_LOGIN_OIDC_LOOPBACK_REFUSED: &str = "cli.auth.login.oidc_loopback_refused";
+    pub const AUTH_LOGIN_OIDC_LISTENER_FAILED: &str = "cli.auth.login.oidc_listener_failed";
+    pub const AUTH_LOGIN_OIDC_TIMED_OUT: &str = "cli.auth.login.oidc_timed_out";
+    pub const AUTH_LOGIN_OIDC_DENIED: &str = "cli.auth.login.oidc_denied";
+    pub const AUTH_LOGIN_OIDC_DENIED_DESCRIBED: &str = "cli.auth.login.oidc_denied_described";
     pub const AUTH_REGISTER_IN_PROGRESS: &str = "cli.auth.register.in_progress";
     pub const AUTH_REGISTER_SUCCESS: &str = "cli.auth.register.success";
     pub const AUTH_REGISTER_FAILED: &str = "cli.auth.register.failed";
