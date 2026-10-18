@@ -91,7 +91,7 @@ async fn a_large_body_within_the_limit_reaches_the_handler_whole() {
 
 /// The cap covers operations that take no body at all.
 ///
-/// Every group carries one, the exempt ten's included, rather than only the operations that
+/// Every group carries one, the exempt twelve's included, rather than only the operations that
 /// happen to accept a body today, so a body sent where none is expected is refused rather than
 /// read into memory and discarded.
 #[tokio::test]

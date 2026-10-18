@@ -142,7 +142,7 @@ async fn every_declared_response_is_exercised() {
         .assert_status(StatusCode::OK);
 
     // 413 is declared on *every* operation, because every group carries a body-size cap — the
-    // exempt ten in a group holding nothing else — and a Kynos interceptor's declaration is its
+    // exempt twelve in a group holding nothing else — and a Kynos interceptor's declaration is its
     // type (`S-C33`, #478). So every operation produces one here, sent the cheapest way the
     // limit can be reached: a `Content-Length` over every group's cap, refused before a byte of
     // the body is read.
@@ -3167,7 +3167,9 @@ const HANDSHAKE_HEADERS: [&str; 3] = [
 /// client hits before it knows the window; the `/.well-known/capsule/*` records are public
 /// discovery; the `/s/{opaque_id}*` reads must answer an indistinguishable `404`
 /// (share-links.md), which a `426` would turn into a probing oracle; the `/d/{opaque_id}*`
-/// guest deposits have their protocol pinned at link issuance (web-upload.md).
+/// guest deposits have their protocol pinned at link issuance (web-upload.md); refreshing and
+/// closing a session are upkeep an out-of-window client must still reach, since its reads are
+/// admitted at any protocol date (#527).
 const EXEMPT: &[(&str, &str)] = &[
     ("GET", "/v1/version"),
     ("GET", "/.well-known/capsule/attestation-keys"),
@@ -3179,6 +3181,8 @@ const EXEMPT: &[(&str, &str)] = &[
     ("GET", "/s/{opaque_id}/blob/{hash}"),
     ("POST", "/d/{opaque_id}"),
     ("PATCH", "/d/{opaque_id}/{upload_id}"),
+    ("POST", "/v1/auth/refresh"),
+    ("POST", "/v1/auth/logout"),
 ];
 
 /// The HTTP methods a path item may carry, as the document spells them.
@@ -3278,7 +3282,7 @@ fn is_exempt(method: &str, template: &str) -> bool {
 
 /// The operations declaring the handshake are exactly the ones outside [`EXEMPT`].
 #[test]
-fn the_handshake_is_declared_on_every_operation_but_the_exempt_ten() {
+fn the_handshake_is_declared_on_every_operation_but_the_exempt_twelve() {
     let document = capsule_server::openapi().expect("router describes itself");
     let json = serde_json::to_value(&document).expect("a document serializes");
 
@@ -3335,7 +3339,7 @@ fn the_handshake_is_declared_on_every_operation_but_the_exempt_ten() {
         "the gated set is not \"everything but EXEMPT\"; `lib.rs::router` and this pin change \
          together"
     );
-    assert_eq!(EXEMPT.len(), 10, "the design names ten exemptions");
+    assert_eq!(EXEMPT.len(), 12, "the design names twelve exemptions");
 
     for (method, path) in EXEMPT {
         assert!(

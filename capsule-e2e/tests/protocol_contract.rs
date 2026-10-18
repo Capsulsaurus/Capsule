@@ -97,7 +97,7 @@ async fn e2e_case_9_a_server_outside_this_builds_window_refuses_writes_with_426(
     assert_eq!(refused.error_code(), Some(VERSION_UNSUPPORTED));
 
     // The window rides every response, an exempt operation's included (`GET /v1/version` is
-    // one of the ten the design exempts, and this client sends no handshake at all).
+    // one of the twelve the design exempts, and this client sends no handshake at all).
     let exempt = rest::Client::new(server.base_url()).expect("the API root parses");
     let version = exempt.get_version().await.expect("the version is public");
     let header = |name: &str| {

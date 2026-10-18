@@ -571,9 +571,9 @@ where
 ///
 /// Mounted on the `Group` holding the non-safe operations, rather than the router, because the
 /// exemptions the design names — the reachability probe, public discovery, share reads, guest
-/// deposits — are expressed by mounting those operations outside it, and because a read is held
-/// to a different rule by [`ProtocolReadGate`]. See `lib.rs::router` for the lists and the
-/// reasons.
+/// deposits, session refresh and logout — are expressed by mounting those operations outside
+/// it, and because a read is held to a different rule by [`ProtocolReadGate`]. See
+/// `lib.rs::router` for the lists and the reasons.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ProtocolGate;
 
