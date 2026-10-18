@@ -219,7 +219,9 @@ ml-kem = "0.3"           # RustCrypto FIPS-203 (ML-KEM-768) — PQ half of the X
 x25519-dalek = "2"       # RustCrypto X25519 — classical half of the X-Wing device KEM
 getrandom = "0.3"        # OS CSPRNG for keys, salts, nonce prefixes
 tar = "0.4"              # deterministic uncompressed POSIX tar backup container
-sharks = "0.5"           # Shamir secret sharing (opt-in 2-of-3 recovery)
+# Shamir secret sharing (opt-in 2-of-3 recovery). The maintained `sharks` fork with uniform
+# polynomial coefficients (RUSTSEC-2024-0398 fix) and the same share encoding; `sharks` is retired.
+blahaj = "0.7"
 
 # Sole logging facade (the `log` crate is forbidden in new code; see the Dependencies doc).
 # Non-optional: the native library/import/lifecycle surface instruments hot-path spans and
