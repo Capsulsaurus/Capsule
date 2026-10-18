@@ -1,12 +1,15 @@
-# cargo-deny — the machine check for Capsule's dependency-licence policy.
+# cargo-deny — the machine check for Capsule's dependency-licence policy, and for the
+# RustSec advisories, crate bans and crate sources of the same graph.
 #
-# The policy, and the reasoning behind every decision encoded here, lives in
-# capsule-docs/src/content/docs/design/licensing.md. This file is the enforcement;
-# that doc is the contract. Run it with `mise run license-check` (part of `check-rust`).
+# The licence policy, and the reasoning behind every decision encoded in [licenses],
+# lives in capsule-docs/src/content/docs/design/licensing.md. This file is the
+# enforcement; that doc is the contract. Run it with `mise run license-check` (part of
+# `check-rust`).
 #
-# Only the licence check is wired up. `cargo deny check advisories` needs a network
-# fetch of the RustSec database, which would make the gate non-deterministic and break
-# the offline build; vulnerability scanning is a separate concern from licensing.
+# The advisories, bans and sources checks run separately, as `mise run deny-check`, in
+# CI's `rust-advisories` job. They stay out of `check-rust` because `check advisories`
+# fetches the RustSec database over the network: the offline build keeps its
+# deterministic licence gate, and CI fails on any advisory the database publishes.
 
 [graph]
 # Check every target Capsule ships for, not just the host. `tzf-rel` reaches the wasm
@@ -80,3 +83,57 @@ allow = ["IJG"]
 # configuration. The NOTICE conjunctive section names it.
 name = "libfuzzer-sys"
 allow = ["NCSA"]
+
+[advisories]
+# Every RustSec advisory against the graph fails the build: vulnerabilities, unmaintained
+# crates at any depth, and unsound ones. The remedy is a patched version in Cargo.lock.
+# An entry below is admitted only where no patched version is reachable, and each names
+# what blocks the fix and the issue that removes the entry. Deleting an entry once its
+# blocker clears is how the gate proves the advisory gone.
+unmaintained = "all"
+ignore = [
+    # sharks 0.5.0 is the last release and the advisory has no fix. It splits the
+    # recovery seed for the opt-in Shamir 2-of-3 social recovery (capsule-core backup).
+    # Replacing it, and deciding the format of shares already issued, is #611.
+    { id = "RUSTSEC-2024-0398", reason = "sharks: no patched release; replacement tracked in #611" },
+
+    # The libcrux family is pinned exactly (`^0.0.x`) by openmls_libcrux_crypto 0.3.1 and
+    # hpke-rs-libcrux 0.6.1, which openmls 0.8 requires. The patched releases arrive only
+    # with openmls_libcrux_crypto 0.4 / openmls 0.9, an API migration of capsule-core's MLS
+    # code tracked in #610. Remove all eleven entries in that pull request.
+    { id = "RUSTSEC-2026-0073", reason = "libcrux-poly1305: pinned by openmls 0.8; fixed by the openmls 0.9 migration (#610)" },
+    { id = "RUSTSEC-2026-0075", reason = "libcrux-ed25519: pinned by openmls 0.8; fixed by the openmls 0.9 migration (#610)" },
+    { id = "RUSTSEC-2026-0124", reason = "libcrux-chacha20poly1305: pinned by openmls 0.8; fixed by the openmls 0.9 migration (#610)" },
+    { id = "RUSTSEC-2026-0207", reason = "libcrux-sha3: pinned by openmls 0.8; fixed by the openmls 0.9 migration (#610)" },
+    { id = "RUSTSEC-2026-0208", reason = "libcrux-sha3: pinned by openmls 0.8; fixed by the openmls 0.9 migration (#610)" },
+    { id = "RUSTSEC-2026-0209", reason = "libcrux-aesgcm: pinned by openmls 0.8; fixed by the openmls 0.9 migration (#610)" },
+    { id = "RUSTSEC-2026-0210", reason = "libcrux-aesgcm renamed (unmaintained): pinned by openmls 0.8; fixed by the openmls 0.9 migration (#610)" },
+    { id = "RUSTSEC-2026-0211", reason = "libcrux-aesgcm: pinned by openmls 0.8; fixed by the openmls 0.9 migration (#610)" },
+    { id = "RUSTSEC-2026-0212", reason = "libcrux-secrets: pinned by openmls 0.8; fixed by the openmls 0.9 migration (#610)" },
+    { id = "RUSTSEC-2026-0330", reason = "libcrux-kem: pinned by openmls 0.8; fixed by the openmls 0.9 migration (#610)" },
+    { id = "RUSTSEC-2026-0331", reason = "libcrux-kem: pinned by openmls 0.8; fixed by the openmls 0.9 migration (#610)" },
+
+    # quick-xml 0.37.5 is required (`^0.37.5`) by little_exif 0.6.23, the latest release,
+    # reached through rawshift-image's metadata path in capsule-core's `media` feature. Both
+    # advisories are denial of service on a crafted document; the key-free server decodes
+    # no media. Remove when little_exif moves past quick-xml 0.37.
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml via little_exif 0.6.23 (latest): no reachable fix; client-side DoS only" },
+    { id = "RUSTSEC-2026-0195", reason = "quick-xml via little_exif 0.6.23 (latest): no reachable fix; client-side DoS only" },
+
+    # Unmaintained, no vulnerability. paste is a proc macro of little_exif and rav1e;
+    # proc-macro-error2 is a proc macro of sea-orm 1.x's derive (sea-bae). Both run only at
+    # compile time. Remove when those upstreams drop them.
+    { id = "RUSTSEC-2024-0436", reason = "paste (unmaintained proc macro) via little_exif and rav1e; compile-time only" },
+    { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 (unmaintained proc macro) via sea-orm 1.x; compile-time only" },
+]
+
+[bans]
+# Duplicate versions are reported, not refused: the graph carries several (two rand,
+# two libcrux-aead) that only upstream releases can collapse.
+multiple-versions = "warn"
+
+[sources]
+# Every crate comes from crates.io. A git dependency or another registry is a supply-chain
+# decision that needs a reviewed entry here first.
+unknown-registry = "deny"
+unknown-git = "deny"
