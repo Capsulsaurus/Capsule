@@ -17,6 +17,9 @@
 //! - **Instants are not moved.** `expires_at` and `revoked_at` may lose sub-microsecond
 //!   precision and nothing more — an expiry that moved later is a link live past its owner's
 //!   choice.
+//! - **Only a live link holds a blob from the collector.** `names_live` answers for every
+//!   address a live link serves and for nothing else, and a revoked or expired link holds
+//!   nothing — so a link's blobs are kept exactly while it can serve them (#653).
 //!
 //! # Reusing a harness
 //!
@@ -336,6 +339,77 @@ pub async fn revocation_does_not_leak_between_links(h: &dyn Harness) {
 }
 
 // ===========================================================================================
+// What the collector asks (#653)
+// ===========================================================================================
+
+/// Whether a live link names `address` at `when`.
+async fn names_live(h: &dyn Harness, address: &ContentAddress, when: Timestamp) -> bool {
+    ok(
+        h.shares().names_live(address, when).await,
+        "ask whether a live link names an address",
+    )
+}
+
+/// A live link names every address in its serve set, and nothing outside it.
+pub async fn a_live_link_names_every_address_it_serves(h: &dyn Harness) {
+    let case = "names";
+    let record = link(case, 1, &user(case, "alice"));
+    issue(h, record.clone()).await;
+    for address in &record.serves {
+        assert!(
+            names_live(h, address, at(10)).await,
+            "a live link must hold every address it serves, the metadata record included"
+        );
+    }
+    assert!(
+        !names_live(h, &address(&format!("{case}/1/elsewhere")), at(10)).await,
+        "a link holds nothing it does not enumerate"
+    );
+}
+
+/// A revoked link names nothing, and neither does one past its expiry.
+pub async fn a_revoked_or_expired_link_names_nothing(h: &dyn Harness) {
+    let case = "unnamed";
+    let alice = user(case, "alice");
+    let revoked = link(case, 1, &alice);
+    issue(h, revoked.clone()).await;
+    assert!(revoke(h, &alice, &revoked.opaque_id, at(10)).await);
+    assert!(
+        !names_live(h, &revoked.metadata, at(11)).await,
+        "a revoked link holds nothing for the collector"
+    );
+
+    let expiring = link(case, 2, &alice);
+    issue(h, expiring.clone()).await;
+    assert!(names_live(h, &expiring.metadata, at(3_599)).await);
+    assert!(
+        !names_live(h, &expiring.metadata, at(3_600)).await,
+        "a link is not live at its own expiry instant, so it holds nothing from then on"
+    );
+}
+
+/// An address two links serve stays held while either is live.
+pub async fn a_shared_address_is_held_while_any_naming_link_is_live(h: &dyn Harness) {
+    let case = "overlap";
+    let alice = user(case, "alice");
+    let common = address(&format!("{case}/common"));
+    let mut first = link(case, 1, &alice);
+    first.serves.insert(common.clone());
+    let mut second = link(case, 2, &alice);
+    second.serves.insert(common.clone());
+    second.expires_at = None;
+    issue(h, first.clone()).await;
+    issue(h, second.clone()).await;
+    assert!(revoke(h, &alice, &first.opaque_id, at(10)).await);
+    assert!(
+        names_live(h, &common, at(11)).await,
+        "the second link is still live and still serves it"
+    );
+    assert!(revoke(h, &alice, &second.opaque_id, at(12)).await);
+    assert!(!names_live(h, &common, at(13)).await);
+}
+
+// ===========================================================================================
 // The whole suite
 // ===========================================================================================
 
@@ -354,6 +428,10 @@ pub async fn run_all(h: &dyn Harness) {
     a_second_revocation_changes_nothing(h).await;
     only_the_owner_can_revoke(h).await;
     revocation_does_not_leak_between_links(h).await;
+
+    a_live_link_names_every_address_it_serves(h).await;
+    a_revoked_or_expired_link_names_nothing(h).await;
+    a_shared_address_is_held_while_any_naming_link_is_live(h).await;
 }
 
 #[cfg(test)]
@@ -398,6 +476,9 @@ mod tests {
         a_second_revocation_changes_nothing,
         only_the_owner_can_revoke,
         revocation_does_not_leak_between_links,
+        a_live_link_names_every_address_it_serves,
+        a_revoked_or_expired_link_names_nothing,
+        a_shared_address_is_held_while_any_naming_link_is_live,
     }
 
     /// The whole suite, in one pass on one store — the entry point the container case uses.

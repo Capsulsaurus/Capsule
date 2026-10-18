@@ -11,9 +11,10 @@
 //! pre-flight refresh and the one `401` replay are the SDK's), and maps the generated typed
 //! refusals onto [`ShareError`]. Nothing here parses or serializes by hand.
 //!
-//! What this module does **not** do is put the metadata blob on the server. `serves` names it
-//! and the public path serves it from the blob store, but no write surface accepts it yet, so a
-//! link registered here opens only once that blob is in the store.
+//! The sealed metadata record travels in the same request, as `metadata_blob`: the server checks
+//! that it hashes to `metadata_hash`, stores it before it records the link, and keeps it from the
+//! collector for as long as the link is live (#653). So a link this module registers is
+//! servable as soon as `issue` returns, provided every covered ciphertext is already held.
 //!
 //! The fragment secret never reaches this module's requests: [`issue_request`] reads the opaque
 //! id, the publication and the expiry, and the URL is assembled locally by [`share_url`].
@@ -98,8 +99,8 @@ impl ShareError {
 /// The `POST /v1/shares` body for `link`, from what `Workspace::publish_link` returned for it.
 ///
 /// The record's `metadata_hash` and `serves` (record first, then each covered ciphertext) are
-/// carried as lowercase hex, the passphrase-wrapped scope as base64, and the expiry as the
-/// link's own RFC 3339 string. The fragment secret is not read.
+/// carried as lowercase hex, the sealed record itself and the passphrase-wrapped scope as
+/// base64, and the expiry as the link's own RFC 3339 string. The fragment secret is not read.
 #[must_use]
 pub fn issue_request(
     link: &ShareLink,
@@ -118,6 +119,7 @@ pub fn issue_request(
             .as_ref()
             .map(|secret| BASE64.encode(secret)),
         expires_at: link.expires_at.clone(),
+        metadata_blob: Some(BASE64.encode(&publication.metadata_blob)),
     }
 }
 

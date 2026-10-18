@@ -1453,6 +1453,17 @@ impl ShareStore for SwitchableShares {
         }
         self.inner.revoke(owner, opaque_id, at)
     }
+
+    fn names_live<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+        now: Timestamp,
+    ) -> StoreFuture<'a, bool> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.names_live(address, now)
+    }
 }
 
 /// Whether the fixture's server federates (`FEDERATION_ENABLED`, #509), switchable per request.

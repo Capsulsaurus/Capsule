@@ -396,6 +396,9 @@ struct Stores {
     uploads: Arc<dyn UploadSessionStore>,
     marks: Arc<dyn CollectionStore>,
     quotas: Arc<dyn QuotaStore>,
+    /// The share links: read by the application, and by the collector, which must not sweep a
+    /// blob a live link serves (#653). Here rather than in [`Ports`] so both are one store.
+    shares: Arc<dyn ShareStore>,
 }
 
 impl Stores {
@@ -407,6 +410,7 @@ impl Stores {
                 self.blobs.clone(),
                 self.marks.clone(),
                 self.quotas.clone(),
+                self.shares.clone(),
                 self.clock.clone(),
                 grace_window,
             )
@@ -434,6 +438,7 @@ impl Base {
             uploads: Arc::new(InMemoryUploadSessions::with_default_ttl(self.clock.clone())),
             marks: Arc::new(InMemoryCollection::new()),
             quotas: Arc::new(InMemoryQuota::new()),
+            shares: Arc::new(InMemoryShares::new()),
             root: self.root,
             clock: self.clock,
             blobs: self.blobs,
@@ -447,6 +452,7 @@ impl Base {
             uploads: valkey.uploads(),
             marks: Arc::new(PostgresCollection::new(connection.clone())),
             quotas: Arc::new(PostgresQuota::new(connection.clone())),
+            shares: Arc::new(PostgresShares::new(connection.clone())),
             root: self.root,
             clock: self.clock,
             blobs: self.blobs,
@@ -540,7 +546,6 @@ struct Ports {
     enrollments: Arc<dyn EnrollmentStore>,
     channels: Arc<dyn ChannelStore>,
     moderation: Arc<dyn ModerationStore>,
-    shares: Arc<dyn ShareStore>,
     drops: Arc<dyn DropStore>,
     counters: Arc<dyn CounterStore>,
     /// The pending OIDC ceremonies. Built on both arms whether or not `OIDC_ISSUER` is set, and
@@ -583,7 +588,6 @@ fn memory_ports(config: &Config, clock: &Arc<SystemClock>) -> Result<Ports, Boot
         enrollments: Arc::new(InMemoryEnrollments::with_default_ttl(clock.clone())),
         channels: Arc::new(InMemoryChannels::with_default_ttl(clock.clone())),
         moderation: Arc::new(InMemoryModeration::new()),
-        shares: Arc::new(InMemoryShares::new()),
         drops: Arc::new(InMemoryDrops::new()),
         counters: Arc::new(InMemoryCounters::new()),
         oidc_authorizations: Arc::new(InMemoryOidcAuthorizations::with_default_ttl(clock.clone())),
@@ -627,7 +631,6 @@ fn durable_ports(
         enrollments: valkey.enrollments(),
         channels: valkey.channels(),
         moderation: Arc::new(PostgresModeration::new(db())),
-        shares: Arc::new(PostgresShares::new(db())),
         drops: Arc::new(PostgresDrops::new(db())),
         counters: Arc::new(ValkeyCounters::new(valkey.valkey().clone())),
         oidc_authorizations: valkey.oidc_authorizations(),
@@ -668,6 +671,7 @@ fn compose(
     let uploads = stores.uploads.clone();
     let marks = stores.marks.clone();
     let quotas = stores.quotas.clone();
+    let shares = stores.shares.clone();
 
     // The signer is built from the private key alone and derives its own public half, which is
     // what lets `ServerInfo` below publish the key tokens actually verify under rather than one
@@ -696,7 +700,6 @@ fn compose(
         enrollments,
         channels,
         moderation,
-        shares,
         drops,
         counters,
         oidc_authorizations,

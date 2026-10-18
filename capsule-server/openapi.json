@@ -25060,6 +25060,13 @@
               "null"
             ],
             "description": "When the link stops being live, RFC 3339. Absent means no expiry."
+          },
+          "metadata_blob": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The sealed metadata record itself, base64.\n\nIts SHA-256 must equal `metadata_hash`, and it may be at most 8 MiB decoded. The server\nstores it before it records the link, so a viewer's first fetch finds it, and keeps it\nfor as long as the link is live. Opaque to this server: it is sealed under material\nderived from the URL fragment, which never reaches it.\n\nOptional so an older client still registers a link; such a link serves its metadata\nonly if the blob is already in the store."
           }
         },
         "type": "object",
