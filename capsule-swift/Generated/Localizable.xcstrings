@@ -40883,6 +40883,16 @@
         }
       }
     },
+    "error.directory.untrusted_signature": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This account's device list isn't signed by the account key this device trusts."
+          }
+        }
+      }
+    },
     "error.directory.version_conflict": {
       "localizations": {
         "ar": {

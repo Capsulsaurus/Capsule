@@ -17,6 +17,7 @@ use capsule_core::lifecycle::{LifecycleError, Workspace};
 use capsule_sdk::albums::{AlbumClient, AlbumTransport};
 use capsule_sdk::auth::{AuthClient, AuthError, LoginOutcome, Session};
 use capsule_sdk::client::AuthenticatedClient;
+use capsule_sdk::directory::{DirectoryClient, DirectoryError};
 use capsule_sdk::net::ConnectionClass;
 use capsule_sdk::push::{self, PushError};
 use capsule_sdk::recovery::{MintedSecret, RecoveryClient, RecoveryError};
@@ -140,6 +141,10 @@ pub enum RemoteError {
     /// An escrow or sealed-identity call failed (`capsule auth recover`).
     #[error(transparent)]
     Recovery(#[from] RecoveryError),
+    /// Fetching or publishing the account's signed device directory failed
+    /// (`capsule auth recover` joining the new device to it).
+    #[error(transparent)]
+    Directory(#[from] DirectoryError),
     /// The account profile could not be read, so the account's server id is unknown.
     #[error("the account profile could not be read: {0}")]
     Profile(String),
@@ -167,6 +172,7 @@ impl RemoteError {
             })) => code.as_deref(),
             Self::Push(PushError::Album(error)) => error.error_code(),
             Self::Recovery(error) => error.error_code(),
+            Self::Directory(error) => error.error_code(),
             _ => None,
         }
     }
@@ -353,17 +359,27 @@ async fn checkpoint(store: &SessionStore, session: &Session) {
 ///    the typed secret is read);
 /// 4. create the library at `library` with `Workspace::create_from_master`, which opens the
 ///    sealed identity under the recovered master key and refuses before writing anything if it
-///    does not open.
+///    does not open;
+/// 5. join the account's device directory (#625): fetch the
+///    account's signed directory (`GET /v1/auth/devices/directory/{user_id}`), verify it under
+///    the identity key the sealed identity opened, append the new device with
+///    `Workspace::extend_account_directory` and publish it at the stored version + 1. An
+///    account that never published one gets the new library's own, at version 1.
 ///
-/// The new device is not added to the account's device directory here: the CLI publishes no
-/// directory for any library today, and joining one is a separate step.
+/// Step 5 is part of the recovery, not a follow-up: a device the directory does not list signs
+/// nothing the account's other devices accept. So a failure there **removes the library step 4
+/// created** — it holds nothing but the keys minted for it moments earlier — and returns the
+/// error, which leaves the path as it was and makes rerunning the command the retry. Every
+/// refusal before step 4 writes nothing.
 ///
 /// # Errors
 ///
 /// [`RemoteError::NotAuthenticated`] with no stored session; [`RemoteError::Recovery`] for an
 /// escrow or sealed-identity refusal (`IdentityNotStored` carries its own code);
 /// [`RemoteError::WrongRecoverySecret`] when no reading of the secret opens the escrow;
-/// [`RemoteError::Lifecycle`] when the library cannot be created.
+/// [`RemoteError::Lifecycle`] when the library cannot be created, or when the account's
+/// directory cannot be extended with the new device; [`RemoteError::Directory`] when the
+/// account's directory cannot be fetched, does not verify, or the publish is refused.
 #[instrument(skip(store, recovery_secret, passphrase, params), fields(library = %library.display()))]
 pub async fn auth_recover(
     remote: &RemoteConfig,
@@ -399,7 +415,7 @@ async fn recover_with(
     // `sync_endpoint` is the bare server origin, the base every generated operation hangs off.
     let api_root = &remote.sync_endpoint;
     let user_id = account_id(api_root, session.clone()).await?;
-    let recovery = RecoveryClient::new(session, api_root)?;
+    let recovery = RecoveryClient::new(session.clone(), api_root)?;
     let escrow = recovery.fetch_escrow().await?;
     let sealed = recovery.fetch_sealed_identity().await?;
     tracing::info!(%user_id, "recover: fetched the escrow and the sealed identity");
@@ -414,7 +430,10 @@ async fn recover_with(
             RemoteError::WrongRecoverySecret
         })?;
 
-    let workspace = Workspace::create_from_master(
+    // `create_from_master` refuses a non-empty root, so whatever is under `library` after it
+    // returns is this run's alone; `existed` says whether the root itself is.
+    let existed = library.exists();
+    let mut workspace = Workspace::create_from_master(
         library,
         passphrase,
         params,
@@ -427,7 +446,109 @@ async fn recover_with(
         device = %workspace.device_id(),
         "recover: the library opens as the recovered account on a new device"
     );
-    Ok(workspace)
+
+    let directory = DirectoryClient::new(session, &remote.auth_endpoint);
+    match join_account_directory(&directory, &mut workspace).await {
+        Ok(version) => {
+            tracing::info!(
+                %user_id,
+                device = %workspace.device_id(),
+                directory_version = version,
+                "recover: the new device is listed in the account's directory"
+            );
+            Ok(workspace)
+        }
+        Err(error) => {
+            tracing::warn!(
+                %user_id,
+                device = %workspace.device_id(),
+                %error,
+                "recover: the new device could not join the account's directory; removing the library"
+            );
+            // Close the library's files before removing them.
+            drop(workspace);
+            discard_new_library(library, existed);
+            Err(error)
+        }
+    }
+}
+
+/// Make `workspace`'s device a member of its account's published device directory, returning
+/// the `directory_version` the server stores afterwards.
+///
+/// The account's directory is fetched and verified under the identity key `workspace` holds —
+/// a document that does not verify is refused by the SDK and never reaches the extend. With one
+/// published, the device is appended with `Workspace::extend_account_directory` and the result
+/// is published at the stored version + 1, keeping every device already listed. A directory
+/// that already lists the device under its key is adopted unchanged and nothing is published.
+/// With none published ([`DirectoryError::NotPublished`]), the workspace's own directory —
+/// this device alone, at version 1 — is the account's first.
+async fn join_account_directory(
+    directory: &DirectoryClient,
+    workspace: &mut Workspace,
+) -> Result<u64, RemoteError> {
+    let identity = workspace.user_ik_public();
+    let user_id = workspace.user_id();
+    let to_publish = match directory.fetch(user_id, &identity).await {
+        Ok(published) => {
+            let stored = published.core.directory_version;
+            tracing::debug!(
+                %user_id,
+                directory_version = stored,
+                devices = published.core.devices.len(),
+                "recover: the account's directory fetched and verified"
+            );
+            let Some(extended) = workspace.extend_account_directory(&published)? else {
+                tracing::info!(
+                    %user_id,
+                    directory_version = stored,
+                    "recover: the account's directory already lists this device"
+                );
+                return Ok(stored);
+            };
+            extended
+        }
+        Err(DirectoryError::NotPublished) => {
+            tracing::info!(
+                %user_id,
+                "recover: the account has no directory yet; publishing this device's own"
+            );
+            workspace.device_directory().clone()
+        }
+        Err(error) => return Err(error.into()),
+    };
+    Ok(directory.publish(&to_publish, &identity).await?)
+}
+
+/// Remove the library a failed recovery created at `root`, restoring the path to how it was:
+/// absent when `existed` is false, an empty directory when it is true (the only kind
+/// `create_from_master` accepts).
+///
+/// Best effort: the recovery has already failed, and its error is the one the caller reports.
+/// A removal that fails is logged with the path, so whatever it left can be found and removed.
+fn discard_new_library(root: &std::path::Path, existed: bool) {
+    let outcome = if existed {
+        std::fs::read_dir(root).and_then(|entries| {
+            entries.into_iter().try_for_each(|entry| {
+                let path = entry?.path();
+                if path.is_dir() {
+                    std::fs::remove_dir_all(&path)
+                } else {
+                    std::fs::remove_file(&path)
+                }
+            })
+        })
+    } else {
+        std::fs::remove_dir_all(root)
+    };
+    match outcome {
+        Ok(()) => tracing::info!(root = %root.display(), "recover: the new library was removed"),
+        Err(error) => tracing::warn!(
+            root = %root.display(),
+            %error,
+            "recover: the new library could not be fully removed"
+        ),
+    }
 }
 
 /// The signed-in account's id, as the server assigned it.
@@ -1093,6 +1214,51 @@ mod tests {
             candidates,
             vec![[0x00, 0xff].repeat(16), hex.as_bytes().to_vec()]
         );
+    }
+
+    /// A library laid out the way a recovery leaves one: nested directories and files.
+    fn lay_out_a_library(root: &std::path::Path) {
+        std::fs::create_dir_all(root.join(".library/keys")).expect("the skeleton creates");
+        std::fs::write(root.join(".library/keys/device.key"), b"k").expect("a key file writes");
+        std::fs::write(root.join("library.toml"), b"name").expect("a top-level file writes");
+    }
+
+    /// A recovery that created its root removes it whole when the directory join fails, so the
+    /// path is absent again and a rerun starts from nothing.
+    #[test]
+    fn a_failed_join_removes_the_root_the_recovery_created() {
+        let parent = std::env::temp_dir().join(format!(
+            "capsule-cli-discard-created-{}",
+            std::process::id()
+        ));
+        let root = parent.join("recovered");
+        lay_out_a_library(&root);
+
+        discard_new_library(&root, false);
+
+        assert!(!root.exists(), "the created root is gone");
+        assert!(parent.exists(), "and nothing above it is touched");
+        std::fs::remove_dir_all(&parent).ok();
+    }
+
+    /// A recovery into an empty directory the user made leaves that directory, empty, in place.
+    #[test]
+    fn a_failed_join_empties_a_root_that_existed_and_keeps_it() {
+        let root = std::env::temp_dir().join(format!(
+            "capsule-cli-discard-existing-{}",
+            std::process::id()
+        ));
+        lay_out_a_library(&root);
+
+        discard_new_library(&root, true);
+
+        assert!(root.is_dir(), "the user's directory stays");
+        assert_eq!(
+            std::fs::read_dir(&root).expect("it reads").count(),
+            0,
+            "and is empty again, as it was before the recovery"
+        );
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

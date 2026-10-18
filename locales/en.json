@@ -8315,6 +8315,10 @@
     "message": "That device list couldn't be read.",
     "context": "HTTP 415 on POST /v1/auth/devices/directory (slice S-C9): the body was not sent as application/cbor. The signed device directory travels as canonical CBOR — the encoding it was signed in — so any other media type is a client that has misunderstood what it is sending."
   },
+  "error.directory.untrusted_signature": {
+    "message": "This account's device list isn't signed by the account key this device trusts.",
+    "context": "Client-side code: a fetched DeviceDirectory does not verify under the user identity key the client pinned (for example the identity a recovery opened), so it is treated as foreign or forged and never used. Shown when `capsule auth recover` cannot join the account's device list; nothing was changed on the server."
+  },
   "error.directory.version_conflict": {
     "message": "This device list is out of date. Capsule will refresh it before continuing.",
     "context": "HTTP 409 on device-directory publish (threat-model invariant 23): the submitted DeviceDirectory's directory_version does not strictly advance the version already stored for the user. A non-advancing or regressing publish is refused so the server cannot roll back a revocation."

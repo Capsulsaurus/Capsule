@@ -200,6 +200,9 @@ pub mod error_codes {
     /// `error.directory.unsupported_media_type`
     pub const DIRECTORY_UNSUPPORTED_MEDIA_TYPE: &str = "error.directory.unsupported_media_type";
 
+    /// `error.directory.untrusted_signature`
+    pub const DIRECTORY_UNTRUSTED_SIGNATURE: &str = "error.directory.untrusted_signature";
+
     /// `error.directory.version_conflict`
     pub const DIRECTORY_VERSION_CONFLICT: &str = "error.directory.version_conflict";
 

@@ -250,6 +250,10 @@ async fn a_foreign_signed_directory_is_refused() {
         .await
         .unwrap_err();
     assert!(matches!(err, DirectoryError::UntrustedSignature));
+    assert_eq!(
+        err.error_code(),
+        Some(error_codes::DIRECTORY_UNTRUSTED_SIGNATURE)
+    );
 }
 
 #[tokio::test]
