@@ -310,8 +310,18 @@ impl Workspace {
     #[tracing::instrument(skip_all, fields(from = %self.account.user_id, to = %user_id))]
     pub fn bind_account_id(&mut self, user_id: Uuid) -> Result<()> {
         if self.account.user_id == user_id {
-            tracing::debug!("account id already bound; nothing to do");
-            return Ok(());
+            // An earlier bind may have rewritten the account file and failed to persist the
+            // re-signed directory; this retry is what writes it, so the next open restores it
+            // rather than re-signing the stale one.
+            if Self::persisted_directory_is(&self.root, &self.directory) {
+                tracing::debug!("account id already bound; nothing to do");
+                return Ok(());
+            }
+            tracing::info!(
+                directory_version = self.directory.core.directory_version,
+                "account id already bound; persisting the directory an earlier bind failed to write"
+            );
+            return Self::persist_directory(&self.root, &self.directory);
         }
         if !self.assets.is_empty() {
             tracing::warn!(
@@ -344,8 +354,10 @@ impl Workspace {
         core.updated_at = now_rfc3339();
         // Adopted in memory before it is persisted, unlike the other directory changes: the
         // account file above already names the new id, so a retry is a no-op and memory must not
-        // keep a directory naming the old one. Should this write fail, the next open finds a
-        // directory naming the old id, refuses it, and rebuilds one naming the new id.
+        // keep a directory naming the old one. Should this write fail, a retry with the same id
+        // writes it; failing that, the next open finds the directory naming the old id, signed
+        // by this account's IK, and re-signs it under the new id at the next version, keeping
+        // every device it lists (`restore_directory`).
         self.directory = core.sign(&self.account.user_ik);
         tracing::info!(
             directory_version = self.directory.core.directory_version,
@@ -541,8 +553,9 @@ impl Workspace {
     /// - **the `add_id` counter**, reseeded past everything this device has ever written
     ///   (`S-A9`);
     /// - **the signed device directory** from `{root}/.library/directory.cbor` (#562), once it
-    ///   verifies under the user IK, names this account, and lists this device live; otherwise
-    ///   a fresh version-1 directory listing only this device, with a `warn` naming why.
+    ///   verifies under the user IK and lists this device live (re-signed under this account's
+    ///   id at the next version when it still names the id from before a rebind); otherwise a
+    ///   fresh version-1 directory listing only this device, with a `warn` naming why.
     ///
     /// A library with no `albums.cbor` predates this and opens with zero albums plus a `warn`
     /// naming backup restore — see [`AlbumStore::load`].
@@ -920,6 +933,14 @@ impl Workspace {
         Ok(())
     }
 
+    /// Whether the directory file at `root` already holds exactly `directory`.
+    fn persisted_directory_is(root: &Path, directory: &DeviceDirectory) -> bool {
+        let Ok(on_disk) = fs::read(Self::directory_path(root)) else {
+            return false;
+        };
+        cbor::to_canonical_vec(directory).is_ok_and(|bytes| bytes == on_disk)
+    }
+
     /// Persist `directory` and only then adopt it as this workspace's directory, so a failed
     /// write leaves memory and disk agreeing on the previous one.
     pub(super) fn adopt_directory(&mut self, directory: DeviceDirectory) -> Result<()> {
@@ -934,9 +955,11 @@ impl Workspace {
     /// trustworthy and at least as new as `built` (this device's freshly signed version-1
     /// directory), otherwise `built`.
     ///
-    /// The persisted file is trusted only when it verifies under the account's user IK, names
-    /// this account, and lists this device live under the signing key it signs with. Anything
-    /// else — missing (a library written before #562), unreadable, tampered, foreign, or one that
+    /// The persisted file is trusted only when it verifies under the account's user IK and lists
+    /// this device live under the signing key it signs with. One that names another account id
+    /// under this account's own IK is the directory a failed [`bind_account_id`](Self::bind_account_id)
+    /// left behind, and is re-signed under the bound id at the next version. Anything else —
+    /// missing (a library written before #562), unreadable, tampered, foreign, or one that
     /// revoked this device — falls back to `built` with a log line naming why, the behaviour
     /// every reopen had before the directory was persisted. The fallback is not written back,
     /// so the refused file stays on disk for inspection until the next directory change.
@@ -973,6 +996,25 @@ impl Workspace {
             );
             return built;
         }
+        let persisted = if persisted.core.user_id == account.user_id {
+            persisted
+        } else {
+            // Signed by this account's own IK yet naming another id: the directory from before a
+            // `bind_account_id` whose directory write never landed (the account file is the
+            // authority on the id). Re-sign it under the bound id at the next version, as that
+            // bind did, rather than dropping every device it lists for a version-1 rebuild.
+            tracing::warn!(
+                persisted_version = persisted.core.directory_version,
+                from = %persisted.core.user_id,
+                to = %account.user_id,
+                "workspace open: persisted device directory names the pre-rebind account id; re-signing it under the bound id"
+            );
+            let mut core = persisted.core;
+            core.user_id = account.user_id;
+            core.directory_version += 1;
+            core.updated_at = now_rfc3339();
+            core.sign(&account.user_ik)
+        };
         if persisted.core.directory_version < built.core.directory_version {
             tracing::warn!(
                 persisted_version = persisted.core.directory_version,
@@ -996,9 +1038,6 @@ impl Workspace {
     ) -> Option<&'static str> {
         if !persisted.verify(&account.user_ik.verifying_key()) {
             return Some("it does not verify under the user identity key");
-        }
-        if persisted.core.user_id != account.user_id {
-            return Some("it names another account");
         }
         match persisted.device(&account.device.device_id) {
             None => Some("it does not list this device"),
@@ -1634,6 +1673,81 @@ mod tests {
         );
     }
 
+    /// A workspace at `lib` that has cross-signed one other device, so its directory is at
+    /// version 2 and lists two devices.
+    fn workspace_with_a_cross_signed_device(lib: &Path) -> Workspace {
+        use crate::crypto::keys::HybridSigningKey;
+
+        let mut ws = fast_workspace(lib);
+        ws.cross_sign_device(DeviceEntry {
+            device_id: Uuid::now_v7(),
+            dsk_public: HybridSigningKey::generate().verifying_key(),
+            dek_public: None,
+            added_at: DEVICE_ADDED_AT.into(),
+            revoked_at: None,
+        })
+        .unwrap();
+        assert_eq!(ws.device_directory().core.directory_version, 2);
+        ws
+    }
+
+    /// **#562.** A bind whose directory write fails still binds (the account file names the new
+    /// id), and a retry with the same id is what writes the re-signed directory, so a reopen
+    /// restores it with every device it lists rather than rebuilding at version 1.
+    #[test]
+    fn a_bind_retry_persists_the_directory_an_earlier_bind_failed_to_write() {
+        let lib = TempDir::new().unwrap();
+        let mut ws = workspace_with_a_cross_signed_device(lib.path());
+        let server_id = Uuid::now_v7();
+        // A directory where the file belongs makes the rename fail.
+        let directory_path = Workspace::directory_path(lib.path());
+        fs::remove_file(&directory_path).unwrap();
+        fs::create_dir(&directory_path).unwrap();
+
+        let err = ws.bind_account_id(server_id).unwrap_err();
+        assert!(matches!(err, LifecycleError::Io(_)), "{err:?}");
+        assert_eq!(ws.user_id(), server_id, "the account file was rewritten");
+        let bound = ws.device_directory().clone();
+        assert_eq!(bound.core.user_id, server_id);
+        assert_eq!(bound.core.directory_version, 3);
+
+        fs::remove_dir(&directory_path).unwrap();
+        ws.bind_account_id(server_id).unwrap();
+        assert_eq!(ws.device_directory(), &bound, "the retry re-signs nothing");
+        drop(ws);
+
+        let reopened = Workspace::open(lib.path(), b"passphrase", FAST_PARAMS).unwrap();
+        assert_eq!(reopened.device_directory(), &bound);
+        assert_eq!(reopened.device_directory().core.devices.len(), 2);
+    }
+
+    /// **#562.** A bind whose directory write never landed, and that nobody retried, leaves the
+    /// pre-rebind directory on disk: signed by this account's IK but naming the old id. The
+    /// reopen re-signs it under the bound id at the next version and keeps every device it
+    /// lists, instead of a version-1 rebuild that is stale against what was published.
+    #[test]
+    fn a_directory_naming_the_pre_rebind_id_is_re_signed_on_open() {
+        let lib = TempDir::new().unwrap();
+        let mut ws = workspace_with_a_cross_signed_device(lib.path());
+        let pre_rebind = ws.device_directory().clone();
+        let server_id = Uuid::now_v7();
+        ws.bind_account_id(server_id).unwrap();
+        let user_ik = ws.user_ik_public();
+        drop(ws);
+        // As though the bind's directory write had failed after the account file was rewritten.
+        plant_directory(lib.path(), &pre_rebind);
+
+        let reopened = Workspace::open(lib.path(), b"passphrase", FAST_PARAMS).unwrap();
+        let opened = reopened.device_directory();
+        assert_eq!(opened.core.user_id, server_id);
+        assert_eq!(opened.core.directory_version, 3);
+        assert_eq!(opened.core.devices, pre_rebind.core.devices);
+        assert!(opened.verify(&user_ik));
+        let on_disk: DeviceDirectory =
+            cbor::from_slice(&fs::read(Workspace::directory_path(lib.path())).unwrap()).unwrap();
+        assert_eq!(on_disk, pre_rebind, "the open writes nothing back");
+    }
+
     /// Replace the persisted directory of the library at `lib` with `directory`.
     fn plant_directory(lib: &Path, directory: &DeviceDirectory) {
         fs::write(
@@ -1690,10 +1804,6 @@ mod tests {
 
         let foreign = fast_workspace(lib_x.path()).device_directory().clone();
 
-        let mut misnamed = genuine.core.clone();
-        misnamed.user_id = Uuid::now_v7();
-        let misnamed = misnamed.sign(&ik);
-
         let mut without_me = genuine.core.clone();
         without_me.devices.retain(|d| d.device_id != device);
         let without_me = without_me.sign(&ik);
@@ -1722,7 +1832,6 @@ mod tests {
             ("older than a fresh one", older),
             ("tampered", tampered),
             ("foreign", foreign),
-            ("misnamed", misnamed),
             ("without this device", without_me),
             ("this device rekeyed", rekeyed),
             ("this device revoked", revoked),
