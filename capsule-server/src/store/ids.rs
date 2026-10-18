@@ -159,6 +159,23 @@ secret_id! {
     AuthorizationCode
 }
 
+secret_id! {
+    /// The handle a client polls an OIDC device authorization with (issue #635).
+    ///
+    /// The server's own 128 random bits, not the provider's device code: the key to one pending
+    /// device ceremony, a bearer credential for its length, so it redacts itself.
+    OidcDeviceHandle
+}
+
+secret_id! {
+    /// The `device_code` an identity provider issues for a device authorization (RFC 8628 §3.2).
+    ///
+    /// Held server-side and redeemed at the token endpoint; never sent to the client. Whoever
+    /// holds it and the client id can collect the person's tokens once they approve, so it is
+    /// a credential and redacts itself like the rest.
+    DeviceCode
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -76,6 +76,7 @@
 //! | `capsule:enroll:channel:{id}` | hash | channel TTL |
 //! | `capsule:enroll:mbox:{id}:{a\|b}` | list | the channel's remaining TTL |
 //! | `capsule:oidc:authorization:{state}` | hash | authorization TTL |
+//! | `capsule:oidc:device:{handle}` | hash | device-authorization TTL |
 //! | `capsule:cohorts:{uid}` | hash (`cohort_hash` → `first last`) | **none** |
 //!
 //! Scripts derive a few of these keys from a record they have just read (`SREM` the previous
@@ -122,14 +123,15 @@ use uuid::Uuid;
 
 use super::auth::{AuthStateStore, CohortRecord, CohortStore, DEFAULT_SESSION_TTL, SessionRecord};
 use super::ceremony::{
-    CHALLENGE_TTL, ChallengeStore, ChannelStore, Direction, DrainOutcome, ENROLLMENT_CODE_TTL,
-    EnrollmentStore, OIDC_AUTHORIZATION_TTL, OidcAuthorizationStore, PendingAuthorization,
+    CHALLENGE_TTL, ChallengeStore, ChannelStore, DEVICE_SLOW_DOWN_STEP, DevicePollSlot, Direction,
+    DrainOutcome, ENROLLMENT_CODE_TTL, EnrollmentStore, OIDC_AUTHORIZATION_TTL, OIDC_DEVICE_TTL,
+    OidcAuthorizationStore, OidcDeviceStore, PendingAuthorization, PendingDeviceAuthorization,
     PendingEnrollment, RELAY_CHANNEL_TTL, RelayChannel, RelayOutcome, RelayPayload,
     RevokeAllChallenge,
 };
 use super::ids::{
-    AlbumId, AssetId, ChallengeToken, ChannelId, EnrollmentCode, OidcNonce, OidcState, OwnerId,
-    PkceVerifier, SessionId, UploadId, UserId,
+    AlbumId, AssetId, ChallengeToken, ChannelId, DeviceCode, EnrollmentCode, OidcDeviceHandle,
+    OidcNonce, OidcState, OwnerId, PkceVerifier, SessionId, UploadId, UserId,
 };
 use super::upload::{
     AcceptedChunk, BlobRole, FinalizeClaim, LIFETIME_CAP, UploadSessionRecord, UploadSessionStatus,
@@ -605,6 +607,7 @@ const ENROLLMENTS: &str = "enrollments";
 const CHANNELS: &str = "channels";
 const COHORTS: &str = "cohorts";
 const OIDC_AUTHORIZATIONS: &str = "oidc authorizations";
+const OIDC_DEVICES: &str = "oidc devices";
 
 /// The global eviction view.
 const PROGRESS_KEY: &str = "capsule:upload:progress";
@@ -669,6 +672,10 @@ fn mailbox_key(channel: &ChannelId, direction: Direction) -> String {
 
 fn oidc_authorization_key(state: &OidcState) -> String {
     format!("capsule:oidc:authorization:{}", state.as_str())
+}
+
+fn oidc_device_key(handle: &OidcDeviceHandle) -> String {
+    format!("capsule:oidc:device:{}", handle.as_str())
 }
 
 fn cohorts_key(user: &UserId) -> String {
@@ -1094,6 +1101,34 @@ script!(
 redis.call('DEL', KEYS[1])
 if #record == 0 or expired(record, ARGV[1]) then return nil end
 return record"
+);
+
+// KEYS: device record. ARGV: now (µs), now (ms), slow-down step (s). Claims the next poll slot
+// in one step, so two racing polls cannot both find it free. Every value written is either an
+// argument Rust formatted or a small whole number of seconds, so no large Lua number is ever
+// converted to a string. Returns nil (no live ceremony), {'too_soon', interval}, or {'due',
+// field, value, …}.
+script!(
+    CLAIM_DEVICE,
+    "if not live(KEYS[1], ARGV[1]) then return nil end
+local interval = tonumber(redis.call('HGET', KEYS[1], 'interval_secs'))
+local polled = tonumber(redis.call('HGET', KEYS[1], 'polled_at_ms'))
+redis.call('HSET', KEYS[1], 'polled_at_ms', ARGV[2])
+if tonumber(ARGV[2]) - polled < interval * 1000 then
+  interval = interval + tonumber(ARGV[3])
+  redis.call('HSET', KEYS[1], 'interval_secs', tostring(interval))
+  return {'too_soon', tostring(interval)}
+end
+local reply = {'due'}
+for _, item in ipairs(redis.call('HGETALL', KEYS[1])) do reply[#reply + 1] = item end
+return reply"
+);
+
+// KEYS: device record. ARGV: now (µs), slow-down step (s). Returns the raised interval, or nil.
+script!(
+    SLOW_DOWN_DEVICE,
+    "if not live(KEYS[1], ARGV[1]) then return nil end
+return redis.call('HINCRBY', KEYS[1], 'interval_secs', ARGV[2])"
 );
 
 // KEYS: record. ARGV: now.
@@ -2309,6 +2344,190 @@ impl OidcAuthorizationStore for ValkeyOidcAuthorizations {
     }
 }
 
+/// Valkey [`OidcDeviceStore`] (issue #635).
+///
+/// One hash per pending device ceremony under `capsule:oidc:device:{handle}`, written by
+/// `PUT_RECORD` and ended by `CONSUME_RECORD` as the authorization store's are. What the
+/// authorization store does not have is the poll schedule: `polled_at_ms` (whole milliseconds,
+/// stamped by the store) and `interval_secs` live in the same hash, and `CLAIM_DEVICE` reads and
+/// advances both in one script, so two polls racing one handle claim one slot.
+///
+/// No ceiling, for the reason [`ValkeyOidcAuthorizations`] has none: every record carries a
+/// `PEXPIRE` at the store's lifetime, and the begin is budgeted deployment-wide before this
+/// store is reached.
+#[derive(Debug)]
+pub struct ValkeyOidcDevices {
+    valkey: Valkey,
+    clock: Arc<dyn Clock>,
+    ttl: SignedDuration,
+}
+
+impl ValkeyOidcDevices {
+    /// A store on `valkey` and `clock` with the given ceremony lifetime.
+    pub fn new(valkey: Valkey, clock: Arc<dyn Clock>, ttl: SignedDuration) -> Self {
+        Self { valkey, clock, ttl }
+    }
+
+    /// A store with the [`OIDC_DEVICE_TTL`].
+    pub fn with_default_ttl(valkey: Valkey, clock: Arc<dyn Clock>) -> Self {
+        Self::new(valkey, clock, OIDC_DEVICE_TTL)
+    }
+}
+
+fn encode_device(
+    record: &PendingDeviceAuthorization,
+    polled_at: Timestamp,
+    expires_at: Timestamp,
+) -> Vec<String> {
+    let mut encoder = Encoder::default();
+    encoder
+        .field("device_code", record.device_code.as_str())
+        .field("binding_challenge", &record.binding_challenge)
+        .field("interval_secs", record.interval.as_secs())
+        .field("issued_at", record.issued_at)
+        .field("polled_at_ms", polled_at.as_millisecond())
+        .field("expires_at", micros(expires_at));
+    encoder.finish()
+}
+
+fn decode_device(flat: Vec<String>) -> Result<PendingDeviceAuthorization, StoreError> {
+    let fields = Fields::from_flat(OIDC_DEVICES, "PendingDeviceAuthorization", flat)?;
+    Ok(PendingDeviceAuthorization {
+        device_code: DeviceCode::new(fields.required("device_code")?),
+        binding_challenge: fields.required("binding_challenge")?.to_owned(),
+        interval: SignedDuration::from_secs(fields.number("interval_secs")?),
+        issued_at: fields.timestamp("issued_at")?,
+    })
+}
+
+/// What `CLAIM_DEVICE` answered, decoded.
+fn decode_claim(reply: Option<Vec<String>>) -> Result<DevicePollSlot, StoreError> {
+    let corrupt = |detail: String| StoreError::Corrupt {
+        store: OIDC_DEVICES,
+        record: "DevicePollSlot",
+        detail,
+    };
+    let Some(mut reply) = reply else {
+        return Ok(DevicePollSlot::Unknown);
+    };
+    if reply.is_empty() {
+        return Err(corrupt("the claim answered an empty reply".to_owned()));
+    }
+    let tag = reply.remove(0);
+    match tag.as_str() {
+        "due" => Ok(DevicePollSlot::Due(decode_device(reply)?)),
+        "too_soon" => {
+            let interval = reply
+                .first()
+                .and_then(|secs| secs.parse::<i64>().ok())
+                .ok_or_else(|| corrupt(format!("the raised interval is unreadable: {reply:?}")))?;
+            Ok(DevicePollSlot::TooSoon {
+                interval: SignedDuration::from_secs(interval),
+            })
+        }
+        other => Err(corrupt(format!(
+            "the claim answered an unknown tag {other:?}"
+        ))),
+    }
+}
+
+impl OidcDeviceStore for ValkeyOidcDevices {
+    fn ttl(&self) -> SignedDuration {
+        self.ttl
+    }
+
+    fn begin<'a>(
+        &'a self,
+        handle: &'a OidcDeviceHandle,
+        record: PendingDeviceAuthorization,
+    ) -> StoreFuture<'a, ()> {
+        Box::pin(async move {
+            let now = self.clock.now();
+            let mut args = vec![ttl_millis(self.ttl)];
+            args.extend(encode_device(&record, now, deadline(now, self.ttl)));
+            let _: i64 = self
+                .valkey
+                .eval(OIDC_DEVICES, &PUT_RECORD, &[oidc_device_key(handle)], &args)
+                .await?;
+            tracing::debug!("recorded a pending OIDC device authorization");
+            Ok(())
+        })
+    }
+
+    fn claim<'a>(&'a self, handle: &'a OidcDeviceHandle) -> StoreFuture<'a, DevicePollSlot> {
+        Box::pin(async move {
+            let now = self.clock.now();
+            let reply: Option<Vec<String>> = self
+                .valkey
+                .eval(
+                    OIDC_DEVICES,
+                    &CLAIM_DEVICE,
+                    &[oidc_device_key(handle)],
+                    &[
+                        micros(now).to_string(),
+                        now.as_millisecond().to_string(),
+                        DEVICE_SLOW_DOWN_STEP.as_secs().to_string(),
+                    ],
+                )
+                .await?;
+            let slot = decode_claim(reply)?;
+            tracing::debug!(
+                due = matches!(slot, DevicePollSlot::Due(_)),
+                known = !matches!(slot, DevicePollSlot::Unknown),
+                "claimed a poll on an OIDC device authorization"
+            );
+            Ok(slot)
+        })
+    }
+
+    fn slow_down<'a>(
+        &'a self,
+        handle: &'a OidcDeviceHandle,
+    ) -> StoreFuture<'a, Option<SignedDuration>> {
+        Box::pin(async move {
+            let raised: Option<i64> = self
+                .valkey
+                .eval(
+                    OIDC_DEVICES,
+                    &SLOW_DOWN_DEVICE,
+                    &[oidc_device_key(handle)],
+                    &[
+                        micros(self.clock.now()).to_string(),
+                        DEVICE_SLOW_DOWN_STEP.as_secs().to_string(),
+                    ],
+                )
+                .await?;
+            tracing::debug!(
+                hit = raised.is_some(),
+                "raised an OIDC device authorization's interval"
+            );
+            Ok(raised.map(SignedDuration::from_secs))
+        })
+    }
+
+    fn finish<'a>(
+        &'a self,
+        handle: &'a OidcDeviceHandle,
+    ) -> StoreFuture<'a, Option<PendingDeviceAuthorization>> {
+        Box::pin(async move {
+            let flat: Option<Vec<String>> = self
+                .valkey
+                .eval(
+                    OIDC_DEVICES,
+                    &CONSUME_RECORD,
+                    &[oidc_device_key(handle)],
+                    &[micros(self.clock.now()).to_string()],
+                )
+                .await?;
+            tracing::debug!(
+                hit = flat.is_some(),
+                "finished an OIDC device authorization"
+            );
+            flat.map(decode_device).transpose()
+        })
+    }
+}
+
 // ===========================================================================================
 // The bundle
 // ===========================================================================================
@@ -2325,6 +2544,7 @@ pub struct ValkeyStores {
     channels: Arc<ValkeyChannels>,
     cohorts: Arc<ValkeyCohorts>,
     oidc_authorizations: Arc<ValkeyOidcAuthorizations>,
+    oidc_devices: Arc<ValkeyOidcDevices>,
 }
 
 impl ValkeyStores {
@@ -2344,6 +2564,7 @@ impl ValkeyStores {
             ENROLLMENT_CODE_TTL,
             RELAY_CHANNEL_TTL,
             OIDC_AUTHORIZATION_TTL,
+            OIDC_DEVICE_TTL,
         ))
     }
 
@@ -2358,7 +2579,9 @@ impl ValkeyStores {
         ttl: SignedDuration,
     ) -> Result<Self, StoreError> {
         let valkey = Valkey::connect(url).await?;
-        Ok(Self::with_ttl(valkey, clock, ttl, ttl, ttl, ttl, ttl, ttl))
+        Ok(Self::with_ttl(
+            valkey, clock, ttl, ttl, ttl, ttl, ttl, ttl, ttl,
+        ))
     }
 
     #[allow(
@@ -2374,6 +2597,7 @@ impl ValkeyStores {
         enrollment: SignedDuration,
         channel: SignedDuration,
         oidc_authorization: SignedDuration,
+        oidc_device: SignedDuration,
     ) -> Self {
         Self {
             auth: Arc::new(ValkeyAuthState::new(
@@ -2403,9 +2627,10 @@ impl ValkeyStores {
             )),
             oidc_authorizations: Arc::new(ValkeyOidcAuthorizations::new(
                 valkey.clone(),
-                clock,
+                Arc::clone(&clock),
                 oidc_authorization,
             )),
+            oidc_devices: Arc::new(ValkeyOidcDevices::new(valkey.clone(), clock, oidc_device)),
             cohorts: Arc::new(ValkeyCohorts::new(valkey.clone())),
             valkey,
         }
@@ -2449,6 +2674,11 @@ impl ValkeyStores {
     /// The pending OIDC authorization store.
     pub fn oidc_authorizations(&self) -> Arc<ValkeyOidcAuthorizations> {
         Arc::clone(&self.oidc_authorizations)
+    }
+
+    /// The pending OIDC device authorization store.
+    pub fn oidc_devices(&self) -> Arc<ValkeyOidcDevices> {
+        Arc::clone(&self.oidc_devices)
     }
 }
 
@@ -2554,6 +2784,71 @@ mod tests {
             oidc_authorization_key(&OidcState::new("s")),
             "capsule:oidc:authorization:s"
         );
+    }
+
+    #[test]
+    fn a_pending_device_authorization_round_trips_through_its_hash_encoding() {
+        let record = PendingDeviceAuthorization {
+            device_code: DeviceCode::new("device-code"),
+            binding_challenge: "binding".to_owned(),
+            interval: SignedDuration::from_secs(10),
+            issued_at: deadline(Timestamp::UNIX_EPOCH, SignedDuration::from_nanos(1)),
+        };
+        let flat = encode_device(&record, Timestamp::UNIX_EPOCH, Timestamp::UNIX_EPOCH);
+        for field in ["expires_at", "polled_at_ms", "interval_secs"] {
+            assert!(flat.contains(&field.to_owned()), "{field} is encoded");
+        }
+        assert_eq!(decode_device(flat).expect("decodes"), record);
+        assert_eq!(
+            oidc_device_key(&OidcDeviceHandle::new("h")),
+            "capsule:oidc:device:h"
+        );
+        // The script reads the two schedule fields by these names.
+        for field in ["'interval_secs'", "'polled_at_ms'"] {
+            assert!(CLAIM_DEVICE.source.contains(field), "{field}");
+        }
+        assert!(SLOW_DOWN_DEVICE.source.contains("'interval_secs'"));
+    }
+
+    #[test]
+    fn a_claim_reply_decodes_to_its_slot() {
+        let record = PendingDeviceAuthorization {
+            device_code: DeviceCode::new("device-code"),
+            binding_challenge: "binding".to_owned(),
+            interval: SignedDuration::from_secs(5),
+            issued_at: Timestamp::UNIX_EPOCH,
+        };
+        let mut due = vec!["due".to_owned()];
+        due.extend(encode_device(
+            &record,
+            Timestamp::UNIX_EPOCH,
+            Timestamp::UNIX_EPOCH,
+        ));
+        assert_eq!(
+            decode_claim(Some(due)).expect("decodes"),
+            DevicePollSlot::Due(record)
+        );
+        assert_eq!(
+            decode_claim(Some(vec!["too_soon".to_owned(), "10".to_owned()])).expect("decodes"),
+            DevicePollSlot::TooSoon {
+                interval: SignedDuration::from_secs(10)
+            }
+        );
+        assert_eq!(
+            decode_claim(None).expect("decodes"),
+            DevicePollSlot::Unknown
+        );
+        for broken in [
+            vec![],
+            vec!["too_soon".to_owned()],
+            vec!["too_soon".to_owned(), "1.5".to_owned()],
+            vec!["later".to_owned()],
+        ] {
+            assert!(
+                matches!(decode_claim(Some(broken)), Err(StoreError::Corrupt { .. })),
+                "an unreadable claim is corrupt, not a slot"
+            );
+        }
     }
 
     #[test]

@@ -38,8 +38,8 @@ use capsule_server::store::upload::{
 use capsule_server::store::valkey::ValkeyStores;
 use capsule_server::store::{
     AssetId, AuthStateStore, ChallengeStore, ChannelStore, Clock, CohortStore, EnrollmentStore,
-    OidcAuthorizationStore, OwnerId, SessionId, SessionRecord, StoreError, StoreFuture, UploadId,
-    UserId,
+    OidcAuthorizationStore, OidcDeviceStore, OwnerId, SessionId, SessionRecord, StoreError,
+    StoreFuture, UploadId, UserId,
 };
 use jiff::{SignedDuration, Timestamp};
 use testcontainers::runners::AsyncRunner;
@@ -108,6 +108,7 @@ struct ValkeyHarness {
     channels: Arc<dyn ChannelStore>,
     cohorts: Arc<dyn CohortStore>,
     oidc_authorizations: Arc<dyn OidcAuthorizationStore>,
+    oidc_devices: Arc<dyn OidcDeviceStore>,
 }
 
 impl ValkeyHarness {
@@ -127,6 +128,7 @@ impl ValkeyHarness {
             channels: stores.channels(),
             cohorts: stores.cohorts(),
             oidc_authorizations: stores.oidc_authorizations(),
+            oidc_devices: stores.oidc_devices(),
             stores,
         }
     }
@@ -174,6 +176,10 @@ impl Harness for ValkeyHarness {
 
     fn oidc_authorizations(&self) -> &dyn OidcAuthorizationStore {
         &*self.oidc_authorizations
+    }
+
+    fn oidc_devices(&self) -> &dyn OidcDeviceStore {
+        &*self.oidc_devices
     }
 }
 
@@ -604,6 +610,54 @@ async fn oidc_callbacks_race_to_one_redemption() {
         }
     }
     assert_eq!((redeemed, refused), (1, 15), "exactly one callback redeems");
+}
+
+/// Sixteen polls race one due device handle; exactly one claims the slot (#635).
+///
+/// `two_polls_racing_one_handle_claim_one_slot` asserts it for two. Contested for real, the read
+/// of the schedule and its advance are one script, so one poll at most reaches the provider.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn device_polls_race_to_one_slot() {
+    use capsule_server::store::{
+        DeviceCode, DevicePollSlot, OidcDeviceHandle, PendingDeviceAuthorization,
+    };
+
+    let Some(server) = server().await else {
+        return;
+    };
+    let harness = ValkeyHarness::connect(&server.url).await;
+    let store = Arc::clone(&harness.oidc_devices);
+    let handle = OidcDeviceHandle::new("valkey-race-device");
+    store
+        .begin(
+            &handle,
+            PendingDeviceAuthorization {
+                device_code: DeviceCode::new("valkey-race-device-code"),
+                binding_challenge: "valkey-race-binding".to_owned(),
+                interval: SignedDuration::from_secs(5),
+                issued_at: harness.clock.now(),
+            },
+        )
+        .await
+        .expect("the ceremony begins");
+    harness.clock.advance(SignedDuration::from_secs(5));
+
+    let mut tasks = tokio::task::JoinSet::new();
+    for _ in 0..16 {
+        let store = Arc::clone(&store);
+        let handle = handle.clone();
+        tasks.spawn(async move { store.claim(&handle).await.expect("answers") });
+    }
+    let mut due = 0;
+    let mut too_soon = 0;
+    while let Some(slot) = tasks.join_next().await {
+        match slot.expect("a poll task completes") {
+            DevicePollSlot::Due(_) => due += 1,
+            DevicePollSlot::TooSoon { .. } => too_soon += 1,
+            DevicePollSlot::Unknown => panic!("the ceremony is live"),
+        }
+    }
+    assert_eq!((due, too_soon), (1, 15), "exactly one poll claims the slot");
 }
 
 /// A counter hit is charged and decided on the server: many tasks, one budget.

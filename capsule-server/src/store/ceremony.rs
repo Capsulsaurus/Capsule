@@ -40,8 +40,8 @@
 use jiff::{SignedDuration, Timestamp};
 
 use super::{
-    ChallengeToken, ChannelId, EnrollmentCode, OidcNonce, OidcState, PkceVerifier, StoreFuture,
-    UserId,
+    ChallengeToken, ChannelId, DeviceCode, EnrollmentCode, OidcDeviceHandle, OidcNonce, OidcState,
+    PkceVerifier, StoreFuture, UserId,
 };
 
 // -------------------------------------------------------------------------------------------
@@ -344,6 +344,115 @@ pub trait OidcAuthorizationStore: std::fmt::Debug + Send + Sync {
     /// racing the same `state` resolve here: one gets the record, the other gets `None`.
     fn consume<'a>(&'a self, state: &'a OidcState)
     -> StoreFuture<'a, Option<PendingAuthorization>>;
+}
+
+// -------------------------------------------------------------------------------------------
+// OIDC device authorization (RFC 8628, issue #635)
+// -------------------------------------------------------------------------------------------
+
+/// What the server holds while a person approves a device authorization on another device.
+///
+/// Keyed by the [`OidcDeviceHandle`] the client polls with. Unlike [`PendingAuthorization`] this
+/// is read many times — once per poll — so it also carries the interval the server enforces.
+/// *When* it was last polled is the store's, not the record's: the store stamps it from its own
+/// clock at the begin and at every claim, so no caller can hand it a schedule.
+///
+/// No `expires_at` field, for the reason [`RevokeAllChallenge`] has none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingDeviceAuthorization {
+    /// The provider's device code, redeemed at its token endpoint. Never sent to the client.
+    pub device_code: DeviceCode,
+    /// The S256 hash of the secret the initiating client holds, as on
+    /// [`PendingAuthorization::binding_challenge`]: every poll must present the secret.
+    pub binding_challenge: String,
+    /// How long the client must wait between polls. Starts at the provider's interval and is
+    /// raised by [`DEVICE_SLOW_DOWN_STEP`] on every `slow_down`, whoever answered it.
+    pub interval: SignedDuration,
+    /// When the ceremony began. The route renders the published expiry from it.
+    pub issued_at: Timestamp,
+}
+
+/// How long a begun device authorization waits for its person.
+///
+/// Fifteen minutes: the device flow asks a person to pick up another device, open an address and
+/// type a code before they sign in, which takes longer than following a redirect. Providers issue
+/// device codes for five (dex) to thirty minutes; the route publishes whichever of the provider's
+/// `expires_in` and this is sooner, so this is a ceiling on how long the server holds one.
+pub const OIDC_DEVICE_TTL: SignedDuration = SignedDuration::from_mins(15);
+
+/// How much a `slow_down` raises a ceremony's interval by (RFC 8628 §3.5: "increased by 5
+/// seconds for this and all subsequent requests").
+///
+/// The client adds the same amount on every `slow_down` it is answered, so it and the server
+/// stay in step without the new interval ever being sent.
+pub const DEVICE_SLOW_DOWN_STEP: SignedDuration = SignedDuration::from_secs(5);
+
+/// The shortest interval a device ceremony is ever polled at.
+///
+/// Five seconds, RFC 8628 §3.2's default when the provider names none. A provider naming less is
+/// raised to it: a client polling slower than the provider allows costs nothing, and the server
+/// is the one relaying every poll.
+pub const DEVICE_POLL_FLOOR: SignedDuration = SignedDuration::from_secs(5);
+
+/// What claiming a poll slot found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DevicePollSlot {
+    /// At least one interval has passed since the last poll (or the begin): the provider may be
+    /// asked. This claim is now the last poll.
+    Due(PendingDeviceAuthorization),
+    /// The client polled sooner than one interval after the last poll (or the begin). The
+    /// provider must not be asked; the interval was raised by [`DEVICE_SLOW_DOWN_STEP`], and
+    /// this claim is now the last poll, so a client that keeps polling early keeps being slowed.
+    TooSoon {
+        /// The raised interval.
+        interval: SignedDuration,
+    },
+    /// No live ceremony has this handle: unknown, finished, or expired.
+    Unknown,
+}
+
+/// Pending OIDC device authorizations, keyed by handle (issue #635).
+///
+/// Beside [`OidcAuthorizationStore`] rather than a second record type in it: a pending device
+/// authorization is polled, so it needs a non-destructive read with a schedule, which the
+/// authorization store exists to not have.
+pub trait OidcDeviceStore: std::fmt::Debug + Send + Sync {
+    /// How long a begun device authorization lives. A property of the ceremony.
+    fn ttl(&self) -> SignedDuration;
+
+    /// Record a freshly begun device authorization under its handle. The begin counts as the
+    /// last poll, so the first claim is due one interval after it (RFC 8628 §3.4).
+    fn begin<'a>(
+        &'a self,
+        handle: &'a OidcDeviceHandle,
+        record: PendingDeviceAuthorization,
+    ) -> StoreFuture<'a, ()>;
+
+    /// Claim the next poll for `handle`, atomically.
+    ///
+    /// One operation, on purpose, for the reason [`ChannelStore::enqueue`] is one: a separate
+    /// read of `polled_at` and write of the new one would let two polls racing one handle both
+    /// see the slot free and both reach the provider. Here exactly one claims a slot; the other
+    /// is [`DevicePollSlot::TooSoon`].
+    fn claim<'a>(&'a self, handle: &'a OidcDeviceHandle) -> StoreFuture<'a, DevicePollSlot>;
+
+    /// Raise `handle`'s interval by [`DEVICE_SLOW_DOWN_STEP`] because the provider said
+    /// `slow_down`, returning the raised interval, or `None` if no live ceremony has the handle.
+    fn slow_down<'a>(
+        &'a self,
+        handle: &'a OidcDeviceHandle,
+    ) -> StoreFuture<'a, Option<SignedDuration>>;
+
+    /// End the ceremony and return what it held, or `None` if it was unknown, already finished,
+    /// or expired.
+    ///
+    /// Destructive, like [`OidcAuthorizationStore::consume`]: the route calls it on every
+    /// terminal answer, and on success *before* it opens a session, so two polls collecting one
+    /// approval resolve here to one session.
+    fn finish<'a>(
+        &'a self,
+        handle: &'a OidcDeviceHandle,
+    ) -> StoreFuture<'a, Option<PendingDeviceAuthorization>>;
 }
 
 // -------------------------------------------------------------------------------------------
