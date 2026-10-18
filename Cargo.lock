@@ -1130,6 +1130,7 @@ dependencies = [
  "capsule-core",
  "capsule-sdk",
  "capsule-server",
+ "capsule-wasm",
  "jiff",
  "kynos",
  "sea-orm",
