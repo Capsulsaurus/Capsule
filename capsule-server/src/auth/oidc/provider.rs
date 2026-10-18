@@ -123,7 +123,9 @@ pub enum ProviderError {
     #[error("the ID token was refused: {0}")]
     TokenRejected(#[from] ClaimRejection),
     /// The provider does not offer the device authorization grant to this client: its discovery
-    /// document names no `device_authorization_endpoint`, or that endpoint refused the request.
+    /// document names no `device_authorization_endpoint`, or that endpoint answered
+    /// `unauthorized_client` or `unsupported_grant_type`. Any other refusal is
+    /// [`ProviderError::Unavailable`].
     #[error("the identity provider does not offer the device grant: {detail}")]
     DeviceUnsupported {
         /// Why, for the log line.
@@ -395,6 +397,15 @@ impl TokenRefusal {
             None => bounded(&self.error),
         }
     }
+
+    /// Whether the `error` member says the provider will not run the requested grant for this
+    /// client at all (RFC 6749 §5.2): `unauthorized_client`, or `unsupported_grant_type`.
+    fn refuses_the_grant(&self) -> bool {
+        matches!(
+            self.error.as_str(),
+            "unauthorized_client" | "unsupported_grant_type"
+        )
+    }
 }
 
 /// What the token endpoint answered one request with.
@@ -613,12 +624,16 @@ impl HttpIdentityProvider {
             .await?;
         let status = response.status();
         if status.is_client_error() {
-            // RFC 8628 §3.2 answers a refusal in RFC 6749 §5.2's shape: `unauthorized_client`
-            // for a client the provider will not run the grant for, which is configuration.
+            // RFC 8628 §3.2 answers a refusal in RFC 6749 §5.2's shape. Only the members that
+            // say the provider will not run this grant for this client are configuration; any
+            // other 4xx (a `429`, an `invalid_request`, a body with no member) is the provider
+            // failing this one request, and an outage rather than a standing refusal.
             let refusal: TokenRefusal = response.json().await.unwrap_or_default();
-            return Err(ProviderError::DeviceUnsupported {
-                detail: refusal.describe(status, "device authorization endpoint"),
-            });
+            let detail = refusal.describe(status, "device authorization endpoint");
+            if refusal.refuses_the_grant() {
+                return Err(ProviderError::DeviceUnsupported { detail });
+            }
+            return Err(ProviderError::Unavailable { detail });
         }
         if !status.is_success() {
             return Err(ProviderError::Unavailable {

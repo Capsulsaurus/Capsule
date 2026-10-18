@@ -129,8 +129,9 @@ struct State {
     issuer: String,
     /// Whether discovery names a device endpoint and the endpoint answers.
     device_offered: AtomicBool,
-    /// Whether the device endpoint refuses this client (`unauthorized_client`).
-    device_refused: AtomicBool,
+    /// The refusal the device endpoint answers with instead of a code: a status and the
+    /// `error` member (empty for a body without one), or none.
+    device_refusal: Mutex<Option<(u16, &'static str)>>,
     /// The `interval` the device endpoint publishes, or none.
     device_interval: Mutex<Option<u64>>,
     /// Every device code issued, by code.
@@ -239,7 +240,7 @@ impl MockIdp {
         let state = Arc::new(State {
             issuer: format!("{scheme}://{addr}/idp"),
             device_offered: AtomicBool::new(true),
-            device_refused: AtomicBool::new(false),
+            device_refusal: Mutex::new(None),
             device_interval: Mutex::new(Some(5)),
             devices: Mutex::new(BTreeMap::new()),
             device_hits: AtomicUsize::new(0),
@@ -339,9 +340,10 @@ impl MockIdp {
         self.state.device_offered.store(offered, Ordering::SeqCst);
     }
 
-    /// Whether the device endpoint refuses this client.
-    pub(crate) fn set_device_refused(&self, refused: bool) {
-        self.state.device_refused.store(refused, Ordering::SeqCst);
+    /// Make the device endpoint answer `status` with `error` as its `error` member (no member
+    /// when `error` is empty), or, with none, issue codes again.
+    pub(crate) fn set_device_refusal(&self, refusal: Option<(u16, &'static str)>) {
+        *lock(&self.state.device_refusal) = refusal;
     }
 
     /// The `interval` the device endpoint publishes; `None` omits the member.
@@ -719,13 +721,13 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, state: Arc<Stat
         }
         ("POST", "/idp/device/code") if state.device_offered.load(Ordering::SeqCst) => {
             state.device_hits.fetch_add(1, Ordering::SeqCst);
-            let (status, payload) = if state.device_refused.load(Ordering::SeqCst) {
-                (
-                    400,
-                    serde_json::json!({ "error": "unauthorized_client" }).to_string(),
-                )
-            } else {
-                device_code_response(&state, &form_of(&body))
+            let refusal = *lock(&state.device_refusal);
+            let (status, payload) = match refusal {
+                Some((status, "")) => (status, "{}".to_owned()),
+                Some((status, error)) => {
+                    (status, serde_json::json!({ "error": error }).to_string())
+                }
+                None => device_code_response(&state, &form_of(&body)),
             };
             (status, "application/json", payload)
         }

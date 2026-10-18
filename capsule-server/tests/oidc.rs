@@ -510,14 +510,38 @@ async fn a_provider_without_the_grant_is_a_typed_refusal_that_costs_no_request()
 
     // An endpoint that refuses this client is the same refusal: configuration, not an outage.
     let idp = MockIdp::start().await;
-    idp.set_device_refused(true);
     let rp = relying_party(&idp, wall_clock());
-    let error = rp.begin_device().await.expect_err("refused");
-    match error {
-        ProviderError::DeviceUnsupported { detail } => {
-            assert!(detail.contains("unauthorized_client"), "{detail}");
+    for error_member in ["unauthorized_client", "unsupported_grant_type"] {
+        idp.set_device_refusal(Some((400, error_member)));
+        match rp.begin_device().await.expect_err("refused") {
+            ProviderError::DeviceUnsupported { detail } => {
+                assert!(detail.contains(error_member), "{detail}");
+            }
+            other => panic!("expected {error_member} to be unsupported, got {other:?}"),
         }
-        other => panic!("expected the grant to be unsupported, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn any_other_device_endpoint_refusal_is_an_outage_not_an_unsupported_grant() {
+    let idp = MockIdp::start().await;
+    let rp = relying_party(&idp, wall_clock());
+    // A throttle, a malformed request, a bad client credential, or a 4xx with no `error` member
+    // is the provider failing this one request: none says it never runs the grant for us.
+    for (status, error_member) in [
+        (429, ""),
+        (429, "slow_down"),
+        (400, "invalid_request"),
+        (401, "invalid_client"),
+        (400, "invalid_scope"),
+        (403, ""),
+    ] {
+        idp.set_device_refusal(Some((status, error_member)));
+        let error = rp.begin_device().await.expect_err("refused");
+        assert!(
+            matches!(error, ProviderError::Unavailable { .. }),
+            "{status} {error_member:?} should be an outage, got {error:?}"
+        );
     }
 }
 
