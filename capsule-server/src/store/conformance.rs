@@ -1141,7 +1141,7 @@ pub async fn an_oidc_authorization_expires_with_its_store(h: &dyn Harness) {
 ///
 /// The other side of [`an_oidc_authorization_expires_with_its_store`]'s boundary: an adapter
 /// that expired a record early would fail a person who signed in at the provider inside the
-/// window. A microsecond rather than a [`tick`] because that is the Valkey adapter's resolution
+/// window. A microsecond rather than a `tick()` because that is the Valkey adapter's resolution
 /// (its module docs): a deadline is kept as the microsecond it falls in, so a nanosecond short of
 /// a deadline that is not microsecond-aligned is already that microsecond, and the answer would
 /// depend on where earlier cases left the shared clock.
