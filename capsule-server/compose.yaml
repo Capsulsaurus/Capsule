@@ -3,11 +3,12 @@
 # Bring them up with `mise run serve-deps` and the server up with `mise run serve`. The two are
 # deliberately separate tasks: a task that silently starts containers is a task that leaks them.
 #
-# **Valkey is read (#403); Postgres is not yet (#402).** `capsule-server serve` connects to
-# `VALKEY_URL` and then refuses naming `DATABASE_URL` until the Postgres adapters land, so the
-# way to run a server is still `mise run serve-memory`. This file exists now because the compose stack went
-# with the Salvo tree in `S-C59` and re-deriving it later is re-doing work — and because
-# dependabot needs a live file to track the images against.
+# **Both services are read.** A durable `capsule-server serve` opens the Postgres pool from
+# `DATABASE_URL` (#402), refusing a schema it was not built for until `capsule-server-migration up`
+# has run, and then proves `VALKEY_URL` answers (#403). With both services up, the migration
+# applied and `capsule-server/.env.example` exported, `mise run serve` runs a durable server;
+# `mise run serve-memory` needs neither service. The file is also what dependabot tracks the
+# images against.
 #
 # There is deliberately **no object store**. Blobs are written to the filesystem `BLOB_ROOT`,
 # which is the blob backend and not a cache in front of one (design/filesystem/server.md); a
