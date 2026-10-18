@@ -38,8 +38,9 @@ use capsule_server::album::{
 use capsule_server::app::Modules;
 use capsule_server::attestation::{AttestationContext, InMemoryReceipts, LocalAttestationKey};
 use capsule_server::auth::oidc::{
-    AuthorizationRequest, FederatedAccounts, FederatedLink, IdentityProvider, OidcCollaborators,
-    OidcContext, ProviderError, ProviderFuture, Redemption, VerifiedIdentity,
+    AuthorizationRequest, DeviceAuthorization, DevicePoll, FederatedAccounts, FederatedLink,
+    IdentityProvider, OidcCollaborators, OidcContext, ProviderError, ProviderFuture, Redemption,
+    VerifiedIdentity,
 };
 use capsule_server::auth::{
     AccountDirectory, AccountProfiles, ActivateOutcome, AuthCollaborators, AuthContext,
@@ -271,6 +272,48 @@ pub(crate) struct SwitchableIdentityProvider {
     requests: Mutex<Vec<RecordedAuthorization>>,
     /// How many codes the server asked this double to redeem, whatever it answered.
     redemptions: AtomicUsize,
+    /// Whether the provider offers the device grant (issue #635).
+    device_offered: AtomicBool,
+    /// What every device poll answers until the test says otherwise.
+    device_answer: Mutex<DeviceAnswer>,
+    /// The `expires_in` every device authorization is issued with.
+    device_expires_in: Mutex<jiff::SignedDuration>,
+    /// Every device authorization issued, numbered.
+    device_begins: AtomicUsize,
+    /// Every device code the server polled with, in order.
+    device_polls: Mutex<Vec<String>>,
+}
+
+/// What the double answers a device poll with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeviceAnswer {
+    /// `authorization_pending`.
+    Pending,
+    /// `slow_down`.
+    SlowDown,
+    /// `access_denied`.
+    Denied,
+    /// `expired_token`.
+    Expired,
+    /// Approved: the double's identity.
+    Approved,
+    /// A refusal RFC 8628 does not name.
+    ExchangeRefused,
+    /// A token the relying party refuses.
+    TokenRejected,
+}
+
+/// The user code every device authorization the double issues carries.
+pub(crate) const DEVICE_USER_CODE: &str = "WDJB-MJHT";
+
+/// A device-begin body, bound to the suite's client.
+pub(crate) fn oidc_device_body() -> serde_json::Value {
+    serde_json::json!({ "binding_challenge": oidc_binding_challenge() })
+}
+
+/// A device-poll body for `handle`, presenting the suite client's binding.
+pub(crate) fn oidc_device_poll_body(handle: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({ "handle": handle, "binding_verifier": OIDC_BINDING })
 }
 
 /// One authorization request as the double saw it.
@@ -296,7 +339,41 @@ impl SwitchableIdentityProvider {
             token_rejected: AtomicBool::new(false),
             requests: Mutex::new(Vec::new()),
             redemptions: AtomicUsize::new(0),
+            device_offered: AtomicBool::new(true),
+            device_answer: Mutex::new(DeviceAnswer::Pending),
+            device_expires_in: Mutex::new(jiff::SignedDuration::from_mins(10)),
+            device_begins: AtomicUsize::new(0),
+            device_polls: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Whether the provider offers the device grant.
+    pub(crate) fn set_device_offered(&self, offered: bool) {
+        self.device_offered.store(offered, Ordering::SeqCst);
+    }
+
+    /// What every device poll answers from now on.
+    pub(crate) fn set_device_answer(&self, answer: DeviceAnswer) {
+        *self
+            .device_answer
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = answer;
+    }
+
+    /// The `expires_in` every device authorization is issued with from now on.
+    pub(crate) fn set_device_expires_in(&self, expires_in: jiff::SignedDuration) {
+        *self
+            .device_expires_in
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = expires_in;
+    }
+
+    /// Every device code the server has polled with so far.
+    pub(crate) fn device_polls(&self) -> Vec<String> {
+        self.device_polls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// How many codes the server has asked to redeem so far.
@@ -419,6 +496,80 @@ impl IdentityProvider for SwitchableIdentityProvider {
                 .clone())
         })
     }
+
+    fn begin_device(&self) -> ProviderFuture<'_, DeviceAuthorization> {
+        Box::pin(async move {
+            if !self.configured.load(Ordering::SeqCst) {
+                return Err(ProviderError::NotConfigured);
+            }
+            if !self.device_offered.load(Ordering::SeqCst) {
+                return Err(ProviderError::DeviceUnsupported {
+                    detail: REFUSAL.to_owned(),
+                });
+            }
+            if self.unavailable.load(Ordering::SeqCst) {
+                return Err(ProviderError::Unavailable {
+                    detail: REFUSAL.to_owned(),
+                });
+            }
+            let n = self.device_begins.fetch_add(1, Ordering::SeqCst);
+            Ok(DeviceAuthorization {
+                device_code: capsule_server::store::DeviceCode::new(format!("device-code-{n}")),
+                user_code: DEVICE_USER_CODE.to_owned(),
+                verification_uri: "https://idp.test/device".to_owned(),
+                verification_uri_complete: Some(format!(
+                    "https://idp.test/device?user_code={DEVICE_USER_CODE}"
+                )),
+                expires_in: *self
+                    .device_expires_in
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner),
+                interval: capsule_server::store::DEVICE_POLL_FLOOR,
+            })
+        })
+    }
+
+    fn poll_device<'a>(
+        &'a self,
+        device_code: &'a capsule_server::store::DeviceCode,
+    ) -> ProviderFuture<'a, DevicePoll> {
+        Box::pin(async move {
+            self.device_polls
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(device_code.as_str().to_owned());
+            if !self.configured.load(Ordering::SeqCst) {
+                return Err(ProviderError::NotConfigured);
+            }
+            if self.unavailable.load(Ordering::SeqCst) {
+                return Err(ProviderError::Unavailable {
+                    detail: REFUSAL.to_owned(),
+                });
+            }
+            let answer = *self
+                .device_answer
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            match answer {
+                DeviceAnswer::Pending => Ok(DevicePoll::Pending),
+                DeviceAnswer::SlowDown => Ok(DevicePoll::SlowDown),
+                DeviceAnswer::Denied => Ok(DevicePoll::Denied),
+                DeviceAnswer::Expired => Ok(DevicePoll::Expired),
+                DeviceAnswer::Approved => Ok(DevicePoll::Verified(
+                    self.identity
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .clone(),
+                )),
+                DeviceAnswer::ExchangeRefused => Err(ProviderError::ExchangeRefused {
+                    detail: "invalid_grant".to_owned(),
+                }),
+                DeviceAnswer::TokenRejected => Err(ProviderError::TokenRejected(
+                    capsule_server::auth::oidc::ClaimRejection::Nonce,
+                )),
+            }
+        })
+    }
 }
 
 /// The OIDC ceremony store, with two switches: unreachable, and full.
@@ -487,6 +638,96 @@ impl OidcAuthorizationStore for SwitchableOidcAuthorizations {
         Box::pin(async move {
             self.refuse()?;
             self.inner.consume(state).await
+        })
+    }
+}
+
+/// The OIDC device store (issue #635), with the same two switches: unreachable, and full.
+#[derive(Debug)]
+pub(crate) struct SwitchableOidcDevices {
+    inner: capsule_server::store::memory::InMemoryOidcDevices,
+    unavailable: AtomicBool,
+    full: AtomicBool,
+}
+
+impl SwitchableOidcDevices {
+    pub(crate) fn new(clock: Arc<ManualClock>) -> Self {
+        Self {
+            inner: capsule_server::store::memory::InMemoryOidcDevices::with_default_ttl(clock),
+            unavailable: AtomicBool::new(false),
+            full: AtomicBool::new(false),
+        }
+    }
+
+    pub(crate) fn set_unavailable(&self, unavailable: bool) {
+        self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    /// Make every `begin` answer as a store at its ceiling, or stop.
+    pub(crate) fn set_full(&self, full: bool) {
+        self.full.store(full, Ordering::SeqCst);
+    }
+
+    fn refuse(&self) -> Result<(), StoreError> {
+        if self.unavailable.load(Ordering::SeqCst) {
+            return Err(StoreError::Unavailable {
+                store: "oidc devices",
+                detail: REFUSAL.to_owned(),
+            });
+        }
+        Ok(())
+    }
+}
+
+impl capsule_server::store::OidcDeviceStore for SwitchableOidcDevices {
+    fn ttl(&self) -> SignedDuration {
+        self.inner.ttl()
+    }
+
+    fn begin<'a>(
+        &'a self,
+        handle: &'a capsule_server::store::OidcDeviceHandle,
+        record: capsule_server::store::PendingDeviceAuthorization,
+    ) -> StoreFuture<'a, ()> {
+        Box::pin(async move {
+            self.refuse()?;
+            if self.full.load(Ordering::SeqCst) {
+                return Err(StoreError::Rejected {
+                    store: "oidc devices",
+                    detail: REFUSAL.to_owned(),
+                });
+            }
+            self.inner.begin(handle, record).await
+        })
+    }
+
+    fn claim<'a>(
+        &'a self,
+        handle: &'a capsule_server::store::OidcDeviceHandle,
+    ) -> StoreFuture<'a, capsule_server::store::DevicePollSlot> {
+        Box::pin(async move {
+            self.refuse()?;
+            self.inner.claim(handle).await
+        })
+    }
+
+    fn slow_down<'a>(
+        &'a self,
+        handle: &'a capsule_server::store::OidcDeviceHandle,
+    ) -> StoreFuture<'a, Option<SignedDuration>> {
+        Box::pin(async move {
+            self.refuse()?;
+            self.inner.slow_down(handle).await
+        })
+    }
+
+    fn finish<'a>(
+        &'a self,
+        handle: &'a capsule_server::store::OidcDeviceHandle,
+    ) -> StoreFuture<'a, Option<capsule_server::store::PendingDeviceAuthorization>> {
+        Box::pin(async move {
+            self.refuse()?;
+            self.inner.finish(handle).await
         })
     }
 }
@@ -2989,6 +3230,8 @@ pub(crate) struct Fixture {
     pub(crate) idp: Arc<SwitchableIdentityProvider>,
     /// The pending OIDC ceremonies.
     pub(crate) oidc_authorizations: Arc<SwitchableOidcAuthorizations>,
+    /// The pending OIDC device authorizations (issue #635).
+    pub(crate) oidc_devices: Arc<SwitchableOidcDevices>,
 }
 
 impl Fixture {
@@ -3097,6 +3340,7 @@ impl Fixture {
         let codes = Arc::new(TotpCodes::new("Capsule"));
         let idp = Arc::new(SwitchableIdentityProvider::new());
         let oidc_authorizations = Arc::new(SwitchableOidcAuthorizations::new(clock.clone()));
+        let oidc_devices = Arc::new(SwitchableOidcDevices::new(clock.clone()));
         let provider: Arc<dyn IdentityProvider> = provider.unwrap_or_else(|| idp.clone());
 
         // One index behind both modules, which is what makes "upload it, then read it back off
@@ -3181,6 +3425,7 @@ impl Fixture {
             oidc: OidcContext::new(OidcCollaborators {
                 provider,
                 authorizations: oidc_authorizations.clone(),
+                devices: oidc_devices.clone(),
                 accounts: accounts.clone(),
                 clock: clock.clone(),
             }),
@@ -3225,6 +3470,7 @@ impl Fixture {
             codes,
             idp,
             oidc_authorizations,
+            oidc_devices,
         }
     }
 

@@ -40,13 +40,21 @@
 //! [`open_in_browser`] reaches the host through the private `Opener` port (environment and
 //! process spawn), so its graphical-session check and each platform's opener are tested with a
 //! scripted host; only the real `std::process::Command` spawn is left untested.
+//!
+//! # Without a browser: `--device`
+//!
+//! `capsule auth login --oidc --device` is the RFC 8628 device authorization grant over the
+//! server's two device legs, for a terminal that cannot receive a redirect — a headless host, an
+//! SSH session. [`login_device`] prints the verification address and the user code, never opens
+//! a browser and binds no port, and polls at the provider's interval until the person approves
+//! on any other device. Its [`DeviceCeremony`] seam is tested the same way, on a paused clock.
 
 use std::future::Future;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
-use capsule_sdk::auth::{AuthClient, OidcAuthorization};
+use capsule_sdk::auth::{AuthClient, OidcAuthorization, OidcDeviceAuthorization, OidcDevicePoll};
 use futures::StreamExt as _;
 use futures::stream::FuturesUnordered;
 use secrecy::ExposeSecret as _;
@@ -98,6 +106,12 @@ pub enum OidcLoginError {
     #[error("no sign-in arrived within {} seconds", .waited.as_secs())]
     TimedOut {
         /// How long the listener waited.
+        waited: Duration,
+    },
+    /// The person did not approve a device sign-in before its code expired.
+    #[error("no sign-in was approved within {} seconds", .waited.as_secs())]
+    DeviceTimedOut {
+        /// How long the CLI polled for.
         waited: Duration,
     },
     /// The provider's redirect carried an `error` instead of a `code` (RFC 6749 §4.1.2.1).
@@ -166,6 +180,121 @@ impl Ceremony for SdkCeremony<'_> {
             .complete_oidc_login(pending, state, code)
             .await?;
         remote::settle_login(self.store, outcome).await
+    }
+}
+
+// ===========================================================================================
+// Signing in from another device (RFC 8628, issue #635)
+// ===========================================================================================
+
+/// The longest the CLI polls a device sign-in for.
+///
+/// Fifteen minutes, the server's own ceiling on a device ceremony; the ceremony's `expires_by`
+/// caps it further, and is usually what decides.
+pub const DEVICE_TIMEOUT: Duration = Duration::from_mins(15);
+
+/// What one device poll came to, from the terminal's side.
+pub enum DeviceStep {
+    /// Not approved yet: wait the interval and poll again.
+    Pending,
+    /// Polled too soon, or the provider asked to slow down: raise the interval and poll again.
+    SlowDown,
+    /// Finished, and settled exactly as a password sign-in is.
+    Settled(LoginStep),
+}
+
+/// The two server legs of a device sign-in.
+///
+/// [`SdkCeremony`] is the one the CLI runs; the seam exists so [`login_device`]'s polling — the
+/// interval, the slow-downs, the deadline — is tested without a server.
+pub trait DeviceCeremony {
+    /// Begin a device sign-in.
+    fn begin_device(&self) -> impl Future<Output = Result<OidcDeviceAuthorization, RemoteError>>;
+
+    /// Poll it once, persisting a session if one opened.
+    fn poll_device(
+        &self,
+        pending: &OidcDeviceAuthorization,
+    ) -> impl Future<Output = Result<DeviceStep, RemoteError>>;
+}
+
+impl DeviceCeremony for SdkCeremony<'_> {
+    async fn begin_device(&self) -> Result<OidcDeviceAuthorization, RemoteError> {
+        Ok(self.client.begin_oidc_device_login().await?)
+    }
+
+    async fn poll_device(
+        &self,
+        pending: &OidcDeviceAuthorization,
+    ) -> Result<DeviceStep, RemoteError> {
+        match self.client.poll_oidc_device_login(pending).await? {
+            OidcDevicePoll::Pending => Ok(DeviceStep::Pending),
+            OidcDevicePoll::SlowDown => Ok(DeviceStep::SlowDown),
+            OidcDevicePoll::Complete(outcome) => Ok(DeviceStep::Settled(
+                remote::settle_login(self.store, outcome).await?,
+            )),
+        }
+    }
+}
+
+/// Sign in from another device: begin, show the address and the code, poll until it settles.
+///
+/// `show` is handed the begun ceremony and how long the CLI will wait, before the first poll;
+/// the CLI prints the address and the code there, and never opens a browser. The CLI waits one
+/// interval before **every** poll, the first included (RFC 8628 §3.4), and raises the interval by
+/// five seconds on every slow-down (§3.5), which keeps it in step with the server without being
+/// told the new number. It stops at the ceremony's `expires_by` or `ceiling`, whichever is
+/// sooner, and before a poll that would land past it.
+///
+/// # Errors
+///
+/// [`OidcLoginError::Remote`] for a refused or failed server leg — the provider's denial and the
+/// ceremony's expiry among them — and [`OidcLoginError::DeviceTimedOut`] when it was never
+/// approved in time.
+#[instrument(skip_all)]
+pub async fn login_device<C: DeviceCeremony>(
+    ceremony: &C,
+    show: impl FnOnce(&OidcDeviceAuthorization, Duration),
+    ceiling: Duration,
+) -> Result<LoginStep, OidcLoginError> {
+    let mut pending = ceremony.begin_device().await?;
+    tracing::info!(
+        interval_secs = pending.interval_secs,
+        "began a device sign-in from the terminal"
+    );
+    let now = u64::try_from(jiff::Timestamp::now().as_second()).unwrap_or(0);
+    let bound = wait_bound(pending.expires_by, now, ceiling);
+    show(&pending, bound);
+
+    let mut waited = Duration::ZERO;
+    loop {
+        // Never below a second, whatever a server says: a zero interval is a busy loop.
+        let interval = Duration::from_secs(pending.interval_secs.max(1));
+        if waited + interval > bound {
+            tracing::warn!(
+                waited_secs = waited.as_secs(),
+                "no device sign-in was approved in time"
+            );
+            return Err(OidcLoginError::DeviceTimedOut { waited });
+        }
+        tokio::time::sleep(interval).await;
+        waited += interval;
+        match ceremony.poll_device(&pending).await? {
+            DeviceStep::Pending => {
+                tracing::debug!("the device sign-in is not approved yet");
+            }
+            DeviceStep::SlowDown => {
+                pending.slow_down();
+                tracing::info!(
+                    interval_secs = pending.interval_secs,
+                    "the server asked the device sign-in to slow down"
+                );
+            }
+            DeviceStep::Settled(step) => {
+                tracing::info!("the device sign-in was approved");
+                return Ok(step);
+            }
+        }
     }
 }
 
@@ -1285,5 +1414,140 @@ mod tests {
             "{error:?}"
         );
         assert_eq!(shown, Some(Duration::ZERO));
+    }
+
+    // ---- the device sign-in (issue #635) -----------------------------------------------------
+
+    /// One scripted device answer: `None` is the next poll's server error.
+    type DeviceAnswer = Option<fn() -> DeviceStep>;
+
+    /// A device ceremony the test scripts: it answers each poll from a queue and records when,
+    /// on the paused clock, each poll arrived.
+    struct ScriptedDevice {
+        expires_in: u64,
+        interval_secs: u64,
+        answers: Mutex<std::collections::VecDeque<DeviceAnswer>>,
+        polled_at: Mutex<Vec<Duration>>,
+        started: tokio::time::Instant,
+    }
+
+    impl ScriptedDevice {
+        fn new(expires_in: u64, answers: Vec<DeviceAnswer>) -> Self {
+            Self {
+                expires_in,
+                interval_secs: 5,
+                answers: Mutex::new(answers.into()),
+                polled_at: Mutex::new(Vec::new()),
+                started: tokio::time::Instant::now(),
+            }
+        }
+
+        fn polled_at(&self) -> Vec<u64> {
+            self.polled_at
+                .lock()
+                .expect("unpoisoned")
+                .iter()
+                .map(Duration::as_secs)
+                .collect()
+        }
+    }
+
+    impl DeviceCeremony for ScriptedDevice {
+        async fn begin_device(&self) -> Result<OidcDeviceAuthorization, RemoteError> {
+            let now = u64::try_from(jiff::Timestamp::now().as_second()).unwrap_or(0);
+            Ok(OidcDeviceAuthorization {
+                handle: SecretString::from("handle"),
+                binding: SecretString::from("binding"),
+                user_code: "WDJB-MJHT".to_owned(),
+                verification_uri: "https://idp.test/device".to_owned(),
+                verification_uri_complete: None,
+                interval_secs: self.interval_secs,
+                expires_by: now + self.expires_in,
+            })
+        }
+
+        async fn poll_device(
+            &self,
+            pending: &OidcDeviceAuthorization,
+        ) -> Result<DeviceStep, RemoteError> {
+            assert_eq!(pending.handle.expose_secret(), "handle");
+            self.polled_at
+                .lock()
+                .expect("unpoisoned")
+                .push(self.started.elapsed());
+            let answer = self
+                .answers
+                .lock()
+                .expect("unpoisoned")
+                .pop_front()
+                .unwrap_or(Some(|| DeviceStep::Pending));
+            match answer {
+                Some(step) => Ok(step()),
+                None => Err(RemoteError::Auth(
+                    capsule_sdk::auth::AuthError::OidcDeviceDenied,
+                )),
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_device_sign_in_waits_an_interval_before_every_poll_and_slows_down_when_told() {
+        let ceremony = ScriptedDevice::new(
+            600,
+            vec![
+                Some(|| DeviceStep::Pending),
+                Some(|| DeviceStep::SlowDown),
+                Some(|| DeviceStep::Pending),
+                Some(|| DeviceStep::Settled(LoginStep::Complete)),
+            ],
+        );
+        let mut shown = None;
+        let step = login_device(
+            &ceremony,
+            |pending, waited| shown = Some((pending.user_code.clone(), waited)),
+            DEVICE_TIMEOUT,
+        )
+        .await
+        .expect("the sign-in settles");
+        assert!(matches!(step, LoginStep::Complete));
+        assert_eq!(
+            shown,
+            Some(("WDJB-MJHT".to_owned(), Duration::from_secs(600))),
+            "the code is shown with the ceremony's own deadline, nearer than the ceiling"
+        );
+        // 5 s before the first poll, 5 more, then 10 after the slow-down, and 10 again.
+        assert_eq!(ceremony.polled_at(), vec![5, 10, 20, 30]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_device_sign_in_never_approved_stops_at_its_deadline() {
+        let ceremony = ScriptedDevice::new(12, vec![]);
+        let error = login_device(&ceremony, |_, _| {}, DEVICE_TIMEOUT)
+            .await
+            .expect_err("never approved");
+        assert!(
+            matches!(error, OidcLoginError::DeviceTimedOut { waited } if waited == Duration::from_secs(10)),
+            "{error:?}"
+        );
+        // A third poll would land at 15 s, past the 12-second deadline, so it is never sent.
+        assert_eq!(ceremony.polled_at(), vec![5, 10]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_refused_device_poll_ends_the_sign_in_with_the_servers_answer() {
+        let ceremony = ScriptedDevice::new(600, vec![Some(|| DeviceStep::Pending), None]);
+        let error = login_device(&ceremony, |_, _| {}, DEVICE_TIMEOUT)
+            .await
+            .expect_err("declined");
+        assert!(
+            matches!(
+                error,
+                OidcLoginError::Remote(RemoteError::Auth(
+                    capsule_sdk::auth::AuthError::OidcDeviceDenied
+                ))
+            ),
+            "{error:?}"
+        );
+        assert_eq!(ceremony.polled_at(), vec![5, 10]);
     }
 }

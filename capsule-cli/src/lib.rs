@@ -214,6 +214,11 @@ async fn dispatch(cli: Cli) -> Result<()> {
             } => auth_register(email, password_stdin).await?,
             AuthCommands::Login {
                 oidc: true,
+                device: true,
+                ..
+            } => auth_login_oidc_device().await?,
+            AuthCommands::Login {
+                oidc: true,
                 no_browser,
                 ..
             } => auth_login_oidc(no_browser).await?,
@@ -996,6 +1001,68 @@ async fn auth_login_oidc(no_browser: bool) -> Result<()> {
     Ok(())
 }
 
+/// `capsule auth login --oidc --device`: sign in through the server's identity provider from
+/// another device (RFC 8628, issue #635) — print the address and the code, poll until the person
+/// approves, and persist the session ([`oidc::login_device`] owns the flow).
+async fn auth_login_oidc_device() -> Result<()> {
+    let bundle = i18n::cli_bundle();
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let ceremony = oidc::SdkCeremony::new(&remote, &store)
+        .map_err(|error| login_failed(&bundle, &describe_remote_error(&bundle, &error)))?;
+
+    println!(
+        "{}",
+        bundle
+            .format(keys::AUTH_LOGIN_OIDC_DEVICE_IN_PROGRESS, &[])
+            .green()
+    );
+    let show = |pending: &capsule_sdk::auth::OidcDeviceAuthorization,
+                waited: std::time::Duration| {
+        // Provider-authored, printed to a terminal: control characters are dropped, as the
+        // server already refused any code carrying one.
+        let printable = |text: &str| text.chars().filter(|c| !c.is_control()).collect::<String>();
+        println!("{}", bundle.format(keys::AUTH_LOGIN_OIDC_DEVICE_VISIT, &[]));
+        println!("{}", printable(&pending.verification_uri));
+        println!(
+            "{}",
+            bundle
+                .format(
+                    keys::AUTH_LOGIN_OIDC_DEVICE_CODE,
+                    &[("code", Value::Str(&printable(&pending.user_code)))]
+                )
+                .bold()
+        );
+        if let Some(complete) = &pending.verification_uri_complete {
+            println!(
+                "{}",
+                bundle.format(keys::AUTH_LOGIN_OIDC_DEVICE_COMPLETE, &[])
+            );
+            println!("{}", printable(complete));
+        }
+        println!(
+            "{}",
+            bundle.format(
+                keys::AUTH_LOGIN_OIDC_DEVICE_WAITING,
+                &[(
+                    "count",
+                    Value::Int(i64::try_from(waited.as_secs().div_ceil(60)).unwrap_or(i64::MAX))
+                )]
+            )
+        );
+    };
+    let step = oidc::login_device(&ceremony, show, oidc::DEVICE_TIMEOUT)
+        .await
+        .map_err(|error| login_failed(&bundle, &describe_oidc_error(&bundle, &error)))?;
+
+    finish_second_factor(&bundle, &remote, &store, step).await?;
+    println!(
+        "{}",
+        bundle.format(keys::AUTH_LOGIN_OIDC_SUCCESS, &[]).green()
+    );
+    Ok(())
+}
+
 /// The `capsule auth login` failure line, carrying `reason`.
 fn login_failed(bundle: &capsule_i18n::Bundle, reason: &str) -> eyre::Report {
     eyre!(
@@ -1021,6 +1088,9 @@ fn describe_oidc_error(bundle: &capsule_i18n::Bundle, error: &oidc::OidcLoginErr
         ),
         oidc::OidcLoginError::TimedOut { .. } => {
             bundle.format(keys::AUTH_LOGIN_OIDC_TIMED_OUT, &[])
+        }
+        oidc::OidcLoginError::DeviceTimedOut { .. } => {
+            bundle.format(keys::AUTH_LOGIN_OIDC_DEVICE_TIMED_OUT, &[])
         }
         oidc::OidcLoginError::Denied { error, description } => {
             // Provider-authored text, printed to a terminal: control characters are dropped so
@@ -1721,6 +1791,74 @@ mod oidc_login_tests {
             &["capsule", "auth", "login", "--no-browser"][..],
         ] {
             assert!(Cli::try_parse_from(refused).is_err(), "{refused:?}");
+        }
+    }
+
+    /// `--device` is an arm of `--oidc` and opens no browser, so `--no-browser` has nothing to
+    /// add to it (issue #635).
+    #[test]
+    fn the_device_flag_rides_oidc_alone() {
+        let parsed = Cli::try_parse_from(["capsule", "auth", "login", "--oidc", "--device"])
+            .expect("--oidc --device parses");
+        assert!(matches!(
+            parsed.command,
+            Commands::Auth {
+                command: AuthCommands::Login {
+                    oidc: true,
+                    device: true,
+                    no_browser: false,
+                    ..
+                }
+            }
+        ));
+        for refused in [
+            &["capsule", "auth", "login", "--device"][..],
+            &[
+                "capsule",
+                "auth",
+                "login",
+                "--oidc",
+                "--device",
+                "--no-browser",
+            ][..],
+            &["capsule", "auth", "login", "--device", "--email", "a@b.c"][..],
+        ] {
+            assert!(Cli::try_parse_from(refused).is_err(), "{refused:?}");
+        }
+    }
+
+    /// The device sign-in's own failures render their own lines: the timeout, and the server's
+    /// denial, expiry and unsupported answers through their catalog codes.
+    #[test]
+    fn each_device_failure_has_its_own_line() {
+        let bundle = Bundle::for_locale("en");
+        assert_eq!(
+            describe_oidc_error(
+                &bundle,
+                &OidcLoginError::DeviceTimedOut {
+                    waited: std::time::Duration::from_secs(600)
+                }
+            ),
+            bundle.format(keys::AUTH_LOGIN_OIDC_DEVICE_TIMED_OUT, &[])
+        );
+        for (error, code) in [
+            (
+                AuthError::OidcDeviceDenied,
+                capsule_i18n::error_codes::AUTH_OIDC_DEVICE_DENIED,
+            ),
+            (
+                AuthError::OidcDeviceExpired,
+                capsule_i18n::error_codes::AUTH_OIDC_DEVICE_EXPIRED,
+            ),
+            (
+                AuthError::OidcDeviceUnsupported,
+                capsule_i18n::error_codes::AUTH_OIDC_DEVICE_UNSUPPORTED,
+            ),
+        ] {
+            assert_eq!(
+                describe_oidc_error(&bundle, &OidcLoginError::Remote(RemoteError::Auth(error))),
+                bundle.format(code, &[])
+            );
         }
     }
 

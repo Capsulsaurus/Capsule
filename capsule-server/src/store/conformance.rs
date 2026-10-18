@@ -40,13 +40,14 @@ use uuid::Uuid;
 
 use super::auth::{AuthStateStore, CohortStore, SessionRecord};
 use super::ceremony::{
-    ChallengeStore, ChannelStore, Direction, DrainOutcome, EnrollmentStore, OidcAuthorizationStore,
-    PendingAuthorization, PendingEnrollment, RelayChannel, RelayOutcome, RelayPayload,
+    ChallengeStore, ChannelStore, DEVICE_SLOW_DOWN_STEP, DevicePollSlot, Direction, DrainOutcome,
+    EnrollmentStore, OidcAuthorizationStore, OidcDeviceStore, PendingAuthorization,
+    PendingDeviceAuthorization, PendingEnrollment, RelayChannel, RelayOutcome, RelayPayload,
     RevokeAllChallenge,
 };
 use super::ids::{
-    AssetId, ChallengeToken, ChannelId, EnrollmentCode, OidcNonce, OidcState, OwnerId,
-    PkceVerifier, SessionId, UploadId, UserId,
+    AssetId, ChallengeToken, ChannelId, DeviceCode, EnrollmentCode, OidcDeviceHandle, OidcNonce,
+    OidcState, OwnerId, PkceVerifier, SessionId, UploadId, UserId,
 };
 use super::upload::{
     AcceptedChunk, BlobRole, FinalizeClaim, UploadSessionRecord, UploadSessionStatus,
@@ -96,6 +97,8 @@ pub trait Harness: CohortHarness {
     fn channels(&self) -> &dyn ChannelStore;
     /// The pending OIDC authorization store under test (slice `S-N1`).
     fn oidc_authorizations(&self) -> &dyn OidcAuthorizationStore;
+    /// The pending OIDC device authorization store under test (issue #635).
+    fn oidc_devices(&self) -> &dyn OidcDeviceStore;
 }
 
 /// Unwrap a store result, failing with the operation that was expected to work.
@@ -176,6 +179,30 @@ fn pending(case: &str, offset: i64) -> PendingAuthorization {
         binding_challenge: format!("{case}-binding"),
         issued_at: deadline(base(), SignedDuration::from_secs(offset)),
     }
+}
+
+/// The interval every device case polls at: well inside the one-minute harness lifetime with
+/// room for a `slow_down` or two on top.
+const DEVICE_INTERVAL: SignedDuration = SignedDuration::from_secs(5);
+
+/// A pending device authorization for `case`.
+fn device(case: &str) -> PendingDeviceAuthorization {
+    PendingDeviceAuthorization {
+        device_code: DeviceCode::new(format!("{case}-device-code")),
+        binding_challenge: format!("{case}-binding"),
+        interval: DEVICE_INTERVAL,
+        issued_at: base(),
+    }
+}
+
+/// Begin `case`'s device authorization and return its handle.
+async fn begin_device(h: &dyn Harness, case: &str) -> OidcDeviceHandle {
+    let handle = OidcDeviceHandle::new(format!("{case}-handle"));
+    ok(
+        h.oidc_devices().begin(&handle, device(case)).await,
+        "begin a device authorization",
+    );
+    handle
 }
 
 // ===========================================================================================
@@ -1166,6 +1193,187 @@ pub async fn an_oidc_authorization_is_live_until_its_deadline(h: &dyn Harness) {
     );
 }
 
+/// The first poll is due one interval after the begin, and each later one an interval after the
+/// last; a due claim hands back the record intact.
+pub async fn a_device_poll_is_due_only_after_its_interval(h: &dyn Harness) {
+    let store = h.oidc_devices();
+    let handle = begin_device(h, "device-due").await;
+
+    ok(h.advance(DEVICE_INTERVAL).await, "advance one interval");
+    assert_eq!(
+        ok(store.claim(&handle).await, "claim a due poll"),
+        DevicePollSlot::Due(device("device-due")),
+        "a poll one interval after the begin is due, every field intact"
+    );
+    ok(h.advance(DEVICE_INTERVAL).await, "advance one interval");
+    assert_eq!(
+        ok(store.claim(&handle).await, "claim the next poll"),
+        DevicePollSlot::Due(device("device-due")),
+        "and so is one an interval after the last poll"
+    );
+    assert_eq!(
+        ok(
+            store
+                .claim(&OidcDeviceHandle::new("device-never-begun"))
+                .await,
+            "claim unknown"
+        ),
+        DevicePollSlot::Unknown,
+        "an unknown handle has no slot"
+    );
+}
+
+/// A poll sooner than one interval after the last is refused, raises the interval for this and
+/// every later poll, and counts as the last poll itself.
+pub async fn a_device_poll_too_soon_raises_the_interval(h: &dyn Harness) {
+    let store = h.oidc_devices();
+    let handle = begin_device(h, "device-too-soon").await;
+
+    ok(
+        h.advance(DEVICE_INTERVAL - SignedDuration::from_millis(1))
+            .await,
+        "advance to a millisecond short of one interval",
+    );
+    let raised = DEVICE_INTERVAL + DEVICE_SLOW_DOWN_STEP;
+    assert_eq!(
+        ok(store.claim(&handle).await, "claim too soon"),
+        DevicePollSlot::TooSoon { interval: raised },
+        "a millisecond early is too soon, and the interval grows by the slow-down step"
+    );
+    ok(h.advance(DEVICE_INTERVAL).await, "advance the old interval");
+    assert_eq!(
+        ok(store.claim(&handle).await, "claim at the old interval"),
+        DevicePollSlot::TooSoon {
+            interval: raised + DEVICE_SLOW_DOWN_STEP
+        },
+        "the old interval is no longer enough, and the early claim was the last poll"
+    );
+    ok(
+        h.advance(raised + DEVICE_SLOW_DOWN_STEP).await,
+        "advance the raised interval",
+    );
+    let mut record = device("device-too-soon");
+    record.interval = raised + DEVICE_SLOW_DOWN_STEP;
+    assert_eq!(
+        ok(store.claim(&handle).await, "claim at the raised interval"),
+        DevicePollSlot::Due(record),
+        "the raised interval is kept, and honouring it is due"
+    );
+}
+
+/// Two polls racing one due handle claim one slot between them.
+pub async fn two_polls_racing_one_handle_claim_one_slot(h: &dyn Harness) {
+    let store = h.oidc_devices();
+    let handle = begin_device(h, "device-race").await;
+    ok(h.advance(DEVICE_INTERVAL).await, "advance one interval");
+
+    let (first, second) = tokio::join!(store.claim(&handle), store.claim(&handle));
+    let slots = [ok(first, "claim one"), ok(second, "claim two")];
+    let due = slots
+        .iter()
+        .filter(|slot| matches!(slot, DevicePollSlot::Due(_)))
+        .count();
+    let too_soon = slots
+        .iter()
+        .filter(|slot| matches!(slot, DevicePollSlot::TooSoon { .. }))
+        .count();
+    assert_eq!(
+        (due, too_soon),
+        (1, 1),
+        "exactly one racing poll reaches the provider: {slots:?}"
+    );
+}
+
+/// The provider's `slow_down` raises the interval without claiming a slot.
+pub async fn a_provider_slow_down_raises_the_interval(h: &dyn Harness) {
+    let store = h.oidc_devices();
+    let handle = begin_device(h, "device-slow-down").await;
+
+    let raised = DEVICE_INTERVAL + DEVICE_SLOW_DOWN_STEP;
+    assert_eq!(
+        ok(store.slow_down(&handle).await, "slow down"),
+        Some(raised),
+        "the interval grows by the slow-down step"
+    );
+    assert_eq!(
+        ok(
+            store
+                .slow_down(&OidcDeviceHandle::new("device-never-begun"))
+                .await,
+            "slow down unknown"
+        ),
+        None,
+        "an unknown handle has no interval to raise"
+    );
+    ok(h.advance(DEVICE_INTERVAL).await, "advance the old interval");
+    assert_eq!(
+        ok(store.claim(&handle).await, "claim at the old interval"),
+        DevicePollSlot::TooSoon {
+            interval: raised + DEVICE_SLOW_DOWN_STEP
+        },
+        "the raised interval is what the next claim is judged against"
+    );
+}
+
+/// A finished device authorization is gone, and finishing it again finds nothing.
+pub async fn a_finished_device_authorization_is_gone(h: &dyn Harness) {
+    let store = h.oidc_devices();
+    let handle = begin_device(h, "device-finish").await;
+
+    assert_eq!(
+        ok(store.finish(&handle).await, "finish"),
+        Some(device("device-finish")),
+        "the first finish gets the record, every field intact"
+    );
+    assert_eq!(
+        ok(store.finish(&handle).await, "finish again"),
+        None,
+        "a finished ceremony cannot be finished twice"
+    );
+    ok(h.advance(DEVICE_INTERVAL).await, "advance one interval");
+    assert_eq!(
+        ok(store.claim(&handle).await, "claim a finished handle"),
+        DevicePollSlot::Unknown,
+        "and cannot be polled"
+    );
+}
+
+/// A pending device authorization dies at its store's TTL.
+pub async fn a_device_authorization_expires_with_its_store(h: &dyn Harness) {
+    let store = h.oidc_devices();
+    let handle = begin_device(h, "device-expiry").await;
+
+    ok(
+        h.advance(store.ttl() - SignedDuration::from_micros(1))
+            .await,
+        "advance to a microsecond short of the device TTL",
+    );
+    assert!(
+        matches!(
+            ok(store.claim(&handle).await, "claim before the deadline"),
+            DevicePollSlot::Due(_)
+        ),
+        "a device authorization is live until its TTL has passed"
+    );
+    ok(
+        h.advance(SignedDuration::from_micros(1)).await,
+        "advance to the device TTL",
+    );
+    assert_eq!(
+        ok(store.claim(&handle).await, "claim at the deadline"),
+        DevicePollSlot::Unknown,
+        "a device authorization is gone at its TTL"
+    );
+    assert_eq!(
+        ok(store.slow_down(&handle).await, "slow down at the deadline"),
+        None
+    );
+    assert_eq!(
+        ok(store.finish(&handle).await, "finish at the deadline"),
+        None
+    );
+}
+
 /// An enrollment redeems under either spelling, and redeeming burns both.
 pub async fn an_enrollment_redeems_by_either_spelling_and_burns_both(h: &dyn Harness) {
     let store = h.enrollments();
@@ -1576,6 +1784,13 @@ pub async fn run_all(h: &dyn Harness) {
     an_oidc_authorization_is_single_use(h).await;
     an_oidc_authorization_expires_with_its_store(h).await;
     an_oidc_authorization_is_live_until_its_deadline(h).await;
+
+    a_device_poll_is_due_only_after_its_interval(h).await;
+    a_device_poll_too_soon_raises_the_interval(h).await;
+    two_polls_racing_one_handle_claim_one_slot(h).await;
+    a_provider_slow_down_raises_the_interval(h).await;
+    a_finished_device_authorization_is_gone(h).await;
+    a_device_authorization_expires_with_its_store(h).await;
 
     run_all_cohorts(h).await;
 }

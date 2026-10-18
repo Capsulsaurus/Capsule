@@ -101,8 +101,42 @@ impl Signer {
     }
 }
 
+/// Who approved a device authorization, and how the token minted for it misbehaves.
+#[derive(Debug, Clone)]
+pub(crate) struct DeviceApproval {
+    pub(crate) subject: String,
+    pub(crate) email: Option<String>,
+    /// `Tamper::Nonce` puts a nonce in the token, which a device grant's token must not carry.
+    pub(crate) tamper: Tamper,
+}
+
+/// Where one device authorization stands at the provider.
+#[derive(Debug, Clone)]
+enum DeviceState {
+    /// The person has not finished: `authorization_pending`.
+    Pending,
+    /// Answer the next poll `slow_down`, then pending again.
+    SlowDown,
+    /// The person declined: `access_denied`, from now on.
+    Denied,
+    /// The code lapsed: `expired_token`, from now on.
+    Expired,
+    /// The person approved: the next poll is issued tokens, once.
+    Approved(DeviceApproval),
+}
+
 struct State {
     issuer: String,
+    /// Whether discovery names a device endpoint and the endpoint answers.
+    device_offered: AtomicBool,
+    /// The refusal the device endpoint answers with instead of a code: a status and the
+    /// `error` member (empty for a body without one), or none.
+    device_refusal: Mutex<Option<(u16, &'static str)>>,
+    /// The `interval` the device endpoint publishes, or none.
+    device_interval: Mutex<Option<u64>>,
+    /// Every device code issued, by code.
+    devices: Mutex<BTreeMap<String, DeviceState>>,
+    device_hits: AtomicUsize,
     /// Every key the JWK Set publishes; the last one signs.
     published: Mutex<Vec<Signer>>,
     /// Symmetric keys the JWK Set publishes beside them, by `kid`.
@@ -205,6 +239,11 @@ impl MockIdp {
         let acceptor = tls.map(|ca| tokio_rustls::TlsAcceptor::from(ca.config));
         let state = Arc::new(State {
             issuer: format!("{scheme}://{addr}/idp"),
+            device_offered: AtomicBool::new(true),
+            device_refusal: Mutex::new(None),
+            device_interval: Mutex::new(Some(5)),
+            devices: Mutex::new(BTreeMap::new()),
+            device_hits: AtomicUsize::new(0),
             published: Mutex::new(vec![Signer::generate("k1".to_owned())]),
             oct_keys: Mutex::new(Vec::new()),
             grants: Mutex::new(BTreeMap::new()),
@@ -291,6 +330,54 @@ impl MockIdp {
     pub(crate) fn token_hits(&self) -> usize {
         self.state.token_hits.load(Ordering::SeqCst)
     }
+
+    pub(crate) fn device_hits(&self) -> usize {
+        self.state.device_hits.load(Ordering::SeqCst)
+    }
+
+    /// Whether discovery names a device endpoint at all.
+    pub(crate) fn set_device_offered(&self, offered: bool) {
+        self.state.device_offered.store(offered, Ordering::SeqCst);
+    }
+
+    /// Make the device endpoint answer `status` with `error` as its `error` member (no member
+    /// when `error` is empty), or, with none, issue codes again.
+    pub(crate) fn set_device_refusal(&self, refusal: Option<(u16, &'static str)>) {
+        *lock(&self.state.device_refusal) = refusal;
+    }
+
+    /// The `interval` the device endpoint publishes; `None` omits the member.
+    pub(crate) fn set_device_interval(&self, interval: Option<u64>) {
+        *lock(&self.state.device_interval) = interval;
+    }
+
+    fn set_device(&self, device_code: &str, to: DeviceState) {
+        let mut devices = lock(&self.state.devices);
+        let device = devices
+            .get_mut(device_code)
+            .expect("the device code was issued");
+        *device = to;
+    }
+
+    /// The person approves `device_code`.
+    pub(crate) fn approve_device(&self, device_code: &str, approval: DeviceApproval) {
+        self.set_device(device_code, DeviceState::Approved(approval));
+    }
+
+    /// The person declines `device_code`.
+    pub(crate) fn deny_device(&self, device_code: &str) {
+        self.set_device(device_code, DeviceState::Denied);
+    }
+
+    /// `device_code` lapses.
+    pub(crate) fn expire_device(&self, device_code: &str) {
+        self.set_device(device_code, DeviceState::Expired);
+    }
+
+    /// The next poll of `device_code` is answered `slow_down`.
+    pub(crate) fn slow_down_device(&self, device_code: &str) {
+        self.set_device(device_code, DeviceState::SlowDown);
+    }
 }
 
 /// The relying party's `code_challenge`, S256 (RFC 7636 §4.2).
@@ -339,23 +426,134 @@ fn token_response(
         return refuse("invalid_grant", "PKCE verification failed");
     }
 
+    let id_token = mint_id_token(
+        state,
+        &grant.subject,
+        grant.email.as_deref(),
+        Some(&grant.nonce),
+        &grant.tamper,
+    );
+    issued(&id_token)
+}
+
+/// The token endpoint's success body around `id_token`.
+fn issued(id_token: &str) -> (u16, String) {
+    (
+        200,
+        serde_json::json!({
+            "id_token": id_token,
+            "access_token": "opaque-access-token",
+            "token_type": "Bearer",
+        })
+        .to_string(),
+    )
+}
+
+/// The token endpoint's answer to a device-code poll (RFC 8628 §3.4–3.5).
+fn device_token_response(state: &State, form: &BTreeMap<String, String>) -> (u16, String) {
+    let refuse = |error: &str| (400, serde_json::json!({ "error": error }).to_string());
+    if form.get("client_id").map(String::as_str) != Some(CLIENT_ID) {
+        return refuse("invalid_client");
+    }
+    let Some(code) = form.get("device_code") else {
+        return refuse("invalid_request");
+    };
+    let mut devices = lock(&state.devices);
+    let Some(device) = devices.get_mut(code) else {
+        return refuse("invalid_grant");
+    };
+    match std::mem::replace(device, DeviceState::Pending) {
+        DeviceState::Pending => refuse("authorization_pending"),
+        DeviceState::SlowDown => refuse("slow_down"),
+        DeviceState::Denied => {
+            *device = DeviceState::Denied;
+            refuse("access_denied")
+        }
+        DeviceState::Expired => {
+            *device = DeviceState::Expired;
+            refuse("expired_token")
+        }
+        DeviceState::Approved(approval) => {
+            // Single-use, like a real provider: the code is spent once its tokens are taken.
+            devices.remove(code);
+            drop(devices);
+            let nonce = match &approval.tamper {
+                Tamper::Nonce(nonce) => Some(nonce.as_str()),
+                _ => None,
+            };
+            let id_token = mint_id_token(
+                state,
+                &approval.subject,
+                approval.email.as_deref(),
+                nonce,
+                &approval.tamper,
+            );
+            issued(&id_token)
+        }
+    }
+}
+
+/// The device authorization endpoint (RFC 8628 §3.1–3.2).
+fn device_code_response(state: &State, form: &BTreeMap<String, String>) -> (u16, String) {
+    if form.get("client_id").map(String::as_str) != Some(CLIENT_ID) {
+        return (
+            401,
+            serde_json::json!({ "error": "invalid_client" }).to_string(),
+        );
+    }
+    if !form
+        .get("scope")
+        .is_some_and(|scope| scope.split(' ').any(|s| s == "openid"))
+    {
+        return (
+            400,
+            serde_json::json!({ "error": "invalid_scope" }).to_string(),
+        );
+    }
+    let n = state.next_code.fetch_add(1, Ordering::SeqCst);
+    let device_code = format!("device-{n}");
+    let user_code = format!("USER-{n}");
+    lock(&state.devices).insert(device_code.clone(), DeviceState::Pending);
+    let mut body = serde_json::json!({
+        "device_code": device_code,
+        "user_code": user_code,
+        "verification_uri": format!("{}/device", state.issuer),
+        "verification_uri_complete": format!("{}/device?user_code={user_code}", state.issuer),
+        "expires_in": 600,
+    });
+    if let Some(interval) = *lock(&state.device_interval) {
+        body["interval"] = serde_json::json!(interval);
+    }
+    (200, body.to_string())
+}
+
+/// An ID token for `subject`, signed as `tamper` says.
+fn mint_id_token(
+    state: &State,
+    subject: &str,
+    email: Option<&str>,
+    nonce: Option<&str>,
+    tamper: &Tamper,
+) -> String {
     let now = jiff::Timestamp::now().as_second();
     let mut claims = serde_json::json!({
         "iss": state.issuer,
-        "sub": grant.subject,
+        "sub": subject,
         "aud": CLIENT_ID,
         // Three hours, not the five minutes a real provider mints: the relying party under
         // test judges time by a clock the tests move forward by more than an hour to exercise
         // the key-cache ceiling, and a five-minute token would expire under it.
         "exp": now + 3 * 3600,
         "iat": now,
-        "nonce": grant.nonce,
     });
-    if let Some(email) = &grant.email {
+    if let Some(nonce) = nonce {
+        claims["nonce"] = serde_json::json!(nonce);
+    }
+    if let Some(email) = email {
         claims["email"] = serde_json::json!(email);
         claims["email_verified"] = serde_json::json!(true);
     }
-    match &grant.tamper {
+    match tamper {
         Tamper::None
         | Tamper::UnpublishedKey
         | Tamper::AlgNone
@@ -367,7 +565,7 @@ fn token_response(
         Tamper::Nonce(nonce) => claims["nonce"] = serde_json::json!(nonce),
     }
 
-    let id_token = match &grant.tamper {
+    match tamper {
         Tamper::AlgNone => {
             let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"none","typ":"JWT"}"#);
             let payload = URL_SAFE_NO_PAD.encode(claims.to_string());
@@ -417,16 +615,7 @@ fn token_response(
             header.kid = Some(signer.kid.clone());
             jsonwebtoken::encode(&header, &claims, &signer.encoding).expect("the key signs")
         }
-    };
-    (
-        200,
-        serde_json::json!({
-            "id_token": id_token,
-            "access_token": "opaque-access-token",
-            "token_type": "Bearer",
-        })
-        .to_string(),
-    )
+    }
 }
 
 async fn serve<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, state: Arc<State>) {
@@ -481,20 +670,20 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, state: Arc<Stat
                 (503, "text/plain", "down".to_owned())
             } else {
                 let base = state.issuer.trim_end_matches("/idp");
-                (
-                    200,
-                    "application/json",
-                    serde_json::json!({
-                        "issuer": state.issuer,
-                        "authorization_endpoint": format!("{base}/idp/authorize"),
-                        "token_endpoint": format!("{base}/idp/token"),
-                        "jwks_uri": format!("{base}/idp/keys"),
-                        "response_types_supported": ["code"],
-                        "subject_types_supported": ["public"],
-                        "id_token_signing_alg_values_supported": ["EdDSA"],
-                    })
-                    .to_string(),
-                )
+                let mut document = serde_json::json!({
+                    "issuer": state.issuer,
+                    "authorization_endpoint": format!("{base}/idp/authorize"),
+                    "token_endpoint": format!("{base}/idp/token"),
+                    "jwks_uri": format!("{base}/idp/keys"),
+                    "response_types_supported": ["code"],
+                    "subject_types_supported": ["public"],
+                    "id_token_signing_alg_values_supported": ["EdDSA"],
+                });
+                if state.device_offered.load(Ordering::SeqCst) {
+                    document["device_authorization_endpoint"] =
+                        serde_json::json!(format!("{base}/idp/device/code"));
+                }
+                (200, "application/json", document.to_string())
             }
         }
         ("GET", "/idp/keys") => {
@@ -520,16 +709,26 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, state: Arc<Stat
         }
         ("POST", "/idp/token") => {
             state.token_hits.fetch_add(1, Ordering::SeqCst);
-            // `Url` decodes form bodies for free; the query-pair parser is the form parser.
-            let form: BTreeMap<String, String> =
-                reqwest::Url::parse(&format!("http://x/?{}", String::from_utf8_lossy(&body)))
-                    .map(|url| {
-                        url.query_pairs()
-                            .map(|(k, v)| (k.into_owned(), v.into_owned()))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-            let (status, payload) = token_response(&state, &form, basic.as_deref());
+            let form = form_of(&body);
+            let (status, payload) = if form.get("grant_type").map(String::as_str)
+                == Some("urn:ietf:params:oauth:grant-type:device_code")
+            {
+                device_token_response(&state, &form)
+            } else {
+                token_response(&state, &form, basic.as_deref())
+            };
+            (status, "application/json", payload)
+        }
+        ("POST", "/idp/device/code") if state.device_offered.load(Ordering::SeqCst) => {
+            state.device_hits.fetch_add(1, Ordering::SeqCst);
+            let refusal = *lock(&state.device_refusal);
+            let (status, payload) = match refusal {
+                Some((status, "")) => (status, "{}".to_owned()),
+                Some((status, error)) => {
+                    (status, serde_json::json!({ "error": error }).to_string())
+                }
+                None => device_code_response(&state, &form_of(&body)),
+            };
             (status, "application/json", payload)
         }
         _ => (404, "text/plain", "no such route".to_owned()),
@@ -541,6 +740,18 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(mut stream: S, state: Arc<Stat
     );
     let _ = stream.write_all(response.as_bytes()).await;
     let _ = stream.flush().await;
+}
+
+/// A form body, decoded. `Url` decodes form bodies for free; the query-pair parser is the form
+/// parser.
+fn form_of(body: &[u8]) -> BTreeMap<String, String> {
+    reqwest::Url::parse(&format!("http://x/?{}", String::from_utf8_lossy(body)))
+        .map(|url| {
+            url.query_pairs()
+                .map(|(k, v)| (k.into_owned(), v.into_owned()))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The address the mock is bound to, for a case that wants to name it.

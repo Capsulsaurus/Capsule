@@ -105,12 +105,12 @@ use crate::share::postgres::PostgresShares;
 use crate::share::{InMemoryShares, ShareContext, ShareStore};
 use crate::store::memory::{
     InMemoryAuthState, InMemoryChallenges, InMemoryChannels, InMemoryCohorts, InMemoryEnrollments,
-    InMemoryOidcAuthorizations, InMemoryUploadSessions,
+    InMemoryOidcAuthorizations, InMemoryOidcDevices, InMemoryUploadSessions,
 };
 use crate::store::valkey::ValkeyStores;
 use crate::store::{
     AuthStateStore, ChallengeStore, ChannelStore, CohortStore, EnrollmentStore,
-    OidcAuthorizationStore, PostgresCohorts, SystemClock, UploadSessionStore,
+    OidcAuthorizationStore, OidcDeviceStore, PostgresCohorts, SystemClock, UploadSessionStore,
 };
 use crate::sync::{CursorCodec, SyncContext};
 use crate::upload::{UploadContext, UploadPolicy};
@@ -546,6 +546,8 @@ struct Ports {
     /// The pending OIDC ceremonies. Built on both arms whether or not `OIDC_ISSUER` is set, and
     /// read only when it is.
     oidc_authorizations: Arc<dyn OidcAuthorizationStore>,
+    /// The pending OIDC device authorizations (issue #635), on the same terms.
+    oidc_devices: Arc<dyn OidcDeviceStore>,
 }
 
 /// The credential verifier, built once.
@@ -585,6 +587,7 @@ fn memory_ports(config: &Config, clock: &Arc<SystemClock>) -> Result<Ports, Boot
         drops: Arc::new(InMemoryDrops::new()),
         counters: Arc::new(InMemoryCounters::new()),
         oidc_authorizations: Arc::new(InMemoryOidcAuthorizations::with_default_ttl(clock.clone())),
+        oidc_devices: Arc::new(InMemoryOidcDevices::with_default_ttl(clock.clone())),
     })
 }
 
@@ -628,6 +631,7 @@ fn durable_ports(
         drops: Arc::new(PostgresDrops::new(db())),
         counters: Arc::new(ValkeyCounters::new(valkey.valkey().clone())),
         oidc_authorizations: valkey.oidc_authorizations(),
+        oidc_devices: valkey.oidc_devices(),
     })
 }
 
@@ -696,6 +700,7 @@ fn compose(
         drops,
         counters,
         oidc_authorizations,
+        oidc_devices,
     } = ports;
     // The production write authority (`S-C19`/`S-C20`), not a permissive double: it reads the
     // album's own pin and the account's published device directory, so invariants 6 and 7 mean
@@ -785,6 +790,7 @@ fn compose(
             OidcContext::new(OidcCollaborators {
                 provider,
                 authorizations: oidc_authorizations,
+                devices: oidc_devices,
                 accounts: accounts.federated.clone(),
                 clock: clock.clone(),
             })

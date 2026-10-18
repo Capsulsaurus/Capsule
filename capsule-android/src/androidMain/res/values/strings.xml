@@ -1710,6 +1710,11 @@
     <string name="cli_auth_login_oidc_browser_unavailable">No browser could be opened from here. Open the address above in any browser.</string>
     <string name="cli_auth_login_oidc_denied">The identity provider did not sign you in (%s).</string>
     <string name="cli_auth_login_oidc_denied_described">The identity provider did not sign you in (%1$s): %2$s</string>
+    <string name="cli_auth_login_oidc_device_code">and enter this code: %s</string>
+    <string name="cli_auth_login_oidc_device_complete">Or open this address, which already carries the code:</string>
+    <string name="cli_auth_login_oidc_device_in_progress">Signing in to Capsule through your identity provider, from another device…</string>
+    <string name="cli_auth_login_oidc_device_timed_out">The sign-in was not approved in time. Run the command again to get a new code.</string>
+    <string name="cli_auth_login_oidc_device_visit">On any device with a browser, open this address:</string>
     <string name="cli_auth_login_oidc_in_progress">Signing in to Capsule through your identity provider…</string>
     <string name="cli_auth_login_oidc_listener_failed">This computer could not listen for the sign-in to come back: %s</string>
     <string name="cli_auth_login_oidc_loopback_refused">This server does not accept sign-ins from the command line through its identity provider. Its operator can allow them by setting OIDC_ALLOW_LOOPBACK_REDIRECT=true.</string>
@@ -1755,6 +1760,7 @@
     <string name="cli_help_auth_escrow_arg_passphrase_stdin">Read the library passphrase from stdin instead of prompting</string>
     <string name="cli_help_auth_escrow_arg_replace">Replace the account\'s existing recovery backup; the previous recovery secret stops working</string>
     <string name="cli_help_auth_login_about">Login to Capsule</string>
+    <string name="cli_help_auth_login_arg_device">With --oidc, sign in from another device: print an address and a code instead of using a browser here</string>
     <string name="cli_help_auth_login_arg_email">Account email (prompted when omitted)</string>
     <string name="cli_help_auth_login_arg_no_browser">With --oidc, print the sign-in address without opening a browser</string>
     <string name="cli_help_auth_login_arg_oidc">Sign in through the server\'s identity provider in a browser instead of with a password. The server must allow loopback redirects (OIDC_ALLOW_LOOPBACK_REDIRECT=true)</string>
@@ -2020,6 +2026,11 @@
     <string name="error_auth_invalid_credentials">Invalid email or password.</string>
     <string name="error_auth_oidc_address_taken">An account with that email address already exists here. Sign in with its password instead.</string>
     <string name="error_auth_oidc_at_capacity">Too many sign-ins are already in progress. Please try again in a moment.</string>
+    <string name="error_auth_oidc_device_denied">The sign-in was declined at your identity provider.</string>
+    <string name="error_auth_oidc_device_expired">That sign-in code has expired or was already used. Start again.</string>
+    <string name="error_auth_oidc_device_pending">Waiting for you to finish signing in on your other device.</string>
+    <string name="error_auth_oidc_device_slow_down">Checking too often; slowing down.</string>
+    <string name="error_auth_oidc_device_unsupported">Signing in without a browser isn\'t available with this server\'s identity provider.</string>
     <string name="error_auth_oidc_exchange_failed">Your identity provider didn\'t accept that sign-in. Try again.</string>
     <string name="error_auth_oidc_not_configured">Single sign-on isn\'t set up on this server.</string>
     <string name="error_auth_oidc_redirect_invalid">That sign-in can\'t return to this app.</string>
@@ -2340,6 +2351,10 @@
     <plurals name="app_timeline_selection_count">
         <item quantity="one">%d Selected</item>
         <item quantity="other">%d Selected</item>
+    </plurals>
+    <plurals name="cli_auth_login_oidc_device_waiting">
+        <item quantity="one">Waiting up to %d minute for you to approve the sign-in…</item>
+        <item quantity="other">Waiting up to %d minutes for you to approve the sign-in…</item>
     </plurals>
     <plurals name="cli_auth_login_oidc_waiting">
         <item quantity="one">Waiting up to %d minute for the sign-in to finish…</item>

@@ -215,6 +215,8 @@ async fn every_declared_response_is_exercised() {
         ("DELETE", "/v1/drops/anything"),
         ("POST", "/v1/auth/oidc/authorize"),
         ("POST", "/v1/auth/oidc/callback"),
+        ("POST", "/v1/auth/oidc/device"),
+        ("POST", "/v1/auth/oidc/device/poll"),
     ] {
         let request = match method {
             "GET" => client.get(path),
@@ -2937,6 +2939,9 @@ async fn every_declared_response_is_exercised() {
     // ── Signing in through an identity provider (`S-N1`) ───────────────────────────────────
     oidc_block(client, &fixture).await;
 
+    // ── Signing in without a browser: the device grant (issue #635) ────────────────────────
+    oidc_device_block(client, &fixture).await;
+
     // ── The resumption listing (`S-C57`) and the durable custody chain (`S-C58`) ───────────
     // Both are plain authenticated reads over stores this walk has already filled, so they sit
     // here rather than in a block of their own.
@@ -5302,4 +5307,143 @@ async fn oidc_block(client: &support::Client, fixture: &Fixture) {
         .send()
         .await
         .assert_status(StatusCode::ACCEPTED);
+}
+
+/// Every declared response of `POST /v1/auth/oidc/device` and `POST /v1/auth/oidc/device/poll`
+/// (issue #635), driven through the fixture's provider double.
+///
+/// Runs after [`oidc_block`], whose last step confirmed a second factor on the double's
+/// `subject-1` — which is what makes the poll's `202` reachable here. The 400 and 426 are also
+/// the gate's; the 413 is the body-size loop's.
+async fn oidc_device_block(client: &support::Client, fixture: &Fixture) {
+    use support::DeviceAnswer;
+
+    let interval = jiff::SignedDuration::from_secs(5);
+    let begin = || async {
+        client
+            .post("/v1/auth/oidc/device")
+            .json(&support::oidc_device_body())
+            .send()
+            .await
+    };
+    let poll = |handle: serde_json::Value| async move {
+        client
+            .post("/v1/auth/oidc/device/poll")
+            .json(&support::oidc_device_poll_body(&handle))
+            .send()
+            .await
+    };
+
+    // 415 and 422 are the `Json` extractor's, on both operations.
+    for path in ["/v1/auth/oidc/device", "/v1/auth/oidc/device/poll"] {
+        client
+            .post(path)
+            .body("text/plain", "{}")
+            .send()
+            .await
+            .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        client
+            .post(path)
+            .json(&json!({ "binding_challenge": 42, "handle": 42 }))
+            .send()
+            .await
+            .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    // begin: 400 (a malformed binding), 404 (no grant), 503 (the store full), 500 (the
+    // provider), then 200.
+    client
+        .post("/v1/auth/oidc/device")
+        .json(&json!({ "binding_challenge": "short" }))
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    fixture.idp.set_device_offered(false);
+    begin().await.assert_status(StatusCode::NOT_FOUND);
+    fixture.idp.set_device_offered(true);
+    fixture.oidc_devices.set_full(true);
+    begin().await.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    fixture.oidc_devices.set_full(false);
+    fixture.idp.set_unavailable(true);
+    begin()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.idp.set_unavailable(false);
+
+    // poll: 429 (too soon), 400 (pending), 401 (denied), 500 (the store).
+    let begun: serde_json::Value = begin().await.assert_status(StatusCode::OK).json();
+    poll(begun["handle"].clone())
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS);
+    fixture.clock.advance(interval * 2);
+    poll(begun["handle"].clone())
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    fixture.idp.set_device_answer(DeviceAnswer::Denied);
+    fixture.clock.advance(interval * 2);
+    poll(begun["handle"].clone())
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    fixture.oidc_devices.set_unavailable(true);
+    poll(begun["handle"].clone())
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.oidc_devices.set_unavailable(false);
+
+    // 200: an identity with no second factor.
+    fixture.idp.set_device_answer(DeviceAnswer::Approved);
+    fixture
+        .idp
+        .set_identity(capsule_server::auth::oidc::VerifiedIdentity {
+            issuer: "https://idp.test".to_owned(),
+            subject: "device-subject".to_owned(),
+            email: Some("device@example.test".to_owned()),
+            email_verified: true,
+        });
+    let begun: serde_json::Value = begin().await.assert_status(StatusCode::OK).json();
+    fixture.clock.advance(interval);
+    poll(begun["handle"].clone())
+        .await
+        .assert_status(StatusCode::OK);
+
+    // 409: the seeded password account's address. Never linked.
+    fixture
+        .idp
+        .set_identity(capsule_server::auth::oidc::VerifiedIdentity {
+            issuer: "https://idp.test".to_owned(),
+            subject: "device-impersonator".to_owned(),
+            email: Some(EMAIL.to_owned()),
+            email_verified: true,
+        });
+    let begun: serde_json::Value = begin().await.assert_status(StatusCode::OK).json();
+    fixture.clock.advance(interval);
+    poll(begun["handle"].clone())
+        .await
+        .assert_status(StatusCode::CONFLICT);
+
+    // 202: `subject-1`, whose factor `oidc_block` confirmed.
+    fixture
+        .idp
+        .set_identity(capsule_server::auth::oidc::VerifiedIdentity {
+            issuer: "https://idp.test".to_owned(),
+            subject: "subject-1".to_owned(),
+            email: Some("federated@example.test".to_owned()),
+            email_verified: true,
+        });
+    let begun: serde_json::Value = begin().await.assert_status(StatusCode::OK).json();
+    fixture.clock.advance(interval);
+    poll(begun["handle"].clone())
+        .await
+        .assert_status(StatusCode::ACCEPTED);
+    fixture.idp.set_device_answer(DeviceAnswer::Pending);
+
+    // begin: 429, last, because it spends the deployment-wide budget for the rest of the minute.
+    let mut answered = StatusCode::OK;
+    for _ in 0..61 {
+        answered = begin().await.status();
+        if answered == StatusCode::TOO_MANY_REQUESTS {
+            break;
+        }
+    }
+    assert_eq!(answered, StatusCode::TOO_MANY_REQUESTS);
 }

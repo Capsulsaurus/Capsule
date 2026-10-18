@@ -291,6 +291,14 @@ pub(crate) enum AuthCommands {
         /// With --oidc, print the sign-in address without opening a browser
         #[arg(long, requires = "oidc")]
         no_browser: bool,
+        /// With --oidc, sign in from another device: print an address and a code instead of
+        /// using a browser here
+        #[arg(
+            long,
+            requires = "oidc",
+            conflicts_with_all = ["no_browser", "email", "password_stdin"]
+        )]
+        device: bool,
     },
     /// Set up recovery for a library: bind it to the signed-in account and store its recovery
     /// backup under a new recovery secret

@@ -184,6 +184,8 @@ pub fn router() -> ServerRouter {
                     routes::totp::totp_verify_login,
                     routes::oidc::begin_oidc_login,
                     routes::oidc::complete_oidc_login,
+                    routes::oidc::begin_oidc_device_login,
+                    routes::oidc::poll_oidc_device_login,
                 ])
                 // The cross-device add: one code, one channel, and the writes into it.
                 .mount(kynos::routes![

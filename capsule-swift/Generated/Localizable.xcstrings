@@ -29425,6 +29425,78 @@
         }
       }
     },
+    "cli.auth.login.oidc_device_code": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "and enter this code: %@"
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_device_complete": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Or open this address, which already carries the code:"
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_device_in_progress": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signing in to Capsule through your identity provider, from another device…"
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_device_timed_out": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The sign-in was not approved in time. Run the command again to get a new code."
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_device_visit": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On any device with a browser, open this address:"
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_device_waiting": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Waiting up to %lld minute for you to approve the sign-in…"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Waiting up to %lld minutes for you to approve the sign-in…"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "cli.auth.login.oidc_in_progress": {
       "localizations": {
         "en": {
@@ -30469,6 +30541,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Login to Capsule"
+          }
+        }
+      }
+    },
+    "cli.help.auth.login.arg.device": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "With --oidc, sign in from another device: print an address and a code instead of using a browser here"
           }
         }
       }
@@ -39111,6 +39193,56 @@
           "stringUnit": {
             "state": "translated",
             "value": "Too many sign-ins are already in progress. Please try again in a moment."
+          }
+        }
+      }
+    },
+    "error.auth.oidc_device_denied": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The sign-in was declined at your identity provider."
+          }
+        }
+      }
+    },
+    "error.auth.oidc_device_expired": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That sign-in code has expired or was already used. Start again."
+          }
+        }
+      }
+    },
+    "error.auth.oidc_device_pending": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for you to finish signing in on your other device."
+          }
+        }
+      }
+    },
+    "error.auth.oidc_device_slow_down": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking too often; slowing down."
+          }
+        }
+      }
+    },
+    "error.auth.oidc_device_unsupported": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signing in without a browser isn't available with this server's identity provider."
           }
         }
       }

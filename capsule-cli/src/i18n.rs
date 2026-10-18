@@ -61,6 +61,13 @@ pub mod keys {
     pub const AUTH_LOGIN_OIDC_TIMED_OUT: &str = "cli.auth.login.oidc_timed_out";
     pub const AUTH_LOGIN_OIDC_DENIED: &str = "cli.auth.login.oidc_denied";
     pub const AUTH_LOGIN_OIDC_DENIED_DESCRIBED: &str = "cli.auth.login.oidc_denied_described";
+    // `capsule auth login --oidc --device` — the device authorization grant (issue #635).
+    pub const AUTH_LOGIN_OIDC_DEVICE_IN_PROGRESS: &str = "cli.auth.login.oidc_device_in_progress";
+    pub const AUTH_LOGIN_OIDC_DEVICE_VISIT: &str = "cli.auth.login.oidc_device_visit";
+    pub const AUTH_LOGIN_OIDC_DEVICE_CODE: &str = "cli.auth.login.oidc_device_code";
+    pub const AUTH_LOGIN_OIDC_DEVICE_COMPLETE: &str = "cli.auth.login.oidc_device_complete";
+    pub const AUTH_LOGIN_OIDC_DEVICE_WAITING: &str = "cli.auth.login.oidc_device_waiting";
+    pub const AUTH_LOGIN_OIDC_DEVICE_TIMED_OUT: &str = "cli.auth.login.oidc_device_timed_out";
     pub const AUTH_REGISTER_IN_PROGRESS: &str = "cli.auth.register.in_progress";
     pub const AUTH_REGISTER_SUCCESS: &str = "cli.auth.register.success";
     pub const AUTH_REGISTER_FAILED: &str = "cli.auth.register.failed";

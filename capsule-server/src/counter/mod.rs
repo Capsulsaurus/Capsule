@@ -204,6 +204,14 @@ pub enum CounterKey {
     /// retired surface namespaced counters with hand-formatted strings, and a sentinel string is
     /// that mistake with a nicer name.
     OidcAuthorizeRefused,
+    /// Every OIDC device authorization begun, deployment-wide (issue #635).
+    ///
+    /// One bucket, because the begin carries nothing a caller does not choose: there is no
+    /// redirect host to key on, and the binding challenge is a fresh random hash per ceremony,
+    /// so keying on it would hand every request a fresh allowance. It is the same unauthenticated
+    /// write into a store the authorize is, so it is bounded the way the authorize's admitted
+    /// path is in effect — a ceiling on how fast pending ceremonies can be begun.
+    OidcDevice,
     /// Requests from one federated peer server, across the sync and blob reads (`S-E2`,
     /// invariant 21).
     ///
@@ -279,6 +287,7 @@ impl CounterKey {
             Self::RegistrationSource(_) => "registration_source",
             Self::OidcAuthorize(_) => "oidc_authorize",
             Self::OidcAuthorizeRefused => "oidc_authorize_refused",
+            Self::OidcDevice => "oidc_device",
             Self::PeerRequests(_) => "peer_requests",
             Self::FederatedReports(_) => "federated_reports",
             Self::PeerReports(_) => "peer_reports",
@@ -304,6 +313,7 @@ impl CounterKey {
             Self::SecondFactor(_) => ceilings::SECOND_FACTOR,
             Self::OidcAuthorize(_) => ceilings::OIDC_AUTHORIZE,
             Self::OidcAuthorizeRefused => ceilings::OIDC_AUTHORIZE_REFUSED,
+            Self::OidcDevice => ceilings::OIDC_DEVICE,
             Self::PeerRequests(_) | Self::PeerReports(_) => ceilings::PEER_ORIGIN,
             Self::FederatedReports(_) => ceilings::FEDERATED_REPORTS,
             Self::FederatedIntake(_) => ceilings::FEDERATED_INTAKE,
@@ -333,7 +343,9 @@ impl CounterKey {
             // `capsule:counter:{kind}:{scope}` and a key ending in `:` invites a second, subtly
             // different spelling later. `GLOBAL` is that segment, shared deliberately: `as_str`
             // already distinguishes the two kinds, so one constant cannot collide them.
-            Self::EnrollmentRedemptionMalformed | Self::OidcAuthorizeRefused => GLOBAL_SCOPE,
+            Self::EnrollmentRedemptionMalformed | Self::OidcAuthorizeRefused | Self::OidcDevice => {
+                GLOBAL_SCOPE
+            }
         }
     }
 }
@@ -496,6 +508,10 @@ pub mod ceilings {
     /// [`CounterKey::OidcAuthorizeRefused`](super::CounterKey::OidcAuthorizeRefused) — one key
     /// exists, so one window.
     pub const OIDC_AUTHORIZE_REFUSED: usize = 1;
+
+    /// [`CounterKey::OidcDevice`](super::CounterKey::OidcDevice) — one key exists, so one
+    /// window.
+    pub const OIDC_DEVICE: usize = 1;
 
     /// [`CounterKey::PeerRequests`](super::CounterKey::PeerRequests) and
     /// [`CounterKey::PeerReports`](super::CounterKey::PeerReports) — both keyed on a peer's

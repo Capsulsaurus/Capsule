@@ -83,6 +83,21 @@ pub mod error_codes {
     /// `error.auth.oidc_at_capacity`
     pub const AUTH_OIDC_AT_CAPACITY: &str = "error.auth.oidc_at_capacity";
 
+    /// `error.auth.oidc_device_denied`
+    pub const AUTH_OIDC_DEVICE_DENIED: &str = "error.auth.oidc_device_denied";
+
+    /// `error.auth.oidc_device_expired`
+    pub const AUTH_OIDC_DEVICE_EXPIRED: &str = "error.auth.oidc_device_expired";
+
+    /// `error.auth.oidc_device_pending`
+    pub const AUTH_OIDC_DEVICE_PENDING: &str = "error.auth.oidc_device_pending";
+
+    /// `error.auth.oidc_device_slow_down`
+    pub const AUTH_OIDC_DEVICE_SLOW_DOWN: &str = "error.auth.oidc_device_slow_down";
+
+    /// `error.auth.oidc_device_unsupported`
+    pub const AUTH_OIDC_DEVICE_UNSUPPORTED: &str = "error.auth.oidc_device_unsupported";
+
     /// `error.auth.oidc_exchange_failed`
     pub const AUTH_OIDC_EXCHANGE_FAILED: &str = "error.auth.oidc_exchange_failed";
 

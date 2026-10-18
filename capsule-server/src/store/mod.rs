@@ -37,8 +37,8 @@
 //! # Adapters, and what they are for
 //!
 //! **Two** adapters per port, and which two is a property of the port rather than a menu.
-//! The six volatile stores — [`AuthStateStore`], [`UploadSessionStore`] and the four ceremony
-//! stores, [`OidcAuthorizationStore`] among them since #460 — get the Valkey adapter in [`valkey`] and the deterministic in-memory double in
+//! The seven volatile stores — [`AuthStateStore`], [`UploadSessionStore`] and the five ceremony
+//! stores, [`OidcAuthorizationStore`] among them since #460 and [`OidcDeviceStore`] since #635 — get the Valkey adapter in [`valkey`] and the deterministic in-memory double in
 //! [`memory`], and nothing else: Valkey is required, the server refuses to boot without
 //! `VALKEY_URL` (design/filesystem/server.md, "Required Services"), and [`crate::boot`] connects
 //! to it and proves it answers `PING` before anything else is assembled. The rejected
@@ -88,15 +88,16 @@ use jiff::{SignedDuration, Timestamp};
 
 pub use self::auth::{AuthStateStore, CohortRecord, CohortStore, SessionRecord};
 pub use self::ceremony::{
-    CHALLENGE_TTL, ChallengeStore, ChannelStore, Direction, DrainOutcome, ENROLLMENT_CODE_TTL,
-    EnrollmentStore, OIDC_AUTHORIZATION_TTL, OidcAuthorizationStore, PendingAuthorization,
-    PendingEnrollment, RELAY_CHANNEL_TTL, RelayChannel, RelayOutcome, RelayPayload,
-    RevokeAllChallenge,
+    CHALLENGE_TTL, ChallengeStore, ChannelStore, DEVICE_POLL_FLOOR, DEVICE_SLOW_DOWN_STEP,
+    DevicePollSlot, Direction, DrainOutcome, ENROLLMENT_CODE_TTL, EnrollmentStore,
+    OIDC_AUTHORIZATION_TTL, OIDC_DEVICE_TTL, OidcAuthorizationStore, OidcDeviceStore,
+    PendingAuthorization, PendingDeviceAuthorization, PendingEnrollment, RELAY_CHANNEL_TTL,
+    RelayChannel, RelayOutcome, RelayPayload, RevokeAllChallenge,
 };
 pub use self::cohorts_postgres::PostgresCohorts;
 pub use self::ids::{
-    AlbumId, AssetId, AuthorizationCode, ChallengeToken, ChannelId, EnrollmentCode, OidcNonce,
-    OidcState, OwnerId, PkceVerifier, SessionId, UploadId, UserId,
+    AlbumId, AssetId, AuthorizationCode, ChallengeToken, ChannelId, DeviceCode, EnrollmentCode,
+    OidcDeviceHandle, OidcNonce, OidcState, OwnerId, PkceVerifier, SessionId, UploadId, UserId,
 };
 pub use self::upload::{
     AcceptedChunk, BlobRole, FinalizeClaim, UploadSessionRecord, UploadSessionStatus,

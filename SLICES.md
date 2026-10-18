@@ -385,7 +385,7 @@ lives.
 | S-I7 | The Rust runtime formatter cannot do ICU plurals | i18n | — | M | ACTIVE | done | plurals evaluated; `select`/`offset:` still refused |
 | S-I8 | clap `--help` text is unreachable from the catalogs | i18n | — | S | ACTIVE | done | help is localized via `cli.help.*`; `ValueEnum` variant help stays English |
 | S-N1 | OIDC relying party (server) | auth | — | L | RETIRED | done\* | in-process mock IdP stands in for the testcontainer one; durable adapters landed (#460) |
-| S-N2 | SDK/CLI OIDC login flows | auth | S-N1 | M | MIXED | part | SDK half landed with `S-N1`; CLI loopback `--oidc` landed (#461); device grant is #635 |
+| S-N2 | SDK/CLI OIDC login flows | auth | S-N1 | M | MIXED | done | SDK half landed with `S-N1`; CLI loopback `--oidc` landed (#461); device grant `--oidc --device` landed (#635) |
 | S-N3 | `device_id` on session listing + ceremony cohorts | auth | — | S | RETIRED | done | the wire half lands with `S-C13`; the TOTP ceremony with `S-C55`; passkeys retire on `S-C56` |
 | S-P1 | `capsule_sdk` FFI workspace verbs | iOS path | S-A10 | L | MIXED | done | feed `manifest_cbor` shape → `S-C30` |
 | S-P2 | Swift auth service + Keychain + login screen | iOS path | S-P1 | L | MIXED | ready | |
@@ -5396,8 +5396,20 @@ lands on Kynos rather than on Salvo.
   wait capped by the ceremony deadline, and the session settled through the password path's
   own function, second factor included. Scripted-ceremony tests cover the listener and the
   orchestration; `capsule-cli/tests/oidc_dex.rs` is the dex round trip, gated on
-  `CAPSULE_TEST_DEX=1`. **Remainder (#635):** the device authorization grant (RFC 8628) with
-  its own ceremony store, routes, contract and CLI arm.
+  `CAPSULE_TEST_DEX=1`.
+- **Part landed (issue #635):** the device authorization grant (RFC 8628) —
+  `POST /v1/auth/oidc/device` and `POST /v1/auth/oidc/device/poll`, the server proxying the
+  provider's device endpoint and holding the device code behind a handle of its own, the
+  poll answering what the callback answers (second factor included) or one
+  `error.auth.oidc_device_*` code per RFC 8628 answer, the interval enforced server-side
+  and raised five seconds per `slow_down`, and the ID token verified with every callback
+  check but the nonce, which must be absent. `OidcDeviceStore` sits beside
+  `OidcAuthorizationStore` with in-memory and Valkey adapters under the shared
+  conformance suite; `capsule_sdk::auth::AuthClient::begin_oidc_device_login` /
+  `poll_oidc_device_login` are the SDK legs; `capsule auth login --oidc --device` prints the
+  address and code and polls. `capsule-server/tests/oidc.rs` covers each provider answer
+  against the mock provider's device endpoint; `capsule-cli/tests/oidc_dex.rs` carries the
+  gated dex round trip for it.
 
 ### S-N3 — `device_id` on session listing + ceremony cohorts
 
