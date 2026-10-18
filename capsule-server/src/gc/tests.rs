@@ -640,15 +640,17 @@ async fn a_dry_run_credits_nothing() {
     assert_eq!(h.used("uploader").await, 16);
 }
 
-/// An index that lands a restore after the purge worker has listed its tombstones and before
-/// it purges them — the interleaving a real `TrashRestore` can produce, made deterministic.
+/// An index that changes a listed row after the purge worker has listed its tombstones and
+/// before it purges them, made deterministic: it lands a `restore` (the interleaving a real
+/// `TrashRestore` can produce), or treats the `dropped` row as gone by the time it is purged.
 #[derive(Debug)]
-struct RestoresAfterListing {
+struct RacesTheListing {
     inner: Arc<InMemoryAssetIndex>,
     restore: std::sync::Mutex<Option<LifecycleOp>>,
+    dropped: Option<AssetId>,
 }
 
-impl AssetIndex for RestoresAfterListing {
+impl AssetIndex for RacesTheListing {
     fn reserve(&self, asset: PendingAsset) -> crate::index::IndexFuture<'_, Reservation> {
         self.inner.reserve(asset)
     }
@@ -743,6 +745,9 @@ impl AssetIndex for RestoresAfterListing {
         asset: &'a AssetId,
         now: Timestamp,
     ) -> crate::index::IndexFuture<'a, crate::index::PurgeOutcome> {
+        if self.dropped.as_ref() == Some(asset) {
+            return Box::pin(async { Ok(crate::index::PurgeOutcome::Unknown) });
+        }
         self.inner.purge(asset, now)
     }
 
@@ -801,9 +806,10 @@ async fn a_restore_between_listing_and_purge_keeps_its_bytes() {
         retention_until: None,
         at: h.clock.now(),
     };
-    let racing = Arc::new(RestoresAfterListing {
+    let racing = Arc::new(RacesTheListing {
         inner: h.index.clone(),
         restore: std::sync::Mutex::new(Some(restore)),
+        dropped: None,
     });
     let context = CollectionContext::new(
         racing,
@@ -844,6 +850,47 @@ async fn a_restore_between_listing_and_purge_keeps_its_bytes() {
         h.blobs.stat(&held).await.expect("stat").is_some(),
         "the restored asset's bytes are still on disk"
     );
+}
+
+#[tokio::test]
+async fn a_listed_tombstone_whose_row_is_gone_at_purge_time_is_skipped() {
+    let h = Harness::new();
+    h.publish("vanished", b"its row went before the purge")
+        .await;
+    h.delete("vanished", Some(Timestamp::UNIX_EPOCH), 1).await;
+    h.publish("expired", b"purged in the same pass").await;
+    h.delete("expired", Some(Timestamp::UNIX_EPOCH), 2).await;
+    h.clock.advance(days(1));
+
+    let id = AssetId::new("vanished");
+    let racing = Arc::new(RacesTheListing {
+        inner: h.index.clone(),
+        restore: std::sync::Mutex::new(None),
+        dropped: Some(id.clone()),
+    });
+    let context = CollectionContext::new(
+        racing,
+        h.blobs.clone(),
+        h.marks.clone(),
+        h.quotas.clone(),
+        h.clock.clone(),
+        DEFAULT_GRACE_WINDOW,
+    );
+
+    let report = purge_expired(&context, Mode::Apply, 10)
+        .await
+        .expect("a missing row is accounted for, not an error that fails the pass");
+    assert_eq!(
+        report.skipped,
+        vec![id],
+        "the listed row the purge found gone is reported as skipped"
+    );
+    assert_eq!(
+        report.purged,
+        vec![AssetId::new("expired")],
+        "the rest of the page is still purged"
+    );
+    assert!(report.retained.is_empty(), "{report:?}");
 }
 
 /// A [`ProgressSweep`] that records the instant of every sweep, or fails when told to.
