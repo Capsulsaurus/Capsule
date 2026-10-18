@@ -30,8 +30,12 @@
 //!   open. The budget is checked against every frame the pipeline will allocate from the file's
 //!   own claims — the sensor, the active area, the default crop and each tile — and every strip
 //!   and tile byte range must lie inside the file, because the reader allocates each one at the
-//!   length the file states before it reads a byte. A JPEG XL tile (ProRAW) states its own size
-//!   in its codestream header, so each one is probed too. What this cannot bound is the
+//!   length the file states before it reads a byte. The work is bounded as well as each
+//!   allocation: a tile or strip must fit inside the sensor, the file may list no more of them
+//!   than the sensor's grid holds, and a JPEG XL tile (ProRAW), which states its own size in
+//!   its codestream header, is probed and must fit inside the tile or strip it fills. Without
+//!   those, a few-KB file listing many entries at one compressible codestream would make the
+//!   reader run that many full-budget decodes. What this cannot bound is the
 //!   allocation `open` makes for an IFD entry's value count while parsing, which happens inside
 //!   the crate before Capsule sees anything.
 //! - **Orientation** is applied by `process`, so it is reported in `orientation_applied` and
@@ -507,8 +511,10 @@ struct RawLayout {
     /// The default crop (`x`, `y`, `w`, `h`), relative to the active area, that `process`
     /// applies when it fits.
     crop: Option<(u32, u32, u32, u32)>,
-    /// The tile size, when the raw frame is tiled.
-    tile: Option<(u32, u32)>,
+    /// The frame each range decodes into, as the file declares it: the tile size, or a strip's
+    /// sensor width by its rows per strip (the whole sensor where it states none). The reader
+    /// places range `i` on this grid, so the grid also bounds how many ranges there can be.
+    unit_size: (u32, u32),
     /// `"strip"` or `"tile"`: what [`ranges`](Self::ranges) holds, for the error detail.
     unit: &'static str,
     /// Every strip or tile as `(offset, length)`, each of which the reader allocates at the
@@ -569,7 +575,12 @@ fn raw_layout(raw: &OpenRaw<'_>, format: StillFormat) -> Result<RawLayout, Media
                 ),
                 // ARW's crop tags *are* its active area; `process` applies no second crop.
                 crop: None,
-                tile: tiled.then_some((m.tile_width, m.tile_height)),
+                // An untiled ARW is one LJPEG stream covering the whole sensor.
+                unit_size: if tiled {
+                    (m.tile_width, m.tile_height)
+                } else {
+                    (m.sensor_size.width, m.sensor_size.height)
+                },
                 unit: if tiled { "tile" } else { "strip" },
                 ranges: if tiled {
                     pairs(&m.tile_offsets, &m.tile_byte_counts)
@@ -599,7 +610,15 @@ fn raw_layout(raw: &OpenRaw<'_>, format: StillFormat) -> Result<RawLayout, Media
                     .default_crop_origin
                     .zip(m.default_crop_size)
                     .map(|((x, y), (w, h))| (x, y, w, h)),
-                tile: tiled.then_some((m.tile_width, m.tile_height)),
+                // Upstream reads a zero `RowsPerStrip` as one strip of the whole sensor, and
+                // clips a larger one to the sensor's height.
+                unit_size: if tiled {
+                    (m.tile_width, m.tile_height)
+                } else if m.rows_per_strip == 0 {
+                    (sensor_w, sensor_h)
+                } else {
+                    (sensor_w, m.rows_per_strip.min(sensor_h))
+                },
                 unit: if tiled { "tile" } else { "strip" },
                 ranges: if tiled {
                     pairs(&m.tile_offsets, &m.tile_byte_counts)
@@ -650,6 +669,10 @@ fn check_raw_frame(
 /// the size the file states, and an allocation failure aborts rather than unwinds, so
 /// [`decode_guarded`] cannot catch it. Indexing faults (an active area outside the sensor) do
 /// unwind, but are refused here too so they report as a decode failure rather than a panic.
+///
+/// The number of decodes is held too, not only the size of each: every strip or tile must fit
+/// the sensor, there may be no more of them than the sensor's grid of that size holds, and a
+/// JPEG XL codestream must fit the strip or tile it fills.
 fn check_raw_layout(
     bytes: &[u8],
     format: StillFormat,
@@ -662,10 +685,31 @@ fn check_raw_layout(
     if let Some((_, _, crop_w, crop_h)) = layout.crop {
         check_raw_frame(format, "default crop", (crop_w, crop_h), limit)?;
     }
-    if let Some(tile) = layout.tile {
-        check_raw_frame(format, "tile", tile, limit)?;
-    }
+    check_raw_frame(format, layout.unit, layout.unit_size, limit)?;
     let (sensor_w, sensor_h) = layout.sensor;
+    let unit = layout.unit;
+    let (unit_w, unit_h) = layout.unit_size;
+    if unit_w > sensor_w || unit_h > sensor_h {
+        return Err(MediaError::Decode {
+            format,
+            detail: format!(
+                "{unit} size {unit_w}x{unit_h} exceeds the {sensor_w}x{sensor_h} sensor"
+            ),
+        });
+    }
+    // The reader places range `i` at column `i % across`, row `i / across`; anything past the
+    // grid is a range it would decode in full and then place nowhere (or underflow on).
+    let grid = u64::from(sensor_w.div_ceil(unit_w)) * u64::from(sensor_h.div_ceil(unit_h));
+    let count = layout.ranges.len() as u64;
+    if count > grid {
+        return Err(MediaError::Decode {
+            format,
+            detail: format!(
+                "{count} {unit}s listed, but a {sensor_w}x{sensor_h} sensor holds at most \
+                 {grid} {unit}s of {unit_w}x{unit_h}"
+            ),
+        });
+    }
     if u64::from(x) + u64::from(width) > u64::from(sensor_w)
         || u64::from(y) + u64::from(height) > u64::from(sensor_h)
     {
@@ -685,7 +729,6 @@ fn check_raw_layout(
     }
     let file_len = bytes.len() as u64;
     for (index, &(offset, length)) in layout.ranges.iter().enumerate() {
-        let unit = layout.unit;
         let Some(end) = offset.checked_add(length).filter(|end| *end <= file_len) else {
             return Err(MediaError::Decode {
                 format,
@@ -701,12 +744,28 @@ fn check_raw_layout(
                 format,
                 detail: format!("JPEG XL {unit} {index} header: {e}"),
             })?;
-            check_raw_frame(
-                format,
-                "JPEG XL tile",
-                (probe.size.width, probe.size.height),
-                limit,
-            )?;
+            // The tile decoder allocates from this header, not from the declared size, so a
+            // codestream larger than its slot is refused. Fitting the slot also holds it to the
+            // budget: the slot fits the sensor, which is already within `limit`.
+            let (jxl_w, jxl_h) = (probe.size.width, probe.size.height);
+            if jxl_w > unit_w || jxl_h > unit_h {
+                tracing::warn!(
+                    %format,
+                    index,
+                    jxl_w,
+                    jxl_h,
+                    unit_w,
+                    unit_h,
+                    "media: refusing a JPEG XL codestream larger than its declared slot"
+                );
+                return Err(MediaError::Decode {
+                    format,
+                    detail: format!(
+                        "JPEG XL {unit} {index} codestream is {jxl_w}x{jxl_h}, larger than \
+                         the declared {unit_w}x{unit_h} {unit}"
+                    ),
+                });
+            }
         }
     }
     Ok(())

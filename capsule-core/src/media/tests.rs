@@ -1081,6 +1081,17 @@ fn dng_cfa(
     samples: &[u16],
     edit: impl FnOnce(&mut Vec<IfdEntry>),
 ) -> Vec<u8> {
+    dng_cfa_with(width, height, samples, |entries, _, _| edit(entries))
+}
+
+/// [`dng_cfa`] whose `edit` is also given the strip's offset and length, for a fixture that
+/// lists the same strip more than once.
+fn dng_cfa_with(
+    width: u32,
+    height: u32,
+    samples: &[u16],
+    edit: impl FnOnce(&mut Vec<IfdEntry>, u32, u32),
+) -> Vec<u8> {
     let payload: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
     tiff_file(&payload, |writer, offset, length| {
         let mut entries = vec![
@@ -1101,7 +1112,7 @@ fn dng_cfa(
             IfdEntry::long(TiffTag::WhiteLevel, 65535),
             IfdEntry::rationals(TiffTag::AsShotNeutral, &[(1, 1), (1, 1), (1, 1)]),
         ];
-        edit(&mut entries);
+        edit(&mut entries, offset, length);
         writer.write_ifd(&mut entries, 0).expect("IFD0")
     })
 }
@@ -1109,9 +1120,18 @@ fn dng_cfa(
 /// A ProRAW-shaped DNG: one LinearRaw (already demosaicked) tile of `tile_size`, carried as the
 /// JPEG XL codestream of `frame`.
 fn dng_linear_jxl(tile_size: (u32, u32), frame: &RgbaImage) -> Vec<u8> {
-    let codestream = jxl_bytes(frame, None);
+    dng_linear_jxl_with(&jxl_bytes(frame, None), tile_size, |_, _, _| {})
+}
+
+/// [`dng_linear_jxl`] over an arbitrary `codestream`, with `edit` applied to IFD0's entries and
+/// given the tile's offset and length.
+fn dng_linear_jxl_with(
+    codestream: &[u8],
+    tile_size: (u32, u32),
+    edit: impl FnOnce(&mut Vec<IfdEntry>, u32, u32),
+) -> Vec<u8> {
     let (width, height) = tile_size;
-    tiff_file(&codestream, |writer, offset, length| {
+    tiff_file(codestream, |writer, offset, length| {
         let mut entries = vec![
             IfdEntry::long(TiffTag::ImageWidth, width),
             IfdEntry::long(TiffTag::ImageLength, height),
@@ -1128,6 +1148,7 @@ fn dng_linear_jxl(tile_size: (u32, u32), frame: &RgbaImage) -> Vec<u8> {
             IfdEntry::ascii(TiffTag::Model, "Synthetic ProRAW"),
             IfdEntry::rationals(TiffTag::AsShotNeutral, &[(1, 1), (1, 1), (1, 1)]),
         ];
+        edit(&mut entries, offset, length);
         writer.write_ifd(&mut entries, 0).expect("IFD0")
     })
 }
@@ -1416,8 +1437,10 @@ fn a_linear_raw_dng_decodes_from_its_jpeg_xl_tile() {
 }
 
 /// The RAW budget refuses, before anything is allocated for it, every frame the file claims:
-/// the sensor, the active area, and a JPEG XL tile's own codestream header. None of these
-/// fixtures holds the pixels it claims, which is the point.
+/// the sensor and the active area, at whatever budget the caller sets. None of these fixtures
+/// holds the pixels it claims, which is the point. A JPEG XL tile's own codestream header is
+/// held to its tile, which fits the sensor, by
+/// `a_raw_file_cannot_list_more_work_than_its_sensor_holds`.
 #[test]
 fn an_oversized_raw_frame_is_refused_before_decoding() {
     let over = MediaError::PixelBudgetExceeded {
@@ -1451,20 +1474,198 @@ fn an_oversized_raw_frame_is_refused_before_decoding() {
     assert_eq!(RawshiftDecoder.probe(&active, "arw"), Err(over.clone()));
     assert_eq!(RawshiftDecoder.decode(&active, "arw"), Err(over));
 
-    // A JPEG XL tile whose codestream is larger than the budget, though the tile it fills is
-    // not: the codestream header is what the tile decoder allocates from.
-    let jxl = dng_linear_jxl((16, 16), &gradient(40, 40));
+    // The budget is the caller's: the same small file is refused under a limit it exceeds and
+    // probes under one it does not.
+    let jxl = dng_linear_jxl((16, 16), &gradient(16, 16));
     assert_eq!(
-        probe_raw(&jxl, StillFormat::Dng, 1_000),
+        probe_raw(&jxl, StillFormat::Dng, 200),
         Err(MediaError::PixelBudgetExceeded {
-            pixels: 1_600,
-            limit: 1_000,
+            pixels: 256,
+            limit: 200,
         })
     );
     assert!(
-        probe_raw(&jxl, StillFormat::Dng, 2_000).is_ok(),
+        probe_raw(&jxl, StillFormat::Dng, 256).is_ok(),
         "the same file within budget probes"
     );
+}
+
+/// Assert `bytes` probes and decodes as a `format` decode failure whose detail holds `needle`.
+fn assert_raw_decode_failure(bytes: &[u8], ext: &str, format: StillFormat, needle: &str) {
+    for (stage, result) in [
+        ("probe", RawshiftDecoder.probe(bytes, ext).map(|_| ())),
+        ("decode", RawshiftDecoder.decode(bytes, ext).map(|_| ())),
+    ] {
+        match result {
+            Err(MediaError::Decode {
+                format: got,
+                detail,
+            }) => {
+                assert_eq!(got, format, "{stage}");
+                assert!(detail.contains(needle), "{stage}: {detail}");
+            }
+            other => panic!("{stage} must be a decode failure holding {needle:?}, got {other:?}"),
+        }
+    }
+}
+
+/// The number of decodes is bounded, not only the size of each: a few-KB file listing many
+/// tiles at one codestream would otherwise make the reader run that many full decodes. A tile
+/// or strip must fit the sensor, the file may list no more of them than the sensor's grid
+/// holds, and a JPEG XL codestream must fit the tile it fills.
+#[test]
+fn a_raw_file_cannot_list_more_work_than_its_sensor_holds() {
+    let frame = gradient(16, 16);
+    let codestream = jxl_bytes(&frame, None);
+
+    // Two tile entries at the one codestream, on a sensor that holds one 16x16 tile.
+    let repeated = dng_linear_jxl_with(&codestream, (16, 16), |e, offset, length| {
+        set_entry(e, IfdEntry::longs(TiffTag::TileOffsets, &[offset, offset]));
+        set_entry(
+            e,
+            IfdEntry::longs(TiffTag::TileByteCounts, &[length, length]),
+        );
+    });
+    assert_raw_decode_failure(&repeated, "dng", StillFormat::Dng, "holds at most 1 tile");
+
+    // The same two entries are sound once the sensor's grid holds two tiles.
+    let two_across = dng_linear_jxl_with(&codestream, (16, 16), |e, offset, length| {
+        set_entry(e, IfdEntry::long(TiffTag::ImageWidth, 32));
+        set_entry(e, IfdEntry::longs(TiffTag::TileOffsets, &[offset, offset]));
+        set_entry(
+            e,
+            IfdEntry::longs(TiffTag::TileByteCounts, &[length, length]),
+        );
+    });
+    let probed = RawshiftDecoder
+        .probe(&two_across, "dng")
+        .expect("a full grid probes");
+    assert_eq!(probed.stored_dimensions, (32, 16));
+
+    // A tile larger than the sensor it tiles.
+    let big_tile = dng_linear_jxl_with(&codestream, (16, 16), |e, _, _| {
+        set_entry(e, IfdEntry::long(TiffTag::TileWidth, 64));
+        set_entry(e, IfdEntry::long(TiffTag::TileLength, 64));
+    });
+    assert_raw_decode_failure(
+        &big_tile,
+        "dng",
+        StillFormat::Dng,
+        "exceeds the 16x16 sensor",
+    );
+
+    // A JPEG XL codestream larger than the tile it fills: its header, not the tile size, is
+    // what the tile decoder allocates from.
+    let oversized = dng_linear_jxl((16, 16), &gradient(40, 40));
+    assert_raw_decode_failure(
+        &oversized,
+        "dng",
+        StillFormat::Dng,
+        "codestream is 40x40, larger than the declared 16x16 tile",
+    );
+
+    // Strips are held to the same grid: a sensor of 8 rows in strips of 8 holds one strip.
+    let samples = split_cfa(16, 8, 50_000, 5_000);
+    let strips = dng_cfa_with(16, 8, &samples, |e, offset, length| {
+        set_entry(e, IfdEntry::longs(TiffTag::StripOffsets, &[offset, offset]));
+        set_entry(
+            e,
+            IfdEntry::longs(TiffTag::StripByteCounts, &[length, length]),
+        );
+    });
+    assert_raw_decode_failure(&strips, "dng", StillFormat::Dng, "holds at most 1 strip");
+
+    // And so are ARW tiles: a 32x32 tile on a 16x8 sensor.
+    let arw = sony_arw(
+        16,
+        8,
+        &split_cfa(16, 8, 12_000, 1_200),
+        |_| {},
+        |e| {
+            let (offset, length) = (8, 64);
+            set_entry(e, IfdEntry::long(TiffTag::TileWidth, 32));
+            set_entry(e, IfdEntry::long(TiffTag::TileLength, 32));
+            set_entry(e, IfdEntry::longs(TiffTag::TileOffsets, &[offset]));
+            set_entry(e, IfdEntry::longs(TiffTag::TileByteCounts, &[length]));
+        },
+    );
+    assert_raw_decode_failure(&arw, "arw", StillFormat::Arw, "exceeds the 16x8 sensor");
+}
+
+/// The layout refusals that stand before any range is read: a zero-sized sensor, a file that
+/// locates no pixel data, and a JPEG XL tile whose codestream header does not parse.
+#[test]
+fn a_raw_layout_with_nothing_to_decode_is_refused() {
+    let samples = split_cfa(16, 8, 50_000, 5_000);
+    let zero = dng_cfa(16, 8, &samples, |e| {
+        set_entry(e, IfdEntry::long(TiffTag::ImageWidth, 0));
+    });
+    assert_eq!(
+        RawshiftDecoder.probe(&zero, "dng").map(|_| ()),
+        Err(MediaError::ZeroDimension {
+            width: 0,
+            height: 8,
+        })
+    );
+
+    let no_data = dng_cfa(16, 8, &samples, |e| {
+        e.retain(|entry| entry.tag != TiffTag::StripByteCounts as u16);
+    });
+    assert_raw_decode_failure(
+        &no_data,
+        "dng",
+        StillFormat::Dng,
+        "locates no strip or tile data",
+    );
+
+    let garbage = dng_linear_jxl_with(&[0x5A; 64], (16, 16), |_, _, _| {});
+    assert_raw_decode_failure(&garbage, "dng", StillFormat::Dng, "JPEG XL tile 0 header");
+}
+
+/// A DNG's `ActiveArea` (`top, left, bottom, right`) is the frame the demosaic renders, so the
+/// probe reports it as the stored dimensions; one reaching outside the sensor is a decode
+/// failure, not an indexing panic.
+#[test]
+fn a_dng_active_area_is_the_stored_frame_and_must_fit_the_sensor() {
+    let (width, height) = (16u32, 8u32);
+    let samples = split_cfa(width, height, 50_000, 5_000);
+    let inside = dng_cfa(width, height, &samples, |e| {
+        set_entry(e, IfdEntry::longs(TiffTag::ActiveArea, &[0, 2, 8, 14]));
+    });
+    let probed = RawshiftDecoder.probe(&inside, "dng").expect("probe");
+    assert_eq!(probed.stored_dimensions, (12, 8));
+    let decoded = RawshiftDecoder.decode(&inside, "dng").expect("decode");
+    assert_eq!((decoded.width(), decoded.height()), (12, 8));
+
+    let outside = dng_cfa(width, height, &samples, |e| {
+        set_entry(e, IfdEntry::longs(TiffTag::ActiveArea, &[0, 8, 8, 24]));
+    });
+    assert_raw_decode_failure(&outside, "dng", StillFormat::Dng, "outside the 16x8 sensor");
+}
+
+/// A `RawError` other than `Unsupported` is a broken file, not a known gap: an ARW whose
+/// lossless-JPEG strip has lost its start-of-image marker probes (the layout is sound) and then
+/// fails in `process` as [`MediaError::Decode`].
+#[test]
+fn a_raw_reader_failure_is_a_decode_failure() {
+    let mut arw = sony_arw(16, 8, &split_cfa(16, 8, 12_000, 1_200), |_| {}, |_| {});
+    assert_eq!(
+        &arw[8..10],
+        &[0xFF, 0xD8],
+        "the strip starts after the header"
+    );
+    arw[8..10].copy_from_slice(&[0, 0]);
+    assert!(
+        RawshiftDecoder.probe(&arw, "arw").is_ok(),
+        "the layout is sound"
+    );
+    match RawshiftDecoder.decode(&arw, "arw") {
+        Err(MediaError::Decode { format, detail }) => {
+            assert_eq!(format, StillFormat::Arw);
+            assert!(detail.starts_with("RAW process: "), "{detail}");
+        }
+        other => panic!("a corrupt strip must be a decode failure, got {other:?}"),
+    }
 }
 
 /// A layout the reader would trust and fault on is a decode failure, not a deferral: a strip
