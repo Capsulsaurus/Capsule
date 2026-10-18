@@ -142,7 +142,8 @@ pub enum RemoteError {
     #[error(transparent)]
     Recovery(#[from] RecoveryError),
     /// Fetching or publishing the account's signed device directory failed
-    /// (`capsule auth recover` joining the new device to it).
+    /// (`capsule auth recover` joining the new device to it), or `capsule auth escrow` found it
+    /// signed under an identity key other than the library's (`UntrustedSignature`).
     #[error(transparent)]
     Directory(#[from] DirectoryError),
     /// The account profile could not be read, so the account's server id is unknown.
@@ -609,6 +610,9 @@ pub struct EscrowSetup {
 /// 1. resume the stored session and read the account's server id (`GET /v1/auth/profile`),
 ///    then refuse with [`LifecycleError::AccountRebind`] when the library's id differs from it
 ///    and the library already holds assets, so no secret is minted that the bind would discard;
+///    and refuse with [`DirectoryError::UntrustedSignature`] when the account's published
+///    device directory does not verify under the library's identity key — another library of
+///    the account anchored its own, so a recovery from this escrow could never join it;
 /// 2. unless `replace`, refuse with [`RemoteError::EscrowAlreadyStored`] when the account
 ///    already has an escrow (`GET /v1/auth/escrow`): storing another would retire the secret
 ///    that opens it, and that may belong to another library of the same account;
@@ -625,8 +629,10 @@ pub struct EscrowSetup {
 /// # Errors
 ///
 /// [`RemoteError::NotAuthenticated`] with no stored session; [`RemoteError::Profile`] when the
-/// account id cannot be read; the two refusals above; [`RemoteError::Lifecycle`] for the bind
-/// or the wrap; [`RemoteError::Recovery`] for an escrow or sealed-identity call.
+/// account id cannot be read; the refusals above; [`RemoteError::Directory`] when the account's
+/// directory does not verify under the library's identity key (code
+/// `error.directory.untrusted_signature`) or cannot be fetched; [`RemoteError::Lifecycle`] for
+/// the bind or the wrap; [`RemoteError::Recovery`] for an escrow or sealed-identity call.
 #[instrument(skip_all, fields(library_user = %workspace.user_id(), replace = replace))]
 pub async fn auth_escrow(
     remote: &RemoteConfig,
@@ -670,6 +676,8 @@ async fn escrow_with(
         ))
         .into());
     }
+    let directory = DirectoryClient::new(session.clone(), &remote.auth_endpoint);
+    ensure_identity_anchors_account(&directory, user_id, workspace).await?;
     let recovery = RecoveryClient::new(session, api_root)?;
     if !replace {
         match recovery.fetch_escrow().await {
@@ -708,6 +716,54 @@ async fn escrow_with(
         user_id,
         replaced: stored.replaced,
     })
+}
+
+/// Refuse to escrow a library whose identity key is not the one account `user_id`'s published
+/// device directory is signed under.
+///
+/// The directory is fetched under `workspace`'s identity key: a document that verifies, or none
+/// published at all ([`DirectoryError::NotPublished`], so the first recovery publishes the
+/// account's first directory), passes. A document that does not verify
+/// ([`DirectoryError::UntrustedSignature`]) means another library of the account anchored its
+/// own key: a recovery from this library's escrow could never join that directory (#625), so
+/// the escrow is refused before a secret is minted. Any other failure is returned as is, since
+/// the question cannot be answered without the directory.
+async fn ensure_identity_anchors_account(
+    directory: &DirectoryClient,
+    user_id: Uuid,
+    workspace: &Workspace,
+) -> Result<(), RemoteError> {
+    match directory.fetch(user_id, &workspace.user_ik_public()).await {
+        Ok(published) => {
+            tracing::debug!(
+                %user_id,
+                directory_version = published.core.directory_version,
+                "escrow: the account's directory verifies under this library's identity key"
+            );
+            Ok(())
+        }
+        Err(DirectoryError::NotPublished) => {
+            tracing::debug!(%user_id, "escrow: the account has no directory published yet");
+            Ok(())
+        }
+        Err(DirectoryError::UntrustedSignature) => {
+            tracing::warn!(
+                %user_id,
+                library_user = %workspace.user_id(),
+                "escrow: refused before minting, the account's directory is signed under another \
+                 library's identity key"
+            );
+            Err(DirectoryError::UntrustedSignature.into())
+        }
+        Err(error) => {
+            tracing::warn!(
+                %user_id,
+                %error,
+                "escrow: refused, the account's directory could not be fetched"
+            );
+            Err(error.into())
+        }
+    }
 }
 
 /// The outcome of a `capsule sync` run.
