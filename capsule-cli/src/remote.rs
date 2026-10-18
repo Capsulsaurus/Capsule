@@ -312,7 +312,7 @@ pub async fn auth_logout(remote: &RemoteConfig, store: &SessionStore) -> Result<
 /// It is fixed here rather than inside the SDK because the store is the CLI's: the SDK's
 /// `Session` is deliberately in-memory and says so, and a library that wrote to a caller's disk
 /// would be the surprising thing.
-async fn resume_session(
+pub(crate) async fn resume_session(
     remote: &RemoteConfig,
     store: &SessionStore,
 ) -> Result<Session, RemoteError> {
@@ -330,7 +330,7 @@ async fn resume_session(
 ///
 /// A session that has been logged out exports nothing; that is not an error, it is the store
 /// having nothing left to hold.
-async fn checkpoint(store: &SessionStore, session: &Session) {
+pub(crate) async fn checkpoint(store: &SessionStore, session: &Session) {
     let Some(persisted) = session.export().await else {
         return;
     };

@@ -151,6 +151,11 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         command: RepairCommands,
     },
+    /// Issue and revoke view-only share links on the server
+    Share {
+        #[command(subcommand)]
+        command: ShareCommands,
+    },
     /// Run the offline end-to-end data-plane showcase (real cryptography, no network)
     Demo {
         /// Working directory for the demo libraries (a temp dir is used if omitted)
@@ -260,6 +265,47 @@ pub(crate) enum RepairCommands {
         /// covers the whole library); only meaningful with --apply
         #[arg(long, value_name = "COUNT", value_parser = clap::value_parser!(u64).range(1..))]
         limit: Option<u64>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum ShareCommands {
+    /// Issue a view-only share link for an album or one asset, and print the URL to send
+    Create {
+        /// Path to the Capsule library
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// Share every asset of this album that is not in trash
+        #[arg(
+            long,
+            value_name = "ALBUM_ID",
+            required_unless_present = "asset",
+            conflicts_with = "asset"
+        )]
+        album: Option<Uuid>,
+        /// Share this one asset
+        #[arg(long, value_name = "ASSET_ID")]
+        asset: Option<Uuid>,
+        /// When the link stops opening, as an RFC 3339 timestamp (e.g. 2026-12-31T23:59:59Z)
+        #[arg(long, value_name = "TIMESTAMP")]
+        expires_at: Option<String>,
+        /// Read the library passphrase from stdin instead of prompting, so the command
+        /// works in scripts and CI where there is no terminal.
+        #[arg(long)]
+        passphrase_stdin: bool,
+        /// Protect the link with a passphrase the recipient must enter as well as open the URL
+        #[arg(long)]
+        protect: bool,
+        /// With --protect, read the link passphrase from stdin instead of prompting (the line
+        /// after the library passphrase when --passphrase-stdin is also given)
+        #[arg(long, requires = "protect")]
+        link_passphrase_stdin: bool,
+    },
+    /// Revoke a share link, so its URL stops opening
+    Revoke {
+        /// The link's opaque id: the 32 hex characters after /s/ in its URL
+        #[arg(value_name = "OPAQUE_ID")]
+        opaque_id: String,
     },
 }
 

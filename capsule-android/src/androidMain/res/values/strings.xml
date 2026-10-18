@@ -1830,6 +1830,17 @@
     <string name="cli_help_reset_arg_data">Reset data directory</string>
     <string name="cli_help_root_about">A command line interface for Capsule - the photo management platform</string>
     <string name="cli_help_root_long_about">Capsule CLI provides tools for managing your photos and albums:\n\n- Authentication management\n- Sync local and remote data\n- Check status and list files\n- Manage albums and collections</string>
+    <string name="cli_help_share_about">Issue and revoke view-only share links on the server</string>
+    <string name="cli_help_share_create_about">Issue a view-only share link for an album or one asset, and print the URL to send</string>
+    <string name="cli_help_share_create_arg_album">Share every asset of this album that is not in trash</string>
+    <string name="cli_help_share_create_arg_asset">Share this one asset</string>
+    <string name="cli_help_share_create_arg_expires_at">When the link stops opening, as an RFC 3339 timestamp (e.g. 2026-12-31T23:59:59Z)</string>
+    <string name="cli_help_share_create_arg_library">Path to the Capsule library</string>
+    <string name="cli_help_share_create_arg_link_passphrase_stdin">With --protect, read the link passphrase from stdin instead of prompting (the line after the library passphrase when --passphrase-stdin is also given)</string>
+    <string name="cli_help_share_create_arg_passphrase_stdin">Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal</string>
+    <string name="cli_help_share_create_arg_protect">Protect the link with a passphrase the recipient must enter as well as open the URL</string>
+    <string name="cli_help_share_revoke_about">Revoke a share link, so its URL stops opening</string>
+    <string name="cli_help_share_revoke_arg_opaque_id">The link\'s opaque id: the 32 hex characters after /s/ in its URL</string>
     <string name="cli_help_show_about">Show what an imported asset\'s signed sidecar records: caption, rating, tags, GPS, timestamps</string>
     <string name="cli_help_show_arg_asset">The asset to show: its id, or a prefix of at least 8 hex characters of its SHA-256 content hash — the same digest `shasum -a 256` prints for the source file</string>
     <string name="cli_help_show_arg_library">Path to the Capsule library</string>
@@ -1901,6 +1912,21 @@
     <string name="cli_repair_capture_time_trashed">  Skipped %s asset(s) in trash; restore an asset first if it should be repaired.</string>
     <string name="cli_repair_capture_time_unreadable">  %1$s: original could not be read (%2$s); skipped</string>
     <string name="cli_repair_failed">Repair failed: %s</string>
+    <string name="cli_share_create_empty_scope">Nothing to share: that album holds no assets outside trash.</string>
+    <string name="cli_share_create_expires_notice">The link stops opening at %s.</string>
+    <string name="cli_share_create_expiry_not_in_future">--expires-at %s is not in the future, so the link would never open.</string>
+    <string name="cli_share_create_failed">Share link not issued: %s</string>
+    <string name="cli_share_create_in_progress">Issuing a share link on %s…</string>
+    <string name="cli_share_create_invalid_expiry">--expires-at %s is not an RFC 3339 timestamp (for example 2026-12-31T23:59:59Z).</string>
+    <string name="cli_share_create_link_passphrase_confirm">Repeat the link passphrase</string>
+    <string name="cli_share_create_link_passphrase_mismatch">The two link passphrases do not match.</string>
+    <string name="cli_share_create_link_passphrase_prompt">Link passphrase (the recipient types it to open the link)</string>
+    <string name="cli_share_create_passphrase_notice">The link is passphrase-protected: send the passphrase separately from the URL.</string>
+    <string name="cli_share_create_revoke_hint">To revoke it: capsule share revoke %s</string>
+    <string name="cli_share_create_scope_unavailable">This library does not hold that album or asset, or the asset is in trash.</string>
+    <string name="cli_share_revoke_failed">Share link not revoked: %s</string>
+    <string name="cli_share_revoke_invalid_opaque_id">%s is not a share link\'s opaque id: expected the 32 lowercase hex characters after /s/ in its URL.</string>
+    <string name="cli_share_revoke_success">Share link %s no longer opens for anyone.</string>
     <string name="cli_show_album">  Album:           %s</string>
     <string name="cli_show_ambiguous">%1$s matches %2$s assets; give more of the hash, or the full asset id.</string>
     <string name="cli_show_caption">  Caption:         %s</string>
@@ -2368,6 +2394,14 @@
     <plurals name="cli_library_migrate_unmigrated_notice">
         <item quantity="one">%d sidecar in this library is unsigned, so its asset is hidden. Run `capsule library migrate` to admit it.</item>
         <item quantity="other">%d sidecars in this library are unsigned, so their assets are hidden. Run `capsule library migrate` to admit them.</item>
+    </plurals>
+    <plurals name="cli_share_create_not_held">
+        <item quantity="one">%d shared asset is not on the server yet, so the link could not show it. Run capsule push for this library first.</item>
+        <item quantity="other">%d shared assets are not on the server yet, so the link could not show them. Run capsule push for this library first.</item>
+    </plurals>
+    <plurals name="cli_share_create_success">
+        <item quantity="one">Share link issued for %d asset. Anyone with this URL can view it:</item>
+        <item quantity="other">Share link issued for %d assets. Anyone with this URL can view them:</item>
     </plurals>
     <plurals name="common_item_count">
         <item quantity="one">%d item</item>

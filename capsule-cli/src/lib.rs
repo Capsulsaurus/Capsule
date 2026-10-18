@@ -21,7 +21,9 @@ use capsule_core::library::{Library, LibraryError, init_library, open_library, r
 use capsule_core::lifecycle::{Workspace, unmigrated_sidecars};
 use capsule_core::metadata::FileMetadata;
 use capsule_sdk::net::ConnectionClass;
-use cli::{AuthCommands, Cli, Commands, ImportProviderArg, LibraryCommands, RepairCommands};
+use cli::{
+    AuthCommands, Cli, Commands, ImportProviderArg, LibraryCommands, RepairCommands, ShareCommands,
+};
 use colored::*;
 use dialoguer::{Confirm, Input, Password};
 use eyre::{Result, eyre};
@@ -41,6 +43,7 @@ pub mod oidc;
 pub mod remote;
 pub mod repair;
 pub mod session;
+pub mod share;
 pub mod show;
 pub mod status;
 pub mod syncstore;
@@ -650,6 +653,37 @@ async fn dispatch(cli: Cli) -> Result<()> {
                     }
                 }
             }
+        },
+
+        // ── Share ─────────────────────────────────────────────────────────
+        Commands::Share { command } => match command {
+            ShareCommands::Create {
+                library,
+                album,
+                asset,
+                expires_at,
+                passphrase_stdin,
+                protect,
+                link_passphrase_stdin,
+            } => {
+                let scope = match (album, asset) {
+                    (_, Some(asset)) => capsule_core::sharing::ShareScope::Asset(asset),
+                    (Some(album), None) => capsule_core::sharing::ShareScope::Album(album),
+                    (None, None) => {
+                        unreachable!("clap requires --album unless --asset is present")
+                    }
+                };
+                share_create(
+                    &library,
+                    scope,
+                    expires_at,
+                    passphrase_stdin,
+                    protect,
+                    link_passphrase_stdin,
+                )
+                .await?;
+            }
+            ShareCommands::Revoke { opaque_id } => share_revoke(&opaque_id).await?,
         },
 
         // ── Demo ──────────────────────────────────────────────────────────
@@ -1548,6 +1582,102 @@ async fn push_workspace(workspace: &Workspace, options: remote::PushOptions) -> 
             Err(eyre!(
                 "{}",
                 bundle.format(keys::PUSH_FAILED, &[("reason", Value::Str(&reason))])
+            ))
+        }
+    }
+}
+
+/// `capsule share create`: issue a view-only link over `scope` and print its URL.
+async fn share_create(
+    library: &Path,
+    scope: capsule_core::sharing::ShareScope,
+    expires_at: Option<String>,
+    passphrase_stdin: bool,
+    protect: bool,
+    link_passphrase_stdin: bool,
+) -> Result<()> {
+    let bundle = i18n::cli_bundle();
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let mut ws = open_workspace(library, passphrase_stdin)?;
+    let passphrase = if !protect {
+        None
+    } else if link_passphrase_stdin {
+        Some(read_password(
+            Some("--link-passphrase-stdin"),
+            String::new(),
+        )?)
+    } else {
+        Some(
+            Password::new()
+                .with_prompt(bundle.format(keys::SHARE_CREATE_LINK_PASSPHRASE_PROMPT, &[]))
+                .with_confirmation(
+                    bundle.format(keys::SHARE_CREATE_LINK_PASSPHRASE_CONFIRM, &[]),
+                    bundle.format(keys::SHARE_CREATE_LINK_PASSPHRASE_MISMATCH, &[]),
+                )
+                .interact()
+                .map_err(|e| eyre!("Failed to read password: {e}"))?,
+        )
+    };
+    let request = share::CreateRequest {
+        scope,
+        expires_at,
+        passphrase,
+    };
+
+    println!(
+        "{}",
+        bundle
+            .format(
+                keys::SHARE_CREATE_IN_PROGRESS,
+                &[("endpoint", Value::Str(&remote.sync_endpoint))],
+            )
+            .green()
+    );
+    match share::create(&remote, &store, &mut ws, &request, jiff::Timestamp::now()).await {
+        Ok(issued) => {
+            share::render_issued(&bundle, &issued);
+            Ok(())
+        }
+        Err(error) => {
+            let reason = share::describe_error(&bundle, &error);
+            Err(eyre!(
+                "{}",
+                bundle.format(
+                    keys::SHARE_CREATE_FAILED,
+                    &[("reason", Value::Str(&reason))]
+                )
+            ))
+        }
+    }
+}
+
+/// `capsule share revoke`: stop the link `opaque_id` from opening.
+async fn share_revoke(opaque_id: &str) -> Result<()> {
+    let bundle = i18n::cli_bundle();
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    match share::revoke(&remote, &store, opaque_id).await {
+        Ok(id) => {
+            println!(
+                "{}",
+                bundle
+                    .format(
+                        keys::SHARE_REVOKE_SUCCESS,
+                        &[("opaque_id", Value::Str(&id))]
+                    )
+                    .green()
+            );
+            Ok(())
+        }
+        Err(error) => {
+            let reason = share::describe_error(&bundle, &error);
+            Err(eyre!(
+                "{}",
+                bundle.format(
+                    keys::SHARE_REVOKE_FAILED,
+                    &[("reason", Value::Str(&reason))]
+                )
             ))
         }
     }

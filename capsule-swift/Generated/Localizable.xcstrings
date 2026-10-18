@@ -31245,6 +31245,116 @@
         }
       }
     },
+    "cli.help.share.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Issue and revoke view-only share links on the server"
+          }
+        }
+      }
+    },
+    "cli.help.share.create.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Issue a view-only share link for an album or one asset, and print the URL to send"
+          }
+        }
+      }
+    },
+    "cli.help.share.create.arg.album": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Share every asset of this album that is not in trash"
+          }
+        }
+      }
+    },
+    "cli.help.share.create.arg.asset": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Share this one asset"
+          }
+        }
+      }
+    },
+    "cli.help.share.create.arg.expires_at": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "When the link stops opening, as an RFC 3339 timestamp (e.g. 2026-12-31T23:59:59Z)"
+          }
+        }
+      }
+    },
+    "cli.help.share.create.arg.library": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Path to the Capsule library"
+          }
+        }
+      }
+    },
+    "cli.help.share.create.arg.link_passphrase_stdin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "With --protect, read the link passphrase from stdin instead of prompting (the line after the library passphrase when --passphrase-stdin is also given)"
+          }
+        }
+      }
+    },
+    "cli.help.share.create.arg.passphrase_stdin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal"
+          }
+        }
+      }
+    },
+    "cli.help.share.create.arg.protect": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Protect the link with a passphrase the recipient must enter as well as open the URL"
+          }
+        }
+      }
+    },
+    "cli.help.share.revoke.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Revoke a share link, so its URL stops opening"
+          }
+        }
+      }
+    },
+    "cli.help.share.revoke.arg.opaque_id": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The link's opaque id: the 32 hex characters after /s/ in its URL"
+          }
+        }
+      }
+    },
     "cli.help.show.about": {
       "localizations": {
         "en": {
@@ -32427,6 +32537,200 @@
           "stringUnit": {
             "state": "translated",
             "value": "Repair failed: %@"
+          }
+        }
+      }
+    },
+    "cli.share.create.empty_scope": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nothing to share: that album holds no assets outside trash."
+          }
+        }
+      }
+    },
+    "cli.share.create.expires_notice": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The link stops opening at %@."
+          }
+        }
+      }
+    },
+    "cli.share.create.expiry_not_in_future": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "--expires-at %@ is not in the future, so the link would never open."
+          }
+        }
+      }
+    },
+    "cli.share.create.failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Share link not issued: %@"
+          }
+        }
+      }
+    },
+    "cli.share.create.in_progress": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Issuing a share link on %@…"
+          }
+        }
+      }
+    },
+    "cli.share.create.invalid_expiry": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "--expires-at %@ is not an RFC 3339 timestamp (for example 2026-12-31T23:59:59Z)."
+          }
+        }
+      }
+    },
+    "cli.share.create.link_passphrase_confirm": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Repeat the link passphrase"
+          }
+        }
+      }
+    },
+    "cli.share.create.link_passphrase_mismatch": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The two link passphrases do not match."
+          }
+        }
+      }
+    },
+    "cli.share.create.link_passphrase_prompt": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Link passphrase (the recipient types it to open the link)"
+          }
+        }
+      }
+    },
+    "cli.share.create.not_held": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld shared asset is not on the server yet, so the link could not show it. Run capsule push for this library first."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld shared assets are not on the server yet, so the link could not show them. Run capsule push for this library first."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "cli.share.create.passphrase_notice": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The link is passphrase-protected: send the passphrase separately from the URL."
+          }
+        }
+      }
+    },
+    "cli.share.create.revoke_hint": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "To revoke it: capsule share revoke %@"
+          }
+        }
+      }
+    },
+    "cli.share.create.scope_unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This library does not hold that album or asset, or the asset is in trash."
+          }
+        }
+      }
+    },
+    "cli.share.create.success": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Share link issued for %lld asset. Anyone with this URL can view it:"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Share link issued for %lld assets. Anyone with this URL can view them:"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "cli.share.revoke.failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Share link not revoked: %@"
+          }
+        }
+      }
+    },
+    "cli.share.revoke.invalid_opaque_id": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ is not a share link's opaque id: expected the 32 lowercase hex characters after /s/ in its URL."
+          }
+        }
+      }
+    },
+    "cli.share.revoke.success": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Share link %@ no longer opens for anyone."
           }
         }
       }
