@@ -241,11 +241,10 @@ impl crate::drop::DropAdopter for Workspace {
     }
 
     /// Adopt a pending drop into `album_id` **in place** (no byte re-upload): decapsulate the
-    /// guest-chosen `K`, run the import's still pipeline over the plaintext
-    /// ([`prepare_still`](Workspace::prepare_still): header-derived `content_type`, pixel
-    /// dimensions, LQIP, signed thumbnail derivatives — never fatal over pixels, reported in
-    /// [`AdoptedDrop::derivatives`]), rewrap `K` under the album AMK (`asset-keywrap/v1`), author + sign a
-    /// `create` manifest with `key_mode = wrapped` whose `ciphertext_hash` references the
+    /// guest-chosen `K`, run the import's still pipeline over the plaintext (`prepare_still`:
+    /// header-derived `content_type`, pixel dimensions, LQIP, signed thumbnail derivatives —
+    /// never fatal over pixels, reported in [`AdoptedDrop::derivatives`]), rewrap `K` under
+    /// the album AMK (`asset-keywrap/v1`), author + sign a `create` manifest with `key_mode = wrapped` whose `ciphertext_hash` references the
     /// staged blob, self-verify through [`verify_asset`], register the asset in the library
     /// (chain, sidecar, sealed metadata blob, plaintext, derivatives, index row — the same
     /// writes `commit_signed_create` makes for an import), and only then drop the inbox row. A
