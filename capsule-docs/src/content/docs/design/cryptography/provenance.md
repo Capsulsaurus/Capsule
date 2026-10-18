@@ -181,7 +181,9 @@ DerivativeManifest {
 }
 ```
 
-A derivative overwrite is therefore a `derivative-replace` lifecycle action that appends to the provenance chain like any other write. Quarantine semantics from [Write Authorization](/design/cryptography/keys/#write-authorization) apply: a derivative whose manifest fails verification is surfaced, never silently applied — a buggy client cannot poison a derivative under the receiving side's nose.
+**Physical placement.** A derivative manifest travels as the asset manifest does: as one more blob in the bundle, under the `derivative_manifest` [blob role](/design/import/upload-protocol/#what-gets-uploaded), whose bytes are its canonical CBOR. The server stores them verbatim and the [sync feed](/design/import/download-sync/#discovering-what-changed) serves them back unchanged on the asset's entry, because they are what a receiver opens the derivative with: the blob manifest names the derivative's `ciphertext_hash`, and only the signed manifest names the `nonce_prefix` and `amk_version` its file key is derived from. A tier whose `format` is the `original` sentinel ships its manifest and no derivative blob, so a receiver can tell "this tier is the original" from "this tier is missing".
+
+Because every derivative is signed, a derivative overwrite is a `derivative-replace` lifecycle action that appends to the provenance chain like any other write. Quarantine semantics from [Write Authorization](/design/cryptography/keys/#write-authorization) apply: a derivative whose manifest fails verification is surfaced, never silently applied — a buggy client cannot poison a derivative under the receiving side's nose.
 
 ## Validation
 

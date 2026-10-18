@@ -116,7 +116,7 @@ pub struct UploadTag;
 /// records deliberately derive no serde traits, so that a record cannot be smuggled through a
 /// store built for another. The mapping is one `match` in one direction.
 #[derive(Schema, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum WireBlobRole {
     /// The encrypted original.
     Original,
@@ -128,6 +128,10 @@ pub enum WireBlobRole {
     Provenance,
     /// A backup copy.
     Backup,
+    /// A derivative tier's signed `DerivativeManifest`, stored verbatim (#556). Never listed in
+    /// the sync feed's `blobs`: the feed carries these bytes inline on the entry's
+    /// `derivative_manifests`, so a client that predates the role never meets the value.
+    DerivativeManifest,
 }
 
 /// The outbound direction, for the sync feed's blob list.
@@ -143,6 +147,7 @@ impl From<BlobRole> for WireBlobRole {
             BlobRole::Metadata => Self::Metadata,
             BlobRole::Provenance => Self::Provenance,
             BlobRole::Backup => Self::Backup,
+            BlobRole::DerivativeManifest => Self::DerivativeManifest,
         }
     }
 }
@@ -155,6 +160,7 @@ impl From<WireBlobRole> for BlobRole {
             WireBlobRole::Metadata => Self::Metadata,
             WireBlobRole::Provenance => Self::Provenance,
             WireBlobRole::Backup => Self::Backup,
+            WireBlobRole::DerivativeManifest => Self::DerivativeManifest,
         }
     }
 }

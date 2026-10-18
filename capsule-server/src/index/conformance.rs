@@ -345,6 +345,70 @@ pub async fn original_held_follows_the_original_blob(index: &dyn AssetIndex) {
     );
 }
 
+/// A derivative's signed manifest is a plural role that reaches the feed on its own list (#556):
+/// two of them are both held, a retried finalization mints nothing, and neither appears in the
+/// entry's blob list, which a client that predates the role decodes strictly.
+pub async fn derivative_manifests_are_plural_and_reach_the_feed_apart(index: &dyn AssetIndex) {
+    let owner = OwnerId::new("dman-owner");
+    let (asset, seq) = publish(index, "dman", 1).await;
+
+    let thumbnail = record(
+        index,
+        &asset,
+        blob(BlobRole::DerivativeManifest, "dman-thumbnail"),
+    )
+    .await
+    .expect("a manifest landing on a visible asset is a publishable change");
+    let preview = record(
+        index,
+        &asset,
+        blob(BlobRole::DerivativeManifest, "dman-preview"),
+    )
+    .await
+    .expect("a second manifest is an addition, not a conflict");
+    assert!(seq < thumbnail && thumbnail < preview);
+    record(index, &asset, blob(BlobRole::Derivative, "dman-d")).await;
+
+    match ok(
+        index
+            .record_blob(&asset, blob(BlobRole::DerivativeManifest, "dman-thumbnail"))
+            .await,
+        "re-record a derivative manifest",
+    ) {
+        BlobOutcome::AlreadyHeld(_) => {}
+        other => panic!("a retried manifest finalization answered {other:?}"),
+    }
+
+    let page = ok(index.feed_page(&owner, seq, 10).await, "page the feed");
+    let entry = page.last().expect("the asset is in the feed");
+    let mut expected = vec![address("dman-thumbnail"), address("dman-preview")];
+    expected.sort();
+    assert_eq!(
+        entry.derivative_manifests, expected,
+        "both manifests reach the feed, in address order"
+    );
+    assert!(
+        entry
+            .blobs
+            .iter()
+            .all(|blob| blob.role != BlobRole::DerivativeManifest),
+        "the blob list never names the role"
+    );
+    assert!(
+        entry
+            .blobs
+            .iter()
+            .any(|blob| blob.role == BlobRole::Derivative),
+        "the derivative itself is still listed"
+    );
+
+    let row = ok(index.read(&asset).await, "read the row").expect("the row exists");
+    assert!(
+        row.is_publishable(),
+        "a manifest does not disturb the index tier"
+    );
+}
+
 /// The change kind is a fact about the reader, not about the asset.
 pub async fn the_change_kind_is_relative_to_the_reader(index: &dyn AssetIndex) {
     let owner = OwnerId::new("kind-owner");
@@ -2115,6 +2179,7 @@ pub async fn run_all(index: &dyn AssetIndex) {
     a_singular_role_cannot_be_repointed(index).await;
     recording_against_an_unreserved_asset_is_not_found(index).await;
     original_held_follows_the_original_blob(index).await;
+    derivative_manifests_are_plural_and_reach_the_feed_apart(index).await;
     the_change_kind_is_relative_to_the_reader(index).await;
     paging_is_ordered_bounded_and_resumable(index).await;
     every_minted_number_is_reachable(index).await;

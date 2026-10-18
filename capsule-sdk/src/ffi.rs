@@ -247,6 +247,8 @@ pub enum FfiBlobRole {
     Provenance,
     /// A library backup artifact.
     Backup,
+    /// A derivative tier's signed manifest.
+    DerivativeManifest,
 }
 
 impl From<FfiBlobRole> for BlobRole {
@@ -257,6 +259,7 @@ impl From<FfiBlobRole> for BlobRole {
             FfiBlobRole::Metadata => Self::Metadata,
             FfiBlobRole::Provenance => Self::Provenance,
             FfiBlobRole::Backup => Self::Backup,
+            FfiBlobRole::DerivativeManifest => Self::DerivativeManifest,
         }
     }
 }
@@ -269,6 +272,7 @@ impl From<BlobRole> for FfiBlobRole {
             BlobRole::Metadata => Self::Metadata,
             BlobRole::Provenance => Self::Provenance,
             BlobRole::Backup => Self::Backup,
+            BlobRole::DerivativeManifest => Self::DerivativeManifest,
         }
     }
 }

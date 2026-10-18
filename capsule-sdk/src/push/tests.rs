@@ -147,6 +147,70 @@ fn only_a_derivative_declares_its_role_and_format() {
     assert!(json["manifest_envelope"].get("derivative_format").is_none());
 }
 
+/// **The derivative manifests (#556).** Each signed manifest ships in T1 as an opaque
+/// `derivative_manifest` blob addressed by its own bytes, **ahead of** the derivatives it opens,
+/// declaring no derivative pair — the server refuses the pair on anything but a derivative.
+#[test]
+fn derivative_manifests_ship_in_the_preview_tier_ahead_of_their_derivatives() {
+    use capsule_core::crypto::hash::Hash32;
+    use capsule_core::crypto::provenance::DerivativeRole;
+    use capsule_core::lifecycle::DerivativeBlob;
+
+    let (_dir, mut bundle) = real_bundle();
+    bundle.derivatives.push(DerivativeBlob {
+        role: DerivativeRole::Thumbnail,
+        format: "image/jxl".to_owned(),
+        amk_version: Some(bundle.amk_version),
+        bytes: b"derivative ciphertext".to_vec(),
+        ciphertext_hash: Hash32([7u8; 32]),
+    });
+    bundle.derivative_manifests = vec![
+        b"signed thumbnail manifest".to_vec(),
+        b"signed sentinel manifest".to_vec(),
+    ];
+
+    let blobs = bundle_blobs(&bundle);
+    assert_eq!(
+        blobs.iter().map(|(blob, _)| blob.role).collect::<Vec<_>>(),
+        vec![
+            BlobRole::Provenance,
+            BlobRole::Metadata,
+            BlobRole::DerivativeManifest,
+            BlobRole::DerivativeManifest,
+            BlobRole::Derivative,
+            BlobRole::Original,
+        ],
+        "a receiver that sees a derivative has already been handed its manifest"
+    );
+    for (manifest, (blob, hash)) in bundle.derivative_manifests.iter().zip(&blobs[2..4]) {
+        assert_eq!(blob.tier, UploadTier::Preview);
+        assert_eq!(blob.bytes, manifest.as_slice(), "the exact bytes ship");
+        assert_eq!(*hash, hash_bytes(manifest).to_hex());
+        assert_eq!(blob.content_type, "application/octet-stream");
+
+        let request = create_request(&bundle, blob, hash);
+        let json = serde_json::to_value(&request).expect("the request serializes");
+        assert_eq!(json["blob_role"], "derivative_manifest");
+        assert_eq!(request.manifest_envelope.ciphertext_hash, *hash);
+        assert!(json["manifest_envelope"].get("derivative_role").is_none());
+        assert!(json["manifest_envelope"].get("derivative_format").is_none());
+    }
+
+    // The staged view agrees, so resume and scheduling see the same rungs the push drives.
+    let staged = staged_asset(&bundle);
+    assert_eq!(
+        staged
+            .ladder_ordered()
+            .iter()
+            .map(|blob| blob.hash.clone())
+            .collect::<Vec<_>>(),
+        blobs
+            .iter()
+            .map(|(_, hash)| hash.clone())
+            .collect::<Vec<_>>()
+    );
+}
+
 /// **The ladder.** A bundle's blobs come out strictly T0 (the index tier: provenance, then the
 /// metadata blob) → T1 (derivatives) → T2 (original), and each blob's declared size and role
 /// match what it actually carries.

@@ -202,6 +202,25 @@ fn held_from_feed_excludes_the_original_while_awaiting() {
     );
 }
 
+/// A derivative manifest the feed inlines is held under the digest of its bytes — the address
+/// the push names it by — so re-running a push against an unchanged library does not re-open a
+/// session for it (#556).
+#[test]
+fn held_from_feed_holds_each_inlined_derivative_manifest_by_its_digest() {
+    let entry = feed_entry("m", false, false);
+    let held = held_from_feed(&entry);
+    let digest = capsule_core::crypto::hash::hash_bytes(b"m-thumb-manifest").to_hex();
+    assert!(
+        held.contains(&digest),
+        "the manifest is held by its address"
+    );
+    assert_eq!(
+        held.len(),
+        2,
+        "the derivative and its manifest, and nothing else"
+    );
+}
+
 /// **Staged resume from server truth (smoke).** Kill the client mid-ladder; on
 /// restart the tier queue re-derives from the feed and re-uploads only the missing
 /// tiers — never the ones the server already holds.
@@ -337,6 +356,7 @@ fn feed_entry(id: &str, original_held: bool, with_original_ref: bool) -> FeedEnt
                 size: 8_000,
             }],
         },
+        derivative_manifests: vec![format!("{id}-thumb-manifest").into_bytes()],
         original_held,
         changed_at: "1970-01-01T00:00:00Z".to_string(),
     }

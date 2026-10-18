@@ -115,7 +115,12 @@ impl Scope {
         match role {
             BlobRole::Backup => false,
             BlobRole::Original => matches!(self, Self::Read),
-            BlobRole::Derivative | BlobRole::Metadata | BlobRole::Provenance => true,
+            // A derivative's signed manifest is what opens it, so whatever may fetch the
+            // derivative may fetch its manifest.
+            BlobRole::Derivative
+            | BlobRole::DerivativeManifest
+            | BlobRole::Metadata
+            | BlobRole::Provenance => true,
         }
     }
 }
@@ -776,6 +781,7 @@ mod tests {
     fn scope_is_decided_by_the_blobs_role() {
         for role in [
             BlobRole::Derivative,
+            BlobRole::DerivativeManifest,
             BlobRole::Metadata,
             BlobRole::Provenance,
         ] {

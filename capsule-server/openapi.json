@@ -23937,7 +23937,8 @@
           "derivative",
           "metadata",
           "provenance",
-          "backup"
+          "backup",
+          "derivative_manifest"
         ],
         "description": "A blob's role in its asset bundle, as the wire spells it.\n\nA wire type of its own rather than a serde derive on [`BlobRole`]: the state ports'\nrecords deliberately derive no serde traits, so that a record cannot be smuggled through a\nstore built for another. The mapping is one `match` in one direction."
       },
@@ -24724,6 +24725,13 @@
             },
             "type": "array",
             "description": "The asset's original and derivative blobs."
+          },
+          "derivative_manifests": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "description": "The asset's signed derivative manifests, each base64 of its `derivative_manifest`\nblob's exact bytes, in address order (#556).\n\nWhat a receiver opens a thumbnail or preview with: the manifest names the derivative's\n`ciphertext_hash`, `nonce_prefix` and AMK epoch, and the blob list carries none of\nthem. Served verbatim for the reason [`Self::manifest_cbor`] is (`S-C30`). Empty on a\ntombstone; a manifest the store cannot produce is left out with a loud server-side log."
           },
           "original_held": {
             "type": "boolean",

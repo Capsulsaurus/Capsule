@@ -151,6 +151,15 @@ pub struct SyncEntry {
     pub metadata_blob: Option<String>,
     /// The asset's original and derivative blobs.
     pub blobs: Vec<SyncBlobRef>,
+    /// The asset's signed derivative manifests, each base64 of its `derivative_manifest`
+    /// blob's exact bytes, in address order (#556).
+    ///
+    /// What a receiver opens a thumbnail or preview with: the manifest names the derivative's
+    /// `ciphertext_hash`, `nonce_prefix` and AMK epoch, and the blob list carries none of
+    /// them. Served verbatim for the reason [`Self::manifest_cbor`] is (`S-C30`). Empty on a
+    /// tombstone; a manifest the store cannot produce is left out with a loud server-side log.
+    #[serde(default)]
+    pub derivative_manifests: Vec<String>,
     /// Whether the original has landed. `false` is the derived `awaiting-original` state.
     pub original_held: bool,
     /// When the change happened, RFC 3339.
@@ -565,9 +574,19 @@ async fn album_read_access(
 async fn render(sync: &SyncContext, entry: FeedEntry) -> SyncEntry {
     let deleted = entry.change == ChangeKind::Deleted;
     let manifest = match entry.provenance.as_ref().filter(|_| !deleted) {
-        Some(address) => read_manifest(sync, address, &entry).await,
+        Some(address) => read_manifest(sync, address, &entry, ManifestKind::Asset).await,
         None => None,
     };
+    let mut derivative_manifests = Vec::new();
+    if !deleted {
+        for address in &entry.derivative_manifests {
+            if let Some(encoded) =
+                read_manifest(sync, address, &entry, ManifestKind::Derivative).await
+            {
+                derivative_manifests.push(encoded);
+            }
+        }
+    }
 
     SyncEntry {
         asset_id: entry.asset_id.to_string(),
@@ -594,12 +613,34 @@ async fn render(sync: &SyncContext, entry: FeedEntry) -> SyncEntry {
                 })
                 .collect()
         },
+        derivative_manifests,
         original_held: !deleted && entry.original_held,
         changed_at: entry.at.to_string(),
     }
 }
 
-/// Read a provenance blob and encode it for the wire, or explain in the log why not.
+/// Which signed manifest a feed entry is inlining — named in every log line, so an operator
+/// reading one knows which role's blob went missing.
+#[derive(Debug, Clone, Copy)]
+enum ManifestKind {
+    /// The asset's `provenance` blob.
+    Asset,
+    /// One of its `derivative_manifest` blobs.
+    Derivative,
+}
+
+impl ManifestKind {
+    /// The blob role the manifest is stored under.
+    fn role(self) -> &'static str {
+        match self {
+            Self::Asset => crate::store::BlobRole::Provenance.as_str(),
+            Self::Derivative => crate::store::BlobRole::DerivativeManifest.as_str(),
+        }
+    }
+}
+
+/// Read a manifest blob — the asset's provenance blob or one of its derivative manifests — and
+/// encode it for the wire, or explain in the log why not.
 ///
 /// Every failure here is the **server's** inconsistency, never the client's, so none of them is
 /// a rejection: an asset whose manifest cannot be produced is still an asset the client should
@@ -609,29 +650,31 @@ async fn read_manifest(
     sync: &SyncContext,
     address: &ContentAddress,
     entry: &FeedEntry,
+    kind: ManifestKind,
 ) -> Option<String> {
+    let role = kind.role();
     let stat = match sync.blobs().stat(address).await {
         Ok(stat) => stat,
         Err(error) => {
             tracing::error!(
-                %error, %address, asset = %entry.asset_id,
-                "the blob store could not stat a provenance blob"
+                %error, %address, asset = %entry.asset_id, role,
+                "the blob store could not stat a manifest blob"
             );
             return None;
         }
     };
     let Some(stat) = stat else {
         tracing::error!(
-            %address, asset = %entry.asset_id,
-            "the index names a provenance blob the store does not hold"
+            %address, asset = %entry.asset_id, role,
+            "the index names a manifest blob the store does not hold"
         );
         return None;
     };
     if stat.size > MAX_MANIFEST_BYTES {
         // The upload ceiling should have refused this long before it reached a feed.
         tracing::error!(
-            %address, asset = %entry.asset_id, size = stat.size, cap = MAX_MANIFEST_BYTES,
-            "a provenance blob is past the inline cap and was omitted from the feed"
+            %address, asset = %entry.asset_id, role, size = stat.size, cap = MAX_MANIFEST_BYTES,
+            "a manifest blob is past the inline cap and was omitted from the feed"
         );
         return None;
     }
@@ -641,15 +684,15 @@ async fn read_manifest(
         Ok(Some(bytes)) => Some(BASE64.encode(bytes)),
         Ok(None) => {
             tracing::error!(
-                %address, asset = %entry.asset_id,
-                "a provenance blob vanished between stat and read"
+                %address, asset = %entry.asset_id, role,
+                "a manifest blob vanished between stat and read"
             );
             None
         }
         Err(error) => {
             tracing::error!(
-                %error, %address, asset = %entry.asset_id,
-                "the blob store could not read a provenance blob"
+                %error, %address, asset = %entry.asset_id, role,
+                "the blob store could not read a manifest blob"
             );
             None
         }

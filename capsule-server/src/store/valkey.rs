@@ -489,15 +489,7 @@ fn decode_session(flat: Vec<String>) -> Result<SessionRecord, StoreError> {
 }
 
 fn parse_role(text: &str) -> Option<BlobRole> {
-    [
-        BlobRole::Original,
-        BlobRole::Derivative,
-        BlobRole::Metadata,
-        BlobRole::Provenance,
-        BlobRole::Backup,
-    ]
-    .into_iter()
-    .find(|role| role.as_str() == text)
+    BlobRole::from_token(text)
 }
 
 fn parse_status(text: &str) -> Option<UploadSessionStatus> {

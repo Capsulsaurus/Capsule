@@ -122,6 +122,10 @@ pub struct AssetBlobs {
     /// source_asset_id, nonce_prefix)`, and those three values live here and nowhere else: the
     /// blob manifest carries only content addresses. A thumbnail or preview with no manifest
     /// describing its blob is not opened ([`DegradeReason::NoManifest`]).
+    ///
+    /// A receiver gets them from the sync feed, as the exact signed bytes in
+    /// [`FeedEntry::derivative_manifests`](crate::sync::FeedEntry::derivative_manifests); they
+    /// are decoded and verified before they are put here.
     pub derivative_manifests: Vec<DerivativeManifest>,
 }
 

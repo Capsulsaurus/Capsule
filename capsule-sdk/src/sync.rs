@@ -150,6 +150,14 @@ pub struct FeedEntry {
     pub metadata_blob: Vec<u8>,
     /// Content addresses of the asset's blobs by role.
     pub blobs: BlobManifest,
+    /// The asset's signed derivative manifests, each the **exact** canonical CBOR of one
+    /// `derivative_manifest` blob, served back unchanged (#556). Empty on a tombstone.
+    ///
+    /// What opens a thumbnail or preview: each names its derivative's `ciphertext_hash`,
+    /// `nonce_prefix` and AMK epoch, which [`BlobManifest`] does not carry. Decode, verify, and
+    /// hand the verified manifests to [`crate::fetch::AssetBlobs::derivative_manifests`]. Never
+    /// re-encoded here, for the reason [`Self::manifest_cbor`] is not.
+    pub derivative_manifests: Vec<Vec<u8>>,
     /// Whether the original blob is finalized on the server (`awaiting-original`
     /// derived state when `false`; staged uploads).
     pub original_held: bool,
@@ -245,7 +253,7 @@ pub enum SyncError {
     /// A feed entry carried a `protocol_version` that is not a `YYYY-MM-DD` date.
     #[error("malformed feed entry protocol version {0:?}")]
     MalformedProtocol(String),
-    /// A feed entry's `manifest_cbor` is not base64.
+    /// A feed entry's `manifest_cbor`, or one of its `derivative_manifests`, is not base64.
     ///
     /// The feed is JSON and a manifest is CBOR, so the signed bytes ride base64. A body that
     /// fails to decode is a server that cannot be talked to, not an asset to quarantine.
@@ -689,6 +697,18 @@ fn decode_entry(entry: rest::types::SyncEntry) -> Result<FeedEntry, SyncError> {
             .map_err(|error| SyncError::MalformedManifest(error.to_string()))?,
         None => Vec::new(),
     };
+    // Optional on the wire: a server that predates the field sends no key, which is an asset
+    // with no manifests to hand over rather than a malformed entry.
+    let derivative_manifests = entry
+        .derivative_manifests
+        .iter()
+        .flatten()
+        .map(|encoded| {
+            BASE64
+                .decode(encoded)
+                .map_err(|error| SyncError::MalformedManifest(error.to_string()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(FeedEntry {
         album_id: entry.album_id.into_bytes(),
         sync_seq: u64::try_from(entry.sync_seq).unwrap_or(u64::MAX),
@@ -698,6 +718,7 @@ fn decode_entry(entry: rest::types::SyncEntry) -> Result<FeedEntry, SyncError> {
         manifest_cbor,
         metadata_blob: entry.metadata_blob.unwrap_or_default().into_bytes(),
         blobs: decode_blobs(entry.blobs),
+        derivative_manifests,
         original_held: entry.original_held,
         changed_at: entry.changed_at,
     })
@@ -732,6 +753,10 @@ fn role_str(role: &rest::types::WireBlobRole) -> &'static str {
         rest::types::WireBlobRole::Derivative => "derivative",
         rest::types::WireBlobRole::Provenance => "provenance",
         rest::types::WireBlobRole::Backup => "backup",
+        // The server never lists this role in `blobs` — the manifests ride the entry's own
+        // `derivative_manifests` — but the wire enum is shared with the upload body, so the
+        // arm exists and spells the token the server would.
+        rest::types::WireBlobRole::DerivativeManifest => "derivative_manifest",
     }
 }
 

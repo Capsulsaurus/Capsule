@@ -365,6 +365,9 @@ pub enum BlobRole {
     Provenance,
     /// A library backup artifact.
     Backup,
+    /// A derivative tier's signed `DerivativeManifest`, canonical CBOR — what a receiver opens
+    /// that tier's derivative with.
+    DerivativeManifest,
 }
 
 /// The server-visible mirror of the signed manifest's envelope fields, declared

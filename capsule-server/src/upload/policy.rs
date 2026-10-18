@@ -26,7 +26,7 @@ use jiff::Timestamp;
 /// The closed `content_type` enum for the current protocol version (invariant 5).
 ///
 /// Frozen for a given `protocol_version` and server-tunable across versions. Metadata,
-/// provenance and backup blobs are opaque CBOR or ciphertext and declare
+/// provenance, derivative-manifest and backup blobs are opaque CBOR or ciphertext and declare
 /// `application/octet-stream`.
 ///
 /// It carries two disjoint things: the **originals** a client imports, and the **derivatives**

@@ -107,7 +107,8 @@ impl StagedAsset {
 /// read from a sync feed entry — the server truth a resume re-derives from.
 ///
 /// A derivative/metadata blob ref present on the entry is held (its tier finalized;
-/// the entry's very existence means T0 index finalized). The original is included
+/// the entry's very existence means T0 index finalized), and so is every derivative
+/// manifest the entry inlines, by the digest of its bytes. The original is included
 /// **iff** `original_held` — the `awaiting-original` fact — so T2 is treated as
 /// outstanding until the feed flips it, never as a dangling reference.
 #[must_use]
@@ -115,6 +116,11 @@ pub fn held_from_feed(entry: &FeedEntry) -> HashSet<String> {
     let mut held = HashSet::new();
     for derivative in &entry.blobs.derivatives {
         held.insert(derivative.ciphertext_hash.clone());
+    }
+    // A derivative manifest rides the entry as its bytes rather than as an address, and its
+    // address is the digest of those bytes — the same derivation the push uses to name it.
+    for manifest in &entry.derivative_manifests {
+        held.insert(capsule_core::crypto::hash::hash_bytes(manifest).to_hex());
     }
     if entry.original_held
         && let Some(original) = &entry.blobs.original

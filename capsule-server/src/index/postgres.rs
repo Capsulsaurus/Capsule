@@ -114,14 +114,8 @@ fn hold_from(token: Option<String>) -> Result<Option<ServingHold>, StoreError> {
 
 /// Read a stored blob role back.
 fn role_from(token: &str) -> Result<BlobRole, StoreError> {
-    match token {
-        "original" => Ok(BlobRole::Original),
-        "derivative" => Ok(BlobRole::Derivative),
-        "metadata" => Ok(BlobRole::Metadata),
-        "provenance" => Ok(BlobRole::Provenance),
-        "backup" => Ok(BlobRole::Backup),
-        other => Err(PORT.undecodable(format!("`{other}` is not a blob role"))),
-    }
+    BlobRole::from_token(token)
+        .ok_or_else(|| PORT.undecodable(format!("`{token}` is not a blob role")))
 }
 
 /// Read a stored content address back.
@@ -769,7 +763,8 @@ impl AssetIndex for PostgresAssetIndex {
                        (SELECT b.role FROM asset_blobs b \
                         WHERE b.asset_id = a.asset_id AND b.address = $1 \
                         ORDER BY CASE b.role WHEN 'original' THEN 0 WHEN 'derivative' THEN 1 \
-                          WHEN 'metadata' THEN 2 WHEN 'provenance' THEN 3 ELSE 4 END \
+                          WHEN 'metadata' THEN 2 WHEN 'provenance' THEN 3 WHEN 'backup' THEN 4 \
+                          ELSE 5 END \
                         LIMIT 1) AS role, \
                        EXISTS (SELECT 1 FROM asset_blobs o \
                         WHERE o.asset_id = a.asset_id AND o.role = 'original') AS original_held \
