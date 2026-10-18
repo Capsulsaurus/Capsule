@@ -1,18 +1,17 @@
 //! UniFFI bindings exposing the `capsule-core` SQLite catalog to Swift (and, in
 //! future, other UniFFI targets such as Android/Kotlin).
 //!
-//! One of the uniffi surfaces in the workspace — `capsule-core`'s `ffi` feature
-//! exports the crypto `FfiWorkspace` + `HardwareSigner` foreign trait separately. The two
-//! are **layered** on a single uniffi version (slice `S-F1`): distinct crates and distinct
-//! bindings namespaces (`capsule_core_ffi` here, `capsule_core` there), never linked into the
-//! same binary, so their generated scaffolding cannot collide.
+//! One of the two uniffi namespaces in the workspace, on a single pinned uniffi version
+//! (slice `S-F1`): `capsule_core_ffi` here, and `capsule_sdk` in `capsule-sdk`, which carries
+//! the crypto `FfiWorkspace` and the `FfiHardwareSigner` / `FfiHardwareKeyAgreement` foreign
+//! traits. `capsule-core` itself exports no namespace, so no dependency this crate links
+//! contributes generated scaffolding of its own (ADR-0005).
 //!
 //! This crate is also the **app umbrella staticlib** (slice `S-F3`): it links
 //! `capsule-sdk`'s uniffi surface (the `capsule_sdk` namespace — the S-D9 user-flow
-//! primitives) so the iOS app consumes ONE Rust library carrying both namespaces.
-//! Two separate Rust staticlibs cannot share a binary (each bundles its own std), so
-//! any namespace the app needs must ride in this one. `capsule-sdk` does *not* enable
-//! `capsule-core/ffi`, keeping the S-F1 never-same-binary invariant intact.
+//! primitives and the S-P1 workspace verbs) so the iOS app consumes ONE Rust library
+//! carrying both namespaces. Two separate Rust staticlibs cannot share a binary (each
+//! bundles its own std), so any namespace the app needs must ride in this one.
 //!
 //! Everything platform-specific (filesystem layout, file I/O, PhotoKit,
 //! hashing) lives in the Swift client. The types defined here form the explicit

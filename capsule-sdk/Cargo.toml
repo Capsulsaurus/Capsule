@@ -10,7 +10,7 @@ publish.workspace = true
 # `cdylib` is the Android `.so` and `staticlib` the iOS/macOS input for the uniffi
 # bindings (see the `ffi` feature); library-mode `uniffi-bindgen` reads its metadata
 # from the compiled cdylib. Cargo cannot gate crate-type by feature, so host builds
-# also emit these — an accepted, cheap cost, mirroring `capsule-core`.
+# also emit these — an accepted, cheap cost.
 crate-type = ["lib", "cdylib", "staticlib"]
 
 # Generates the Kotlin/Swift bindings from the compiled cdylib (library mode). Built

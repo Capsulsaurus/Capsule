@@ -11,15 +11,13 @@
 //! `capsule-core`, reached through exactly one call per verb. There is no second implementation
 //! of any of it here, and adding one would be a defect rather than an optimization.
 //!
-//! # Two namespaces, never one binary
+//! # Core's seams, declared in this namespace
 //!
-//! `capsule-core` has its own uniffi surface behind its `ffi` feature (the `capsule_core`
-//! namespace). This crate must **not** enable it: the `S-F1` invariant is that the
-//! `capsule_core` and `capsule_sdk` namespaces never share a binary, because their generated
-//! scaffolding would collide. So the seams core exports as uniffi foreign traits are re-declared
-//! here in *this* namespace — [`FfiHardwareSigner`], [`FfiHardwareKeyAgreement`] and
-//! [`FfiHardwareSignerError`] mirror core's, and `ForeignHardwareSigner` /
-//! `ForeignKeyAgreement` adapt one to the other. They are declarations of the same contract,
+//! `capsule-core` exports no uniffi namespace (ADR-0005): its hardware seams are plain Rust
+//! traits. So the seams a native element implements are declared here in *this* namespace —
+//! [`FfiHardwareSigner`], [`FfiHardwareKeyAgreement`] and [`FfiHardwareSignerError`] mirror
+//! core's `HardwareSigner`, `HardwareKeyAgreement` and `HardwareSignerError`, and
+//! `ForeignHardwareSigner` / `ForeignKeyAgreement` adapt one to the other. They are declarations of the same contract,
 //! not a second implementation of it: not a byte of signing or key-agreement logic lives here.
 //!
 //! # Transport independence
@@ -55,7 +53,7 @@ use super::{FfiError, FfiUploadRequest};
 
 /// Failure surfaced by a foreign [`FfiHardwareSigner`]. Mirrors `capsule-core`'s
 /// `HardwareSignerError` variant for variant — it is the same contract, declared in the
-/// `capsule_sdk` namespace so the two uniffi surfaces stay separable (`S-F1`).
+/// `capsule_sdk` namespace because core's own type carries no uniffi derive.
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 #[uniffi(flat_error)]
 pub enum FfiHardwareSignerError {
