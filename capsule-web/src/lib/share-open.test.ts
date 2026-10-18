@@ -37,6 +37,25 @@ interface Fixture {
     passphraseWrappedB64: string;
     plaintextB64: string;
     ciphertextB64: string;
+    album: AlbumFixture;
+}
+
+/** One album asset as the fixture serves it. */
+interface AlbumAsset {
+    fileId: string;
+    noncePrefixHex: string;
+    ciphertextB64: string;
+}
+
+/** The album-scoped grant over a derived asset and an adopted (wrapped-key) drop (#598). */
+interface AlbumFixture {
+    linkOnlyWrappedB64: string;
+    amkVersion: number;
+    derived: AlbumAsset;
+    wrapped: AlbumAsset & {
+        wrappedFileKeyHex: string;
+        foreignWrappedFileKeyHex: string;
+    };
 }
 
 const fixture: Fixture = JSON.parse(
@@ -201,5 +220,150 @@ describe('share-link cross-language KAT', () => {
                 ),
             ),
         ).toBe('tampered');
+    });
+});
+
+// #598: an album-scoped grant covers an adopted web-upload drop, whose key a guest chose and
+// no AMK derives. The viewer recovers it from the served `wrapped_file_key`.
+describe('album-scope share over an adopted (wrapped-key) drop', () => {
+    const album = fixture.album;
+    const openAlbum = () =>
+        openShare(
+            album.linkOnlyWrappedB64,
+            fixture.opaqueIdHex,
+            fixture.fragmentHex,
+            null,
+        );
+
+    test('a derived album asset still decrypts with no key mode given', () => {
+        const scope = openAlbum();
+        expect(scope.scopeKind()).toBe('album');
+        const plaintext = decryptShareBlob(
+            scope,
+            {
+                assetId: album.derived.fileId,
+                amkVersion: album.amkVersion,
+                noncePrefixHex: album.derived.noncePrefixHex,
+            },
+            bytes(album.derived.ciphertextB64),
+        );
+        expect(new Uint8Array(plaintext)).toEqual(bytes(fixture.plaintextB64));
+        scope.free();
+    });
+
+    test('a wrapped asset decrypts byte-exact through the viewer helper', () => {
+        const scope = openAlbum();
+        const plaintext = decryptShareBlob(
+            scope,
+            {
+                assetId: album.wrapped.fileId,
+                amkVersion: album.amkVersion,
+                noncePrefixHex: album.wrapped.noncePrefixHex,
+                keyMode: 'wrapped',
+                wrappedFileKeyHex: album.wrapped.wrappedFileKeyHex,
+            },
+            bytes(album.wrapped.ciphertextB64),
+        );
+        expect(new Uint8Array(plaintext)).toEqual(bytes(fixture.plaintextB64));
+        scope.free();
+    });
+
+    test('the same asset read as derived fails its AEAD open, as before the fix', () => {
+        const scope = openAlbum();
+        expect(
+            codeOf(() =>
+                decryptShareBlob(
+                    scope,
+                    {
+                        assetId: album.wrapped.fileId,
+                        amkVersion: album.amkVersion,
+                        noncePrefixHex: album.wrapped.noncePrefixHex,
+                    },
+                    bytes(album.wrapped.ciphertextB64),
+                ),
+            ),
+        ).toBe('tampered');
+        scope.free();
+    });
+
+    test('a wrapped key sealed under another AMK fails closed as tampered', () => {
+        const scope = openAlbum();
+        expect(
+            codeOf(() =>
+                scope.decryptBlob(
+                    album.wrapped.fileId,
+                    album.amkVersion,
+                    album.wrapped.noncePrefixHex,
+                    bytes(album.wrapped.ciphertextB64),
+                    album.wrapped.foreignWrappedFileKeyHex,
+                ),
+            ),
+        ).toBe('tampered');
+        scope.free();
+    });
+
+    test('an epoch the grant holds no AMK for is scope_unavailable', () => {
+        const scope = openAlbum();
+        expect(
+            codeOf(() =>
+                scope.decryptBlob(
+                    album.wrapped.fileId,
+                    album.amkVersion + 1,
+                    album.wrapped.noncePrefixHex,
+                    bytes(album.wrapped.ciphertextB64),
+                    album.wrapped.wrappedFileKeyHex,
+                ),
+            ),
+        ).toBe('scope_unavailable');
+        scope.free();
+    });
+
+    test('a wrapped key of the wrong length is malformed', () => {
+        const scope = openAlbum();
+        expect(
+            codeOf(() =>
+                scope.decryptBlob(
+                    album.wrapped.fileId,
+                    album.amkVersion,
+                    album.wrapped.noncePrefixHex,
+                    bytes(album.wrapped.ciphertextB64),
+                    album.wrapped.wrappedFileKeyHex.slice(2),
+                ),
+            ),
+        ).toBe('malformed');
+        scope.free();
+    });
+
+    test('a key mode that disagrees with the wrapped key is malformed', () => {
+        const scope = openAlbum();
+        const base = {
+            assetId: album.wrapped.fileId,
+            amkVersion: album.amkVersion,
+            noncePrefixHex: album.wrapped.noncePrefixHex,
+        };
+        const ciphertext = bytes(album.wrapped.ciphertextB64);
+        expect(
+            codeOf(() =>
+                decryptShareBlob(
+                    scope,
+                    { ...base, keyMode: 'wrapped' },
+                    ciphertext,
+                ),
+            ),
+        ).toBe('malformed');
+        expect(
+            codeOf(() =>
+                decryptShareBlob(
+                    scope,
+                    {
+                        ...base,
+                        keyMode: 'derived',
+                        wrappedFileKeyHex: album.wrapped.wrappedFileKeyHex,
+                    },
+                    ciphertext,
+                ),
+            ),
+        ).toBe('malformed');
+        scope.free();
     });
 });

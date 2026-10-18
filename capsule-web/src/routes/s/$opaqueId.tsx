@@ -49,6 +49,12 @@ interface ShareAsset {
     nonce_prefix: string;
     /** The crypto-manifest AMK epoch (`0` for an asset-scoped grant). */
     amk_version: number;
+    /** The manifest's `key_mode`; absent means `derived`. `wrapped` marks an adopted
+     *  web-upload drop, whose key an album-scoped viewer unwraps rather than derives. */
+    key_mode?: 'derived' | 'wrapped';
+    /** Lowercase-hex AMK-sealed file key; present iff `key_mode` is `wrapped`. Opaque without
+     *  the album's AMK, so as key-free as the nonce prefix beside it. */
+    wrapped_file_key?: string;
 }
 
 /** The `GET /s/{opaque-id}` response body. */
@@ -135,6 +141,9 @@ function ShareViewer() {
                                         assetId: asset.asset_id,
                                         amkVersion: asset.amk_version,
                                         noncePrefixHex: asset.nonce_prefix,
+                                        keyMode: asset.key_mode,
+                                        wrappedFileKeyHex:
+                                            asset.wrapped_file_key,
                                     },
                                     ciphertext,
                                 );
