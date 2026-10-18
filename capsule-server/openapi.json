@@ -10275,536 +10275,6 @@
         ]
       }
     },
-    "/v1/upload": {
-      "post": {
-        "summary": "Open an upload session for one blob of an asset bundle.",
-        "description": "Runs the refuse-by-default envelope battery — invariants 1–8 and the top-level↔envelope\nconsistency family — **before** anything is written, then stages the session's file and\nrecords the session. A request whose `(owner, hash, album)` tuple already has an active\nsession gets that session back rather than a second one.",
-        "operationId": "create_upload",
-        "parameters": [
-          {
-            "name": "X-Capsule-Protocol",
-            "in": "header",
-            "description": "The `YYYY-MM-DD` protocol version this request is written against. Outside the server's `[X-Capsule-Protocol-Min, X-Capsule-Protocol-Max]` window the request is refused with `426`.",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-            }
-          },
-          {
-            "name": "X-Capsule-Crypto-Suite",
-            "in": "header",
-            "description": "The crypto suite id from the primitives inventory. Sent on writes; a suite this server does not implement is refused with `400`.",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 65535.0,
-              "minimum": 0.0
-            }
-          },
-          {
-            "name": "X-Capsule-Sidecar-Schema",
-            "in": "header",
-            "description": "The sidecar schema version declared at `sidecar_schema` field 0. Sent on metadata updates; a schema newer than this server indexes is refused with `400`.",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 65535.0,
-              "minimum": 0.0
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateUploadRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "401": {
-            "description": "Unauthorized",
-            "headers": {
-              "WWW-Authenticate": {
-                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
-                "required": true,
-                "schema": {
-                  "type": "string"
-                },
-                "example": "Bearer"
-              },
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad Request",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "415": {
-            "description": "Unsupported Media Type",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Unprocessable Entity",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "201": {
-            "description": "Upload session created",
-            "headers": {
-              "Location": {
-                "description": "Where the session lives.",
-                "required": false,
-                "schema": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                }
-              },
-              "X-Capsule-Suggested-Chunk-Size": {
-                "description": "The starting chunk size.",
-                "required": false,
-                "schema": {
-                  "type": [
-                    "integer",
-                    "null"
-                  ],
-                  "minimum": 0.0,
-                  "format": "uint64"
-                }
-              },
-              "X-Capsule-Offset": {
-                "description": "The authoritative offset, on a resumed session.",
-                "required": false,
-                "schema": {
-                  "type": [
-                    "integer",
-                    "null"
-                  ],
-                  "minimum": 0.0,
-                  "format": "uint64"
-                }
-              },
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CreateUploadResponse"
-                }
-              }
-            }
-          },
-          "200": {
-            "description": "The active session for these bytes, to resume",
-            "headers": {
-              "Location": {
-                "description": "Where the session lives.",
-                "required": false,
-                "schema": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                }
-              },
-              "X-Capsule-Suggested-Chunk-Size": {
-                "description": "The starting chunk size.",
-                "required": false,
-                "schema": {
-                  "type": [
-                    "integer",
-                    "null"
-                  ],
-                  "minimum": 0.0,
-                  "format": "uint64"
-                }
-              },
-              "X-Capsule-Offset": {
-                "description": "The authoritative offset, on a resumed session.",
-                "required": false,
-                "schema": {
-                  "type": [
-                    "integer",
-                    "null"
-                  ],
-                  "minimum": 0.0,
-                  "format": "uint64"
-                }
-              },
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CreateUploadResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Album quiescing",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DuplicateBlobProblem"
-                }
-              }
-            }
-          },
-          "426": {
-            "description": "Protocol version unsupported",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "File too large",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ]
-      }
-    },
     "/v1/upload/{id}": {
       "delete": {
         "summary": "Cancel a session: its record, its accepted chunks and its staged bytes, together.",
@@ -11973,434 +11443,6 @@
         ]
       }
     },
-    "/v1/albums/{album_id}/ops": {
-      "post": {
-        "summary": "Apply one signed lifecycle manifest to an album's asset.",
-        "description": "The whole battery runs before anything is written, and a rejection writes nothing —\nincluding the blobs the bundle carries, which are stored only after the manifest has passed\nevery check the server can make without a key.",
-        "operationId": "album_lifecycle_op",
-        "parameters": [
-          {
-            "name": "album_id",
-            "in": "path",
-            "description": "The album's identifier.",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "X-Capsule-Protocol",
-            "in": "header",
-            "description": "The `YYYY-MM-DD` protocol version this request is written against. Outside the server's `[X-Capsule-Protocol-Min, X-Capsule-Protocol-Max]` window the request is refused with `426`.",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-            }
-          },
-          {
-            "name": "X-Capsule-Crypto-Suite",
-            "in": "header",
-            "description": "The crypto suite id from the primitives inventory. Sent on writes; a suite this server does not implement is refused with `400`.",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 65535.0,
-              "minimum": 0.0
-            }
-          },
-          {
-            "name": "X-Capsule-Sidecar-Schema",
-            "in": "header",
-            "description": "The sidecar schema version declared at `sidecar_schema` field 0. Sent on metadata updates; a schema newer than this server indexes is refused with `400`.",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 65535.0,
-              "minimum": 0.0
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OpRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "401": {
-            "description": "Unauthorized",
-            "headers": {
-              "WWW-Authenticate": {
-                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
-                "required": true,
-                "schema": {
-                  "type": "string"
-                },
-                "example": "Bearer"
-              },
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad Request",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "415": {
-            "description": "Unsupported Media Type",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Unprocessable Entity",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "200": {
-            "description": "OK",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OpResponse"
-                }
-              }
-            }
-          },
-          "426": {
-            "description": "Upgrade required",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProtocolRangeProblem"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Stale revival",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StaleRevivalProblem"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "the request body exceeds the configured limit",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ]
-      }
-    },
     "/v1/storage/verify": {
       "post": {
         "summary": "Confirm that the server holds the copies a client is about to stop holding.",
@@ -12671,388 +11713,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/StorageVerifyResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "the request body exceeds the configured limit",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            }
-          },
-          "426": {
-            "description": "Protocol version unsupported",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ]
-      }
-    },
-    "/v1/shares": {
-      "post": {
-        "summary": "Register a share link the caller's client has issued.",
-        "operationId": "issue_share",
-        "parameters": [
-          {
-            "name": "X-Capsule-Protocol",
-            "in": "header",
-            "description": "The `YYYY-MM-DD` protocol version this request is written against. Outside the server's `[X-Capsule-Protocol-Min, X-Capsule-Protocol-Max]` window the request is refused with `426`.",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-            }
-          },
-          {
-            "name": "X-Capsule-Crypto-Suite",
-            "in": "header",
-            "description": "The crypto suite id from the primitives inventory. Sent on writes; a suite this server does not implement is refused with `400`.",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 65535.0,
-              "minimum": 0.0
-            }
-          },
-          {
-            "name": "X-Capsule-Sidecar-Schema",
-            "in": "header",
-            "description": "The sidecar schema version declared at `sidecar_schema` field 0. Sent on metadata updates; a schema newer than this server indexes is refused with `400`.",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "maximum": 65535.0,
-              "minimum": 0.0
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/IssueShareRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "401": {
-            "description": "Unauthorized",
-            "headers": {
-              "WWW-Authenticate": {
-                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
-                "required": true,
-                "schema": {
-                  "type": "string"
-                },
-                "example": "Bearer"
-              },
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad Request",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "415": {
-            "description": "Unsupported Media Type",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Unprocessable Entity",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "201": {
-            "description": "The share link is registered and servable",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/IssueShareResponse"
                 }
               }
             }
@@ -14808,6 +13468,1346 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Protocol version unsupported",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/upload": {
+      "post": {
+        "summary": "Open an upload session for one blob of an asset bundle.",
+        "description": "Runs the refuse-by-default envelope battery — invariants 1–8 and the top-level↔envelope\nconsistency family — **before** anything is written, then stages the session's file and\nrecords the session. A request whose `(owner, hash, album)` tuple already has an active\nsession gets that session back rather than a second one.",
+        "operationId": "create_upload",
+        "parameters": [
+          {
+            "name": "X-Capsule-Protocol",
+            "in": "header",
+            "description": "The `YYYY-MM-DD` protocol version this request is written against. Outside the server's `[X-Capsule-Protocol-Min, X-Capsule-Protocol-Max]` window the request is refused with `426`.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+            }
+          },
+          {
+            "name": "X-Capsule-Crypto-Suite",
+            "in": "header",
+            "description": "The crypto suite id from the primitives inventory. Sent on writes; a suite this server does not implement is refused with `400`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 65535.0,
+              "minimum": 0.0
+            }
+          },
+          {
+            "name": "X-Capsule-Sidecar-Schema",
+            "in": "header",
+            "description": "The sidecar schema version declared at `sidecar_schema` field 0. Sent on metadata updates; a schema newer than this server indexes is refused with `400`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 65535.0,
+              "minimum": 0.0
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateUploadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              },
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Upload session created",
+            "headers": {
+              "Location": {
+                "description": "Where the session lives.",
+                "required": false,
+                "schema": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "X-Capsule-Suggested-Chunk-Size": {
+                "description": "The starting chunk size.",
+                "required": false,
+                "schema": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0.0,
+                  "format": "uint64"
+                }
+              },
+              "X-Capsule-Offset": {
+                "description": "The authoritative offset, on a resumed session.",
+                "required": false,
+                "schema": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0.0,
+                  "format": "uint64"
+                }
+              },
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateUploadResponse"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "The active session for these bytes, to resume",
+            "headers": {
+              "Location": {
+                "description": "Where the session lives.",
+                "required": false,
+                "schema": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "X-Capsule-Suggested-Chunk-Size": {
+                "description": "The starting chunk size.",
+                "required": false,
+                "schema": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0.0,
+                  "format": "uint64"
+                }
+              },
+              "X-Capsule-Offset": {
+                "description": "The authoritative offset, on a resumed session.",
+                "required": false,
+                "schema": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0.0,
+                  "format": "uint64"
+                }
+              },
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateUploadResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Album quiescing",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DuplicateBlobProblem"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Protocol version unsupported",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "File too large",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/albums/{album_id}/ops": {
+      "post": {
+        "summary": "Apply one signed lifecycle manifest to an album's asset.",
+        "description": "The whole battery runs before anything is written, and a rejection writes nothing —\nincluding the blobs the bundle carries, which are stored only after the manifest has passed\nevery check the server can make without a key.",
+        "operationId": "album_lifecycle_op",
+        "parameters": [
+          {
+            "name": "album_id",
+            "in": "path",
+            "description": "The album's identifier.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Capsule-Protocol",
+            "in": "header",
+            "description": "The `YYYY-MM-DD` protocol version this request is written against. Outside the server's `[X-Capsule-Protocol-Min, X-Capsule-Protocol-Max]` window the request is refused with `426`.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+            }
+          },
+          {
+            "name": "X-Capsule-Crypto-Suite",
+            "in": "header",
+            "description": "The crypto suite id from the primitives inventory. Sent on writes; a suite this server does not implement is refused with `400`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 65535.0,
+              "minimum": 0.0
+            }
+          },
+          {
+            "name": "X-Capsule-Sidecar-Schema",
+            "in": "header",
+            "description": "The sidecar schema version declared at `sidecar_schema` field 0. Sent on metadata updates; a schema newer than this server indexes is refused with `400`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 65535.0,
+              "minimum": 0.0
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              },
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Upgrade required",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolRangeProblem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Stale revival",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StaleRevivalProblem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/shares": {
+      "post": {
+        "summary": "Register a share link the caller's client has issued.",
+        "operationId": "issue_share",
+        "parameters": [
+          {
+            "name": "X-Capsule-Protocol",
+            "in": "header",
+            "description": "The `YYYY-MM-DD` protocol version this request is written against. Outside the server's `[X-Capsule-Protocol-Min, X-Capsule-Protocol-Max]` window the request is refused with `426`.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+            }
+          },
+          {
+            "name": "X-Capsule-Crypto-Suite",
+            "in": "header",
+            "description": "The crypto suite id from the primitives inventory. Sent on writes; a suite this server does not implement is refused with `400`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 65535.0,
+              "minimum": 0.0
+            }
+          },
+          {
+            "name": "X-Capsule-Sidecar-Schema",
+            "in": "header",
+            "description": "The sidecar schema version declared at `sidecar_schema` field 0. Sent on metadata updates; a schema newer than this server indexes is refused with `400`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 65535.0,
+              "minimum": 0.0
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IssueShareRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              },
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The share link is registered and servable",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueShareResponse"
                 }
               }
             }
@@ -21051,6 +21051,458 @@
         }
       }
     },
+    "/v1/auth/refresh": {
+      "post": {
+        "summary": "Exchange a refresh token for a new pair, rotating the session.",
+        "description": "The presented session is **closed** and a new one opened in its place, so a refresh token is\ngood exactly once. The session's advisory provenance — its cohort hash and device id — is\ncarried across the rotation, or the devices listing would lose track of a device every time\nits tokens turned over.",
+        "operationId": "refresh_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Session expired",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/logout": {
+      "post": {
+        "summary": "End the session the presented access token was issued against.",
+        "description": "Idempotent: a session that is already closed, expired, or was never opened produces the same\nanswer, because \"there is no longer a session\" is what the caller asked for.",
+        "operationId": "logout",
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              },
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "the request succeeded and there is no content to send",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/d/{opaque_id}": {
       "post": {
         "summary": "Open a drop session through a link.",
@@ -21751,458 +22203,6 @@
           }
         }
       }
-    },
-    "/v1/auth/refresh": {
-      "post": {
-        "summary": "Exchange a refresh token for a new pair, rotating the session.",
-        "description": "The presented session is **closed** and a new one opened in its place, so a refresh token is\ngood exactly once. The session's advisory provenance — its cohort hash and device id — is\ncarried across the rotation, or the devices listing would lose track of a device every time\nits tokens turned over.",
-        "operationId": "refresh_token",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RefreshRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "400": {
-            "description": "Bad Request",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "415": {
-            "description": "Unsupported Media Type",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Unprocessable Entity",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "200": {
-            "description": "OK",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TokenResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Session expired",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "the request body exceeds the configured limit",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/v1/auth/logout": {
-      "post": {
-        "summary": "End the session the presented access token was issued against.",
-        "description": "Idempotent: a session that is already closed, expired, or was never opened produces the same\nanswer, because \"there is no longer a session\" is what the caller asked for.",
-        "operationId": "logout",
-        "responses": {
-          "401": {
-            "description": "Unauthorized",
-            "headers": {
-              "WWW-Authenticate": {
-                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
-                "required": true,
-                "schema": {
-                  "type": "string"
-                },
-                "example": "Bearer"
-              },
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "204": {
-            "description": "the request succeeded and there is no content to send",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "the request body exceeds the configured limit",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ]
-      }
     }
   },
   "components": {
@@ -22847,16 +22847,218 @@
         ],
         "description": "What the server now holds for the album."
       },
-      "WireBlobRole": {
-        "type": "string",
-        "enum": [
-          "original",
-          "derivative",
-          "metadata",
-          "provenance",
-          "backup"
+      "AssetVerifyRequest": {
+        "properties": {
+          "asset_id": {
+            "type": "string",
+            "description": "The asset."
+          },
+          "blob_hashes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "description": "Every content address the client would be trusting the server with. The verdict is a\nconjunction over exactly these, so a client asks about what it is about to delete."
+          }
+        },
+        "type": "object",
+        "required": [
+          "asset_id",
+          "blob_hashes"
         ],
-        "description": "A blob's role in its asset bundle, as the wire spells it.\n\nA wire type of its own rather than a serde derive on [`BlobRole`]: the state ports'\nrecords deliberately derive no serde traits, so that a record cannot be smuggled through a\nstore built for another. The mapping is one `match` in one direction."
+        "description": "One asset to verify, with the exact copies the client is relying on."
+      },
+      "StorageVerifyRequest": {
+        "properties": {
+          "assets": {
+            "items": {
+              "$ref": "#/components/schemas/AssetVerifyRequest"
+            },
+            "type": "array",
+            "description": "The assets to verify."
+          },
+          "deep": {
+            "type": "boolean",
+            "description": "Also re-read and re-hash the bytes (`S-C41`).\n\nAbsent or `false` is the structural check: ask the index and the store whether the bytes\nare there. `true` additionally re-hashes them, which is the only way to catch silent\ncorruption — `stored` is a question about the filesystem, and a corrupt blob is still\nstored.\n\n**Rate-limited per account**, because a deep scan reads and hashes every declared blob\nand an unbounded one is an I/O-amplification attack costing the caller one small JSON\nbody. Past the budget the *structural* verdict still comes back and each blob's `deep`\nreads `rate_limited`: throwing away a good structural answer because the optional half\nwas throttled would make the limiter cost more than it saves."
+          }
+        },
+        "type": "object",
+        "required": [
+          "assets"
+        ],
+        "description": "The `POST /v1/storage/verify` body."
+      },
+      "BlobVerdictResponse": {
+        "properties": {
+          "hash": {
+            "type": "string",
+            "description": "The address, as the client declared it."
+          },
+          "role": {
+            "type": "string",
+            "description": "The role the asset holds it under — `unknown` for a hash the asset does not hold."
+          },
+          "stored": {
+            "type": "boolean",
+            "description": "The bytes are present at that address."
+          },
+          "indexed": {
+            "type": "boolean",
+            "description": "A live asset of the caller's references the address."
+          },
+          "retrievable": {
+            "type": "boolean",
+            "description": "Nothing is withholding it."
+          },
+          "deep": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What a deep scan found: `intact`, `corrupt`, or `rate_limited` (`S-C41`).\n\n**Absent when no deep scan ran**, and the absence is load-bearing: it is the difference\nbetween \"we did not look at the bytes\" and \"we looked and they were fine\", and a client\ndeciding whether to release its only copy has to be able to tell those apart."
+          }
+        },
+        "type": "object",
+        "required": [
+          "hash",
+          "role",
+          "stored",
+          "indexed",
+          "retrievable"
+        ],
+        "description": "One declared blob's verdict."
+      },
+      "StorageVerdictResponse": {
+        "properties": {
+          "asset_id": {
+            "type": "string",
+            "description": "The asset the client asked about."
+          },
+          "durable": {
+            "type": "boolean",
+            "description": "Every declared blob is stored ∧ indexed ∧ retrievable. **This is the field that gates a\ndeletion**, so it is false whenever the server cannot say otherwise."
+          },
+          "blobs": {
+            "items": {
+              "$ref": "#/components/schemas/BlobVerdictResponse"
+            },
+            "type": "array",
+            "description": "One entry per declared hash, in declaration order and never shortened."
+          },
+          "checked_at": {
+            "type": "string",
+            "description": "The server's own clock at verification, RFC 3339. Never the client's."
+          }
+        },
+        "type": "object",
+        "required": [
+          "asset_id",
+          "durable",
+          "blobs",
+          "checked_at"
+        ],
+        "description": "One asset's verdict."
+      },
+      "StorageVerifyResponse": {
+        "properties": {
+          "verdicts": {
+            "items": {
+              "$ref": "#/components/schemas/StorageVerdictResponse"
+            },
+            "type": "array",
+            "description": "One verdict per requested asset, in request order."
+          }
+        },
+        "type": "object",
+        "required": [
+          "verdicts"
+        ],
+        "description": "The `POST /v1/storage/verify` response."
+      },
+      "ProvisionLinkRequest": {
+        "properties": {
+          "opaque_id": {
+            "type": "string",
+            "description": "The 128-bit opaque id, 32 lowercase hex characters, from the client's CSPRNG."
+          },
+          "drop_pubkey": {
+            "type": "string",
+            "description": "The Drop Key's public half, base64. Opaque here — the server never decapsulates."
+          },
+          "crypto_suite_id": {
+            "type": "integer",
+            "maximum": 65535.0,
+            "minimum": 0.0,
+            "format": "uint16",
+            "description": "The suite a drop must be sealed under."
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the link stops accepting drops, RFC 3339."
+          },
+          "max_total_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "Cumulative bytes across every drop on this link."
+          },
+          "max_file_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32",
+            "description": "How many files the link may deposit."
+          },
+          "max_file_size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "The largest single file."
+          },
+          "single_use": {
+            "type": "boolean",
+            "description": "Whether the link dies after its first successful drop."
+          },
+          "passphrase_verifier": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An Argon2id **verifier**, base64, when the link is passphrase-gated.\n\nA verifier and never a passphrase: this is an abuse gate the server checks, which is why\nit is stored here at all — unlike a share link's passphrase, which protects decryption\nand which the server never sees in any form."
+          }
+        },
+        "type": "object",
+        "required": [
+          "opaque_id",
+          "drop_pubkey",
+          "crypto_suite_id"
+        ],
+        "description": "A link the owner is provisioning."
+      },
+      "ProvisionLinkResponse": {
+        "properties": {
+          "opaque_id": {
+            "type": "string",
+            "description": "The opaque id, echoed."
+          }
+        },
+        "type": "object",
+        "required": [
+          "opaque_id"
+        ],
+        "description": "Confirmation that a link is live."
       },
       "ManifestEnvelope": {
         "properties": {
@@ -22990,6 +23192,88 @@
           "action"
         ],
         "description": "The server-visible mirror of the signed manifest's envelope fields, as declared at\n`POST /v1/upload`.\n\nStrict (`deny_unknown_fields`) like the rest of the transport JSON. The Postel asymmetry\nthe design draws — tolerant inside documents that outlive us, strict on the wire we own —\nputs unknown-key tolerance in the *signed CBOR interiors*, never in this JSON projection."
+      },
+      "AdoptRequest": {
+        "properties": {
+          "album_id": {
+            "type": "string",
+            "description": "The album to adopt into."
+          },
+          "asset_id": {
+            "type": "string",
+            "description": "The asset the drop becomes."
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "The blob's declared size — the inbox row's, restated and checked against it."
+          },
+          "hash": {
+            "type": "string",
+            "description": "The ciphertext hash, which must name **this drop's** blob."
+          },
+          "content_type": {
+            "type": "string",
+            "description": "The declared content type."
+          },
+          "crypto_suite_id": {
+            "type": "integer",
+            "maximum": 65535.0,
+            "minimum": 0.0,
+            "format": "uint16",
+            "description": "The crypto suite."
+          },
+          "protocol_version": {
+            "type": "string",
+            "description": "The protocol version the manifest is written against."
+          },
+          "key_mode": {
+            "type": "string",
+            "description": "How the asset's key is carried. `derived` or `wrapped` (invariant 32)."
+          },
+          "manifest_envelope": {
+            "$ref": "#/components/schemas/ManifestEnvelope",
+            "description": "The signed manifest envelope, verbatim."
+          }
+        },
+        "type": "object",
+        "required": [
+          "album_id",
+          "asset_id",
+          "size",
+          "hash",
+          "content_type",
+          "crypto_suite_id",
+          "protocol_version",
+          "key_mode",
+          "manifest_envelope"
+        ],
+        "description": "The owner's signed `create` over a drop already in their inbox.\n\nThe same shape a `POST /v1/upload` create carries, minus everything about transferring bytes:\nthe blob is already committed, so there is no size to negotiate and no session to open. What\nremains is the manifest, which is the whole point — a drop becomes an asset only when the\n**owner** signs for it."
+      },
+      "AdoptResponse": {
+        "properties": {
+          "asset_id": {
+            "type": "string",
+            "description": "The asset the drop became."
+          }
+        },
+        "type": "object",
+        "required": [
+          "asset_id"
+        ],
+        "description": "What adoption produced."
+      },
+      "WireBlobRole": {
+        "type": "string",
+        "enum": [
+          "original",
+          "derivative",
+          "metadata",
+          "provenance",
+          "backup"
+        ],
+        "description": "A blob's role in its asset bundle, as the wire spells it.\n\nA wire type of its own rather than a serde derive on [`BlobRole`]: the state ports'\nrecords deliberately derive no serde traits, so that a record cannot be smuggled through a\nstore built for another. The mapping is one `match` in one direction."
       },
       "CreateUploadRequest": {
         "properties": {
@@ -23140,134 +23424,6 @@
         ],
         "description": "What a lifecycle write did."
       },
-      "AssetVerifyRequest": {
-        "properties": {
-          "asset_id": {
-            "type": "string",
-            "description": "The asset."
-          },
-          "blob_hashes": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "description": "Every content address the client would be trusting the server with. The verdict is a\nconjunction over exactly these, so a client asks about what it is about to delete."
-          }
-        },
-        "type": "object",
-        "required": [
-          "asset_id",
-          "blob_hashes"
-        ],
-        "description": "One asset to verify, with the exact copies the client is relying on."
-      },
-      "StorageVerifyRequest": {
-        "properties": {
-          "assets": {
-            "items": {
-              "$ref": "#/components/schemas/AssetVerifyRequest"
-            },
-            "type": "array",
-            "description": "The assets to verify."
-          },
-          "deep": {
-            "type": "boolean",
-            "description": "Also re-read and re-hash the bytes (`S-C41`).\n\nAbsent or `false` is the structural check: ask the index and the store whether the bytes\nare there. `true` additionally re-hashes them, which is the only way to catch silent\ncorruption — `stored` is a question about the filesystem, and a corrupt blob is still\nstored.\n\n**Rate-limited per account**, because a deep scan reads and hashes every declared blob\nand an unbounded one is an I/O-amplification attack costing the caller one small JSON\nbody. Past the budget the *structural* verdict still comes back and each blob's `deep`\nreads `rate_limited`: throwing away a good structural answer because the optional half\nwas throttled would make the limiter cost more than it saves."
-          }
-        },
-        "type": "object",
-        "required": [
-          "assets"
-        ],
-        "description": "The `POST /v1/storage/verify` body."
-      },
-      "BlobVerdictResponse": {
-        "properties": {
-          "hash": {
-            "type": "string",
-            "description": "The address, as the client declared it."
-          },
-          "role": {
-            "type": "string",
-            "description": "The role the asset holds it under — `unknown` for a hash the asset does not hold."
-          },
-          "stored": {
-            "type": "boolean",
-            "description": "The bytes are present at that address."
-          },
-          "indexed": {
-            "type": "boolean",
-            "description": "A live asset of the caller's references the address."
-          },
-          "retrievable": {
-            "type": "boolean",
-            "description": "Nothing is withholding it."
-          },
-          "deep": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "What a deep scan found: `intact`, `corrupt`, or `rate_limited` (`S-C41`).\n\n**Absent when no deep scan ran**, and the absence is load-bearing: it is the difference\nbetween \"we did not look at the bytes\" and \"we looked and they were fine\", and a client\ndeciding whether to release its only copy has to be able to tell those apart."
-          }
-        },
-        "type": "object",
-        "required": [
-          "hash",
-          "role",
-          "stored",
-          "indexed",
-          "retrievable"
-        ],
-        "description": "One declared blob's verdict."
-      },
-      "StorageVerdictResponse": {
-        "properties": {
-          "asset_id": {
-            "type": "string",
-            "description": "The asset the client asked about."
-          },
-          "durable": {
-            "type": "boolean",
-            "description": "Every declared blob is stored ∧ indexed ∧ retrievable. **This is the field that gates a\ndeletion**, so it is false whenever the server cannot say otherwise."
-          },
-          "blobs": {
-            "items": {
-              "$ref": "#/components/schemas/BlobVerdictResponse"
-            },
-            "type": "array",
-            "description": "One entry per declared hash, in declaration order and never shortened."
-          },
-          "checked_at": {
-            "type": "string",
-            "description": "The server's own clock at verification, RFC 3339. Never the client's."
-          }
-        },
-        "type": "object",
-        "required": [
-          "asset_id",
-          "durable",
-          "blobs",
-          "checked_at"
-        ],
-        "description": "One asset's verdict."
-      },
-      "StorageVerifyResponse": {
-        "properties": {
-          "verdicts": {
-            "items": {
-              "$ref": "#/components/schemas/StorageVerdictResponse"
-            },
-            "type": "array",
-            "description": "One verdict per requested asset, in request order."
-          }
-        },
-        "type": "object",
-        "required": [
-          "verdicts"
-        ],
-        "description": "The `POST /v1/storage/verify` response."
-      },
       "IssueShareRequest": {
         "properties": {
           "opaque_id": {
@@ -23320,162 +23476,6 @@
           "opaque_id"
         ],
         "description": "Confirmation that a link is now servable."
-      },
-      "ProvisionLinkRequest": {
-        "properties": {
-          "opaque_id": {
-            "type": "string",
-            "description": "The 128-bit opaque id, 32 lowercase hex characters, from the client's CSPRNG."
-          },
-          "drop_pubkey": {
-            "type": "string",
-            "description": "The Drop Key's public half, base64. Opaque here — the server never decapsulates."
-          },
-          "crypto_suite_id": {
-            "type": "integer",
-            "maximum": 65535.0,
-            "minimum": 0.0,
-            "format": "uint16",
-            "description": "The suite a drop must be sealed under."
-          },
-          "expires_at": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "When the link stops accepting drops, RFC 3339."
-          },
-          "max_total_bytes": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "minimum": 0.0,
-            "format": "uint64",
-            "description": "Cumulative bytes across every drop on this link."
-          },
-          "max_file_count": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "maximum": 4294967295.0,
-            "minimum": 0.0,
-            "format": "uint32",
-            "description": "How many files the link may deposit."
-          },
-          "max_file_size": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "minimum": 0.0,
-            "format": "uint64",
-            "description": "The largest single file."
-          },
-          "single_use": {
-            "type": "boolean",
-            "description": "Whether the link dies after its first successful drop."
-          },
-          "passphrase_verifier": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "An Argon2id **verifier**, base64, when the link is passphrase-gated.\n\nA verifier and never a passphrase: this is an abuse gate the server checks, which is why\nit is stored here at all — unlike a share link's passphrase, which protects decryption\nand which the server never sees in any form."
-          }
-        },
-        "type": "object",
-        "required": [
-          "opaque_id",
-          "drop_pubkey",
-          "crypto_suite_id"
-        ],
-        "description": "A link the owner is provisioning."
-      },
-      "ProvisionLinkResponse": {
-        "properties": {
-          "opaque_id": {
-            "type": "string",
-            "description": "The opaque id, echoed."
-          }
-        },
-        "type": "object",
-        "required": [
-          "opaque_id"
-        ],
-        "description": "Confirmation that a link is live."
-      },
-      "AdoptRequest": {
-        "properties": {
-          "album_id": {
-            "type": "string",
-            "description": "The album to adopt into."
-          },
-          "asset_id": {
-            "type": "string",
-            "description": "The asset the drop becomes."
-          },
-          "size": {
-            "type": "integer",
-            "minimum": 0.0,
-            "format": "uint64",
-            "description": "The blob's declared size — the inbox row's, restated and checked against it."
-          },
-          "hash": {
-            "type": "string",
-            "description": "The ciphertext hash, which must name **this drop's** blob."
-          },
-          "content_type": {
-            "type": "string",
-            "description": "The declared content type."
-          },
-          "crypto_suite_id": {
-            "type": "integer",
-            "maximum": 65535.0,
-            "minimum": 0.0,
-            "format": "uint16",
-            "description": "The crypto suite."
-          },
-          "protocol_version": {
-            "type": "string",
-            "description": "The protocol version the manifest is written against."
-          },
-          "key_mode": {
-            "type": "string",
-            "description": "How the asset's key is carried. `derived` or `wrapped` (invariant 32)."
-          },
-          "manifest_envelope": {
-            "$ref": "#/components/schemas/ManifestEnvelope",
-            "description": "The signed manifest envelope, verbatim."
-          }
-        },
-        "type": "object",
-        "required": [
-          "album_id",
-          "asset_id",
-          "size",
-          "hash",
-          "content_type",
-          "crypto_suite_id",
-          "protocol_version",
-          "key_mode",
-          "manifest_envelope"
-        ],
-        "description": "The owner's signed `create` over a drop already in their inbox.\n\nThe same shape a `POST /v1/upload` create carries, minus everything about transferring bytes:\nthe blob is already committed, so there is no size to negotiate and no session to open. What\nremains is the manifest, which is the whole point — a drop becomes an asset only when the\n**owner** signs for it."
-      },
-      "AdoptResponse": {
-        "properties": {
-          "asset_id": {
-            "type": "string",
-            "description": "The asset the drop became."
-          }
-        },
-        "type": "object",
-        "required": [
-          "asset_id"
-        ],
-        "description": "What adoption produced."
       },
       "WireScope": {
         "type": "string",
@@ -24580,6 +24580,19 @@
         ],
         "description": "What a viewer needs to start."
       },
+      "RefreshRequest": {
+        "properties": {
+          "refresh_token": {
+            "type": "string",
+            "description": "The refresh token issued by a previous login or refresh.\n\nUnconstrained in the schema for the reason [`LoginRequest`] records: an empty one is a\ntoken that does not verify, which is a 401 the handler already answers correctly."
+          }
+        },
+        "type": "object",
+        "required": [
+          "refresh_token"
+        ],
+        "description": "The refresh token being exchanged for a new pair.\n\n`Debug` is hand-written, for the same reason as [`LoginRequest`]: this field is a live\ncredential."
+      },
       "CreateDropRequest": {
         "properties": {
           "content_type": {
@@ -24643,19 +24656,6 @@
           "suggested_chunk_size"
         ],
         "description": "The session a guest uploads into."
-      },
-      "RefreshRequest": {
-        "properties": {
-          "refresh_token": {
-            "type": "string",
-            "description": "The refresh token issued by a previous login or refresh.\n\nUnconstrained in the schema for the reason [`LoginRequest`] records: an empty one is a\ntoken that does not verify, which is a 401 the handler already answers correctly."
-          }
-        },
-        "type": "object",
-        "required": [
-          "refresh_token"
-        ],
-        "description": "The refresh token being exchanged for a new pair.\n\n`Debug` is hand-written, for the same reason as [`LoginRequest`]: this field is a live\ncredential."
       },
       "CodedProblem": {
         "properties": {
