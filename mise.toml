@@ -26,9 +26,9 @@ hk = "1.48.0"
 # fetch of a version-matched wasm-bindgen) once the toolchain is installed.
 "cargo:wasm-bindgen-cli" = "0.2.100"
 # cargo-deny enforces the dependency-licence allowlist in deny.toml (the policy it
-# implements is capsule-docs/.../design/licensing.md). Only `check licenses` is wired
-# up: the advisories check needs a network fetch of the RustSec database, which would
-# make the gate non-deterministic and break the offline build.
+# implements is capsule-docs/.../design/licensing.md) offline, as `license-check`, and
+# the RustSec advisories, bans and sources online, as `deny-check` (CI only: the
+# advisories check fetches the RustSec database, so it stays out of `check-rust`).
 "cargo:cargo-deny" = "0.19.8"
 
 [env]
@@ -291,6 +291,15 @@ run = "cargo run -q -p xtask -- i18n-guard"
 [tasks.license-check]
 description = "Verify every dependency licence is allowlisted in deny.toml"
 run = "cargo deny --all-features check licenses"
+
+# Dependency-advisory gate. Fails on any RustSec advisory against Cargo.lock that deny.toml
+# does not ignore by id with a reason, on a banned crate, and on a crate from anywhere but
+# crates.io. It fetches the advisory database, so it is not part of the offline `check-rust`;
+# CI's `rust-advisories` job runs it on every pull request and every push to master, so a
+# newly published advisory fails the next run.
+[tasks.deny-check]
+description = "Verify Cargo.lock against RustSec advisories, crate bans and crate sources"
+run = "cargo deny --all-features check advisories bans sources"
 
 # Dump the Kynos OpenAPI 3.2 document to the committed capsule-server/openapi.json that spargen
 # generates the typed REST client from (slices `S-C34`, `S-D28`). The dump is state-free — no

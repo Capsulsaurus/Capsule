@@ -226,6 +226,29 @@ jobs:
       - name: Check (fmt + clippy + build)
         run: mise run check-rust
 
+  # RustSec advisories, crate bans and crate sources against Cargo.lock (#507). Not gated on
+  # the `changes` filter: an advisory is published against a lockfile nobody touched, so the
+  # check runs on every pull request and every push to master, and a new one fails the next
+  # run. It reads only Cargo metadata, so no build and no cache. An advisory with no
+  # reachable fix is ignored by id, with its reason, in deny.toml.
+  rust-advisories:
+    name: Rust (dependency advisories)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - name: Set up mise (task runner)
+        uses: jdx/mise-action@v2
+        with:
+          install: false
+      - name: Check advisories, bans and sources
+        run: mise run deny-check
+
   rust-test:
     name: Rust (tests)
     needs: changes
@@ -544,8 +567,9 @@ jobs:
   # Single aggregated status check. Mark THIS ("CI / required") as the required
   # check in branch protection — path-filtered jobs report "skipped", which this
   # treats as a pass. Every job in `needs` is verified below: the loop covers the
-  # nine gates (`rust-test` included — it became blocking with `S-C59`, see the
-  # note on that job — and `rust-containers`, blocking from the start, #514), and `changes` is checked ahead of it under a stricter rule,
+  # ten gates (`rust-test` included — it became blocking with `S-C59`, see the
+  # note on that job — `rust-containers`, blocking from the start, #514, and
+  # `rust-advisories`, unfiltered, #507), and `changes` is checked ahead of it under a stricter rule,
   # because "skipped" is only trustworthy when the filter that skipped it ran.
   # A job in `needs` but absent from both checks is a gate that cannot fail.
   required:
@@ -553,7 +577,7 @@ jobs:
     if: always()
     # TODO(track:deferred): re-add `kotlin` and `swift` here and to the loop below when mobile
     # resumes — see #389 (Android) and #391–#393 (Apple). Both jobs are disabled (`if: false`).
-    needs: [changes, commit-lint, rust, rust-test, rust-containers, rust-cross, web, docs, docs-truth, markdown]
+    needs: [changes, commit-lint, rust, rust-advisories, rust-test, rust-containers, rust-cross, web, docs, docs-truth, markdown]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs succeeded
@@ -572,6 +596,7 @@ jobs:
             exit 1
           fi
           for r in "${{ needs.commit-lint.result }}" "${{ needs.rust.result }}" \
+                   "${{ needs.rust-advisories.result }}" \
                    "${{ needs.rust-test.result }}" "${{ needs.rust-containers.result }}" \
                    "${{ needs.rust-cross.result }}" \
                    "${{ needs.web.result }}" \
