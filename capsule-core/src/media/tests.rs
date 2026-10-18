@@ -28,6 +28,8 @@ use rawshift_image::formats::export::{
 };
 use uuid::Uuid;
 
+#[cfg(feature = "media-avif-decode")]
+use super::decode::check_avif_frames;
 use super::decode::{Decoder, RawshiftDecoder, decode_guarded};
 use super::derivative::{
     DerivativeContext, DerivativeSealer, DerivativeTier, SealedDerivative, StillDerivatives,
@@ -771,6 +773,95 @@ fn an_avif_exif_orientation_is_applied() {
         .expect("the AVIF decodes");
     assert_eq!((decoded.width(), decoded.height()), (48, 64));
     assert_eq!(decoded.orientation_applied, 6);
+}
+
+/// Rewrite an AVIF's `ispe` box to claim `width` x `height`, leaving the AV1 frame alone.
+#[cfg(all(feature = "media-avif-decode", feature = "media-linked-codecs"))]
+fn restate_ispe(avif: &mut [u8], width: u32, height: u32) {
+    let at = avif
+        .windows(4)
+        .position(|w| w == b"ispe")
+        .expect("the fixture AVIF has an ispe box");
+    // The fourcc, then a full box's version and flags, then width and height, big-endian.
+    avif[at + 8..at + 12].copy_from_slice(&width.to_be_bytes());
+    avif[at + 12..at + 16].copy_from_slice(&height.to_be_bytes());
+}
+
+/// An AVIF whose `ispe` understates its frame fools the header probe, so the budget is checked
+/// against the AV1 frames themselves: refused by dav1d's frame-size limit before it allocates,
+/// and accepted exactly up to the real frame's pixel count.
+#[cfg(all(feature = "media-avif-decode", feature = "media-linked-codecs"))]
+#[test]
+fn an_avif_whose_ispe_understates_its_frame_is_budgeted_by_the_real_frame() {
+    let mut avif = avif_bytes(&quadrants(64, 48), None);
+    restate_ispe(&mut avif, 8, 6);
+    let probed = RawshiftDecoder
+        .probe(&avif, "avif")
+        .expect("the AVIF probes");
+    assert_eq!(
+        probed.stored_dimensions,
+        (8, 6),
+        "the probe states the ispe claim, which is why decode cannot rely on it"
+    );
+
+    // A budget the claim fits and the real frame does not: dav1d refuses from the frame header.
+    assert_eq!(
+        check_avif_frames(&avif, 8 * 6),
+        Err(MediaError::PixelBudgetExceeded {
+            pixels: 8 * 6 + 1,
+            limit: 8 * 6,
+        })
+    );
+    assert!(matches!(
+        check_avif_frames(&avif, 64 * 48 - 1),
+        Err(MediaError::PixelBudgetExceeded { .. })
+    ));
+    assert_eq!(check_avif_frames(&avif, 64 * 48), Ok(()));
+
+    // Under the real budget the decode goes ahead, and reports the frame's size, not the claim.
+    let decoded = RawshiftDecoder
+        .decode(&avif, "avif")
+        .expect("an in-budget AVIF decodes whatever its ispe says");
+    assert_eq!((decoded.width(), decoded.height()), (64, 48));
+}
+
+/// An AVIF item that holds no AV1 frame is a decode failure: `image` would read it until dav1d
+/// yielded a picture, which never comes.
+#[cfg(all(feature = "media-avif-decode", feature = "media-linked-codecs"))]
+#[test]
+fn an_avif_item_with_no_frame_is_a_decode_failure() {
+    let mut avif = avif_bytes(&quadrants(64, 48), None);
+    let coded = mp4parse::read_avif(
+        &mut std::io::Cursor::new(&avif),
+        mp4parse::ParseStrictness::Normal,
+    )
+    .expect("the fixture AVIF parses")
+    .primary_item_coded_data()
+    .expect("the fixture AVIF has a primary item")
+    .to_vec();
+    let at = avif
+        .windows(coded.len())
+        .position(|w| w == coded.as_slice())
+        .expect("the primary item's bytes are in the file");
+    // Replace the item with one AV1 padding OBU (type 15, has_size_field) of the same length.
+    let payload = coded.len() - 3;
+    assert!(
+        payload < 1 << 14,
+        "two LEB128 bytes hold the padding length"
+    );
+    let padding = &mut avif[at..at + coded.len()];
+    padding.fill(0);
+    padding[0] = (15 << 3) | 0b10;
+    padding[1] = (payload & 0x7F) as u8 | 0x80;
+    padding[2] = (payload >> 7) as u8;
+
+    match RawshiftDecoder.decode(&avif, "avif") {
+        Err(MediaError::Decode { format, detail }) => {
+            assert_eq!(format, StillFormat::Avif);
+            assert!(detail.contains("no frame"), "{detail}");
+        }
+        other => panic!("a frameless AVIF item must be a decode failure, got {other:?}"),
+    }
 }
 
 /// Bytes that are no still at all are a distinct outcome from a still with no codec: there is

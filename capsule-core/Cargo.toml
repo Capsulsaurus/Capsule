@@ -73,8 +73,10 @@ media-linked-codecs = [
 # cross-compiled C library is exactly what those builds must not grow. A separate feature rather
 # than a third arm of `media-linked-codecs`, because the two need different build hosts (cmake +
 # nasm versus a system library) and a caller may want one without the other. `capsule-cli`
-# enables it on every host but Windows.
-media-avif-decode = ["media", "rawshift-image/avif-decode-image"]
+# enables it on every host but Windows. `dep:dav1d` and `dep:mp4parse` are the same two crates
+# `image` already links, named directly so `media::decode` can bound every AV1 frame with
+# dav1d's own `frame_size_limit` before `image` (which sets none) decodes it.
+media-avif-decode = ["media", "rawshift-image/avif-decode-image", "dep:dav1d", "dep:mp4parse"]
 # `mls` links the live OpenMLS group backend (`crypto::authority::OpenMlsAuthority`, slice
 # S-X1) pinned to the X-Wing PQ ciphersuite `MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519`
 # (`0x004D`) via its formally-verified libcrux provider. Implied by `native` so the default
@@ -178,6 +180,10 @@ rawshift-image = { version = "0.1.1", default-features = false, features = [
     "tiff-decode",
     "gif-decode",
 ], optional = true }
+# The AVIF frame-size pre-flight (`media-avif-decode` only): the versions `image` 0.25's
+# `avif-native` already resolves, so the graph gains no crate. See `media::decode`.
+dav1d = { version = "0.11.1", optional = true }
+mp4parse = { version = "0.17.0", optional = true }
 # Bundled SQLite (C) — the on-device library index. Optional + gated by `native` because it
 # cannot target `wasm32-unknown-unknown`; the WASM sealing build drops it.
 rusqlite = { version = "0.32", features = ["bundled"], optional = true }

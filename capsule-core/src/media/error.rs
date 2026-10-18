@@ -90,7 +90,8 @@ pub enum MediaError {
     /// ever sees a buffer.
     #[error("{pixels} pixels exceeds the {limit}-pixel decode budget")]
     PixelBudgetExceeded {
-        /// The pixel count the header claims.
+        /// The pixel count the header claims. For an AVIF whose AV1 frame dav1d refused from its
+        /// own frame header, which reports no size, `limit + 1`: a lower bound.
         pixels: u64,
         /// The budget in force.
         limit: u64,

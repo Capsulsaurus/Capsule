@@ -10,7 +10,10 @@
 //! 3. **Budget** ([`MAX_DECODE_PIXELS`]) — a header-only
 //!    [`probe`](Decoder::probe) refuses an oversized frame before the decoder allocates. It has
 //!    to be pre-decode: `rawshift-image` decodes to interleaved RGB `u16`, so the bomb is
-//!    inside the decoder, not in Capsule's copy of the result.
+//!    inside the decoder, not in Capsule's copy of the result. An AVIF's header size is its
+//!    `ispe` box, a claim the AV1 frame need not honour, so with `media-avif-decode` decode
+//!    also bounds the real AV1 frames through dav1d's own `frame_size_limit` before
+//!    `rawshift-image` decodes them.
 //! 4. **Decode**, then **apply the EXIF orientation** to the pixels, so the frame this module
 //!    returns is always upright and its dimensions are the ones a viewer shows.
 //! 5. **Normalise** to packed RGBA8, which is what [`crate::lqip`] and the downscale both take.
@@ -207,6 +210,12 @@ impl Decoder for RawshiftDecoder {
     fn decode(&self, bytes: &[u8], ext: &str) -> Result<DecodedImage, MediaError> {
         let probed = self.probe(bytes, ext)?;
         let format = probed.format;
+        // The probe's AVIF size is the `ispe` box, which the file states and nothing checks
+        // against the AV1 frame `image` then decodes and allocates for. Bound the real frames.
+        #[cfg(feature = "media-avif-decode")]
+        if format == StillFormat::Avif {
+            check_avif_frames(bytes, MAX_DECODE_PIXELS)?;
+        }
         let mut rgb = decode_standard_image(bytes, standard_format(format)).map_err(|e| {
             MediaError::Decode {
                 format,
@@ -277,6 +286,131 @@ pub(crate) fn guarded<T>(
         "media: a third-party codec panicked; the original is imported without a derivative"
     );
     Err(MediaError::DecoderPanic)
+}
+
+/// `DAV1D_ERR(ERANGE)`: what dav1d returns when a frame header exceeds `frame_size_limit`.
+/// `ERANGE` is 34 on every host `media-avif-decode` builds for (Linux and macOS; Windows is
+/// excluded), and `dav1d` maps no named variant onto it.
+#[cfg(feature = "media-avif-decode")]
+const DAV1D_FRAME_TOO_LARGE: dav1d::Error = dav1d::Error::UnknownError(-34);
+
+/// Refuse an AVIF any of whose AV1 frames holds more than `limit` pixels, before
+/// `rawshift-image` decodes it.
+///
+/// The header probe reads the `ispe` box, which is the file's own claim. `image`'s
+/// `AvifDecoder` then runs libdav1d with no `frame_size_limit` and allocates its output from the
+/// real frame size, so an AVIF whose `ispe` understates its frame would reach an allocation
+/// failure, which aborts rather than unwinds and so is beyond [`decode_guarded`]. This decodes
+/// the same items `image` will (`mp4parse` at the same strictness, primary and alpha) with
+/// dav1d's own `frame_size_limit` set, which refuses an oversized frame from its header, before
+/// dav1d allocates the picture; every frame it does produce is checked again by its decoded size.
+///
+/// The cost is one extra AV1 decode of each in-budget AVIF. That is the price of a check made by
+/// the decoder itself rather than by a second, hand-written parser of the AV1 frame header.
+///
+/// `pub(super)` so the tests can drive it with a budget a small fixture can exceed.
+#[cfg(feature = "media-avif-decode")]
+pub(super) fn check_avif_frames(bytes: &[u8], limit: u64) -> Result<(), MediaError> {
+    let context = mp4parse::read_avif(
+        &mut std::io::Cursor::new(bytes),
+        mp4parse::ParseStrictness::Normal,
+    )
+    .map_err(|e| MediaError::Decode {
+        format: StillFormat::Avif,
+        detail: format!("AVIF container: {e}"),
+    })?;
+    for (item, coded) in [
+        ("primary", context.primary_item_coded_data()),
+        ("alpha", context.alpha_item_coded_data()),
+    ] {
+        if let Some(coded) = coded.filter(|coded| !coded.is_empty()) {
+            check_av1_frames(item, coded, limit)?;
+        }
+    }
+    Ok(())
+}
+
+/// Decode one AV1 item with `frame_size_limit = limit`, draining every frame it holds.
+#[cfg(feature = "media-avif-decode")]
+fn check_av1_frames(item: &'static str, coded: &[u8], limit: u64) -> Result<(), MediaError> {
+    let refused = |e: dav1d::Error| {
+        if e == DAV1D_FRAME_TOO_LARGE {
+            tracing::warn!(
+                item,
+                limit,
+                "media: refusing an AVIF whose AV1 frame exceeds the decode budget"
+            );
+            // dav1d refuses from the frame header without reporting its size; the frame is
+            // known only to hold more than `limit` pixels.
+            MediaError::PixelBudgetExceeded {
+                pixels: limit.saturating_add(1),
+                limit,
+            }
+        } else {
+            MediaError::Decode {
+                format: StillFormat::Avif,
+                detail: format!("AV1 {item} item: {e}"),
+            }
+        }
+    };
+    let mut settings = dav1d::Settings::new();
+    // One thread and no frame delay, so every frame is decoded, and checked, in order here.
+    settings.set_n_threads(1);
+    settings.set_max_frame_delay(1);
+    settings.set_frame_size_limit(u32::try_from(limit).unwrap_or(u32::MAX));
+    let mut decoder = dav1d::Decoder::with_settings(&settings).map_err(refused)?;
+
+    let mut pending = match decoder.send_data(coded.to_vec(), None, None, None) {
+        Ok(()) => false,
+        Err(dav1d::Error::Again) => true,
+        Err(e) => return Err(refused(e)),
+    };
+    let mut frames = 0_u32;
+    loop {
+        match decoder.get_picture() {
+            Ok(picture) => {
+                frames += 1;
+                let pixels = u64::from(picture.width()) * u64::from(picture.height());
+                if pixels > limit {
+                    tracing::warn!(
+                        item,
+                        width = picture.width(),
+                        height = picture.height(),
+                        pixels,
+                        limit,
+                        "media: refusing an AVIF whose decoded AV1 frame exceeds the decode budget"
+                    );
+                    return Err(MediaError::PixelBudgetExceeded { pixels, limit });
+                }
+                continue;
+            }
+            Err(dav1d::Error::Again) => {}
+            Err(e) => return Err(refused(e)),
+        }
+        if !pending {
+            break;
+        }
+        pending = match decoder.send_pending_data() {
+            Ok(()) => false,
+            Err(dav1d::Error::Again) => true,
+            Err(e) => return Err(refused(e)),
+        };
+    }
+    if frames == 0 {
+        // `image` reads an item until dav1d yields a picture, so an item that yields none would
+        // spin there rather than fail.
+        return Err(MediaError::Decode {
+            format: StillFormat::Avif,
+            detail: format!("AV1 {item} item holds no frame"),
+        });
+    }
+    tracing::debug!(
+        item,
+        frames,
+        limit,
+        "media: AVIF frames are within the decode budget"
+    );
+    Ok(())
 }
 
 /// Identify a still and refuse anything this build has no codec for, before any decoder runs.
