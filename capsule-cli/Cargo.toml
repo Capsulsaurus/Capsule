@@ -70,6 +70,10 @@ tracing-subscriber = { version = "0.3.23", features = [
 # Asset ids on the `capsule cull` argument surface (S-D16). Already the workspace-wide
 # identifier pin; the CLI simply needs to name and parse the type it prints.
 uuid = { workspace = true }
+# `capsule auth login --oidc` (S-N2): decoding the provider's redirect query on the loopback
+# listener. Already in the graph under reqwest; named here so the listener does not hand-roll
+# percent-decoding.
+url = "2.5.8"
 walkdir = "2.5.0"
 
 # `media-avif-decode`: AVIF stills decode, so an AVIF original gets its dimensions, placeholder and

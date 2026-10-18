@@ -67,6 +67,24 @@
               "repeatable": false,
               "required": false,
               "takes_value": false
+            },
+            {
+              "help": "Sign in through the server's identity provider in a browser instead of with a password. The server must allow loopback redirects (OIDC_ALLOW_LOOPBACK_REDIRECT=true)",
+              "id": "oidc",
+              "long": "oidc",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "With --oidc, print the sign-in address without opening a browser",
+              "id": "no_browser",
+              "long": "no-browser",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
             }
           ],
           "name": "login"

@@ -37,6 +37,7 @@ pub mod db;
 pub mod demo;
 pub mod i18n;
 pub mod migrate;
+pub mod oidc;
 pub mod remote;
 pub mod repair;
 pub mod session;
@@ -212,8 +213,14 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 password_stdin,
             } => auth_register(email, password_stdin).await?,
             AuthCommands::Login {
+                oidc: true,
+                no_browser,
+                ..
+            } => auth_login_oidc(no_browser).await?,
+            AuthCommands::Login {
                 email,
                 password_stdin,
+                ..
             } => auth_login(email, password_stdin).await?,
             AuthCommands::Escrow {
                 library,
@@ -893,27 +900,7 @@ async fn auth_login(email: Option<String>, password_stdin: bool) -> Result<()> {
         }
     };
 
-    // The password verified and the sign-in may not be finished (`S-C55`). The CLI is
-    // interactive, so it asks — a client that could not would have to report a second factor as
-    // a failure, which is what the SDK's `LoginOutcome::into_session` is for and what this is
-    // deliberately not.
-    if let remote::LoginStep::SecondFactorRequired { mfa_token } = step {
-        println!(
-            "{}",
-            bundle
-                .format(keys::AUTH_LOGIN_SECOND_FACTOR_REQUIRED, &[])
-                .yellow()
-        );
-        let code = flag_or_prompt(None, bundle.format(keys::AUTH_LOGIN_TOTP_PROMPT, &[]))?;
-        if let Err(error) = remote::auth_verify_totp(&remote, &store, &mfa_token, code.trim()).await
-        {
-            let reason = describe_remote_error(&bundle, &error);
-            return Err(eyre!(
-                "{}",
-                bundle.format(keys::AUTH_LOGIN_FAILED, &[("reason", Value::Str(&reason))])
-            ));
-        }
-    }
+    finish_second_factor(&bundle, &remote, &store, step).await?;
 
     println!(
         "{}",
@@ -922,6 +909,140 @@ async fn auth_login(email: Option<String>, password_stdin: bool) -> Result<()> {
             .green()
     );
     Ok(())
+}
+
+/// Finish a sign-in that answered a second-factor challenge, by asking for the code.
+///
+/// The first factor verified and the sign-in may not be finished (`S-C55`). The CLI is
+/// interactive, so it asks — a client that could not would have to report a second factor as
+/// a failure, which is what the SDK's `LoginOutcome::into_session` is for and what this is
+/// deliberately not. Shared by the password and the identity-provider sign-ins, which honour the
+/// same factor.
+async fn finish_second_factor(
+    bundle: &capsule_i18n::Bundle,
+    remote: &remote::RemoteConfig,
+    store: &session::SessionStore,
+    step: remote::LoginStep,
+) -> Result<()> {
+    if let remote::LoginStep::SecondFactorRequired { mfa_token } = step {
+        println!(
+            "{}",
+            bundle
+                .format(keys::AUTH_LOGIN_SECOND_FACTOR_REQUIRED, &[])
+                .yellow()
+        );
+        let code = flag_or_prompt(None, bundle.format(keys::AUTH_LOGIN_TOTP_PROMPT, &[]))?;
+        if let Err(error) = remote::auth_verify_totp(remote, store, &mfa_token, code.trim()).await {
+            let reason = describe_remote_error(bundle, &error);
+            return Err(eyre!(
+                "{}",
+                bundle.format(keys::AUTH_LOGIN_FAILED, &[("reason", Value::Str(&reason))])
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// `capsule auth login --oidc`: sign in through the server's identity provider in a browser,
+/// over a loopback listener, and persist the session ([`oidc`] owns the flow).
+async fn auth_login_oidc(no_browser: bool) -> Result<()> {
+    let bundle = i18n::cli_bundle();
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let ceremony = oidc::SdkCeremony::new(&remote, &store)
+        .map_err(|error| login_failed(&bundle, &describe_remote_error(&bundle, &error)))?;
+    let pages = oidc::CallbackPages {
+        received: bundle.format(keys::AUTH_LOGIN_OIDC_PAGE_RECEIVED, &[]),
+        refused: bundle.format(keys::AUTH_LOGIN_OIDC_PAGE_REFUSED, &[]),
+    };
+
+    println!(
+        "{}",
+        bundle
+            .format(keys::AUTH_LOGIN_OIDC_IN_PROGRESS, &[])
+            .green()
+    );
+    let show = |authorization_url: &str, waited: std::time::Duration| {
+        println!("{}", bundle.format(keys::AUTH_LOGIN_OIDC_VISIT, &[]));
+        println!("{authorization_url}");
+        if !no_browser && !oidc::open_in_browser(authorization_url) {
+            println!(
+                "{}",
+                bundle
+                    .format(keys::AUTH_LOGIN_OIDC_BROWSER_UNAVAILABLE, &[])
+                    .yellow()
+            );
+        }
+        println!(
+            "{}",
+            bundle.format(
+                keys::AUTH_LOGIN_OIDC_WAITING,
+                &[(
+                    "minutes",
+                    Value::Int(i64::try_from(waited.as_secs().div_ceil(60)).unwrap_or(i64::MAX))
+                )]
+            )
+        );
+    };
+    let step = oidc::login(&ceremony, show, &pages, oidc::LISTENER_TIMEOUT)
+        .await
+        .map_err(|error| login_failed(&bundle, &describe_oidc_error(&bundle, &error)))?;
+
+    finish_second_factor(&bundle, &remote, &store, step).await?;
+    println!(
+        "{}",
+        bundle.format(keys::AUTH_LOGIN_OIDC_SUCCESS, &[]).green()
+    );
+    Ok(())
+}
+
+/// The `capsule auth login` failure line, carrying `reason`.
+fn login_failed(bundle: &capsule_i18n::Bundle, reason: &str) -> eyre::Report {
+    eyre!(
+        "{}",
+        bundle.format(keys::AUTH_LOGIN_FAILED, &[("reason", Value::Str(reason))])
+    )
+}
+
+/// A localized reason for an OIDC sign-in failure.
+///
+/// A refused loopback redirect gets the remedy rather than only the code: the server's operator
+/// has to set `OIDC_ALLOW_LOOPBACK_REDIRECT=true`, which is off by default, and nothing the person
+/// at the terminal does will change that.
+fn describe_oidc_error(bundle: &capsule_i18n::Bundle, error: &oidc::OidcLoginError) -> String {
+    match error {
+        oidc::OidcLoginError::Remote(remote::RemoteError::Auth(
+            capsule_sdk::auth::AuthError::OidcRedirectInvalid,
+        )) => bundle.format(keys::AUTH_LOGIN_OIDC_LOOPBACK_REFUSED, &[]),
+        oidc::OidcLoginError::Remote(error) => describe_remote_error(bundle, error),
+        oidc::OidcLoginError::Listener(error) => bundle.format(
+            keys::AUTH_LOGIN_OIDC_LISTENER_FAILED,
+            &[("reason", Value::Str(&error.to_string()))],
+        ),
+        oidc::OidcLoginError::TimedOut { .. } => {
+            bundle.format(keys::AUTH_LOGIN_OIDC_TIMED_OUT, &[])
+        }
+        oidc::OidcLoginError::Denied { error, description } => {
+            // Provider-authored text, printed to a terminal: control characters are dropped so
+            // a provider cannot write escape sequences into it.
+            let printable =
+                |text: &str| text.chars().filter(|c| !c.is_control()).collect::<String>();
+            let error = printable(error);
+            match description {
+                Some(description) => bundle.format(
+                    keys::AUTH_LOGIN_OIDC_DENIED_DESCRIBED,
+                    &[
+                        ("error", Value::Str(&error)),
+                        ("description", Value::Str(&printable(description))),
+                    ],
+                ),
+                None => bundle.format(
+                    keys::AUTH_LOGIN_OIDC_DENIED,
+                    &[("error", Value::Str(&error))],
+                ),
+            }
+        }
+    }
 }
 
 /// `capsule auth escrow`: set recovery up for the library at `library`, as the signed-in
@@ -1563,6 +1684,127 @@ mod escrow_tests {
                 keys::AUTH_ESCROW_FAILED,
                 &[("reason", crate::i18n::Value::Str(&reason))]
             )
+        );
+    }
+}
+
+#[cfg(test)]
+mod oidc_login_tests {
+    use capsule_sdk::auth::AuthError;
+    use clap::Parser as _;
+
+    use super::describe_oidc_error;
+    use crate::cli::{AuthCommands, Cli, Commands};
+    use crate::i18n::{Bundle, Value, keys};
+    use crate::oidc::OidcLoginError;
+    use crate::remote::RemoteError;
+
+    /// `--oidc` is its own sign-in: it takes no password inputs, and `--no-browser` means
+    /// nothing without it.
+    #[test]
+    fn the_oidc_flag_excludes_the_password_inputs() {
+        let parsed = Cli::try_parse_from(["capsule", "auth", "login", "--oidc", "--no-browser"])
+            .expect("--oidc --no-browser parses");
+        assert!(matches!(
+            parsed.command,
+            Commands::Auth {
+                command: AuthCommands::Login {
+                    oidc: true,
+                    no_browser: true,
+                    ..
+                }
+            }
+        ));
+        for refused in [
+            &["capsule", "auth", "login", "--oidc", "--email", "a@b.c"][..],
+            &["capsule", "auth", "login", "--oidc", "--password-stdin"][..],
+            &["capsule", "auth", "login", "--no-browser"][..],
+        ] {
+            assert!(Cli::try_parse_from(refused).is_err(), "{refused:?}");
+        }
+    }
+
+    /// A refused loopback redirect names the server variable the operator has to set.
+    #[test]
+    fn a_refused_loopback_redirect_names_the_server_setting() {
+        let bundle = Bundle::for_locale("en");
+        let line = describe_oidc_error(
+            &bundle,
+            &OidcLoginError::Remote(RemoteError::Auth(AuthError::OidcRedirectInvalid)),
+        );
+        assert_eq!(
+            line,
+            bundle.format(keys::AUTH_LOGIN_OIDC_LOOPBACK_REFUSED, &[])
+        );
+        assert!(line.contains("OIDC_ALLOW_LOOPBACK_REDIRECT=true"), "{line}");
+    }
+
+    /// Each terminal failure renders its own line, and provider text cannot carry control
+    /// characters into the terminal.
+    #[test]
+    fn each_oidc_failure_has_its_own_line() {
+        let bundle = Bundle::for_locale("en");
+        assert_eq!(
+            describe_oidc_error(
+                &bundle,
+                &OidcLoginError::TimedOut {
+                    waited: std::time::Duration::from_secs(300)
+                }
+            ),
+            bundle.format(keys::AUTH_LOGIN_OIDC_TIMED_OUT, &[])
+        );
+        assert_eq!(
+            describe_oidc_error(
+                &bundle,
+                &OidcLoginError::Denied {
+                    error: "access_denied".to_owned(),
+                    description: None,
+                }
+            ),
+            bundle.format(
+                keys::AUTH_LOGIN_OIDC_DENIED,
+                &[("error", Value::Str("access_denied"))]
+            )
+        );
+        let described = describe_oidc_error(
+            &bundle,
+            &OidcLoginError::Denied {
+                error: "access_\u{1b}denied".to_owned(),
+                description: Some("no\u{1b}[31m thanks".to_owned()),
+            },
+        );
+        assert_eq!(
+            described,
+            bundle.format(
+                keys::AUTH_LOGIN_OIDC_DENIED_DESCRIBED,
+                &[
+                    ("error", Value::Str("access_denied")),
+                    ("description", Value::Str("no[31m thanks")),
+                ]
+            )
+        );
+        assert!(
+            describe_oidc_error(
+                &bundle,
+                &OidcLoginError::Remote(RemoteError::Auth(AuthError::OidcNotConfigured))
+            )
+            .contains(&bundle.format(capsule_i18n::error_codes::AUTH_OIDC_NOT_CONFIGURED, &[]))
+        );
+    }
+
+    /// The wait line pluralizes on whole minutes.
+    #[test]
+    fn the_wait_line_counts_minutes() {
+        let bundle = Bundle::for_locale("en");
+        assert!(
+            bundle
+                .format(keys::AUTH_LOGIN_OIDC_WAITING, &[("minutes", Value::Int(1))])
+                .contains("1 minute ")
+        );
+        assert!(
+            bundle
+                .format(keys::AUTH_LOGIN_OIDC_WAITING, &[("minutes", Value::Int(5))])
+                .contains("5 minutes ")
         );
     }
 }

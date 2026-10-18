@@ -1707,6 +1707,17 @@
     <string name="cli_auth_login_email_prompt">Email</string>
     <string name="cli_auth_login_failed">Login failed: %s</string>
     <string name="cli_auth_login_in_progress">Logging in to Capsule…</string>
+    <string name="cli_auth_login_oidc_browser_unavailable">No browser could be opened from here. Open the address above in any browser.</string>
+    <string name="cli_auth_login_oidc_denied">The identity provider did not sign you in (%s).</string>
+    <string name="cli_auth_login_oidc_denied_described">The identity provider did not sign you in (%1$s): %2$s</string>
+    <string name="cli_auth_login_oidc_in_progress">Signing in to Capsule through your identity provider…</string>
+    <string name="cli_auth_login_oidc_listener_failed">This computer could not listen for the sign-in to come back: %s</string>
+    <string name="cli_auth_login_oidc_loopback_refused">This server does not accept sign-ins from the command line through its identity provider. Its operator can allow them by setting OIDC_ALLOW_LOOPBACK_REDIRECT=true.</string>
+    <string name="cli_auth_login_oidc_page_received">You are signed in to Capsule. You can close this tab and return to the terminal.</string>
+    <string name="cli_auth_login_oidc_page_refused">The sign-in did not complete. Return to the terminal to see why.</string>
+    <string name="cli_auth_login_oidc_success">Signed in through your identity provider.</string>
+    <string name="cli_auth_login_oidc_timed_out">No sign-in came back in time. Run the command again to start a new one.</string>
+    <string name="cli_auth_login_oidc_visit">To sign in, open this address in a browser:</string>
     <string name="cli_auth_login_password_prompt">Password</string>
     <string name="cli_auth_login_second_factor_required">This account has two-factor authentication switched on.</string>
     <string name="cli_auth_login_success">Logged in as %s.</string>
@@ -1745,6 +1756,8 @@
     <string name="cli_help_auth_escrow_arg_replace">Replace the account\'s existing recovery backup; the previous recovery secret stops working</string>
     <string name="cli_help_auth_login_about">Login to Capsule</string>
     <string name="cli_help_auth_login_arg_email">Account email (prompted when omitted)</string>
+    <string name="cli_help_auth_login_arg_no_browser">With --oidc, print the sign-in address without opening a browser</string>
+    <string name="cli_help_auth_login_arg_oidc">Sign in through the server\'s identity provider in a browser instead of with a password. The server must allow loopback redirects (OIDC_ALLOW_LOOPBACK_REDIRECT=true)</string>
     <string name="cli_help_auth_login_arg_password_stdin">Read the password from stdin instead of prompting, so the command works in scripts and CI where there is no terminal</string>
     <string name="cli_help_auth_logout_about">Logout from Capsule</string>
     <string name="cli_help_auth_recover_about">Recover the signed-in account onto this machine from its recovery backup</string>
@@ -2327,6 +2340,10 @@
     <plurals name="app_timeline_selection_count">
         <item quantity="one">%d Selected</item>
         <item quantity="other">%d Selected</item>
+    </plurals>
+    <plurals name="cli_auth_login_oidc_waiting">
+        <item quantity="one">Waiting up to %d minute for the sign-in to finish…</item>
+        <item quantity="other">Waiting up to %d minutes for the sign-in to finish…</item>
     </plurals>
     <plurals name="cli_library_info_migrate_hint">
         <item quantity="one">Run `capsule library migrate` to admit the %d unsigned sidecar.</item>
