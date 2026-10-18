@@ -85,3 +85,9 @@ walkdir = "2.5.0"
 # skipped. Cargo unifies this with the unconditional dependency above.
 [target.'cfg(not(windows))'.dependencies]
 capsule-core = { path = "../capsule-core", features = ["media-avif-decode"] }
+
+[dev-dependencies]
+# `tests/oidc_dex.rs` plays the person at the browser against dex (S-N2): it follows the
+# authorization URL, submits dex's password form, and follows the redirect to the CLI's loopback
+# listener. The workspace pin, already in the graph through capsule-sdk.
+reqwest = { workspace = true }

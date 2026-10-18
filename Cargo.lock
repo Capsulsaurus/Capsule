@@ -990,6 +990,7 @@ dependencies = [
  "indexmap 2.14.0",
  "jiff",
  "nanoid",
+ "reqwest",
  "sea-orm",
  "secrecy",
  "serde",
