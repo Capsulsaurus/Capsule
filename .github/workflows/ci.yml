@@ -325,6 +325,70 @@ jobs:
           NEXTEST_PROFILE: ci
         run: mise run test-rust-containers
 
+  # `capsule auth login --oidc` against a real identity provider (#640). The round trip in
+  # capsule-cli/tests/oidc_dex.rs skips unless CAPSULE_TEST_DEX=1, so `rust-test` passes it
+  # vacuously; this job is where it runs. It brings up compose.yaml's own dex service (v2.44.0,
+  # its inline config, so CI and a developer's machine sign in to the same provider), starts
+  # the in-memory server the test file's header names with the three OIDC variables, and fails
+  # on a skip line just as `test-rust-containers` does. Every wait is bounded: compose's
+  # `--wait-timeout` on dex's healthcheck, curl's retry count on the server's `/v1/version`.
+  rust-oidc:
+    name: Rust (OIDC round trip)
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      # nasm and libdav1d: capsule-cli's codecs, as in the `rust` job.
+      - name: Install nasm and libdav1d
+        run: sudo apt-get update && sudo apt-get install -y nasm libdav1d-dev
+      - name: Install nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - name: Start dex
+        run: docker compose -f capsule-server/compose.yaml --profile oidc up -d --wait --wait-timeout 120 dex
+      - name: Build the server and the round trip
+        run: |
+          cargo build -p capsule-server
+          cargo nextest run -p capsule-cli --test oidc_dex --no-run
+      # The same arguments as `mise run serve-memory`, run from the binary just built so the
+      # readiness probe below waits on boot rather than on a compile.
+      - name: Start the OIDC-configured server
+        env:
+          OIDC_ISSUER: http://127.0.0.1:5556/dex
+          OIDC_CLIENT_ID: capsule
+          OIDC_ALLOW_LOOPBACK_REDIRECT: "true"
+          JWT_ED25519_DER: MC4CAQAwBQYDK2VwBCIEIN6eTvXEL7xMZWHY8rTk7VbQSGSuRkle5MVfiiYUStLF
+          BLOB_ROOT: ./target/capsule-server-blobs
+        run: |
+          nohup ./target/debug/capsule-server serve --memory --listen 127.0.0.1:3000 \
+            > "$RUNNER_TEMP/capsule-server.log" 2>&1 &
+          curl --silent --show-error --fail --retry 60 --retry-delay 1 --retry-connrefused \
+            --output /dev/null http://127.0.0.1:3000/v1/version
+      - name: Test (dex round trip)
+        shell: bash
+        env:
+          NEXTEST_PROFILE: ci
+          CAPSULE_TEST_DEX: "1"
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/oidc_dex.log"
+          cargo nextest run -p capsule-cli --test oidc_dex --no-tests=fail --success-output final 2>&1 | tee "$log"
+          if grep -nE 'skipped: ' "$log" >&2; then
+            echo "rust-oidc: the round trip skipped instead of running against dex." >&2
+            exit 1
+          fi
+      - name: Show the server and dex logs
+        if: failure()
+        run: |
+          cat "$RUNNER_TEMP/capsule-server.log" || true
+          docker compose -f capsule-server/compose.yaml --profile oidc logs dex || true
+
   # Verify the app FFI — capsule-sdk with `--features ffi`, plus the capsule-core-ffi
   # umbrella on Apple, both linking capsule-core — cross-compiles to the formally
   # supported targets (mobile + desktop). Tier 1 (Apple, Android) gates; Tier 2 (Windows MSVC, aarch64 Linux)
@@ -572,8 +636,8 @@ jobs:
   # Single aggregated status check. Mark THIS ("CI / required") as the required
   # check in branch protection — path-filtered jobs report "skipped", which this
   # treats as a pass. Every job in `needs` is verified below: the loop covers the
-  # ten gates (`rust-test` included — it became blocking with `S-C59`, see the
-  # note on that job — `rust-containers`, blocking from the start, #514, and
+  # eleven gates (`rust-test` included — it became blocking with `S-C59`, see the
+  # note on that job — `rust-containers`, blocking from the start, #514, `rust-oidc`, #640, and
   # `rust-advisories`, unfiltered, #507), and `changes` is checked ahead of it under a stricter rule,
   # because "skipped" is only trustworthy when the filter that skipped it ran.
   # A job in `needs` but absent from both checks is a gate that cannot fail.
@@ -582,7 +646,7 @@ jobs:
     if: always()
     # TODO(track:deferred): re-add `kotlin` and `swift` here and to the loop below when mobile
     # resumes — see #389 (Android) and #391–#393 (Apple). Both jobs are disabled (`if: false`).
-    needs: [changes, commit-lint, rust, rust-advisories, rust-test, rust-containers, rust-cross, web, docs, docs-truth, markdown]
+    needs: [changes, commit-lint, rust, rust-advisories, rust-test, rust-containers, rust-oidc, rust-cross, web, docs, docs-truth, markdown]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs succeeded
@@ -603,7 +667,7 @@ jobs:
           for r in "${{ needs.commit-lint.result }}" "${{ needs.rust.result }}" \
                    "${{ needs.rust-advisories.result }}" \
                    "${{ needs.rust-test.result }}" "${{ needs.rust-containers.result }}" \
-                   "${{ needs.rust-cross.result }}" \
+                   "${{ needs.rust-oidc.result }}" "${{ needs.rust-cross.result }}" \
                    "${{ needs.web.result }}" \
                    "${{ needs.docs.result }}" "${{ needs.docs-truth.result }}" \
                    "${{ needs.markdown.result }}"; do
