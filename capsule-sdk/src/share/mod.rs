@@ -24,7 +24,7 @@ use capsule_core::sharing::{ShareLink, SharePublication};
 use tracing::instrument;
 
 use crate::auth::Session;
-use crate::client::{AuthenticatedClient, ClientError};
+use crate::client::{AuthenticatedClient, ClientError, describe_error, is_token_failure};
 use crate::rest;
 
 /// Why a share-link operation did not complete.
@@ -239,29 +239,11 @@ where
             status: status.as_u16(),
             code: None,
         },
-        // A bearer provider that could not produce a token is boxed as the generated runtime's
-        // own `AuthError`; every other request-construction failure is the wire's.
-        rest::Error::RequestConstruction(inner)
-            if std::error::Error::source(&inner)
-                .and_then(|source| source.downcast_ref::<rest::AuthError>())
-                .is_some() =>
-        {
+        rest::Error::RequestConstruction(_) if is_token_failure(&error) => {
             ShareError::Unauthorized { code: None }
         }
-        other => ShareError::Transport(describe(&other)),
+        other => ShareError::Transport(describe_error(&other)),
     }
-}
-
-/// The generated client's failure together with its source chain, where the reqwest reason is.
-fn describe(error: &dyn std::error::Error) -> String {
-    let mut rendered = error.to_string();
-    let mut source = error.source();
-    while let Some(cause) = source {
-        rendered.push_str(": ");
-        rendered.push_str(&cause.to_string());
-        source = cause.source();
-    }
-    rendered
 }
 
 fn coded(problem: &rest::types::CodedProblem) -> (Option<String>, String) {

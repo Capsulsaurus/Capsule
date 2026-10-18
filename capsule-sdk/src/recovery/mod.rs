@@ -60,7 +60,7 @@ use jiff::Timestamp;
 use tracing::instrument;
 
 use crate::auth::Session;
-use crate::client::{AuthenticatedClient, ClientError};
+use crate::client::{AuthenticatedClient, ClientError, describe_error, is_token_failure};
 use crate::rest;
 
 /// Everything the networked recovery flows can fail with. Callers switch on the typed
@@ -856,28 +856,13 @@ where
             status: status.as_u16(),
             code: None,
         },
-        // `RequestConstruction` is **not** a pre-flight-only class. reqwest builds every
-        // failure of the request it executes with `error::request(..)`, so `is_request()` is
-        // true for connection-refused, DNS and TLS failures too, and the generated taxonomy
-        // routes all of them here alongside the genuine pre-flight ones. Splitting them by
-        // class alone would report an unreachable server as "sign in again", which on an
-        // offline device is the one remedy that cannot work.
-        //
-        // The *source* discriminates them: a bearer provider that could not produce a token is
-        // boxed as the generated runtime's own `AuthError`, and nothing else on this path is.
-        // A dead session must reach a caller as an auth failure rather than as a transport
-        // blip, because the two have opposite remedies.
-        rest::Error::RequestConstruction(inner) => {
-            if std::error::Error::source(inner)
-                .and_then(|source| source.downcast_ref::<rest::AuthError>())
-                .is_some()
-            {
-                RecoveryError::Unauthorized {
-                    code: None,
-                    detail: describe(error),
-                }
-            } else {
-                RecoveryError::Transport(describe(error))
+        // Splitting `RequestConstruction` by class alone would report an unreachable server as
+        // "sign in again", which on an offline device is the one remedy that cannot work; the
+        // shared classifier reads the source instead.
+        rest::Error::RequestConstruction(_) if is_token_failure(error) => {
+            RecoveryError::Unauthorized {
+                code: None,
+                detail: describe_error(error),
             }
         }
         // A *declared* refusal whose body was not the coded problem the document promises.
@@ -889,26 +874,8 @@ where
         rest::Error::Decode { path, .. } => RecoveryError::Transport(format!(
             "the escrow endpoint answered a refusal this client could not parse ({path})"
         )),
-        other => RecoveryError::Transport(describe(other)),
+        other => RecoveryError::Transport(describe_error(other)),
     }
-}
-
-/// Render a generated-client failure together with its source chain. The taxonomy's own
-/// `Display` names the class and, for the wire classes, little else (`"transport failed"`,
-/// `"request construction failed"`) — the source chain is where the reqwest/hyper reason a log
-/// reader needs actually lives.
-fn describe<E>(error: &rest::Error<E>) -> String
-where
-    E: std::error::Error + 'static,
-{
-    let mut rendered = error.to_string();
-    let mut source = std::error::Error::source(error);
-    while let Some(cause) = source {
-        rendered.push_str(": ");
-        rendered.push_str(&cause.to_string());
-        source = cause.source();
-    }
-    rendered
 }
 
 #[cfg(test)]
