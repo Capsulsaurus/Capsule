@@ -4,7 +4,6 @@
 use uuid::Uuid;
 
 use super::{Workspace, now_rfc3339};
-use crate::crypto::keys::Amk;
 use crate::sharing::{
     LINK_SECRET_LEN, RevocationRecord, ScopeMaterial, ShareLink, ShareLinkId, ShareLinkIssuer,
     ShareLinkRecord, ShareScope, SharingError, encapsulate_scope, generate_opaque_id,
@@ -40,14 +39,16 @@ impl Workspace {
                     .expect("provenance chain is never empty")
                     .manifest
                     .core;
-                let epoch = head.amk_version.0;
-                let amk = album
-                    .amks
-                    .get(&epoch)
-                    .ok_or(SharingError::ScopeUnavailable)?;
-                // Carry the folded file key: the recipient re-uses the manifest's
-                // `nonce_prefix` to decrypt, so the grant must derive under that same prefix.
-                let file_key = Amk::from_bytes(*amk).derive_file_key(&asset_id, &head.nonce_prefix);
+                if !album.amks.contains_key(&head.amk_version.0) {
+                    return Err(SharingError::ScopeUnavailable);
+                }
+                // Carry the head's file key, honouring its `key_mode`: a derived key is folded
+                // under the manifest's `nonce_prefix` (which the recipient re-uses to decrypt),
+                // and an adopted drop's is unwrapped from `wrapped_file_key`.
+                let file_key = self.original_file_key(album, head).map_err(|e| {
+                    tracing::warn!(%asset_id, error = %e, "share link: asset file key recovery failed");
+                    SharingError::Crypto("asset file key recovery failed")
+                })?;
                 Ok(ScopeMaterial::Asset {
                     file_id: asset_id,
                     file_key,
@@ -267,6 +268,186 @@ mod tests {
                 &core.nonce_prefix
             ),
         );
+    }
+
+    /// Stage and adopt a guest drop into a fresh album; returns `(album, asset, ciphertext)`.
+    fn adopted_drop(ws: &mut Workspace, plaintext: &[u8]) -> (Uuid, Uuid, Vec<u8>) {
+        use crate::drop::{DropAdopter, LinkCaps, UploadLinkIssuer, seal_drop};
+        let album = ws.create_album("Guests").unwrap();
+        let link = UploadLinkIssuer::create_link(ws, LinkCaps::default(), None).unwrap();
+        let sealed = seal_drop(plaintext, &link.drop_pubkey, "image/jpeg").unwrap();
+        let ciphertext = sealed.ciphertext.clone();
+        let drop_id = ws.receive_drop(link.link_id, sealed).unwrap();
+        let adopted = DropAdopter::adopt(ws, drop_id, album).unwrap();
+        assert_eq!(
+            adopted.manifest.core.key_mode,
+            crate::crypto::provenance::KeyMode::Wrapped
+        );
+        (album, adopted.asset_id(), ciphertext)
+    }
+
+    fn head_core(ws: &Workspace, asset_id: &Uuid) -> crate::crypto::provenance::ManifestCore {
+        ws.asset(asset_id)
+            .unwrap()
+            .chain
+            .records()
+            .last()
+            .unwrap()
+            .manifest
+            .core
+            .clone()
+    }
+
+    /// #551: an asset-scoped link to an adopted drop carries the guest's key — unwrapped
+    /// from `wrapped_file_key`, not re-derived — so the recipient decrypts the unchanged
+    /// guest ciphertext.
+    #[test]
+    fn share_link_asset_scope_grants_an_adopted_drop() {
+        let lib = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let plaintext = b"\xFF\xD8\xFF an adopted guest photo, shared";
+        let (_, asset_id, ciphertext) = adopted_drop(&mut ws, plaintext);
+
+        let link = ws
+            .create_link(ShareScope::Asset(asset_id), None, None)
+            .unwrap();
+        let material = crate::sharing::open_scope(
+            &link.wrapped_scope,
+            &link.opaque_id,
+            &link.fragment_secret,
+            None,
+        )
+        .unwrap();
+        let head = head_core(&ws, &asset_id);
+        let key = material.file_key_for_manifest(&head).unwrap();
+        assert_eq!(
+            decrypt_asset_vec(&key, &head.nonce_prefix, &ciphertext).unwrap(),
+            plaintext
+        );
+    }
+
+    /// #551: an album-scoped link covers an adopted drop: from the grant's AMKs and the
+    /// asset's manifest, the recipient unwraps the guest's key and decrypts the ciphertext.
+    /// The derived-only triple path cannot, which is why the manifest path exists.
+    #[test]
+    fn share_link_album_scope_grants_an_adopted_drop() {
+        let lib = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let plaintext = b"\xFF\xD8\xFF an adopted guest photo, album-shared";
+        let (album_id, asset_id, ciphertext) = adopted_drop(&mut ws, plaintext);
+
+        let link = ws
+            .create_link(ShareScope::Album(album_id), None, None)
+            .unwrap();
+        let material = crate::sharing::open_scope(
+            &link.wrapped_scope,
+            &link.opaque_id,
+            &link.fragment_secret,
+            None,
+        )
+        .unwrap();
+        let head = head_core(&ws, &asset_id);
+        let key = material.file_key_for_manifest(&head).unwrap();
+        assert_eq!(
+            decrypt_asset_vec(&key, &head.nonce_prefix, &ciphertext).unwrap(),
+            plaintext
+        );
+        let derived = material
+            .file_key_for(&asset_id, head.amk_version.0, &head.nonce_prefix)
+            .unwrap();
+        assert!(decrypt_asset_vec(&derived, &head.nonce_prefix, &ciphertext).is_err());
+
+        // An epoch the grant holds no AMK for is not covered.
+        let mut unheld = head.clone();
+        unheld.amk_version = crate::crypto::keys::AmkVersion(99);
+        assert_eq!(
+            material.file_key_for_manifest(&unheld),
+            Err(SharingError::ScopeUnavailable)
+        );
+
+        // Another album's manifest at an epoch number the grant does hold is not covered
+        // either: epochs are per album, so the grant's AMK for that number is not its key.
+        let (_, other) = imported_asset(&mut ws, b"\xFF\xD8\xFF not in the shared album");
+        let foreign = head_core(&ws, &other);
+        assert_ne!(foreign.album_id, album_id);
+        assert_eq!(foreign.amk_version, head.amk_version);
+        assert_eq!(
+            material.file_key_for_manifest(&foreign),
+            Err(SharingError::ScopeUnavailable)
+        );
+    }
+
+    /// A tampered `wrapped` manifest in the shared album: its key sealed under another AMK,
+    /// or missing altogether. Each one fails closed with a `Crypto` error and yields no key.
+    fn tampered_wrapped_keys(
+        core: &crate::crypto::provenance::ManifestCore,
+    ) -> [Option<crate::crypto::provenance::WrappedFileKey>; 2] {
+        let foreign_amk = crate::crypto::keys::Amk::from_bytes([0x99; 32]);
+        [
+            Some(crate::crypto::provenance::WrappedFileKey(
+                crate::crypto::encryption::seal_file_key(&foreign_amk, &core.file_id, &[0x77; 32]),
+            )),
+            None,
+        ]
+    }
+
+    /// The album-scope recipient path fails closed on a wrapped key that does not open.
+    #[test]
+    fn album_scope_wrapped_key_that_does_not_open_fails_closed() {
+        let lib = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let (album_id, asset_id, _) = adopted_drop(&mut ws, b"\xFF\xD8\xFF tampered drop");
+        let link = ws
+            .create_link(ShareScope::Album(album_id), None, None)
+            .unwrap();
+        let material = crate::sharing::open_scope(
+            &link.wrapped_scope,
+            &link.opaque_id,
+            &link.fragment_secret,
+            None,
+        )
+        .unwrap();
+        let head = head_core(&ws, &asset_id);
+        for wrapped in tampered_wrapped_keys(&head) {
+            let mut core = head.clone();
+            core.wrapped_file_key = wrapped;
+            assert_eq!(
+                material.file_key_for_manifest(&core),
+                Err(SharingError::Crypto("asset file key recovery failed"))
+            );
+        }
+    }
+
+    /// Asset-scope issue fails closed, minting no link, when the head's wrapped key does not
+    /// open under the album's AMK.
+    #[test]
+    fn asset_scope_issue_with_a_wrapped_key_that_does_not_open_fails_closed() {
+        use crate::crypto::provenance::ProvenanceChain;
+        let lib = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let (_, asset_id, _) = adopted_drop(&mut ws, b"\xFF\xD8\xFF tampered drop");
+        let record = ws
+            .asset(&asset_id)
+            .unwrap()
+            .chain
+            .records()
+            .last()
+            .unwrap()
+            .clone();
+        for wrapped in tampered_wrapped_keys(&record.manifest.core) {
+            let mut tampered = record.clone();
+            tampered.manifest.core.wrapped_file_key = wrapped;
+            let mut chain = ProvenanceChain::new();
+            chain.append(tampered).unwrap();
+            ws.assets.get_mut(&asset_id).unwrap().chain = chain;
+            let issued = ws.share_links.len();
+            assert_eq!(
+                ws.create_link(ShareScope::Asset(asset_id), None, None)
+                    .map(|_| ()),
+                Err(SharingError::Crypto("asset file key recovery failed"))
+            );
+            assert_eq!(ws.share_links.len(), issued, "no link is recorded");
+        }
     }
 
     /// Revocation & expiry: the issuer's record drives the serve-path liveness predicate.

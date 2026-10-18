@@ -17,7 +17,7 @@ runner and (via [hk](https://hk.jdx.dev)) the git-hook manager. From the repo ro
 ```sh
 mise trust          # trust this repo's mise config (+ capsule-swift/mise.toml)
 mise install        # installs hk, convco, cargo-nextest (+ language tools)
-mise run setup      # installs the web/docs/vision package dependencies
+mise run setup      # installs the web/docs package dependencies
 hk install          # wires up the git hooks
 ```
 
@@ -46,7 +46,6 @@ mise run check-docs        # format, lint, test, build
 mise run check-docs-truth  # every name the docs claim resolves in the tree
 mise run check-kotlin      # ktlint + detekt
 mise run check-swift       # format, lint, unit tests, iPhone UI sweep (macOS only)
-mise run check-vision      # format + lint
 mise run check-md          # markdownlint
 ```
 
