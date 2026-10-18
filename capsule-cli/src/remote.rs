@@ -492,7 +492,7 @@ pub struct EscrowSetup {
 /// [`RemoteError::NotAuthenticated`] with no stored session; [`RemoteError::Profile`] when the
 /// account id cannot be read; the two refusals above; [`RemoteError::Lifecycle`] for the bind
 /// or the wrap; [`RemoteError::Recovery`] for an escrow or sealed-identity call.
-#[instrument(skip_all, fields(library_user = %workspace.user_id(), replace))]
+#[instrument(skip_all, fields(library_user = %workspace.user_id(), replace = replace))]
 pub async fn auth_escrow(
     remote: &RemoteConfig,
     store: &SessionStore,
