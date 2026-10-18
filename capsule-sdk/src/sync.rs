@@ -732,6 +732,10 @@ fn role_str(role: &rest::types::WireBlobRole) -> &'static str {
         rest::types::WireBlobRole::Derivative => "derivative",
         rest::types::WireBlobRole::Provenance => "provenance",
         rest::types::WireBlobRole::Backup => "backup",
+        // The server never lists this role in `blobs` — the manifests ride the entry's own
+        // `derivative_manifests` — but the wire enum is shared with the upload body, so the
+        // arm exists and spells the token the server would.
+        rest::types::WireBlobRole::DerivativeManifest => "derivative_manifest",
     }
 }
 

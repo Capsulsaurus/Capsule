@@ -187,6 +187,74 @@ async fn the_feed_serves_the_uploaded_manifest_byte_for_byte() {
     );
 }
 
+/// A derivative's signed manifest rides its entry inline and verbatim (#556), never in the blob
+/// list, and a tombstone carries none.
+#[tokio::test]
+async fn the_feed_inlines_each_derivative_manifest_byte_for_byte() {
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+    let (asset, _) = publish(&fixture, "derived").await;
+
+    let thumbnail = b"signed-derivative-manifest-thumbnail".to_vec();
+    let preview = b"signed-derivative-manifest-preview".to_vec();
+    let mut held = Vec::new();
+    for bytes in [&thumbnail, &preview] {
+        let address = store_blob(&fixture, bytes).await;
+        record(&fixture, &asset, BlobRole::DerivativeManifest, &address, 0).await;
+        held.push((address, bytes.clone()));
+    }
+    // A manifest the index names and the store cannot produce is left out, not a failed page.
+    let missing = ContentAddress::parse(&support::checksum(b"never stored")).expect("an address");
+    record(&fixture, &asset, BlobRole::DerivativeManifest, &missing, 0).await;
+
+    let body = page(&fixture, &bearer, "", StatusCode::OK).await;
+    let entry = body["entries"]
+        .as_array()
+        .expect("an array")
+        .last()
+        .expect("the asset is in the feed");
+    let served: Vec<Vec<u8>> = entry["derivative_manifests"]
+        .as_array()
+        .expect("the entry carries its derivative manifests")
+        .iter()
+        .map(|encoded| {
+            BASE64
+                .decode(encoded.as_str().expect("base64 text"))
+                .expect("the feed emits base64")
+        })
+        .collect();
+    held.sort_by(|a, b| a.0.cmp(&b.0));
+    let expected: Vec<Vec<u8>> = held.into_iter().map(|(_, bytes)| bytes).collect();
+    assert_eq!(
+        served, expected,
+        "the feed serves every stored manifest's exact bytes, in address order"
+    );
+    assert!(
+        entry["blobs"]
+            .as_array()
+            .expect("an array")
+            .iter()
+            .all(|blob| blob["role"] != "derivative_manifest"),
+        "a client that predates the role must never meet it in the blob list"
+    );
+
+    fixture
+        .index
+        .tombstone(&asset, Timestamp::UNIX_EPOCH)
+        .await
+        .expect("the index tombstones");
+    let body = page(&fixture, &bearer, "", StatusCode::OK).await;
+    let entry = &body["entries"][0];
+    assert_eq!(entry["change"], "deleted");
+    assert!(
+        entry["derivative_manifests"]
+            .as_array()
+            .expect("an array")
+            .is_empty(),
+        "a tombstone hands back no manifest for an asset that is gone"
+    );
+}
+
 /// An asset whose original has not landed is `awaiting-original`, and the flip reaches the feed.
 #[tokio::test]
 async fn original_held_flips_when_the_original_lands() {

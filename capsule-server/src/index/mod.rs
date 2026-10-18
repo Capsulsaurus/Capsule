@@ -590,6 +590,12 @@ pub struct FeedEntry {
     pub metadata: Option<ContentAddress>,
     /// The original and derivative blobs the asset holds.
     pub blobs: Vec<BlobRef>,
+    /// The addresses of the asset's signed derivative manifests, in address order (#556).
+    ///
+    /// Kept apart from [`Self::blobs`] rather than listed in it under a new role: the wire
+    /// inlines these bytes the way it inlines the asset manifest, and a client that predates the
+    /// role must never meet it in a list it decodes strictly.
+    pub derivative_manifests: Vec<ContentAddress>,
     /// Whether the original has landed — `false` is the derived `awaiting-original` state.
     pub original_held: bool,
     /// When the change happened.
@@ -808,7 +814,8 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
 ///
 /// The manifest, the metadata blob and the original are each named by the signed manifest, so a
 /// second address under one of these roles is a contradiction rather than an addition.
-/// Derivatives and backups are plural by nature — an asset has a thumbnail *and* a preview.
+/// Derivatives, their signed manifests and backups are plural by nature — an asset has a
+/// thumbnail *and* a preview, and a manifest for each.
 ///
 /// Free function beside [`entry_for`] rather than a method on an adapter, and for the same
 /// reason: two adapters that disagreed about which roles are singular would disagree about when
@@ -884,6 +891,12 @@ pub(crate) fn entry_for(row: &AssetRow, after: u64) -> Option<FeedEntry> {
             .iter()
             .filter(|blob| matches!(blob.role, BlobRole::Original | BlobRole::Derivative))
             .cloned()
+            .collect(),
+        derivative_manifests: row
+            .blobs
+            .iter()
+            .filter(|blob| blob.role == BlobRole::DerivativeManifest)
+            .map(|blob| blob.address.clone())
             .collect(),
         original_held: row.original_held(),
         at: row.updated_at,
