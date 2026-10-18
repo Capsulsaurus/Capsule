@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use uuid::Uuid;
 
+use super::derivatives::{PreparedStill, StillSource};
 use super::{AssetState, Workspace, now_rfc3339};
 use crate::crypto::encryption::{
     blob_ciphertext_hash, decrypt_asset_vec, encrypt_asset_vec_with_prefix, seal_file_key,
@@ -27,6 +28,7 @@ use crate::drop::{
     AdoptedDrop, DropDescriptor, DropError, DropId, LinkCaps, PassphraseVerifier, PendingDrop,
     SealedDrop, UploadLink, UploadLinkId, generate_opaque_id as generate_drop_id, open_drop_key,
 };
+use crate::exif::ExifExtract;
 use crate::metadata::crdt::Lww;
 use crate::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1};
 
@@ -239,11 +241,14 @@ impl crate::drop::DropAdopter for Workspace {
     }
 
     /// Adopt a pending drop into `album_id` **in place** (no byte re-upload): decapsulate the
-    /// guest-chosen `K`, rewrap it under the album AMK (`asset-keywrap/v1`), author + sign a
+    /// guest-chosen `K`, run the import's still pipeline over the plaintext
+    /// ([`prepare_still`](Workspace::prepare_still): header-derived `content_type`, pixel
+    /// dimensions, LQIP, signed thumbnail derivatives — never fatal over pixels, reported in
+    /// [`AdoptedDrop::derivatives`]), rewrap `K` under the album AMK (`asset-keywrap/v1`), author + sign a
     /// `create` manifest with `key_mode = wrapped` whose `ciphertext_hash` references the
     /// staged blob, self-verify through [`verify_asset`], register the asset in the library
-    /// (chain, sidecar, sealed metadata blob, plaintext, index row — the same writes
-    /// `commit_signed_create` makes for an import), and only then drop the inbox row. A
+    /// (chain, sidecar, sealed metadata blob, plaintext, derivatives, index row — the same
+    /// writes `commit_signed_create` makes for an import), and only then drop the inbox row. A
     /// registration failure leaves the drop in the inbox. Returns the [`AdoptedDrop`]: the
     /// signed manifest plus the metadata blob and provenance record a push publishes. SSoT:
     /// [Web Upload] — Review and adopt-in-place.
@@ -301,6 +306,62 @@ impl crate::drop::DropAdopter for Workspace {
             ));
         }
 
+        let ext = adopted_extension(descriptor.suggested_filename.as_deref());
+        let capture_timestamp = now_rfc3339();
+        let capture_utc = capture_timestamp
+            .parse::<jiff::Timestamp>()
+            .map_or(0, jiff::Timestamp::as_second);
+
+        // The import's still pipeline over the decrypted plaintext, before the sidecar is
+        // signed: header-derived `content_type`, pixel `dimensions`, the chromahash `lqip`, and
+        // signed thumbnail derivatives to persist once the asset's own files are durable. Each
+        // derivative is sealed under its own AMK-derived key and fresh nonce prefix — the
+        // guest's `K` covers the original only — and the `original` sentinel references the
+        // staged blob through `canonical`, which is that blob's address and prefix. Never fatal
+        // over pixels: an undecodable drop adopts with the reason in `status`. A drop has no
+        // path and no EXIF yet, so the source is labelled by drop id for logs and carries an
+        // empty extract (dimensions then come from decoded pixels or not at all).
+        let source_label = std::path::PathBuf::from(format!("drop:{}", drop.0));
+        let PreparedStill {
+            format,
+            dimensions,
+            lqip,
+            derivatives,
+            deferred_formats,
+            status: derivative_status,
+        } = self
+            .prepare_still(
+                &StillSource {
+                    plaintext: &plaintext,
+                    ext: &ext,
+                    src: &source_label,
+                    exif: &ExifExtract::default(),
+                },
+                file_id,
+                album_id,
+                capture_utc,
+                &amk,
+                &canonical,
+            )
+            .map_err(|e| {
+                tracing::error!(
+                    asset_id = %file_id,
+                    drop_id = %drop.0,
+                    error = %e,
+                    "adoption: the workspace could not author signed derivatives; the drop stays \
+                     in the inbox"
+                );
+                DropError::Register(format!("derivatives: {e}"))
+            })?;
+        tracing::debug!(
+            asset_id = %file_id,
+            drop_id = %drop.0,
+            status = ?derivative_status,
+            derivatives = derivatives.len(),
+            deferred_formats,
+            "adoption: still pipeline ran over the drop's plaintext"
+        );
+
         // Author + sign the sidecar. `created_by`/author is the adopter — the guest is never
         // a signer; its origin is an unverified, self-asserted descriptive note.
         let mut sidecar = SidecarV1 {
@@ -308,11 +369,14 @@ impl crate::drop::DropAdopter for Workspace {
             crypto_suite_id: CRYPTO_SUITE_ID,
             uuid: file_id,
             hash: hash::hash_bytes(&plaintext),
-            capture_timestamp: now_rfc3339(),
+            capture_timestamp,
             import_timestamp: now_rfc3339(),
-            content_type: descriptor.content_type.clone(),
-            dimensions: None,
-            lqip: None,
+            // Header-derived wherever the bytes name a still Capsule models; the guest's
+            // self-asserted type is the fallback for everything else (a video, say).
+            content_type: format
+                .map_or_else(|| descriptor.content_type.clone(), |f| f.mime().to_string()),
+            dimensions,
+            lqip,
             tags_user: Default::default(),
             tags_ai: Default::default(),
             caption: Default::default(),
@@ -414,11 +478,8 @@ impl crate::drop::DropAdopter for Workspace {
         let asset = AssetState {
             asset_id: file_id,
             album_id,
-            ext: adopted_extension(descriptor.suggested_filename.as_deref()),
-            capture_utc: sidecar
-                .capture_timestamp
-                .parse::<jiff::Timestamp>()
-                .map_or(0, jiff::Timestamp::as_second),
+            ext,
+            capture_utc,
             chain,
             sidecar,
             metadata_blob: metadata_blob.clone(),
@@ -426,6 +487,9 @@ impl crate::drop::DropAdopter for Workspace {
         };
         let register = |ws: &Self| -> super::Result<()> {
             ws.write_asset_files(&asset, &plaintext)?;
+            // After the asset's own files, as on import: a derivative is regenerable, so a
+            // failure to write one is logged and never fails the adoption.
+            ws.persist_derivatives(&asset, &derivatives);
             ws.index_asset_row(&asset)?;
             ws.index_original_representation(&asset, plaintext.len())
         };
@@ -446,12 +510,15 @@ impl crate::drop::DropAdopter for Workspace {
             asset_id = %file_id,
             drop_id = %drop.0,
             album_id = %album_id,
+            derivatives = ?derivative_status,
             "adopted a guest drop into the library"
         );
         Ok(AdoptedDrop {
             manifest,
             metadata_blob,
             record,
+            derivatives: derivative_status,
+            deferred_formats: deferred_formats as u32,
         })
     }
 
