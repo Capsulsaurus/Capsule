@@ -40,6 +40,42 @@
           "name": "logout"
         },
         {
+          "about": "Recover the signed-in account onto this machine from its recovery backup",
+          "args": [
+            {
+              "help": "Directory for the recovered library; it must not hold a library yet",
+              "id": "library",
+              "long": "library",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            },
+            {
+              "help": "Read the recovery secret from the first line of stdin instead of prompting",
+              "id": "recovery_secret_stdin",
+              "long": "recovery-secret-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Read the new library passphrase from the next line of stdin instead of prompting",
+              "id": "passphrase_stdin",
+              "long": "passphrase-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "recover"
+        },
+        {
           "about": "Create a Capsule account and sign in",
           "args": [
             {

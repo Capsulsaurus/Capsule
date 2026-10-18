@@ -1561,6 +1561,20 @@ impl EscrowStore for SwitchableEscrow {
         }
         self.inner.fetch(user)
     }
+
+    fn store_identity(&self, record: EscrowRecord) -> StoreFuture<'_, Replaced> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.store_identity(record)
+    }
+
+    fn fetch_identity<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, Option<EscrowRecord>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.fetch_identity(user)
+    }
 }
 
 /// A revoke-all challenge store that can be made to fail on demand.

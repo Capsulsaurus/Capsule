@@ -216,3 +216,146 @@ async fn the_stored_at_a_put_echoes_is_the_stored_at_the_store_holds() {
         .expect("an escrow is held");
     assert_eq!(held.stored_at, echoed);
 }
+
+// ===========================================================================================
+// The sealed identity beside the escrow (#544)
+// ===========================================================================================
+
+/// Where the sealed identity lives.
+const IDENTITY: &str = "/v1/auth/escrow/identity";
+
+/// Store `blob` as the sealed identity and assert the status.
+async fn store_identity(
+    fixture: &Fixture,
+    bearer: &str,
+    blob: Vec<u8>,
+    expect: StatusCode,
+) -> kynos::test::TestResponse {
+    let response = fixture
+        .client
+        .put(IDENTITY)
+        .header("authorization", bearer)
+        .header("accept", "application/json")
+        .body("application/octet-stream", blob)
+        .send()
+        .await;
+    response.assert_status(expect);
+    response
+}
+
+/// Fetch the caller's sealed identity and assert the status.
+async fn fetch_identity(
+    fixture: &Fixture,
+    bearer: &str,
+    expect: StatusCode,
+) -> kynos::test::TestResponse {
+    let response = fixture
+        .client
+        .get(IDENTITY)
+        .header("authorization", bearer)
+        .send()
+        .await;
+    response.assert_status(expect);
+    response
+}
+
+#[tokio::test]
+async fn a_sealed_identity_comes_back_byte_for_byte_and_replaces() {
+    // A recovered device opens the seal under the master key it recovered; a re-encoded seal
+    // would not open, and the failure would look like the wrong master key.
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let first = wrapped(0x81, 120);
+    let resealed = wrapped(0x82, 140);
+
+    let body: Value = store_identity(&fixture, &bearer, first, StatusCode::OK)
+        .await
+        .json();
+    assert_eq!(body["replaced"], false);
+    let body: Value = store_identity(&fixture, &bearer, resealed.clone(), StatusCode::OK)
+        .await
+        .json();
+    assert_eq!(
+        body["replaced"], true,
+        "only one sealed identity per account"
+    );
+
+    let fetched = fetch_identity(&fixture, &bearer, StatusCode::OK).await;
+    assert_eq!(
+        fetched.header("content-type"),
+        Some("application/octet-stream")
+    );
+    assert_eq!(fetched.bytes().as_ref(), resealed.as_slice());
+}
+
+#[tokio::test]
+async fn the_sealed_identity_and_the_escrow_are_stored_independently() {
+    // A recovery-secret rotation replaces the escrow and must leave the identity alone, and an
+    // identity stored first must not read as an escrow.
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let identity = wrapped(0x91, 100);
+
+    store_identity(&fixture, &bearer, identity.clone(), StatusCode::OK).await;
+    fetch(&fixture, &bearer, StatusCode::NOT_FOUND).await;
+
+    let body: Value = store(&fixture, &bearer, wrapped(0x92, 256), StatusCode::OK)
+        .await
+        .json();
+    assert_eq!(body["replaced"], false, "an identity is not an escrow");
+    store(&fixture, &bearer, wrapped(0x93, 256), StatusCode::OK).await;
+
+    let fetched = fetch_identity(&fixture, &bearer, StatusCode::OK).await;
+    assert_eq!(fetched.bytes().as_ref(), identity.as_slice());
+}
+
+#[tokio::test]
+async fn a_missing_sealed_identity_has_its_own_code() {
+    // An account with an escrow and no sealed identity cannot be recovered as itself, and the
+    // remedy (finish the backup from a device that still holds the identity) differs from the
+    // one for a missing escrow, so a client must be able to tell them apart.
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    store(&fixture, &bearer, wrapped(0xA1, 256), StatusCode::OK).await;
+
+    let problem: Value = fetch_identity(&fixture, &bearer, StatusCode::NOT_FOUND)
+        .await
+        .json();
+    assert_eq!(problem["code"], "error.escrow.identity_not_stored");
+
+    fixture.escrows.set_unavailable(true);
+    let problem: Value = fetch_identity(&fixture, &bearer, StatusCode::INTERNAL_SERVER_ERROR)
+        .await
+        .json();
+    assert_eq!(problem["code"], "error.escrow.unavailable");
+}
+
+#[tokio::test]
+async fn a_sealed_identity_is_scoped_to_its_account_and_refused_like_an_escrow() {
+    let fixture = Fixture::working();
+    let mine = fixture.bearer().await;
+    let theirs = fixture
+        .other_bearer("01937b7c-0000-7000-8000-0000000000ff")
+        .await;
+
+    let held = wrapped(0xB1, 128);
+    store_identity(&fixture, &mine, held.clone(), StatusCode::OK).await;
+    fetch_identity(&fixture, &theirs, StatusCode::NOT_FOUND).await;
+
+    // Refused exactly as an escrow is, and a refusal is not a deletion.
+    let problem: Value = store_identity(&fixture, &mine, Vec::new(), StatusCode::BAD_REQUEST)
+        .await
+        .json();
+    assert_eq!(problem["code"], "error.escrow.malformed");
+    let huge = wrapped(0xB2, capsule_server::escrow::MAX_ESCROW_BYTES + 1);
+    store_identity(&fixture, &mine, huge, StatusCode::BAD_REQUEST).await;
+    let fetched = fetch_identity(&fixture, &mine, StatusCode::OK).await;
+    assert_eq!(fetched.bytes().as_ref(), held.as_slice());
+
+    fixture
+        .client
+        .get(IDENTITY)
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+}

@@ -88,6 +88,52 @@ async fn an_escrow_is_scoped_to_its_account() {
     );
 }
 
+#[tokio::test]
+async fn a_sealed_identity_is_held_beside_the_escrow_and_not_in_its_place() {
+    // The two slots share a record shape and nothing else: a store into one must never be
+    // readable from, or displace anything in, the other.
+    let store = InMemoryEscrow::new();
+    store
+        .store(record(&user(), b"wrap", Timestamp::UNIX_EPOCH))
+        .await
+        .expect("the store accepts");
+    assert_eq!(
+        store
+            .fetch_identity(&user())
+            .await
+            .expect("the store answers"),
+        None,
+        "an escrow is not a sealed identity"
+    );
+
+    assert_eq!(
+        store
+            .store_identity(record(&user(), b"identity", Timestamp::UNIX_EPOCH))
+            .await
+            .expect("the store accepts"),
+        Replaced::No
+    );
+    let held = store
+        .fetch(&user())
+        .await
+        .expect("the store answers")
+        .expect("the escrow is still held");
+    assert_eq!(held.blob, b"wrap");
+    let identity = store
+        .fetch_identity(&user())
+        .await
+        .expect("the store answers")
+        .expect("a sealed identity is held");
+    assert_eq!(identity.blob, b"identity");
+    assert_eq!(
+        store
+            .fetch_identity(&other())
+            .await
+            .expect("the store answers"),
+        None
+    );
+}
+
 #[test]
 fn an_empty_body_is_not_an_escrow() {
     assert_eq!(admissible(b""), Err(MalformedEscrow::Empty));

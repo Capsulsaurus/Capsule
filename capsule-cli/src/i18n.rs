@@ -55,6 +55,17 @@ pub mod keys {
     pub const AUTH_LOGOUT_SUCCESS: &str = "cli.auth.logout.success";
     pub const AUTH_LOGOUT_NOT_LOGGED_IN: &str = "cli.auth.logout.not_logged_in";
     pub const AUTH_NOT_AUTHENTICATED: &str = "cli.auth.not_authenticated";
+    // `capsule auth recover` — a new device of an existing account, from its escrow (#544).
+    pub const AUTH_RECOVER_SECRET_PROMPT: &str = "cli.auth.recover.secret_prompt";
+    pub const AUTH_RECOVER_PASSPHRASE_PROMPT: &str = "cli.auth.recover.passphrase_prompt";
+    pub const AUTH_RECOVER_PASSPHRASE_CONFIRM: &str = "cli.auth.recover.passphrase_confirm";
+    pub const AUTH_RECOVER_PASSPHRASE_MISMATCH: &str = "cli.auth.recover.passphrase_mismatch";
+    pub const AUTH_RECOVER_IN_PROGRESS: &str = "cli.auth.recover.in_progress";
+    pub const AUTH_RECOVER_SUCCESS: &str = "cli.auth.recover.success";
+    pub const AUTH_RECOVER_FAILED: &str = "cli.auth.recover.failed";
+    pub const AUTH_RECOVER_WRONG_SECRET: &str = "cli.auth.recover.wrong_secret";
+    /// A `--*-stdin` flag was given and stdin's first line was empty; `{flag}` names it.
+    pub const STDIN_EMPTY: &str = "cli.stdin.empty";
     pub const SYNC_IN_PROGRESS: &str = "cli.sync.in_progress";
     pub const SYNC_DRY_RUN_NOTICE: &str = "cli.sync.dry_run_notice";
     pub const SYNC_UP_TO_DATE: &str = "cli.sync.up_to_date";

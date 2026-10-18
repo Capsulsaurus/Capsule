@@ -124,6 +124,10 @@ pub const EXPECTED_MIGRATIONS: &[ExpectedMigration] = &[
         name: "m20260902_000017_migration_checksums",
         checksum: "ec6f63e917e61ced06acf221c5d419f70341f6e8c68086fa2b328eea37ba5fe8",
     },
+    ExpectedMigration {
+        name: "m20260902_000018_sealed_identities",
+        checksum: "d9187cb622fa496c5eb6adea98dd6313c8b4b45a2521e3edfba2c56bea8acbb9",
+    },
 ];
 
 /// The command an operator runs to apply them.
@@ -584,10 +588,11 @@ mod tests {
             };
             let connection = database.connection();
 
-            // The state a pre-#524 database is in: `000001`–`000016` applied, no ledger.
-            server_migration::Migrator::down(connection, Some(1))
+            // The state a pre-#524 database is in: `000001`–`000016` applied, no ledger. Every
+            // ordinal after `000017` rolls back with it.
+            server_migration::Migrator::down(connection, Some(2))
                 .await
-                .expect("`000017` rolls back");
+                .expect("`000018` and `000017` roll back");
             execute(connection, &format!("DROP TABLE {CHECKSUM_LEDGER}")).await;
             let error = assert_schema_current(connection)
                 .await

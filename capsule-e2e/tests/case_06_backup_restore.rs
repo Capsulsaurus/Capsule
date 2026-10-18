@@ -11,9 +11,10 @@
 //!   only memory-hard cost this crate pays: the tier is the thing under test here, so it is
 //!   spelled out rather than made cheap.
 //! - The new device opens *as A's account* with `Workspace::create_from_master`: the recovered
-//!   master key, the server's account id, and A's sealed identity key. The sealed identity has
-//!   no server route yet, so the case hands it across in memory — the one leg of the bootstrap
-//!   not exercised over the wire.
+//!   master key, the server's account id, and A's sealed identity key. A stores the sealed
+//!   identity beside the escrow (`PUT /v1/auth/escrow/identity`, #544) and the new session
+//!   fetches it back, so every leg of the bootstrap crosses the wire: nothing but the recovery
+//!   secret and the account's credentials is carried from A to the new device.
 //! - The new device joins the account's device directory (#550): its own version-1 directory is
 //!   refused as stale against the one A already published, so it fetches A's through the SDK's
 //!   `DirectoryClient`, verifies it under the identity key it opened, appends itself with
@@ -25,15 +26,17 @@
 //!   read-only. The export names [`FAST_KDF`] explicitly, and the import needs no such argument:
 //!   the artifact records the cost it was wrapped under.
 
+use capsule_cli::remote::{self, RemoteConfig, RemoteError};
+use capsule_cli::session::SessionStore;
 use capsule_core::crypto::keys::MasterKey;
 use capsule_core::crypto::primitives::DeviceTier;
 use capsule_core::crypto::provenance::ProvenanceChain;
 use capsule_core::crypto::verify_asset::VerifyOutcome;
 use capsule_core::lifecycle::{LifecycleError, Workspace};
 use capsule_e2e::fixtures::synthetic_jpeg;
-use capsule_e2e::{Device, FAST_KDF, PASSPHRASE, Server};
+use capsule_e2e::{Device, FAST_KDF, PASSPHRASE, PROTOCOL_VERSION, Server};
 use capsule_sdk::directory::{DirectoryClient, DirectoryError};
-use capsule_sdk::recovery::RecoveryClient;
+use capsule_sdk::recovery::{MintedSecret, RecoveryClient, RecoveryError};
 
 const RECOVERY_SECRET: &[u8] = b"seven words the user wrote down somewhere safe";
 const BACKUP_PASSPHRASE: &[u8] = b"backup passphrase";
@@ -55,27 +58,41 @@ async fn e2e_case_6_a_new_device_bootstraps_from_the_escrow_and_restores_the_bac
         .workspace
         .escrow_master_key(RECOVERY_SECRET, DeviceTier::LowRam)
         .expect("the master key wraps under the recovery secret");
-    RecoveryClient::new(a.session.clone(), server.base_url())
-        .expect("the API root parses")
+    let recovery_a =
+        RecoveryClient::new(a.session.clone(), server.base_url()).expect("the API root parses");
+    recovery_a
         .store_escrow(&escrow)
         .await
         .expect("the escrow stores");
+    let sealed = a.workspace.sealed_identity();
+    let stored = recovery_a
+        .store_sealed_identity(&sealed)
+        .await
+        .expect("the sealed identity stores beside the escrow");
+    assert!(!stored.replaced, "A's first sealed identity");
 
     // The fresh device: a new session on the account, nothing else.
     let session_b = a.login_again(&server).await;
-    let fetched = RecoveryClient::new(session_b.clone(), server.base_url())
-        .expect("the API root parses")
-        .fetch_escrow()
-        .await
-        .expect("the escrow fetches");
+    let recovery_b =
+        RecoveryClient::new(session_b.clone(), server.base_url()).expect("the API root parses");
+    let fetched = recovery_b.fetch_escrow().await.expect("the escrow fetches");
     let wire = fetched.blob().clone();
     assert_eq!(wire, escrow, "the escrow is ciphertext served verbatim");
+    let sealed_wire = recovery_b
+        .fetch_sealed_identity()
+        .await
+        .expect("the sealed identity fetches");
+    assert_eq!(
+        sealed_wire, sealed,
+        "the sealed identity is ciphertext served verbatim"
+    );
 
     let master = capsule_core::backup::recover_master_key(&wire, RECOVERY_SECRET)
         .expect("the recovery secret opens the escrow");
 
     // The new device opens as A's account: the recovered master key, the server's id for the
-    // account, and A's identity key sealed under that master key.
+    // account, and A's identity key sealed under that master key — every input but the recovery
+    // secret came over the wire.
     let root_b = tempfile::tempdir().expect("a fresh library root");
     let mut b = Workspace::create_from_master(
         root_b.path(),
@@ -83,7 +100,7 @@ async fn e2e_case_6_a_new_device_bootstraps_from_the_escrow_and_restores_the_bac
         FAST_KDF,
         MasterKey::from_bytes(master),
         a.user_id,
-        &a.workspace.sealed_identity(),
+        &sealed_wire,
     )
     .expect("the recovered master key opens A's sealed identity");
     assert_eq!(b.user_id(), a.user_id, "B is A's account");
@@ -194,4 +211,140 @@ async fn e2e_case_6_a_new_device_bootstraps_from_the_escrow_and_restores_the_bac
         b.import_asset(a.workspace.default_album_id(), &other),
         Err(LifecycleError::AlbumReadOnly(_))
     ));
+}
+
+/// **`capsule auth recover`**, the CLI's leg of case 6 (#544): the orchestration the command
+/// runs — profile, escrow fetch, sealed-identity fetch, `recover_master_key`,
+/// `create_from_master` — over the CLI's own session store, against the real server.
+///
+/// The secret is a minted one, typed back as the hex the user was shown: the escrow is wrapped
+/// under its bytes, which is the reading the command must try. Every refusal is driven before
+/// the success and leaves nothing behind.
+#[tokio::test]
+async fn e2e_case_6_the_cli_recover_command_opens_a_new_library_as_the_account() {
+    let server = Server::boot().await;
+    let a = Device::register(&server, "cli-recover").await;
+    let secret = MintedSecret::generate();
+    let escrow = a
+        .workspace
+        .escrow_master_key(secret.as_bytes(), DeviceTier::LowRam)
+        .expect("the master key wraps under the minted secret");
+
+    // The CLI's state: the session `capsule auth login` persists on the new machine.
+    let home = tempfile::tempdir().expect("a temp CLI home");
+    let store = SessionStore::new(home.path().join("session.json"));
+    let remote = RemoteConfig {
+        auth_endpoint: server.auth_base(),
+        sync_endpoint: server.base_url().to_owned(),
+        upload_endpoint: server.upload_base(),
+        albums_endpoint: server.albums_base(),
+        protocol_version: PROTOCOL_VERSION.to_owned(),
+    };
+    let library = home.path().join("recovered");
+
+    // No session stored: nothing to recover as.
+    assert!(matches!(
+        remote::auth_recover(
+            &remote,
+            &store,
+            &library,
+            &secret.to_hex(),
+            PASSPHRASE,
+            FAST_KDF
+        )
+        .await,
+        Err(RemoteError::NotAuthenticated)
+    ));
+
+    let signed_in = a.login_again(&server).await;
+    store
+        .save(&signed_in.export().await.expect("a live session exports"))
+        .expect("the session persists");
+
+    // An escrow without a sealed identity cannot be recovered as the account, and says so with
+    // its own code before any key derivation.
+    let recovery_a =
+        RecoveryClient::new(a.session.clone(), server.base_url()).expect("the API root parses");
+    recovery_a
+        .store_escrow(&escrow)
+        .await
+        .expect("the escrow stores");
+    let Err(missing) = remote::auth_recover(
+        &remote,
+        &store,
+        &library,
+        &secret.to_hex(),
+        PASSPHRASE,
+        FAST_KDF,
+    )
+    .await
+    else {
+        panic!("no sealed identity is stored yet, so recovery cannot succeed");
+    };
+    assert!(
+        matches!(
+            missing,
+            RemoteError::Recovery(RecoveryError::IdentityNotStored)
+        ),
+        "got {missing:?}"
+    );
+    assert_eq!(
+        missing.error_code(),
+        Some("error.escrow.identity_not_stored")
+    );
+    assert!(!library.exists(), "a refused recovery writes nothing");
+
+    recovery_a
+        .store_sealed_identity(&a.workspace.sealed_identity())
+        .await
+        .expect("the sealed identity stores");
+
+    // The wrong secret opens nothing, and writes nothing.
+    let Err(wrong) = remote::auth_recover(
+        &remote,
+        &store,
+        &library,
+        &MintedSecret::generate().to_hex(),
+        PASSPHRASE,
+        FAST_KDF,
+    )
+    .await
+    else {
+        panic!("another secret does not open the escrow");
+    };
+    assert!(
+        matches!(wrong, RemoteError::WrongRecoverySecret),
+        "got {wrong:?}"
+    );
+    assert!(!library.exists(), "a refused recovery writes nothing");
+
+    // The secret as the user was shown it: a new library, as A's account, on a new device.
+    let recovered = remote::auth_recover(
+        &remote,
+        &store,
+        &library,
+        &secret.to_hex(),
+        PASSPHRASE,
+        FAST_KDF,
+    )
+    .await
+    .expect("`capsule auth recover` completes");
+    assert_eq!(recovered.user_id(), a.user_id, "the server's id for A");
+    assert_eq!(
+        recovered.user_ik_public(),
+        a.workspace.user_ik_public(),
+        "the identity the server pinned for A"
+    );
+    assert_eq!(
+        recovered.default_album_id(),
+        a.workspace.default_album_id(),
+        "A's master key"
+    );
+    assert_ne!(recovered.device_id(), a.workspace.device_id());
+    drop(recovered);
+
+    // It is a real library: it reopens under the passphrase chosen for it.
+    let reopened = Workspace::open(&library, PASSPHRASE, FAST_KDF)
+        .expect("the recovered library reopens under its new passphrase");
+    assert_eq!(reopened.user_id(), a.user_id);
 }
