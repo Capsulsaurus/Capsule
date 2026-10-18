@@ -398,7 +398,7 @@ lives.
 | S-Q1 | Mark/complete E2E cases 2, 3, 11 | e2e | — | S | MIXED | done\* | 2, 3 in `capsule-e2e`; 11 lands with #447 |
 | S-Q2 | E2E case 6: backup → fresh-device restore | e2e | — | M | MIXED | done\* | restore reads; verify → #550; account seam → #467 |
 | S-Q3 | E2E case 7: full lifecycle chain | e2e | — | M | MIXED | done | |
-| S-Q4 | E2E case 12: cross-device enrollment | e2e | — | M | MIXED | done\* | server leg; client ceremony → #471, #467, #405 |
+| S-Q4 | E2E case 12: cross-device enrollment | e2e | — | M | MIXED | done\* | server leg + client ceremony; MLS join → #405; master-key transfer owed |
 | S-Q5 | Live-browser smokes (gRPC-web, share, drop) | e2e | S-P7 | M | MIXED | ready | |
 | S-Q6 | E2E case 10: model regen after version bump | e2e | — | M | ACTIVE | done | the case was untestable, not untested |
 | S-U1 | Domain + ports + mock seam | apple-ui | — | L | ACTIVE | done | |
@@ -5633,8 +5633,14 @@ the SDK's directory publish sends the identity-key header (#466).
 - **Landed, server leg** (2026-09-05, #409): `capsule-e2e/tests/case_12_enrollment.rs` —
   fresh local auth, code issue, redeem, relay and drain in both directions (each payload
   delivered once, mailboxes never cross), initiator close, and the MITM abort at the wire.
-  **Owed:** the client ceremony — B's keys, the safety code, A's cross-sign → #471 and #467;
-  the MLS join → `S-C51` (#405).
+- **Landed, client ceremony** (#563): `e2e_case_12_the_client_ceremony_admits_the_new_device_over_the_relay`
+  — commitment, both reveals, equal safety codes, A's cross-sign, the published directory
+  fetched back verified, and B finding its own keys in the relayed directory; and
+  `e2e_case_12_a_relay_that_swaps_the_enrollee_keys_diverges_the_codes_and_a_aborts` — a
+  consistent swap opens its own commitment but not B's and the codes diverge (the abort
+  itself is test-scripted: no production code decides it).
+  **Owed:** B's MLS join and `libraries match` → `S-C51` (#405); the master-key transfer
+  under a channel key, which needs an ephemeral key agreement not yet defined.
 
 ### S-Q5 — Live-browser smokes
 
