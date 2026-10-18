@@ -441,7 +441,9 @@ async fn e2e_case_12_a_relay_that_swaps_the_enrollee_keys_diverges_the_codes_and
     let code_on_b = enrollment_safety_code(&a_seen_by_b, &b_keys);
     assert_ne!(code_on_a, code_on_b, "the swap must show on the codes");
 
-    // A aborts: it signs nothing, publishes nothing, and closes the channel.
+    // A aborts: it signs nothing, publishes nothing, and closes the channel. The
+    // abort is scripted here (no production code decides it), so the directory
+    // checks below prove only that closing the channel changes neither directory.
     initiator
         .close_enrollment_channel(&channel, PROTOCOL_VERSION, None)
         .await
