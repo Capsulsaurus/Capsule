@@ -305,8 +305,24 @@ const DAV1D_FRAME_TOO_LARGE: dav1d::Error = dav1d::Error::UnknownError(-34);
 /// dav1d's own `frame_size_limit` set, which refuses an oversized frame from its header, before
 /// dav1d allocates the picture; every frame it does produce is checked again by its decoded size.
 ///
-/// The cost is one extra AV1 decode of each in-budget AVIF. That is the price of a check made by
-/// the decoder itself rather than by a second, hand-written parser of the AV1 frame header.
+/// Three decisions this function embodies, each recorded in #629's `## Decisions taken`:
+///
+/// - **A full second decode is the bound.** Every AV1 item of every in-budget AVIF is decoded
+///   here and again by `image`, so its AV1 decode CPU roughly doubles (unmeasured). The
+///   alternative, refusing from a hand-written parse of the AV1 sequence and frame headers, would
+///   be a second parser of a format dav1d already parses, and a weaker bound: frame-size
+///   override caps a frame only by `2^frame_width_bits`. Every frame is drained rather than the
+///   first only, because `image` reads them all. Each picture is dropped before the next, so the
+///   two decodes never hold frames at once.
+/// - **`dav1d` and `mp4parse` are direct dependencies**, pinned to the versions `image` resolves,
+///   because neither `rawshift-image` nor `image` exposes a frame-size limit. A future `image`
+///   bump that moves either major version leaves two copies until these pins follow it.
+/// - **A header refusal reports `pixels: limit + 1`**, a lower bound, because dav1d's
+///   `DAV1D_ERR(ERANGE)` carries no frame size; see [`MediaError::PixelBudgetExceeded`]. A frame
+///   that decodes over budget reports its real size.
+///
+/// Delete this pre-flight, and the two `dep:` entries on `media-avif-decode`, once
+/// `rawshift-image` passes a frame-size limit to dav1d itself.
 ///
 /// `pub(super)` so the tests can drive it with a budget a small fixture can exceed.
 #[cfg(feature = "media-avif-decode")]
