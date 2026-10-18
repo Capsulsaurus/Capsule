@@ -831,6 +831,82 @@ async fn the_collector_keeps_a_live_links_record_and_reclaims_a_revoked_ones() {
     );
 }
 
+/// #653: a collaborator that cannot answer is a `500`, never a link issued without its record.
+///
+/// One case per collaborator issue touches before it records the link: the quota ledger's read
+/// (the grace-window gate), the blob store's `put`, and the ledger's charge. Each leaves no link,
+/// and the charge failure leaves nothing charged.
+#[tokio::test]
+async fn a_collaborator_that_cannot_answer_issues_nothing() {
+    use capsule_server::quota::QuotaStore as _;
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let owner = capsule_server::store::UserId::new(support::user().as_str());
+    let record = payload(b'm', 64);
+    let metadata = address_of(&record);
+    let body = |tag: u8| {
+        json!({
+            "opaque_id": opaque(tag),
+            "metadata_hash": metadata.as_str(),
+            "serves": [metadata.as_str()],
+            "metadata_blob": BASE64.encode(&record),
+        })
+    };
+
+    // The quota state read.
+    fixture.quotas.set_unavailable(true);
+    let problem = issue(
+        &fixture,
+        &bearer,
+        &body(1),
+        StatusCode::INTERNAL_SERVER_ERROR,
+    )
+    .await;
+    assert_eq!(problem["code"], "error.share.unavailable", "{problem}");
+    assert!(fixture.blobs.stat(&metadata).await.expect("stat").is_none());
+    fixture.quotas.set_unavailable(false);
+
+    // The blob store's put.
+    fixture.blobs.set_puts_unavailable(true);
+    let problem = issue(
+        &fixture,
+        &bearer,
+        &body(2),
+        StatusCode::INTERNAL_SERVER_ERROR,
+    )
+    .await;
+    assert_eq!(problem["code"], "error.share.unavailable", "{problem}");
+    assert_eq!(
+        fixture.quotas.usage(&owner).await.expect("usage").used,
+        0,
+        "a record that was not stored is not charged"
+    );
+    fixture.blobs.set_puts_unavailable(false);
+
+    // The ledger's charge, after the read answered and the record was stored.
+    fixture.quotas.set_charges_unavailable(true);
+    let problem = issue(
+        &fixture,
+        &bearer,
+        &body(3),
+        StatusCode::INTERNAL_SERVER_ERROR,
+    )
+    .await;
+    assert_eq!(problem["code"], "error.share.unavailable", "{problem}");
+    fixture.quotas.set_charges_unavailable(false);
+    assert_eq!(fixture.quotas.usage(&owner).await.expect("usage").used, 0);
+
+    for tag in 1..=3 {
+        fetch(
+            &fixture,
+            &format!("/s/{}", opaque(tag)),
+            StatusCode::NOT_FOUND,
+        )
+        .await;
+    }
+}
+
 /// #653: a stored record counts against the owner's quota, once per distinct record.
 #[tokio::test]
 async fn a_metadata_record_is_charged_to_the_owner_once() {
