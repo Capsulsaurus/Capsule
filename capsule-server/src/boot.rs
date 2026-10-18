@@ -1649,6 +1649,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_assembled_maintenance_workers_see_the_links_the_application_issues() {
+        // #653, Decision 5: the share store lives in `Stores`, so the collector and the scrub
+        // read the very store `issue_share` writes. Two stores would mean a collector that sees
+        // no links and sweeps every record, which only an assembly-level case can catch.
+        use base64::Engine as _;
+
+        let root = tempfile::tempdir().expect("a scratch directory");
+        let assembled = assemble(&memory_config(root.path()))
+            .await
+            .expect("it assembles");
+        let client = kynos::test::TestClient::new(assembled.service().expect("the router builds"));
+
+        let registered: serde_json::Value = client
+            .post("/v1/auth/register")
+            .header(
+                "x-capsule-protocol",
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            )
+            .header("accept", "application/json")
+            .json(&serde_json::json!({
+                "email": "somebody@example.test",
+                "password": "correct horse battery staple",
+            }))
+            .send()
+            .await
+            .assert_status(kynos::http::StatusCode::OK)
+            .json();
+        let token = registered["access_token"]
+            .as_str()
+            .expect("an access token");
+
+        let record = b"a share's sealed metadata record";
+        let metadata = capsule_core::crypto::hash::hash_bytes(record).to_hex();
+        client
+            .post("/v1/shares")
+            .header(
+                "x-capsule-protocol",
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            )
+            .header("authorization", &format!("Bearer {token}"))
+            .header("accept", "application/json")
+            .json(&serde_json::json!({
+                "opaque_id": "0123456789abcdef0123456789abcdef",
+                "metadata_hash": metadata,
+                "serves": [metadata],
+                "metadata_blob": base64::engine::general_purpose::STANDARD.encode(record),
+            }))
+            .send()
+            .await
+            .assert_status(kynos::http::StatusCode::CREATED);
+
+        let address = crate::blob::ContentAddress::parse(&metadata).expect("an address");
+        let report = crate::gc::collect(&assembled.maintenance.collection, crate::gc::Mode::Apply)
+            .await
+            .expect("a collection pass");
+        assert!(
+            !report.marked.contains(&address),
+            "the collector must read the store the link was issued into: {report:?}"
+        );
+        let scrubbed = crate::scrub::scrub(
+            &assembled.maintenance.scrub,
+            crate::scrub::Depth::Structural,
+        )
+        .await
+        .expect("a scrub pass");
+        assert_eq!(
+            scrubbed.count("orphan"),
+            0,
+            "and so must the scrub: {:?}",
+            scrubbed.findings
+        );
+    }
+
+    #[tokio::test]
     async fn a_locked_account_recovers_through_the_login_route_once_the_window_passes() {
         // Asserted through the **route** rather than against the adapter, because that is where
         // the property actually has to hold: `login` asks the directory first and answers `423`
