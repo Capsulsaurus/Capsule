@@ -8221,7 +8221,7 @@
   },
   "error.federation.not_configured": {
     "message": "This server doesn't share albums with other servers.",
-    "context": "HTTP 403 on the federation lifecycle writes — minting, revoking or refreshing a capability, and federated report intake (slice S-E2): this deployment has no FEDERATION_URL, so it does not federate. A capability minted while it did still verifies; configuration does not un-mint a token."
+    "context": "HTTP 404 on all four federation operations — minting, revoking or refreshing a capability, and federated report intake (slice S-E2): this deployment has FEDERATION_ENABLED off, which is the default, so it does not federate. While it is off no capability is honoured, including one minted while it was on."
   },
   "error.federation.peer_unknown": {
     "message": "That server isn't one this server knows.",
