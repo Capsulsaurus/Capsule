@@ -397,11 +397,15 @@ async fn e2e_case_6_the_cli_recover_command_opens_a_new_library_as_the_account()
 /// opens, so the fetched directory does not verify and the new device cannot join it. The
 /// library the recovery created is removed, leaving the path as it was — absent when the
 /// command made it, empty when the user did — so rerunning the command is the retry.
+///
+/// `capsule auth escrow` refuses to create that state (#656): it is shown refusing the foreign
+/// library and writing nothing, and accepting the anchoring one. The state is then stored over
+/// the SDK directly, as an earlier CLI or another client could have left it.
 #[tokio::test]
 async fn e2e_case_6_a_recovery_whose_directory_join_fails_leaves_nothing_behind() {
     let server = Server::boot().await;
     // Registers the account and publishes a directory under this library's identity key.
-    let account = Device::register(&server, "cli-recover-join").await;
+    let mut account = Device::register(&server, "cli-recover-join").await;
 
     let home = tempfile::tempdir().expect("a temp CLI home");
     let store = SessionStore::new(home.path().join("session.json"));
@@ -417,25 +421,82 @@ async fn e2e_case_6_a_recovery_whose_directory_join_fails_leaves_nothing_behind(
         protocol_version: PROTOCOL_VERSION.to_owned(),
     };
 
-    // A second, unrelated library escrows its own identity for the same account.
+    // A second, unrelated library holds its own identity key for the same account.
     let root = tempfile::tempdir().expect("a library root");
     let mut other =
         Workspace::create_with_params(root.path(), PASSPHRASE, FAST_KDF).expect("a CLI library");
     assert_ne!(other.user_ik_public(), account.workspace.user_ik_public());
-    let mut shown = String::new();
-    remote::auth_escrow(
+    let minted_id = other.user_id();
+    let recovery =
+        RecoveryClient::new(signed_in.clone(), server.base_url()).expect("the API root parses");
+
+    // #656: `capsule auth escrow` refuses it before a secret is minted, and writes nothing.
+    let Err(foreign) = remote::auth_escrow(
         &remote,
         &store,
         &mut other,
         false,
         DeviceTier::LowRam,
-        |secret| {
-            shown = secret.to_hex();
-            true
+        |_| {
+            panic!("a library whose key the account's directory is not signed under sees no secret")
         },
     )
     .await
-    .expect("`capsule auth escrow` completes");
+    else {
+        panic!("the account's directory does not verify under this library's identity key");
+    };
+    assert!(
+        matches!(
+            foreign,
+            RemoteError::Directory(DirectoryError::UntrustedSignature)
+        ),
+        "got {foreign:?}"
+    );
+    assert_eq!(
+        foreign.error_code(),
+        Some("error.directory.untrusted_signature"),
+        "the CLI localizes the refusal through its catalog code"
+    );
+    assert_eq!(other.user_id(), minted_id, "the library is not rebound");
+    assert!(matches!(
+        recovery.fetch_escrow().await,
+        Err(RecoveryError::NotEnrolled)
+    ));
+    assert!(matches!(
+        recovery.fetch_sealed_identity().await,
+        Err(RecoveryError::IdentityNotStored)
+    ));
+
+    // The library whose key the directory is signed under passes the same check.
+    remote::auth_escrow(
+        &remote,
+        &store,
+        &mut account.workspace,
+        false,
+        DeviceTier::LowRam,
+        |_| true,
+    )
+    .await
+    .expect("the directory verifies under the anchoring library's key");
+
+    // The state the refusal now prevents, stored over the SDK directly: the other library's
+    // escrow and sealed identity, displacing the anchoring library's.
+    other
+        .bind_account_id(account.user_id)
+        .expect("a library without assets binds");
+    let secret = MintedSecret::generate();
+    let blob = other
+        .escrow_master_key(secret.as_bytes(), DeviceTier::LowRam)
+        .expect("the master key wraps");
+    recovery
+        .store_escrow(&blob)
+        .await
+        .expect("the escrow is stored");
+    recovery
+        .store_sealed_identity(&other.sealed_identity())
+        .await
+        .expect("the sealed identity is stored");
+    let shown = secret.to_hex();
 
     // The command makes the root: a failed join removes it.
     let created = home.path().join("recovered");
