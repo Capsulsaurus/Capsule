@@ -967,7 +967,7 @@ mod tests {
         assert_eq!(a.asset_id(), file_id.to_string());
         assert_eq!(a.content_hash(), "ee".repeat(32));
         assert_eq!(a.content_type(), "image/png");
-        assert_eq!(a.size(), 5008.0);
+        assert_eq!(a.size().to_bits(), 5008f64.to_bits());
         assert_eq!(a.amk_version(), 3);
         assert_eq!(a.nonce_prefix_hex(), "07".repeat(NONCE_PREFIX_LEN));
         assert_eq!(a.key_mode(), "wrapped");
