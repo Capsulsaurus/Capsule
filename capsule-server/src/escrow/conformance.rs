@@ -8,6 +8,9 @@
 //!   whatever it contains — including bytes no wrap format would produce.
 //! - **Accounts do not see each other.** Storing or replacing one account's escrow leaves every
 //!   other account's untouched.
+//! - **The sealed identity obeys the same rules, in a slot of its own.** Storing or replacing an
+//!   account's sealed identity never touches its escrow, and the other way round: a
+//!   recovery-secret rotation re-wraps the escrow and must leave the identity where it was.
 //! - **The instant reads back as the instant.** `stored_at` is what a client compares its cached
 //!   copy against, so an adapter may drop sub-microsecond precision but must never move it.
 //!
@@ -66,6 +69,22 @@ async fn store(h: &dyn Harness, record: EscrowRecord) -> Replaced {
 /// What is held for `user`.
 async fn fetch(h: &dyn Harness, user: &UserId) -> Option<EscrowRecord> {
     ok(h.escrows().fetch(user).await, "fetch an escrow")
+}
+
+/// Store `record` as the sealed identity, expecting it to work.
+async fn store_identity(h: &dyn Harness, record: EscrowRecord) -> Replaced {
+    ok(
+        h.escrows().store_identity(record).await,
+        "store a sealed identity",
+    )
+}
+
+/// The sealed identity held for `user`.
+async fn fetch_identity(h: &dyn Harness, user: &UserId) -> Option<EscrowRecord> {
+    ok(
+        h.escrows().fetch_identity(user).await,
+        "fetch a sealed identity",
+    )
 }
 
 // ===========================================================================================
@@ -158,6 +177,102 @@ pub async fn the_stored_instant_reads_back_at_microsecond_precision(h: &dyn Harn
     );
 }
 
+/// An account with no sealed identity fetches `None`, whether or not it has an escrow.
+pub async fn an_account_with_no_sealed_identity_fetches_none(h: &dyn Harness) {
+    let alice = user("no-identity", "alice");
+    assert_eq!(fetch_identity(h, &alice).await, None);
+    store(h, escrow(&alice, b"wrapped master key", at(1))).await;
+    assert_eq!(
+        fetch_identity(h, &alice).await,
+        None,
+        "an escrow is not a sealed identity"
+    );
+}
+
+/// The sealed identity replaces like the escrow does, and comes back byte for byte.
+pub async fn a_sealed_identity_replaces_and_reads_back_byte_for_byte(h: &dyn Harness) {
+    let alice = user("identity", "alice");
+    let mut noise: Vec<u8> = (0..=255_u8).rev().collect();
+    noise.extend([0, 0xff, 0]);
+    let first = escrow(&alice, &noise, at(1));
+    assert_eq!(store_identity(h, first.clone()).await, Replaced::No);
+    assert_eq!(fetch_identity(h, &alice).await, Some(first));
+
+    let resealed = escrow(&alice, b"sealed under the rotated master key", at(2));
+    assert_eq!(store_identity(h, resealed.clone()).await, Replaced::Yes);
+    assert_eq!(
+        fetch_identity(h, &alice).await,
+        Some(resealed),
+        "only the newest sealed identity is held"
+    );
+
+    let bob = user("identity", "bob");
+    let largest = escrow(&bob, &vec![0x5a; super::MAX_ESCROW_BYTES], at(3));
+    store_identity(h, largest.clone()).await;
+    assert_eq!(fetch_identity(h, &bob).await, Some(largest));
+}
+
+/// One account's sealed identity never touches another's.
+pub async fn sealed_identities_do_not_leak_between_accounts(h: &dyn Harness) {
+    let alice = user("identity-isolated", "alice");
+    let bob = user("identity-isolated", "bob");
+    let bobs = escrow(&bob, b"bob's identity", at(1));
+    store_identity(h, bobs.clone()).await;
+    assert_eq!(
+        store_identity(h, escrow(&alice, b"alice's identity", at(2))).await,
+        Replaced::No
+    );
+    store_identity(h, escrow(&alice, b"alice's resealed identity", at(3))).await;
+    assert_eq!(fetch_identity(h, &bob).await, Some(bobs));
+    assert_eq!(
+        fetch_identity(h, &user("identity-isolated", "carol")).await,
+        None
+    );
+}
+
+/// The two slots are independent: storing or replacing either leaves the other as it was, and
+/// a first sealed identity is a first one even on an account that already escrowed.
+pub async fn the_escrow_and_the_sealed_identity_are_independent(h: &dyn Harness) {
+    let alice = user("independent", "alice");
+    let wrap = escrow(&alice, b"wrap", at(1));
+    store(h, wrap.clone()).await;
+    let identity = escrow(&alice, b"identity", at(2));
+    assert_eq!(
+        store_identity(h, identity.clone()).await,
+        Replaced::No,
+        "an escrow is not a sealed identity, so nothing was replaced"
+    );
+    assert_eq!(
+        fetch(h, &alice).await,
+        Some(wrap),
+        "the escrow is untouched"
+    );
+
+    // A guided re-wrap: the escrow rotates, and the identity does not.
+    let rotated = escrow(&alice, b"rotated wrap", at(3));
+    assert_eq!(store(h, rotated.clone()).await, Replaced::Yes);
+    assert_eq!(fetch(h, &alice).await, Some(rotated.clone()));
+    assert_eq!(fetch_identity(h, &alice).await, Some(identity));
+
+    let resealed = escrow(&alice, b"resealed identity", at(4));
+    store_identity(h, resealed.clone()).await;
+    assert_eq!(fetch(h, &alice).await, Some(rotated));
+    assert_eq!(fetch_identity(h, &alice).await, Some(resealed));
+}
+
+/// The sealed identity's `stored_at` reads back at microsecond precision, as the escrow's does.
+pub async fn the_sealed_identity_instant_reads_back_at_microsecond_precision(h: &dyn Harness) {
+    let alice = user("identity-precise", "alice");
+    let written = Timestamp::from_nanosecond(1_700_000_000_987_654_321).expect("an instant");
+    store_identity(h, escrow(&alice, b"identity", written)).await;
+    let held = fetch_identity(h, &alice).await.expect("held").stored_at;
+    assert!(held <= written, "{held} is later than {written}");
+    assert!(
+        written.duration_since(held) < SignedDuration::from_micros(1),
+        "{held} lost more than sub-microsecond precision from {written}"
+    );
+}
+
 // ===========================================================================================
 // The whole suite
 // ===========================================================================================
@@ -171,6 +286,11 @@ pub async fn run_all(h: &dyn Harness) {
     the_blob_is_returned_byte_for_byte(h).await;
     escrows_do_not_leak_between_accounts(h).await;
     the_stored_instant_reads_back_at_microsecond_precision(h).await;
+    an_account_with_no_sealed_identity_fetches_none(h).await;
+    a_sealed_identity_replaces_and_reads_back_byte_for_byte(h).await;
+    sealed_identities_do_not_leak_between_accounts(h).await;
+    the_escrow_and_the_sealed_identity_are_independent(h).await;
+    the_sealed_identity_instant_reads_back_at_microsecond_precision(h).await;
 }
 
 #[cfg(test)]
@@ -210,6 +330,11 @@ mod tests {
         the_blob_is_returned_byte_for_byte,
         escrows_do_not_leak_between_accounts,
         the_stored_instant_reads_back_at_microsecond_precision,
+        an_account_with_no_sealed_identity_fetches_none,
+        a_sealed_identity_replaces_and_reads_back_byte_for_byte,
+        sealed_identities_do_not_leak_between_accounts,
+        the_escrow_and_the_sealed_identity_are_independent,
+        the_sealed_identity_instant_reads_back_at_microsecond_precision,
     }
 
     /// The whole suite, in one pass on one store — the entry point the container case uses.

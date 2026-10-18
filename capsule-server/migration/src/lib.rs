@@ -13,7 +13,8 @@
 //!   escrow, the collector's marks, custody receipts and TOTP enrolments;
 //! - `000016` (#460): federated accounts on the account table — a nullable credential and
 //!   address, and the `(issuer, subject)` link;
-//! - `000017` (#524): the checksum ledger's backfill (below).
+//! - `000017` (#524): the checksum ledger's backfill (below);
+//! - `000018` (#544): the sealed user identity key beside the escrow.
 //!
 //! # Every instant is a `BIGINT` of microseconds since the Unix epoch
 //!
@@ -87,6 +88,7 @@ migrations![
     m20260902_000015_totp,
     m20260902_000016_federated_accounts,
     m20260902_000017_migration_checksums,
+    m20260902_000018_sealed_identities,
 ];
 
 /// The content checksum of one migration's source: lowercase hex SHA-256.

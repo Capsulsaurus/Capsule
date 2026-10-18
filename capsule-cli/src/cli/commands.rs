@@ -285,6 +285,18 @@ pub(crate) enum AuthCommands {
         #[arg(long)]
         password_stdin: bool,
     },
+    /// Recover the signed-in account onto this machine from its recovery backup
+    Recover {
+        /// Directory for the recovered library; it must not hold a library yet
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// Read the recovery secret from the first line of stdin instead of prompting
+        #[arg(long)]
+        recovery_secret_stdin: bool,
+        /// Read the new library passphrase from the next line of stdin instead of prompting
+        #[arg(long)]
+        passphrase_stdin: bool,
+    },
     /// Logout from Capsule
     Logout,
     /// Show authentication status

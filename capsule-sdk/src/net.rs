@@ -736,13 +736,18 @@ pub fn dial_client() -> reqwest::Result<reqwest::Client> {
 /// request still wins, which is how the hand-written upload path keeps pinning a per-transport
 /// protocol date.
 ///
-/// `X-Capsule-Sidecar-Schema` is deliberately absent: the design scopes it to metadata updates,
-/// and a schema number is a property of one write rather than of the transport.
+/// `X-Capsule-Sidecar-Schema` rides along too (#404, #520). The design has clients send it on
+/// metadata updates, and this build writes exactly one sidecar schema
+/// ([`SIDECAR_SCHEMA_V1`](capsule_core::sidecar::SIDECAR_SCHEMA_V1)), so it is a constant of the
+/// build like the suite rather than a property of one write. On the transport, every request
+/// that carries a sidecar carries the number — including a metadata update reached through a
+/// generated operation no hand-written path wraps — and the server validates it only when
+/// present, so a request that carries no sidecar is unaffected by it.
 #[must_use]
 pub fn protocol_headers() -> reqwest::header::HeaderMap {
     use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 
-    let mut headers = HeaderMap::with_capacity(2);
+    let mut headers = HeaderMap::with_capacity(3);
     headers.insert(
         HeaderName::from_static("x-capsule-protocol"),
         HeaderValue::from_static(capsule_core::crypto::primitives::PROTOCOL_VERSION),
@@ -750,6 +755,10 @@ pub fn protocol_headers() -> reqwest::header::HeaderMap {
     headers.insert(
         HeaderName::from_static("x-capsule-crypto-suite"),
         HeaderValue::from(capsule_core::crypto::primitives::CRYPTO_SUITE_ID),
+    );
+    headers.insert(
+        HeaderName::from_static("x-capsule-sidecar-schema"),
+        HeaderValue::from(capsule_core::sidecar::SIDECAR_SCHEMA_V1),
     );
     headers
 }
@@ -1120,7 +1129,7 @@ mod tests {
         assert!(dial_client().is_ok());
     }
 
-    /// Every SDK transport carries the two build constants the server's gate reads.
+    /// Every SDK transport carries the three build constants the server's gate reads.
     #[test]
     fn the_handshake_headers_are_the_build_constants() {
         let headers = protocol_headers();
@@ -1141,10 +1150,16 @@ mod tests {
             )
         );
         assert_eq!(
-            headers.len(),
-            2,
-            "the sidecar schema is a property of one write"
+            headers
+                .get("x-capsule-sidecar-schema")
+                .and_then(|v| v.to_str().ok()),
+            Some(
+                capsule_core::sidecar::SIDECAR_SCHEMA_V1
+                    .to_string()
+                    .as_str()
+            )
         );
+        assert_eq!(headers.len(), 3);
         assert!(http_client().is_ok());
     }
 }

@@ -245,6 +245,9 @@ pub mod error_codes {
     /// `error.enrollment.relay_malformed`
     pub const ENROLLMENT_RELAY_MALFORMED: &str = "error.enrollment.relay_malformed";
 
+    /// `error.escrow.identity_not_stored`
+    pub const ESCROW_IDENTITY_NOT_STORED: &str = "error.escrow.identity_not_stored";
+
     /// `error.escrow.malformed`
     pub const ESCROW_MALFORMED: &str = "error.escrow.malformed";
 

@@ -112,7 +112,6 @@ capsule-cli/src/lib.rs	Skipping {label} directory
 capsule-cli/src/lib.rs	{} directory {} does not exist, skipping...
 capsule-cli/src/lib.rs	Failed to read input: {e}
 capsule-cli/src/lib.rs	Failed to read password from stdin: {e}
-capsule-cli/src/lib.rs	--password-stdin was given but stdin was empty
 capsule-cli/src/lib.rs	Failed to read password: {e}
 capsule-cli/src/lib.rs	Failed to open local database: {e}
 capsule-cli/src/lib.rs	Failed to open signed workspace: {e}

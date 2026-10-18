@@ -34,6 +34,24 @@
 //! that retained the blob it unwraps would preserve exactly the artifact the rotation exists to
 //! destroy. Recovery from a bad rotation is the backup *artifact*, which the user holds.
 //!
+//! # The sealed identity rides beside it
+//!
+//! A recovered device needs two things to open as the account it recovers: the master key, which
+//! the escrow above carries, and the account's **user identity key**. The IK is drawn at random,
+//! not derived from the master key — rotating the master key must not rotate the identity — and
+//! the server pins it on the first directory publish (`S-C42`), so a recovered device cannot mint
+//! its own. `capsule_core`'s `Workspace::sealed_identity` seals it under the master key, and this
+//! port holds that blob in a second slot beside the escrow ([`EscrowStore::store_identity`],
+//! [`EscrowStore::fetch_identity`]).
+//!
+//! It adds no second root and no new trust in the server. The sealed identity opens only under
+//! the master key, and the master key comes out of the escrow only under the recovery secret, so
+//! whoever can open one could already open the other; the server holds two ciphertexts it can
+//! read neither of. It obeys every rule the escrow does — one per account, opaque, replaced in
+//! one operation, never versioned — and the two slots are independent: storing one never
+//! touches the other, because the escrow is re-wrapped on every recovery-secret rotation and
+//! the identity is not.
+//!
 //! # Adapters
 //!
 //! [`InMemoryEscrow`] is the deterministic double and [`PostgresEscrow`] the durable adapter;
@@ -58,12 +76,13 @@ use crate::store::{StoreFuture, UserId};
 /// no business knowing the format.
 pub const MAX_ESCROW_BYTES: usize = 64 * 1024;
 
-/// One account's escrowed master key.
+/// One account's escrowed master key, or its sealed user identity key — the two blobs share
+/// one shape, and which one a record is follows from the [`EscrowStore`] method it went through.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EscrowRecord {
     /// The account it belongs to.
     pub user_id: UserId,
-    /// The wrapped master key, exactly as the client sent it.
+    /// The wrapped master key (or the sealed identity), exactly as the client sent it.
     pub blob: Vec<u8>,
     /// When the server accepted it.
     ///
@@ -114,6 +133,17 @@ pub trait EscrowStore: std::fmt::Debug + Send + Sync {
 
     /// The escrow currently held for `user`, or `None`.
     fn fetch<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, Option<EscrowRecord>>;
+
+    /// Store `record` as the account's **sealed identity**, replacing whatever sealed identity it
+    /// had, and report whether one was replaced.
+    ///
+    /// The same one-operation replace [`store`](Self::store) owes, in a slot of its own: it never
+    /// reads, writes or replaces the account's escrow.
+    fn store_identity(&self, record: EscrowRecord) -> StoreFuture<'_, Replaced>;
+
+    /// The sealed identity currently held for `user`, or `None`. Independent of whether an
+    /// escrow is held.
+    fn fetch_identity<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, Option<EscrowRecord>>;
 }
 
 /// Whether storing an escrow displaced an earlier one.
@@ -136,6 +166,7 @@ pub enum Replaced {
 #[derive(Debug, Default)]
 pub struct InMemoryEscrow {
     held: Mutex<BTreeMap<UserId, EscrowRecord>>,
+    identities: Mutex<BTreeMap<UserId, EscrowRecord>>,
 }
 
 impl InMemoryEscrow {
@@ -176,6 +207,28 @@ impl EscrowStore for InMemoryEscrow {
 
     fn fetch<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, Option<EscrowRecord>> {
         Box::pin(async move { Ok(lock(&self.held).get(user).cloned()) })
+    }
+
+    fn store_identity(&self, record: EscrowRecord) -> StoreFuture<'_, Replaced> {
+        Box::pin(async move {
+            let mut identities = lock(&self.identities);
+            let user = record.user_id.clone();
+            let bytes = record.blob.len();
+            if identities.insert(user.clone(), record).is_some() {
+                tracing::info!(
+                    %user,
+                    bytes,
+                    "a sealed identity was replaced; the previous one is gone"
+                );
+                return Ok(Replaced::Yes);
+            }
+            tracing::info!(%user, bytes, "a sealed identity was stored for the first time");
+            Ok(Replaced::No)
+        })
+    }
+
+    fn fetch_identity<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, Option<EscrowRecord>> {
+        Box::pin(async move { Ok(lock(&self.identities).get(user).cloned()) })
     }
 }
 

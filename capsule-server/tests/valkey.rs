@@ -670,6 +670,10 @@ async fn a_durable_boot_without_a_database_url_refuses_and_names_it() {
             "JWT_ED25519_DER".to_owned(),
             "MC4CAQAwBQYDK2VwBCIEIN6eTvXEL7xMZWHY8rTk7VbQSGSuRkle5MVfiiYUStLF".to_owned(),
         ),
+        (
+            "DATABASE_URL".to_owned(),
+            "postgres://127.0.0.1:1/capsule".to_owned(),
+        ),
         ("VALKEY_URL".to_owned(), server.url.clone()),
         (
             "ATTESTATION_KEY_SEED".to_owned(),
@@ -681,8 +685,11 @@ async fn a_durable_boot_without_a_database_url_refuses_and_names_it() {
     ]
     .into_iter()
     .collect();
-    let config = Config::load(&environment, &Overrides::default(), Demands::Serve)
+    let mut config = Config::load(&environment, &Overrides::default(), Demands::Serve)
         .expect("it is well-formed");
+    // `Config::load` demands `DATABASE_URL` itself (#520); dropping it after loading reaches the
+    // boot path's own backstop, which is what this case asserts.
+    config.database_url = None;
     let error = assemble(&config)
         .await
         .expect_err("a durable backend with no database refuses");

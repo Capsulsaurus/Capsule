@@ -127,7 +127,7 @@ Every public route applies the same headers:
 | --- | --- |
 | `X-Capsule-Protocol` | request, required on every gated route |
 | `X-Capsule-Crypto-Suite` | request for writes; validated when present |
-| `X-Capsule-Sidecar-Schema` | request on metadata updates; validated when present |
+| `X-Capsule-Sidecar-Schema` | request, sent by clients on metadata updates and accepted on any request (`capsule-sdk` sends it on every one); validated when present, absence not refused |
 | `X-Capsule-Protocol-Min` | response, on every response of every operation |
 | `X-Capsule-Protocol-Max` | response, on every response of every operation |
 | `X-Capsule-Min-Client-Build` | response, on every response of every operation; advisory (`0.0.0` = no cutoff) |
