@@ -46,6 +46,7 @@ use super::derivative::{
 use super::detect::{MAX_DECODE_PIXELS, SUPPORTED_STILL_FORMATS, StillFormat};
 use super::error::{FormatOp, MediaError};
 use super::resize::{capped_dimensions, downscale_rgba8};
+use super::tiff_bounds::check_ifd_value_counts;
 use crate::crypto::encryption::encrypt_asset_rekey;
 use crate::crypto::hash::Hash32;
 use crate::crypto::keys::{Amk, AmkVersion, HybridSigningKey};
@@ -1795,6 +1796,261 @@ fn nikon_nef_is_recognised_and_refused() {
 #[test]
 fn fujifilm_raf_is_recognised_and_refused() {
     assert_refused_raw_family(&decodable_arw(), "raf", StillFormat::Raf);
+}
+
+// ── RAW IFD value counts (issue #644) ────────────────────────────────────────
+
+/// TIFF data types, as the entry tables below spell them.
+const T_SHORT: u16 = 3;
+const T_LONG: u16 = 4;
+const T_RATIONAL: u16 = 5;
+const T_UNDEFINED: u16 = 7;
+const T_DOUBLE: u16 = 12;
+/// MakerNote, read by the reader as one `UNDEFINED` value of `count` bytes.
+const TAG_MAKER_NOTE: u16 = 0x927C;
+
+/// One classic-TIFF entry: `(tag, type, count, value-or-offset)`.
+type HandEntry = (u16, u16, u32, u32);
+
+/// The offset [`hand_tiff`] places IFD `index` at, given every IFD's entry count: straight after
+/// the 8-byte header, each IFD `2 + 12n + 4` bytes long.
+fn hand_ifd_offset(entry_counts: &[usize], index: usize) -> u32 {
+    8 + entry_counts[..index]
+        .iter()
+        .map(|&n| 6 + 12 * n as u32)
+        .sum::<u32>()
+}
+
+/// A hand-assembled little-endian classic TIFF: IFD0 is `ifds[0]`, the rest follow it unchained
+/// (their next-IFD pointers are 0), reachable only through the pointers the entries hold. Held to
+/// a few hundred bytes, which is the point: a file that small must not be able to make the RAW
+/// reader allocate gigabytes.
+fn hand_tiff(ifds: &[&[HandEntry]]) -> Vec<u8> {
+    let mut out = b"II\x2A\x00\x08\x00\x00\x00".to_vec();
+    for entries in ifds {
+        out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        for &(tag, typ, count, value) in *entries {
+            out.extend_from_slice(&tag.to_le_bytes());
+            out.extend_from_slice(&typ.to_le_bytes());
+            out.extend_from_slice(&count.to_le_bytes());
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        out.extend_from_slice(&0u32.to_le_bytes());
+    }
+    assert!(out.len() < 512, "a few hundred bytes, got {}", out.len());
+    out
+}
+
+/// Assert `bytes` is refused, under both RAW extensions and at both probe and decode, as a decode
+/// failure naming the IFD bounds and the oversized `tag`.
+fn assert_ifd_count_refused(bytes: &[u8], tag: u16) {
+    let needle = format!("RAW IFD bounds: TIFF tag {tag:#06x}");
+    assert_raw_decode_failure(bytes, "arw", StillFormat::Arw, &needle);
+    assert_raw_decode_failure(bytes, "dng", StillFormat::Dng, &needle);
+}
+
+/// Allocation site one, `TiffParser::read_value`: a `DOUBLE` entry claiming `u32::MAX` values
+/// would ask for 32 GiB. Refused before `RawFile::open`, at whatever type the entry declares.
+#[test]
+fn a_value_count_past_the_file_is_refused_before_the_raw_reader_reads_it() {
+    for (typ, tag) in [(T_DOUBLE, 0x9999), (T_SHORT, 0x0110), (T_UNDEFINED, 0x02BC)] {
+        let bytes = hand_tiff(&[&[
+            (TiffTag::Make.as_u16(), 2, 4, u32::from_le_bytes(*b"SON\0")),
+            (tag, typ, u32::MAX, 8),
+        ]]);
+        assert_ifd_count_refused(&bytes, tag);
+    }
+}
+
+/// Allocation site two, `parse_ifd_at`'s `SubIFDs` read: `read_value_as_u64_vec` reserves
+/// `count` `u64`s whatever type the entry declares, so a `SubIFDs` entry of any type, in classic
+/// TIFF too, is held to 8 bytes per element.
+#[test]
+fn a_subifds_count_past_the_file_is_refused_whatever_its_type() {
+    let sub_ifds = TiffTag::SubIFDs.as_u16();
+    for typ in [T_LONG, 13, 0, 99] {
+        let bytes = hand_tiff(&[&[(sub_ifds, typ, u32::MAX / 2, 8)]]);
+        assert_ifd_count_refused(&bytes, sub_ifds);
+    }
+    // At the boundary: as many 8-byte `u64`s as the file holds passes the walk. Four classic
+    // 4-byte offsets fit in the file's 26 bytes, but the reader would reserve 32 for them.
+    let fits = hand_tiff(&[&[(sub_ifds, T_LONG, 3, 8)]]);
+    assert_eq!(fits.len(), 26);
+    assert!(check_ifd_value_counts(&fits).is_ok());
+    let over = hand_tiff(&[&[(sub_ifds, T_LONG, 4, 8)]]);
+    assert!(check_ifd_value_counts(&over).is_err());
+}
+
+/// Every offset in a `SubIFDs` list is followed, not only the first: an oversized entry in the
+/// second SubIFD of a two-element list is refused, and is not once that element is 0.
+#[test]
+fn every_subifd_in_a_list_is_walked() {
+    let counts = [1, 1, 1];
+    let (first, second) = (hand_ifd_offset(&counts, 1), hand_ifd_offset(&counts, 2));
+    let list = hand_ifd_offset(&counts, 3);
+    let with_list = |elements: [u32; 2]| {
+        let mut bytes = hand_tiff(&[
+            &[(TiffTag::SubIFDs.as_u16(), T_LONG, 2, list)],
+            &[(0x9998, T_LONG, 1, 0)],
+            &[(TiffTag::StripByteCounts.as_u16(), T_LONG, u32::MAX, 8)],
+        ]);
+        assert_eq!(bytes.len(), list as usize, "the list follows the last IFD");
+        for element in elements {
+            bytes.extend_from_slice(&element.to_le_bytes());
+        }
+        bytes
+    };
+    assert_ifd_count_refused(
+        &with_list([first, second]),
+        TiffTag::StripByteCounts.as_u16(),
+    );
+    assert_eq!(
+        check_ifd_value_counts(&with_list([first, 0])).map(|w| w.ifds),
+        Ok(2)
+    );
+}
+
+/// Rewrite the next-IFD pointer of the IFD at `ifd` (holding `entries` entries) to `next`.
+fn set_next_ifd(bytes: &mut [u8], ifd: u32, entries: usize, next: u32) {
+    let at = ifd as usize + 2 + 12 * entries;
+    bytes[at..at + 4].copy_from_slice(&next.to_le_bytes());
+}
+
+/// The top-level chain is followed past IFD0: an oversized entry in IFD1 is refused. A next
+/// pointer on a SubIFD or an EXIF IFD is not, because the reader follows next pointers only along
+/// the top-level chain, so the same entry behind one is left alone.
+#[test]
+fn only_the_top_level_chain_follows_next_pointers() {
+    let oversized = (TiffTag::StripByteCounts.as_u16(), T_LONG, u32::MAX, 8);
+    let make = (TiffTag::Make.as_u16(), 2, 4, u32::from_le_bytes(*b"SON\0"));
+
+    let mut chained = hand_tiff(&[&[make], &[oversized]]);
+    assert!(
+        check_ifd_value_counts(&chained).is_ok(),
+        "unchained, IFD1 is unreached"
+    );
+    set_next_ifd(&mut chained, 8, 1, hand_ifd_offset(&[1, 1], 1));
+    assert_ifd_count_refused(&chained, oversized.0);
+
+    let counts = [2, 1, 1];
+    let (child, beyond) = (hand_ifd_offset(&counts, 1), hand_ifd_offset(&counts, 2));
+    for pointer in [TiffTag::SubIFDs, TiffTag::ExifIFDPointer] {
+        let mut bytes = hand_tiff(&[
+            &[make, (pointer.as_u16(), T_LONG, 1, child)],
+            &[(0x9998, T_LONG, 1, 0)],
+            &[oversized],
+        ]);
+        set_next_ifd(&mut bytes, child, 1, beyond);
+        assert_eq!(
+            check_ifd_value_counts(&bytes).map(|w| w.ifds),
+            Ok(2),
+            "{pointer:?}'s next pointer must not be followed"
+        );
+    }
+}
+
+/// Allocation site three, the byte reads behind strips, tiles and the MakerNote: an oversized
+/// count is refused in every directory the reader parses — the EXIF IFD's MakerNote, a GPS
+/// rational, a raw SubIFD's strip table, and the Sony SR2 IFD the ARW reader follows from IFD0.
+#[test]
+fn an_oversized_count_is_refused_in_every_directory_the_reader_parses() {
+    let counts = [2, 1];
+    let child = hand_ifd_offset(&counts, 1);
+    let cases: [(HandEntry, HandEntry); 4] = [
+        (
+            (TiffTag::ExifIFDPointer.as_u16(), T_LONG, 1, child),
+            (TAG_MAKER_NOTE, T_UNDEFINED, u32::MAX, 8),
+        ),
+        (
+            (TiffTag::GPSInfoIFDPointer.as_u16(), T_LONG, 1, child),
+            (0x0002, T_RATIONAL, u32::MAX, 8),
+        ),
+        (
+            (TiffTag::SubIFDs.as_u16(), T_LONG, 1, child),
+            (TiffTag::StripByteCounts.as_u16(), T_LONG, u32::MAX, 8),
+        ),
+        ((0x02BC, T_LONG, 1, child), (0x7313, T_SHORT, u32::MAX, 8)),
+    ];
+    for (pointer, oversized) in cases {
+        let make = (TiffTag::Make.as_u16(), 2, 4, u32::from_le_bytes(*b"SON\0"));
+        let bytes = hand_tiff(&[&[make, pointer], &[oversized]]);
+        assert_ifd_count_refused(&bytes, oversized.0);
+        // The same entry where the reader never looks — no pointer reaches it — is not refused.
+        let unreached = hand_tiff(&[&[make, (0x9998, T_LONG, 1, child)], &[oversized]]);
+        assert!(check_ifd_value_counts(&unreached).is_ok());
+    }
+}
+
+/// The walk refuses only what would allocate: real fixtures pass and are walked in full, a value
+/// that fits but sits past the end of the file is left to the reader, and a pointer cycle ends.
+#[test]
+fn the_ifd_walk_passes_what_would_not_allocate() {
+    let arw = decodable_arw();
+    assert_eq!(check_ifd_value_counts(&arw).map(|w| w.ifds), Ok(2));
+    let dng = dng_cfa(16, 8, &split_cfa(16, 8, 50_000, 5_000), |_| {});
+    assert_eq!(check_ifd_value_counts(&dng).map(|w| w.ifds), Ok(1));
+
+    let past_the_end = hand_tiff(&[&[(0x9999, T_DOUBLE, 2, 10_000)]]);
+    assert!(check_ifd_value_counts(&past_the_end).is_ok());
+
+    // IFD0 lists itself as its SubIFD, its EXIF IFD and its next IFD.
+    let cycle = hand_tiff(&[&[
+        (TiffTag::SubIFDs.as_u16(), T_LONG, 1, 8),
+        (TiffTag::ExifIFDPointer.as_u16(), T_LONG, 1, 8),
+    ]]);
+    let mut cycle = cycle;
+    let next = cycle.len() - 4;
+    cycle[next..].copy_from_slice(&8u32.to_le_bytes());
+    assert_eq!(check_ifd_value_counts(&cycle).map(|w| w.ifds), Ok(1));
+    for (ext, format) in [("arw", StillFormat::Arw), ("dng", StillFormat::Dng)] {
+        match RawshiftDecoder.probe(&cycle, ext) {
+            Err(MediaError::Decode { detail, .. }) => {
+                assert!(!detail.contains("IFD bounds"), "{detail}");
+            }
+            Err(MediaError::UnsupportedFormat { format: got, .. }) => assert_eq!(got, format),
+            other => panic!("a self-referencing IFD must not probe, got {other:?}"),
+        }
+    }
+
+    // Not a TIFF, and a header whose IFD0 is out of range: nothing to walk.
+    assert_eq!(
+        check_ifd_value_counts(b"not a tiff"),
+        Ok(Default::default())
+    );
+    let truncated = b"II\x2A\x00\xFF\xFF\x00\x00";
+    assert_eq!(check_ifd_value_counts(truncated).map(|w| w.ifds), Ok(0));
+}
+
+/// Big-endian classic TIFF and BigTIFF are walked too, and a BigTIFF count whose byte size
+/// overflows `u64` is refused rather than wrapped.
+#[test]
+fn the_ifd_walk_covers_big_endian_and_bigtiff() {
+    let mut be = b"MM\x00\x2A\x00\x00\x00\x08\x00\x01".to_vec();
+    be.extend_from_slice(&0x9999u16.to_be_bytes());
+    be.extend_from_slice(&T_DOUBLE.to_be_bytes());
+    be.extend_from_slice(&u32::MAX.to_be_bytes());
+    be.extend_from_slice(&8u32.to_be_bytes());
+    be.extend_from_slice(&0u32.to_be_bytes());
+    let refused = check_ifd_value_counts(&be).expect_err("big-endian count");
+    assert_eq!((refused.tag, refused.count), (0x9999, u64::from(u32::MAX)));
+    assert_ifd_count_refused(&be, 0x9999);
+
+    let bigtiff = |count: u64| {
+        let mut out = b"II\x2B\x00\x08\x00\x00\x00".to_vec();
+        out.extend_from_slice(&16u64.to_le_bytes()); // IFD0
+        out.extend_from_slice(&1u64.to_le_bytes()); // one entry
+        out.extend_from_slice(&0x9999u16.to_le_bytes());
+        out.extend_from_slice(&T_DOUBLE.to_le_bytes());
+        out.extend_from_slice(&count.to_le_bytes());
+        out.extend_from_slice(&16u64.to_le_bytes());
+        out.extend_from_slice(&0u64.to_le_bytes()); // next IFD
+        out
+    };
+    assert!(check_ifd_value_counts(&bigtiff(2)).is_ok());
+    for count in [1 << 40, u64::MAX] {
+        let refused = check_ifd_value_counts(&bigtiff(count)).expect_err("BigTIFF count");
+        assert_eq!(refused.count, count);
+    }
 }
 
 // ── The panic guard ──────────────────────────────────────────────────────────

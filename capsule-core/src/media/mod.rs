@@ -63,6 +63,7 @@ mod derivative;
 mod detect;
 mod error;
 mod resize;
+mod tiff_bounds;
 
 // `native`-gated because `lifecycle` is its only caller and `lifecycle` is `native`-gated: a
 // `--features media` build without `native` (which the aarch64 cross-check uses, to isolate the

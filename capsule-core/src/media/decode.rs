@@ -35,9 +35,11 @@
 //!   than the sensor's grid holds, and a JPEG XL tile (ProRAW), which states its own size in
 //!   its codestream header, is probed and must fit inside the tile or strip it fills. Without
 //!   those, a few-KB file listing many entries at one compressible codestream would make the
-//!   reader run that many full-budget decodes. What this cannot bound is the
-//!   allocation `open` makes for an IFD entry's value count while parsing, which happens inside
-//!   the crate before Capsule sees anything.
+//!   reader run that many full-budget decodes. All of that reads what `open` has already
+//!   parsed, and `open` itself allocates each IFD entry's value at the count the entry claims,
+//!   so before it runs, a no-allocation walk of the IFD chain (`tiff_bounds`, issue #644)
+//!   refuses as [`MediaError::Decode`] any entry whose value needs more bytes than the file
+//!   holds.
 //! - **Orientation** is applied by `process`, so it is reported in `orientation_applied` and
 //!   never applied a second time here.
 //! - **Unsupported variants defer.** Upstream decodes Sony lossless-JPEG ARW and uncompressed or
@@ -89,6 +91,7 @@ use rawshift_image::transforms::orientation::apply_orientation;
 
 use super::detect::{MAX_DECODE_PIXELS, StillFormat};
 use super::error::{FormatOp, MediaError};
+use super::tiff_bounds::check_ifd_value_counts;
 use crate::lqip::{Gamut, RgbaImage};
 
 /// The EXIF orientation value meaning "already upright".
@@ -825,6 +828,29 @@ fn open_raw_within(
     format: StillFormat,
     limit: u64,
 ) -> Result<(OpenRaw<'_>, MediaMetadata), MediaError> {
+    // Before `open`, because `open` allocates each IFD entry's value at the count the entry
+    // claims; see `tiff_bounds`.
+    let walk = check_ifd_value_counts(bytes).map_err(|oversized| {
+        tracing::warn!(
+            %format,
+            ifd_offset = oversized.ifd_offset,
+            tag = oversized.tag,
+            data_type = oversized.data_type,
+            count = oversized.count,
+            file_len = oversized.file_len,
+            "media: refused a RAW still whose IFD entry claims more than the file holds"
+        );
+        MediaError::Decode {
+            format,
+            detail: format!("RAW IFD bounds: {oversized}"),
+        }
+    })?;
+    tracing::trace!(
+        %format,
+        ifds = walk.ifds,
+        entries = walk.entries,
+        "media: RAW IFD value counts are within the file"
+    );
     let raw = RawFile::open(Cursor::new(bytes)).map_err(|e| raw_error(format, "open", e))?;
     let layout = raw_layout(&raw, format)?;
     check_raw_layout(bytes, format, &layout, limit)?;
