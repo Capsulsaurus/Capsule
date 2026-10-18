@@ -454,7 +454,7 @@ pub async fn charge_upload(
     let ChargeOutcome::Charged { used } = outcome else {
         // Somebody already holds these bytes. A merge is not storage, so there is nothing to
         // refuse and nothing to release.
-        return Ok(UploadCharge::Admitted);
+        return Ok(UploadCharge::AlreadyAttributed);
     };
     if used < limits.hard_limit {
         return Ok(UploadCharge::Admitted);
@@ -467,8 +467,18 @@ pub async fn charge_upload(
 /// What charging an upload decided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UploadCharge {
-    /// The session may open. Either the bytes were charged, or they were already somebody's.
+    /// The session may open: the bytes were charged to this user by this call.
+    ///
+    /// A caller whose write then fails before the bytes land may [`QuotaStore::release`] them,
+    /// because the debit is its own.
     Admitted,
+    /// The session may open: the bytes were already attributed — to this user or to another —
+    /// so nothing was debited.
+    ///
+    /// Distinct from [`Self::Admitted`] so a caller undoing a failed write never releases an
+    /// attribution an earlier write made. One value for both owners, as
+    /// [`ChargeOutcome::AlreadyAttributed`] is.
+    AlreadyAttributed,
     /// It would cross the hard limit. Nothing is charged — the debit was released.
     Refused,
 }

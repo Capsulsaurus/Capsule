@@ -746,6 +746,11 @@ async fn a_metadata_record_that_would_cross_the_hard_limit_is_refused() {
         used,
         "a refused record is not charged"
     );
+    // #662: and never stored, so an account over its limit leaves nothing uncharged behind.
+    assert!(
+        fixture.blobs.stat(&refused).await.expect("stat").is_none(),
+        "a record refused at the hard limit must not reach the store"
+    );
     fetch(
         &fixture,
         &format!("/s/{}", opaque(2)),
@@ -834,8 +839,9 @@ async fn the_collector_keeps_a_live_links_record_and_reclaims_a_revoked_ones() {
 /// #653: a collaborator that cannot answer is a `500`, never a link issued without its record.
 ///
 /// One case per collaborator issue touches before it records the link: the quota ledger's read
-/// (the grace-window gate), the blob store's `put`, and the ledger's charge. Each leaves no link,
-/// and the charge failure leaves nothing charged.
+/// (the grace-window gate), the ledger's charge, and the blob store's `put`. Each leaves no link
+/// and nothing charged: the charge failure stores nothing, and a failed `put` releases the charge
+/// taken just before it (#662).
 #[tokio::test]
 async fn a_collaborator_that_cannot_answer_issues_nothing() {
     use capsule_server::quota::QuotaStore as _;
@@ -884,7 +890,7 @@ async fn a_collaborator_that_cannot_answer_issues_nothing() {
     );
     fixture.blobs.set_puts_unavailable(false);
 
-    // The ledger's charge, after the read answered and the record was stored.
+    // The ledger's charge, after the read answered and before the record is stored (#662).
     fixture.quotas.set_charges_unavailable(true);
     let problem = issue(
         &fixture,
@@ -896,6 +902,10 @@ async fn a_collaborator_that_cannot_answer_issues_nothing() {
     assert_eq!(problem["code"], "error.share.unavailable", "{problem}");
     fixture.quotas.set_charges_unavailable(false);
     assert_eq!(fixture.quotas.usage(&owner).await.expect("usage").used, 0);
+    assert!(
+        fixture.blobs.stat(&metadata).await.expect("stat").is_none(),
+        "a record the ledger could not charge is not stored"
+    );
 
     for tag in 1..=3 {
         fetch(
@@ -942,6 +952,49 @@ async fn a_metadata_record_is_charged_to_the_owner_once() {
         fixture.quotas.usage(&owner).await.expect("usage").used,
         after
     );
+}
+
+/// #662: a failed store releases only a charge its own request made.
+///
+/// The record is charged before it is stored, so a `put` that fails must undo the debit, but a
+/// record the ledger already attributes was charged by an earlier link whose bytes are stored and
+/// served. Releasing that would leave a live link's record uncharged.
+#[tokio::test]
+async fn a_failed_store_keeps_an_earlier_links_charge() {
+    use capsule_server::quota::QuotaStore as _;
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let owner = capsule_server::store::UserId::new(support::user().as_str());
+    let (_, metadata, _) = live_link(&fixture, &bearer, 1).await;
+    let charged = fixture.quotas.usage(&owner).await.expect("usage").used;
+
+    fixture.blobs.set_puts_unavailable(true);
+    let problem = issue(
+        &fixture,
+        &bearer,
+        &json!({
+            "opaque_id": opaque(2),
+            "metadata_hash": metadata.as_str(),
+            "serves": [metadata.as_str()],
+            "metadata_blob": BASE64.encode(payload(b'm', 64)),
+        }),
+        StatusCode::INTERNAL_SERVER_ERROR,
+    )
+    .await;
+    fixture.blobs.set_puts_unavailable(false);
+    assert_eq!(problem["code"], "error.share.unavailable", "{problem}");
+    assert_eq!(
+        fixture.quotas.usage(&owner).await.expect("usage").used,
+        charged,
+        "the first link's record stays charged"
+    );
+    fetch(
+        &fixture,
+        &format!("/s/{}", opaque(2)),
+        StatusCode::NOT_FOUND,
+    )
+    .await;
 }
 
 #[tokio::test]
