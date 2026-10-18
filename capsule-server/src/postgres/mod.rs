@@ -128,6 +128,10 @@ pub const EXPECTED_MIGRATIONS: &[ExpectedMigration] = &[
         name: "m20260902_000018_sealed_identities",
         checksum: "d9187cb622fa496c5eb6adea98dd6313c8b4b45a2521e3edfba2c56bea8acbb9",
     },
+    ExpectedMigration {
+        name: "m20260902_000019_share_serves_address_index",
+        checksum: "b811a0fe63b0b4cb56fde0fddfc02deeb83282fb48adc262d05fe2aea5fbdf2e",
+    },
 ];
 
 /// The command an operator runs to apply them.
@@ -589,10 +593,17 @@ mod tests {
             let connection = database.connection();
 
             // The state a pre-#524 database is in: `000001`–`000016` applied, no ledger. Every
-            // ordinal after `000017` rolls back with it.
-            server_migration::Migrator::down(connection, Some(2))
+            // ordinal after `000017` rolls back with it, so the step count is derived from the
+            // list rather than written down, and a new ordinal cannot leave `000017` applied.
+            let ledger = EXPECTED_MIGRATIONS
+                .iter()
+                .position(|migration| migration.name == "m20260902_000017_migration_checksums")
+                .expect("`000017` is an expected migration");
+            let steps = u32::try_from(EXPECTED_MIGRATIONS.len() - ledger)
+                .expect("the migration count fits a u32");
+            server_migration::Migrator::down(connection, Some(steps))
                 .await
-                .expect("`000018` and `000017` roll back");
+                .expect("`000017` and every later ordinal roll back");
             execute(connection, &format!("DROP TABLE {CHECKSUM_LEDGER}")).await;
             let error = assert_schema_current(connection)
                 .await
@@ -668,6 +679,55 @@ mod tests {
                 .map(|migration| migration.name)
                 .collect();
             assert_eq!(applied, expected);
+        }
+
+        /// Whether `share_serves` carries an index named `idx_share_serves_address` whose only
+        /// key is `address`.
+        async fn has_address_index(connection: &sea_orm::DatabaseConnection) -> bool {
+            let rows = connection
+                .query_all(sea_orm::Statement::from_string(
+                    sea_orm::DbBackend::Postgres,
+                    "SELECT indexdef FROM pg_indexes \
+                     WHERE tablename = 'share_serves' AND indexname = 'idx_share_serves_address'"
+                        .to_owned(),
+                ))
+                .await
+                .expect("pg_indexes is readable");
+            rows.iter().any(|row| {
+                let definition: String = row.try_get("", "indexdef").expect("an indexdef column");
+                definition.ends_with("(address)")
+            })
+        }
+
+        /// `000019` indexes `share_serves` by address — what the collector's live-link check
+        /// probes for every blob no asset holds (#659) — and its rollback drops that index alone.
+        #[tokio::test]
+        async fn share_serves_is_indexed_by_address() {
+            let Some(database) = testing::start("the share_serves address index").await else {
+                return;
+            };
+            let connection = database.connection();
+
+            assert!(
+                has_address_index(connection).await,
+                "a migrated database indexes share_serves by address"
+            );
+
+            server_migration::Migrator::down(connection, Some(1))
+                .await
+                .expect("`000019` rolls back");
+            assert!(
+                !has_address_index(connection).await,
+                "rolling back `000019` drops the index"
+            );
+
+            server_migration::Migrator::up(connection, None)
+                .await
+                .expect("`000019` re-applies");
+            assert!(has_address_index(connection).await);
+            assert_schema_current(connection)
+                .await
+                .expect("the schema is current again");
         }
     }
 }
