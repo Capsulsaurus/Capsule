@@ -4,7 +4,7 @@
 //! # The replace is one statement
 //!
 //! `escrows` holds one row per account, and so does `sealed_identities`; both are written by the
-//! same statement shape, in [`PostgresEscrow::upsert`]. [`EscrowStore::store`] is a single
+//! same statement shape, in `PostgresEscrow::upsert`. [`EscrowStore::store`] is a single
 //! `INSERT … ON CONFLICT (user_id) DO UPDATE`, which is the atomicity the port owes: there is no
 //! instant at which the account has no escrow, and none at which the secret being rotated away
 //! from still unwraps anything this table holds. A delete followed by an insert would open the
