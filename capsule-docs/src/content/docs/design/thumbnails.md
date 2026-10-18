@@ -55,7 +55,11 @@ Decode is JPEG, PNG, JXL, TIFF, GIF and the **ARW and DNG** RAW families in ever
 ([#588](https://github.com/Capsulsaurus/Capsule/issues/588)). ARW and DNG go through
 `rawshift-image`'s RAW pipeline, which applies the file's default crop and EXIF orientation
 itself, and an ARW or DNG variant it has no decoder for defers like a missing codec
-([#589](https://github.com/Capsulsaurus/Capsule/issues/589)). **HEIC, WebP and the other RAW
+([#589](https://github.com/Capsulsaurus/Capsule/issues/589)). Because that reader allocates
+each TIFF entry's value at the count the entry claims while it parses, Capsule first walks the
+IFD chain itself (IFD0 and its successors, SubIFDs, the EXIF and GPS IFDs, and the Sony SR2 IFD)
+without allocating, and refuses as a decode failure any entry whose value needs more bytes than
+the file holds ([#644](https://github.com/Capsulsaurus/Capsule/issues/644)). **HEIC, WebP and the other RAW
 families (CR2, CR3, CRW, NEF, RAF) are recognised and refused**, and so is AVIF in a build
 without that feature. HEIC is refused by decision, not by toolchain: libheif and libde265 are both LGPL-3.0
 and excluded by the licensing policy, and the permissive paths are recorded in the
