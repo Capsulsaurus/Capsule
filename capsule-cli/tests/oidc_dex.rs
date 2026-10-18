@@ -18,6 +18,9 @@
 //! CAPSULE_TEST_DEX=1 cargo nextest run -p capsule-cli --test oidc_dex
 //! ```
 //!
+//! CI runs the same three steps in the `rust-oidc` job of `.github/workflows/ci.yml`, and fails it on a
+//! skip line, so the round trip is a gate rather than a pass by absence.
+//!
 //! `CAPSULE_ENDPOINT` points the CLI at a server other than `mise run serve-memory`'s.
 //! `CAPSULE_TEST_DEX_LOGIN` and `CAPSULE_TEST_DEX_PASSWORD` override the static dex account
 //! (`admin@example.com` / `password`).
