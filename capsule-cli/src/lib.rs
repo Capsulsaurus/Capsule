@@ -215,6 +215,11 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 email,
                 password_stdin,
             } => auth_login(email, password_stdin).await?,
+            AuthCommands::Recover {
+                library,
+                recovery_secret_stdin,
+                passphrase_stdin,
+            } => auth_recover(&library, recovery_secret_stdin, passphrase_stdin).await?,
             AuthCommands::Logout => auth_logout().await?,
             AuthCommands::Status => {
                 println!("{}", "Checking authentication status...".blue());
@@ -900,6 +905,92 @@ async fn auth_login(email: Option<String>, password_stdin: bool) -> Result<()> {
             .green()
     );
     Ok(())
+}
+
+/// `capsule auth recover`: open a new library on this machine as the signed-in account, from
+/// its escrow, its sealed identity and the recovery secret (#544).
+///
+/// The recovery secret is read first and the new library passphrase second, which is also
+/// the order of the two stdin lines when both `--*-stdin` flags are given.
+async fn auth_recover(
+    library: &Path,
+    recovery_secret_stdin: bool,
+    passphrase_stdin: bool,
+) -> Result<()> {
+    let bundle = i18n::cli_bundle();
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+
+    let secret = read_password(
+        recovery_secret_stdin,
+        bundle.format(keys::AUTH_RECOVER_SECRET_PROMPT, &[]),
+    )?;
+    let passphrase = if passphrase_stdin {
+        read_password(true, String::new())?
+    } else {
+        Password::new()
+            .with_prompt(bundle.format(keys::AUTH_RECOVER_PASSPHRASE_PROMPT, &[]))
+            .with_confirmation(
+                bundle.format(keys::AUTH_RECOVER_PASSPHRASE_CONFIRM, &[]),
+                bundle.format(keys::AUTH_RECOVER_PASSPHRASE_MISMATCH, &[]),
+            )
+            .interact()
+            .map_err(|e| eyre!("Failed to read password: {e}"))?
+    };
+
+    let path = library.display().to_string();
+    println!(
+        "{}",
+        bundle
+            .format(
+                keys::AUTH_RECOVER_IN_PROGRESS,
+                &[("path", Value::Str(&path))]
+            )
+            .green()
+    );
+    match remote::auth_recover(
+        &remote,
+        &store,
+        library,
+        &secret,
+        passphrase.as_bytes(),
+        DeviceTier::Normal.params(),
+    )
+    .await
+    {
+        Ok(workspace) => {
+            let device = workspace.device_id().to_string();
+            println!(
+                "{}",
+                bundle
+                    .format(
+                        keys::AUTH_RECOVER_SUCCESS,
+                        &[("path", Value::Str(&path)), ("device", Value::Str(&device))],
+                    )
+                    .green()
+            );
+            Ok(())
+        }
+        Err(remote::RemoteError::NotAuthenticated) => Err(eyre!(
+            "{}",
+            bundle.format(keys::AUTH_NOT_AUTHENTICATED, &[])
+        )),
+        Err(error) => {
+            let reason = match error {
+                remote::RemoteError::WrongRecoverySecret => {
+                    bundle.format(keys::AUTH_RECOVER_WRONG_SECRET, &[])
+                }
+                other => describe_remote_error(&bundle, &other),
+            };
+            Err(eyre!(
+                "{}",
+                bundle.format(
+                    keys::AUTH_RECOVER_FAILED,
+                    &[("reason", Value::Str(&reason))]
+                )
+            ))
+        }
+    }
 }
 
 /// `capsule auth logout`: revoke the session over the SDK and clear local state.

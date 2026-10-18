@@ -6851,6 +6851,38 @@
     "message": "Not authenticated. Run 'capsule auth login' first.",
     "context": "CLI error when a command needs a session but none is stored."
   },
+  "cli.auth.recover.failed": {
+    "message": "Recovery failed: {reason}",
+    "context": "CLI failure line for `capsule auth recover` (#544). {reason} is a localized or English error detail."
+  },
+  "cli.auth.recover.in_progress": {
+    "message": "Recovering your account into {path}…",
+    "context": "CLI status line printed while `capsule auth recover` fetches the recovery backup and creates the library. {path} is the library directory."
+  },
+  "cli.auth.recover.passphrase_confirm": {
+    "message": "Repeat the library passphrase",
+    "context": "CLI `capsule auth recover` interactive prompt asking the user to type the new library passphrase a second time."
+  },
+  "cli.auth.recover.passphrase_mismatch": {
+    "message": "The passphrases do not match.",
+    "context": "CLI `capsule auth recover`: the two entries of the new library passphrase differed; the prompt asks again."
+  },
+  "cli.auth.recover.passphrase_prompt": {
+    "message": "New library passphrase",
+    "context": "CLI `capsule auth recover` interactive prompt for the passphrase that will protect the recovered library on this machine. It is new, not the recovery secret and not the account password."
+  },
+  "cli.auth.recover.secret_prompt": {
+    "message": "Recovery secret",
+    "context": "CLI `capsule auth recover` interactive prompt for the recovery secret the user saved when they set up recovery."
+  },
+  "cli.auth.recover.success": {
+    "message": "Recovered. The library at {path} opens as your account on this device ({device}).",
+    "context": "CLI success line after `capsule auth recover`. {path} is the library directory; {device} is the new device's id."
+  },
+  "cli.auth.recover.wrong_secret": {
+    "message": "That recovery secret does not open this account's recovery backup.",
+    "context": "CLI `capsule auth recover`: the typed recovery secret failed to unwrap the account's master-key escrow. Nothing was written."
+  },
   "cli.auth.register.failed": {
     "message": "Could not create the account: {reason}",
     "context": "CLI failure line for `capsule auth register`. {reason} is a localized or English error detail."
@@ -6930,6 +6962,22 @@
   "cli.help.auth.logout.about": {
     "message": "Logout from Capsule",
     "context": "clap --help: the one-line description of `capsule auth logout`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.auth.recover.about": {
+    "message": "Recover the signed-in account onto this machine from its recovery backup",
+    "context": "clap --help: the one-line description of `capsule auth recover` (#544). Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.auth.recover.arg.library": {
+    "message": "Directory for the recovered library; it must not hold a library yet",
+    "context": "clap --help: help for the `--library` option of `capsule auth recover`."
+  },
+  "cli.help.auth.recover.arg.passphrase_stdin": {
+    "message": "Read the new library passphrase from the next line of stdin instead of prompting",
+    "context": "clap --help: help for the `--passphrase-stdin` flag of `capsule auth recover`. With --recovery-secret-stdin as well, the recovery secret is the first line and the passphrase the second."
+  },
+  "cli.help.auth.recover.arg.recovery_secret_stdin": {
+    "message": "Read the recovery secret from the first line of stdin instead of prompting",
+    "context": "clap --help: help for the `--recovery-secret-stdin` flag of `capsule auth recover`."
   },
   "cli.help.auth.register.about": {
     "message": "Create a Capsule account and sign in",

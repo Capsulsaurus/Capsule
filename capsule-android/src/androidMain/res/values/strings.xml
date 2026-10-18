@@ -1705,6 +1705,14 @@
     <string name="cli_auth_logout_not_logged_in">You are not logged in.</string>
     <string name="cli_auth_logout_success">Logged out.</string>
     <string name="cli_auth_not_authenticated">Not authenticated. Run \'capsule auth login\' first.</string>
+    <string name="cli_auth_recover_failed">Recovery failed: %s</string>
+    <string name="cli_auth_recover_in_progress">Recovering your account into %s…</string>
+    <string name="cli_auth_recover_passphrase_confirm">Repeat the library passphrase</string>
+    <string name="cli_auth_recover_passphrase_mismatch">The passphrases do not match.</string>
+    <string name="cli_auth_recover_passphrase_prompt">New library passphrase</string>
+    <string name="cli_auth_recover_secret_prompt">Recovery secret</string>
+    <string name="cli_auth_recover_success">Recovered. The library at %1$s opens as your account on this device (%2$s).</string>
+    <string name="cli_auth_recover_wrong_secret">That recovery secret does not open this account\'s recovery backup.</string>
     <string name="cli_auth_register_failed">Could not create the account: %s</string>
     <string name="cli_auth_register_in_progress">Creating your Capsule account…</string>
     <string name="cli_auth_register_success">Account created. Signed in as %s.</string>
@@ -1725,6 +1733,10 @@
     <string name="cli_help_auth_login_arg_email">Account email (prompted when omitted)</string>
     <string name="cli_help_auth_login_arg_password_stdin">Read the password from stdin instead of prompting, so the command works in scripts and CI where there is no terminal</string>
     <string name="cli_help_auth_logout_about">Logout from Capsule</string>
+    <string name="cli_help_auth_recover_about">Recover the signed-in account onto this machine from its recovery backup</string>
+    <string name="cli_help_auth_recover_arg_library">Directory for the recovered library; it must not hold a library yet</string>
+    <string name="cli_help_auth_recover_arg_passphrase_stdin">Read the new library passphrase from the next line of stdin instead of prompting</string>
+    <string name="cli_help_auth_recover_arg_recovery_secret_stdin">Read the recovery secret from the first line of stdin instead of prompting</string>
     <string name="cli_help_auth_register_about">Create a Capsule account and sign in</string>
     <string name="cli_help_auth_register_arg_email">Account email (prompted when omitted)</string>
     <string name="cli_help_auth_register_arg_password_stdin">Read the password from stdin instead of prompting, so the command works in scripts and CI where there is no terminal</string>

@@ -29951,6 +29951,86 @@
         }
       }
     },
+    "cli.auth.recover.failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recovery failed: %@"
+          }
+        }
+      }
+    },
+    "cli.auth.recover.in_progress": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recovering your account into %@…"
+          }
+        }
+      }
+    },
+    "cli.auth.recover.passphrase_confirm": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Repeat the library passphrase"
+          }
+        }
+      }
+    },
+    "cli.auth.recover.passphrase_mismatch": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The passphrases do not match."
+          }
+        }
+      }
+    },
+    "cli.auth.recover.passphrase_prompt": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New library passphrase"
+          }
+        }
+      }
+    },
+    "cli.auth.recover.secret_prompt": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recovery secret"
+          }
+        }
+      }
+    },
+    "cli.auth.recover.success": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recovered. The library at %1$@ opens as your account on this device (%2$@)."
+          }
+        }
+      }
+    },
+    "cli.auth.recover.wrong_secret": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That recovery secret does not open this account's recovery backup."
+          }
+        }
+      }
+    },
     "cli.auth.register.failed": {
       "localizations": {
         "en": {
@@ -30147,6 +30227,46 @@
           "stringUnit": {
             "state": "translated",
             "value": "Logout from Capsule"
+          }
+        }
+      }
+    },
+    "cli.help.auth.recover.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recover the signed-in account onto this machine from its recovery backup"
+          }
+        }
+      }
+    },
+    "cli.help.auth.recover.arg.library": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Directory for the recovered library; it must not hold a library yet"
+          }
+        }
+      }
+    },
+    "cli.help.auth.recover.arg.passphrase_stdin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read the new library passphrase from the next line of stdin instead of prompting"
+          }
+        }
+      }
+    },
+    "cli.help.auth.recover.arg.recovery_secret_stdin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read the recovery secret from the first line of stdin instead of prompting"
           }
         }
       }

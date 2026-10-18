@@ -10,12 +10,16 @@
 
 use std::collections::HashSet;
 
+use capsule_core::crypto::keys::MasterKey;
+use capsule_core::crypto::primitives::Argon2Params;
 use capsule_core::import::UploadPolicy;
 use capsule_core::lifecycle::{LifecycleError, Workspace};
 use capsule_sdk::albums::{AlbumClient, AlbumTransport};
 use capsule_sdk::auth::{AuthClient, AuthError, LoginOutcome, Session};
+use capsule_sdk::client::AuthenticatedClient;
 use capsule_sdk::net::ConnectionClass;
 use capsule_sdk::push::{self, PushError};
+use capsule_sdk::recovery::{RecoveryClient, RecoveryError};
 use capsule_sdk::staged::{StagedScheduler, TierSessionOutcome, held_from_feed};
 use capsule_sdk::sync::{SyncConsumer, SyncCursor, SyncError, SyncState};
 use capsule_sdk::upload::{UploadClient, UploadTransport};
@@ -23,6 +27,7 @@ use sea_orm::{ConnectionTrait, TransactionTrait};
 use secrecy::SecretString;
 use thiserror::Error;
 use tracing::instrument;
+use uuid::Uuid;
 
 use crate::session::{SessionError, SessionStore};
 use crate::syncstore::{self, SyncStoreError, SyncedAssetView};
@@ -132,6 +137,15 @@ pub enum RemoteError {
     /// The freshly-logged-in session held no exportable tokens (should not happen).
     #[error("login produced no session tokens")]
     EmptySession,
+    /// An escrow or sealed-identity call failed (`capsule auth recover`).
+    #[error(transparent)]
+    Recovery(#[from] RecoveryError),
+    /// The account profile could not be read, so the account's server id is unknown.
+    #[error("the account profile could not be read: {0}")]
+    Profile(String),
+    /// The recovery secret did not open this account's escrow.
+    #[error("the recovery secret does not open this account's escrow")]
+    WrongRecoverySecret,
 }
 
 impl RemoteError {
@@ -145,6 +159,7 @@ impl RemoteError {
                 ..
             })) => code.as_deref(),
             Self::Push(PushError::Album(error)) => error.error_code(),
+            Self::Recovery(error) => error.error_code(),
             _ => None,
         }
     }
@@ -300,6 +315,140 @@ async fn checkpoint(store: &SessionStore, session: &Session) {
         // failure would throw away work that landed.
         Err(error) => tracing::warn!(%error, "the rotated session could not be persisted"),
     }
+}
+
+// ─── Recovery (#544) ─────────────────────────────────────────────────────────
+
+/// `capsule auth recover`: bootstrap a library on this machine **as the signed-in account**,
+/// from what the server holds and the recovery secret alone.
+///
+/// The flow, every leg over the SDK:
+///
+/// 1. resume the stored session and read the account's server id (`GET /v1/auth/profile`) —
+///    the id the new library must carry, because the server refuses a directory or a manifest
+///    that names any other;
+/// 2. fetch the escrow and the sealed identity (`GET /v1/auth/escrow`,
+///    `GET /v1/auth/escrow/identity`) — both before any key derivation, so an account that
+///    never stored its identity fails at once rather than after an Argon2id pass;
+/// 3. unwrap the master key with the recovery secret ([`recovery_secret_candidates`] says how
+///    the typed secret is read);
+/// 4. create the library at `library` with `Workspace::create_from_master`, which opens the
+///    sealed identity under the recovered master key and refuses before writing anything if it
+///    does not open.
+///
+/// The new device is not added to the account's device directory here: the CLI publishes no
+/// directory for any library today, and joining one is a separate step.
+///
+/// # Errors
+///
+/// [`RemoteError::NotAuthenticated`] with no stored session; [`RemoteError::Recovery`] for an
+/// escrow or sealed-identity refusal (`IdentityNotStored` carries its own code);
+/// [`RemoteError::WrongRecoverySecret`] when no reading of the secret opens the escrow;
+/// [`RemoteError::Lifecycle`] when the library cannot be created.
+#[instrument(skip(store, recovery_secret, passphrase, params), fields(library = %library.display()))]
+pub async fn auth_recover(
+    remote: &RemoteConfig,
+    store: &SessionStore,
+    library: &std::path::Path,
+    recovery_secret: &str,
+    passphrase: &[u8],
+    params: Argon2Params,
+) -> Result<Workspace, RemoteError> {
+    let session = resume_session(remote, store).await?;
+    let outcome = recover_with(
+        remote,
+        session.clone(),
+        library,
+        recovery_secret,
+        passphrase,
+        params,
+    )
+    .await;
+    checkpoint(store, &session).await;
+    outcome
+}
+
+/// The recovery itself, over a session somebody else is responsible for persisting.
+async fn recover_with(
+    remote: &RemoteConfig,
+    session: Session,
+    library: &std::path::Path,
+    recovery_secret: &str,
+    passphrase: &[u8],
+    params: Argon2Params,
+) -> Result<Workspace, RemoteError> {
+    // `sync_endpoint` is the bare server origin, the base every generated operation hangs off.
+    let api_root = &remote.sync_endpoint;
+    let user_id = account_id(api_root, session.clone()).await?;
+    let recovery = RecoveryClient::new(session, api_root)?;
+    let escrow = recovery.fetch_escrow().await?;
+    let sealed = recovery.fetch_sealed_identity().await?;
+    tracing::info!(%user_id, "recover: fetched the escrow and the sealed identity");
+
+    let master = recovery_secret_candidates(recovery_secret)
+        .into_iter()
+        .find_map(|candidate| {
+            capsule_core::backup::recover_master_key(escrow.blob(), &candidate).ok()
+        })
+        .ok_or_else(|| {
+            tracing::warn!("recover: the recovery secret did not open the escrow");
+            RemoteError::WrongRecoverySecret
+        })?;
+
+    let workspace = Workspace::create_from_master(
+        library,
+        passphrase,
+        params,
+        MasterKey::from_bytes(master),
+        user_id,
+        &sealed,
+    )?;
+    tracing::info!(
+        %user_id,
+        device = %workspace.device_id(),
+        "recover: the library opens as the recovered account on a new device"
+    );
+    Ok(workspace)
+}
+
+/// The signed-in account's id, as the server assigned it.
+async fn account_id(api_root: &str, session: Session) -> Result<Uuid, RemoteError> {
+    let client = AuthenticatedClient::new(api_root, session)
+        .map_err(|error| RemoteError::Profile(error.to_string()))?;
+    let profile = client
+        .get_profile(capsule_core::crypto::primitives::PROTOCOL_VERSION, None)
+        .await
+        .map_err(|error| RemoteError::Profile(error.to_string()))?
+        .into_inner();
+    Uuid::parse_str(&profile.user_id).map_err(|error| {
+        RemoteError::Profile(format!(
+            "the account id {:?} is not a UUID: {error}",
+            profile.user_id
+        ))
+    })
+}
+
+/// The byte strings a typed recovery secret may stand for, in the order they are tried.
+///
+/// A secret the SDK minted (`MintedSecret`) is 32 random bytes shown to the user as 64
+/// lowercase hex characters, and the escrow is wrapped under the **bytes**, not the hex. A
+/// secret the user chose is wrapped under its UTF-8 text. So a 64-character hex string is tried
+/// decoded first and then as typed, and anything else only as typed. Trying both costs one
+/// extra Argon2id pass in the rare case a chosen passphrase is itself 64 hex characters, and
+/// guessing one reading would lock that user out.
+///
+/// Surrounding whitespace is dropped: it is never part of a secret a person copied.
+#[must_use]
+pub fn recovery_secret_candidates(typed: &str) -> Vec<Vec<u8>> {
+    let typed = typed.trim();
+    let mut candidates = Vec::with_capacity(2);
+    if typed.len() == 64
+        && let Ok(bytes) = hex::decode(typed)
+    {
+        candidates.push(bytes);
+    }
+    candidates.push(typed.as_bytes().to_vec());
+    candidates
 }
 
 /// The outcome of a `capsule sync` run.
@@ -792,6 +941,35 @@ mod tests {
             !after_scheme.contains('/'),
             "sync endpoint must be a bare origin, got {}",
             cfg.sync_endpoint
+        );
+    }
+
+    /// A minted secret is shown as hex and wrapped under its bytes, so the decoded bytes are
+    /// tried first; the text as typed is still tried, because a chosen passphrase may happen
+    /// to be 64 hex characters.
+    #[test]
+    fn a_hex_recovery_secret_is_tried_decoded_and_then_as_typed() {
+        let hex = "00ff".repeat(16);
+        let candidates = recovery_secret_candidates(&format!("  {hex}\n"));
+        assert_eq!(
+            candidates,
+            vec![[0x00, 0xff].repeat(16), hex.as_bytes().to_vec()]
+        );
+    }
+
+    #[test]
+    fn a_chosen_recovery_secret_is_tried_as_typed_only() {
+        assert_eq!(
+            recovery_secret_candidates("seven words the user wrote down"),
+            vec![b"seven words the user wrote down".to_vec()]
+        );
+        // Hex of the wrong length is not a minted secret.
+        assert_eq!(recovery_secret_candidates("00ff"), vec![b"00ff".to_vec()]);
+        // 64 characters that are not hex.
+        let not_hex = "z".repeat(64);
+        assert_eq!(
+            recovery_secret_candidates(&not_hex),
+            vec![not_hex.as_bytes().to_vec()]
         );
     }
 }
