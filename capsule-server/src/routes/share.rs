@@ -97,8 +97,9 @@ pub struct IssueShareRequest {
     ///
     /// Its SHA-256 must equal `metadata_hash`, and it may be at most 8 MiB decoded. The server
     /// stores it before it records the link, so a viewer's first fetch finds it, and keeps it
-    /// for as long as the link is live. Opaque to this server: it is sealed under material
-    /// derived from the URL fragment, which never reaches it.
+    /// for as long as the link is live. It counts against the caller's storage quota, and is
+    /// refused once the account is past its quota grace window. Opaque to this server: it is
+    /// sealed under material derived from the URL fragment, which never reaches it.
     ///
     /// Optional so an older client still registers a link; such a link serves its metadata
     /// only if the blob is already in the store.
@@ -316,6 +317,7 @@ pub async fn issue_share(
                 }
             })?;
         tracing::info!(%owner, size = record.len(), "stored a share's sealed metadata record");
+        charge_metadata(&quota, &owner, &metadata, record.len() as u64).await?;
     }
 
     let outcome = share
@@ -588,6 +590,37 @@ async fn admit_metadata_growth(
     Err(IssueShareRejection::QuotaGraceExpired {
         code: error_codes::QUOTA_GRACE_LOCKED,
     })
+}
+
+/// Attribute a stored metadata record to the link's owner (`S-C6`).
+///
+/// Charged, not only admitted: a link holds its record from the collector for as long as it is
+/// live, which may be forever, so an uncharged record would be storage an account could grow
+/// without limit by issuing links. Charged **after** the store, so a failed store charges
+/// nothing; a record the ledger already attributes — the same bytes under a second link — is
+/// not charged twice. The collector credits it back when it sweeps the blob, as it does every
+/// blob (`release_attribution`).
+///
+/// Never refused for crossing the hard limit. Metadata growth is refused only past the grace
+/// window, which [`admit_metadata_growth`] has already decided; this only records the bytes.
+async fn charge_metadata(
+    quota: &QuotaContext,
+    owner: &UserId,
+    address: &ContentAddress,
+    size: u64,
+) -> Result<(), IssueShareRejection> {
+    let outcome = quota
+        .quotas()
+        .charge(owner, address, size, quota.clock().now(), quota.limits())
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %owner, "the quota ledger could not charge a share's metadata record");
+            IssueShareRejection::Unavailable {
+                code: error_codes::SHARE_UNAVAILABLE,
+            }
+        })?;
+    tracing::debug!(%owner, size, ?outcome, "charged a share's metadata record");
+    Ok(())
 }
 
 impl IssueShareRejection {

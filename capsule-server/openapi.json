@@ -25066,7 +25066,7 @@
               "string",
               "null"
             ],
-            "description": "The sealed metadata record itself, base64.\n\nIts SHA-256 must equal `metadata_hash`, and it may be at most 8 MiB decoded. The server\nstores it before it records the link, so a viewer's first fetch finds it, and keeps it\nfor as long as the link is live. Opaque to this server: it is sealed under material\nderived from the URL fragment, which never reaches it.\n\nOptional so an older client still registers a link; such a link serves its metadata\nonly if the blob is already in the store."
+            "description": "The sealed metadata record itself, base64.\n\nIts SHA-256 must equal `metadata_hash`, and it may be at most 8 MiB decoded. The server\nstores it before it records the link, so a viewer's first fetch finds it, and keeps it\nfor as long as the link is live. It counts against the caller's storage quota, and is\nrefused once the account is past its quota grace window. Opaque to this server: it is\nsealed under material derived from the URL fragment, which never reaches it.\n\nOptional so an older client still registers a link; such a link serves its metadata\nonly if the blob is already in the store."
           }
         },
         "type": "object",

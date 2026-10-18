@@ -723,6 +723,49 @@ async fn the_collector_keeps_a_live_links_record_and_reclaims_a_revoked_ones() {
     let report = collect(&collection, Mode::Apply).await.expect("a pass");
     assert!(report.swept.contains(&metadata), "{report:?}");
     assert!(fixture.blobs.stat(&metadata).await.expect("stat").is_none());
+    // The record was charged to the owner at issue, and the sweep gives the bytes back.
+    let owner = capsule_server::store::UserId::new(support::user().as_str());
+    assert!(
+        report.credited.contains(&(owner, 64)),
+        "the swept record's bytes go back to the account that issued it: {report:?}"
+    );
+}
+
+/// #653: a stored record counts against the owner's quota, once per distinct record.
+#[tokio::test]
+async fn a_metadata_record_is_charged_to_the_owner_once() {
+    use capsule_server::quota::QuotaStore as _;
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let owner = capsule_server::store::UserId::new(support::user().as_str());
+    let before = fixture.quotas.usage(&owner).await.expect("usage").used;
+
+    let (_, metadata, _) = live_link(&fixture, &bearer, 1).await;
+    let after = fixture.quotas.usage(&owner).await.expect("usage").used;
+    assert_eq!(
+        after,
+        before + 64,
+        "the 64-byte record is the owner's storage"
+    );
+
+    // The same record under a second link is the same bytes, and is not charged again.
+    issue(
+        &fixture,
+        &bearer,
+        &json!({
+            "opaque_id": opaque(2),
+            "metadata_hash": metadata.as_str(),
+            "serves": [metadata.as_str()],
+            "metadata_blob": BASE64.encode(payload(b'm', 64)),
+        }),
+        StatusCode::CREATED,
+    )
+    .await;
+    assert_eq!(
+        fixture.quotas.usage(&owner).await.expect("usage").used,
+        after
+    );
 }
 
 #[tokio::test]

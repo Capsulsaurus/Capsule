@@ -89,17 +89,19 @@ The record travels in the issue request itself, as the optional `metadata_blob` 
 
 1. decodes it and refuses it with `400 error.share.malformed` if it is not base64, if it is larger than **8 MiB** decoded (`capsule_server::share::MAX_SHARE_METADATA_BYTES`), or if its SHA-256 is not `metadata_hash`;
 2. admits it as **metadata growth** under [quota](#quota), refusing with `403 error.quota.grace_locked` past the grace window;
-3. stores it under `metadata_hash`, and only then records the link, so no viewer ever resolves a link whose record is not yet servable. A link refused after the store (an opaque id already held) leaves a blob no live link names, which the collector reclaims.
+3. stores it under `metadata_hash` and charges it to the caller's quota;
+4. only then records the link, so no viewer ever resolves a link whose record is not yet servable. A link refused at this step (an opaque id already held) leaves a blob no live link names, which the collector reclaims and credits back.
 
 **The collector keeps what a live link serves.** A record has no asset row, so the asset index counts zero references to it. The collector therefore also asks the share store whether a **live** link (not revoked, and not past its expiry) names the address in its serve set, and treats a yes as a reference. The question covers the whole serve set, not only the record, because a link may serve a blob its issuer prepared for the boundary crossing that no asset names either. Once the last live link naming a blob is revoked or expires, the blob is an ordinary orphan: it is marked on the next pass and swept after the grace window, and a link issued in that window over the same blob cancels the mark.
 
 #### Quota
 
-**Decision: the record is not charged to the owner's ledger, and it is admitted as metadata growth.** This is the rule a lifecycle write's inline metadata blob already follows: it is refused only once the account is past its grace window, never by a projected total, and it adds no attribution.
+**Decision: the record counts against the owner's quota.** It is charged to the account that issues the link, and admitted as **metadata growth**.
 
-- *Why not charge it.* The ledger attributes bytes by content address to the first uploader, and releases them only when the collector sweeps the blob. A record is bounded at 8 MiB and is unique to its link, so it is small next to the ciphertext it points at, which is already charged to whoever uploaded it. Charging the record would give quota a second write on the issue path, and that write would have to be undone whenever the link is refused after it. That buys accuracy on the smallest blobs the server holds.
-- *Why gate it at all.* An account past its grace window is refused every write that grows storage. A share link that stored a record anyway would be a way around that.
-- *What would reverse it.* A deployment that bills per byte, where records add up to real storage. Charging then means calling `QuotaStore::charge` for `metadata_hash` before the store. The collector already credits a swept blob back through `release_attribution`, so the release side is in place.
+- *Why charge it.* A live link keeps its record from the collector, and a link with no expiry is live until it is revoked. An uncharged record would therefore be storage an account could grow without limit by issuing links, up to 8 MiB at a time. The ledger attributes bytes by content address, so the same record under a second link is not charged again. The collector credits a record back when it sweeps the blob (`release_attribution`), as it does for every blob, so revoking the last link that names it is what returns the bytes.
+- *Why metadata growth and not an upload.* An upload is refused when its projected total crosses the hard limit. A record is refused only once the account is past its grace window, which is the rule a lifecycle write's inline metadata blob follows. A record is small next to the ciphertext it points at, and refusing to share an album that is already stored would not free any space. Past the grace window, though, every write that grows storage is refused, and a link is one of them.
+- *The order.* The record is charged **after** it is stored, so a store that fails charges nothing. A charge left behind by a link that is refused afterwards is credited back when the collector sweeps the orphaned blob.
+- *What would reverse it.* A deployment that wants links to be free would drop the charge and keep the grace-window gate. The cost is that the unlimited growth above is no longer bounded by quota.
 
 **Status note.** The server side is in place: the record is uploaded with the link, and kept for as long as the link is live. `capsule_sdk::share::issue_request` sends `metadata_blob`. The `capsule share create|revoke` command and the end-to-end case are in #654.
 
