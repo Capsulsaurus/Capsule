@@ -464,7 +464,17 @@ pub async fn login<C: Ceremony>(
 /// back to a text-mode browser that would take over this very terminal. The child is reaped on a
 /// background thread; whether it then finds a browser is not observable, which is why the URL is
 /// always printed too.
+///
+/// The URL is the server's, so it is opened only when it parses as an absolute `http` or `https`
+/// URL with a host: handed to an opener, a `file:` path, a network-share executable or another
+/// URI handler's scheme would be run on the server's say-so. Anything else is left printed and
+/// not opened.
 pub fn open_in_browser(url: &str) -> bool {
+    let Some(url) = browser_url(url) else {
+        tracing::warn!("the authorization URL is not an http or https URL; it is not opened");
+        return false;
+    };
+    let url = url.as_str();
     let (program, arguments): (&str, Vec<&str>) = if cfg!(target_os = "macos") {
         ("open", vec![url])
     } else if cfg!(windows) {
@@ -500,6 +510,13 @@ pub fn open_in_browser(url: &str) -> bool {
             false
         }
     }
+}
+
+/// `url` parsed, when it is an absolute `http` or `https` URL with a host — the only kind
+/// [`open_in_browser`] hands to the platform's opener.
+fn browser_url(url: &str) -> Option<url::Url> {
+    let parsed = url::Url::parse(url).ok()?;
+    (matches!(parsed.scheme(), "http" | "https") && parsed.host().is_some()).then_some(parsed)
 }
 
 #[cfg(test)]
@@ -598,6 +615,33 @@ mod tests {
     }
 
     #[test]
+    fn only_an_http_or_https_url_is_handed_to_the_opener() {
+        for openable in [
+            "https://idp.test/authorize?state=s&redirect_uri=http%3A%2F%2F127.0.0.1%3A1%2Fcallback",
+            "http://127.0.0.1:5556/dex/auth",
+            "HTTPS://IdP.Test/authorize",
+        ] {
+            assert!(browser_url(openable).is_some(), "{openable}");
+        }
+        for refused in [
+            "file:///etc/passwd",
+            "file://server/share/payload.exe",
+            "\\\\server\\share\\payload.exe",
+            "C:\\Windows\\System32\\calc.exe",
+            "/usr/bin/xterm",
+            "ms-settings:privacy",
+            "javascript:alert(1)",
+            "smb://server/share",
+            "ftp://idp.test/authorize",
+            "-a Calculator",
+            "",
+        ] {
+            assert!(browser_url(refused).is_none(), "{refused}");
+            assert!(!open_in_browser(refused), "{refused}");
+        }
+    }
+
+    #[test]
     fn a_page_cannot_carry_markup() {
         assert_eq!(
             escape_html("<a href=\"x\">&</a>"),
@@ -677,6 +721,208 @@ mod tests {
         assert!(real.starts_with("HTTP/1.1 200"), "{real}");
         assert!(real.contains("Signed in &lt;ok&gt;"), "{real}");
         assert!(real.contains("Cache-Control: no-store"), "{real}");
+    }
+
+    /// A connected pair: the listener's side and the client's.
+    async fn connected_pair() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .expect("a loopback port binds");
+        let address = listener.local_addr().expect("a bound address");
+        let (accepted, client) = tokio::join!(listener.accept(), TcpStream::connect(address));
+        (
+            accepted.expect("the listener accepts").0,
+            client.expect("the client connects"),
+        )
+    }
+
+    /// The authority (`127.0.0.1:{port}`) of a loopback redirect URI.
+    fn authority_of(redirect_uri: &str) -> String {
+        redirect_uri
+            .strip_prefix("http://")
+            .and_then(|rest| rest.split('/').next())
+            .expect("a loopback redirect URI")
+            .to_owned()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_connection_that_sends_nothing_is_dropped_after_the_read_timeout() {
+        let (server, _client) = connected_pair().await;
+        let started = tokio::time::Instant::now();
+        let (_, target) = read_request(server).await;
+        assert_eq!(target, None);
+        assert!(
+            started.elapsed() >= REQUEST_READ_TIMEOUT,
+            "{:?}",
+            started.elapsed()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_silent_connection_is_answered_400_once_the_read_timeout_passes() {
+        let listener = LoopbackListener::bind()
+            .await
+            .expect("a loopback port binds");
+        let authority = authority_of(listener.redirect_uri());
+        let silent = async {
+            let mut stream = TcpStream::connect(&authority).await.expect("connects");
+            let started = tokio::time::Instant::now();
+            let mut response = String::new();
+            stream
+                .read_to_string(&mut response)
+                .await
+                .expect("the response is read");
+            (response, started.elapsed())
+        };
+        let pages = pages();
+        tokio::select! {
+            redirect = listener.receive(STATE, &pages) => panic!("nothing was sent: {redirect:?}"),
+            (response, waited) = silent => {
+                assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+                assert!(waited >= REQUEST_READ_TIMEOUT, "{waited:?}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_request_that_reaches_the_size_cap_is_dropped_without_waiting() {
+        let (server, mut client) = connected_pair().await;
+        // A request line and headers that never end, exactly at the cap.
+        let mut request = b"GET /callback?state=".to_vec();
+        request.resize(MAX_REQUEST_BYTES, b'a');
+        client
+            .write_all(&request)
+            .await
+            .expect("the request is written");
+        let (_, target) = tokio::time::timeout(REQUEST_READ_TIMEOUT / 2, read_request(server))
+            .await
+            .expect("the cap ends the read before the read timeout");
+        assert_eq!(target, None);
+
+        // The same request, one byte short of the cap and then terminated, is read.
+        let (server, mut client) = connected_pair().await;
+        let mut request = format!("GET /callback?state={STATE}&code=").into_bytes();
+        request.resize(MAX_REQUEST_BYTES - b" HTTP/1.1\r\n\r\n".len() - 1, b'a');
+        request.extend_from_slice(b" HTTP/1.1\r\n\r\n");
+        client
+            .write_all(&request)
+            .await
+            .expect("the request is written");
+        let (_, target) = read_request(server).await;
+        assert!(
+            target
+                .as_deref()
+                .is_some_and(|target| target.starts_with("/callback?state=")),
+            "{target:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_oversized_request_is_answered_400_and_the_wait_goes_on() {
+        let listener = LoopbackListener::bind()
+            .await
+            .expect("a loopback port binds");
+        let redirect_uri = listener.redirect_uri().to_owned();
+        let browser = async {
+            let mut stream = TcpStream::connect(authority_of(&redirect_uri))
+                .await
+                .expect("connects");
+            let mut request = format!("GET /callback?state={STATE}&code=").into_bytes();
+            request.resize(MAX_REQUEST_BYTES, b'a');
+            stream
+                .write_all(&request)
+                .await
+                .expect("the request is written");
+            let mut oversized = String::new();
+            stream
+                .read_to_string(&mut oversized)
+                .await
+                .expect("the response is read");
+            let real = get(
+                &redirect_uri,
+                &format!("/callback?state={STATE}&code=after"),
+            )
+            .await;
+            (oversized, real)
+        };
+        let (redirect, (oversized, real)) = tokio::time::timeout(
+            Duration::from_secs(5),
+            futures::future::join(listener.receive(STATE, &pages()), browser),
+        )
+        .await
+        .expect("the oversized request does not hold up the redirect");
+        assert!(oversized.starts_with("HTTP/1.1 400"), "{oversized}");
+        assert!(real.starts_with("HTTP/1.1 200"), "{real}");
+        assert_eq!(
+            redirect,
+            Redirect::Code {
+                state: STATE.to_owned(),
+                code: "after".to_owned(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn past_the_in_flight_cap_a_connection_is_closed_unanswered() {
+        let listener = LoopbackListener::bind()
+            .await
+            .expect("a loopback port binds");
+        let redirect_uri = listener.redirect_uri().to_owned();
+        let authority = authority_of(&redirect_uri);
+        let browser = async {
+            // Fill every in-flight slot with a connection that sends nothing. Each is held open
+            // until the listener has answered it, so the slots stay taken.
+            let mut idle = Vec::with_capacity(MAX_IN_FLIGHT);
+            for _ in 0..MAX_IN_FLIGHT {
+                idle.push(TcpStream::connect(&authority).await.expect("connects"));
+            }
+            // One more: the listener closes it without reading or answering, even though it
+            // carries this ceremony's redirect.
+            let mut extra = TcpStream::connect(&authority).await.expect("connects");
+            let _ = extra
+                .write_all(
+                    format!("GET /callback?state={STATE}&code=refused HTTP/1.1\r\n\r\n").as_bytes(),
+                )
+                .await;
+            let mut answer = Vec::new();
+            let answered = extra.read_to_end(&mut answer).await.map(|_| answer);
+            // Freeing the slots (the listener reads EOF and answers 400) lets a redirect in.
+            for mut connection in idle {
+                connection.shutdown().await.expect("the write half closes");
+                let mut response = String::new();
+                connection
+                    .read_to_string(&mut response)
+                    .await
+                    .expect("the response is read");
+                assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+            }
+            let real = get(
+                &redirect_uri,
+                &format!("/callback?state={STATE}&code=granted"),
+            )
+            .await;
+            (answered, real)
+        };
+        let (redirect, (answered, real)) = tokio::time::timeout(
+            Duration::from_secs(5),
+            futures::future::join(listener.receive(STATE, &pages()), browser),
+        )
+        .await
+        .expect("the listener recovers once the slots free");
+        // Closed unanswered: either a clean EOF with no bytes, or a reset because the request
+        // was never read.
+        match answered {
+            Ok(bytes) => assert!(bytes.is_empty(), "{}", String::from_utf8_lossy(&bytes)),
+            Err(error) => assert_eq!(error.kind(), io::ErrorKind::ConnectionReset, "{error}"),
+        }
+        assert!(real.starts_with("HTTP/1.1 200"), "{real}");
+        assert_eq!(
+            redirect,
+            Redirect::Code {
+                state: STATE.to_owned(),
+                code: "granted".to_owned(),
+            }
+        );
     }
 
     /// A ceremony the test scripts: it records what it was asked and answers as told.

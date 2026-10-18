@@ -91,3 +91,6 @@ capsule-core = { path = "../capsule-core", features = ["media-avif-decode"] }
 # authorization URL, submits dex's password form, and follows the redirect to the CLI's loopback
 # listener. The workspace pin, already in the graph through capsule-sdk.
 reqwest = { workspace = true }
+# `test-util` gives the OIDC loopback listener's tests a paused clock, so its ten-second read
+# timeout is exercised without the test waiting ten seconds.
+tokio = { workspace = true, features = ["test-util"] }
