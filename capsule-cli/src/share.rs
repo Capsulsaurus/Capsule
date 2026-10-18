@@ -45,7 +45,9 @@ use crate::session::SessionStore;
 
 /// One `capsule share create` invocation, independent of the argument parser so the flow is
 /// drivable (and testable) without a `clap` round trip.
-#[derive(Debug, Clone)]
+///
+/// `Debug` is hand-written so the link passphrase never reaches a log line.
+#[derive(Clone)]
 pub struct CreateRequest {
     /// What the link grants: one album or one asset.
     pub scope: ShareScope,
@@ -53,6 +55,19 @@ pub struct CreateRequest {
     pub expires_at: Option<String>,
     /// The link passphrase for a `--protect` link.
     pub passphrase: Option<String>,
+}
+
+impl std::fmt::Debug for CreateRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CreateRequest")
+            .field("scope", &self.scope)
+            .field("expires_at", &self.expires_at)
+            .field(
+                "passphrase",
+                &self.passphrase.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
 }
 
 /// What a successful `capsule share create` registered.
@@ -465,6 +480,18 @@ mod tests {
         }
         assert!(describe_error(&bundle, &cases[0]).contains("tomorrow"));
         assert!(describe_error(&bundle, &cases[4]).contains('2'));
+    }
+
+    #[test]
+    fn a_request_never_prints_its_link_passphrase() {
+        let request = CreateRequest {
+            scope: ShareScope::Asset(uuid::Uuid::nil()),
+            expires_at: None,
+            passphrase: Some("hunter2-correct-horse".to_owned()),
+        };
+        let printed = format!("{request:?}");
+        assert!(!printed.contains("hunter2"), "{printed}");
+        assert!(printed.contains("<redacted>"), "{printed}");
     }
 
     #[test]
