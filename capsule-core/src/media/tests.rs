@@ -501,10 +501,39 @@ fn is_decodable_matches_the_supported_table() {
         assert!(format.is_decodable(), "{format} is in the supported table");
         assert!(!format.is_raw(), "no RAW family decodes in this build");
     }
+    // AVIF decodes exactly where the opt-in libdav1d feature is linked (issue #588), and the
+    // pure-Rust default — what the mobile FFI and the cross builds compile — never claims it.
+    assert_eq!(
+        StillFormat::Avif.is_decodable(),
+        cfg!(feature = "media-avif-decode"),
+        "AVIF is decodable iff `media-avif-decode` links libdav1d"
+    );
+    assert_eq!(
+        SUPPORTED_STILL_FORMATS.to_vec(),
+        if cfg!(feature = "media-avif-decode") {
+            vec![
+                StillFormat::Jpeg,
+                StillFormat::Png,
+                StillFormat::Jxl,
+                StillFormat::Tiff,
+                StillFormat::Gif,
+                StillFormat::Avif,
+            ]
+        } else {
+            vec![
+                StillFormat::Jpeg,
+                StillFormat::Png,
+                StillFormat::Jxl,
+                StillFormat::Tiff,
+                StillFormat::Gif,
+            ]
+        },
+        "the supported table is pinned per build"
+    );
+    // HEIC never decodes, under any feature: libheif and libde265 are LGPL-3.0 (issue #588).
     for format in [
         StillFormat::Ppm,
         StillFormat::WebP,
-        StillFormat::Avif,
         StillFormat::Heic,
         StillFormat::Arw,
         StillFormat::Cr2,
@@ -611,6 +640,9 @@ fn png_alpha_is_flattened_to_opaque() {
 fn a_format_with_no_codec_refuses_with_a_typed_error() {
     let cases: &[(Vec<u8>, &str, StillFormat)] = &[
         (isobmff(b"heic"), "heic", StillFormat::Heic),
+        // With `media-avif-decode` an AVIF passes the gate and is a decode case instead; see
+        // `a_truncated_avif_is_a_decode_error_rather_than_a_deferral`.
+        #[cfg(not(feature = "media-avif-decode"))]
         (isobmff(b"avif"), "avif", StillFormat::Avif),
         (isobmff(b"crx "), "cr3", StillFormat::Cr3),
         (
@@ -638,6 +670,107 @@ fn a_format_with_no_codec_refuses_with_a_typed_error() {
             }),
         );
     }
+}
+
+// ── AVIF decode (`media-avif-decode`, issue #588) ────────────────────────────
+
+/// With `media-avif-decode` an AVIF is a supported format, so an `ftyp avif` box with no image
+/// behind it passes the gate and fails the header probe: a **decode failure** worth reporting,
+/// no longer a no-codec deferral — and never a panic out of the C decoder.
+#[cfg(feature = "media-avif-decode")]
+#[test]
+fn a_truncated_avif_is_a_decode_error_rather_than_a_deferral() {
+    let header = isobmff(b"avif");
+    for result in [
+        RawshiftDecoder.probe(&header, "avif").map(|_| ()),
+        decode_guarded(&RawshiftDecoder, &header, "avif").map(|_| ()),
+    ] {
+        match result {
+            Err(MediaError::Decode { format, .. }) => assert_eq!(format, StillFormat::Avif),
+            other => panic!("a header-only AVIF must be a decode failure, got {other:?}"),
+        }
+    }
+}
+
+/// Encode a frame as AVIF through ravif, optionally embedding `metadata`'s EXIF.
+///
+/// The decode tests need an AVIF source and the suite commits no binary fixtures, so the
+/// encoder `media-linked-codecs` links supplies one. It is a different codec from the one under
+/// test — rav1e encodes, libdav1d decodes — so agreement between them is evidence about the
+/// decoder rather than about a matched pair. Quality 90 for the same reason as [`jpeg_bytes`].
+#[cfg(all(feature = "media-avif-decode", feature = "media-linked-codecs"))]
+fn avif_bytes(frame: &RgbaImage, metadata: Option<&ImageMetadata>) -> Vec<u8> {
+    let embed = if metadata.is_some() {
+        MetadataEmbedOptions {
+            embed_exif: true,
+            embed_icc: false,
+            embed_xmp: false,
+        }
+    } else {
+        MetadataEmbedOptions::none()
+    };
+    let options = EncodeOptions::AvifRavif(rawshift_image::formats::export::RavifEncodeConfig {
+        common: common(embed),
+        quality: 90,
+        speed: 6,
+    });
+    let empty = ImageMetadata::default();
+    encode_rgb_image_to_vec(&to_rgb_u16(frame), metadata.unwrap_or(&empty), &options)
+        .expect("the fixture AVIF encodes")
+}
+
+/// An AVIF decodes to upright, opaque RGBA8 of the dimensions it was built with, and its
+/// pixels are the ones encoded — each flat quadrant within the lossy codec's margin.
+#[cfg(all(feature = "media-avif-decode", feature = "media-linked-codecs"))]
+#[test]
+fn an_avif_decodes_to_the_pixels_it_was_built_from() {
+    let frame = quadrants(64, 48);
+    let avif = avif_bytes(&frame, None);
+
+    let probed = RawshiftDecoder
+        .probe(&avif, "avif")
+        .expect("the AVIF probes");
+    assert_eq!(probed.format, StillFormat::Avif);
+    assert_eq!(probed.stored_dimensions, (64, 48));
+
+    let decoded = RawshiftDecoder
+        .decode(&avif, "avif")
+        .expect("the AVIF decodes");
+    assert_eq!(decoded.format, StillFormat::Avif);
+    assert_eq!((decoded.width(), decoded.height()), (64, 48));
+    assert_eq!(decoded.image.rgba.len(), 64 * 48 * 4);
+    assert!(
+        decoded.image.rgba.chunks_exact(4).all(|px| px[3] == 255),
+        "every decoded frame is opaque"
+    );
+    assert_eq!(decoded.orientation_applied, 1, "no tag, no transform");
+
+    let (tl, tr, bl, br) = quadrant_means(&decoded.image);
+    for (got, want) in [(tl, 0), (tr, 85), (bl, 170), (br, 255)] {
+        assert!(
+            got.abs_diff(want) <= 8,
+            "quadrant mean {got} is within 8 levels of {want}"
+        );
+    }
+}
+
+/// An AVIF's EXIF orientation is honoured like a JPEG's: a quarter-turn transposes the decoded
+/// frame and is reported as consumed.
+#[cfg(all(feature = "media-avif-decode", feature = "media-linked-codecs"))]
+#[test]
+fn an_avif_exif_orientation_is_applied() {
+    let avif = avif_bytes(&quadrants(64, 48), Some(&oriented(6)));
+    let probed = RawshiftDecoder
+        .probe(&avif, "avif")
+        .expect("the AVIF probes");
+    assert_eq!(probed.orientation, Some(6), "the EXIF tag is read");
+    assert_eq!(probed.upright_dimensions(), (48, 64));
+
+    let decoded = RawshiftDecoder
+        .decode(&avif, "avif")
+        .expect("the AVIF decodes");
+    assert_eq!((decoded.width(), decoded.height()), (48, 64));
+    assert_eq!(decoded.orientation_applied, 6);
 }
 
 /// Bytes that are no still at all are a distinct outcome from a still with no codec: there is
