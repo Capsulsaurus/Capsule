@@ -142,6 +142,22 @@ pub enum StoreError {
         detail: String,
     },
 
+    /// The backend refused the operation because a uniqueness constraint already holds the key
+    /// it would have written (Postgres SQLSTATE `23505`). Unlike [`StoreError::Rejected`], the
+    /// outcome is known: the statement wrote nothing, and the transaction it ran in is aborted.
+    ///
+    /// An adapter whose port has a conflict outcome decides that outcome by the index itself
+    /// (`ON CONFLICT`) wherever it can, so this variant reaching a caller means a key the
+    /// adapter did not expect to collide did — a minted id already held, or a race the port
+    /// answers some other way. It is kept apart from `Rejected` so the log line says which.
+    #[error("the {store} store already holds that key: {detail}")]
+    Conflict {
+        /// Which port failed.
+        store: &'static str,
+        /// The backend's own description of the violated constraint.
+        detail: String,
+    },
+
     /// A stored value could not be read back as the record type that owns its key. This is
     /// the failure the generic blob store made *routine* — a `get_temp_data::<A>` against a
     /// key written as `B` — and is retained only because a rolling deploy can genuinely leave
