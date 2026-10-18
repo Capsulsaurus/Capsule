@@ -1,21 +1,22 @@
 package com.justin13888.capsule.hardware
 
+import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
-import uniffi.capsule_core.DeviceTier
-import uniffi.capsule_core.FfiClientBuild
-import uniffi.capsule_core.FfiVerifyOutcome
-import uniffi.capsule_core.FfiWorkspace
-import uniffi.capsule_core.HardwareSignerException
+import uniffi.capsule_sdk.FfiClientBuild
+import uniffi.capsule_sdk.FfiDeviceTier
+import uniffi.capsule_sdk.FfiHardwareSignerException
+import uniffi.capsule_sdk.FfiVerifyOutcome
+import uniffi.capsule_sdk.FfiWorkspace
 import java.nio.file.Files
 
 /**
  * The Kotlin analogue of the Swift `SmokeTests.softwareP256ComposesEndToEnd` — proves the software
- * **P-256** element composes through `P256HybridSigningKey` into a real workspace over uniffi
- * (slice S-F2). The [StrongBoxSigner] path is on-device only (androidInstrumentedTest); this
+ * **P-256** element composes through `P256HybridSigningKey` into a real workspace over the
+ * `capsule_sdk` uniffi namespace (slice S-F2). The [StrongBoxSigner] path is on-device only (androidInstrumentedTest); this
  * always-runnable JVM path exercises the same wire contract (65-byte uncompressed SEC1 public key,
  * DER ECDSA signature) that StrongBox emits, so a green run proves the whole P-256 FFI composition
  * independent of hardware. Run `./stage-bindings.sh` first.
@@ -28,11 +29,7 @@ class SoftwareP256SignerSmokeTest {
 
     private fun freshRoot(): String = Files.createTempDirectory("capsule-kotlin-p256-smoke").toString()
 
-    private fun freshImage(): String {
-        val img = Files.createTempFile("capsule-kotlin-p256-img", ".jpg")
-        Files.write(img, byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte()) + "p256 smoke bytes".toByteArray())
-        return img.toString()
-    }
+    private val image = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte()) + "p256 smoke bytes".toByteArray()
 
     @Test
     fun softwareP256ContractHoldsAndIsHonest() {
@@ -46,7 +43,7 @@ class SoftwareP256SignerSmokeTest {
         assertEquals(0x30.toByte(), sig[0], "DER SEQUENCE tag — not raw r‖s")
 
         // Honest: a software key reports itself exportable, unlike a real secure element.
-        assertThrows(HardwareSignerException.Exportable::class.java) {
+        assertThrows(FfiHardwareSignerException.Exportable::class.java) {
             signer.assertNonExportable("device-dsk")
         }
     }
@@ -58,16 +55,17 @@ class SoftwareP256SignerSmokeTest {
             FfiWorkspace.createWithP256HardwareSigner(
                 freshRoot(),
                 "correct horse".toByteArray(),
-                DeviceTier.NORMAL,
+                FfiDeviceTier.NORMAL,
                 signer,
                 "device-dsk",
                 ByteArray(32) { 9 },
                 client,
             )
         // The manifest, signed by the P-256 hybrid, verifies through the verify_asset chokepoint.
-        // Import into a session album (the default album has no session key material minted).
-        val asset = ws.importAsset(ws.createAlbum("P-256 Trip"), freshImage())
-        assertTrue(ws.verify(asset) is FfiVerifyOutcome.Accept)
+        // Seal into a session album (the default album has no session key material minted).
+        val asset = ws.sealAsset(ws.createAlbum("P-256 Trip"), "photo.jpg", image)
+        assertTrue(ws.verifyAsset(asset) is FfiVerifyOutcome.Accept)
+        assertArrayEquals(image, ws.readPlaintext(asset))
         assertFalse(ws.userId().isEmpty())
     }
 }

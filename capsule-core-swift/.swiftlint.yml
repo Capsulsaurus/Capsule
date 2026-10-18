@@ -8,7 +8,7 @@ included:
 excluded:
   - .build
   # generated uniffi bindings, staged by ./stage-bindings.sh (gitignored)
-  - Sources/CapsuleHardware/capsule_core.swift
+  - Sources/CapsuleHardware/capsule_sdk.swift
 
 analyzer_rules:
   - unused_declaration
