@@ -790,7 +790,9 @@ impl ChallengeStore for InMemoryChallenges {
 /// minute before anything is refused, which is far beyond a self-hosted deployment's sign-in
 /// rate and well inside the memory a record of four short strings costs. The ceiling exists so
 /// that a caller who begins ceremonies without ever finishing them grows this map to a bound and
-/// not to the heap; the Valkey adapter (#460) gets the same property from the TTL alone.
+/// not to the heap. [`ValkeyOidcAuthorizations`](super::valkey::ValkeyOidcAuthorizations) has no
+/// ceiling: its records carry a `PEXPIRE`, and the authorize route's per-host budget bounds the
+/// rate they are written at — see that adapter's docs.
 pub const PENDING_AUTHORIZATION_CEILING: usize = 10_000;
 
 /// In-memory [`OidcAuthorizationStore`] (slice `S-N1`).
@@ -1261,8 +1263,8 @@ impl super::conformance::Harness for InMemoryStores {
         &self.channels
     }
 
-    fn oidc_authorizations(&self) -> Option<&dyn OidcAuthorizationStore> {
-        Some(&self.oidc_authorizations)
+    fn oidc_authorizations(&self) -> &dyn OidcAuthorizationStore {
+        &self.oidc_authorizations
     }
 }
 
@@ -1325,6 +1327,7 @@ mod tests {
         closing_a_channel_drops_both_mailboxes,
         an_oidc_authorization_is_single_use,
         an_oidc_authorization_expires_with_its_store,
+        an_oidc_authorization_is_live_until_its_deadline,
     }
 
     /// The same, for the cases that take a [`conformance::CohortHarness`].

@@ -384,7 +384,7 @@ lives.
 | S-I6 | Android ships raw ICU to users; the guard never fires | i18n | — | M | ACTIVE | done | `aapt2` unverified — owed-CI |
 | S-I7 | The Rust runtime formatter cannot do ICU plurals | i18n | — | M | ACTIVE | done | plurals evaluated; `select`/`offset:` still refused |
 | S-I8 | clap `--help` text is unreachable from the catalogs | i18n | — | S | ACTIVE | done | help is localized via `cli.help.*`; `ValueEnum` variant help stays English |
-| S-N1 | OIDC relying party (server) | auth | — | L | RETIRED | done\* | in-process mock IdP stands in for the testcontainer one; durable adapters owed (#460) |
+| S-N1 | OIDC relying party (server) | auth | — | L | RETIRED | done\* | in-process mock IdP stands in for the testcontainer one; durable adapters landed (#460) |
 | S-N2 | SDK/CLI OIDC login flows | auth | S-N1 | M | MIXED | part | SDK half landed with `S-N1`; CLI loopback listener + device grant are #461 |
 | S-N3 | `device_id` on session listing + ceremony cohorts | auth | — | S | RETIRED | done | the wire half lands with `S-C13`; the TOTP ceremony with `S-C55`; passkeys retire on `S-C56` |
 | S-P1 | `capsule_sdk` FFI workspace verbs | iOS path | S-A10 | L | MIXED | done | feed `manifest_cbor` shape → `S-C30` |
@@ -2553,6 +2553,9 @@ working on a surface written after it.
 - **The remaining durable ports landed (#446)**, and the `Durable` arm now builds a whole server
   on Postgres and Valkey; it refuses only a durable boot that configures OIDC (#460). `gc`,
   `purge` and `scrub` run on the same durable stores without `--memory`.
+- **The OIDC stores landed (#460)**: the pending ceremonies on Valkey, the federated accounts on
+  the Postgres account table with a null credential. The durable arm no longer refuses
+  `OIDC_ISSUER`.
 - **Was owed:** the remaining durable ports (#446). Every port has an in-memory adapter and one
   shared conformance suite, so "the double behaves like the real one" is an assertion rather than
   an assumption. Counters were deliberately excluded and became `S-C32`.
@@ -5360,9 +5363,10 @@ lands on Kynos rather than on Salvo.
   `auth.oidc` or `null`. **Two deviations, recorded:** the testcontainer IdP is an
   in-process mock provider on loopback, because `test-rust` runs offline (dex in
   `capsule-server/compose.yaml`, `--profile oidc`, is the manual run); and the Valkey
-  ceremony-store and Postgres federated-account adapters are owed (#460), so
-  `OIDC_ISSUER` under the durable backends is refused by name and the development
-  profile's federated accounts hold their own rows. Hand-written over `jsonwebtoken`
+  ceremony-store and Postgres federated-account adapters were owed (#460), so
+  `OIDC_ISSUER` under the durable backends was refused by name and the development
+  profile's federated accounts held their own rows — the second deviation since closed
+  by #460, which landed both adapters and folded those rows into the account table. Hand-written over `jsonwebtoken`
   rather than `openidconnect` — see the OIDC row in
   [Dependencies](capsule-docs/src/content/docs/design/dependencies.md).
 

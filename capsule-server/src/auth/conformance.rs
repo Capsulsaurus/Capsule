@@ -13,6 +13,11 @@
 //!
 //! So the harness hands out all four, and a case reaches for the ones its property spans.
 //!
+//! [`FederatedAccounts`] is the fifth, since #460 put federated accounts on the same row: the
+//! cases that matter about it — the cross-directory `409`, the profile row, and a null
+//! credential that never authenticates — are again properties of one port observed through
+//! another.
+//!
 //! # What this suite cannot assert, stated rather than faked
 //!
 //! **The timing-equalized miss.** [`AccountDirectory`]'s contract is that no caller can tell an
@@ -46,6 +51,7 @@ use std::task::Poll;
 use jiff::{SignedDuration, Timestamp};
 
 use super::directory::{AccountDirectory, Authentication, DirectoryError, DirectoryFuture};
+use super::oidc::{FederatedAccounts, FederatedLink, VerifiedIdentity};
 use super::profile::{
     AccountProfiles, PasswordChange, PasswordChanged, ProfileRecord, ProfileUpdate,
 };
@@ -67,6 +73,9 @@ pub trait Harness: Send + Sync {
     fn profiles(&self) -> &dyn AccountProfiles;
     /// Where a password is replaced (`S-C54`).
     fn passwords(&self) -> &dyn PasswordChange;
+    /// Which account a verified OpenID Connect identity is (`S-N1`, #460) — over the same rows
+    /// as the other four, which is what the federated cases below assert.
+    fn federated(&self) -> &dyn FederatedAccounts;
 
     /// How many consecutive failures this harness locks an account out after.
     fn lockout_attempts(&self) -> u32;
@@ -736,6 +745,311 @@ pub async fn a_profile_for_an_absent_account_is_absent_and_not_an_error(h: &dyn 
     );
 }
 
+// ===========================================================================================
+// Federated accounts (#460)
+// ===========================================================================================
+
+/// `case`'s own identity provider, so cases sharing a harness never share a link.
+fn issuer(case: &str) -> String {
+    format!("https://{case}.idp.example.test")
+}
+
+/// An identity at `case`'s provider, with a verified address if one is given.
+fn identity(case: &str, subject: &str, email: Option<&str>) -> VerifiedIdentity {
+    VerifiedIdentity {
+        issuer: issuer(case),
+        subject: format!("{case}-{subject}"),
+        email: email.map(str::to_owned),
+        email_verified: true,
+    }
+}
+
+/// The same identity, its address asserted but **not** verified.
+fn unverified(mut identity: VerifiedIdentity) -> VerifiedIdentity {
+    identity.email_verified = false;
+    identity
+}
+
+/// Resolve `identity` under the freshly minted `minted`.
+async fn resolve(h: &dyn Harness, identity: &VerifiedIdentity, minted: &UserId) -> FederatedLink {
+    ok(
+        h.federated()
+            .resolve_or_create(identity, minted, Timestamp::UNIX_EPOCH)
+            .await,
+        "resolve a federated identity",
+    )
+}
+
+/// The first sign-in creates the account; every later one is the same account.
+///
+/// A later sign-in's freshly minted id is discarded: the link, not the caller, names the account.
+pub async fn a_first_federated_sign_in_creates_and_a_later_one_links(h: &dyn Harness) {
+    let case = "fed-link";
+    let person = identity(case, "sub", Some(&email(case)));
+    assert_eq!(
+        resolve(h, &person, &user(case, 0)).await,
+        FederatedLink::Created(user(case, 0))
+    );
+    assert_eq!(
+        resolve(h, &person, &user(case, 1)).await,
+        FederatedLink::Linked(user(case, 0)),
+        "the existing link wins over a new minted id"
+    );
+}
+
+/// `(issuer, subject)` is the key: the same subject at another provider is another person.
+pub async fn the_same_subject_at_another_issuer_is_another_account(h: &dyn Harness) {
+    let case = "fed-issuer";
+    let here = identity(case, "sub", None);
+    let mut elsewhere = here.clone();
+    elsewhere.issuer = issuer("fed-issuer-other");
+    assert_eq!(
+        resolve(h, &here, &user(case, 0)).await,
+        FederatedLink::Created(user(case, 0))
+    );
+    assert_eq!(
+        resolve(h, &elsewhere, &user(case, 1)).await,
+        FederatedLink::Created(user(case, 1))
+    );
+}
+
+/// A verified address a **password** account registered with is refused, and nothing is written.
+///
+/// The cross-directory `409` (decision 11 of #459): the address is a claim the provider controls,
+/// so honouring it as a link would hand the password account to whoever set it there. The
+/// password account still signs in, and a retry is refused again rather than half-linked.
+pub async fn a_verified_address_a_password_account_holds_is_taken(h: &dyn Harness) {
+    let (address, owner) = seed(h, "fed-taken").await;
+    let claimant = identity("fed-taken", "sub", Some(&address));
+    assert_eq!(
+        resolve(h, &claimant, &user("fed-taken", 1)).await,
+        FederatedLink::AddressTaken
+    );
+    assert_eq!(
+        resolve(h, &claimant, &user("fed-taken", 2)).await,
+        FederatedLink::AddressTaken,
+        "the refused identity was not half-linked"
+    );
+    assert!(
+        ok(
+            h.profiles().read(&user("fed-taken", 1)).await,
+            "read the refused id's profile",
+        )
+        .is_none(),
+        "the refused identity created no account"
+    );
+    assert_eq!(
+        ok(
+            h.directory().authenticate(&address, PASSWORD).await,
+            "authenticate the password account",
+        ),
+        Authentication::Granted(owner),
+    );
+}
+
+/// A verified address an earlier **federated** account recorded is refused to a second identity.
+pub async fn a_verified_address_a_federated_account_holds_is_taken(h: &dyn Harness) {
+    let case = "fed-taken-fed";
+    let address = email(case);
+    assert_eq!(
+        resolve(h, &identity(case, "first", Some(&address)), &user(case, 0)).await,
+        FederatedLink::Created(user(case, 0))
+    );
+    assert_eq!(
+        resolve(h, &identity(case, "second", Some(&address)), &user(case, 1)).await,
+        FederatedLink::AddressTaken
+    );
+}
+
+/// Registering with an address a federated account holds is refused, as any taken address is.
+pub async fn registering_over_a_federated_address_is_refused(h: &dyn Harness) {
+    let case = "fed-register";
+    let address = email(case);
+    resolve(h, &identity(case, "sub", Some(&address)), &user(case, 0)).await;
+    assert_eq!(
+        ok(
+            h.registry()
+                .create(&address, PASSWORD, &user(case, 1), Timestamp::UNIX_EPOCH)
+                .await,
+            "register over a federated address",
+        ),
+        Registration::AlreadyExists,
+    );
+}
+
+/// An unverified address neither blocks anybody nor is blocked by anybody.
+///
+/// Reserving it would let a person register somebody else's address, unverified, at the
+/// provider and so lock its owner out of signing in here — a targeted denial of service costing
+/// one sign-up. Comparing it would refuse the squatter their own account for no reason.
+pub async fn an_unverified_address_neither_blocks_nor_reserves(h: &dyn Harness) {
+    let case = "fed-unverified";
+    let address = email(case);
+    let squatter = unverified(identity(case, "squatter", Some(&address)));
+    assert_eq!(
+        resolve(h, &squatter, &user(case, 0)).await,
+        FederatedLink::Created(user(case, 0)),
+        "the squatter gets an account of their own"
+    );
+    assert_eq!(
+        ok(
+            h.registry()
+                .create(&address, PASSWORD, &user(case, 1), Timestamp::UNIX_EPOCH)
+                .await,
+            "the owner registers a password account",
+        ),
+        Registration::Created(user(case, 1)),
+        "the unverified claim reserved nothing"
+    );
+    let another = unverified(identity(case, "another", Some(&address)));
+    assert_eq!(
+        resolve(h, &another, &user(case, 2)).await,
+        FederatedLink::Created(user(case, 2)),
+        "an unverified claim is never compared, even against a registered address"
+    );
+}
+
+/// Two identities with no address do not collide on the absent one.
+pub async fn addressless_identities_are_accounts_too(h: &dyn Harness) {
+    let case = "fed-addressless";
+    assert_eq!(
+        resolve(h, &identity(case, "one", None), &user(case, 0)).await,
+        FederatedLink::Created(user(case, 0))
+    );
+    assert_eq!(
+        resolve(h, &identity(case, "two", None), &user(case, 1)).await,
+        FederatedLink::Created(user(case, 1))
+    );
+}
+
+/// A federated account's credential is null, and a null credential never authenticates.
+///
+/// "No password for OIDC accounts" made structural (#460): by its verified address or by its id,
+/// every presentation is `Refused` — the timing-equalized miss an unknown account gets — and
+/// never `Granted`. It is never charged either, so past the lockout ceiling it is still `Refused`
+/// rather than `Locked`, which would be a refusal only a real credential can earn. A password
+/// change reports no such account, and leaves nothing behind that a later presentation could
+/// match.
+pub async fn a_null_credential_never_authenticates(h: &dyn Harness) {
+    let case = "fed-null-credential";
+    let address = email(case);
+    let id = user(case, 0);
+    assert_eq!(
+        resolve(h, &identity(case, "sub", Some(&address)), &id).await,
+        FederatedLink::Created(id.clone())
+    );
+    for presented in [PASSWORD, "", "null", "*"] {
+        assert_eq!(
+            ok(
+                h.directory().authenticate(&address, presented).await,
+                "authenticate a federated account by address",
+            ),
+            Authentication::Refused,
+            "{presented:?} by address"
+        );
+        assert_eq!(
+            ok(
+                h.directory().authenticate_user(&id, presented).await,
+                "authenticate a federated account by id",
+            ),
+            Authentication::Refused,
+            "{presented:?} by id"
+        );
+    }
+    for _ in 0..=h.lockout_attempts() {
+        let _ = h.directory().authenticate(&address, "a guess").await;
+    }
+    assert_eq!(
+        ok(
+            h.directory().authenticate(&address, PASSWORD).await,
+            "authenticate past the ceiling",
+        ),
+        Authentication::Refused,
+        "a federated account is never charged, so never locked"
+    );
+    assert_eq!(
+        ok(
+            h.passwords()
+                .set_password(&id, PASSWORD, Timestamp::UNIX_EPOCH)
+                .await,
+            "set a federated account's password",
+        ),
+        PasswordChanged::NoSuchAccount,
+    );
+    assert_eq!(
+        ok(
+            h.directory().authenticate_user(&id, PASSWORD).await,
+            "authenticate after the refused change",
+        ),
+        Authentication::Refused,
+        "the refused change wrote no credential"
+    );
+}
+
+/// A federated account with a verified address has a profile row, and takes an edit.
+///
+/// One account table: the profile is the same row the link is on. An account whose provider
+/// asserted no verified address has none — [`ProfileRecord::email`] is not optional — and takes
+/// no edit, so `read` and `update` agree that it is absent.
+pub async fn a_federated_account_has_a_profile_when_it_has_an_address(h: &dyn Harness) {
+    let case = "fed-profile";
+    let address = email(case);
+    let id = user(case, 0);
+    resolve(h, &identity(case, "sub", Some(&address)), &id).await;
+    let profile = present(
+        ok(h.profiles().read(&id).await, "read a federated profile"),
+        "a federated account's profile",
+    );
+    assert_eq!(profile.user_id, id);
+    assert_eq!(profile.email, address);
+    assert_eq!(profile.display_name, None);
+    assert_eq!(profile.created_at, Timestamp::UNIX_EPOCH);
+    let named = present(
+        ok(
+            h.profiles()
+                .update(
+                    &id,
+                    &ProfileUpdate {
+                        display_name: Some(Some("Ada Lovelace".to_owned())),
+                    },
+                )
+                .await,
+            "name a federated account",
+        ),
+        "the updated profile",
+    );
+    assert_eq!(named.display_name.as_deref(), Some("Ada Lovelace"));
+
+    let addressless = user(case, 1);
+    resolve(
+        h,
+        &unverified(identity(case, "addressless", Some(&email("fed-profile-u")))),
+        &addressless,
+    )
+    .await;
+    assert!(
+        ok(
+            h.profiles().read(&addressless).await,
+            "read an addressless profile"
+        )
+        .is_none()
+    );
+    assert!(
+        ok(
+            h.profiles()
+                .update(
+                    &addressless,
+                    &ProfileUpdate {
+                        display_name: Some(Some("Nobody".to_owned())),
+                    },
+                )
+                .await,
+            "name an addressless account",
+        )
+        .is_none()
+    );
+}
+
 /// Unwrap the harness's own seam, which speaks `StoreError` rather than `DirectoryError`.
 #[track_caller]
 fn ok_store(result: Result<(), crate::store::StoreError>) {
@@ -771,6 +1085,16 @@ pub async fn run_all(h: &dyn Harness) {
     a_profile_reads_back_what_registration_wrote_and_takes_an_edit(h).await;
     an_absent_field_and_a_cleared_one_are_different_updates(h).await;
     a_profile_for_an_absent_account_is_absent_and_not_an_error(h).await;
+
+    a_first_federated_sign_in_creates_and_a_later_one_links(h).await;
+    the_same_subject_at_another_issuer_is_another_account(h).await;
+    a_verified_address_a_password_account_holds_is_taken(h).await;
+    a_verified_address_a_federated_account_holds_is_taken(h).await;
+    registering_over_a_federated_address_is_refused(h).await;
+    an_unverified_address_neither_blocks_nor_reserves(h).await;
+    addressless_identities_are_accounts_too(h).await;
+    a_null_credential_never_authenticates(h).await;
+    a_federated_account_has_a_profile_when_it_has_an_address(h).await;
 }
 
 #[cfg(test)]
@@ -783,6 +1107,7 @@ mod tests {
     use crate::auth::accounts_memory::{InMemoryAccounts, MAX_FAILED_ATTEMPTS};
     use crate::auth::credential::Credentials;
     use crate::auth::directory::AccountDirectory;
+    use crate::auth::oidc::FederatedAccounts;
     use crate::auth::profile::{AccountProfiles, PasswordChange};
     use crate::auth::registry::AccountRegistry;
     use crate::store::StoreFuture;
@@ -812,6 +1137,10 @@ mod tests {
         }
 
         fn passwords(&self) -> &dyn PasswordChange {
+            &self.accounts
+        }
+
+        fn federated(&self) -> &dyn FederatedAccounts {
             &self.accounts
         }
 

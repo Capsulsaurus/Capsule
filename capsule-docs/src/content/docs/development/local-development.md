@@ -124,11 +124,11 @@ a task that leaks them. Bring them down with
 opened first and its schema checked against the migrations this binary was built for — a
 database that is behind refuses, naming `capsule-server-migration up`. Then `VALKEY_URL` is
 connected to and `PING`ed, and a server that cannot be reached is a refusal naming the failure
-(never the URL). Every port is then on one of the two. Without `VALKEY_URL` and without
-`--memory` it exits 2 naming the variable — the refusal `capsule-server/src/store/mod.rs` has
-documented since `S-C29`. With `OIDC_ISSUER` set it refuses too, because the OIDC stores have no
-durable adapter yet (#460). None of these ever silently falls back to the in-memory adapters,
-which is the whole point: a deployment that forgot a variable must fail closed.
+(never the URL). Every port is then on one of the two, the OIDC ceremony and federated-account
+stores included (#460). Without `VALKEY_URL` and without `--memory` it exits 2 naming the
+variable — the refusal `capsule-server/src/store/mod.rs` has documented since `S-C29`. Neither
+refusal ever silently falls back to the in-memory adapters, which is the whole point: a
+deployment that forgot a variable must fail closed.
 
 The Valkey adapters are proven against a live server by `capsule-server/tests/valkey.rs`, which
 runs the same conformance suites the in-memory doubles pass. It is env-gated so `mise run

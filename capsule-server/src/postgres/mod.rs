@@ -58,6 +58,7 @@ pub const EXPECTED_MIGRATIONS: &[&str] = &[
     "m20260902_000013_collection_marks",
     "m20260902_000014_receipts",
     "m20260902_000015_totp",
+    "m20260902_000016_federated_accounts",
 ];
 
 /// The command an operator runs to apply them.

@@ -39,8 +39,9 @@ written *against*, and a port with two implementations before it has one suite i
 implementations will disagree.
 
 Every durable port now has the second implementation on Postgres (#402, #446), and every volatile
-one on Valkey (#403), each passing the same case list as its double against a container. The two
-OIDC stores are the exception (#460): a durable `serve` that configures OIDC is refused.
+one on Valkey (#403), each passing the same case list as its double against a container — the two
+OIDC stores included (#460): the pending ceremonies are on Valkey, and the federated accounts are
+rows of the Postgres account table, with a null credential no password can sign in to.
 
 **The test suite still runs without a container.** Every Postgres case is gated on
 `CAPSULE_TEST_POSTGRES=1` and prints one line naming itself when it is skipped:
@@ -141,14 +142,13 @@ so size `maxmemory` for live state rather than relying on eviction to make room.
 
 ## What is owed
 
-**A durable `serve` runs, except with OIDC configured.** It opens the pool from `DATABASE_URL`
-and refuses a schema it was not built for, naming `capsule-server-migration up`. It then proves
-`VALKEY_URL` answers `PING`, and builds every port on one of the two: Postgres for every record a
-restart must not lose, Valkey for the session, upload-session, ceremony and counter state. The
-OIDC ceremony and federated-account stores have in-memory adapters only (#460), so a durable
-`serve` with `OIDC_ISSUER` set refuses and names that issue.
+**A durable `serve` runs, OIDC included.** It opens the pool from `DATABASE_URL` and refuses a
+schema it was not built for, naming `capsule-server-migration up`. It then proves `VALKEY_URL`
+answers `PING`, and builds every port on one of the two: Postgres for every record a restart must
+not lose — the accounts, federated ones among them (#460) — and Valkey for the session,
+upload-session, ceremony and counter state, the pending OIDC authorizations among them.
 
-Refusing rather than filling those two ports with in-memory adapters is the point:
+No port on that path is in-memory:
 [Filesystem — Server](../capsule-docs/src/content/docs/design/filesystem/server.md) says required
 means required, and a server that came up holding state it will lose on the next restart is worse
 than one that does not start. What `--memory` buys is not durability, but a running surface

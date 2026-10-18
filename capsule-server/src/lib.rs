@@ -54,8 +54,8 @@
 //! suite is a port whose two implementations will disagree.
 //!
 //! Every durable port now has the second implementation on Postgres (#402, #446) and every
-//! volatile one on Valkey (#403), each passing the same case list as its double. The two OIDC
-//! stores are the exception (#460), and a durable boot that configures OIDC is refused.
+//! volatile one on Valkey (#403), each passing the same case list as its double — the two OIDC
+//! stores included since #460, so a durable boot that configures OIDC runs on them.
 //!
 //! **The suite still runs without a container.** Every Postgres case is gated on
 //! `CAPSULE_TEST_POSTGRES=1` and prints one line naming itself when it is skipped, so
