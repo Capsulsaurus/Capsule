@@ -348,3 +348,194 @@ async fn e2e_case_6_the_cli_recover_command_opens_a_new_library_as_the_account()
         .expect("the recovered library reopens under its new passphrase");
     assert_eq!(reopened.user_id(), a.user_id);
 }
+
+/// **`capsule auth escrow`** then **`capsule auth recover`** (#624): a library the CLI created
+/// — carrying its own minted account id — is set up for recovery by the CLI, and the CLI
+/// recovers it on a new machine from the secret the escrow command showed and nothing else.
+///
+/// Every refusal is driven first and shown to store nothing: a library that already holds
+/// assets cannot be rebound, and a failed type-back gate writes nothing. Then the setup, the
+/// refusal of a second setup without `--replace`, the recovery, and a `--replace` that retires
+/// the first secret.
+#[tokio::test]
+async fn e2e_case_6_the_cli_escrow_command_sets_up_what_recover_restores() {
+    let server = Server::boot().await;
+    let account = Device::register(&server, "cli-escrow").await;
+
+    let home = tempfile::tempdir().expect("a temp CLI home");
+    let store = SessionStore::new(home.path().join("session.json"));
+    let signed_in = account.login_again(&server).await;
+    store
+        .save(&signed_in.export().await.expect("a live session exports"))
+        .expect("the session persists");
+    let remote = RemoteConfig {
+        auth_endpoint: server.auth_base(),
+        sync_endpoint: server.base_url().to_owned(),
+        upload_endpoint: server.upload_base(),
+        albums_endpoint: server.albums_base(),
+        protocol_version: PROTOCOL_VERSION.to_owned(),
+    };
+    let recovery =
+        RecoveryClient::new(signed_in.clone(), server.base_url()).expect("the API root parses");
+
+    // A library that already signed an asset under its own id cannot adopt the server's.
+    let used_root = tempfile::tempdir().expect("a library root");
+    let mut used = Workspace::create_with_params(used_root.path(), PASSPHRASE, FAST_KDF)
+        .expect("a CLI library");
+    let album = used.default_album_id();
+    used.ensure_album(album, "Imports")
+        .expect("the default album's keys exist");
+    let jpeg = used_root.path().join("keepsake.jpg");
+    std::fs::write(&jpeg, synthetic_jpeg()).expect("the fixture writes");
+    used.import_asset(album, &jpeg).expect("the file imports");
+    // Refused before a secret is minted: the user is never shown one the bind would discard.
+    let Err(rebind) = remote::auth_escrow(
+        &remote,
+        &store,
+        &mut used,
+        false,
+        DeviceTier::LowRam,
+        |_| panic!("a library with assets is refused before a recovery secret is shown"),
+    )
+    .await
+    else {
+        panic!("a library with assets cannot be bound to the server's id");
+    };
+    assert!(
+        matches!(
+            rebind,
+            RemoteError::Lifecycle(LifecycleError::AccountRebind(_))
+        ),
+        "got {rebind:?}"
+    );
+    assert_ne!(used.user_id(), account.user_id);
+    assert!(matches!(
+        recovery.fetch_escrow().await,
+        Err(RecoveryError::NotEnrolled)
+    ));
+
+    // A fresh CLI library: its own minted id, not the server's.
+    let root = tempfile::tempdir().expect("a library root");
+    let mut library =
+        Workspace::create_with_params(root.path(), PASSPHRASE, FAST_KDF).expect("a CLI library");
+    let minted_id = library.user_id();
+    assert_ne!(minted_id, account.user_id);
+
+    // The type-back gate failing stores nothing and leaves the library unbound.
+    let Err(unconfirmed) = remote::auth_escrow(
+        &remote,
+        &store,
+        &mut library,
+        false,
+        DeviceTier::LowRam,
+        |_| false,
+    )
+    .await
+    else {
+        panic!("an unconfirmed secret is not stored");
+    };
+    assert!(
+        matches!(unconfirmed, RemoteError::RecoverySecretNotConfirmed),
+        "got {unconfirmed:?}"
+    );
+    assert_eq!(library.user_id(), minted_id, "the library is not rebound");
+    assert!(matches!(
+        recovery.fetch_escrow().await,
+        Err(RecoveryError::NotEnrolled)
+    ));
+
+    // The setup: the secret is captured where the user would read it off the terminal.
+    let mut shown = String::new();
+    let setup = remote::auth_escrow(
+        &remote,
+        &store,
+        &mut library,
+        false,
+        DeviceTier::LowRam,
+        |secret| {
+            shown = secret.to_hex();
+            true
+        },
+    )
+    .await
+    .expect("`capsule auth escrow` completes");
+    assert_eq!(
+        setup.user_id, account.user_id,
+        "the server's id for the account"
+    );
+    assert!(!setup.replaced, "the account's first escrow");
+    assert_eq!(library.user_id(), account.user_id, "the library is bound");
+    // Sealing is randomized, so the stored bytes are not compared here; the recovery below
+    // opening the account's identity key is what proves they are this library's.
+    recovery
+        .fetch_sealed_identity()
+        .await
+        .expect("the sealed identity is stored beside the escrow");
+
+    // A second setup without --replace would retire the secret just shown: refused, and the
+    // secret is never minted.
+    let Err(again) = remote::auth_escrow(
+        &remote,
+        &store,
+        &mut library,
+        false,
+        DeviceTier::LowRam,
+        |_| panic!("no secret is minted when an escrow is already stored"),
+    )
+    .await
+    else {
+        panic!("a stored escrow is not replaced without --replace");
+    };
+    assert!(
+        matches!(again, RemoteError::EscrowAlreadyStored),
+        "got {again:?}"
+    );
+
+    // The new machine: `capsule auth recover` with the secret the escrow command showed.
+    let new_home = tempfile::tempdir().expect("a new machine");
+    let recovered_root = new_home.path().join("recovered");
+    let recovered = remote::auth_recover(
+        &remote,
+        &store,
+        &recovered_root,
+        &shown,
+        PASSPHRASE,
+        FAST_KDF,
+    )
+    .await
+    .expect("`capsule auth recover` opens what `capsule auth escrow` stored");
+    assert_eq!(recovered.user_id(), account.user_id);
+    assert_eq!(recovered.user_ik_public(), library.user_ik_public());
+    assert_eq!(recovered.default_album_id(), library.default_album_id());
+    assert_ne!(recovered.device_id(), library.device_id());
+    drop(recovered);
+
+    // --replace stores a new escrow, and the first secret stops opening it.
+    let replaced = remote::auth_escrow(
+        &remote,
+        &store,
+        &mut library,
+        true,
+        DeviceTier::LowRam,
+        |_| true,
+    )
+    .await
+    .expect("`capsule auth escrow --replace` completes");
+    assert!(replaced.replaced, "the earlier escrow was displaced");
+    let Err(stale) = remote::auth_recover(
+        &remote,
+        &store,
+        &new_home.path().join("stale"),
+        &shown,
+        PASSPHRASE,
+        FAST_KDF,
+    )
+    .await
+    else {
+        panic!("the retired secret opens nothing");
+    };
+    assert!(
+        matches!(stale, RemoteError::WrongRecoverySecret),
+        "got {stale:?}"
+    );
+}

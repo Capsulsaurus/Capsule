@@ -11,7 +11,7 @@
 use std::collections::HashSet;
 
 use capsule_core::crypto::keys::MasterKey;
-use capsule_core::crypto::primitives::Argon2Params;
+use capsule_core::crypto::primitives::{Argon2Params, DeviceTier};
 use capsule_core::import::UploadPolicy;
 use capsule_core::lifecycle::{LifecycleError, Workspace};
 use capsule_sdk::albums::{AlbumClient, AlbumTransport};
@@ -19,7 +19,7 @@ use capsule_sdk::auth::{AuthClient, AuthError, LoginOutcome, Session};
 use capsule_sdk::client::AuthenticatedClient;
 use capsule_sdk::net::ConnectionClass;
 use capsule_sdk::push::{self, PushError};
-use capsule_sdk::recovery::{RecoveryClient, RecoveryError};
+use capsule_sdk::recovery::{MintedSecret, RecoveryClient, RecoveryError};
 use capsule_sdk::staged::{StagedScheduler, TierSessionOutcome, held_from_feed};
 use capsule_sdk::sync::{SyncConsumer, SyncCursor, SyncError, SyncState};
 use capsule_sdk::upload::{UploadClient, UploadTransport};
@@ -146,6 +146,13 @@ pub enum RemoteError {
     /// The recovery secret did not open this account's escrow.
     #[error("the recovery secret does not open this account's escrow")]
     WrongRecoverySecret,
+    /// `capsule auth escrow` without `--replace` found an escrow already stored for the account:
+    /// storing another would retire the recovery secret that opens it.
+    #[error("this account already has a recovery escrow stored")]
+    EscrowAlreadyStored,
+    /// The user did not type the minted recovery secret back, so nothing was stored.
+    #[error("the recovery secret was not confirmed")]
+    RecoverySecretNotConfirmed,
 }
 
 impl RemoteError {
@@ -449,6 +456,125 @@ pub fn recovery_secret_candidates(typed: &str) -> Vec<Vec<u8>> {
     }
     candidates.push(typed.as_bytes().to_vec());
     candidates
+}
+
+/// What `capsule auth escrow` stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EscrowSetup {
+    /// The server's id for the account, which the library is now bound to.
+    pub user_id: Uuid,
+    /// Whether the escrow displaced an earlier one, so the previous recovery secret has
+    /// stopped working and backups made under it need re-exporting or destroying.
+    pub replaced: bool,
+}
+
+/// `capsule auth escrow`: set up recovery for `workspace` **as the signed-in account**, so
+/// [`auth_recover`] can later restore it on a new machine from the recovery secret alone.
+///
+/// The flow, every network leg over the SDK:
+///
+/// 1. resume the stored session and read the account's server id (`GET /v1/auth/profile`),
+///    then refuse with [`LifecycleError::AccountRebind`] when the library's id differs from it
+///    and the library already holds assets, so no secret is minted that the bind would discard;
+/// 2. unless `replace`, refuse with [`RemoteError::EscrowAlreadyStored`] when the account
+///    already has an escrow (`GET /v1/auth/escrow`): storing another would retire the secret
+///    that opens it, and that may belong to another library of the same account;
+/// 3. mint a recovery secret and hand it to `confirm`, which shows it once and runs the
+///    type-back gate; `false` is [`RemoteError::RecoverySecretNotConfirmed`];
+/// 4. bind the library to the server's id (`Workspace::bind_account_id`), which keeps its own
+///    [`LifecycleError::AccountRebind`] refusal as the authority behind step 1's early one;
+/// 5. wrap the master key under the secret at `tier` and store it (`PUT /v1/auth/escrow`),
+///    then store the sealed identity beside it (`PUT /v1/auth/escrow/identity`).
+///
+/// Every refusal before step 4 writes nothing, locally or on the server. A failure after it
+/// leaves the library bound, which a rerun treats as already done.
+///
+/// # Errors
+///
+/// [`RemoteError::NotAuthenticated`] with no stored session; [`RemoteError::Profile`] when the
+/// account id cannot be read; the two refusals above; [`RemoteError::Lifecycle`] for the bind
+/// or the wrap; [`RemoteError::Recovery`] for an escrow or sealed-identity call.
+#[instrument(skip_all, fields(library_user = %workspace.user_id(), replace = replace))]
+pub async fn auth_escrow(
+    remote: &RemoteConfig,
+    store: &SessionStore,
+    workspace: &mut Workspace,
+    replace: bool,
+    tier: DeviceTier,
+    confirm: impl FnOnce(&MintedSecret) -> bool,
+) -> Result<EscrowSetup, RemoteError> {
+    let session = resume_session(remote, store).await?;
+    let outcome = escrow_with(remote, session.clone(), workspace, replace, tier, confirm).await;
+    checkpoint(store, &session).await;
+    outcome
+}
+
+/// The escrow setup itself, over a session somebody else is responsible for persisting.
+async fn escrow_with(
+    remote: &RemoteConfig,
+    session: Session,
+    workspace: &mut Workspace,
+    replace: bool,
+    tier: DeviceTier,
+    confirm: impl FnOnce(&MintedSecret) -> bool,
+) -> Result<EscrowSetup, RemoteError> {
+    let api_root = &remote.sync_endpoint;
+    let user_id = account_id(api_root, session.clone()).await?;
+    // The bind in step 4 refuses a library that already authored assets under its own id. Ask
+    // the same question here, before a secret is minted, so the user is never shown and made to
+    // record a secret that is then discarded.
+    let assets = workspace.asset_ids().len();
+    if workspace.user_id() != user_id && assets > 0 {
+        tracing::warn!(
+            %user_id,
+            library_user = %workspace.user_id(),
+            assets,
+            "escrow: refused before minting, the library already authored assets under its own id"
+        );
+        return Err(LifecycleError::AccountRebind(format!(
+            "{assets} asset(s) already name {} as created_by_user",
+            workspace.user_id()
+        ))
+        .into());
+    }
+    let recovery = RecoveryClient::new(session, api_root)?;
+    if !replace {
+        match recovery.fetch_escrow().await {
+            Ok(_) => {
+                tracing::warn!(%user_id, "escrow: refused, an escrow is already stored");
+                return Err(RemoteError::EscrowAlreadyStored);
+            }
+            Err(RecoveryError::NotEnrolled) => {
+                tracing::debug!(%user_id, "escrow: no escrow stored yet");
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+
+    let secret = MintedSecret::generate();
+    if !confirm(&secret) {
+        tracing::warn!(%user_id, "escrow: the recovery secret was not typed back; nothing stored");
+        return Err(RemoteError::RecoverySecretNotConfirmed);
+    }
+
+    workspace.bind_account_id(user_id)?;
+    tracing::info!(%user_id, "escrow: the library is bound to the server's account id");
+
+    let blob = workspace.escrow_master_key(secret.as_bytes(), tier)?;
+    let stored = recovery.store_escrow(&blob).await?;
+    let identity = recovery
+        .store_sealed_identity(&workspace.sealed_identity())
+        .await?;
+    tracing::info!(
+        %user_id,
+        escrow_replaced = stored.replaced,
+        identity_replaced = identity.replaced,
+        "escrow: the escrow and the sealed identity are stored"
+    );
+    Ok(EscrowSetup {
+        user_id,
+        replaced: stored.replaced,
+    })
 }
 
 /// The outcome of a `capsule sync` run.

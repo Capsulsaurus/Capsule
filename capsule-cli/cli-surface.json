@@ -9,6 +9,42 @@
       "name": "auth",
       "subcommands": [
         {
+          "about": "Set up recovery for a library: bind it to the signed-in account and store its recovery backup under a new recovery secret",
+          "args": [
+            {
+              "help": "Path to the Capsule library; it must not hold any assets yet",
+              "id": "library",
+              "long": "library",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            },
+            {
+              "help": "Read the library passphrase from stdin instead of prompting",
+              "id": "passphrase_stdin",
+              "long": "passphrase-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Replace the account's existing recovery backup; the previous recovery secret stops working",
+              "id": "replace",
+              "long": "replace",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "escrow"
+        },
+        {
           "about": "Login to Capsule",
           "args": [
             {

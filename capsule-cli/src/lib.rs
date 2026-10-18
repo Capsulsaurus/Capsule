@@ -215,6 +215,11 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 email,
                 password_stdin,
             } => auth_login(email, password_stdin).await?,
+            AuthCommands::Escrow {
+                library,
+                passphrase_stdin,
+                replace,
+            } => auth_escrow(&library, passphrase_stdin, replace).await?,
             AuthCommands::Recover {
                 library,
                 recovery_secret_stdin,
@@ -919,6 +924,121 @@ async fn auth_login(email: Option<String>, password_stdin: bool) -> Result<()> {
     Ok(())
 }
 
+/// `capsule auth escrow`: set recovery up for the library at `library`, as the signed-in
+/// account (#624). [`remote::auth_escrow`] owns the flow; this is its terminal: the library
+/// passphrase, the one showing of the minted secret, and the type-back gate.
+async fn auth_escrow(library: &Path, passphrase_stdin: bool, replace: bool) -> Result<()> {
+    let bundle = i18n::cli_bundle();
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+
+    let passphrase = read_password(
+        passphrase_stdin.then_some("--passphrase-stdin"),
+        bundle.format(keys::AUTH_ESCROW_PASSPHRASE_PROMPT, &[]),
+    )?;
+    let mut workspace = as_capsule_cli(
+        Workspace::open(library, passphrase.as_bytes(), DeviceTier::Normal.params()).map_err(
+            |e| {
+                let reason = e.to_string();
+                eyre!(
+                    "{}",
+                    bundle.format(keys::AUTH_ESCROW_FAILED, &[("reason", Value::Str(&reason))])
+                )
+            },
+        )?,
+    );
+
+    let path = library.display().to_string();
+    println!(
+        "{}",
+        bundle
+            .format(
+                keys::AUTH_ESCROW_IN_PROGRESS,
+                &[("path", Value::Str(&path))]
+            )
+            .green()
+    );
+    let confirm = |secret: &capsule_sdk::recovery::MintedSecret| {
+        let hex = secret.to_hex();
+        println!(
+            "{}",
+            bundle.format(
+                keys::AUTH_ESCROW_SECRET_SHOWN,
+                &[("secret", Value::Str(&hex))]
+            )
+        );
+        match Input::<String>::new()
+            .with_prompt(bundle.format(keys::AUTH_ESCROW_TYPEBACK_PROMPT, &[]))
+            .interact_text()
+        {
+            Ok(typed) => typed_back_matches(secret, &typed),
+            Err(error) => {
+                tracing::warn!(%error, "escrow: the type-back prompt could not be read");
+                false
+            }
+        }
+    };
+    match remote::auth_escrow(
+        &remote,
+        &store,
+        &mut workspace,
+        replace,
+        DeviceTier::Normal,
+        confirm,
+    )
+    .await
+    {
+        Ok(setup) => {
+            println!(
+                "{}",
+                bundle
+                    .format(keys::AUTH_ESCROW_SUCCESS, &[("path", Value::Str(&path))])
+                    .green()
+            );
+            if setup.replaced {
+                println!(
+                    "{}",
+                    bundle.format(keys::AUTH_ESCROW_REPLACED, &[]).yellow()
+                );
+            }
+            Ok(())
+        }
+        Err(remote::RemoteError::NotAuthenticated) => Err(eyre!(
+            "{}",
+            bundle.format(keys::AUTH_NOT_AUTHENTICATED, &[])
+        )),
+        Err(error) => Err(eyre!("{}", describe_escrow_error(&bundle, &error))),
+    }
+}
+
+/// The line `capsule auth escrow` prints for a refusal: the three it names itself (an escrow
+/// already stored, the type-back gate, a library that already holds assets), and the
+/// generic failure line wrapping any other reason.
+fn describe_escrow_error(bundle: &Bundle, error: &remote::RemoteError) -> String {
+    match error {
+        remote::RemoteError::EscrowAlreadyStored => {
+            bundle.format(keys::AUTH_ESCROW_ALREADY_STORED, &[])
+        }
+        remote::RemoteError::RecoverySecretNotConfirmed => {
+            bundle.format(keys::AUTH_ESCROW_TYPEBACK_MISMATCH, &[])
+        }
+        remote::RemoteError::Lifecycle(capsule_core::lifecycle::LifecycleError::AccountRebind(
+            _,
+        )) => bundle.format(keys::AUTH_ESCROW_LIBRARY_HAS_ASSETS, &[]),
+        other => {
+            let reason = describe_remote_error(bundle, other);
+            bundle.format(keys::AUTH_ESCROW_FAILED, &[("reason", Value::Str(&reason))])
+        }
+    }
+}
+
+/// The type-back gate's compare: `typed` is the hex the user was shown, surrounding
+/// whitespace dropped and either case accepted; anything that is not 64 hex characters of
+/// this secret fails.
+fn typed_back_matches(secret: &capsule_sdk::recovery::MintedSecret, typed: &str) -> bool {
+    hex::decode(typed.trim()).is_ok_and(|bytes| secret.matches(&bytes))
+}
+
 /// `capsule auth recover`: open a new library on this machine as the signed-in account, from
 /// its escrow, its sealed identity and the recovery secret (#544).
 ///
@@ -1359,6 +1479,90 @@ mod library_info_tests {
         assert_eq!(
             hint.as_deref(),
             Some("Run `capsule library migrate` to admit the 3 unsigned sidecars.")
+        );
+    }
+}
+
+#[cfg(test)]
+mod escrow_tests {
+    use capsule_core::lifecycle::LifecycleError;
+    use capsule_sdk::recovery::{MintedSecret, RecoveryError};
+
+    use super::{describe_escrow_error, typed_back_matches};
+    use crate::i18n::{Bundle, keys};
+    use crate::remote::RemoteError;
+
+    /// The hex the user was shown passes, in either case and with the newline a terminal adds.
+    #[test]
+    fn the_type_back_gate_accepts_the_shown_hex() {
+        let secret = MintedSecret::generate();
+        let hex = secret.to_hex();
+        assert!(typed_back_matches(&secret, &hex));
+        assert!(typed_back_matches(
+            &secret,
+            &format!("  {}\n", hex.to_uppercase())
+        ));
+    }
+
+    /// Another secret, a truncated copy, and text that is not hex all fail the gate.
+    #[test]
+    fn the_type_back_gate_refuses_anything_else() {
+        let secret = MintedSecret::generate();
+        let hex = secret.to_hex();
+        assert!(!typed_back_matches(
+            &secret,
+            &MintedSecret::generate().to_hex()
+        ));
+        assert!(!typed_back_matches(&secret, &hex[..62]));
+        assert!(!typed_back_matches(&secret, ""));
+        assert!(!typed_back_matches(&secret, &"z".repeat(64)));
+    }
+
+    /// Each refusal the command names renders its own catalog line, and the rebind refusal
+    /// tells the user to use a fresh library (#624 decision).
+    #[test]
+    fn each_named_refusal_has_its_own_line() {
+        let bundle = Bundle::for_locale("en");
+        let cases = [
+            (
+                RemoteError::EscrowAlreadyStored,
+                keys::AUTH_ESCROW_ALREADY_STORED,
+            ),
+            (
+                RemoteError::RecoverySecretNotConfirmed,
+                keys::AUTH_ESCROW_TYPEBACK_MISMATCH,
+            ),
+            (
+                RemoteError::Lifecycle(LifecycleError::AccountRebind("1 asset".into())),
+                keys::AUTH_ESCROW_LIBRARY_HAS_ASSETS,
+            ),
+        ];
+        for (error, key) in cases {
+            assert_eq!(
+                describe_escrow_error(&bundle, &error),
+                bundle.format(key, &[])
+            );
+        }
+        assert!(
+            bundle
+                .format(keys::AUTH_ESCROW_LIBRARY_HAS_ASSETS, &[])
+                .contains("fresh library")
+        );
+    }
+
+    /// Any other failure is wrapped in the generic line, localized by its code when it has one.
+    #[test]
+    fn other_failures_are_wrapped_in_the_failed_line() {
+        let bundle = Bundle::for_locale("en");
+        let line =
+            describe_escrow_error(&bundle, &RemoteError::Recovery(RecoveryError::NotEnrolled));
+        let reason = bundle.format(capsule_i18n::error_codes::ESCROW_NOT_STORED, &[]);
+        assert_eq!(
+            line,
+            bundle.format(
+                keys::AUTH_ESCROW_FAILED,
+                &[("reason", crate::i18n::Value::Str(&reason))]
+            )
         );
     }
 }
