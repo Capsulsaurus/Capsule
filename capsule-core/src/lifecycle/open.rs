@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use jiff::civil::Date;
@@ -28,6 +28,9 @@ use crate::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1};
 
 /// A device is treated as added far in the past so any import timestamp postdates it.
 const DEVICE_ADDED_AT: &str = "2020-01-01T00:00:00Z";
+
+/// The signed device directory's file under `{root}/.library/` (#562).
+const DIRECTORY_FILE: &str = "directory.cbor";
 
 /// A request to bind this workspace's **device encryption key** to a per-platform secure element
 /// (`S-F8`): the P-256 key-agreement element itself plus the alias its key is held under.
@@ -339,12 +342,16 @@ impl Workspace {
         core.user_id = user_id;
         core.directory_version += 1;
         core.updated_at = now_rfc3339();
+        // Adopted in memory before it is persisted, unlike the other directory changes: the
+        // account file above already names the new id, so a retry is a no-op and memory must not
+        // keep a directory naming the old one. Should this write fail, the next open finds a
+        // directory naming the old id, refuses it, and rebuilds one naming the new id.
         self.directory = core.sign(&self.account.user_ik);
         tracing::info!(
             directory_version = self.directory.core.directory_version,
             "account rebound to the server-assigned id"
         );
-        Ok(())
+        Self::persist_directory(&self.root, &self.directory)
     }
 
     /// Build this device's directory on the account's **published** one instead of replacing it
@@ -360,8 +367,8 @@ impl Workspace {
     ///
     /// Returns `Ok(None)` when `published` already lists this device under the signing key it
     /// signs with: the published directory is adopted unchanged and there is nothing to publish.
-    /// A reopened recovered device lands here, since [`open`](Self::open) rebuilds the
-    /// session-scoped directory.
+    /// A recovered device that extends again after publishing lands here. Either way the adopted
+    /// directory is persisted, so [`open`](Self::open) restores it.
     ///
     /// Refused, leaving this workspace's directory unchanged, with
     /// [`LifecycleError::UntrustedDirectory`] when `published` does not verify or names another
@@ -404,7 +411,7 @@ impl Workspace {
         if published.device(&device_id).is_some_and(|listed| {
             listed.dsk_public == own.dsk_public && listed.revoked_at.is_none()
         }) {
-            self.directory = published.clone();
+            self.adopt_directory(published.clone())?;
             tracing::info!(
                 directory_version = published.core.directory_version,
                 devices = published.core.devices.len(),
@@ -417,7 +424,7 @@ impl Workspace {
         core.add_device(own, now_rfc3339()).inspect_err(|e| {
             tracing::warn!(error = %e, "account directory refused: this device cannot be appended");
         })?;
-        self.directory = core.sign(&self.account.user_ik);
+        self.adopt_directory(core.sign(&self.account.user_ik))?;
         tracing::info!(
             directory_version = self.directory.core.directory_version,
             devices = self.directory.core.devices.len(),
@@ -483,6 +490,7 @@ impl Workspace {
         let device_signer: Box<dyn Signer> =
             device_signer.unwrap_or_else(|| Box::new(account.device.dsk.clone()));
         let directory = Self::build_directory(&account, device_signer.verifying_key());
+        Self::persist_directory(root, &directory)?;
         // A freshly minted `device_id` over a freshly initialised (provably empty) library has
         // provably issued no `add_id`, so it starts at zero with no sweep — the one case the
         // add-id durability rule licenses a reset (`S-A9`). Every *re*-open goes through
@@ -531,7 +539,10 @@ impl Workspace {
     /// - **every managed asset** from its signed artifacts on disk (chain, sidecar, sealed
     ///   metadata blob), a `warn`-and-skip per asset rather than a failed open;
     /// - **the `add_id` counter**, reseeded past everything this device has ever written
-    ///   (`S-A9`).
+    ///   (`S-A9`);
+    /// - **the signed device directory** from `{root}/.library/directory.cbor` (#562), once it
+    ///   verifies under the user IK, names this account, and lists this device live; otherwise
+    ///   a fresh version-1 directory listing only this device, with a `warn` naming why.
     ///
     /// A library with no `albums.cbor` predates this and opens with zero albums plus a `warn`
     /// naming backup restore — see [`AlbumStore::load`].
@@ -606,7 +617,11 @@ impl Workspace {
         };
 
         let device_signer: Box<dyn Signer> = Box::new(account.device.dsk.clone());
-        let directory = Self::build_directory(&account, device_signer.verifying_key());
+        let dsk_public = device_signer.verifying_key();
+        let built = Self::build_directory(&account, dsk_public.clone());
+        // #562: the directory this device last signed — cross-signed devices, a rebound id, an
+        // extension of the account's published one — survives the close.
+        let directory = Self::restore_directory(root, &account, &dsk_public, built);
         let user_id = account.user_id;
         // `S-A9`: reseed the `add_id` counter to one past the maximum this device has ever
         // written, recovered from its own signed sidecars. Without this a reopened library
@@ -880,6 +895,119 @@ impl Workspace {
             }],
         }
         .sign(&account.user_ik)
+    }
+
+    /// Where this library keeps its signed device directory: beside `account.cbor` (#562).
+    pub(super) fn directory_path(root: &Path) -> PathBuf {
+        root.join(".library").join(DIRECTORY_FILE)
+    }
+
+    /// Write `directory` to [`directory_path`](Self::directory_path), temp-then-rename like
+    /// `account.cbor`, so a crash mid-write leaves the previous directory intact rather than a
+    /// truncated one that would no longer verify.
+    fn persist_directory(root: &Path, directory: &DeviceDirectory) -> Result<()> {
+        let path = Self::directory_path(root);
+        let bytes =
+            cbor::to_canonical_vec(directory).map_err(|e| LifecycleError::Cbor(e.to_string()))?;
+        let tmp = crate::utils::paths::tmp_path(&path);
+        fs::write(&tmp, &bytes).map_err(|e| LifecycleError::Io(e.to_string()))?;
+        fs::rename(&tmp, &path).map_err(|e| LifecycleError::Io(e.to_string()))?;
+        tracing::debug!(
+            directory_version = directory.core.directory_version,
+            devices = directory.core.devices.len(),
+            "device directory persisted"
+        );
+        Ok(())
+    }
+
+    /// Persist `directory` and only then adopt it as this workspace's directory, so a failed
+    /// write leaves memory and disk agreeing on the previous one.
+    pub(super) fn adopt_directory(&mut self, directory: DeviceDirectory) -> Result<()> {
+        Self::persist_directory(&self.root, &directory).inspect_err(|e| {
+            tracing::warn!(error = %e, "device directory not adopted: persisting it failed");
+        })?;
+        self.directory = directory;
+        Ok(())
+    }
+
+    /// The directory a reopened workspace starts from (#562): the persisted one when it is
+    /// trustworthy and at least as new as `built` (this device's freshly signed version-1
+    /// directory), otherwise `built`.
+    ///
+    /// The persisted file is trusted only when it verifies under the account's user IK, names
+    /// this account, and lists this device live under the signing key it signs with. Anything
+    /// else — missing (a library written before #562), unreadable, tampered, foreign, or one that
+    /// revoked this device — falls back to `built` with a log line naming why, the behaviour
+    /// every reopen had before the directory was persisted. The fallback is not written back,
+    /// so the refused file stays on disk for inspection until the next directory change.
+    fn restore_directory(
+        root: &Path,
+        account: &Account,
+        dsk_public: &HybridVerifyingKey,
+        built: DeviceDirectory,
+    ) -> DeviceDirectory {
+        let path = Self::directory_path(root);
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                tracing::debug!("workspace open: no persisted device directory; using a fresh one");
+                return built;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "workspace open: persisted device directory unreadable; using a fresh one");
+                return built;
+            }
+        };
+        let persisted: DeviceDirectory = match cbor::from_slice(&bytes) {
+            Ok(directory) => directory,
+            Err(e) => {
+                tracing::warn!(error = %e, "workspace open: persisted device directory does not decode; using a fresh one");
+                return built;
+            }
+        };
+        if let Some(reason) = Self::refuse_persisted_directory(&persisted, account, dsk_public) {
+            tracing::warn!(
+                reason,
+                persisted_version = persisted.core.directory_version,
+                "workspace open: persisted device directory refused; using a fresh one"
+            );
+            return built;
+        }
+        if persisted.core.directory_version < built.core.directory_version {
+            tracing::warn!(
+                persisted_version = persisted.core.directory_version,
+                "workspace open: persisted device directory is older than a fresh one; using the fresh one"
+            );
+            return built;
+        }
+        tracing::info!(
+            directory_version = persisted.core.directory_version,
+            devices = persisted.core.devices.len(),
+            "workspace open: persisted device directory restored"
+        );
+        persisted
+    }
+
+    /// Why a persisted directory may not be adopted on open, or `None` when it may.
+    fn refuse_persisted_directory(
+        persisted: &DeviceDirectory,
+        account: &Account,
+        dsk_public: &HybridVerifyingKey,
+    ) -> Option<&'static str> {
+        if !persisted.verify(&account.user_ik.verifying_key()) {
+            return Some("it does not verify under the user identity key");
+        }
+        if persisted.core.user_id != account.user_id {
+            return Some("it names another account");
+        }
+        match persisted.device(&account.device.device_id) {
+            None => Some("it does not list this device"),
+            Some(entry) if entry.dsk_public != *dsk_public => {
+                Some("it lists this device under another signing key")
+            }
+            Some(entry) if entry.revoked_at.is_some() => Some("it lists this device as revoked"),
+            Some(_) => None,
+        }
     }
 }
 
@@ -1361,6 +1489,11 @@ mod tests {
         let mut reopened =
             Workspace::open(lib_b.path(), b"device b passphrase", FAST_PARAMS).unwrap();
         assert_eq!(reopened.device_id(), device_b);
+        assert_eq!(
+            reopened.device_directory(),
+            &extended,
+            "#562: the extended directory is restored, not rebuilt at version 1"
+        );
         assert_eq!(reopened.extend_account_directory(&extended).unwrap(), None);
         assert_eq!(reopened.device_directory(), &extended);
     }
@@ -1494,6 +1627,131 @@ mod tests {
         let reopened = Workspace::open(lib.path(), b"passphrase", FAST_PARAMS).unwrap();
         assert_eq!(reopened.user_id(), server_id);
         assert_eq!(reopened.device_directory().core.user_id, server_id);
+        assert_eq!(
+            reopened.device_directory().core.directory_version,
+            before + 1,
+            "#562: the bumped version survives the reopen"
+        );
+    }
+
+    /// Replace the persisted directory of the library at `lib` with `directory`.
+    fn plant_directory(lib: &Path, directory: &DeviceDirectory) {
+        fs::write(
+            Workspace::directory_path(lib),
+            cbor::to_canonical_vec(directory).unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// **#562.** A library written before the directory was persisted has no `directory.cbor`:
+    /// it opens with a fresh version-1 directory listing only this device, as before.
+    #[test]
+    fn a_library_without_a_persisted_directory_opens_with_a_fresh_one() {
+        let lib = TempDir::new().unwrap();
+        let ws = fast_workspace(lib.path());
+        let device = ws.device_id();
+        drop(ws);
+        fs::remove_file(Workspace::directory_path(lib.path())).unwrap();
+
+        let reopened = Workspace::open(lib.path(), b"passphrase", FAST_PARAMS).unwrap();
+        let directory = reopened.device_directory();
+        assert_eq!(directory.core.directory_version, 1);
+        assert_eq!(directory.core.devices.len(), 1);
+        assert!(directory.device(&device).is_some());
+        assert!(directory.verify(&reopened.user_ik_public()));
+    }
+
+    /// **#562.** A persisted directory that is undecodable, tampered, foreign, or that does not
+    /// list this device live under its own key is never adopted: the reopen falls back to a
+    /// fresh version-1 directory, and the refused file is left where it was.
+    #[test]
+    fn an_untrustworthy_persisted_directory_is_refused_on_open() {
+        use crate::crypto::keys::HybridSigningKey;
+
+        let lib = TempDir::new().unwrap();
+        let lib_x = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        ws.cross_sign_device(DeviceEntry {
+            device_id: Uuid::now_v7(),
+            dsk_public: HybridSigningKey::generate().verifying_key(),
+            dek_public: None,
+            added_at: DEVICE_ADDED_AT.into(),
+            revoked_at: None,
+        })
+        .unwrap();
+        let genuine = ws.device_directory().clone();
+        assert_eq!(genuine.core.directory_version, 2);
+        let device = ws.device_id();
+        let ik = ws.account.user_ik.clone();
+        drop(ws);
+
+        let mut tampered = genuine.clone();
+        tampered.core.directory_version += 1;
+
+        let foreign = fast_workspace(lib_x.path()).device_directory().clone();
+
+        let mut misnamed = genuine.core.clone();
+        misnamed.user_id = Uuid::now_v7();
+        let misnamed = misnamed.sign(&ik);
+
+        let mut without_me = genuine.core.clone();
+        without_me.devices.retain(|d| d.device_id != device);
+        let without_me = without_me.sign(&ik);
+
+        let mut rekeyed = genuine.core.clone();
+        for d in &mut rekeyed.devices {
+            if d.device_id == device {
+                d.dsk_public = HybridSigningKey::generate().verifying_key();
+            }
+        }
+        let rekeyed = rekeyed.sign(&ik);
+
+        let mut revoked = genuine.core.clone();
+        for d in &mut revoked.devices {
+            if d.device_id == device {
+                d.revoked_at = Some(DEVICE_ADDED_AT.into());
+            }
+        }
+        let revoked = revoked.sign(&ik);
+
+        let mut older = genuine.core.clone();
+        older.directory_version = 0;
+        let older = older.sign(&ik);
+
+        let refused = [
+            ("older than a fresh one", older),
+            ("tampered", tampered),
+            ("foreign", foreign),
+            ("misnamed", misnamed),
+            ("without this device", without_me),
+            ("this device rekeyed", rekeyed),
+            ("this device revoked", revoked),
+        ];
+        for (case, directory) in &refused {
+            plant_directory(lib.path(), directory);
+            let reopened = Workspace::open(lib.path(), b"passphrase", FAST_PARAMS).unwrap();
+            let opened = reopened.device_directory();
+            assert_eq!(opened.core.directory_version, 1, "{case}");
+            assert_eq!(opened.core.devices.len(), 1, "{case}");
+            assert!(opened.device(&device).is_some(), "{case}");
+            let on_disk: DeviceDirectory =
+                cbor::from_slice(&fs::read(Workspace::directory_path(lib.path())).unwrap())
+                    .unwrap();
+            assert_eq!(
+                &on_disk, directory,
+                "{case}: the refused file is left in place"
+            );
+        }
+
+        fs::write(Workspace::directory_path(lib.path()), b"not cbor").unwrap();
+        let reopened = Workspace::open(lib.path(), b"passphrase", FAST_PARAMS).unwrap();
+        assert_eq!(reopened.device_directory().core.directory_version, 1);
+        drop(reopened);
+
+        // And the genuine one is restored once it is back.
+        plant_directory(lib.path(), &genuine);
+        let reopened = Workspace::open(lib.path(), b"passphrase", FAST_PARAMS).unwrap();
+        assert_eq!(reopened.device_directory(), &genuine);
     }
 
     /// **#467.** Once an asset's manifest names the library's id, rebinding is refused — and the

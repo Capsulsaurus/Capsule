@@ -262,15 +262,17 @@ impl Workspace {
     /// [`LifecycleError::Directory`](super::LifecycleError::Directory), leaving the directory
     /// unchanged, when the entry's id or signing key is already listed or the entry is revoked.
     ///
-    /// The directory is session-scoped today — [`open`](Self::open) rebuilds it — so the caller
-    /// publishes the returned directory; that publication is what persists the admission.
+    /// The re-signed directory is persisted beside the account before it is adopted, so
+    /// [`open`](Self::open) restores it and the next directory this device signs builds on it;
+    /// a failed write is a [`LifecycleError::Io`](super::LifecycleError::Io) and also leaves the
+    /// directory unchanged. The caller still publishes the returned directory.
     #[tracing::instrument(skip_all, fields(device_id = %entry.device_id))]
     pub fn cross_sign_device(&mut self, entry: DeviceEntry) -> Result<DeviceDirectory> {
         let mut core = self.directory.core.clone();
         core.add_device(entry, now_rfc3339()).inspect_err(|e| {
             tracing::warn!(error = %e, "enrollment: cross-sign refused");
         })?;
-        self.directory = core.sign(&self.account.user_ik);
+        self.adopt_directory(core.sign(&self.account.user_ik))?;
         tracing::info!(
             directory_version = self.directory.core.directory_version,
             devices = self.directory.core.devices.len(),
@@ -455,6 +457,67 @@ mod tests {
             ))
         ));
         assert_eq!(a.device_directory(), &admitted);
+    }
+
+    /// **#562.** A cross-signed device and the version it bumped survive a reopen of A, and the
+    /// next device A cross-signs lands on top of it rather than on a rebuilt version-1 directory.
+    #[test]
+    fn a_cross_signed_device_survives_a_reopen() {
+        let (la, _lb, mut a, b) = two_devices();
+        let admitted = a
+            .cross_sign_device(
+                b.enrollment_enrollee_keys()
+                    .into_device_entry("2026-06-01T00:00:00Z".into()),
+            )
+            .unwrap();
+        let directory_path = Workspace::directory_path(la.path());
+        assert!(
+            !crate::utils::paths::tmp_path(&directory_path).exists(),
+            "the staged directory was renamed into place, not left beside it"
+        );
+        let a_id = a.device_id();
+        drop(a);
+
+        let mut reopened = Workspace::open(la.path(), b"passphrase", FAST_PARAMS).unwrap();
+        assert_eq!(reopened.device_id(), a_id);
+        assert_eq!(reopened.device_directory(), &admitted);
+        assert!(reopened.device_directory().device(&b.device_id()).is_some());
+
+        let lib_c = TempDir::new().unwrap();
+        let c = fast_workspace(lib_c.path());
+        let next = reopened
+            .cross_sign_device(
+                c.enrollment_enrollee_keys()
+                    .into_device_entry("2026-06-02T00:00:00Z".into()),
+            )
+            .unwrap();
+        assert_eq!(
+            next.core.directory_version,
+            admitted.core.directory_version + 1
+        );
+        assert!(next.device(&b.device_id()).is_some(), "B was not forgotten");
+        assert!(next.device(&c.device_id()).is_some());
+    }
+
+    /// **#562.** A cross-sign that cannot be persisted is refused and adopts nothing, so memory
+    /// never runs ahead of the directory a reopen would restore.
+    #[test]
+    fn a_cross_sign_that_cannot_be_persisted_changes_nothing() {
+        let (la, _lb, mut a, b) = two_devices();
+        let before = a.device_directory().clone();
+        // A directory where the file belongs makes the rename fail.
+        let directory_path = Workspace::directory_path(la.path());
+        std::fs::remove_file(&directory_path).unwrap();
+        std::fs::create_dir(&directory_path).unwrap();
+
+        let err = a
+            .cross_sign_device(
+                b.enrollment_enrollee_keys()
+                    .into_device_entry("2026-06-01T00:00:00Z".into()),
+            )
+            .unwrap_err();
+        assert!(matches!(err, LifecycleError::Io(_)), "{err:?}");
+        assert_eq!(a.device_directory(), &before);
     }
 
     /// The entry A signs carries A's clock and no revocation, whatever B might have hoped for.
