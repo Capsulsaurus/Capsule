@@ -97,21 +97,13 @@ ignore = [
     # Replacing it, and deciding the format of shares already issued, is #611.
     { id = "RUSTSEC-2024-0398", reason = "sharks: no patched release; replacement tracked in #611" },
 
-    # The libcrux family is pinned exactly (`^0.0.x`) by openmls_libcrux_crypto 0.3.1 and
-    # hpke-rs-libcrux 0.6.1, which openmls 0.8 requires. The patched releases arrive only
-    # with openmls_libcrux_crypto 0.4 / openmls 0.9, an API migration of capsule-core's MLS
-    # code tracked in #610. Remove all eleven entries in that pull request.
-    { id = "RUSTSEC-2026-0073", reason = "libcrux-poly1305: pinned by openmls 0.8; fixed by the openmls 0.9 migration (#610)" },
-    { id = "RUSTSEC-2026-0075", reason = "libcrux-ed25519: pinned by openmls 0.8; fixed by the openmls 0.9 migration (#610)" },
-    { id = "RUSTSEC-2026-0124", reason = "libcrux-chacha20poly1305: pinned by openmls 0.8; fixed by the openmls 0.9 migration (#610)" },
-    { id = "RUSTSEC-2026-0207", reason = "libcrux-sha3: pinned by openmls 0.8; fixed by the openmls 0.9 migration (#610)" },
-    { id = "RUSTSEC-2026-0208", reason = "libcrux-sha3: pinned by openmls 0.8; fixed by the openmls 0.9 migration (#610)" },
-    { id = "RUSTSEC-2026-0209", reason = "libcrux-aesgcm: pinned by openmls 0.8; fixed by the openmls 0.9 migration (#610)" },
-    { id = "RUSTSEC-2026-0210", reason = "libcrux-aesgcm renamed (unmaintained): pinned by openmls 0.8; fixed by the openmls 0.9 migration (#610)" },
-    { id = "RUSTSEC-2026-0211", reason = "libcrux-aesgcm: pinned by openmls 0.8; fixed by the openmls 0.9 migration (#610)" },
-    { id = "RUSTSEC-2026-0212", reason = "libcrux-secrets: pinned by openmls 0.8; fixed by the openmls 0.9 migration (#610)" },
-    { id = "RUSTSEC-2026-0330", reason = "libcrux-kem: pinned by openmls 0.8; fixed by the openmls 0.9 migration (#610)" },
-    { id = "RUSTSEC-2026-0331", reason = "libcrux-kem: pinned by openmls 0.8; fixed by the openmls 0.9 migration (#610)" },
+    # openmls_libcrux_crypto 0.4.0, the latest release, pins libcrux-hmac-drbg to 0.0.1
+    # (`"0.0.1"`) and hpke-rs-libcrux to 0.7, which pins libcrux-kem to `=0.0.9`. The fixes
+    # (0.0.2, 0.0.10) are unreachable until a provider release admits them; all three are
+    # panics on the client MLS path. Remove these entries in #646.
+    { id = "RUSTSEC-2026-0329", reason = "libcrux-hmac-drbg 0.0.1: pinned by openmls_libcrux_crypto 0.4.0 (latest); tracked in #646" },
+    { id = "RUSTSEC-2026-0330", reason = "libcrux-kem 0.0.9: pinned by hpke-rs-libcrux 0.7 via openmls_libcrux_crypto 0.4.0 (latest); tracked in #646" },
+    { id = "RUSTSEC-2026-0331", reason = "libcrux-kem 0.0.9: pinned by hpke-rs-libcrux 0.7 via openmls_libcrux_crypto 0.4.0 (latest); tracked in #646" },
 
     # quick-xml 0.37.5 is required (`^0.37.5`) by little_exif 0.6.23, the latest release,
     # reached through rawshift-image's metadata path in capsule-core's `media` feature. Both
@@ -128,8 +120,8 @@ ignore = [
 ]
 
 [bans]
-# Duplicate versions are reported, not refused: the graph carries several (two rand,
-# two libcrux-aead) that only upstream releases can collapse.
+# Duplicate versions are reported, not refused: the graph carries several (three rand)
+# that only upstream releases can collapse.
 multiple-versions = "warn"
 
 [sources]

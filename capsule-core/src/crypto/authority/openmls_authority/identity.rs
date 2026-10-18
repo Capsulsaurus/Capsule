@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::provider::CapsuleMlsProvider;
-use super::{OpenMlsAuthorityError, PINNED_CIPHERSUITE};
+use super::{OpenMlsAuthorityError, PINNED_CIPHERSUITE, pinned_capabilities};
 use crate::crypto::keys::directory::{DeviceEntry, DirectoryCore};
 use crate::crypto::keys::{DeviceDirectory, HybridSignature, HybridSigningKey};
 
@@ -221,6 +221,7 @@ impl MlsDeviceIdentity {
         self.store_signer()?;
         let cwk = self.credential_with_key()?;
         let bundle: KeyPackageBundle = KeyPackage::builder()
+            .leaf_node_capabilities(pinned_capabilities())
             .build(PINNED_CIPHERSUITE, &self.provider, &self.mls_signer, cwk)
             .map_err(|e| OpenMlsAuthorityError::KeyPackage(format!("{e:?}")))?;
         Ok(bundle.key_package().clone())

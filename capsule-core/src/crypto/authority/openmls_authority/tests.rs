@@ -142,6 +142,23 @@ fn ciphersuite_is_pinned_xwing_0x004d() {
     assert_eq!(PINNED_CIPHERSUITE_ID, 0x004D);
 }
 
+/// A key package's leaf advertises exactly the pinned suite, never OpenMLS's defaults: the X-Wing
+/// suite is in those defaults only under an OpenMLS feature Capsule does not enable, so a leaf
+/// built without [`pinned_capabilities`] could not join an X-Wing group.
+#[test]
+fn key_package_leaf_advertises_only_the_pinned_suite() {
+    let key_package = Device::new(0xB1, 0xB2, 3).identity().key_package().unwrap();
+    let advertised: Vec<u16> = key_package
+        .leaf_node()
+        .capabilities()
+        .ciphersuites()
+        .iter()
+        .map(openmls_traits::types::VerifiableCiphersuite::value)
+        .collect();
+    assert_eq!(advertised, vec![PINNED_CIPHERSUITE_ID]);
+    assert_eq!(key_package.ciphersuite(), PINNED_CIPHERSUITE);
+}
+
 #[test]
 fn genesis_epoch_and_ceiling() {
     let auth = OpenMlsAuthority::create_self_group(Uuid::from_u128(0xA1)).unwrap();
@@ -517,6 +534,71 @@ fn replaying_a_commit_is_rejected_and_state_is_unchanged() {
     // Replaying the same commit is rejected (stale/duplicate epoch), state unchanged.
     assert!(bob.process_commit(to_in(rot.commit)).is_err());
     assert_eq!(bob.mls_epoch(), epoch_after_first);
+}
+
+/// **A message echoed back to its own sender.** The delivery service fans a member's own message
+/// out to it. Under openmls 0.9 that is no longer a decrypt error: `process_message` returns
+/// `Ok(OwnPrivateMessage)`, since every Capsule group uses OpenMLS's default pure-ciphertext wire
+/// format. Each receive path (commit, key delivery, upgrade intent) turns it into a typed
+/// `UnexpectedMessage`, and the member's state is
+/// unchanged: an echoed key delivery applies nothing, and an echoed staged commit leaves the
+/// pending commit in place for `merge_pending`.
+#[test]
+fn own_message_echoed_back_is_an_unexpected_message_and_changes_nothing() {
+    let album = Uuid::from_u128(0x0ECC);
+    let admin_dev = Device::new(0x1, 0x11, 1);
+    let mut admin =
+        OpenMlsAuthority::create_album(admin_dev.identity(), album, HistoryPolicy::Full).unwrap();
+    let _bob = add_and_join(&mut admin, &Device::new(0x2, 0x22, 2), HistoryPolicy::Full);
+    let epoch = admin.epoch_ceiling();
+
+    // An echoed key delivery (an application message) is refused on the key-delivery path.
+    let kd = admin.build_key_distribution(epoch).unwrap();
+    let echoed = admin.process_key_delivery(to_in(kd));
+    assert!(
+        matches!(
+            &echoed,
+            Err(OpenMlsAuthorityError::UnexpectedMessage(m)) if m.contains("own private message")
+        ),
+        "echoed key delivery must be UnexpectedMessage, got {echoed:?}"
+    );
+    assert_eq!(admin.epoch_ceiling(), epoch);
+
+    // An echoed staged commit is refused on the commit path, before any merge.
+    let mls_epoch = admin.mls_epoch();
+    let commit = admin.stage_self_update().unwrap();
+    let echoed = admin.process_commit(to_in(commit));
+    assert!(
+        matches!(
+            &echoed,
+            Err(OpenMlsAuthorityError::UnexpectedMessage(m)) if m.contains("own private message")
+        ),
+        "echoed own commit must be UnexpectedMessage, got {echoed:?}"
+    );
+    assert_eq!(admin.mls_epoch(), mls_epoch, "the echo merged nothing");
+
+    // The pending commit survived the echo: the "my commit won" path still merges it.
+    admin.merge_pending().unwrap();
+    assert_eq!(admin.mls_epoch(), mls_epoch + 1);
+
+    // The upgrade-intent receive path refuses its own echoed intent the same way.
+    let proposal = admin
+        .propose_upgrade(
+            PROTOCOL_VERSION,
+            CRYPTO_SUITE_ID,
+            "2027-01-01",
+            CRYPTO_SUITE_ID,
+            DEFAULT_UPGRADE_DEADLINE,
+        )
+        .unwrap();
+    let echoed = admin.receive_upgrade_intent(to_in(proposal.message), &admin_dev.directory());
+    assert!(
+        matches!(
+            &echoed,
+            Err(OpenMlsAuthorityError::UnexpectedMessage(m)) if m.contains("own private message")
+        ),
+        "echoed own upgrade intent must be UnexpectedMessage, got {echoed:?}"
+    );
 }
 
 /// **MLS ↔ identity LeafNode binding.** A KeyPackage whose leaf is not bound to the DSK the
