@@ -968,7 +968,9 @@ pub async fn create_upload(
     // refusal must not leave bytes. The reserved-but-unpublished row a refusal leaves behind
     // publishes nothing and is the discard worker's, exactly as an abandoned session's is.
     match crate::quota::charge_upload(&quota, &uploader, &address, request.size).await {
-        Ok(crate::quota::UploadCharge::Admitted) => {}
+        Ok(
+            crate::quota::UploadCharge::Admitted | crate::quota::UploadCharge::AlreadyAttributed,
+        ) => {}
         Ok(crate::quota::UploadCharge::Refused) => return Err(CreateRejection::quota_exceeded()),
         Err(error) => {
             store_unavailable(&error, "charge an upload against its quota");

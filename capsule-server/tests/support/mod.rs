@@ -2183,6 +2183,20 @@ pub(crate) struct SwallowingBlobs {
     swallow: AtomicBool,
     /// Refuse every [`BlobStore::put`], as a full or read-only disk would.
     puts_unavailable: AtomicBool,
+    /// Park every [`BlobStore::put`] until the test lets it go.
+    held_puts: Mutex<Option<PutHold>>,
+}
+
+/// A `put` parked by [`SwallowingBlobs::hold_puts`].
+///
+/// `entered` fires when a `put` reaches the store; it then waits on `release` before it either
+/// refuses or writes, so a test can act on the caller in between.
+#[derive(Debug, Clone)]
+pub(crate) struct PutHold {
+    /// Notified once per `put` that has reached the store.
+    pub(crate) entered: Arc<tokio::sync::Notify>,
+    /// One permit lets one parked `put` go on.
+    pub(crate) release: Arc<tokio::sync::Semaphore>,
 }
 
 impl SwallowingBlobs {
@@ -2192,7 +2206,21 @@ impl SwallowingBlobs {
             inner: InMemoryBlobStore::new(),
             swallow: AtomicBool::new(false),
             puts_unavailable: AtomicBool::new(false),
+            held_puts: Mutex::new(None),
         }
+    }
+
+    /// Park every subsequent `put` until the returned hold releases it.
+    pub(crate) fn hold_puts(&self) -> PutHold {
+        let hold = PutHold {
+            entered: Arc::new(tokio::sync::Notify::new()),
+            release: Arc::new(tokio::sync::Semaphore::new(0)),
+        };
+        *self
+            .held_puts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(hold.clone());
+        hold
     }
 
     /// Drop the next append on the floor while telling the caller it landed.
@@ -2309,15 +2337,29 @@ impl BlobStore for SwallowingBlobs {
         address: &'a ContentAddress,
         bytes: &'a [u8],
     ) -> BlobFuture<'a, Placement> {
-        if self.puts_unavailable.load(Ordering::SeqCst) {
-            return Box::pin(async {
-                Err(BlobError::Backend {
+        let hold = self
+            .held_puts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        Box::pin(async move {
+            if let Some(hold) = hold {
+                hold.entered.notify_one();
+                let _permit = hold
+                    .release
+                    .acquire()
+                    .await
+                    .expect("the hold is never closed");
+            }
+            // Read after the hold, so a test can decide how a parked `put` ends.
+            if self.puts_unavailable.load(Ordering::SeqCst) {
+                return Err(BlobError::Backend {
                     operation: "put",
                     detail: REFUSAL.to_owned(),
-                })
-            });
-        }
-        self.inner.put(address, bytes)
+                });
+            }
+            self.inner.put(address, bytes).await
+        })
     }
 
     fn stat<'a>(&'a self, address: &'a ContentAddress) -> BlobFuture<'a, Option<BlobStat>> {

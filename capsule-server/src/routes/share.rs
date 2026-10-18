@@ -327,18 +327,25 @@ pub async fn issue_share(
         // not yet servable. A link refused below leaves a blob no live link names, which the
         // collector reclaims on its ordinary terms; the reverse order would leave a live link
         // pointing at nothing.
-        share
-            .blobs()
-            .put(&metadata, &record)
-            .await
-            .map_err(|error| {
-                tracing::error!(%error, %owner, "the blob store could not hold a share's metadata record");
-                IssueShareRejection::Unavailable {
-                    code: error_codes::SHARE_UNAVAILABLE,
-                }
-            })?;
-        tracing::info!(%owner, size = record.len(), "stored a share's sealed metadata record");
-        charge_metadata(&quota, &owner, &metadata, record.len() as u64).await?;
+        //
+        // Run as its own task and awaited, so a request cancelled between the charge and the
+        // store finishing — a client that hangs up, a server timeout — cannot drop the future
+        // halfway: the charge, the `put`, and the release a failed `put` owes all run to the
+        // end whether or not anyone is still waiting for the answer.
+        tokio::spawn(store_metadata_record(
+            share.clone(),
+            quota.clone(),
+            owner.clone(),
+            metadata.clone(),
+            record,
+        ))
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %owner, "the task storing a share's metadata record did not finish");
+            IssueShareRejection::Unavailable {
+                code: error_codes::SHARE_UNAVAILABLE,
+            }
+        })??;
     }
 
     let outcome = share
@@ -613,27 +620,59 @@ async fn admit_metadata_growth(
     })
 }
 
-/// Attribute a stored metadata record to the link's owner, refusing one that would cross the
-/// hard limit (`S-C6`).
+/// Charge a link's metadata record, then store it, releasing the charge when the store fails.
+///
+/// Charged before it is stored, as an upload session is charged before its stage opens (#662):
+/// a record refused at the hard limit never reaches the store, so an account over its limit
+/// cannot leave uncharged records behind for the collector to find.
+///
+/// Owns its arguments so [`issue_share`] can run it as a task of its own. Between the charge and
+/// the end of the `put`, a dropped future would leave a charge with no stored blob behind it,
+/// which the collector never credits back because it credits only the blobs it sweeps. A
+/// spawned task is not dropped with the request. A process that stops inside that window still
+/// leaves the charge behind, a residue share-links.md ("The order") accepts.
+async fn store_metadata_record(
+    share: ShareContext,
+    quota: QuotaContext,
+    owner: UserId,
+    metadata: ContentAddress,
+    record: Vec<u8>,
+) -> Result<(), IssueShareRejection> {
+    let charge = charge_metadata(&quota, &owner, &metadata, record.len() as u64).await?;
+    if let Err(error) = share.blobs().put(&metadata, &record).await {
+        tracing::error!(%error, %owner, "the blob store could not hold a share's metadata record");
+        release_metadata_charge(&quota, &owner, &metadata, charge).await;
+        return Err(IssueShareRejection::Unavailable {
+            code: error_codes::SHARE_UNAVAILABLE,
+        });
+    }
+    tracing::info!(%owner, size = record.len(), "stored a share's sealed metadata record");
+    Ok(())
+}
+
+/// Attribute a metadata record to the link's owner before it is stored, refusing one that would
+/// cross the hard limit (`S-C6`).
 ///
 /// Charged, not only admitted: a link holds its record from the collector for as long as it is
 /// live, which may be forever, so an uncharged record would be storage an account could grow
-/// without limit by issuing links. Charged **after** the store, so a failed store charges
-/// nothing; a record the ledger already attributes — the same bytes under a second link — is
+/// without limit by issuing links. A record the ledger already attributes — the same bytes under a second link — is
 /// not charged twice, and is never refused. The collector credits it back when it sweeps the
 /// blob, as it does every blob (`release_attribution`).
 ///
 /// Refused, like an upload, when the new bytes would carry the account to its hard limit
 /// ([`crate::quota::charge_upload`] charges, checks, and releases a refused charge). Without
 /// that, an account over the limit but inside its grace window could store any number of
-/// distinct 8 MiB records, each publicly servable through its link. A refused record is left in
-/// the store uncharged and unlinked, and the collector reclaims it on its ordinary terms.
+/// distinct 8 MiB records, each publicly servable through its link.
+///
+/// Charged **before** the store (#662), as an upload session is charged before its stage
+/// opens, so a refused record is never stored. A store that then fails hands the returned
+/// charge to [`release_metadata_charge`], which undoes it only when this call made it.
 async fn charge_metadata(
     quota: &QuotaContext,
     owner: &UserId,
     address: &ContentAddress,
     size: u64,
-) -> Result<(), IssueShareRejection> {
+) -> Result<crate::quota::UploadCharge, IssueShareRejection> {
     let outcome = crate::quota::charge_upload(quota, owner, address, size)
         .await
         .map_err(|error| {
@@ -644,12 +683,41 @@ async fn charge_metadata(
         })?;
     tracing::debug!(%owner, size, ?outcome, "charged a share's metadata record");
     match outcome {
-        crate::quota::UploadCharge::Admitted => Ok(()),
+        crate::quota::UploadCharge::Admitted | crate::quota::UploadCharge::AlreadyAttributed => {
+            Ok(outcome)
+        }
         crate::quota::UploadCharge::Refused => {
             tracing::info!(%owner, size, "a share link was refused: its record would cross the hard quota limit");
             Err(IssueShareRejection::QuotaExceeded {
                 code: error_codes::QUOTA_EXCEEDED,
             })
+        }
+    }
+}
+
+/// Undo [`charge_metadata`]'s debit for a record the store did not take.
+///
+/// Only a charge this request made is released. A record the ledger already attributed was
+/// charged by an earlier write whose bytes may be stored and linked, and releasing it would
+/// leave them uncharged. A release that itself fails is logged and swallowed: the caller is
+/// already answering `500`, and the residue is an attribution with no blob behind it, which
+/// the log line names for an operator to credit back.
+async fn release_metadata_charge(
+    quota: &QuotaContext,
+    owner: &UserId,
+    address: &ContentAddress,
+    charge: crate::quota::UploadCharge,
+) {
+    if charge != crate::quota::UploadCharge::Admitted {
+        tracing::debug!(%owner, %address, ?charge, "no charge of this request's to release");
+        return;
+    }
+    match quota.quotas().release(owner, address).await {
+        Ok(released) => {
+            tracing::info!(%owner, %address, released, "released the charge for a share record the store did not take");
+        }
+        Err(error) => {
+            tracing::error!(%error, %owner, %address, "the quota ledger could not release the charge for a share record the store did not take");
         }
     }
 }
