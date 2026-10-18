@@ -536,6 +536,51 @@ fn replaying_a_commit_is_rejected_and_state_is_unchanged() {
     assert_eq!(bob.mls_epoch(), epoch_after_first);
 }
 
+/// **A message echoed back to its own sender.** The delivery service fans a member's own message
+/// out to it. Under openmls 0.9 that is no longer a decrypt error: `process_message` returns
+/// `Ok(OwnPrivateMessage)`, since every Capsule group uses OpenMLS's default pure-ciphertext wire
+/// format. Both receive paths turn it into a typed `UnexpectedMessage`, and the member's state is
+/// unchanged: an echoed key delivery applies nothing, and an echoed staged commit leaves the
+/// pending commit in place for `merge_pending`.
+#[test]
+fn own_message_echoed_back_is_an_unexpected_message_and_changes_nothing() {
+    let album = Uuid::from_u128(0x0ECC);
+    let admin_dev = Device::new(0x1, 0x11, 1);
+    let mut admin =
+        OpenMlsAuthority::create_album(admin_dev.identity(), album, HistoryPolicy::Full).unwrap();
+    let _bob = add_and_join(&mut admin, &Device::new(0x2, 0x22, 2), HistoryPolicy::Full);
+    let epoch = admin.epoch_ceiling();
+
+    // An echoed key delivery (an application message) is refused on the key-delivery path.
+    let kd = admin.build_key_distribution(epoch).unwrap();
+    let echoed = admin.process_key_delivery(to_in(kd));
+    assert!(
+        matches!(
+            &echoed,
+            Err(OpenMlsAuthorityError::UnexpectedMessage(m)) if m.contains("own private message")
+        ),
+        "echoed key delivery must be UnexpectedMessage, got {echoed:?}"
+    );
+    assert_eq!(admin.epoch_ceiling(), epoch);
+
+    // An echoed staged commit is refused on the commit path, before any merge.
+    let mls_epoch = admin.mls_epoch();
+    let commit = admin.stage_self_update().unwrap();
+    let echoed = admin.process_commit(to_in(commit));
+    assert!(
+        matches!(
+            &echoed,
+            Err(OpenMlsAuthorityError::UnexpectedMessage(m)) if m.contains("own private message")
+        ),
+        "echoed own commit must be UnexpectedMessage, got {echoed:?}"
+    );
+    assert_eq!(admin.mls_epoch(), mls_epoch, "the echo merged nothing");
+
+    // The pending commit survived the echo: the "my commit won" path still merges it.
+    admin.merge_pending().unwrap();
+    assert_eq!(admin.mls_epoch(), mls_epoch + 1);
+}
+
 /// **MLS ↔ identity LeafNode binding.** A KeyPackage whose leaf is not bound to the DSK the
 /// directory publishes for the claimed device is rejected before any group mutation; a correctly
 /// bound one is admitted.
