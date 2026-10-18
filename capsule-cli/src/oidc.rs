@@ -37,6 +37,9 @@
 //! one, over `capsule-sdk`. The listener and the whole orchestration are exercised against a
 //! scripted ceremony and a scripted browser in this module's tests; the round trip against a real
 //! provider is `tests/oidc_dex.rs`, against the dex service `capsule-server/compose.yaml` ships.
+//! [`open_in_browser`] reaches the host through the private `Opener` port (environment and
+//! process spawn), so its graphical-session check and each platform's opener are tested with a
+//! scripted host; only the real `std::process::Command` spawn is left untested.
 
 use std::future::Future;
 use std::io;
@@ -470,35 +473,95 @@ pub async fn login<C: Ceremony>(
 /// URI handler's scheme would be run on the server's say-so. Anything else is left printed and
 /// not opened.
 pub fn open_in_browser(url: &str) -> bool {
+    open_with(&SystemOpener, OpenerPlatform::CURRENT, url)
+}
+
+/// Which platform opener [`open_in_browser`] uses: chosen at compile time for the real opener,
+/// and named explicitly in tests so every arm runs on every host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpenerPlatform {
+    /// `open`.
+    MacOs,
+    /// `rundll32 url.dll,FileProtocolHandler`.
+    Windows,
+    /// `xdg-open`, only under a graphical session.
+    FreeDesktop,
+}
+
+impl OpenerPlatform {
+    /// The platform this binary was built for.
+    const CURRENT: Self = if cfg!(target_os = "macos") {
+        Self::MacOs
+    } else if cfg!(windows) {
+        Self::Windows
+    } else {
+        Self::FreeDesktop
+    };
+
+    /// The opener program and its arguments for `url`.
+    fn command(self, url: &str) -> (&'static str, Vec<&str>) {
+        match self {
+            Self::MacOs => ("open", vec![url]),
+            Self::Windows => ("rundll32", vec!["url.dll,FileProtocolHandler", url]),
+            Self::FreeDesktop => ("xdg-open", vec![url]),
+        }
+    }
+}
+
+/// What [`open_in_browser`] needs from the host: its environment and a way to start a process.
+/// The port exists so the graphical-session check and both spawn outcomes are unit-tested
+/// without starting a real opener.
+trait Opener {
+    /// The environment variable `name`, when set.
+    fn var(&self, name: &str) -> Option<std::ffi::OsString>;
+    /// Start `program` with `arguments`, detached from this terminal's standard streams, without
+    /// waiting for it to exit.
+    fn spawn(&self, program: &str, arguments: &[&str]) -> io::Result<()>;
+}
+
+/// The real host: the process environment and [`std::process::Command`].
+struct SystemOpener;
+
+impl Opener for SystemOpener {
+    fn var(&self, name: &str) -> Option<std::ffi::OsString> {
+        std::env::var_os(name)
+    }
+
+    fn spawn(&self, program: &str, arguments: &[&str]) -> io::Result<()> {
+        let mut child = std::process::Command::new(program)
+            .args(arguments)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()?;
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+        Ok(())
+    }
+}
+
+/// Whether `opener`'s environment names a graphical session: a non-empty `DISPLAY` or
+/// `WAYLAND_DISPLAY`.
+fn has_graphical_session(opener: &impl Opener) -> bool {
+    ["DISPLAY", "WAYLAND_DISPLAY"]
+        .into_iter()
+        .any(|name| opener.var(name).is_some_and(|value| !value.is_empty()))
+}
+
+/// [`open_in_browser`] against an explicit host and platform.
+fn open_with(opener: &impl Opener, platform: OpenerPlatform, url: &str) -> bool {
     let Some(url) = browser_url(url) else {
         tracing::warn!("the authorization URL is not an http or https URL; it is not opened");
         return false;
     };
-    let url = url.as_str();
-    let (program, arguments): (&str, Vec<&str>) = if cfg!(target_os = "macos") {
-        ("open", vec![url])
-    } else if cfg!(windows) {
-        ("rundll32", vec!["url.dll,FileProtocolHandler", url])
-    } else {
-        let graphical = std::env::var_os("DISPLAY").is_some_and(|value| !value.is_empty())
-            || std::env::var_os("WAYLAND_DISPLAY").is_some_and(|value| !value.is_empty());
-        if !graphical {
-            tracing::debug!("no graphical session; the browser is not opened");
-            return false;
-        }
-        ("xdg-open", vec![url])
-    };
-    match std::process::Command::new(program)
-        .args(arguments)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-    {
-        Ok(mut child) => {
-            std::thread::spawn(move || {
-                let _ = child.wait();
-            });
+    if platform == OpenerPlatform::FreeDesktop && !has_graphical_session(opener) {
+        tracing::debug!("no graphical session; the browser is not opened");
+        return false;
+    }
+    let (program, arguments) = platform.command(url.as_str());
+    match opener.spawn(program, &arguments) {
+        Ok(()) => {
             tracing::debug!(
                 program,
                 "handed the authorization URL to the platform opener"
@@ -638,6 +701,135 @@ mod tests {
         ] {
             assert!(browser_url(refused).is_none(), "{refused}");
             assert!(!open_in_browser(refused), "{refused}");
+        }
+    }
+
+    /// A scripted [`Opener`]: a fixed environment, a fixed spawn outcome, and a record of every
+    /// spawn it was asked for.
+    struct ScriptedOpener {
+        env: Vec<(&'static str, &'static str)>,
+        spawn_fails: bool,
+        spawned: Mutex<Vec<(String, Vec<String>)>>,
+    }
+
+    impl ScriptedOpener {
+        fn new(env: &[(&'static str, &'static str)], spawn_fails: bool) -> Self {
+            Self {
+                env: env.to_vec(),
+                spawn_fails,
+                spawned: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn spawned(&self) -> Vec<(String, Vec<String>)> {
+            self.spawned.lock().unwrap().clone()
+        }
+    }
+
+    impl Opener for ScriptedOpener {
+        fn var(&self, name: &str) -> Option<std::ffi::OsString> {
+            self.env
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| value.into())
+        }
+
+        fn spawn(&self, program: &str, arguments: &[&str]) -> io::Result<()> {
+            self.spawned.lock().unwrap().push((
+                program.to_owned(),
+                arguments
+                    .iter()
+                    .map(|&argument| argument.to_owned())
+                    .collect(),
+            ));
+            if self.spawn_fails {
+                Err(io::Error::new(io::ErrorKind::NotFound, "no such program"))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    const AUTHORIZE: &str = "https://idp.test/authorize?state=s";
+
+    #[test]
+    fn a_graphical_session_is_a_non_empty_display_or_wayland_display() {
+        for (env, graphical) in [
+            (&[][..], false),
+            (&[("DISPLAY", "")][..], false),
+            (&[("WAYLAND_DISPLAY", "")][..], false),
+            (&[("DISPLAY", ""), ("WAYLAND_DISPLAY", "")][..], false),
+            (&[("TERM", "xterm")][..], false),
+            (&[("DISPLAY", ":0")][..], true),
+            (&[("WAYLAND_DISPLAY", "wayland-0")][..], true),
+            (
+                &[("DISPLAY", ""), ("WAYLAND_DISPLAY", "wayland-0")][..],
+                true,
+            ),
+        ] {
+            let opener = ScriptedOpener::new(env, false);
+            assert_eq!(has_graphical_session(&opener), graphical, "{env:?}");
+        }
+    }
+
+    #[test]
+    fn without_a_graphical_session_xdg_open_is_never_spawned() {
+        let opener = ScriptedOpener::new(&[("DISPLAY", "")], false);
+        assert!(!open_with(&opener, OpenerPlatform::FreeDesktop, AUTHORIZE));
+        assert!(opener.spawned().is_empty());
+    }
+
+    #[test]
+    fn each_platform_spawns_its_opener_with_the_url() {
+        let url = browser_url(AUTHORIZE).unwrap().to_string();
+        for (platform, program, arguments) in [
+            (OpenerPlatform::MacOs, "open", vec![url.clone()]),
+            (
+                OpenerPlatform::Windows,
+                "rundll32",
+                vec!["url.dll,FileProtocolHandler".to_owned(), url.clone()],
+            ),
+            (OpenerPlatform::FreeDesktop, "xdg-open", vec![url.clone()]),
+        ] {
+            // No graphical session: only the freedesktop opener consults one.
+            let env: &[_] = if platform == OpenerPlatform::FreeDesktop {
+                &[("WAYLAND_DISPLAY", "wayland-0")]
+            } else {
+                &[]
+            };
+            let opener = ScriptedOpener::new(env, false);
+            assert!(open_with(&opener, platform, AUTHORIZE), "{platform:?}");
+            assert_eq!(
+                opener.spawned(),
+                vec![(program.to_owned(), arguments)],
+                "{platform:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_opener_that_cannot_be_started_is_reported_as_not_opened() {
+        for platform in [
+            OpenerPlatform::MacOs,
+            OpenerPlatform::Windows,
+            OpenerPlatform::FreeDesktop,
+        ] {
+            let opener = ScriptedOpener::new(&[("DISPLAY", ":0")], true);
+            assert!(!open_with(&opener, platform, AUTHORIZE), "{platform:?}");
+            assert_eq!(opener.spawned().len(), 1, "{platform:?}");
+        }
+    }
+
+    #[test]
+    fn a_refused_url_is_never_spawned_on_any_platform() {
+        for platform in [
+            OpenerPlatform::MacOs,
+            OpenerPlatform::Windows,
+            OpenerPlatform::FreeDesktop,
+        ] {
+            let opener = ScriptedOpener::new(&[("DISPLAY", ":0")], false);
+            assert!(!open_with(&opener, platform, "file:///etc/passwd"));
+            assert!(opener.spawned().is_empty(), "{platform:?}");
         }
     }
 
