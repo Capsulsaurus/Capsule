@@ -171,7 +171,8 @@ async fn a_body_past_the_transport_limit_reaches_the_sdk_as_a_codeless_413() {
     let recovery = RecoveryClient::new(device.session.clone(), server.base_url())
         .expect("the API root parses");
 
-    // 33 MiB: one past the 32 MiB `BodySize` backstop. Fast Argon2id parameters, because
+    // 33 MiB: past the 1 MiB `MAX_BOUNDED_BODY_BYTES` cap the escrow route's group mounts
+    // (and past the 32 MiB backstop besides). Fast Argon2id parameters, because
     // nothing here derives — the bytes never reach the escrow route's own checks.
     let oversized = WrappedSecret {
         mem_kib: 64,
