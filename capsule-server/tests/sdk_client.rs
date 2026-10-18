@@ -839,7 +839,14 @@ async fn a_pushed_asset_reaches_the_feed_and_the_entry_decodes_and_verifies() {
         .ensure_album(album_id, "Imports")
         .expect("an album");
     let asset_id = workspace.import_asset(album_id, &src).expect("an import");
-    let bundle = workspace.upload_bundle(&asset_id).expect("a bundle");
+    let mut bundle = workspace.upload_bundle(&asset_id).expect("a bundle");
+    // This fixture earns no derivative tier, so it carries a derivative manifest by hand (#556):
+    // the server stores the role's bytes without parsing them, so what is under test is the
+    // rung — the gate admitting the SDK's request, the feed handing the bytes back unchanged.
+    assert!(bundle.derivative_manifests.is_empty());
+    bundle
+        .derivative_manifests
+        .push(b"a signed derivative manifest, as canonical CBOR".to_vec());
 
     // ── A server that admits this library's album and device ──────────────────────────────
     let fixture = Fixture::working();
@@ -930,6 +937,19 @@ async fn a_pushed_asset_reaches_the_feed_and_the_entry_decodes_and_verifies() {
     assert_eq!(
         entry.manifest_cbor, bundle.provenance_blob,
         "the feed serves the provenance blob's bytes back unchanged"
+    );
+    assert_eq!(
+        entry.derivative_manifests, bundle.derivative_manifests,
+        "the feed serves each derivative manifest's bytes back unchanged"
+    );
+    let held = capsule_sdk::staged::held_from_feed(entry);
+    let replan = capsule_sdk::push::plan(&scheduler, &bundle, &held, false);
+    assert!(
+        replan
+            .blobs
+            .iter()
+            .all(|blob| blob.tier != capsule_core::import::UploadTier::Preview),
+        "a re-push reads the manifest as held from the feed and opens no session for it"
     );
 
     // ── …and a receiving device can decode and verify them ────────────────────────────────
