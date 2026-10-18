@@ -16,10 +16,10 @@ import java.nio.file.Files
 /**
  * The Kotlin analogue of the Swift `SmokeTests.softwareP256ComposesEndToEnd` — proves the software
  * **P-256** element composes through `P256HybridSigningKey` into a real workspace over the
- * `capsule_sdk` uniffi namespace (slice S-F2). The [StrongBoxSigner] path is on-device only (androidInstrumentedTest); this
- * always-runnable JVM path exercises the same wire contract (65-byte uncompressed SEC1 public key,
- * DER ECDSA signature) that StrongBox emits, so a green run proves the whole P-256 FFI composition
- * independent of hardware. Run `./stage-bindings.sh` first.
+ * `capsule_sdk` uniffi namespace (slice S-F2). The [StrongBoxSigner] path is on-device only
+ * (androidInstrumentedTest); this always-runnable JVM path exercises the same wire contract (65-byte
+ * uncompressed SEC1 public key, DER ECDSA signature) that StrongBox emits, so a green run proves the
+ * whole P-256 FFI composition independent of hardware. Run `./stage-bindings.sh` first.
  *
  * Platform-CI-owed: the root Gradle/Android toolchain does not run on the reference dev host, so
  * this is written to mirror the verified Swift shape and is exercised by the platform CI lane.

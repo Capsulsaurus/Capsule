@@ -16,8 +16,8 @@ import java.nio.file.Files
 /**
  * Proves the compiled `capsule-core` works when consumed from Kotlin over the `capsule_sdk` uniffi
  * namespace — the Android analogue of the Rust Linux software smoke. A JVM unit test (no device):
- * JNA loads the host `libcapsule_sdk` from `jna.library.path` (set in build.gradle.kts). Run `./stage-bindings.sh`
- * first. The StrongBox path is on-device only (see androidInstrumentedTest).
+ * JNA loads the host `libcapsule_sdk` from `jna.library.path` (set in build.gradle.kts). Run
+ * `./stage-bindings.sh` first. The StrongBox path is on-device only (see androidInstrumentedTest).
  */
 class SoftwareSignerSmokeTest {
     private val client = FfiClientBuild("capsule-core-kotlin", "0.0.0")
