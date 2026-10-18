@@ -101,9 +101,11 @@ impl Port {
             | DbErr::TryIntoErr { .. }
             | DbErr::ConvertFromU64(_) => self.undecodable(detail),
             // The statement was sent and a unique index refused it. Nothing was written, and
-            // the key is held — a conflict, not an internal failure.
+            // the key is held — a conflict, not an internal failure. Logged at `warn` like every
+            // other refusal: every port that expects a conflict decides it with `ON CONFLICT`, so
+            // one that reaches here is an unexpected collision (a minted id hitting a key).
             _ if is_unique_violation(error) => {
-                tracing::info!(store = self.store, %detail, "a Postgres unique index refused a write");
+                tracing::warn!(store = self.store, %detail, "a Postgres unique index refused a write");
                 StoreError::Conflict {
                     store: self.store,
                     detail,
