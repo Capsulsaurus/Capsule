@@ -20,7 +20,9 @@
 //! `Migrator::up` is not reachable from the server binary at all — see that crate's manifest for
 //! why (the `chrono` gate). What the server does instead is [`assert_schema_current`]: it reads
 //! `seaql_migrations` and refuses to boot unless every ordinal it was built against has been
-//! applied, naming the command an operator has to run.
+//! applied, naming the command an operator has to run — and reads the migration crate's
+//! checksum ledger beside it, refusing an applied ordinal whose source has changed since it ran
+//! (#524).
 //!
 //! That is also the safer rollout. A server that migrates on start runs the migration once per
 //! replica during a rolling deploy — a schema change racing itself — and gives every replica
@@ -379,15 +381,17 @@ mod tests {
             .iter()
             .map(|migration| (migration.name.to_owned(), migration.checksum.to_owned()))
             .collect();
-        let paste: String = checksums
+        let paste = checksums
             .iter()
-            .map(|(name, checksum)| {
-                format!(
+            .fold(String::new(), |mut paste, (name, checksum)| {
+                use std::fmt::Write as _;
+                let _ = write!(
+                    paste,
                     "    ExpectedMigration {{\n        name: \"{name}\",\n        checksum: \
-                     \"{checksum}\",\n    }},\n"
-                )
-            })
-            .collect();
+                 \"{checksum}\",\n    }},\n"
+                );
+                paste
+            });
         assert_eq!(
             compiled, checksums,
             "`postgres::EXPECTED_MIGRATIONS` is what `serve` refuses to boot without; it has \

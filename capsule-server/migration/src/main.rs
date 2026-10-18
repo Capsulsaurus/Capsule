@@ -1,9 +1,13 @@
 //! The operator's migration command.
 //!
 //! `capsule-server serve` deliberately does **not** run migrations: it reads `seaql_migrations`
-//! and refuses to start when the schema is not the one it was built against
-//! (`capsule_server::postgres::assert_schema_current`). A server that migrates on start runs
-//! the migration once per replica on a rolling deploy, which is a schema change racing itself.
+//! and the checksum ledger this binary writes beside it, and refuses to start when the schema is
+//! not the one it was built against (`capsule_server::postgres::assert_schema_current`). A
+//! server that migrates on start runs the migration once per replica on a rolling deploy, which
+//! is a schema change racing itself.
+//!
+//! Every migration `up` applies records its source checksum in the same transaction, and every
+//! migration `down` rolls back deletes it (`server_migration::CHECKSUM_LEDGER`).
 
 use sea_orm_migration::prelude::*;
 
