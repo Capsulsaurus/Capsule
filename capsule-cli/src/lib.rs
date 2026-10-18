@@ -18,7 +18,7 @@ use capsule_core::import::{
     execute_with_source_metadata, plan, scan_paths as scan_files,
 };
 use capsule_core::library::{Library, LibraryError, init_library, open_library, rebuild_index};
-use capsule_core::lifecycle::Workspace;
+use capsule_core::lifecycle::{Workspace, unmigrated_sidecars};
 use capsule_core::metadata::FileMetadata;
 use capsule_sdk::net::ConnectionClass;
 use cli::{AuthCommands, Cli, Commands, ImportProviderArg, LibraryCommands, RepairCommands};
@@ -64,6 +64,17 @@ fn as_capsule_cli(ws: Workspace) -> Workspace {
 #[must_use]
 fn as_count(n: usize) -> i64 {
     i64::try_from(n).unwrap_or(i64::MAX)
+}
+
+/// The `capsule library info` row for the unmigrated-sidecar count, plus the pointer at
+/// `capsule library migrate` — `None` when nothing is left to migrate. The count comes from
+/// the keyless scan, since `info` opens the library without a passphrase.
+#[must_use]
+fn library_info_unmigrated(bundle: &Bundle, unmigrated: usize) -> (String, Option<String>) {
+    let count = [("count", Value::Int(as_count(unmigrated)))];
+    let row = bundle.format(keys::LIBRARY_INFO_UNMIGRATED_SIDECARS, &count);
+    let hint = (unmigrated > 0).then(|| bundle.format(keys::LIBRARY_INFO_MIGRATE_HINT, &count));
+    (row, hint)
 }
 
 /// Resolve the persisted-session file path, erroring if the config directory
@@ -243,6 +254,17 @@ async fn dispatch(cli: Cli) -> Result<()> {
                     cfg.last_scrubbed_at
                         .map_or_else(|| "never".to_string(), |t| t.to_string())
                 );
+                let unmigrated = unmigrated_sidecars(&path).len();
+                tracing::debug!(
+                    library = %path.display(),
+                    unmigrated,
+                    "library info: unmigrated-sidecar count"
+                );
+                let (count_line, hint) = library_info_unmigrated(&i18n::cli_bundle(), unmigrated);
+                println!("  {count_line}");
+                if let Some(hint) = hint {
+                    println!("{}", hint.yellow());
+                }
                 lib.close()
                     .map_err(|e| eyre!("Failed to close library: {e}"))?;
             }
@@ -1191,6 +1213,48 @@ fn open_library_or_err(path: &Path) -> Result<Library> {
         }
         other => eyre!("Failed to open library at {}: {other}", path.display()),
     })
+}
+
+#[cfg(test)]
+mod library_info_tests {
+    use super::library_info_unmigrated;
+    use crate::i18n::Bundle;
+
+    fn en() -> Bundle {
+        Bundle::for_locale("en")
+    }
+
+    /// An up-to-date library still shows the row, with a zero, and no migrate pointer.
+    #[test]
+    fn a_fully_signed_library_shows_zero_and_no_hint() {
+        let (row, hint) = library_info_unmigrated(&en(), 0);
+        assert_eq!(row, "Unmigrated sidecars: 0");
+        assert_eq!(hint, None);
+    }
+
+    /// One unsigned sidecar takes the singular hint, still carrying the count (every arm of
+    /// a `#` plural must, or a locale whose `one` covers other numbers drops it); the
+    /// pointer names the verb verbatim.
+    #[test]
+    fn one_unmigrated_sidecar_points_at_the_migrate_verb() {
+        let (row, hint) = library_info_unmigrated(&en(), 1);
+        assert_eq!(row, "Unmigrated sidecars: 1");
+        assert_eq!(
+            hint.as_deref(),
+            Some("Run `capsule library migrate` to admit the 1 unsigned sidecar.")
+        );
+    }
+
+    /// Several take the plural hint, carrying the count.
+    #[test]
+    fn several_unmigrated_sidecars_take_the_plural_hint() {
+        let (row, hint) = library_info_unmigrated(&en(), 3);
+        assert_eq!(row, "Unmigrated sidecars: 3");
+        assert_eq!(
+            hint.as_deref(),
+            Some("Run `capsule library migrate` to admit the 3 unsigned sidecars.")
+        );
+    }
 }
 
 #[cfg(test)]

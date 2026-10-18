@@ -262,6 +262,26 @@ pub(super) fn find_unanchored(root: &Path) -> Vec<UnmigratedSidecar> {
     out
 }
 
+/// The sidecars under the library at `root` that no provenance chain anchors — the set
+/// [`Workspace::open`] reports through [`Workspace::unmigrated_sidecars`], found without a
+/// passphrase or any key material.
+///
+/// The scan only walks `root/media` and probes each unanchored file's shape, so a keyless
+/// caller (`capsule library info`, which opens the library without unlocking it) can report
+/// what [`Workspace::migrate_unsigned_sidecars`] would pick up. A missing `media/` directory
+/// is an empty library, not an error; an unreadable sidecar is reported as
+/// [`UnmigratedShape::Unknown`], never skipped.
+#[must_use]
+pub fn unmigrated_sidecars(root: &Path) -> Vec<UnmigratedSidecar> {
+    let found = find_unanchored(root);
+    tracing::debug!(
+        library = %root.display(),
+        count = found.len(),
+        "keyless unmigrated-sidecar scan"
+    );
+    found
+}
+
 // ── the legacy shape, decoded once and privately ────────────────────────────
 
 /// Re-encode a CBOR [`Value`] and deserialize it as `T`.
@@ -1604,6 +1624,93 @@ mod tests {
         for id in all {
             assert_eq!(ws.verify(&id).unwrap(), VerifyOutcome::Accept, "{id}");
         }
+    }
+
+    // ── T5b: the keyless scan ───────────────────────────────────────────────
+
+    /// A root with no `media/` directory — a freshly initialised library, or a path that is
+    /// not a library at all — has nothing unmigrated, and the scan does not error.
+    #[test]
+    fn keyless_scan_of_a_library_without_media_is_empty() {
+        let lib = TempDir::new().unwrap();
+        assert!(unmigrated_sidecars(lib.path()).is_empty());
+        assert!(unmigrated_sidecars(&lib.path().join("missing")).is_empty());
+    }
+
+    /// The keyless scan needs no workspace: on a tree holding only legacy files — no keys,
+    /// no vault, nothing a passphrase could unlock — it still finds every legacy sidecar,
+    /// with its asset id and shape, in path order.
+    #[test]
+    fn keyless_scan_finds_legacy_sidecars_without_any_key_material() {
+        let lib = TempDir::new().unwrap();
+        let (rich, future, plain) = three_legacy_assets(lib.path());
+
+        let found = unmigrated_sidecars(lib.path());
+        let ids: Vec<Uuid> = found.iter().filter_map(|u| u.asset_id).collect();
+        assert_eq!(ids, vec![rich, future, plain]);
+        assert!(
+            found
+                .iter()
+                .all(|u| u.shape == UnmigratedShape::LegacyUnsigned)
+        );
+        let mut sorted: Vec<PathBuf> = found.iter().map(|u| u.path.clone()).collect();
+        sorted.sort();
+        assert_eq!(
+            found.iter().map(|u| u.path.clone()).collect::<Vec<_>>(),
+            sorted,
+            "deterministic path order"
+        );
+    }
+
+    /// The keyless scan reports exactly what `Workspace::open` reports: it skips a signed
+    /// asset its chain anchors and counts an unknown-shape file, and after the verb it
+    /// finds nothing.
+    #[test]
+    fn keyless_scan_agrees_with_open_before_and_after_the_verb() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let img = src.path().join("signed.jpg");
+        fs::write(&img, b"\xFF\xD8\xFF a signed asset").unwrap();
+
+        let album = {
+            let mut ws = fast_workspace(lib.path());
+            let album = ws.create_album("Imports").unwrap();
+            ws.import_asset(album, &img).unwrap();
+            album
+        };
+        three_legacy_assets(lib.path());
+        let junk_dir = lib.path().join("media/1970/1970-01");
+        let junk = Uuid::from_u128(0xA4);
+        fs::write(
+            junk_dir.join(format!("{}.cbor", junk.simple())),
+            b"not cbor",
+        )
+        .unwrap();
+
+        let keyless = unmigrated_sidecars(lib.path());
+        assert_eq!(keyless.len(), 4, "three legacy plus the unknown file");
+        assert!(
+            keyless
+                .iter()
+                .any(|u| u.asset_id == Some(junk) && u.shape == UnmigratedShape::Unknown)
+        );
+
+        let mut ws = Workspace::open(lib.path(), b"passphrase", fast_params()).unwrap();
+        assert_eq!(keyless.as_slice(), ws.unmigrated_sidecars());
+
+        ws.migrate_unsigned_sidecars(&opts(album)).unwrap();
+        assert_eq!(
+            unmigrated_sidecars(lib.path()).as_slice(),
+            ws.unmigrated_sidecars()
+        );
+        assert_eq!(
+            unmigrated_sidecars(lib.path())
+                .iter()
+                .filter(|u| u.shape == UnmigratedShape::LegacyUnsigned)
+                .count(),
+            0,
+            "every legacy sidecar was migrated"
+        );
     }
 
     // ── T6: trash carry-over ────────────────────────────────────────────────

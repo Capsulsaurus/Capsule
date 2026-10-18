@@ -7263,6 +7263,14 @@
     "message": "Scanning source files…",
     "context": "CLI status line printed while `capsule import` walks the source paths, before any file is planned."
   },
+  "cli.library.info.migrate_hint": {
+    "message": "{count, plural, one {Run `capsule library migrate` to admit the # unsigned sidecar.} other {Run `capsule library migrate` to admit the # unsigned sidecars.}}",
+    "context": "CLI line from `capsule library info`, printed only when the library holds sidecar files without a signature (written by an older version); their assets stay hidden until migrated. `capsule library migrate` is a command and stays verbatim."
+  },
+  "cli.library.info.unmigrated_sidecars": {
+    "message": "Unmigrated sidecars: {count}",
+    "context": "CLI row in the `capsule library info` listing. {count} is how many sidecar files in the library carry no signature (written by an older version) and so are hidden until `capsule library migrate` runs; 0 on an up-to-date library."
+  },
   "cli.library.migrate.failed": {
     "message": "Migration failed: {reason}",
     "context": "CLI failure line for `capsule library migrate`. {reason} is an English error detail. Assets migrated before the failure stay migrated; running the command again continues."
