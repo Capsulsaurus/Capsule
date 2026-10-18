@@ -736,8 +736,8 @@ pub fn dial_client() -> reqwest::Result<reqwest::Client> {
 /// request still wins, which is how the hand-written upload path keeps pinning a per-transport
 /// protocol date.
 ///
-/// `X-Capsule-Sidecar-Schema` rides along too (#404, #520). The design requires it on metadata
-/// updates, and this build writes exactly one sidecar schema
+/// `X-Capsule-Sidecar-Schema` rides along too (#404, #520). The design has clients send it on
+/// metadata updates, and this build writes exactly one sidecar schema
 /// ([`SIDECAR_SCHEMA_V1`](capsule_core::sidecar::SIDECAR_SCHEMA_V1)), so it is a constant of the
 /// build like the suite rather than a property of one write. On the transport, every request
 /// that carries a sidecar carries the number — including a metadata update reached through a
