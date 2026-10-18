@@ -13,7 +13,7 @@
 //! [`assert_non_exportable`](HardwareSigner::assert_non_exportable) says so by returning
 //! [`HardwareSignerError::Exportable`]. It is the reference the native software-signer examples
 //! (Kotlin / Swift) mirror, and the only backend the CI smoke test exercises (Linux, in-process,
-//! bypassing uniffi and any hardware/TPM requirement).
+//! bypassing the FFI and any hardware/TPM requirement).
 //!
 //! For a device that never touches the hardware seam, the simpler path is the fully-software
 //! [`HybridSigningKey`](super::HybridSigningKey) via
@@ -103,7 +103,7 @@ mod tests {
     fn software_signer_smoke() {
         // The Linux software-signer smoke (keys.md Validation, software fallback): enroll the
         // device key, sign a payload, verify it against the published hybrid key. This bypasses
-        // uniffi and all hardware, so it is the backend gated in CI.
+        // the FFI and all hardware, so it is the backend gated in CI.
         let hw = Arc::new(SoftwareSigner::from_seed([5u8; 32]));
         let signer =
             HardwareBackedSigner::enroll(hw.clone(), "device-dsk".into(), &[6u8; 32]).unwrap();

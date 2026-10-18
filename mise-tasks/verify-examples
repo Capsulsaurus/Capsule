@@ -15,7 +15,7 @@ for f in \
     test -f "$f" || { echo "missing HardwareSigner example: $f" >&2; exit 1; }
 done
 # The software-signer smoke: the simplest backend (no uniffi foreign trait, no hardware).
-cargo nextest run -p capsule-core --features ffi --lib crypto::keys::software
+cargo nextest run -p capsule-core --lib crypto::keys::software
 
 # S-D9 + S-P1: the SDK's FFI surface must exist and its host-verifiable smoke must pass.
 #
@@ -26,9 +26,10 @@ cargo nextest run -p capsule-core --features ffi --lib crypto::keys::software
 #           plus escrow put/get, device-directory publish, and hardware-signer
 #           constructor parity over the `FfiHardwareSigner` foreign-trait seam.
 #
-# The native (Swift + Kotlin) harnesses drive the same flows through the generated
-# bindings against a dev server (platform CI's half; the Kotlin toolchain is unavailable
-# on this host — see SLICES.md S-D9).
+# The native (Swift + Kotlin) harnesses implement `FfiHardwareSigner` /
+# `FfiHardwareKeyAgreement` and drive these verbs through the generated `capsule_sdk`
+# bindings (platform CI's half; the Kotlin toolchain is unavailable on this host — see
+# SLICES.md S-D9).
 for f in \
     capsule-sdk/src/ffi.rs \
     capsule-sdk/src/ffi/workspace.rs; do

@@ -7,11 +7,11 @@
 //! foreign-trait seam ([`LocalAuthGate`]) the Swift/Kotlin side implements with
 //! `LAContext` / `BiometricPrompt`.
 //!
-//! **Why a mirror rather than a re-export.** `capsule-core`'s own uniffi surface lives
-//! behind its `ffi` feature in the `capsule_core` namespace, which by the `S-F1` invariant
-//! never shares a binary with `capsule_core_ffi` (see the crate docs). This crate therefore
-//! depends on `capsule-core` with `ffi` **off** and re-declares the two boundary types in
-//! its own namespace, converting at the edge. The policy still has exactly one owner.
+//! **Why a mirror rather than a re-export.** `capsule-core` exports no uniffi namespace:
+//! its gate types are plain Rust, carrying no uniffi derive, so they cannot cross the
+//! boundary as they stand (see the crate docs). This crate therefore re-declares the two
+//! boundary types in its own namespace, converting at the edge. The policy still has
+//! exactly one owner.
 //!
 //! Scope, stated honestly (SR1): this gate is view-time UX protection against a
 //! borrowed-unlocked-phone snoop. It is **not** a cryptographic boundary — the same bytes

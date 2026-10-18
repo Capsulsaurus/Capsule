@@ -28,7 +28,7 @@
 //! path that resolves under both.
 //!
 //! LQIP is *not* here: it lives in the unconditional [`crate::lqip`] module so the import
-//! pipeline, the uniffi FFI and `capsule-wasm` share one implementation (slice `S-B14`). This
+//! pipeline, the app FFI and `capsule-wasm` share one implementation (slice `S-B14`). This
 //! module produces the pixels [`crate::lqip::Lqip::encode`] consumes.
 //!
 //! # What this build can and cannot do

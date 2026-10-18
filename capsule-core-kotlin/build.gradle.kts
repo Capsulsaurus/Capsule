@@ -31,6 +31,10 @@ dependencies {
     // uniffi Kotlin bindings need JNA at runtime. The plain jar carries the host jnidispatch the
     // JVM unit test needs; on-device instrumented tests use the @aar (per-ABI Android natives).
     implementation("net.java.dev.jna:jna:5.14.0")
+    // The `capsule_sdk` namespace exports `async fn` flows (FfiSession, FfiCapsuleClient), which
+    // uniffi lowers to Kotlin `suspend fun`s over kotlinx.coroutines — the generated source does
+    // not compile without it, even though the harness itself calls only synchronous verbs.
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
     implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
 
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
@@ -40,7 +44,7 @@ dependencies {
     androidTestImplementation("androidx.test:runner:1.6.2")
 }
 
-// JVM unit tests load the host libcapsule_core dylib/so through JNA. The repo root is
+// JVM unit tests load the host libcapsule_sdk dylib/so through JNA. The repo root is
 // this module's parent whether it builds standalone (module == Gradle root) or as the
 // app build's `:core` (root == repo) — `rootDir` differs between the two, projectDir
 // does not, so resolve target/ off projectDir.
@@ -70,23 +74,23 @@ val stageUniffiBindings by tasks.registering(Exec::class) {
     description = "Generate + stage the uniffi Kotlin bindings (mise run gen-bindings)"
     group = "ffi"
     workingDir = projectDir
-    // Idempotent: builds target/debug/libcapsule_core + copies capsule_core.kt into
-    // build/generated-bindings/uniffi/capsule_core/ (the sourceSet srcDir above).
+    // Idempotent: builds target/debug/libcapsule_sdk + copies capsule_sdk.kt into
+    // build/generated-bindings/uniffi/capsule_sdk/ (the sourceSet srcDir above).
     commandLine("bash", "stage-bindings.sh")
     outputs.dir(layout.buildDirectory.dir("generated-bindings"))
 }
 
 // cargo-ndk's `-o` lays the per-ABI .so out in the jniLibs directory layout AGP expects
-// (<abi>/libcapsule_core.so). arm64/armv7/x86_64/x86 cover the four Tier-1 Android ABIs.
+// (<abi>/libcapsule_sdk.so). arm64/armv7/x86_64/x86 cover the four Tier-1 Android ABIs.
 val buildAndroidJniLibs by tasks.registering(Exec::class) {
-    description = "Build per-ABI libcapsule_core.so via cargo-ndk into src/main/jniLibs"
+    description = "Build per-ABI libcapsule_sdk.so via cargo-ndk into src/main/jniLibs"
     group = "ffi"
     workingDir = repoRoot
     val jniLibsDir = file("src/main/jniLibs")
     val abiArgs = listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86").flatMap { listOf("-t", it) }
     commandLine(
         listOf("cargo", "ndk", "-o", jniLibsDir.absolutePath) + abiArgs +
-            listOf("--platform", "26", "build", "-p", "capsule-core", "--features", "ffi"),
+            listOf("--platform", "26", "build", "-p", "capsule-sdk", "--features", "ffi"),
     )
     outputs.dir(jniLibsDir)
 }

@@ -1068,7 +1068,6 @@ dependencies = [
  "tracing",
  "tss-esapi",
  "tzf-rs",
- "uniffi",
  "uuid",
  "walkdir",
  "windows-sys 0.60.2",

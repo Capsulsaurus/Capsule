@@ -150,9 +150,9 @@ description = "Rustdoc gate for the whole workspace (intra-doc links, over all i
 env = { RUSTDOCFLAGS = "-D warnings" }
 run = "cargo doc --workspace --no-deps --document-private-items"
 
-# nextest: cross-binary parallel scheduling + process-per-test isolation. Three
-# invocations — the workspace (default features), then capsule-core's and capsule-sdk's
-# FFI surfaces. The workspace run includes `capsule-e2e`, the bounded E2E cases over the
+# nextest: cross-binary parallel scheduling + process-per-test isolation. Two
+# invocations — the workspace (default features), then capsule-sdk's `ffi` surface (the
+# `capsule_sdk` uniffi namespace; capsule-core exports none). The workspace run includes `capsule-e2e`, the bounded E2E cases over the
 # real SDK, library and server composition root (no container, no env gate; issue #409).
 # nextest does not run doctests, so the last step runs them with `cargo test --doc` for
 # the crates whose doctests are part of the contract: capsule-i18n's crate example and
@@ -161,7 +161,6 @@ run = "cargo doc --workspace --no-deps --document-private-items"
 [tasks.test-rust]
 run = [
   "cargo nextest run --workspace",
-  "cargo nextest run -p capsule-core --features ffi",
   "cargo nextest run -p capsule-sdk --features ffi",
   "cargo test --doc -p capsule-i18n",
 ]
@@ -386,30 +385,29 @@ description = "Print README translatable blocks as a translation-data scaffold"
 run = "cargo run -q -p xtask -- translate-readme --extract"
 
 # ── FFI: uniffi bindings for Kotlin/Swift ────────────────────────────────────
-# Two uniffi surfaces behind their crates' `ffi` feature (one pinned uniffi 0.31.1
-# — the S-F1 consolidation): capsule-core's `FfiWorkspace` (offline lifecycle) and
-# capsule-sdk's `FfiCapsuleClient`/`FfiSession` (the S-D9 user-flow primitives:
-# login → upload → status → sync). `gen-bindings` emits the Kotlin/Swift sources for
-# both from the compiled cdylibs. The `ffi-bindgen` feature adds uniffi's CLI.
+# Two uniffi namespaces on one pinned uniffi (0.31.1 — the S-F1 consolidation), and an
+# app links both as one library (ADR-0005): `capsule_sdk`, behind capsule-sdk's `ffi`
+# feature (the `FfiCapsuleClient`/`FfiSession` S-D9 user flows, the S-P1 `FfiWorkspace`
+# verbs and the hardware-signer seams), and `capsule_core_ffi`, the catalog crate that is
+# also the Apple umbrella staticlib. capsule-core itself exports no namespace.
+# `gen-bindings` emits the `capsule_sdk` Kotlin/Swift sources from its compiled cdylib;
+# the `ffi-bindgen` feature adds uniffi's CLI.
 
 [tasks.build-ffi]
-run = [
-  "cargo build -p capsule-core --features ffi",
-  "cargo build -p capsule-sdk --features ffi",
-]
+run = "cargo build -p capsule-sdk --features ffi"
 
 [tasks.lint-check-ffi]
-run = [
-  "cargo clippy -p capsule-core --features ffi --all-targets -- $CLIPPY_FLAGS",
-  "cargo clippy -p capsule-sdk --features ffi --all-targets -- $CLIPPY_FLAGS",
-]
+run = "cargo clippy -p capsule-sdk --features ffi --all-targets -- $CLIPPY_FLAGS"
 
 # gen-bindings, verify-examples → mise-tasks/ (shebang scripts).
 
 # ── Cross-compilation: FFI / mobile targets ──────────────────────────────────
-# capsule-core builds as cdylib+staticlib (see its [lib] crate-type) so it links
-# into iOS/Android. This is the formal definition of the targets the crate
-# verifies; .github/workflows/ci.yml `rust-cross` enforces it.
+# The mobile artifact is capsule-sdk with `--features ffi`, built as cdylib+staticlib
+# (see its [lib] crate-type): the cdylib is the Android `.so` the Kotlin bindings load,
+# and on Apple the capsule-core-ffi umbrella staticlib carries it alongside the
+# catalog. Both link capsule-core as an rlib, so every target below also cross-builds
+# capsule-core. This is the formal definition of the targets the FFI verifies;
+# .github/workflows/ci.yml `rust-cross` enforces it.
 #
 #   Tier 1 — CI-gated on every PR:
 #     x86_64-unknown-linux-gnu      (host; covered by the `rust` workspace build)
@@ -431,10 +429,10 @@ run = [
 ]
 
 [tasks.build-windows]
-description = "Build capsule-core FFI for x86_64-pc-windows-msvc (Tier 2)"
-run = "cargo build -p capsule-core --features ffi --target x86_64-pc-windows-msvc"
+description = "Build the capsule-sdk FFI for x86_64-pc-windows-msvc (Tier 2)"
+run = "cargo build -p capsule-sdk --features ffi --target x86_64-pc-windows-msvc"
 
-# Sequential: each builds capsule-core into the shared target/ tree.
+# Sequential: each builds capsule-sdk (and capsule-core under it) into the shared target/ tree.
 [tasks.build-targets]
 description = "Build the Tier-1 cross targets (Apple + Android + Linux cross)"
 run = ["mise run build-apple", "mise run build-android", "mise run build-linux-cross"]

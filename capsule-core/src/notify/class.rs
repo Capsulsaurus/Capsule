@@ -75,7 +75,7 @@ impl AlertClass {
     ///
     /// The enum is closed, so an unrecognized name is `None` — a structural error for the
     /// caller to report, never a class that is silently dropped. This exists so a boundary that
-    /// carries the name as a plain string (the uniffi FFI's suppression map, a persisted
+    /// carries the name as a plain string (the app FFI's suppression map, a persisted
     /// client preference) has one table to parse against rather than its own copy.
     #[must_use]
     pub fn from_wire(name: &str) -> Option<Self> {

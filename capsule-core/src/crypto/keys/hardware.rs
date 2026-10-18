@@ -7,8 +7,9 @@
 //! master key. A hybrid signature is therefore composed from a hardware-produced Ed25519
 //! signature and a software-produced ML-DSA-65 signature.
 //!
-//! [`HardwareSigner`] is the seam native code implements — over the uniffi foreign-trait
-//! boundary under the `ffi` feature; a plain Rust trait otherwise. [`HardwareBackedSigner`]
+//! [`HardwareSigner`] is the seam native code implements — a plain Rust trait here, reached from
+//! Swift/Kotlin through the `capsule_sdk` namespace's `FfiHardwareSigner` foreign trait, which
+//! adapts to it one call per method. [`HardwareBackedSigner`]
 //! adapts it to [`Signer`]. The per-platform round-trip + non-exportability harness is owned by
 //! the design (`keys.md` Validation); the in-process contract is exercised here against a mock.
 //!
@@ -22,10 +23,9 @@ use super::hybrid_sig::{HybridSignature, HybridVerifyingKey};
 use super::signer::Signer;
 use crate::crypto::CryptoError;
 
-/// The per-platform hardware secure element, implemented by native code (Swift/Kotlin) over the
-/// uniffi foreign-trait boundary. Rust calls *into* it to enroll a non-exportable Ed25519 key
-/// and to sign with it; the ML-DSA-65 half is handled in Rust.
-#[cfg_attr(feature = "ffi", uniffi::export(with_foreign))]
+/// The per-platform hardware secure element, implemented by native code (Swift/Kotlin) behind the
+/// `capsule_sdk` namespace's `FfiHardwareSigner` foreign trait. Rust calls *into* it to enroll a
+/// non-exportable Ed25519 key and to sign with it; the ML-DSA-65 half is handled in Rust.
 pub trait HardwareSigner: Send + Sync {
     /// Generate (or bind to) the hardware Ed25519 keypair for `key_alias`, returning its
     /// 32-byte public key. Idempotent per alias.
@@ -48,8 +48,8 @@ pub trait HardwareSigner: Send + Sync {
 }
 
 /// The per-platform hardware **key-agreement** element — the ECDH analogue of
-/// [`HardwareSigner`], implemented by native code (Swift/Kotlin) over the uniffi foreign-trait
-/// boundary. It backs the hardware-bound classical half of the device **encryption** key (DEK):
+/// [`HardwareSigner`], implemented by native code (Swift/Kotlin) behind the `capsule_sdk`
+/// namespace's `FfiHardwareKeyAgreement` foreign trait. It backs the hardware-bound classical half of the device **encryption** key (DEK):
 /// shipping secure elements expose **ECDH-P256** (Secure Enclave `P256.KeyAgreement`, StrongBox
 /// ECDH, TPM 2.0 ECDH), so the DEK's X25519 half of [the X-Wing KEM](super::DekKeypair) is replaced by a
 /// hardware-held P-256 static key while the ML-KEM-768 half stays software-sealed. The element
@@ -57,7 +57,6 @@ pub trait HardwareSigner: Send + Sync {
 /// ML-KEM half and the hybrid combiner (SSoT: [Cryptography — Keys § Device Keys], slice `S-F5`).
 ///
 /// [Cryptography — Keys § Device Keys]: https://docs/design/cryptography/keys/#device-keys
-#[cfg_attr(feature = "ffi", uniffi::export(with_foreign))]
 pub trait HardwareKeyAgreement: Send + Sync {
     /// Generate (or bind to) the hardware P-256 key-agreement keypair for `key_alias`, returning
     /// its public key as **uncompressed SEC1 / x9.63** (`0x04‖x‖y`, 65 bytes — the form Secure
@@ -86,7 +85,6 @@ pub trait HardwareKeyAgreement: Send + Sync {
 
 /// Failure surfaced by a [`HardwareSigner`] or [`HardwareKeyAgreement`] backend.
 #[derive(Debug, thiserror::Error)]
-#[cfg_attr(feature = "ffi", derive(uniffi::Error), uniffi(flat_error))]
 pub enum HardwareSignerError {
     /// The user cancelled the biometric / the element refused authentication.
     #[error("hardware authentication cancelled")]

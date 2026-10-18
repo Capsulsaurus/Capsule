@@ -43,4 +43,4 @@
 # "call can throw, but it is not marked with 'try'". Off, for the same reason as
 # hoistTry: the whole test suite is macro invocations.
 --disable preferKeyPath
---exclude .build,Sources/CapsuleHardware/capsule_core.swift
+--exclude .build,Sources/CapsuleHardware/capsule_sdk.swift

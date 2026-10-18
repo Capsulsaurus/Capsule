@@ -5,18 +5,18 @@ import org.bouncycastle.crypto.generators.HKDFBytesGenerator
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
 import org.bouncycastle.crypto.params.HKDFParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
-import uniffi.capsule_core.HardwareSigner
-import uniffi.capsule_core.HardwareSignerException
+import uniffi.capsule_sdk.FfiHardwareSigner
+import uniffi.capsule_sdk.FfiHardwareSignerException
 
 /**
- * Software [HardwareSigner] — the no-secure-element fallback, mirroring the Rust and Swift
+ * Software [FfiHardwareSigner] —the no-secure-element fallback, mirroring the Rust and Swift
  * `SoftwareSigner`. The classical Ed25519 key lives in process memory, derived deterministically
  * (HKDF-SHA512, per `keyAlias`) from a 32-byte seed the caller is responsible for sealing.
  *
  * Because it produces a genuine 32-byte Ed25519 public key and 64-byte signature, this backend
  * plugs **directly** into `FfiWorkspace.createWithHardwareSigner` — it is the one the JVM smoke
  * test drives end to end. It offers no hardware non-exportability, which [assertNonExportable]
- * reports truthfully by throwing [HardwareSignerException.Exportable].
+ * reports truthfully by throwing [FfiHardwareSignerException.Exportable].
  *
  * The derivation matches the Rust/Swift references (salt = `keyAlias`, info =
  * `capsule/software-signer/ed25519/v1`), so the same seed yields the same device key in every
@@ -25,7 +25,7 @@ import uniffi.capsule_core.HardwareSignerException
  */
 class SoftwareSigner(
     private val seed: ByteArray,
-) : HardwareSigner {
+) : FfiHardwareSigner {
     init {
         require(seed.size == 32) { "software signer seed must be 32 bytes" }
     }
@@ -56,7 +56,7 @@ class SoftwareSigner(
     override fun assertNonExportable(keyAlias: String) {
         // Honest by design: a software key is readable, so it can never meet the hardware
         // non-exportability contract a Secure Enclave / StrongBox / TPM does.
-        throw HardwareSignerException.Exportable("software key is exportable")
+        throw FfiHardwareSignerException.Exportable("software key is exportable")
     }
 
     private companion object {

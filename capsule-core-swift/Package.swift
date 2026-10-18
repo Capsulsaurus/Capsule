@@ -2,9 +2,9 @@
 import Foundation
 import PackageDescription
 
-// Standalone harness that links the compiled `capsule-core` and proves the uniffi Swift bindings
-// work before any app integration. Run `./stage-bindings.sh` first: it builds
-// libcapsule_core.dylib and stages the generated `capsule_core.swift` + `capsule_coreFFI.h`.
+// Standalone harness that links the compiled `capsule-sdk` and proves the `capsule_sdk` uniffi Swift
+// bindings work before any app integration. Run `./stage-bindings.sh` first: it builds
+// libcapsule_sdk.dylib and stages the generated `capsule_sdk.swift` + `capsule_sdkFFI.h`.
 //
 // Absolute path to the repo's cargo target dir, so the linker and the runtime loader find the
 // dylib regardless of the directory `swift test` runs from.
@@ -21,16 +21,16 @@ let package = Package(
         .library(name: "CapsuleHardware", targets: ["CapsuleHardware"]),
     ],
     targets: [
-        // The C module exposing the generated uniffi FFI header (capsule_coreFFI.h).
-        .target(name: "capsule_coreFFI"),
-        // The generated Swift bindings + the per-platform HardwareSigner references.
+        // The C module exposing the generated uniffi FFI header (capsule_sdkFFI.h).
+        .target(name: "capsule_sdkFFI"),
+        // The generated Swift bindings + the per-platform FfiHardwareSigner references.
         .target(
             name: "CapsuleHardware",
-            dependencies: ["capsule_coreFFI"],
+            dependencies: ["capsule_sdkFFI"],
             linkerSettings: [
                 .unsafeFlags([
                     "-L\(targetDebug)",
-                    "-lcapsule_core",
+                    "-lcapsule_sdk",
                     "-Xlinker", "-rpath", "-Xlinker", targetDebug,
                 ]),
             ]

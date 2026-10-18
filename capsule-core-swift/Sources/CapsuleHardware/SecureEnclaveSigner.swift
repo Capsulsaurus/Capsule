@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-/// A Secure Enclave–backed ``HardwareSigner`` (Apple, iOS / macOS). The private key is generated
+/// A Secure Enclave–backed ``FfiHardwareSigner`` (Apple, iOS / macOS). The private key is generated
 /// inside the Secure Enclave and never leaves it — there is no API to read the private bytes, so
 /// non-exportability is enforced by the platform.
 ///
@@ -17,7 +17,7 @@ import Foundation
 ///
 /// A production app persists `dataRepresentation` of each key (the encrypted SE blob) in the
 /// Keychain and reloads it; this reference keeps the handles in memory.
-public final class SecureEnclaveSigner: HardwareSigner, @unchecked Sendable {
+public final class SecureEnclaveSigner: FfiHardwareSigner, @unchecked Sendable {
     private var keys: [String: SecureEnclave.P256.Signing.PrivateKey] = [:]
     private let lock = NSLock()
 
@@ -30,7 +30,7 @@ public final class SecureEnclaveSigner: HardwareSigner, @unchecked Sendable {
             return existing
         }
         guard SecureEnclave.isAvailable else {
-            throw HardwareSignerError.Unavailable(message: "Secure Enclave unavailable")
+            throw FfiHardwareSignerError.Unavailable(message: "Secure Enclave unavailable")
         }
         let key = try SecureEnclave.P256.Signing.PrivateKey()
         keys[keyAlias] = key

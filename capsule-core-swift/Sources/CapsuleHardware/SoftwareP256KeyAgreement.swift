@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-/// A software **P-256 ECDH** ``HardwareKeyAgreement`` — the no-secure-element reference the real
+/// A software **P-256 ECDH** ``FfiHardwareKeyAgreement`` — the no-secure-element reference the real
 /// Secure Enclave replaces, and the always-runnable path for the hardware-bound device **encryption**
 /// key's classical half (slice S-F5; a CI VM has no Secure Enclave). It mirrors
 /// ``SecureEnclaveKeyAgreement``'s wire contract exactly — a 65-byte x9.63 (uncompressed SEC1)
@@ -12,7 +12,7 @@ import Foundation
 ///
 /// It offers no hardware non-exportability, which ``assertNonExportable(keyAlias:)`` reports
 /// truthfully by throwing `.Exportable`.
-public final class SoftwareP256KeyAgreement: HardwareKeyAgreement, @unchecked Sendable {
+public final class SoftwareP256KeyAgreement: FfiHardwareKeyAgreement, @unchecked Sendable {
     private static let info = Data("capsule/software-key-agreement/p256/v1".utf8)
     private let seed: Data
 
@@ -54,6 +54,6 @@ public final class SoftwareP256KeyAgreement: HardwareKeyAgreement, @unchecked Se
     public func assertNonExportable(keyAlias: String) throws {
         // Honest by design: a software key is readable, so it can never meet the hardware
         // non-exportability contract a Secure Enclave / StrongBox / TPM does.
-        throw HardwareSignerError.Exportable(message: "software P-256 key is exportable")
+        throw FfiHardwareSignerError.Exportable(message: "software P-256 key is exportable")
     }
 }
