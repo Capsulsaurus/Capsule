@@ -29,7 +29,7 @@ pub mod derivative_format;
 
 /// LQIP — the chromahash placeholder carried in the signed sidecar's `lqip` field (S-B14).
 /// Always compiled, and deliberately so: the placeholder is produced by the import pipeline,
-/// read by the apps through the uniffi FFI, and read by the browser through `capsule-wasm`, so
+/// read by the apps through the FFI crates, and read by the browser through `capsule-wasm`, so
 /// there is exactly one implementation and every surface links it. `chromahash` has zero
 /// runtime dependencies and targets `wasm32-unknown-unknown`. The one `native`-gated part is
 /// [`lqip::sidecar`], because [`sidecar`] itself is.
@@ -92,11 +92,3 @@ pub mod utils;
 // `rusqlite`, `sqlite-vec`, OpenMLS and libcrux in order to call the refuse-by-default invariants
 // it exists to enforce.
 pub mod validation;
-
-/// uniffi-generated bindings surface for Kotlin/Swift (`ffi` feature). The exported API is a
-/// thin wrapper over [`lifecycle::Workspace`]; see [`ffi`].
-#[cfg(feature = "ffi")]
-pub mod ffi;
-
-#[cfg(feature = "ffi")]
-uniffi::setup_scaffolding!();

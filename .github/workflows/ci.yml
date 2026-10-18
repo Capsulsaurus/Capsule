@@ -325,8 +325,9 @@ jobs:
           NEXTEST_PROFILE: ci
         run: mise run test-rust-containers
 
-  # Verify capsule-core cross-compiles to the formally supported targets (mobile +
-  # desktop). Tier 1 (Apple, Android) gates; Tier 2 (Windows MSVC, aarch64 Linux)
+  # Verify the app FFI — capsule-sdk with `--features ffi`, plus the capsule-core-ffi
+  # umbrella on Apple, both linking capsule-core — cross-compiles to the formally
+  # supported targets (mobile + desktop). Tier 1 (Apple, Android) gates; Tier 2 (Windows MSVC, aarch64 Linux)
   # is best-effort via continue-on-error. The host x86_64 Linux Tier-1 target is
   # already covered by the `rust` job's workspace build.
   rust-cross:

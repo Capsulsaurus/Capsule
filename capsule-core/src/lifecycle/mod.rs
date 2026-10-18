@@ -81,7 +81,6 @@ use crate::sidecar::sidecar_v1::{Gps, SidecarV1, StackMembership, StackRole};
 
 /// Errors from lifecycle operations.
 #[derive(Debug, Error)]
-#[cfg_attr(feature = "ffi", derive(uniffi::Error), uniffi(flat_error))]
 pub enum LifecycleError {
     /// Filesystem error.
     #[error("io: {0}")]

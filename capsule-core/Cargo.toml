@@ -5,18 +5,10 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
-[lib]
-# `lib` (rlib) keeps the rest of the workspace linking capsule-core unchanged.
-# `cdylib` is the Android `.so` and `staticlib` the iOS XCFramework input for the
-# uniffi bindings (see the `ffi` feature). Cargo cannot gate crate-type by feature,
-# so host builds also emit these artifacts — an accepted, cheap cost.
-crate-type = ["lib", "cdylib", "staticlib"]
-
-# Generates the Kotlin/Swift bindings from the compiled cdylib (library mode). Built
-# only with `--features ffi-bindgen`, so the `cli` deps never enter the mobile artifact.
-[[bin]]
-name = "uniffi-bindgen"
-required-features = ["ffi-bindgen"]
+# A plain rlib. capsule-core exports no uniffi namespace of its own: the apps reach it through
+# `capsule-sdk`'s `capsule_sdk` namespace (cdylib for Android, staticlib via the
+# `capsule-core-ffi` umbrella for Apple), which links this crate like any other dependent
+# (ADR-0005).
 
 [features]
 # `native` (default) is the on-device library/import/lifecycle surface: it links SQLite,
@@ -90,11 +82,6 @@ mls = [
     "dep:openmls_basic_credential",
     "dep:openmls_memory_storage",
 ]
-# `ffi` exposes the uniffi-annotated surface (FfiWorkspace + foreign traits). It wraps the
-# native `lifecycle::Workspace`, so it implies `native`. `ffi-bindgen` additionally pulls
-# uniffi's CLI so the `uniffi-bindgen` bin can emit the bindings.
-ffi = ["native", "dep:uniffi"]
-ffi-bindgen = ["ffi", "uniffi/cli"]
 # `test-support` exposes the entry points that let a caller choose the backup artifact's Argon2id
 # wrap cost (`backup::export_with_params`, `backup::export_with_salt_and_params`,
 # `Workspace::export_backup_with_params`). **Never in `default`, and never in a shipping
@@ -127,7 +114,7 @@ ciborium = "0.2"
 half = "2"               # IEEE-754 f16 for RFC 8949 §4.2 shortest-float canonical CBOR
 globset = "0.4.18"
 # The LQIP placeholder codec (SSoT: Thumbnails — LQIP; slice S-B14). **Not optional and not
-# feature-gated**: `capsule_core::lqip` is linked identically by the CLI, the uniffi FFI and
+# feature-gated**: `capsule_core::lqip` is linked identically by the CLI, the app FFI and
 # `capsule-wasm`, so a photo's placeholder never depends on which client imported it. Safe to
 # keep unconditional because chromahash has zero runtime dependencies and builds for
 # `wasm32-unknown-unknown` (it ships a `simd128` backend alongside AVX2/SSE2 and NEON).
@@ -228,11 +215,6 @@ sharks = "0.5"           # Shamir secret sharing (opt-in 2-of-3 recovery)
 # Non-optional: the native library/import/lifecycle surface instruments hot-path spans and
 # events, and the WASM sealing build links only the facade (no subscriber), which is free.
 tracing = { workspace = true }
-
-# ── FFI (optional; `ffi` feature) ──────────────────────────────────────────
-# uniffi proc-macro bindings for Kotlin/Swift. Optional so the default library
-# build (CLI, server, tests) never compiles it.
-uniffi = { version = "0.31", optional = true }
 
 # ── MLS group layer (optional; `mls` feature, implied by `native`) ──────────
 # RFC 9420 MLS backing the live `OpenMlsAuthority`, pinned to the X-Wing PQ ciphersuite
