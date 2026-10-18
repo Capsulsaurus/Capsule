@@ -39,7 +39,7 @@
 //!   parsed, and `open` itself allocates each IFD entry's value at the count the entry claims,
 //!   so before it runs, a no-allocation walk of the IFD chain (`tiff_bounds`, issue #644)
 //!   refuses as [`MediaError::Decode`] any entry whose value needs more bytes than the file
-//!   holds.
+//!   holds, and (issue #647) any IFD nested deeper than `open`'s recursion can safely follow.
 //! - **Orientation** is applied by `process`, so it is reported in `orientation_applied` and
 //!   never applied a second time here.
 //! - **Unsupported variants defer.** Upstream decodes Sony lossless-JPEG ARW and uncompressed or
@@ -91,7 +91,7 @@ use rawshift_image::transforms::orientation::apply_orientation;
 
 use super::detect::{MAX_DECODE_PIXELS, StillFormat};
 use super::error::{FormatOp, MediaError};
-use super::tiff_bounds::check_ifd_value_counts;
+use super::tiff_bounds::{IfdRefusal, MAX_IFD_DEPTH, check_ifd_bounds};
 use crate::lqip::{Gamut, RgbaImage};
 
 /// The EXIF orientation value meaning "already upright".
@@ -829,27 +829,37 @@ fn open_raw_within(
     limit: u64,
 ) -> Result<(OpenRaw<'_>, MediaMetadata), MediaError> {
     // Before `open`, because `open` allocates each IFD entry's value at the count the entry
-    // claims; see `tiff_bounds`.
-    let walk = check_ifd_value_counts(bytes).map_err(|oversized| {
-        tracing::warn!(
-            %format,
-            ifd_offset = oversized.ifd_offset,
-            tag = oversized.tag,
-            data_type = oversized.data_type,
-            count = oversized.count,
-            file_len = oversized.file_len,
-            "media: refused a RAW still whose IFD entry claims more than the file holds"
-        );
+    // claims, and recurses into nested IFDs with no depth limit; see `tiff_bounds`.
+    let walk = check_ifd_bounds(bytes).map_err(|refusal| {
+        match &refusal {
+            IfdRefusal::Oversized(oversized) => tracing::warn!(
+                %format,
+                ifd_offset = oversized.ifd_offset,
+                tag = oversized.tag,
+                data_type = oversized.data_type,
+                count = oversized.count,
+                file_len = oversized.file_len,
+                "media: refused a RAW still whose IFD entry claims more than the file holds"
+            ),
+            IfdRefusal::TooDeep(deep) => tracing::warn!(
+                %format,
+                ifd_offset = deep.ifd_offset,
+                depth = deep.depth,
+                max_depth = MAX_IFD_DEPTH,
+                "media: refused a RAW still whose IFDs nest past the depth bound"
+            ),
+        }
         MediaError::Decode {
             format,
-            detail: format!("RAW IFD bounds: {oversized}"),
+            detail: format!("RAW IFD bounds: {refusal}"),
         }
     })?;
     tracing::trace!(
         %format,
         ifds = walk.ifds,
         entries = walk.entries,
-        "media: RAW IFD value counts are within the file"
+        depth = walk.depth,
+        "media: RAW IFD value counts are within the file and its IFDs within the depth bound"
     );
     let raw = RawFile::open(Cursor::new(bytes)).map_err(|e| raw_error(format, "open", e))?;
     let layout = raw_layout(&raw, format)?;
