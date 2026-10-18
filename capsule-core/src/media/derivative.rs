@@ -74,10 +74,9 @@ use uuid::Uuid;
 use super::decode::DecodedImage;
 use super::error::MediaError;
 use super::resize::downscale_rgba8;
-use crate::cbor;
 use crate::crypto::CryptoError;
 use crate::crypto::encryption::NONCE_PREFIX_LEN;
-use crate::crypto::hash::{self, Hash32};
+use crate::crypto::hash::Hash32;
 use crate::crypto::keys::{AmkVersion, Signer};
 use crate::crypto::provenance::{
     DERIVATIVE_MANIFEST_VERSION, DerivativeCore, DerivativeManifest, DerivativeRole,
@@ -567,13 +566,9 @@ pub(super) fn sign_derivative(
         .map_err(|e: CryptoError| MediaError::Sign {
             detail: format!("signing the derivative manifest: {e}"),
         })?;
-    // The next manifest of this role chains to this one: SHA-256 over its canonical CBOR,
-    // signatures included — the same content-hash link the asset provenance chain uses.
-    *prior = Some(hash::hash_bytes(
-        &cbor::to_canonical_vec(&manifest).map_err(|e| MediaError::Sign {
-            detail: format!("serialising the derivative manifest: {e}"),
-        })?,
-    ));
+    // The next manifest of this role chains to this one, by the one definition of the link
+    // that `verify_derivative` also walks the chain with.
+    *prior = Some(manifest.link_hash());
     Ok(GeneratedDerivative {
         tier,
         format,

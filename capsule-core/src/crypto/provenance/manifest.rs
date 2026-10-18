@@ -351,6 +351,23 @@ impl DerivativeCore {
     }
 }
 
+impl DerivativeManifest {
+    /// The canonical bytes both signatures cover.
+    pub fn signing_bytes(&self) -> Vec<u8> {
+        self.core.signing_bytes()
+    }
+
+    /// The chain link the next manifest of this `(source_asset_id, role)` names as its
+    /// `prior_provenance_hash`: SHA-256 over this manifest's canonical CBOR, signatures
+    /// included — the same content-hash link the asset provenance chain uses, and the value
+    /// the producer (`media::derivative`) chains with.
+    pub fn link_hash(&self) -> Hash32 {
+        crate::crypto::hash::hash_bytes(
+            &cbor::to_canonical_vec(self).expect("derivative manifest serializes"),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
