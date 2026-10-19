@@ -252,6 +252,7 @@ pub async fn assemble(config: &Config) -> Result<Assembled, BootError> {
     let base = base(config).await?;
     match config.backends {
         Backends::Memory => {
+            warn_in_memory();
             let stores = base.in_memory();
             let ports = memory_ports(config, &stores.clock)?;
             compose(config, stores, ports, "the in-memory adapters")
@@ -268,6 +269,19 @@ pub async fn assemble(config: &Config) -> Result<Assembled, BootError> {
             compose(config, stores, ports, "the Postgres and Valkey adapters")
         }
     }
+}
+
+/// Say, at `WARN` and on every start, that this process runs on the in-memory adapters.
+///
+/// `--memory` is a development act and never a deployment profile, so a process that comes up on
+/// it says so loudly enough to be seen under a production log filter: everything it holds apart
+/// from the blob bytes is gone when it exits (#521).
+fn warn_in_memory() {
+    tracing::warn!(
+        backends = "memory",
+        "running on the in-memory adapters (--memory): a development profile, never a \
+         deployment; all state but the blob bytes is lost when this process exits"
+    );
 }
 
 /// Open the durable pool and refuse a schema this binary was not built for.
@@ -308,7 +322,10 @@ async fn open_durable_database(config: &Config) -> Result<sea_orm::DatabaseConne
 pub async fn assemble_maintenance(config: &Config) -> Result<Maintenance, BootError> {
     let base = base(config).await?;
     let (stores, adapters) = match config.backends {
-        Backends::Memory => (base.in_memory(), "the in-memory adapters"),
+        Backends::Memory => {
+            warn_in_memory();
+            (base.in_memory(), "the in-memory adapters")
+        }
         // The same two probes, in the same order, as `serve`'s durable arm — and the same
         // stores, so a `gc` pass reads the index the server writes and the marks the previous
         // pass left. That last part is the reason the arm exists: the collector marks a blob on

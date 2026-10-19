@@ -298,6 +298,28 @@ fn serving_without_valkey_and_without_the_memory_profile_refuses_by_name() {
 }
 
 #[test]
+fn the_environment_cannot_select_the_memory_profile() {
+    // Only `--memory` does (#521). The retired `CAPSULE_PROFILE=memory` is ignored, with a
+    // warning, so this is the durable serve above and is refused for the Valkey it lacks.
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let (code, _, stderr) = run(server(&[
+        "serve",
+        "--listen",
+        EPHEMERAL,
+        "--blob-root",
+        &root.path().display().to_string(),
+    ])
+    .env("JWT_ED25519_DER", EXAMPLE_DER)
+    .env("CAPSULE_PROFILE", "memory"));
+    assert_eq!(code, Some(2), "{stderr}");
+    assert!(stderr.contains("VALKEY_URL"), "{stderr}");
+    assert!(
+        stderr.contains("CAPSULE_PROFILE is no longer read"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn a_durable_backend_refuses_by_name_rather_than_falling_back() {
     // The other half of the same property: the operator *did* set `VALKEY_URL`, and falling
     // back to the in-memory adapters is the one thing that must never happen.
@@ -507,6 +529,11 @@ fn a_collection_pass_over_an_empty_store_has_nothing_to_do() {
     let (code, stdout, stderr) = run(&mut operator("gc", root.path(), &[]));
     assert_eq!(code, Some(0), "stdout: {stdout}\nstderr: {stderr}");
     assert!(stdout.contains("nothing to do"), "{stdout}");
+    // Every in-memory start says so at `WARN`, the level this suite's `RUST_LOG` keeps (#521).
+    assert!(
+        stderr.contains("running on the in-memory adapters"),
+        "{stderr}"
+    );
 }
 
 #[test]
