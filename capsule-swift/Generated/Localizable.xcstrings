@@ -29049,6 +29049,106 @@
         }
       }
     },
+    "cli.auth.escrow.already_stored": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This account already has recovery set up. Run the command again with --replace to store a new recovery secret; the old one will stop working."
+          }
+        }
+      }
+    },
+    "cli.auth.escrow.failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recovery setup failed: %@"
+          }
+        }
+      }
+    },
+    "cli.auth.escrow.in_progress": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Setting up recovery for the library at %@…"
+          }
+        }
+      }
+    },
+    "cli.auth.escrow.library_has_assets": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This library already holds assets created under its own account id, so it cannot be bound to your server account. Run 'capsule auth escrow' on a fresh library instead."
+          }
+        }
+      }
+    },
+    "cli.auth.escrow.passphrase_prompt": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Library passphrase"
+          }
+        }
+      }
+    },
+    "cli.auth.escrow.replaced": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This replaced the account's earlier recovery backup: the previous recovery secret no longer works. Re-export or destroy any backup made under it."
+          }
+        }
+      }
+    },
+    "cli.auth.escrow.secret_shown": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your recovery secret is shown once and never again. Write it down and keep it somewhere safe:\n\n    %@\n"
+          }
+        }
+      }
+    },
+    "cli.auth.escrow.success": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recovery is set up. The library at %@ is bound to your account, and 'capsule auth recover' can restore your account on a new machine with the recovery secret you saved."
+          }
+        }
+      }
+    },
+    "cli.auth.escrow.typeback_mismatch": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That does not match the recovery secret shown above. Nothing was stored; run the command again for a new secret."
+          }
+        }
+      }
+    },
+    "cli.auth.escrow.typeback_prompt": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Type the recovery secret back to confirm you saved it"
+          }
+        }
+      }
+    },
     "cli.auth.login.email_prompt": {
       "localizations": {
         "ar": {
@@ -29291,6 +29391,210 @@
           "stringUnit": {
             "state": "translated",
             "value": "正在登入 Capsule…"
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_browser_unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No browser could be opened from here. Open the address above in any browser."
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_denied": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The identity provider did not sign you in (%@)."
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_denied_described": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The identity provider did not sign you in (%1$@): %2$@"
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_device_code": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "and enter this code: %@"
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_device_complete": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Or open this address, which already carries the code:"
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_device_in_progress": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signing in to Capsule through your identity provider, from another device…"
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_device_timed_out": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The sign-in was not approved in time. Run the command again to get a new code."
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_device_visit": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On any device with a browser, open this address:"
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_device_waiting": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Waiting up to %lld minute for you to approve the sign-in…"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Waiting up to %lld minutes for you to approve the sign-in…"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_in_progress": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signing in to Capsule through your identity provider…"
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_listener_failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This computer could not listen for the sign-in to come back: %@"
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_loopback_refused": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This server does not accept sign-ins from the command line through its identity provider. Its operator can allow them by setting OIDC_ALLOW_LOOPBACK_REDIRECT=true."
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_page_received": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule received your sign-in. Return to the terminal, which finishes signing you in."
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_page_refused": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The sign-in did not complete. Return to the terminal to see why."
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_success": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signed in through your identity provider."
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_timed_out": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No sign-in came back in time. Run the command again to start a new one."
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_visit": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "To sign in, open this address in a browser:"
+          }
+        }
+      }
+    },
+    "cli.auth.login.oidc_waiting": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Waiting up to %lld minute for the sign-in to finish…"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Waiting up to %lld minutes for the sign-in to finish…"
+                }
+              }
+            }
           }
         }
       }
@@ -29951,6 +30255,86 @@
         }
       }
     },
+    "cli.auth.recover.failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recovery failed: %@"
+          }
+        }
+      }
+    },
+    "cli.auth.recover.in_progress": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recovering your account into %@…"
+          }
+        }
+      }
+    },
+    "cli.auth.recover.passphrase_confirm": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Repeat the library passphrase"
+          }
+        }
+      }
+    },
+    "cli.auth.recover.passphrase_mismatch": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The passphrases do not match."
+          }
+        }
+      }
+    },
+    "cli.auth.recover.passphrase_prompt": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New library passphrase"
+          }
+        }
+      }
+    },
+    "cli.auth.recover.secret_prompt": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recovery secret"
+          }
+        }
+      }
+    },
+    "cli.auth.recover.success": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recovered. The library at %1$@ opens as your account on this device (%2$@)."
+          }
+        }
+      }
+    },
+    "cli.auth.recover.wrong_secret": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That recovery secret does not open this account's recovery backup."
+          }
+        }
+      }
+    },
     "cli.auth.register.failed": {
       "localizations": {
         "en": {
@@ -30111,6 +30495,46 @@
         }
       }
     },
+    "cli.help.auth.escrow.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Set up recovery for a library: bind it to the signed-in account and store its recovery backup under a new recovery secret"
+          }
+        }
+      }
+    },
+    "cli.help.auth.escrow.arg.library": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Path to the Capsule library; it must not hold any assets yet"
+          }
+        }
+      }
+    },
+    "cli.help.auth.escrow.arg.passphrase_stdin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read the library passphrase from stdin instead of prompting"
+          }
+        }
+      }
+    },
+    "cli.help.auth.escrow.arg.replace": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Replace the account's existing recovery backup; the previous recovery secret stops working"
+          }
+        }
+      }
+    },
     "cli.help.auth.login.about": {
       "localizations": {
         "en": {
@@ -30121,12 +30545,42 @@
         }
       }
     },
+    "cli.help.auth.login.arg.device": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "With --oidc, sign in from another device: print an address and a code instead of using a browser here"
+          }
+        }
+      }
+    },
     "cli.help.auth.login.arg.email": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
             "value": "Account email (prompted when omitted)"
+          }
+        }
+      }
+    },
+    "cli.help.auth.login.arg.no_browser": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "With --oidc, print the sign-in address without opening a browser"
+          }
+        }
+      }
+    },
+    "cli.help.auth.login.arg.oidc": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sign in through the server's identity provider in a browser instead of with a password. The server must allow loopback redirects (OIDC_ALLOW_LOOPBACK_REDIRECT=true)"
           }
         }
       }
@@ -30147,6 +30601,46 @@
           "stringUnit": {
             "state": "translated",
             "value": "Logout from Capsule"
+          }
+        }
+      }
+    },
+    "cli.help.auth.recover.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recover the signed-in account onto this machine from its recovery backup"
+          }
+        }
+      }
+    },
+    "cli.help.auth.recover.arg.library": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Directory for the recovered library; it must not hold a library yet"
+          }
+        }
+      }
+    },
+    "cli.help.auth.recover.arg.passphrase_stdin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read the new library passphrase from the next line of stdin instead of prompting"
+          }
+        }
+      }
+    },
+    "cli.help.auth.recover.arg.recovery_secret_stdin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read the recovery secret from the first line of stdin instead of prompting"
           }
         }
       }
@@ -30751,6 +31245,116 @@
         }
       }
     },
+    "cli.help.share.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Issue and revoke view-only share links on the server"
+          }
+        }
+      }
+    },
+    "cli.help.share.create.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Issue a view-only share link for an album or one asset, and print the URL to send"
+          }
+        }
+      }
+    },
+    "cli.help.share.create.arg.album": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Share every asset of this album that is not in trash"
+          }
+        }
+      }
+    },
+    "cli.help.share.create.arg.asset": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Share this one asset"
+          }
+        }
+      }
+    },
+    "cli.help.share.create.arg.expires_at": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "When the link stops opening, as an RFC 3339 timestamp (e.g. 2026-12-31T23:59:59Z)"
+          }
+        }
+      }
+    },
+    "cli.help.share.create.arg.library": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Path to the Capsule library"
+          }
+        }
+      }
+    },
+    "cli.help.share.create.arg.link_passphrase_stdin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "With --protect, read the link passphrase from stdin instead of prompting (the line after the library passphrase when --passphrase-stdin is also given)"
+          }
+        }
+      }
+    },
+    "cli.help.share.create.arg.passphrase_stdin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal"
+          }
+        }
+      }
+    },
+    "cli.help.share.create.arg.protect": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Protect the link with a passphrase the recipient must enter as well as open the URL"
+          }
+        }
+      }
+    },
+    "cli.help.share.revoke.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Revoke a share link, so its URL stops opening"
+          }
+        }
+      }
+    },
+    "cli.help.share.revoke.arg.opaque_id": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The link's opaque id: the 32 hex characters after /s/ in its URL"
+          }
+        }
+      }
+    },
     "cli.help.show.about": {
       "localizations": {
         "en": {
@@ -30977,6 +31581,38 @@
           "stringUnit": {
             "state": "translated",
             "value": "Scanning source files…"
+          }
+        }
+      }
+    },
+    "cli.library.info.migrate_hint": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Run `capsule library migrate` to admit the %lld unsigned sidecar."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Run `capsule library migrate` to admit the %lld unsigned sidecars."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "cli.library.info.unmigrated_sidecars": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unmigrated sidecars: %@"
           }
         }
       }
@@ -31905,6 +32541,200 @@
         }
       }
     },
+    "cli.share.create.empty_scope": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nothing to share: that album holds no assets outside trash."
+          }
+        }
+      }
+    },
+    "cli.share.create.expires_notice": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The link stops opening at %@."
+          }
+        }
+      }
+    },
+    "cli.share.create.expiry_not_in_future": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "--expires-at %@ is not in the future, so the link would never open."
+          }
+        }
+      }
+    },
+    "cli.share.create.failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Share link not issued: %@"
+          }
+        }
+      }
+    },
+    "cli.share.create.in_progress": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Issuing a share link on %@…"
+          }
+        }
+      }
+    },
+    "cli.share.create.invalid_expiry": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "--expires-at %@ is not an RFC 3339 timestamp (for example 2026-12-31T23:59:59Z)."
+          }
+        }
+      }
+    },
+    "cli.share.create.link_passphrase_confirm": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Repeat the link passphrase"
+          }
+        }
+      }
+    },
+    "cli.share.create.link_passphrase_mismatch": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The two link passphrases do not match."
+          }
+        }
+      }
+    },
+    "cli.share.create.link_passphrase_prompt": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Link passphrase (the recipient types it to open the link)"
+          }
+        }
+      }
+    },
+    "cli.share.create.not_held": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld shared asset is not on the server yet, so the link could not show it. Run capsule push for this library first."
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld shared assets are not on the server yet, so the link could not show them. Run capsule push for this library first."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "cli.share.create.passphrase_notice": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The link is passphrase-protected: send the passphrase separately from the URL."
+          }
+        }
+      }
+    },
+    "cli.share.create.revoke_hint": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "To revoke it: capsule share revoke %@"
+          }
+        }
+      }
+    },
+    "cli.share.create.scope_unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This library does not hold that album or asset, or the asset is in trash."
+          }
+        }
+      }
+    },
+    "cli.share.create.success": {
+      "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Share link issued for %lld asset. Anyone with this URL can view it:"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "Share link issued for %lld assets. Anyone with this URL can view them:"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "cli.share.revoke.failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Share link not revoked: %@"
+          }
+        }
+      }
+    },
+    "cli.share.revoke.invalid_opaque_id": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ is not a share link's opaque id: expected the 32 lowercase hex characters after /s/ in its URL."
+          }
+        }
+      }
+    },
+    "cli.share.revoke.success": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Share link %@ no longer opens for anyone."
+          }
+        }
+      }
+    },
     "cli.show.album": {
       "localizations": {
         "en": {
@@ -32291,6 +33121,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "yes"
+          }
+        }
+      }
+    },
+    "cli.stdin.empty": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ was given but stdin was empty"
           }
         }
       }
@@ -38661,6 +39501,56 @@
         }
       }
     },
+    "error.auth.oidc_device_denied": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The sign-in was declined at your identity provider."
+          }
+        }
+      }
+    },
+    "error.auth.oidc_device_expired": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That sign-in code has expired or was already used. Start again."
+          }
+        }
+      }
+    },
+    "error.auth.oidc_device_pending": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for you to finish signing in on your other device."
+          }
+        }
+      }
+    },
+    "error.auth.oidc_device_slow_down": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking too often; slowing down."
+          }
+        }
+      }
+    },
+    "error.auth.oidc_device_unsupported": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Signing in without a browser isn't available with this server's identity provider."
+          }
+        }
+      }
+    },
     "error.auth.oidc_exchange_failed": {
       "localizations": {
         "en": {
@@ -40297,6 +41187,16 @@
         }
       }
     },
+    "error.directory.untrusted_signature": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This account's device list isn't signed by the account key this device trusts."
+          }
+        }
+      }
+    },
     "error.directory.version_conflict": {
       "localizations": {
         "ar": {
@@ -41285,6 +42185,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "無法讀取新增裝置的請求。"
+          }
+        }
+      }
+    },
+    "error.escrow.identity_not_stored": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This account's recovery backup does not include its identity key, so this device cannot be recovered as the same account. Set recovery up again from a device where this account's library still opens, then recover with the new recovery secret."
           }
         }
       }

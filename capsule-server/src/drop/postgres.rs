@@ -23,10 +23,12 @@
 //! write. `claim` in particular is `UPDATE … WHERE NOT adopting RETURNING …`: two concurrent
 //! adoptions cannot both be handed the row.
 //!
-//! # Writes that the in-memory map overwrites, this overwrites
+//! # `provision` refuses a held id; `reserve` and `deposit` overwrite
 //!
-//! `provision`, `reserve` and `deposit` are upserts that replace a row under the same key, as
-//! the in-memory adapter's map inserts do; the conformance suite holds both to one behaviour.
+//! `provision` is `INSERT … ON CONFLICT (opaque_id) DO NOTHING`, and a row count of zero is
+//! [`LinkProvisionOutcome::Conflict`]: a held link keeps its owner, key and totals (#553).
+//! `reserve` and `deposit` are upserts that replace a row under the same key, as the in-memory adapter's
+//! map inserts do; the conformance suite holds both adapters to one behaviour.
 //!
 //! # Byte counts and the `BIGINT` column
 //!
@@ -42,7 +44,10 @@ use sea_orm::{
     TransactionTrait, Value,
 };
 
-use super::{Admission, DropStore, InboxEntry, LinkCaps, PendingDeposit, UploadLinkRecord, admit};
+use super::{
+    Admission, DropStore, InboxEntry, LinkCaps, LinkProvisionOutcome, PendingDeposit,
+    UploadLinkRecord, admit,
+};
 use crate::blob::ContentAddress;
 use crate::postgres::error::Port;
 use crate::postgres::time::{from_micros, to_micros};
@@ -195,29 +200,17 @@ fn entry_from(row: &QueryResult, doing: &'static str) -> Result<InboxEntry, Stor
 }
 
 impl DropStore for PostgresDrops {
-    fn provision(&self, record: UploadLinkRecord) -> StoreFuture<'_, ()> {
+    fn provision(&self, record: UploadLinkRecord) -> StoreFuture<'_, LinkProvisionOutcome> {
         Box::pin(async move {
             let used_bytes = count_to_column(record.used_bytes)?;
-            self.connection
+            let inserted = self
+                .connection
                 .execute(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     format!(
                         "INSERT INTO drop_links ({LINK_COLUMNS}) \
                          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) \
-                         ON CONFLICT (opaque_id) DO UPDATE SET \
-                           owner_id = EXCLUDED.owner_id, \
-                           drop_pubkey = EXCLUDED.drop_pubkey, \
-                           crypto_suite_id = EXCLUDED.crypto_suite_id, \
-                           protocol_version = EXCLUDED.protocol_version, \
-                           expires_at = EXCLUDED.expires_at, \
-                           max_total_bytes = EXCLUDED.max_total_bytes, \
-                           max_file_count = EXCLUDED.max_file_count, \
-                           max_file_size = EXCLUDED.max_file_size, \
-                           single_use = EXCLUDED.single_use, \
-                           passphrase_verifier = EXCLUDED.passphrase_verifier, \
-                           used_bytes = EXCLUDED.used_bytes, \
-                           used_files = EXCLUDED.used_files, \
-                           revoked_at = EXCLUDED.revoked_at"
+                         ON CONFLICT (opaque_id) DO NOTHING"
                     ),
                     [
                         Value::from(record.opaque_id.clone()),
@@ -238,8 +231,15 @@ impl DropStore for PostgresDrops {
                 ))
                 .await
                 .map_err(PORT.failing("provisioning an upload link"))?;
+            if inserted.rows_affected() == 0 {
+                tracing::info!(
+                    owner = %record.owner_id,
+                    "an upload link was refused: its opaque id is already held"
+                );
+                return Ok(LinkProvisionOutcome::Conflict);
+            }
             tracing::info!(owner = %record.owner_id, "an upload link was provisioned");
-            Ok(())
+            Ok(LinkProvisionOutcome::Provisioned)
         })
     }
 

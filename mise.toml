@@ -26,9 +26,9 @@ hk = "1.48.0"
 # fetch of a version-matched wasm-bindgen) once the toolchain is installed.
 "cargo:wasm-bindgen-cli" = "0.2.100"
 # cargo-deny enforces the dependency-licence allowlist in deny.toml (the policy it
-# implements is capsule-docs/.../design/licensing.md). Only `check licenses` is wired
-# up: the advisories check needs a network fetch of the RustSec database, which would
-# make the gate non-deterministic and break the offline build.
+# implements is capsule-docs/.../design/licensing.md) offline, as `license-check`, and
+# the RustSec advisories, bans and sources online, as `deny-check` (CI only: the
+# advisories check fetches the RustSec database, so it stays out of `check-rust`).
 "cargo:cargo-deny" = "0.19.8"
 
 [env]
@@ -45,19 +45,19 @@ CLIPPY_FLAGS = "-W clippy::pedantic -W unreachable_pub -D warnings -A clippy::mu
 
 [tasks.format]
 description = "Auto-format every toolchain"
-depends = ["format-rust", "format-web", "format-docs", "format-kotlin", "format-vision", "format-swift"]
+depends = ["format-rust", "format-web", "format-docs", "format-kotlin", "format-swift"]
 
 [tasks.format-check]
 description = "Verify formatting, every toolchain"
-depends = ["format-check-rust", "format-check-web", "format-check-docs", "format-check-kotlin", "format-check-vision", "format-check-swift"]
+depends = ["format-check-rust", "format-check-web", "format-check-docs", "format-check-kotlin", "format-check-swift"]
 
 [tasks.lint]
 description = "Auto-fix lints, every toolchain"
-depends = ["lint-rust", "lint-web", "lint-docs", "lint-kotlin", "lint-vision", "lint-swift", "lint-md"]
+depends = ["lint-rust", "lint-web", "lint-docs", "lint-kotlin", "lint-swift", "lint-md"]
 
 [tasks.lint-check]
 description = "Verify lints, every toolchain"
-depends = ["lint-check-rust", "lint-check-web", "lint-check-docs", "lint-check-kotlin", "lint-check-vision", "lint-check-swift", "lint-check-md", "check-docs-truth"]
+depends = ["lint-check-rust", "lint-check-web", "lint-check-docs", "lint-check-kotlin", "lint-check-swift", "lint-check-md", "check-docs-truth"]
 
 [tasks.test]
 description = "Run tests (rust + web + kotlin + swift + docs)"
@@ -110,10 +110,6 @@ depends = ["format-check-web", "lint-check-web", "test-web", "build-web"]
 description = "Docs CI gate"
 depends = ["format-check-docs", "lint-check-docs", "test-docs", "build-docs"]
 
-[tasks.check-vision]
-description = "Vision CI gate"
-depends = ["format-check-vision", "lint-check-vision"]
-
 [tasks.check-kotlin]
 description = "Kotlin CI gate"
 depends = ["format-check-kotlin", "lint-check-kotlin"]
@@ -154,9 +150,9 @@ description = "Rustdoc gate for the whole workspace (intra-doc links, over all i
 env = { RUSTDOCFLAGS = "-D warnings" }
 run = "cargo doc --workspace --no-deps --document-private-items"
 
-# nextest: cross-binary parallel scheduling + process-per-test isolation. Three
-# invocations — the workspace (default features), then capsule-core's and capsule-sdk's
-# FFI surfaces. The workspace run includes `capsule-e2e`, the bounded E2E cases over the
+# nextest: cross-binary parallel scheduling + process-per-test isolation. Two
+# invocations — the workspace (default features), then capsule-sdk's `ffi` surface (the
+# `capsule_sdk` uniffi namespace; capsule-core exports none). The workspace run includes `capsule-e2e`, the bounded E2E cases over the
 # real SDK, library and server composition root (no container, no env gate; issue #409).
 # nextest does not run doctests, so the last step runs them with `cargo test --doc` for
 # the crates whose doctests are part of the contract: capsule-i18n's crate example and
@@ -165,7 +161,6 @@ run = "cargo doc --workspace --no-deps --document-private-items"
 [tasks.test-rust]
 run = [
   "cargo nextest run --workspace",
-  "cargo nextest run -p capsule-core --features ffi",
   "cargo nextest run -p capsule-sdk --features ffi",
   "cargo test --doc -p capsule-i18n",
 ]
@@ -296,6 +291,15 @@ run = "cargo run -q -p xtask -- i18n-guard"
 description = "Verify every dependency licence is allowlisted in deny.toml"
 run = "cargo deny --all-features check licenses"
 
+# Dependency-advisory gate. Fails on any RustSec advisory against Cargo.lock that deny.toml
+# does not ignore by id with a reason, on a banned crate, and on a crate from anywhere but
+# crates.io. It fetches the advisory database, so it is not part of the offline `check-rust`;
+# CI's `rust-advisories` job runs it on every pull request and every push to master, so a
+# newly published advisory fails the next run.
+[tasks.deny-check]
+description = "Verify Cargo.lock against RustSec advisories, crate bans and crate sources"
+run = "cargo deny --all-features check advisories bans sources"
+
 # Dump the Kynos OpenAPI 3.2 document to the committed capsule-server/openapi.json that spargen
 # generates the typed REST client from (slices `S-C34`, `S-D28`). The dump is state-free — no
 # database, Valkey, or key material, because the router takes `App` only as a type parameter — so
@@ -320,16 +324,15 @@ run = "cargo run -q -p capsule-server -- gen-openapi --check"
 [tasks.serve-deps]
 description = "Start Postgres 18 + Valkey 9 for the server (podman compose)"
 # `podman compose` shells out to the compose provider; `docker compose -f …` accepts the same
-# file. The Valkey adapters (#403) read the Valkey service; the Postgres adapters (#402) are not
-# written yet, so this is for their development and for dependabot to have a live file to track.
+# file. A durable `serve` reads both services: Postgres (#402) and Valkey (#403).
 run = "podman compose -f capsule-server/compose.yaml up -d"
 
 [tasks.serve]
-description = "Run the Kynos server (needs the capsule-server/.env.example environment)"
-# No environment is supplied on purpose. `serve` without `VALKEY_URL` and without `--memory`
-# refuses to boot and names the variable — the refusal `capsule-server/src/store/mod.rs` has
-# documented since `S-C29` — and with `VALKEY_URL` set it connects to Valkey and then refuses
-# naming `DATABASE_URL` and #402 until the Postgres adapters land. Copy
+description = "Run the durable Kynos server on Postgres + Valkey (needs serve-deps, a migrated database, and the capsule-server/.env.example environment)"
+# No environment is supplied on purpose. `serve` without `--memory` needs `DATABASE_URL` and
+# `VALKEY_URL`, and refuses to boot naming every one that is missing (exit 2). With both set it
+# opens the pool, refuses a schema it was not built for until `capsule-server-migration up` has
+# run, proves Valkey answers, and serves. Start `serve-deps`, copy
 # `capsule-server/.env.example` and export it, or use `serve-memory` below.
 run = "cargo run -p capsule-server -- serve"
 
@@ -382,30 +385,29 @@ description = "Print README translatable blocks as a translation-data scaffold"
 run = "cargo run -q -p xtask -- translate-readme --extract"
 
 # ── FFI: uniffi bindings for Kotlin/Swift ────────────────────────────────────
-# Two uniffi surfaces behind their crates' `ffi` feature (one pinned uniffi 0.31.1
-# — the S-F1 consolidation): capsule-core's `FfiWorkspace` (offline lifecycle) and
-# capsule-sdk's `FfiCapsuleClient`/`FfiSession` (the S-D9 user-flow primitives:
-# login → upload → status → sync). `gen-bindings` emits the Kotlin/Swift sources for
-# both from the compiled cdylibs. The `ffi-bindgen` feature adds uniffi's CLI.
+# Two uniffi namespaces on one pinned uniffi (0.31.1 — the S-F1 consolidation), and an
+# app links both as one library (ADR-0005): `capsule_sdk`, behind capsule-sdk's `ffi`
+# feature (the `FfiCapsuleClient`/`FfiSession` S-D9 user flows, the S-P1 `FfiWorkspace`
+# verbs and the hardware-signer seams), and `capsule_core_ffi`, the catalog crate that is
+# also the Apple umbrella staticlib. capsule-core itself exports no namespace.
+# `gen-bindings` emits the `capsule_sdk` Kotlin/Swift sources from its compiled cdylib;
+# the `ffi-bindgen` feature adds uniffi's CLI.
 
 [tasks.build-ffi]
-run = [
-  "cargo build -p capsule-core --features ffi",
-  "cargo build -p capsule-sdk --features ffi",
-]
+run = "cargo build -p capsule-sdk --features ffi"
 
 [tasks.lint-check-ffi]
-run = [
-  "cargo clippy -p capsule-core --features ffi --all-targets -- $CLIPPY_FLAGS",
-  "cargo clippy -p capsule-sdk --features ffi --all-targets -- $CLIPPY_FLAGS",
-]
+run = "cargo clippy -p capsule-sdk --features ffi --all-targets -- $CLIPPY_FLAGS"
 
 # gen-bindings, verify-examples → mise-tasks/ (shebang scripts).
 
 # ── Cross-compilation: FFI / mobile targets ──────────────────────────────────
-# capsule-core builds as cdylib+staticlib (see its [lib] crate-type) so it links
-# into iOS/Android. This is the formal definition of the targets the crate
-# verifies; .github/workflows/ci.yml `rust-cross` enforces it.
+# The mobile artifact is capsule-sdk with `--features ffi`, built as cdylib+staticlib
+# (see its [lib] crate-type): the cdylib is the Android `.so` the Kotlin bindings load,
+# and on Apple the capsule-core-ffi umbrella staticlib carries it alongside the
+# catalog. Both link capsule-core as an rlib, so every target below also cross-builds
+# capsule-core. This is the formal definition of the targets the FFI verifies;
+# .github/workflows/ci.yml `rust-cross` enforces it.
 #
 #   Tier 1 — CI-gated on every PR:
 #     x86_64-unknown-linux-gnu      (host; covered by the `rust` workspace build)
@@ -427,10 +429,10 @@ run = [
 ]
 
 [tasks.build-windows]
-description = "Build capsule-core FFI for x86_64-pc-windows-msvc (Tier 2)"
-run = "cargo build -p capsule-core --features ffi --target x86_64-pc-windows-msvc"
+description = "Build the capsule-sdk FFI for x86_64-pc-windows-msvc (Tier 2)"
+run = "cargo build -p capsule-sdk --features ffi --target x86_64-pc-windows-msvc"
 
-# Sequential: each builds capsule-core into the shared target/ tree.
+# Sequential: each builds capsule-sdk (and capsule-core under it) into the shared target/ tree.
 [tasks.build-targets]
 description = "Build the Tier-1 cross targets (Apple + Android + Linux cross)"
 run = ["mise run build-apple", "mise run build-android", "mise run build-linux-cross"]
@@ -586,24 +588,6 @@ run = ["mise run generate-swift"]
 description = "Build the FFI xcframework, then generate the Rust-backed workspace"
 run = ["mise run build-ffi-apple", "TUIST_FFI=1 mise run generate-swift"]
 
-# ── Vision ───────────────────────────────────────────────────────────────────
-
-[tasks.format-vision]
-dir = "capsule-vision"
-run = "uv run ruff format"
-
-[tasks.format-check-vision]
-dir = "capsule-vision"
-run = "uv run ruff format --check"
-
-[tasks.lint-vision]
-dir = "capsule-vision"
-run = "uv run ruff check --fix"
-
-[tasks.lint-check-vision]
-dir = "capsule-vision"
-run = "uv run ruff check && uv run ty check"
-
 # ── Markdown ─────────────────────────────────────────────────────────────────
 # Repo-wide Markdown linting (READMEs, design docs, root docs). markdownlint-cli2
 # is both linter and fixer; globs/ignores live in .markdownlint-cli2.jsonc.
@@ -624,7 +608,7 @@ description = "Conventional Commits check over a range (default origin/master..H
 run = "convco check --first-parent --ignore-reverts {{arg(name='base', default='origin/master')}}..HEAD"
 
 # Write one repo-wide version into every package's source of truth (Rust workspace,
-# web/docs package.json, vision pyproject, Android gradle.properties, iOS Project.swift)
+# web/docs package.json, Android gradle.properties, iOS Project.swift)
 # and bump the Android versionCode. See xtask/src/main.rs for the per-format editors.
 [tasks.set-version]
 description = "Write one version into every package (via xtask)"
@@ -650,9 +634,8 @@ run = "hk uninstall"
 # Install per-package dependencies (named `setup`, not `install`, to avoid colliding
 # with `mise install`, which installs the [tools] above).
 [tasks.setup]
-description = "Install web/docs/vision package dependencies"
+description = "Install web/docs package dependencies"
 run = [
   "cd capsule-web && bun install",
   "cd capsule-docs && bun install",
-  "cd capsule-vision && uv sync",
 ]

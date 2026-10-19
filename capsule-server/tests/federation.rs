@@ -1200,38 +1200,137 @@ async fn a_refresh_issues_a_successor_cuts_the_predecessor_and_replays_to_the_sa
     assert_eq!(refused["code"], "error.federation.capability_revoked");
 }
 
+/// Assert `response` is the gate's answer: `404 error.federation.not_configured`.
+fn assert_not_federating(response: &kynos::test::TestResponse, what: &str) {
+    assert_eq!(response.status(), StatusCode::NOT_FOUND, "{what}");
+    let body: Value = response.json();
+    assert_eq!(body["code"], "error.federation.not_configured", "{what}");
+}
+
+/// Whether `key` is still at its full budget — nothing has been charged against it.
+async fn uncharged(fixture: &Fixture, key: &CounterKey, budget: capsule_server::counter::Budget) {
+    assert_eq!(
+        fixture
+            .counters
+            .peek(key, budget, fixture.clock.now())
+            .await
+            .expect("the counter answers"),
+        capsule_server::counter::Verdict::Admitted {
+            remaining: budget.limit
+        },
+        "{key:?} was charged on a deployment that does not federate"
+    );
+}
+
 #[tokio::test]
-async fn a_deployment_that_does_not_federate_mints_nothing_but_still_revokes() {
-    // Turning federation off must never be the thing that takes away an operator's ability to
-    // cut a grant that is already out there.
+async fn a_deployment_that_does_not_federate_answers_404_before_any_work() {
+    // #509: off is the default, and off means no federated work for anyone — the four
+    // operations answer before a credential, a body, a budget or a store, and no capability is
+    // honoured on the read path.
     let fixture = Fixture::without_federation();
     let bearer = fixture.bearer().await;
     provision(&fixture, &bearer).await;
     roster(&fixture, 1, &[(BOB, MemberRole::Reader)]).await;
-
-    let refused = mint(&fixture, &bearer, mint_body("read")).await;
-    refused.assert_status(StatusCode::FORBIDDEN);
-    let refused: Value = refused.json();
-    assert_eq!(refused["code"], "error.federation.not_configured");
-
-    // A grant minted while it federated still verifies — a token is not un-minted by a
-    // configuration change — and can still be revoked and refused.
-    let (capability, jti) = capability(&fixture, PEER, Scope::Read, 1).await;
     publish_into(&fixture, "unfederated-1", &album()).await;
+    let (signer, public) = support::peer_keypair();
+    pin(&fixture, public).await;
+    let hash = support::checksum(b"the reported bytes");
+
+    let pinned = fixture
+        .peers
+        .read(&PeerId::new(PEER))
+        .await
+        .expect("the store answers");
+    // A grant recorded as though it were minted while federation was on.
+    let (capability, jti) = capability(&fixture, PEER, Scope::Read, 1).await;
+
+    assert_not_federating(&mint(&fixture, &bearer, mint_body("read")).await, "mint");
+    assert_not_federating(&revoke(&fixture, &bearer, &album(), &jti).await, "revoke");
+    assert_not_federating(&refresh(&fixture, &capability).await, "refresh");
+    assert_not_federating(
+        &file(&fixture, report(&signer, &hash, Some("csam"))).await,
+        "report",
+    );
+    // Before the credential: no bearer at all is the same `404`, not a `401`.
+    let anonymous = fixture
+        .client
+        .post(&format!("/v1/albums/{}/capabilities", album()))
+        .header("accept", "application/json")
+        .json(&mint_body("read"))
+        .send()
+        .await;
+    assert_not_federating(&anonymous, "an unauthenticated mint");
+    // Before the body: a body that would be `400` or `422` is the same `404`.
+    assert_not_federating(
+        &file(&fixture, serde_json::json!({ "reporting_server": "" })).await,
+        "a malformed report",
+    );
+
+    // The read primitives honour no capability: the capability arm does not exist, so the
+    // grant is the uncoded `401` any unknown bearer gets. A session is unaffected.
+    page(&fixture, &capability, &album_query())
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    page(&fixture, &bearer, &album_query())
+        .await
+        .assert_status(StatusCode::OK);
+
+    // Nothing was charged, nothing was minted, revoked or filed.
+    uncharged(
+        &fixture,
+        &CounterKey::FederatedIntake(PEER.to_owned()),
+        budgets::FEDERATED_INTAKE,
+    )
+    .await;
+    uncharged(
+        &fixture,
+        &CounterKey::PeerRequests(PEER.to_owned()),
+        budgets::PEER_REQUESTS,
+    )
+    .await;
+    let live = fixture
+        .revocations
+        .live(
+            &capsule_server::federation::CapabilityFilter::Album(album()),
+            fixture.clock.now(),
+        )
+        .await
+        .expect("the store answers");
+    assert_eq!(
+        live.iter()
+            .map(|record| record.jti.as_str())
+            .collect::<Vec<_>>(),
+        [jti.as_str()],
+        "the mint recorded nothing and the revoke cut nothing"
+    );
+    assert!(
+        fixture
+            .moderation
+            .pending_reports()
+            .await
+            .expect("the store answers")
+            .is_empty(),
+        "the report was not filed"
+    );
+    assert_eq!(
+        fixture
+            .peers
+            .read(&PeerId::new(PEER))
+            .await
+            .expect("the store answers"),
+        pinned,
+        "no peer row changed"
+    );
+
+    // Switching federation on is the same server and the same records: the grant pulls again,
+    // because the switch never touched the capability store.
+    fixture.federation.set_enabled(true);
     page(&fixture, &capability, &album_query())
         .await
         .assert_status(StatusCode::OK);
-    // But it cannot be continued.
-    refresh(&fixture, &capability)
+    mint(&fixture, &bearer, mint_body("read"))
         .await
-        .assert_status(StatusCode::FORBIDDEN);
-    revoke(&fixture, &bearer, &album(), &jti)
-        .await
-        .assert_status(StatusCode::NO_CONTENT);
-    let refused = page(&fixture, &capability, &album_query()).await;
-    refused.assert_status(StatusCode::FORBIDDEN);
-    let refused: Value = refused.json();
-    assert_eq!(refused["code"], "error.federation.capability_revoked");
+        .assert_status(StatusCode::CREATED);
 }
 
 // ===========================================================================================
@@ -1548,7 +1647,7 @@ async fn blocking_a_peer_cuts_and_publishes_every_grant_it_holds() {
         capabilities: fixture.revocations.clone(),
         peers: fixture.peers.clone(),
         clock: fixture.clock.clone(),
-        federation_url: Some(support::FEDERATION_URL.to_owned()),
+        enabled: std::sync::Arc::new(true),
     });
     let cut = capsule_server::federation::on_peer_blocked(&federation, &PeerId::new(PEER))
         .await

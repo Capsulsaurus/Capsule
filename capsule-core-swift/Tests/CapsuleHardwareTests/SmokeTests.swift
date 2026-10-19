@@ -4,8 +4,8 @@ import Testing
 
 @testable import CapsuleHardware
 
-/// Proves the compiled `capsule-core` works when consumed from Swift over uniffi — the Apple
-/// analogue of the Rust Linux software smoke. Run `./stage-bindings.sh` first.
+/// Proves the compiled `capsule-core` works when consumed from Swift over the `capsule_sdk` uniffi
+/// namespace — the Apple analogue of the Rust Linux software smoke. Run `./stage-bindings.sh` first.
 @Suite("capsule-core Swift FFI smoke")
 struct SmokeTests {
     /// This harness's self-reported build identity (S-D15), stamped into the manifests the
@@ -19,20 +19,13 @@ struct SmokeTests {
         return dir.path
     }
 
-    /// Write a minimal JPEG-magic file and return its path.
-    private func freshImage() throws -> String {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("capsule-swift-img-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let img = dir.appendingPathComponent("photo.jpg")
-        try Data([0xFF, 0xD8, 0xFF] + Array("se p256 smoke bytes".utf8)).write(to: img)
-        return img.path
-    }
+    /// A minimal JPEG-magic image, sealed by the round trips and compared on read-back.
+    private let image = Data([0xFF, 0xD8, 0xFF] + Array("se p256 smoke bytes".utf8))
 
-    /// Drive a full offline lifecycle (create → import → verify → read) over a P-256
+    /// Drive a full offline lifecycle (create → seal → verify → read) over a P-256
     /// hardware-composed workspace, returning the verify outcome and the read-back bytes. Runs on
     /// the large stack because workspace creation triggers ML-DSA-65 key generation.
-    private func p256RoundTrip(_ hardware: HardwareSigner) throws -> (FfiVerifyOutcome, Data) {
+    private func p256RoundTrip(_ hardware: FfiHardwareSigner) throws -> (FfiVerifyOutcome, Data) {
         try onLargeStack {
             let workspace = try FfiWorkspace.createWithP256HardwareSigner(
                 root: try self.freshRoot(),
@@ -43,10 +36,10 @@ struct SmokeTests {
                 mlSeed: Data(repeating: 9, count: 32),
                 client: self.client
             )
-            // Import into a session album (the default album has no session key material minted).
+            // Seal into a session album (the default album has no session key material minted).
             let album = try workspace.createAlbum(name: "P-256 Trip")
-            let asset = try workspace.importAsset(albumId: album, src: try self.freshImage())
-            let outcome = try workspace.verify(assetId: asset)
+            let asset = try workspace.sealAsset(albumId: album, fileName: "photo.jpg", bytes: self.image)
+            let outcome = try workspace.verifyAsset(assetId: asset)
             let bytes = try workspace.readPlaintext(assetId: asset)
             return (outcome, bytes)
         }
@@ -103,7 +96,7 @@ struct SmokeTests {
         #expect("software signer must report itself exportable") {
             try signer.assertNonExportable(keyAlias: "device-dsk")
         } throws: { error in
-            guard case HardwareSignerError.Exportable = error else { return false }
+            guard case FfiHardwareSignerError.Exportable = error else { return false }
             return true
         }
 
@@ -141,14 +134,14 @@ struct SmokeTests {
         #expect("software signer must report itself exportable") {
             try signer.assertNonExportable(keyAlias: "device-dsk")
         } throws: { error in
-            guard case HardwareSignerError.Exportable = error else { return false }
+            guard case FfiHardwareSignerError.Exportable = error else { return false }
             return true
         }
 
         let (outcome, bytes) = try p256RoundTrip(signer)
         #expect({ if case .accept = outcome { return true } else { return false } }(),
                  "a manifest signed by the P-256 hybrid must verify through verify_asset")
-        #expect(bytes == Data([0xFF, 0xD8, 0xFF] + Array("se p256 smoke bytes".utf8)))
+        #expect(bytes == image)
     }
 
     /// The real Secure Enclave adapter composed through the P-256 hybrid, end to end. Skipped where
@@ -165,7 +158,7 @@ struct SmokeTests {
         let (outcome, bytes) = try p256RoundTrip(enclave)
         #expect({ if case .accept = outcome { return true } else { return false } }(),
                  "a manifest signed by the SE-composed P-256 hybrid must verify")
-        #expect(bytes == Data([0xFF, 0xD8, 0xFF] + Array("se p256 smoke bytes".utf8)))
+        #expect(bytes == image)
         // The private key never leaves the enclave — a throw here fails the test.
         try enclave.assertNonExportable(keyAlias: "device-dsk")
     }
@@ -189,7 +182,7 @@ struct SmokeTests {
         #expect("software element must report itself exportable") {
             try element.assertNonExportable(keyAlias: "device-dek")
         } throws: { error in
-            guard case HardwareSignerError.Exportable = error else { return false }
+            guard case FfiHardwareSignerError.Exportable = error else { return false }
             return true
         }
 

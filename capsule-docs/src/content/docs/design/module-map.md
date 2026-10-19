@@ -23,7 +23,6 @@ whether something exists today, find its slice: `rg 'S-C16' SLICES.md`.
 | `capsule-cli` + its entity/migration crates | Local CLI behavior and its SQLite persistence; network commands ride the SDK |
 | `capsule-web` | The browser client: the guest-drop and share-link viewer surfaces, over `capsule-wasm` |
 | `capsule-swift`, `capsule-android` | The native applications |
-| `capsule-vision` | Model-evaluation notebooks; no shipped source |
 
 GraphQL and gRPC are retired transports and no compatibility surface will be restored
 ([ADR-0001](https://github.com/Capsulsaurus/Capsule/blob/master/adr/0001-the-public-server-surface-is-kynos-rest-only.md)).
@@ -89,8 +88,8 @@ separate typed ports; no generic CAS, transfer, or TTL library is introduced.
 | --- | --- |
 | REST client | Spargen-generated Rust from a checked-in OpenAPI 3.2 document |
 | SDK workflows | Capsule-owned authentication, upload, sync, recovery, and protocol-version orchestration |
-| Namespaces an app links | Exactly two: `capsule_core_ffi` and `capsule_sdk`. `capsule-core-ffi` is the app umbrella staticlib and links `capsule-sdk`'s uniffi surface into itself, because two Rust staticlibs cannot share a binary — each bundles its own `std` — so any namespace an app needs must ride in that one. A third namespace exists, `capsule_core` behind `capsule-core/ffi`, and it never shares a binary with `capsule_sdk` (the `S-F1` invariant). Recorded as ADR-0005 in the repository's `adr/` directory |
-| Workspace verbs over FFI | The `capsule_sdk` UniFFI namespace exposes the workspace surface apps need — enroll/open (including a hardware-signer constructor), albums, seal and import, verify, sync-apply, master-key escrow, and device-directory publish. Orchestration and shape only: each verb is one call into `capsule-core`, which keeps every cryptographic step, and the `capsule_core` namespace never shares a binary with it |
+| Namespaces an app links | Exactly two: `capsule_core_ffi` and `capsule_sdk`. `capsule-core-ffi` is the app umbrella staticlib and links `capsule-sdk`'s uniffi surface into itself, because two Rust staticlibs cannot share a binary — each bundles its own `std` — so any namespace an app needs must ride in that one. These are the only two namespaces in the workspace: `capsule-core` exports none, and its hardware seams reach Swift and Kotlin as the `capsule_sdk` foreign traits `FfiHardwareSigner` and `FfiHardwareKeyAgreement`, which the `capsule-core-kotlin` and `capsule-core-swift` harnesses implement. Recorded as ADR-0005 in the repository's `adr/` directory |
+| Workspace verbs over FFI | The `capsule_sdk` UniFFI namespace exposes the workspace surface apps need — enroll/open (including a hardware-signer constructor), albums, seal and import, verify, sync-apply, master-key escrow, and device-directory publish. Orchestration and shape only: each verb is one call into `capsule-core`, which keeps every cryptographic step |
 | Media | Rawshift performs detection, decode/encode, metadata normalization, derivatives, previews, and video work, consumed through `capsule-core::media` |
 | LQIP | Capsule imports Chromahash **0.7.1** directly; Rawshift has no Chromahash responsibility |
 | Import commit | Capsule applies privacy policy, creates sidecars/provenance, encrypts, signs, and commits normalized media results |
@@ -186,11 +185,11 @@ environment gate. "Blocked on" names the issue that holds the rest of the case's
 | 3 | server half `capsule-server/tests/sync.rs`; client half `capsule-e2e/tests/case_03_sync_pickup.rs` | landed; the push runs the SDK's own ladder | B's `verify_asset` needs the album keys (cases 6, 12) |
 | 4 | — | not started | federation (#406) |
 | 5 | `capsule-sdk/src/peering/tests.rs` | in-process shape | live two-host shape, post-v1 |
-| 6 | `capsule-e2e/tests/case_06_backup_restore.rs` | landed; the new device opens as the recovered account (`Workspace::create_from_master`), the restored asset reads and its chain walks, and the artifact carries the album's public authority so `verify` reaches a verdict (the recovered album stays read-only) | the sealed identity has no server route yet, so the case hands it across in memory; #550 (verify rejects the device: the new device has not adopted the account's published directory) |
+| 6 | `capsule-e2e/tests/case_06_backup_restore.rs` | landed; the new device opens as the recovered account (`Workspace::create_from_master`), the restored asset reads and its chain walks, and the artifact carries the album's public authority so `verify` reaches a verdict (the recovered album stays read-only); the escrow and the sealed identity both cross the wire (#544) | #550 (verify rejects the device: the new device has not adopted the account's published directory) |
 | 7 | `capsule-e2e/tests/case_07_lifecycle.rs` | landed; the push runs the SDK's own ladder | — |
 | 8 | server leg `capsule-e2e/tests/case_08_upgrade_ceremony.rs`; ceremony `capsule-core/src/crypto/authority/openmls_authority/tests.rs` | server leg landed, and its feed-visibility assertion runs the SDK's own ladder; ceremony in-process | a library cannot sign an intent (private DSK) |
 | 9 | `capsule-e2e/tests/protocol_contract.rs` | landed (the UI leg is out of scope) | — |
 | 10 | `capsule-core/tests/model_regen_e2e.rs` (`E2E case 10`) | landed | — |
 | 11 | | lands with #447 (an in-memory fault decorator on the index) | the process-restart variant (#447 defers it) |
-| 12 | server leg `capsule-e2e/tests/case_12_enrollment.rs` | server leg landed; verified-channel half unrepresented (#471) | #471, #405 (MLS join) |
+| 12 | `capsule-e2e/tests/case_12_enrollment.rs` (server leg; client ceremony `e2e_case_12_the_client_ceremony_admits_the_new_device_over_the_relay`, `e2e_case_12_a_relay_that_swaps_the_enrollee_keys_diverges_the_codes_and_a_aborts`) | server leg and client ceremony landed (commitment, safety code, cross-sign, published directory); the MITM abort is test-scripted | B's MLS join / `libraries match` (#405); the master-key transfer (no channel key agreement defined) |
 | 13 | server leg `capsule-e2e/tests/case_13_web_drop_adopt.rs`; seal KAT `capsule-core/tests/drop_adopt_kat.rs` | server leg landed to the durable adopted original | #469 (adopt registers nothing to publish) |

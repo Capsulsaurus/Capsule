@@ -40,7 +40,7 @@ use crate::store::{AlbumId, AssetId, BlobRole, OwnerId};
 
 /// Unwrap an index result, failing with the operation that was expected to work.
 #[track_caller]
-fn ok<T>(result: Result<T, crate::store::StoreError>, doing: &str) -> T {
+pub(crate) fn ok<T>(result: Result<T, crate::store::StoreError>, doing: &str) -> T {
     match result {
         Ok(value) => value,
         Err(error) => panic!("the index could not {doing}: {error}"),
@@ -105,7 +105,7 @@ async fn record(index: &dyn AssetIndex, asset: &AssetId, record: BlobRecord) -> 
 /// Publish `case`'s asset `n`: reserve it, then land its index tier.
 ///
 /// Returns the asset id and the sequence number publication minted.
-async fn publish(index: &dyn AssetIndex, case: &str, n: u32) -> (AssetId, u64) {
+pub(crate) async fn publish(index: &dyn AssetIndex, case: &str, n: u32) -> (AssetId, u64) {
     let row = pending(case, n);
     let asset = row.asset_id.clone();
     ok(index.reserve(row).await, "reserve a row");
@@ -342,6 +342,70 @@ pub async fn original_held_follows_the_original_blob(index: &dyn AssetIndex) {
         entry.change,
         ChangeKind::Updated,
         "a reader that had already seen the asset saw it created a second time"
+    );
+}
+
+/// A derivative's signed manifest is a plural role that reaches the feed on its own list (#556):
+/// two of them are both held, a retried finalization mints nothing, and neither appears in the
+/// entry's blob list, which a client that predates the role decodes strictly.
+pub async fn derivative_manifests_are_plural_and_reach_the_feed_apart(index: &dyn AssetIndex) {
+    let owner = OwnerId::new("dman-owner");
+    let (asset, seq) = publish(index, "dman", 1).await;
+
+    let thumbnail = record(
+        index,
+        &asset,
+        blob(BlobRole::DerivativeManifest, "dman-thumbnail"),
+    )
+    .await
+    .expect("a manifest landing on a visible asset is a publishable change");
+    let preview = record(
+        index,
+        &asset,
+        blob(BlobRole::DerivativeManifest, "dman-preview"),
+    )
+    .await
+    .expect("a second manifest is an addition, not a conflict");
+    assert!(seq < thumbnail && thumbnail < preview);
+    record(index, &asset, blob(BlobRole::Derivative, "dman-d")).await;
+
+    match ok(
+        index
+            .record_blob(&asset, blob(BlobRole::DerivativeManifest, "dman-thumbnail"))
+            .await,
+        "re-record a derivative manifest",
+    ) {
+        BlobOutcome::AlreadyHeld(_) => {}
+        other => panic!("a retried manifest finalization answered {other:?}"),
+    }
+
+    let page = ok(index.feed_page(&owner, seq, 10).await, "page the feed");
+    let entry = page.last().expect("the asset is in the feed");
+    let mut expected = vec![address("dman-thumbnail"), address("dman-preview")];
+    expected.sort();
+    assert_eq!(
+        entry.derivative_manifests, expected,
+        "both manifests reach the feed, in address order"
+    );
+    assert!(
+        entry
+            .blobs
+            .iter()
+            .all(|blob| blob.role != BlobRole::DerivativeManifest),
+        "the blob list never names the role"
+    );
+    assert!(
+        entry
+            .blobs
+            .iter()
+            .any(|blob| blob.role == BlobRole::Derivative),
+        "the derivative itself is still listed"
+    );
+
+    let row = ok(index.read(&asset).await, "read the row").expect("the row exists");
+    assert!(
+        row.is_publishable(),
+        "a manifest does not disturb the index tier"
     );
 }
 
@@ -891,12 +955,18 @@ fn manifest(seed: u8) -> Hash32 {
 }
 
 /// The chain head `asset` currently carries.
-async fn head_of(index: &dyn AssetIndex, asset: &AssetId) -> Option<Hash32> {
+pub(crate) async fn head_of(index: &dyn AssetIndex, asset: &AssetId) -> Option<Hash32> {
     ok(index.read(asset).await, "read a row").and_then(|row| row.chain_head)
 }
 
 /// A lifecycle op for `case`'s asset `n`, chaining onto `prior` and producing `hash`.
-fn op(case: &str, n: u32, action: OpAction, prior: Option<Hash32>, hash: Hash32) -> LifecycleOp {
+pub(crate) fn op(
+    case: &str,
+    n: u32,
+    action: OpAction,
+    prior: Option<Hash32>,
+    hash: Hash32,
+) -> LifecycleOp {
     LifecycleOp {
         asset_id: AssetId::new(format!("{case}-asset-{n}")),
         owner_id: OwnerId::new(format!("{case}-owner")),
@@ -1163,6 +1233,95 @@ pub async fn an_epoch_that_regresses_the_album_is_refused(index: &dyn AssetIndex
         "invariant 18 is an album rule, so a stale asset must not be a way back to a retired \
          epoch",
     );
+}
+
+/// How many albums [`racing_epochs_in_one_album_are_decided_in_sequence_order`] races in.
+///
+/// One race is a coin toss for an adapter whose epoch check is not serialized per album; a
+/// handful of independent albums, alternating which op is submitted first, makes the
+/// interleaving that exposes it the likely outcome rather than the lucky one.
+const EPOCH_RACE_ROUNDS: u8 = 16;
+
+/// A manifest hash unique to one op of one epoch-race round.
+///
+/// [`manifest`]'s hashes are one byte repeated; these never are, so they cannot collide with
+/// one, and `applied_manifests` is keyed on the hash globally.
+fn race_manifest(round: u8, which: u8) -> Hash32 {
+    let mut bytes = [0xE5; 32];
+    bytes[0] = round;
+    bytes[1] = which;
+    Hash32(bytes)
+}
+
+/// Two ops on **different** assets of one album, racing across an epoch boundary, are decided
+/// as if one ran entirely before the other.
+///
+/// Invariant 18 is an album rule, so the epoch an op is checked against is the album's high-water
+/// mark — a fact no single asset row holds. An adapter that locks only the target asset reads
+/// that mark with nothing stopping a concurrent op on a sibling from moving it: an op at epoch 1
+/// and an op at epoch 2 both read 0, both pass, and the epoch-1 op can commit *after* the
+/// epoch-2 one. A reader of the feed then sees the album step back to an epoch it had already
+/// left — exactly what [`an_epoch_that_regresses_the_album_is_refused`] forbids sequentially.
+///
+/// No interleaving can be forced from here, so this asserts what holds under every serial
+/// order: either the epoch-1 op is applied and sits **below** the epoch-2 op in the sequence,
+/// or it arrived second and is refused against the epoch the album has moved to.
+pub async fn racing_epochs_in_one_album_are_decided_in_sequence_order(index: &dyn AssetIndex) {
+    for round in 0..EPOCH_RACE_ROUNDS {
+        let case = format!("op-epoch-race-{round}");
+        let (ahead_asset, _) = publish(index, &case, 1).await;
+        let (behind_asset, _) = publish(index, &case, 2).await;
+
+        let mut ahead = op(
+            &case,
+            1,
+            OpAction::MetadataUpdate,
+            head_of(index, &ahead_asset).await,
+            race_manifest(round, 1),
+        );
+        ahead.amk_version = 2;
+        let mut behind = op(
+            &case,
+            2,
+            OpAction::MetadataUpdate,
+            head_of(index, &behind_asset).await,
+            race_manifest(round, 2),
+        );
+        behind.amk_version = 1;
+
+        // Alternate which op is polled first, so neither submission order is the only one tried.
+        let (ahead, behind) = if round % 2 == 0 {
+            tokio::join!(index.apply_op(ahead), index.apply_op(behind))
+        } else {
+            let (behind, ahead) = tokio::join!(index.apply_op(behind), index.apply_op(ahead));
+            (ahead, behind)
+        };
+        let ahead = ok(ahead, "apply the advancing op");
+        let behind = ok(behind, "apply the trailing op");
+
+        let OpOutcome::Applied {
+            sync_seq: ahead_seq,
+            ..
+        } = ahead
+        else {
+            panic!("round {round}: an op advancing the album's epoch was refused: {ahead:?}")
+        };
+        match behind {
+            OpOutcome::Applied {
+                sync_seq: behind_seq,
+                ..
+            } => assert!(
+                behind_seq < ahead_seq,
+                "round {round}: the epoch-1 op was admitted at {behind_seq}, after the epoch-2 op \
+                 at {ahead_seq} — the album's epoch went backwards in its own feed",
+            ),
+            OpOutcome::AmkRegressed { stored } => assert_eq!(
+                stored, 2,
+                "round {round}: a refusal names the epoch the album moved to"
+            ),
+            other => panic!("round {round}: the trailing op answered {other:?}"),
+        }
+    }
 }
 
 /// An op against somebody else's asset, a missing one, or an unpublished one is one answer.
@@ -1512,6 +1671,16 @@ pub async fn purging_drops_the_references_and_keeps_the_tombstone(index: &dyn As
         AssetState::Tombstoned,
         "removing the row would make the deletion invisible to a client that has not synced \
          since it, rather than final",
+    );
+    assert!(
+        !ok(
+            index.tombstoned(10).await,
+            "list tombstones after the purge"
+        )
+        .iter()
+        .any(|row| row.asset_id == asset),
+        "a purged tombstone holds nothing to purge; listing it again would re-report it on \
+         every pass and, oldest first, starve a bounded pass of the tombstones still waiting",
     );
     assert_eq!(
         ok(
@@ -2010,6 +2179,7 @@ pub async fn run_all(index: &dyn AssetIndex) {
     a_singular_role_cannot_be_repointed(index).await;
     recording_against_an_unreserved_asset_is_not_found(index).await;
     original_held_follows_the_original_blob(index).await;
+    derivative_manifests_are_plural_and_reach_the_feed_apart(index).await;
     the_change_kind_is_relative_to_the_reader(index).await;
     paging_is_ordered_bounded_and_resumable(index).await;
     every_minted_number_is_reachable(index).await;
@@ -2028,6 +2198,7 @@ pub async fn run_all(index: &dyn AssetIndex) {
     racing_identical_submissions_apply_once_and_replay_once(index).await;
     delete_and_restore_are_both_publishable_changes(index).await;
     an_epoch_that_regresses_the_album_is_refused(index).await;
+    racing_epochs_in_one_album_are_decided_in_sequence_order(index).await;
     an_op_on_an_asset_that_is_not_the_callers_is_not_found(index).await;
     a_lifecycle_write_repoints_the_provenance_blob(index).await;
     a_replace_repoints_the_original_the_upload_path_may_not_move(index).await;

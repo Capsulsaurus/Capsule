@@ -45,4 +45,7 @@ capsule-core = { path = "../capsule-core", features = ["test-support"] }
 # Case 1's client leg is the CLI's own `remote::sync` / `remote::list` over its SQLite store.
 capsule-cli = { path = "../capsule-cli" }
 capsule-cli-migration = { path = "../capsule-cli/migration" }
+# Case 14's viewer leg opens a share link through the entry points the web viewer calls, run
+# natively — the same use `capsule-server/tests/share.rs` makes of it in-process.
+capsule-wasm = { path = "../capsule-wasm" }
 sea-orm = { workspace = true, features = ["sqlx-sqlite", "runtime-tokio-rustls"] }

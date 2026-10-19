@@ -61,8 +61,8 @@ use openmls::group::{
     CommitMessageBundle, GroupId, MlsGroup, MlsGroupJoinConfig, StagedCommit, StagedWelcome,
 };
 use openmls::prelude::{
-    Ciphersuite, LeafNodeIndex, LeafNodeParameters, MlsMessageBodyIn, MlsMessageIn, MlsMessageOut,
-    ProcessedMessageContent,
+    Capabilities, Ciphersuite, LeafNodeIndex, LeafNodeParameters, MlsMessageBodyIn, MlsMessageIn,
+    MlsMessageOut, ProcessedMessageContent,
 };
 use openmls_basic_credential::SignatureKeyPair;
 use openmls_traits::OpenMlsProvider;
@@ -92,6 +92,21 @@ pub(crate) const PINNED_CIPHERSUITE: Ciphersuite =
 /// The wire codepoint of `PINNED_CIPHERSUITE`. Asserted in tests so an upstream re-pin can
 /// never silently change the suite Capsule negotiates.
 pub const PINNED_CIPHERSUITE_ID: u16 = 0x004D;
+
+/// The leaf-node capabilities every Capsule key package and founding leaf advertises: exactly
+/// [`PINNED_CIPHERSUITE`], with OpenMLS's defaults for versions, extensions, proposals and
+/// credentials.
+///
+/// Set explicitly because OpenMLS 0.9 lists the X-Wing suite in its *default* capabilities only
+/// under its own `draft-ietf-mls-pq-ciphersuites` feature, which Capsule enables on the leaf
+/// crates instead (see `capsule-core/Cargo.toml`). Without this a leaf would not claim the suite
+/// its group runs, and every add would fail `CiphersuiteNotInCapabilities`. Member commits keep
+/// the leaf's existing capabilities, so the key package and the founder are the only two sites.
+pub(crate) fn pinned_capabilities() -> Capabilities {
+    Capabilities::builder()
+        .ciphersuites(vec![PINNED_CIPHERSUITE])
+        .build()
+}
 
 /// The RFC 9420 exporter label the AMK content key is derived under. A fixed, suite-scoped
 /// domain-separation string; the album id is the exporter *context*, so two albums at the same
@@ -379,6 +394,7 @@ impl OpenMlsAuthority {
         let credential = identity.credential_with_key()?;
         let group = MlsGroup::builder()
             .ciphersuite(PINNED_CIPHERSUITE)
+            .with_capabilities(pinned_capabilities())
             .use_ratchet_tree_extension(true)
             .with_group_id(GroupId::from_slice(album_id.as_bytes()))
             .build(&identity.provider, &identity.mls_signer, credential)
@@ -1426,6 +1442,8 @@ fn describe_content(content: &ProcessedMessageContent) -> &'static str {
         ProcessedMessageContent::ProposalMessage(_) => "proposal",
         ProcessedMessageContent::ExternalJoinProposalMessage(_) => "external-join proposal",
         ProcessedMessageContent::StagedCommitMessage(_) => "commit",
+        ProcessedMessageContent::OwnPendingCommit => "own pending commit",
+        ProcessedMessageContent::OwnPrivateMessage => "own private message",
     }
 }
 

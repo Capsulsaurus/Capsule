@@ -34,6 +34,14 @@
 //! which carries the same property (all three render byte-identically) through a framework
 //! whose error type always has a body.
 //!
+//! # An opaque id is issued once
+//!
+//! The id comes from the issuing client, and every recipient of the URL knows it. So issuing
+//! under an id already held is refused ([`IssueOutcome::Conflict`]) rather than replacing the
+//! record: a replace would let any account that holds the URL take the link over, re-point what
+//! it serves, and un-revoke it (#553). The refusal is one answer whoever holds the id, so the
+//! issue route is no oracle over whose a known id is.
+//!
 //! # Rate limiting is absent, and its absence is declared honestly
 //!
 //! The contract's two limiters — per source IP and per `{opaque-id}` — need the counter port
@@ -69,6 +77,14 @@ use crate::store::{StoreFuture, UserId};
 
 /// The opaque id as it travels in a URL: lowercase hex over 128 bits.
 pub const OPAQUE_ID_HEX_LEN: usize = OPAQUE_ID_LEN * 2;
+
+/// The largest sealed metadata record `POST /v1/shares` accepts inline, decoded (#653).
+///
+/// A `share-metadata/v1` record carries a few hundred bytes of key-free parameters per covered
+/// asset, so 8 MiB holds an album link over tens of thousands of assets. Its base64 is under
+/// 11 MiB, inside the 32 MiB backstop the issue route's group carries
+/// ([`crate::limits::MAX_REQUEST_BODY_BYTES`]), so the cap is this check's and not a `413`.
+pub const MAX_SHARE_METADATA_BYTES: usize = 8 * 1024 * 1024;
 
 /// One share link, as the serving path needs it.
 ///
@@ -134,10 +150,28 @@ pub fn is_opaque_id(raw: &str) -> bool {
             .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
 }
 
+/// What issuing a link did.
+#[must_use]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IssueOutcome {
+    /// The link was recorded.
+    Issued,
+    /// The opaque id is already held. Nothing was written.
+    ///
+    /// Whoever holds it — another account or the caller itself. A re-issue is refused even
+    /// from the owner: it would clear `revoked_at` and so un-revoke a revoked link, and a
+    /// distinct answer for "it is yours" would let a caller learn whose a known id is.
+    Conflict,
+}
+
 /// Where share links live.
 pub trait ShareStore: std::fmt::Debug + Send + Sync {
-    /// Record a link the owner's client issued.
-    fn issue(&self, record: ShareRecord) -> StoreFuture<'_, ()>;
+    /// Record a link the owner's client issued, if its opaque id is not already held.
+    ///
+    /// The check and the write are one operation. A store that looked the id up and then wrote
+    /// would let a concurrent issue land between the two, and the later write would replace
+    /// the record — owner, serve set and all — which is the overwrite this refuses (#553).
+    fn issue(&self, record: ShareRecord) -> StoreFuture<'_, IssueOutcome>;
 
     /// The link `opaque_id` names, whatever its state.
     ///
@@ -156,6 +190,22 @@ pub trait ShareStore: std::fmt::Debug + Send + Sync {
         owner: &'a UserId,
         opaque_id: &'a str,
         at: Timestamp,
+    ) -> StoreFuture<'a, bool>;
+
+    /// Whether a link that is live at `now` names `address` in its serve set (#653).
+    ///
+    /// The collector's question. A share's sealed metadata record has no asset row, so
+    /// [`crate::index::AssetIndex::reference_count`] answers zero for it, and without this the
+    /// collector would sweep the one blob every viewer starts from. A revoked or expired link
+    /// holds nothing, so once the last live link naming a blob is gone the blob is collectable
+    /// on the collector's ordinary mark-then-sweep terms.
+    ///
+    /// Asked about the whole serve set, not only the metadata address: a link may serve a blob
+    /// its issuer prepared for the boundary crossing that no asset row names either.
+    fn names_live<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+        now: Timestamp,
     ) -> StoreFuture<'a, bool>;
 }
 
@@ -180,15 +230,25 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 impl ShareStore for InMemoryShares {
-    fn issue(&self, record: ShareRecord) -> StoreFuture<'_, ()> {
+    fn issue(&self, record: ShareRecord) -> StoreFuture<'_, IssueOutcome> {
         Box::pin(async move {
+            let mut links = lock(&self.links);
+            let std::collections::btree_map::Entry::Vacant(slot) =
+                links.entry(record.opaque_id.clone())
+            else {
+                tracing::info!(
+                    owner = %record.owner_id,
+                    "a share link was refused: its opaque id is already held"
+                );
+                return Ok(IssueOutcome::Conflict);
+            };
             tracing::info!(
                 owner = %record.owner_id,
                 serves = record.serves.len(),
                 "a share link was issued"
             );
-            lock(&self.links).insert(record.opaque_id.clone(), record);
-            Ok(())
+            slot.insert(record);
+            Ok(IssueOutcome::Issued)
         })
     }
 
@@ -213,6 +273,18 @@ impl ShareStore for InMemoryShares {
             record.revoked_at = Some(at);
             tracing::info!(%owner, "a share link was revoked");
             Ok(true)
+        })
+    }
+
+    fn names_live<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+        now: Timestamp,
+    ) -> StoreFuture<'a, bool> {
+        Box::pin(async move {
+            Ok(lock(&self.links)
+                .values()
+                .any(|record| record.is_live_at(now) && record.serves(address)))
         })
     }
 }

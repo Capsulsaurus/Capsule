@@ -34,6 +34,12 @@
 //! [`OidcAuthorization`] keeps and sends only its hash, and the complete leg presents the secret
 //! and refuses a redirect carrying a `state` it did not begin (issue #517).
 //!
+//! The device-grant legs (RFC 8628, issue #635: [`AuthClient::begin_oidc_device_login`] and
+//! [`AuthClient::poll_oidc_device_login`]) are the same kind of thing: two generated calls, the
+//! begin binding the ceremony to this client the same way, and the poll answering
+//! [`OidcDevicePoll`] — keep polling, slow down, or the [`LoginOutcome`] a password login gives.
+//! The wait between polls is the caller's; these send one request each.
+//!
 //! ## Testing
 //!
 //! The wire flows (login/refresh/logout, `401` recovery, error mapping) are proven
@@ -149,6 +155,18 @@ pub enum AuthError {
     /// password instead.
     #[error("an account with that address already exists; sign in with its password")]
     OidcAddressTaken,
+    /// The server's identity provider does not offer the device authorization grant
+    /// (`error.auth.oidc_device_unsupported`): sign in with the browser flow instead.
+    #[error("the identity provider does not offer signing in without a browser")]
+    OidcDeviceUnsupported,
+    /// The person declined the device sign-in at the identity provider
+    /// (`error.auth.oidc_device_denied`).
+    #[error("the sign-in was declined at the identity provider")]
+    OidcDeviceDenied,
+    /// The device sign-in is over: expired, already used, or not this client's
+    /// (`error.auth.oidc_device_expired`). Start again.
+    #[error("the sign-in code expired or was already used")]
+    OidcDeviceExpired,
     /// The generated client could not reach the server, or could not build the request.
     ///
     /// The generated client classifies its transport failures itself (DNS, connection, TLS,
@@ -196,6 +214,9 @@ impl AuthError {
             Self::OidcNotConfigured => Some(error_codes::AUTH_OIDC_NOT_CONFIGURED),
             Self::OidcRedirectInvalid => Some(error_codes::AUTH_OIDC_REDIRECT_INVALID),
             Self::OidcAddressTaken => Some(error_codes::AUTH_OIDC_ADDRESS_TAKEN),
+            Self::OidcDeviceUnsupported => Some(error_codes::AUTH_OIDC_DEVICE_UNSUPPORTED),
+            Self::OidcDeviceDenied => Some(error_codes::AUTH_OIDC_DEVICE_DENIED),
+            Self::OidcDeviceExpired => Some(error_codes::AUTH_OIDC_DEVICE_EXPIRED),
             Self::OidcRejected { code } | Self::Unexpected { code, .. } => code.as_deref(),
             _ => None,
         }
@@ -212,6 +233,8 @@ enum Endpoint {
     Logout,
     OidcAuthorize,
     OidcCallback,
+    OidcDevice,
+    OidcDevicePoll,
 }
 
 impl Endpoint {
@@ -224,6 +247,8 @@ impl Endpoint {
             Self::Logout => "logout",
             Self::OidcAuthorize => "oidc/authorize",
             Self::OidcCallback => "oidc/callback",
+            Self::OidcDevice => "oidc/device",
+            Self::OidcDevicePoll => "oidc/device/poll",
         }
     }
 
@@ -242,8 +267,10 @@ impl Endpoint {
             // The callback's three `401`s — a spent state, a refused exchange, a refused token —
             // all mean "start again"; the code is kept for the log. The authorize declares no
             // `401`, so one from it is a server this client does not model.
-            Self::OidcCallback => AuthError::OidcRejected { code },
-            Self::OidcAuthorize => AuthError::Unexpected {
+            // The poll's remaining `401`s — a refused exchange, a refused token — are the
+            // callback's and mean the same; its denial and expiry are matched by code first.
+            Self::OidcCallback | Self::OidcDevicePoll => AuthError::OidcRejected { code },
+            Self::OidcAuthorize | Self::OidcDevice => AuthError::Unexpected {
                 status: 401,
                 endpoint: self.name(),
                 detail: String::new(),
@@ -255,14 +282,27 @@ impl Endpoint {
     /// The typed refusals only the OIDC endpoints make, matched on the catalog code.
     fn oidc_refusal(self, status: u16, code: Option<&str>) -> Option<AuthError> {
         match (self, status, code) {
-            (Self::OidcAuthorize, 404, Some(error_codes::AUTH_OIDC_NOT_CONFIGURED)) => {
-                Some(AuthError::OidcNotConfigured)
-            }
+            (
+                Self::OidcAuthorize | Self::OidcDevice,
+                404,
+                Some(error_codes::AUTH_OIDC_NOT_CONFIGURED),
+            ) => Some(AuthError::OidcNotConfigured),
             (Self::OidcAuthorize, 400, Some(error_codes::AUTH_OIDC_REDIRECT_INVALID)) => {
                 Some(AuthError::OidcRedirectInvalid)
             }
-            (Self::OidcCallback, 409, Some(error_codes::AUTH_OIDC_ADDRESS_TAKEN)) => {
-                Some(AuthError::OidcAddressTaken)
+            (
+                Self::OidcCallback | Self::OidcDevicePoll,
+                409,
+                Some(error_codes::AUTH_OIDC_ADDRESS_TAKEN),
+            ) => Some(AuthError::OidcAddressTaken),
+            (Self::OidcDevice, 404, Some(error_codes::AUTH_OIDC_DEVICE_UNSUPPORTED)) => {
+                Some(AuthError::OidcDeviceUnsupported)
+            }
+            (Self::OidcDevicePoll, 401, Some(error_codes::AUTH_OIDC_DEVICE_DENIED)) => {
+                Some(AuthError::OidcDeviceDenied)
+            }
+            (Self::OidcDevicePoll, 401, Some(error_codes::AUTH_OIDC_DEVICE_EXPIRED)) => {
+                Some(AuthError::OidcDeviceExpired)
             }
             _ => None,
         }
@@ -441,6 +481,59 @@ pub struct OidcAuthorization {
     pub binding: SecretString,
     /// The absolute Unix-seconds instant the ceremony stops being redeemable.
     pub expires_by: u64,
+}
+
+/// How much a `slow_down` raises a device sign-in's polling interval by (RFC 8628 §3.5). The
+/// server raises its own copy by the same amount, which is why the new interval is never sent.
+pub const DEVICE_SLOW_DOWN_STEP_SECS: u64 = 5;
+
+/// A begun device sign-in through the identity provider (RFC 8628, issue #635).
+///
+/// The platform shows the person `user_code` and `verification_uri` — or renders
+/// `verification_uri_complete` as a link or QR code — and polls
+/// [`AuthClient::poll_oidc_device_login`] with this value, waiting `interval_secs` before the
+/// first poll and between every poll, until it answers something other than
+/// [`OidcDevicePoll::Pending`] or `expires_by` passes. On [`OidcDevicePoll::SlowDown`], call
+/// [`slow_down`](Self::slow_down) before waiting again.
+///
+/// Keep it as an [`OidcAuthorization`] is kept: the `binding` is what the server checks on every
+/// poll, and only its hash was sent. No `Debug`: the handle and the binding are a live credential.
+pub struct OidcDeviceAuthorization {
+    /// The handle the server polls the provider under. The server's own; not the device code.
+    pub handle: SecretString,
+    /// The secret binding the ceremony to this client: 256 random bits, unpadded base64url.
+    pub binding: SecretString,
+    /// The code the person types at the verification page. Show it exactly.
+    pub user_code: String,
+    /// Where the person goes, on any device with a browser, to type the code.
+    pub verification_uri: String,
+    /// The same address with the code already in it, when the provider offers one.
+    pub verification_uri_complete: Option<String>,
+    /// How many seconds to wait before each poll, raised by [`slow_down`](Self::slow_down).
+    pub interval_secs: u64,
+    /// The absolute Unix-seconds instant the ceremony stops being honoured.
+    pub expires_by: u64,
+}
+
+impl OidcDeviceAuthorization {
+    /// Raise the interval by [`DEVICE_SLOW_DOWN_STEP_SECS`], as RFC 8628 §3.5 requires on every
+    /// `slow_down` — the server did the same, so the two stay in step.
+    pub fn slow_down(&mut self) {
+        self.interval_secs = self
+            .interval_secs
+            .saturating_add(DEVICE_SLOW_DOWN_STEP_SECS);
+    }
+}
+
+/// What one device poll answered.
+pub enum OidcDevicePoll {
+    /// The person has not finished at the provider. Wait the interval and poll again.
+    Pending,
+    /// Polled too soon, or the provider asked to slow down. Call
+    /// [`OidcDeviceAuthorization::slow_down`], wait, and poll again.
+    SlowDown,
+    /// The sign-in finished: exactly what [`AuthClient::login`] answers.
+    Complete(LoginOutcome),
 }
 
 /// A fresh client binding for one OIDC ceremony: 256 random bits, unpadded base64url.
@@ -756,6 +849,142 @@ impl AuthClient {
             }
         };
         Ok(outcome)
+    }
+
+    /// Begin a sign-in through the server's identity provider for a client with no browser of
+    /// its own (RFC 8628, issue #635).
+    ///
+    /// What comes back is what to show the person and the handle to poll with, bound to this
+    /// client by a fresh secret of which only the hash is sent.
+    ///
+    /// # Errors
+    ///
+    /// [`AuthError::OidcNotConfigured`] when the server has no provider,
+    /// [`AuthError::OidcDeviceUnsupported`] when its provider does not offer the grant,
+    /// [`AuthError::RateLimited`] when too many were begun.
+    #[instrument(skip_all)]
+    pub async fn begin_oidc_device_login(&self) -> Result<OidcDeviceAuthorization, AuthError> {
+        tracing::info!("beginning a device sign-in through the identity provider");
+        let binding = fresh_oidc_binding();
+        let body = self
+            .rest
+            .begin_oidc_device_login(
+                PROTOCOL_VERSION.to_owned(),
+                None,
+                &rest::types::OidcDeviceRequest {
+                    binding_challenge: oidc_binding_challenge(&binding),
+                },
+            )
+            .await
+            .map_err(|error| {
+                map_rest_error(Endpoint::OidcDevice, error, |refused| match refused {
+                    rest::BeginOidcDeviceLoginError::Status400(problem)
+                    | rest::BeginOidcDeviceLoginError::Status404(problem)
+                    | rest::BeginOidcDeviceLoginError::Status415(problem)
+                    | rest::BeginOidcDeviceLoginError::Status422(problem)
+                    | rest::BeginOidcDeviceLoginError::Status426(problem)
+                    | rest::BeginOidcDeviceLoginError::Status429(problem)
+                    | rest::BeginOidcDeviceLoginError::Status500(problem)
+                    | rest::BeginOidcDeviceLoginError::Status503(problem) => Some(*problem),
+                    rest::BeginOidcDeviceLoginError::Status413 => None,
+                })
+            })?
+            .into_inner();
+        tracing::info!(
+            interval_secs = body.interval,
+            "the device sign-in began; waiting for the person"
+        );
+        Ok(OidcDeviceAuthorization {
+            handle: SecretString::from(body.handle),
+            binding,
+            user_code: body.user_code,
+            verification_uri: body.verification_uri,
+            verification_uri_complete: body.verification_uri_complete,
+            interval_secs: u64::try_from(body.interval).unwrap_or(0),
+            expires_by: u64::try_from(body.expires_by).unwrap_or(0),
+        })
+    }
+
+    /// Poll a device sign-in once (RFC 8628, issue #635).
+    ///
+    /// [`OidcDevicePoll::Pending`] and [`OidcDevicePoll::SlowDown`] are RFC 8628's "keep
+    /// polling"; [`OidcDevicePoll::Complete`] is exactly what [`login`](AuthClient::login)
+    /// answers — a session, or a second-factor challenge — and the configured cohort hash rides
+    /// this request, because it is the one that opens the session. Waiting is the caller's: this
+    /// sends one request and returns.
+    ///
+    /// # Errors
+    ///
+    /// [`AuthError::OidcDeviceDenied`] when the person declined, [`AuthError::OidcDeviceExpired`]
+    /// when the ceremony is over, [`AuthError::OidcRejected`] for a refused exchange or ID
+    /// token, [`AuthError::OidcAddressTaken`] as on the callback.
+    #[instrument(skip_all)]
+    pub async fn poll_oidc_device_login(
+        &self,
+        pending: &OidcDeviceAuthorization,
+    ) -> Result<OidcDevicePoll, AuthError> {
+        let answer = self
+            .rest
+            .poll_oidc_device_login(
+                PROTOCOL_VERSION.to_owned(),
+                None,
+                &rest::types::OidcDevicePollRequest {
+                    handle: pending.handle.expose_secret().to_owned(),
+                    binding_verifier: pending.binding.expose_secret().to_owned(),
+                    cohort_hash: self.cohort().map(str::to_owned),
+                    device_id: None,
+                },
+            )
+            .await;
+        let answer =
+            match answer {
+                Ok(answer) => answer.into_inner(),
+                Err(rest::Error::Api(refused)) if keeps_polling(refused.inner()).is_some() => {
+                    let poll = keeps_polling(refused.inner()).unwrap_or(OidcDevicePoll::Pending);
+                    tracing::debug!(
+                        slow_down = matches!(poll, OidcDevicePoll::SlowDown),
+                        "the device sign-in is not finished"
+                    );
+                    return Ok(poll);
+                }
+                Err(error) => {
+                    return Err(map_rest_error(Endpoint::OidcDevicePoll, error, |refused| {
+                        match refused {
+                            rest::PollOidcDeviceLoginError::Status400(problem)
+                            | rest::PollOidcDeviceLoginError::Status401(problem)
+                            | rest::PollOidcDeviceLoginError::Status409(problem)
+                            | rest::PollOidcDeviceLoginError::Status415(problem)
+                            | rest::PollOidcDeviceLoginError::Status422(problem)
+                            | rest::PollOidcDeviceLoginError::Status426(problem)
+                            | rest::PollOidcDeviceLoginError::Status429(problem)
+                            | rest::PollOidcDeviceLoginError::Status500(problem) => Some(*problem),
+                            rest::PollOidcDeviceLoginError::Status413 => None,
+                        }
+                    }));
+                }
+            };
+        let outcome = match answer {
+            rest::PollOidcDeviceLoginResponse::Status202(challenge) => {
+                tracing::info!("the device sign-in needs a second factor");
+                LoginOutcome::SecondFactorRequired {
+                    mfa_token: SecretString::from(challenge.mfa_token),
+                    expires_by: u64::try_from(challenge.expires_by).unwrap_or(0),
+                }
+            }
+            rest::PollOidcDeviceLoginResponse::Status200(pair) => {
+                let tokens = TokenSet::from_wire(
+                    Endpoint::OidcDevicePoll,
+                    TokenResponseBody {
+                        access_token: pair.access_token,
+                        refresh_token: pair.refresh_token,
+                        expires_by: u64::try_from(pair.expires_by).unwrap_or(0),
+                    },
+                )?;
+                tracing::info!("the device sign-in succeeded; session established");
+                LoginOutcome::Session(self.session_with_tokens(tokens))
+            }
+        };
+        Ok(OidcDevicePoll::Complete(outcome))
     }
 
     /// A `200` is a session and a `202` is a challenge, on every route that opens a session.
@@ -1158,6 +1387,24 @@ fn error_for(
             detail,
             code,
         },
+    }
+}
+
+/// Whether a device poll's refusal is RFC 8628's "keep polling", matched on the catalog code:
+/// `400 error.auth.oidc_device_pending` or `429 error.auth.oidc_device_slow_down`.
+fn keeps_polling(refused: &rest::PollOidcDeviceLoginError) -> Option<OidcDevicePoll> {
+    match refused {
+        rest::PollOidcDeviceLoginError::Status400(problem)
+            if problem.code == error_codes::AUTH_OIDC_DEVICE_PENDING =>
+        {
+            Some(OidcDevicePoll::Pending)
+        }
+        rest::PollOidcDeviceLoginError::Status429(problem)
+            if problem.code == error_codes::AUTH_OIDC_DEVICE_SLOW_DOWN =>
+        {
+            Some(OidcDevicePoll::SlowDown)
+        }
+        _ => None,
     }
 }
 
@@ -2149,6 +2396,211 @@ mod tests {
             error.error_code(),
             Some(error_codes::AUTH_OIDC_STATE_INVALID)
         );
+    }
+
+    /// A begun device sign-in as a test that never ran the begin leg would hold it.
+    fn device_pending(handle: &str) -> OidcDeviceAuthorization {
+        OidcDeviceAuthorization {
+            handle: SecretString::from(handle.to_owned()),
+            binding: fresh_oidc_binding(),
+            user_code: "WDJB-MJHT".to_owned(),
+            verification_uri: "https://idp.test/device".to_owned(),
+            verification_uri_complete: None,
+            interval_secs: 5,
+            expires_by: 1_893_456_000,
+        }
+    }
+
+    /// The device poll's answer, for the cases that expect it to have finished.
+    fn completed(poll: OidcDevicePoll) -> LoginOutcome {
+        match poll {
+            OidcDevicePoll::Complete(outcome) => outcome,
+            OidcDevicePoll::Pending | OidcDevicePoll::SlowDown => {
+                panic!("the fixture answered keep-polling")
+            }
+        }
+    }
+
+    /// The device legs round-trip (issue #635): the begin sends only the binding's hash, every
+    /// poll presents the secret and the handle, the cohort rides the polls, and pending and
+    /// slow-down are answers rather than errors.
+    #[tokio::test]
+    async fn a_device_login_begins_polls_and_completes() {
+        let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let polls = Arc::new(AtomicUsize::new(0));
+        let handler: Handler = {
+            let captured = captured.clone();
+            let polls = polls.clone();
+            Arc::new(move |req: MockRequest| {
+                let captured = captured.clone();
+                let polls = polls.clone();
+                Box::pin(async move {
+                    if let Ok(body) = serde_json::from_str::<serde_json::Value>(&req.body) {
+                        captured.lock().unwrap().push(body);
+                    }
+                    match req.path.as_str() {
+                        "/v1/auth/oidc/device" => MockResponse::json(
+                            200,
+                            serde_json::json!({
+                                "handle": "handle-1",
+                                "user_code": "WDJB-MJHT",
+                                "verification_uri": "https://idp.test/device",
+                                "verification_uri_complete":
+                                    "https://idp.test/device?user_code=WDJB-MJHT",
+                                "interval": 5,
+                                "expires_by": 1_893_456_000,
+                            })
+                            .to_string(),
+                        ),
+                        "/v1/auth/oidc/device/poll" => match polls.fetch_add(1, Ordering::SeqCst) {
+                            0 => problem(400, "error.auth.oidc_device_pending"),
+                            1 => problem(429, "error.auth.oidc_device_slow_down"),
+                            _ => MockResponse::json(
+                                200,
+                                token_json("access-1", "refresh-1", far_future()),
+                            ),
+                        },
+                        _ => MockResponse::json(404, r#"{"error":"x"}"#),
+                    }
+                })
+            })
+        };
+        let server = start_mock(handler).await;
+        let client = AuthClient::new(&server.base_url)
+            .unwrap()
+            .with_cohort_hash("a-particular-machine".to_owned());
+
+        let mut begun = client.begin_oidc_device_login().await.unwrap();
+        assert_eq!(begun.handle.expose_secret(), "handle-1");
+        assert_eq!(begun.user_code, "WDJB-MJHT");
+        assert_eq!(begun.verification_uri, "https://idp.test/device");
+        assert_eq!(
+            begun.verification_uri_complete.as_deref(),
+            Some("https://idp.test/device?user_code=WDJB-MJHT")
+        );
+        assert_eq!(begun.interval_secs, 5);
+        assert_eq!(begun.expires_by, 1_893_456_000);
+
+        assert!(matches!(
+            client.poll_oidc_device_login(&begun).await.unwrap(),
+            OidcDevicePoll::Pending
+        ));
+        assert!(matches!(
+            client.poll_oidc_device_login(&begun).await.unwrap(),
+            OidcDevicePoll::SlowDown
+        ));
+        begun.slow_down();
+        assert_eq!(begun.interval_secs, 10, "RFC 8628 §3.5: five more seconds");
+        let session = finished(completed(
+            client.poll_oidc_device_login(&begun).await.unwrap(),
+        ));
+        assert!(session.is_authenticated().await);
+
+        let bodies = captured.lock().unwrap().clone();
+        let [device, polls @ ..] = bodies.as_slice() else {
+            panic!("a begin and three polls, got {bodies:?}");
+        };
+        let binding = begun.binding.expose_secret();
+        assert_eq!(
+            device["binding_challenge"],
+            oidc_binding_challenge(&begun.binding)
+        );
+        assert!(!device.to_string().contains(binding));
+        assert!(device.get("cohort_hash").is_none());
+        assert_eq!(polls.len(), 3);
+        for poll in polls {
+            assert_eq!(poll["handle"], "handle-1");
+            assert_eq!(poll["binding_verifier"], binding);
+            assert_eq!(poll["cohort_hash"], "a-particular-machine");
+        }
+    }
+
+    /// The device poll's `202` is a second-factor challenge, as the callback's is.
+    #[tokio::test]
+    async fn a_device_poll_can_answer_a_second_factor_challenge() {
+        let handler: Handler = Arc::new(move |req| {
+            Box::pin(async move {
+                match req.path.as_str() {
+                    "/v1/auth/oidc/device/poll" => MockResponse::json(
+                        202,
+                        r#"{"mfa_token":"challenge-1","expires_by":1893456000}"#,
+                    ),
+                    _ => MockResponse::json(404, r#"{"error":"x"}"#),
+                }
+            })
+        });
+        let server = start_mock(handler).await;
+        let client = AuthClient::new(&server.base_url).unwrap();
+        let outcome = completed(
+            client
+                .poll_oidc_device_login(&device_pending("handle-1"))
+                .await
+                .unwrap(),
+        );
+        assert!(matches!(outcome, LoginOutcome::SecondFactorRequired { .. }));
+    }
+
+    /// Each device refusal maps to its typed variant on the catalog code.
+    #[tokio::test]
+    async fn device_refusals_map_to_typed_errors_on_their_codes() {
+        let handler: Handler = Arc::new(move |req| {
+            Box::pin(async move {
+                let handle = serde_json::from_str::<serde_json::Value>(&req.body)
+                    .ok()
+                    .and_then(|body| body["handle"].as_str().map(str::to_owned))
+                    .unwrap_or_default();
+                match (req.path.as_str(), handle.as_str()) {
+                    ("/v1/auth/oidc/device", _) => {
+                        problem(404, "error.auth.oidc_device_unsupported")
+                    }
+                    (_, "denied") => problem(401, "error.auth.oidc_device_denied"),
+                    (_, "expired") => problem(401, "error.auth.oidc_device_expired"),
+                    (_, "taken") => problem(409, "error.auth.oidc_address_taken"),
+                    (_, "refused") => problem(401, "error.auth.oidc_token_invalid"),
+                    (_, "limited") => problem(429, "error.auth.rate_limited"),
+                    _ => MockResponse::json(404, r#"{"error":"x"}"#),
+                }
+            })
+        });
+        let server = start_mock(handler).await;
+        let client = AuthClient::new(&server.base_url).unwrap();
+
+        let error = client
+            .begin_oidc_device_login()
+            .await
+            .err()
+            .expect("refused");
+        assert!(
+            matches!(error, AuthError::OidcDeviceUnsupported),
+            "{error:?}"
+        );
+        assert_eq!(
+            error.error_code(),
+            Some(error_codes::AUTH_OIDC_DEVICE_UNSUPPORTED)
+        );
+
+        for (handle, code) in [
+            ("denied", error_codes::AUTH_OIDC_DEVICE_DENIED),
+            ("expired", error_codes::AUTH_OIDC_DEVICE_EXPIRED),
+            ("taken", error_codes::AUTH_OIDC_ADDRESS_TAKEN),
+            ("refused", error_codes::AUTH_OIDC_TOKEN_INVALID),
+            ("limited", error_codes::AUTH_RATE_LIMITED),
+        ] {
+            let error = client
+                .poll_oidc_device_login(&device_pending(handle))
+                .await
+                .err()
+                .expect("refused");
+            assert_eq!(error.error_code(), Some(code), "{handle}: {error:?}");
+            let typed = match handle {
+                "denied" => matches!(error, AuthError::OidcDeviceDenied),
+                "expired" => matches!(error, AuthError::OidcDeviceExpired),
+                "taken" => matches!(error, AuthError::OidcAddressTaken),
+                "refused" => matches!(error, AuthError::OidcRejected { .. }),
+                _ => matches!(error, AuthError::RateLimited { .. }),
+            };
+            assert!(typed, "{handle}: {error:?}");
+        }
     }
 
     /// The generated client is built on the server root: the auth base minus `/v1/auth`.

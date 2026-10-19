@@ -12,10 +12,12 @@ mod support;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use capsule_server::blob::{BlobStore, ContentAddress};
-use jiff::SignedDuration;
+use capsule_server::index::{AssetIndex, BlobRecord, PendingAsset, Reservation};
+use capsule_server::store::{AssetId, BlobRole, OwnerId};
+use jiff::{SignedDuration, Timestamp};
 use kynos::http::StatusCode;
 use serde_json::{Value, json};
-use support::{Fixture, PROTOCOL_VERSION, album, checksum, payload, user};
+use support::{Fixture, PROTOCOL_VERSION, album, checksum, owner, payload, user};
 
 /// A well-formed opaque id with letters in it.
 fn opaque(tag: u8) -> String {
@@ -264,6 +266,43 @@ async fn a_links_caps_are_spent_once_per_drop_and_refunded_when_one_is_refused()
         problem["code"], "error.drop.cap_exhausted",
         "a full link is a 409, not the indistinguishable 404: the guest was handed a real link \
          and needs to ask for a new one"
+    );
+}
+
+#[tokio::test]
+async fn a_held_opaque_id_cannot_be_reprovisioned_and_the_refusal_is_one_answer() {
+    // #553: every guest a link reaches knows its opaque id. Were a re-provision a replace, any
+    // account could swap in its own drop key and take the guests' deposits, and the owner
+    // could reset a spent link's totals.
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let stranger = fixture
+        .other_bearer("01937b7c-0000-7000-8000-0000000000ff")
+        .await;
+    let id = opaque(3);
+    provision(
+        &fixture,
+        &bearer,
+        &link_body(&id, json!({ "max_file_count": 1 })),
+        StatusCode::CREATED,
+    )
+    .await;
+    create_drop(&fixture, &id, &payload(b'g', 512), StatusCode::CREATED).await;
+
+    let mut takeover = link_body(&id, json!({}));
+    takeover["drop_pubkey"] = json!(BASE64.encode([0xEE_u8; 32]));
+    let from_stranger = provision(&fixture, &stranger, &takeover, StatusCode::BAD_REQUEST).await;
+    let from_owner = provision(&fixture, &bearer, &takeover, StatusCode::BAD_REQUEST).await;
+    assert_eq!(
+        from_stranger, from_owner,
+        "the refusal must not say whose the id is"
+    );
+    assert_eq!(from_stranger["code"], "error.drop.malformed");
+
+    let problem = create_drop(&fixture, &id, &payload(b'h', 512), StatusCode::CONFLICT).await;
+    assert_eq!(
+        problem["code"], "error.drop.cap_exhausted",
+        "a refused re-provision must leave the spent cap spent"
     );
 }
 
@@ -559,7 +598,7 @@ async fn an_adoption_promotes_the_drop_and_empties_the_inbox_row() {
         .header("accept", "application/json")
         .json(&json!({
             "album_id": album().as_str(),
-            "asset_id": "adopted-asset-1",
+            "asset_id": ADOPTED,
             "size": bytes.len(),
             "hash": checksum(&bytes),
             "content_type": "image/jpeg",
@@ -573,7 +612,7 @@ async fn an_adoption_promotes_the_drop_and_empties_the_inbox_row() {
         .assert_status(StatusCode::OK)
         .json();
 
-    assert_eq!(body["asset_id"], "adopted-asset-1");
+    assert_eq!(body["asset_id"], ADOPTED);
     assert!(
         inbox(&fixture, &bearer).await["drops"]
             .as_array()
@@ -606,7 +645,7 @@ async fn an_adoption_that_is_refused_returns_the_drop_to_the_inbox() {
         .header("accept", "application/json")
         .json(&json!({
             "album_id": album().as_str(),
-            "asset_id": "adopted-asset-1",
+            "asset_id": ADOPTED,
             "size": bytes.len(),
             "hash": checksum(&bytes),
             "content_type": "image/jpeg",
@@ -631,7 +670,7 @@ async fn an_adoption_that_is_refused_returns_the_drop_to_the_inbox() {
         .header("accept", "application/json")
         .json(&json!({
             "album_id": album().as_str(),
-            "asset_id": "adopted-asset-1",
+            "asset_id": ADOPTED,
             "size": other.len(),
             "hash": checksum(&other),
             "content_type": "image/jpeg",
@@ -675,7 +714,7 @@ async fn another_accounts_drop_cannot_be_adopted() {
         .header("accept", "application/json")
         .json(&json!({
             "album_id": album().as_str(),
-            "asset_id": "adopted-asset-1",
+            "asset_id": ADOPTED,
             "size": bytes.len(),
             "hash": checksum(&bytes),
             "content_type": "image/jpeg",
@@ -695,6 +734,226 @@ async fn another_accounts_drop_cannot_be_adopted() {
             .len(),
         1
     );
+}
+
+/// The asset id an adoption names: the `file_id` [`support::create_request`] signs, which the
+/// request's `asset_id` must restate. The adoption-refusal cases collide with it.
+const ADOPTED: &str = support::OPS_ASSET;
+
+/// Deposit one drop and return its id, the bytes it holds, and a create manifest over them.
+async fn pending_drop(fixture: &Fixture, bearer: &str) -> (String, Vec<u8>, Value) {
+    let bytes = payload(b'g', 4096);
+    deposit(fixture, bearer, 1, &bytes).await;
+    let drop_id = inbox(fixture, bearer).await["drops"][0]["drop_id"]
+        .as_str()
+        .expect("a drop id")
+        .to_owned();
+    let manifest = support::create_request(&fixture.clock, &bytes, "original");
+    (drop_id, bytes, manifest)
+}
+
+/// Adopt `drop_id` as [`ADOPTED`] with `envelope`, expecting `expect`.
+async fn adopt(
+    fixture: &Fixture,
+    bearer: &str,
+    drop_id: &str,
+    bytes: &[u8],
+    envelope: &Value,
+    expect: StatusCode,
+) -> Value {
+    fixture
+        .client
+        .post(&format!("/v1/drops/{drop_id}/adopt"))
+        .header("authorization", bearer)
+        .header("accept", "application/json")
+        .json(&json!({
+            "album_id": album().as_str(),
+            "asset_id": ADOPTED,
+            "size": bytes.len(),
+            "hash": checksum(bytes),
+            "content_type": "image/jpeg",
+            "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
+            "protocol_version": PROTOCOL_VERSION,
+            "key_mode": "wrapped",
+            "manifest_envelope": envelope,
+        }))
+        .send()
+        .await
+        .assert_status(expect)
+        .json()
+}
+
+/// The refused adoption left its drop in the inbox, unclaimed.
+async fn assert_drop_kept(fixture: &Fixture, bearer: &str) {
+    let held = inbox(fixture, bearer).await;
+    let drops = held["drops"].as_array().expect("drops");
+    assert_eq!(
+        drops.len(),
+        1,
+        "a refused adoption does not settle its drop"
+    );
+    assert_eq!(drops[0]["adopting"], false, "and it is claimable again");
+}
+
+/// Reserve [`ADOPTED`] in the index under `owner_id`, in the fixture's album and pin.
+async fn reserve_adopted(fixture: &Fixture, owner_id: OwnerId) {
+    let reserved = fixture
+        .index
+        .reserve(PendingAsset {
+            asset_id: AssetId::new(ADOPTED),
+            owner_id,
+            album_id: album(),
+            protocol_version: PROTOCOL_VERSION.to_owned(),
+            crypto_suite_id: capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
+            created_at: Timestamp::UNIX_EPOCH,
+        })
+        .await
+        .expect("the index reserves");
+    assert!(matches!(reserved, Reservation::Created(_)));
+}
+
+#[tokio::test]
+async fn an_adoption_onto_another_owners_pending_asset_is_refused_and_keeps_the_drop() {
+    // The asset id is client-chosen. One already filed under another account is a reservation
+    // conflict, and an adoption over it must neither answer `200` nor settle the drop — which
+    // would lose the drop and leave no asset of the caller's behind it.
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (drop_id, bytes, manifest) = pending_drop(&fixture, &bearer).await;
+    reserve_adopted(
+        &fixture,
+        OwnerId::new("01937b7c-0000-7000-8000-0000000000ff"),
+    )
+    .await;
+
+    let problem = adopt(
+        &fixture,
+        &bearer,
+        &drop_id,
+        &bytes,
+        &manifest["manifest_envelope"],
+        StatusCode::BAD_REQUEST,
+    )
+    .await;
+
+    assert_eq!(problem["code"], "error.drop.adoption_refused");
+    assert_drop_kept(&fixture, &bearer).await;
+    let row = fixture
+        .index
+        .read(&AssetId::new(ADOPTED))
+        .await
+        .expect("the index answers")
+        .expect("the foreign row stands");
+    assert!(row.blobs.is_empty(), "nothing was recorded against it");
+}
+
+#[tokio::test]
+async fn an_adoption_onto_an_asset_holding_another_original_is_refused_and_keeps_the_drop() {
+    // The owner's own pending row joins, but it already holds a different original: recording
+    // this drop's blob is a conflict, not a re-point, and the drop must stay in the inbox.
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (drop_id, bytes, manifest) = pending_drop(&fixture, &bearer).await;
+    reserve_adopted(&fixture, owner()).await;
+    let elsewhere = payload(b'o', 4096);
+    let address = ContentAddress::parse(&checksum(&elsewhere)).expect("a content address");
+    fixture
+        .index
+        .record_blob(
+            &AssetId::new(ADOPTED),
+            BlobRecord {
+                role: BlobRole::Original,
+                address,
+                size: elsewhere.len() as u64,
+                manifest_sha256: None,
+                finalized_at: Timestamp::UNIX_EPOCH,
+            },
+        )
+        .await
+        .expect("the index records");
+
+    let problem = adopt(
+        &fixture,
+        &bearer,
+        &drop_id,
+        &bytes,
+        &manifest["manifest_envelope"],
+        StatusCode::BAD_REQUEST,
+    )
+    .await;
+
+    assert_eq!(problem["code"], "error.drop.adoption_refused");
+    assert_drop_kept(&fixture, &bearer).await;
+}
+
+#[tokio::test]
+async fn an_adoption_attributed_to_another_account_is_refused_and_keeps_the_drop() {
+    // Invariant 7's account half, as the upload and ops surfaces enforce it: the adopter is the
+    // author, so a manifest naming somebody else is refused before anything is reserved, and
+    // the claim is released.
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (drop_id, bytes, mut manifest) = pending_drop(&fixture, &bearer).await;
+    manifest["manifest_envelope"]["created_by_user"] =
+        "01937b7c-0000-7000-8000-0000000000ff".into();
+
+    let problem = adopt(
+        &fixture,
+        &bearer,
+        &drop_id,
+        &bytes,
+        &manifest["manifest_envelope"],
+        StatusCode::BAD_REQUEST,
+    )
+    .await;
+
+    assert_eq!(problem["code"], "error.drop.adoption_refused");
+    assert_drop_kept(&fixture, &bearer).await;
+    assert!(
+        fixture
+            .index
+            .read(&AssetId::new(ADOPTED))
+            .await
+            .expect("the index answers")
+            .is_none(),
+        "no asset was reserved for it"
+    );
+}
+
+#[tokio::test]
+async fn an_adoption_whose_asset_id_is_not_the_signed_file_id_is_refused_and_keeps_the_drop() {
+    // The signed manifest's `file_id` is the asset id; `asset_id` only restates it. An adoption
+    // whose two disagree would reserve under an id the owner's signature does not cover, so it
+    // is refused before anything is claimed or reserved, under either id.
+    const SIGNED: &str = "018f3f1e-4b7a-7c9d-8e2f-00000000beef";
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (drop_id, bytes, mut manifest) = pending_drop(&fixture, &bearer).await;
+    manifest["manifest_envelope"]["file_id"] = SIGNED.into();
+
+    let problem = adopt(
+        &fixture,
+        &bearer,
+        &drop_id,
+        &bytes,
+        &manifest["manifest_envelope"],
+        StatusCode::BAD_REQUEST,
+    )
+    .await;
+
+    assert_eq!(problem["code"], "error.drop.adoption_refused");
+    assert_drop_kept(&fixture, &bearer).await;
+    for id in [ADOPTED, SIGNED] {
+        assert!(
+            fixture
+                .index
+                .read(&AssetId::new(id))
+                .await
+                .expect("the index answers")
+                .is_none(),
+            "no asset was reserved under {id}"
+        );
+    }
 }
 
 #[tokio::test]

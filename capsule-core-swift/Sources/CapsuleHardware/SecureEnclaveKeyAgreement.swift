@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-/// A Secure Enclave–backed ``HardwareKeyAgreement`` (Apple, iOS / macOS) — the ECDH analogue of
+/// A Secure Enclave–backed ``FfiHardwareKeyAgreement`` (Apple, iOS / macOS) — the ECDH analogue of
 /// ``SecureEnclaveSigner`` that backs the hardware-bound classical half of the device **encryption**
 /// key (slice S-F5). The private key is generated inside the Secure Enclave and never leaves it;
 /// there is no API to read the private bytes, so non-exportability is enforced by the platform.
@@ -16,7 +16,7 @@ import Foundation
 ///
 /// A production app persists `dataRepresentation` of each key (the encrypted SE blob) in the Keychain
 /// and reloads it; this reference keeps the handles in memory.
-public final class SecureEnclaveKeyAgreement: HardwareKeyAgreement, @unchecked Sendable {
+public final class SecureEnclaveKeyAgreement: FfiHardwareKeyAgreement, @unchecked Sendable {
     private var keys: [String: SecureEnclave.P256.KeyAgreement.PrivateKey] = [:]
     private let lock = NSLock()
 
@@ -29,7 +29,7 @@ public final class SecureEnclaveKeyAgreement: HardwareKeyAgreement, @unchecked S
             return existing
         }
         guard SecureEnclave.isAvailable else {
-            throw HardwareSignerError.Unavailable(message: "Secure Enclave unavailable")
+            throw FfiHardwareSignerError.Unavailable(message: "Secure Enclave unavailable")
         }
         let key = try SecureEnclave.P256.KeyAgreement.PrivateKey()
         keys[keyAlias] = key

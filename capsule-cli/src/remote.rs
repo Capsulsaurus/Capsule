@@ -10,12 +10,17 @@
 
 use std::collections::HashSet;
 
+use capsule_core::crypto::keys::MasterKey;
+use capsule_core::crypto::primitives::{Argon2Params, DeviceTier};
 use capsule_core::import::UploadPolicy;
 use capsule_core::lifecycle::{LifecycleError, Workspace};
 use capsule_sdk::albums::{AlbumClient, AlbumTransport};
 use capsule_sdk::auth::{AuthClient, AuthError, LoginOutcome, Session};
+use capsule_sdk::client::AuthenticatedClient;
+use capsule_sdk::directory::{DirectoryClient, DirectoryError};
 use capsule_sdk::net::ConnectionClass;
 use capsule_sdk::push::{self, PushError};
+use capsule_sdk::recovery::{MintedSecret, RecoveryClient, RecoveryError};
 use capsule_sdk::staged::{StagedScheduler, TierSessionOutcome, held_from_feed};
 use capsule_sdk::sync::{SyncConsumer, SyncCursor, SyncError, SyncState};
 use capsule_sdk::upload::{UploadClient, UploadTransport};
@@ -23,6 +28,7 @@ use sea_orm::{ConnectionTrait, TransactionTrait};
 use secrecy::SecretString;
 use thiserror::Error;
 use tracing::instrument;
+use uuid::Uuid;
 
 use crate::session::{SessionError, SessionStore};
 use crate::syncstore::{self, SyncStoreError, SyncedAssetView};
@@ -132,6 +138,27 @@ pub enum RemoteError {
     /// The freshly-logged-in session held no exportable tokens (should not happen).
     #[error("login produced no session tokens")]
     EmptySession,
+    /// An escrow or sealed-identity call failed (`capsule auth recover`).
+    #[error(transparent)]
+    Recovery(#[from] RecoveryError),
+    /// Fetching or publishing the account's signed device directory failed
+    /// (`capsule auth recover` joining the new device to it), or `capsule auth escrow` found it
+    /// signed under an identity key other than the library's (`UntrustedSignature`).
+    #[error(transparent)]
+    Directory(#[from] DirectoryError),
+    /// The account profile could not be read, so the account's server id is unknown.
+    #[error("the account profile could not be read: {0}")]
+    Profile(String),
+    /// The recovery secret did not open this account's escrow.
+    #[error("the recovery secret does not open this account's escrow")]
+    WrongRecoverySecret,
+    /// `capsule auth escrow` without `--replace` found an escrow already stored for the account:
+    /// storing another would retire the recovery secret that opens it.
+    #[error("this account already has a recovery escrow stored")]
+    EscrowAlreadyStored,
+    /// The user did not type the minted recovery secret back, so nothing was stored.
+    #[error("the recovery secret was not confirmed")]
+    RecoverySecretNotConfirmed,
 }
 
 impl RemoteError {
@@ -145,6 +172,8 @@ impl RemoteError {
                 ..
             })) => code.as_deref(),
             Self::Push(PushError::Album(error)) => error.error_code(),
+            Self::Recovery(error) => error.error_code(),
+            Self::Directory(error) => error.error_code(),
             _ => None,
         }
     }
@@ -162,15 +191,27 @@ pub async fn auth_login(
     password: &str,
 ) -> Result<LoginStep, RemoteError> {
     let client = AuthClient::new(&remote.auth_endpoint)?;
-    match client.login(email, password).await? {
+    let outcome = client.login(email, password).await?;
+    settle_login(store, outcome).await
+}
+
+/// Act on what a sign-in answered: persist a session, or hand back the second-factor challenge.
+///
+/// One place for the password path and the identity-provider path (`capsule auth login
+/// --oidc`), so the two ways a sign-in can answer cannot be settled differently.
+pub(crate) async fn settle_login(
+    store: &SessionStore,
+    outcome: LoginOutcome,
+) -> Result<LoginStep, RemoteError> {
+    match outcome {
         LoginOutcome::Session(session) => {
             persist(store, session).await?;
             tracing::info!("login persisted to the session store");
             Ok(LoginStep::Complete)
         }
-        // The password verified and the sign-in is not finished (`S-C55`). Nothing is persisted:
-        // there is no session yet, and writing a half-authentication to the store would leave a
-        // later command believing it was signed in.
+        // The sign-in is not finished (`S-C55`). Nothing is persisted: there is no session yet,
+        // and writing a half-authentication to the store would leave a later command believing
+        // it was signed in.
         LoginOutcome::SecondFactorRequired { mfa_token, .. } => {
             tracing::info!("login needs a second factor");
             Ok(LoginStep::SecondFactorRequired { mfa_token })
@@ -271,7 +312,7 @@ pub async fn auth_logout(remote: &RemoteConfig, store: &SessionStore) -> Result<
 /// It is fixed here rather than inside the SDK because the store is the CLI's: the SDK's
 /// `Session` is deliberately in-memory and says so, and a library that wrote to a caller's disk
 /// would be the surprising thing.
-async fn resume_session(
+pub(crate) async fn resume_session(
     remote: &RemoteConfig,
     store: &SessionStore,
 ) -> Result<Session, RemoteError> {
@@ -289,7 +330,7 @@ async fn resume_session(
 ///
 /// A session that has been logged out exports nothing; that is not an error, it is the store
 /// having nothing left to hold.
-async fn checkpoint(store: &SessionStore, session: &Session) {
+pub(crate) async fn checkpoint(store: &SessionStore, session: &Session) {
     let Some(persisted) = session.export().await else {
         return;
     };
@@ -299,6 +340,429 @@ async fn checkpoint(store: &SessionStore, session: &Session) {
         // cost of a failed write-back is one interactive login, and turning it into a command
         // failure would throw away work that landed.
         Err(error) => tracing::warn!(%error, "the rotated session could not be persisted"),
+    }
+}
+
+// ─── Recovery (#544) ─────────────────────────────────────────────────────────
+
+/// `capsule auth recover`: bootstrap a library on this machine **as the signed-in account**,
+/// from what the server holds and the recovery secret alone.
+///
+/// The flow, every leg over the SDK:
+///
+/// 1. resume the stored session and read the account's server id (`GET /v1/auth/profile`) —
+///    the id the new library must carry, because the server refuses a directory or a manifest
+///    that names any other;
+/// 2. fetch the escrow and the sealed identity (`GET /v1/auth/escrow`,
+///    `GET /v1/auth/escrow/identity`) — both before any key derivation, so an account that
+///    never stored its identity fails at once rather than after an Argon2id pass;
+/// 3. unwrap the master key with the recovery secret ([`recovery_secret_candidates`] says how
+///    the typed secret is read);
+/// 4. create the library at `library` with `Workspace::create_from_master`, which opens the
+///    sealed identity under the recovered master key and refuses before writing anything if it
+///    does not open;
+/// 5. join the account's device directory (#625): fetch the
+///    account's signed directory (`GET /v1/auth/devices/directory/{user_id}`), verify it under
+///    the identity key the sealed identity opened, append the new device with
+///    `Workspace::extend_account_directory` and publish it at the stored version + 1. An
+///    account that never published one gets the new library's own, at version 1.
+///
+/// Step 5 is part of the recovery, not a follow-up: a device the directory does not list signs
+/// nothing the account's other devices accept. So a failure there **removes the library step 4
+/// created** — it holds nothing but the keys minted for it moments earlier — and returns the
+/// error, which leaves the path as it was and makes rerunning the command the retry. Every
+/// refusal before step 4 writes nothing.
+///
+/// # Errors
+///
+/// [`RemoteError::NotAuthenticated`] with no stored session; [`RemoteError::Recovery`] for an
+/// escrow or sealed-identity refusal (`IdentityNotStored` carries its own code);
+/// [`RemoteError::WrongRecoverySecret`] when no reading of the secret opens the escrow;
+/// [`RemoteError::Lifecycle`] when the library cannot be created, or when the account's
+/// directory cannot be extended with the new device; [`RemoteError::Directory`] when the
+/// account's directory cannot be fetched, does not verify, or the publish is refused.
+#[instrument(skip(store, recovery_secret, passphrase, params), fields(library = %library.display()))]
+pub async fn auth_recover(
+    remote: &RemoteConfig,
+    store: &SessionStore,
+    library: &std::path::Path,
+    recovery_secret: &str,
+    passphrase: &[u8],
+    params: Argon2Params,
+) -> Result<Workspace, RemoteError> {
+    let session = resume_session(remote, store).await?;
+    let outcome = recover_with(
+        remote,
+        session.clone(),
+        library,
+        recovery_secret,
+        passphrase,
+        params,
+    )
+    .await;
+    checkpoint(store, &session).await;
+    outcome
+}
+
+/// The recovery itself, over a session somebody else is responsible for persisting.
+async fn recover_with(
+    remote: &RemoteConfig,
+    session: Session,
+    library: &std::path::Path,
+    recovery_secret: &str,
+    passphrase: &[u8],
+    params: Argon2Params,
+) -> Result<Workspace, RemoteError> {
+    // `sync_endpoint` is the bare server origin, the base every generated operation hangs off.
+    let api_root = &remote.sync_endpoint;
+    let user_id = account_id(api_root, session.clone()).await?;
+    let recovery = RecoveryClient::new(session.clone(), api_root)?;
+    let escrow = recovery.fetch_escrow().await?;
+    let sealed = recovery.fetch_sealed_identity().await?;
+    tracing::info!(%user_id, "recover: fetched the escrow and the sealed identity");
+
+    let master = recovery_secret_candidates(recovery_secret)
+        .into_iter()
+        .find_map(|candidate| {
+            capsule_core::backup::recover_master_key(escrow.blob(), &candidate).ok()
+        })
+        .ok_or_else(|| {
+            tracing::warn!("recover: the recovery secret did not open the escrow");
+            RemoteError::WrongRecoverySecret
+        })?;
+
+    // `create_from_master` refuses a non-empty root, so whatever is under `library` after it
+    // returns is this run's alone; `existed` says whether the root itself is.
+    let existed = library.exists();
+    let mut workspace = Workspace::create_from_master(
+        library,
+        passphrase,
+        params,
+        MasterKey::from_bytes(master),
+        user_id,
+        &sealed,
+    )?;
+    tracing::info!(
+        %user_id,
+        device = %workspace.device_id(),
+        "recover: the library opens as the recovered account on a new device"
+    );
+
+    let directory = DirectoryClient::new(session, &remote.auth_endpoint);
+    match join_account_directory(&directory, &mut workspace).await {
+        Ok(version) => {
+            tracing::info!(
+                %user_id,
+                device = %workspace.device_id(),
+                directory_version = version,
+                "recover: the new device is listed in the account's directory"
+            );
+            Ok(workspace)
+        }
+        Err(error) => {
+            tracing::warn!(
+                %user_id,
+                device = %workspace.device_id(),
+                %error,
+                "recover: the new device could not join the account's directory; removing the library"
+            );
+            // Close the library's files before removing them.
+            drop(workspace);
+            discard_new_library(library, existed);
+            Err(error)
+        }
+    }
+}
+
+/// Make `workspace`'s device a member of its account's published device directory, returning
+/// the `directory_version` the server stores afterwards.
+///
+/// The account's directory is fetched and verified under the identity key `workspace` holds —
+/// a document that does not verify is refused by the SDK and never reaches the extend. With one
+/// published, the device is appended with `Workspace::extend_account_directory` and the result
+/// is published at the stored version + 1, keeping every device already listed. A directory
+/// that already lists the device under its key is adopted unchanged and nothing is published.
+/// With none published ([`DirectoryError::NotPublished`]), the workspace's own directory —
+/// this device alone, at version 1 — is the account's first.
+async fn join_account_directory(
+    directory: &DirectoryClient,
+    workspace: &mut Workspace,
+) -> Result<u64, RemoteError> {
+    let identity = workspace.user_ik_public();
+    let user_id = workspace.user_id();
+    let to_publish = match directory.fetch(user_id, &identity).await {
+        Ok(published) => {
+            let stored = published.core.directory_version;
+            tracing::debug!(
+                %user_id,
+                directory_version = stored,
+                devices = published.core.devices.len(),
+                "recover: the account's directory fetched and verified"
+            );
+            let Some(extended) = workspace.extend_account_directory(&published)? else {
+                tracing::info!(
+                    %user_id,
+                    directory_version = stored,
+                    "recover: the account's directory already lists this device"
+                );
+                return Ok(stored);
+            };
+            extended
+        }
+        Err(DirectoryError::NotPublished) => {
+            tracing::info!(
+                %user_id,
+                "recover: the account has no directory yet; publishing this device's own"
+            );
+            workspace.device_directory().clone()
+        }
+        Err(error) => return Err(error.into()),
+    };
+    Ok(directory.publish(&to_publish, &identity).await?)
+}
+
+/// Remove the library a failed recovery created at `root`, restoring the path to how it was:
+/// absent when `existed` is false, an empty directory when it is true (the only kind
+/// `create_from_master` accepts).
+///
+/// Best effort: the recovery has already failed, and its error is the one the caller reports.
+/// A removal that fails is logged with the path, so whatever it left can be found and removed.
+fn discard_new_library(root: &std::path::Path, existed: bool) {
+    let outcome = if existed {
+        std::fs::read_dir(root).and_then(|entries| {
+            entries.into_iter().try_for_each(|entry| {
+                let path = entry?.path();
+                if path.is_dir() {
+                    std::fs::remove_dir_all(&path)
+                } else {
+                    std::fs::remove_file(&path)
+                }
+            })
+        })
+    } else {
+        std::fs::remove_dir_all(root)
+    };
+    match outcome {
+        Ok(()) => tracing::info!(root = %root.display(), "recover: the new library was removed"),
+        Err(error) => tracing::warn!(
+            root = %root.display(),
+            %error,
+            "recover: the new library could not be fully removed"
+        ),
+    }
+}
+
+/// The signed-in account's id, as the server assigned it.
+async fn account_id(api_root: &str, session: Session) -> Result<Uuid, RemoteError> {
+    let client = AuthenticatedClient::new(api_root, session)
+        .map_err(|error| RemoteError::Profile(error.to_string()))?;
+    let profile = client
+        .get_profile(capsule_core::crypto::primitives::PROTOCOL_VERSION, None)
+        .await
+        .map_err(|error| RemoteError::Profile(error.to_string()))?
+        .into_inner();
+    Uuid::parse_str(&profile.user_id).map_err(|error| {
+        RemoteError::Profile(format!(
+            "the account id {:?} is not a UUID: {error}",
+            profile.user_id
+        ))
+    })
+}
+
+/// The byte strings a typed recovery secret may stand for, in the order they are tried.
+///
+/// A secret the SDK minted (`MintedSecret`) is 32 random bytes shown to the user as 64
+/// lowercase hex characters, and the escrow is wrapped under the **bytes**, not the hex. A
+/// secret the user chose is wrapped under its UTF-8 text. So a 64-character hex string is tried
+/// decoded first and then as typed, and anything else only as typed. Trying both costs one
+/// extra Argon2id pass in the rare case a chosen passphrase is itself 64 hex characters, and
+/// guessing one reading would lock that user out.
+///
+/// Surrounding whitespace is dropped: it is never part of a secret a person copied.
+#[must_use]
+pub fn recovery_secret_candidates(typed: &str) -> Vec<Vec<u8>> {
+    let typed = typed.trim();
+    let mut candidates = Vec::with_capacity(2);
+    if typed.len() == 64
+        && let Ok(bytes) = hex::decode(typed)
+    {
+        candidates.push(bytes);
+    }
+    candidates.push(typed.as_bytes().to_vec());
+    candidates
+}
+
+/// What `capsule auth escrow` stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EscrowSetup {
+    /// The server's id for the account, which the library is now bound to.
+    pub user_id: Uuid,
+    /// Whether the escrow displaced an earlier one, so the previous recovery secret has
+    /// stopped working and backups made under it need re-exporting or destroying.
+    pub replaced: bool,
+}
+
+/// `capsule auth escrow`: set up recovery for `workspace` **as the signed-in account**, so
+/// [`auth_recover`] can later restore it on a new machine from the recovery secret alone.
+///
+/// The flow, every network leg over the SDK:
+///
+/// 1. resume the stored session and read the account's server id (`GET /v1/auth/profile`),
+///    then refuse with [`LifecycleError::AccountRebind`] when the library's id differs from it
+///    and the library already holds assets, so no secret is minted that the bind would discard;
+///    and refuse with [`DirectoryError::UntrustedSignature`] when the account's published
+///    device directory does not verify under the library's identity key — another library of
+///    the account anchored its own, so a recovery from this escrow could never join it;
+/// 2. unless `replace`, refuse with [`RemoteError::EscrowAlreadyStored`] when the account
+///    already has an escrow (`GET /v1/auth/escrow`): storing another would retire the secret
+///    that opens it, and that may belong to another library of the same account;
+/// 3. mint a recovery secret and hand it to `confirm`, which shows it once and runs the
+///    type-back gate; `false` is [`RemoteError::RecoverySecretNotConfirmed`];
+/// 4. bind the library to the server's id (`Workspace::bind_account_id`), which keeps its own
+///    [`LifecycleError::AccountRebind`] refusal as the authority behind step 1's early one;
+/// 5. wrap the master key under the secret at `tier` and store it (`PUT /v1/auth/escrow`),
+///    then store the sealed identity beside it (`PUT /v1/auth/escrow/identity`).
+///
+/// Every refusal before step 4 writes nothing, locally or on the server. A failure after it
+/// leaves the library bound, which a rerun treats as already done.
+///
+/// # Errors
+///
+/// [`RemoteError::NotAuthenticated`] with no stored session; [`RemoteError::Profile`] when the
+/// account id cannot be read; the refusals above; [`RemoteError::Directory`] when the account's
+/// directory does not verify under the library's identity key (code
+/// `error.directory.untrusted_signature`) or cannot be fetched; [`RemoteError::Lifecycle`] for
+/// the bind or the wrap; [`RemoteError::Recovery`] for an escrow or sealed-identity call.
+#[instrument(skip_all, fields(library_user = %workspace.user_id(), replace = replace))]
+pub async fn auth_escrow(
+    remote: &RemoteConfig,
+    store: &SessionStore,
+    workspace: &mut Workspace,
+    replace: bool,
+    tier: DeviceTier,
+    confirm: impl FnOnce(&MintedSecret) -> bool,
+) -> Result<EscrowSetup, RemoteError> {
+    let session = resume_session(remote, store).await?;
+    let outcome = escrow_with(remote, session.clone(), workspace, replace, tier, confirm).await;
+    checkpoint(store, &session).await;
+    outcome
+}
+
+/// The escrow setup itself, over a session somebody else is responsible for persisting.
+async fn escrow_with(
+    remote: &RemoteConfig,
+    session: Session,
+    workspace: &mut Workspace,
+    replace: bool,
+    tier: DeviceTier,
+    confirm: impl FnOnce(&MintedSecret) -> bool,
+) -> Result<EscrowSetup, RemoteError> {
+    let api_root = &remote.sync_endpoint;
+    let user_id = account_id(api_root, session.clone()).await?;
+    // The bind in step 4 refuses a library that already authored assets under its own id. Ask
+    // the same question here, before a secret is minted, so the user is never shown and made to
+    // record a secret that is then discarded.
+    let assets = workspace.asset_ids().len();
+    if workspace.user_id() != user_id && assets > 0 {
+        tracing::warn!(
+            %user_id,
+            library_user = %workspace.user_id(),
+            assets,
+            "escrow: refused before minting, the library already authored assets under its own id"
+        );
+        return Err(LifecycleError::AccountRebind(format!(
+            "{assets} asset(s) already name {} as created_by_user",
+            workspace.user_id()
+        ))
+        .into());
+    }
+    let directory = DirectoryClient::new(session.clone(), &remote.auth_endpoint);
+    ensure_identity_anchors_account(&directory, user_id, workspace).await?;
+    let recovery = RecoveryClient::new(session, api_root)?;
+    if !replace {
+        match recovery.fetch_escrow().await {
+            Ok(_) => {
+                tracing::warn!(%user_id, "escrow: refused, an escrow is already stored");
+                return Err(RemoteError::EscrowAlreadyStored);
+            }
+            Err(RecoveryError::NotEnrolled) => {
+                tracing::debug!(%user_id, "escrow: no escrow stored yet");
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+
+    let secret = MintedSecret::generate();
+    if !confirm(&secret) {
+        tracing::warn!(%user_id, "escrow: the recovery secret was not typed back; nothing stored");
+        return Err(RemoteError::RecoverySecretNotConfirmed);
+    }
+
+    workspace.bind_account_id(user_id)?;
+    tracing::info!(%user_id, "escrow: the library is bound to the server's account id");
+
+    let blob = workspace.escrow_master_key(secret.as_bytes(), tier)?;
+    let stored = recovery.store_escrow(&blob).await?;
+    let identity = recovery
+        .store_sealed_identity(&workspace.sealed_identity())
+        .await?;
+    tracing::info!(
+        %user_id,
+        escrow_replaced = stored.replaced,
+        identity_replaced = identity.replaced,
+        "escrow: the escrow and the sealed identity are stored"
+    );
+    Ok(EscrowSetup {
+        user_id,
+        replaced: stored.replaced,
+    })
+}
+
+/// Refuse to escrow a library whose identity key is not the one account `user_id`'s published
+/// device directory is signed under.
+///
+/// The directory is fetched under `workspace`'s identity key: a document that verifies, or none
+/// published at all ([`DirectoryError::NotPublished`], so the first recovery publishes the
+/// account's first directory), passes. A document that does not verify
+/// ([`DirectoryError::UntrustedSignature`]) means another library of the account anchored its
+/// own key: a recovery from this library's escrow could never join that directory (#625), so
+/// the escrow is refused before a secret is minted. Any other failure is returned as is, since
+/// the question cannot be answered without the directory.
+async fn ensure_identity_anchors_account(
+    directory: &DirectoryClient,
+    user_id: Uuid,
+    workspace: &Workspace,
+) -> Result<(), RemoteError> {
+    match directory.fetch(user_id, &workspace.user_ik_public()).await {
+        Ok(published) => {
+            tracing::debug!(
+                %user_id,
+                directory_version = published.core.directory_version,
+                "escrow: the account's directory verifies under this library's identity key"
+            );
+            Ok(())
+        }
+        Err(DirectoryError::NotPublished) => {
+            tracing::debug!(%user_id, "escrow: the account has no directory published yet");
+            Ok(())
+        }
+        Err(DirectoryError::UntrustedSignature) => {
+            tracing::warn!(
+                %user_id,
+                library_user = %workspace.user_id(),
+                "escrow: refused before minting, the account's directory is signed under another \
+                 library's identity key"
+            );
+            Err(DirectoryError::UntrustedSignature.into())
+        }
+        Err(error) => {
+            tracing::warn!(
+                %user_id,
+                %error,
+                "escrow: refused, the account's directory could not be fetched"
+            );
+            Err(error.into())
+        }
     }
 }
 
@@ -792,6 +1256,80 @@ mod tests {
             !after_scheme.contains('/'),
             "sync endpoint must be a bare origin, got {}",
             cfg.sync_endpoint
+        );
+    }
+
+    /// A minted secret is shown as hex and wrapped under its bytes, so the decoded bytes are
+    /// tried first; the text as typed is still tried, because a chosen passphrase may happen
+    /// to be 64 hex characters.
+    #[test]
+    fn a_hex_recovery_secret_is_tried_decoded_and_then_as_typed() {
+        let hex = "00ff".repeat(16);
+        let candidates = recovery_secret_candidates(&format!("  {hex}\n"));
+        assert_eq!(
+            candidates,
+            vec![[0x00, 0xff].repeat(16), hex.as_bytes().to_vec()]
+        );
+    }
+
+    /// A library laid out the way a recovery leaves one: nested directories and files.
+    fn lay_out_a_library(root: &std::path::Path) {
+        std::fs::create_dir_all(root.join(".library/keys")).expect("the skeleton creates");
+        std::fs::write(root.join(".library/keys/device.key"), b"k").expect("a key file writes");
+        std::fs::write(root.join("library.toml"), b"name").expect("a top-level file writes");
+    }
+
+    /// A recovery that created its root removes it whole when the directory join fails, so the
+    /// path is absent again and a rerun starts from nothing.
+    #[test]
+    fn a_failed_join_removes_the_root_the_recovery_created() {
+        let parent = std::env::temp_dir().join(format!(
+            "capsule-cli-discard-created-{}",
+            std::process::id()
+        ));
+        let root = parent.join("recovered");
+        lay_out_a_library(&root);
+
+        discard_new_library(&root, false);
+
+        assert!(!root.exists(), "the created root is gone");
+        assert!(parent.exists(), "and nothing above it is touched");
+        std::fs::remove_dir_all(&parent).ok();
+    }
+
+    /// A recovery into an empty directory the user made leaves that directory, empty, in place.
+    #[test]
+    fn a_failed_join_empties_a_root_that_existed_and_keeps_it() {
+        let root = std::env::temp_dir().join(format!(
+            "capsule-cli-discard-existing-{}",
+            std::process::id()
+        ));
+        lay_out_a_library(&root);
+
+        discard_new_library(&root, true);
+
+        assert!(root.is_dir(), "the user's directory stays");
+        assert_eq!(
+            std::fs::read_dir(&root).expect("it reads").count(),
+            0,
+            "and is empty again, as it was before the recovery"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_chosen_recovery_secret_is_tried_as_typed_only() {
+        assert_eq!(
+            recovery_secret_candidates("seven words the user wrote down"),
+            vec![b"seven words the user wrote down".to_vec()]
+        );
+        // Hex of the wrong length is not a minted secret.
+        assert_eq!(recovery_secret_candidates("00ff"), vec![b"00ff".to_vec()]);
+        // 64 characters that are not hex.
+        let not_hex = "z".repeat(64);
+        assert_eq!(
+            recovery_secret_candidates(&not_hex),
+            vec![not_hex.as_bytes().to_vec()]
         );
     }
 }

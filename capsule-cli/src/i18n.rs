@@ -48,6 +48,26 @@ pub mod keys {
     pub const AUTH_LOGIN_IN_PROGRESS: &str = "cli.auth.login.in_progress";
     pub const AUTH_LOGIN_SUCCESS: &str = "cli.auth.login.success";
     pub const AUTH_LOGIN_FAILED: &str = "cli.auth.login.failed";
+    // `capsule auth login --oidc` — the identity-provider sign-in over a loopback listener (S-N2).
+    pub const AUTH_LOGIN_OIDC_IN_PROGRESS: &str = "cli.auth.login.oidc_in_progress";
+    pub const AUTH_LOGIN_OIDC_VISIT: &str = "cli.auth.login.oidc_visit";
+    pub const AUTH_LOGIN_OIDC_BROWSER_UNAVAILABLE: &str = "cli.auth.login.oidc_browser_unavailable";
+    pub const AUTH_LOGIN_OIDC_WAITING: &str = "cli.auth.login.oidc_waiting";
+    pub const AUTH_LOGIN_OIDC_SUCCESS: &str = "cli.auth.login.oidc_success";
+    pub const AUTH_LOGIN_OIDC_PAGE_RECEIVED: &str = "cli.auth.login.oidc_page_received";
+    pub const AUTH_LOGIN_OIDC_PAGE_REFUSED: &str = "cli.auth.login.oidc_page_refused";
+    pub const AUTH_LOGIN_OIDC_LOOPBACK_REFUSED: &str = "cli.auth.login.oidc_loopback_refused";
+    pub const AUTH_LOGIN_OIDC_LISTENER_FAILED: &str = "cli.auth.login.oidc_listener_failed";
+    pub const AUTH_LOGIN_OIDC_TIMED_OUT: &str = "cli.auth.login.oidc_timed_out";
+    pub const AUTH_LOGIN_OIDC_DENIED: &str = "cli.auth.login.oidc_denied";
+    pub const AUTH_LOGIN_OIDC_DENIED_DESCRIBED: &str = "cli.auth.login.oidc_denied_described";
+    // `capsule auth login --oidc --device` — the device authorization grant (issue #635).
+    pub const AUTH_LOGIN_OIDC_DEVICE_IN_PROGRESS: &str = "cli.auth.login.oidc_device_in_progress";
+    pub const AUTH_LOGIN_OIDC_DEVICE_VISIT: &str = "cli.auth.login.oidc_device_visit";
+    pub const AUTH_LOGIN_OIDC_DEVICE_CODE: &str = "cli.auth.login.oidc_device_code";
+    pub const AUTH_LOGIN_OIDC_DEVICE_COMPLETE: &str = "cli.auth.login.oidc_device_complete";
+    pub const AUTH_LOGIN_OIDC_DEVICE_WAITING: &str = "cli.auth.login.oidc_device_waiting";
+    pub const AUTH_LOGIN_OIDC_DEVICE_TIMED_OUT: &str = "cli.auth.login.oidc_device_timed_out";
     pub const AUTH_REGISTER_IN_PROGRESS: &str = "cli.auth.register.in_progress";
     pub const AUTH_REGISTER_SUCCESS: &str = "cli.auth.register.success";
     pub const AUTH_REGISTER_FAILED: &str = "cli.auth.register.failed";
@@ -55,6 +75,28 @@ pub mod keys {
     pub const AUTH_LOGOUT_SUCCESS: &str = "cli.auth.logout.success";
     pub const AUTH_LOGOUT_NOT_LOGGED_IN: &str = "cli.auth.logout.not_logged_in";
     pub const AUTH_NOT_AUTHENTICATED: &str = "cli.auth.not_authenticated";
+    // `capsule auth escrow` — set recovery up for a library (#624).
+    pub const AUTH_ESCROW_PASSPHRASE_PROMPT: &str = "cli.auth.escrow.passphrase_prompt";
+    pub const AUTH_ESCROW_IN_PROGRESS: &str = "cli.auth.escrow.in_progress";
+    pub const AUTH_ESCROW_SECRET_SHOWN: &str = "cli.auth.escrow.secret_shown";
+    pub const AUTH_ESCROW_TYPEBACK_PROMPT: &str = "cli.auth.escrow.typeback_prompt";
+    pub const AUTH_ESCROW_TYPEBACK_MISMATCH: &str = "cli.auth.escrow.typeback_mismatch";
+    pub const AUTH_ESCROW_ALREADY_STORED: &str = "cli.auth.escrow.already_stored";
+    pub const AUTH_ESCROW_LIBRARY_HAS_ASSETS: &str = "cli.auth.escrow.library_has_assets";
+    pub const AUTH_ESCROW_SUCCESS: &str = "cli.auth.escrow.success";
+    pub const AUTH_ESCROW_REPLACED: &str = "cli.auth.escrow.replaced";
+    pub const AUTH_ESCROW_FAILED: &str = "cli.auth.escrow.failed";
+    // `capsule auth recover` — a new device of an existing account, from its escrow (#544).
+    pub const AUTH_RECOVER_SECRET_PROMPT: &str = "cli.auth.recover.secret_prompt";
+    pub const AUTH_RECOVER_PASSPHRASE_PROMPT: &str = "cli.auth.recover.passphrase_prompt";
+    pub const AUTH_RECOVER_PASSPHRASE_CONFIRM: &str = "cli.auth.recover.passphrase_confirm";
+    pub const AUTH_RECOVER_PASSPHRASE_MISMATCH: &str = "cli.auth.recover.passphrase_mismatch";
+    pub const AUTH_RECOVER_IN_PROGRESS: &str = "cli.auth.recover.in_progress";
+    pub const AUTH_RECOVER_SUCCESS: &str = "cli.auth.recover.success";
+    pub const AUTH_RECOVER_FAILED: &str = "cli.auth.recover.failed";
+    pub const AUTH_RECOVER_WRONG_SECRET: &str = "cli.auth.recover.wrong_secret";
+    /// A `--*-stdin` flag was given and stdin's first line was empty; `{flag}` names it.
+    pub const STDIN_EMPTY: &str = "cli.stdin.empty";
     pub const SYNC_IN_PROGRESS: &str = "cli.sync.in_progress";
     pub const SYNC_DRY_RUN_NOTICE: &str = "cli.sync.dry_run_notice";
     pub const SYNC_UP_TO_DATE: &str = "cli.sync.up_to_date";
@@ -74,6 +116,26 @@ pub mod keys {
     pub const PUSH_COMPLETE: &str = "cli.push.complete";
     pub const PUSH_DRY_RUN_COMPLETE: &str = "cli.push.dry_run_complete";
     pub const PUSH_FAILED: &str = "cli.push.failed";
+    // `capsule share create|revoke` — view-only share links on the server (#654).
+    pub const SHARE_CREATE_IN_PROGRESS: &str = "cli.share.create.in_progress";
+    pub const SHARE_CREATE_LINK_PASSPHRASE_PROMPT: &str = "cli.share.create.link_passphrase_prompt";
+    pub const SHARE_CREATE_LINK_PASSPHRASE_CONFIRM: &str =
+        "cli.share.create.link_passphrase_confirm";
+    pub const SHARE_CREATE_LINK_PASSPHRASE_MISMATCH: &str =
+        "cli.share.create.link_passphrase_mismatch";
+    pub const SHARE_CREATE_SUCCESS: &str = "cli.share.create.success";
+    pub const SHARE_CREATE_PASSPHRASE_NOTICE: &str = "cli.share.create.passphrase_notice";
+    pub const SHARE_CREATE_EXPIRES_NOTICE: &str = "cli.share.create.expires_notice";
+    pub const SHARE_CREATE_REVOKE_HINT: &str = "cli.share.create.revoke_hint";
+    pub const SHARE_CREATE_INVALID_EXPIRY: &str = "cli.share.create.invalid_expiry";
+    pub const SHARE_CREATE_EXPIRY_NOT_IN_FUTURE: &str = "cli.share.create.expiry_not_in_future";
+    pub const SHARE_CREATE_EMPTY_SCOPE: &str = "cli.share.create.empty_scope";
+    pub const SHARE_CREATE_SCOPE_UNAVAILABLE: &str = "cli.share.create.scope_unavailable";
+    pub const SHARE_CREATE_NOT_HELD: &str = "cli.share.create.not_held";
+    pub const SHARE_CREATE_FAILED: &str = "cli.share.create.failed";
+    pub const SHARE_REVOKE_SUCCESS: &str = "cli.share.revoke.success";
+    pub const SHARE_REVOKE_INVALID_OPAQUE_ID: &str = "cli.share.revoke.invalid_opaque_id";
+    pub const SHARE_REVOKE_FAILED: &str = "cli.share.revoke.failed";
     // `capsule import` — the local import arm (slice `S-I5`). Import never touches the
     // network, but every line it prints and every error it surfaces still reaches a human.
     pub const IMPORT_IN_PROGRESS: &str = "cli.import.in_progress";
@@ -189,4 +251,7 @@ pub mod keys {
     pub const LIBRARY_MIGRATE_SKIP_ALBUM_READ_ONLY: &str =
         "cli.library.migrate.skip.album_read_only";
     pub const LIBRARY_MIGRATE_SKIP_STRANDED: &str = "cli.library.migrate.skip.stranded";
+    // `capsule library info` — the keyless unmigrated-sidecar count (issue #549).
+    pub const LIBRARY_INFO_UNMIGRATED_SIDECARS: &str = "cli.library.info.unmigrated_sidecars";
+    pub const LIBRARY_INFO_MIGRATE_HINT: &str = "cli.library.info.migrate_hint";
 }

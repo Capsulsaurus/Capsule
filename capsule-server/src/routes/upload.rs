@@ -116,7 +116,7 @@ pub struct UploadTag;
 /// records deliberately derive no serde traits, so that a record cannot be smuggled through a
 /// store built for another. The mapping is one `match` in one direction.
 #[derive(Schema, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum WireBlobRole {
     /// The encrypted original.
     Original,
@@ -128,6 +128,10 @@ pub enum WireBlobRole {
     Provenance,
     /// A backup copy.
     Backup,
+    /// A derivative tier's signed `DerivativeManifest`, stored verbatim (#556). Never listed in
+    /// the sync feed's `blobs`: the feed carries these bytes inline on the entry's
+    /// `derivative_manifests`, so a client that predates the role never meets the value.
+    DerivativeManifest,
 }
 
 /// The outbound direction, for the sync feed's blob list.
@@ -143,6 +147,7 @@ impl From<BlobRole> for WireBlobRole {
             BlobRole::Metadata => Self::Metadata,
             BlobRole::Provenance => Self::Provenance,
             BlobRole::Backup => Self::Backup,
+            BlobRole::DerivativeManifest => Self::DerivativeManifest,
         }
     }
 }
@@ -155,6 +160,7 @@ impl From<WireBlobRole> for BlobRole {
             WireBlobRole::Metadata => Self::Metadata,
             WireBlobRole::Provenance => Self::Provenance,
             WireBlobRole::Backup => Self::Backup,
+            WireBlobRole::DerivativeManifest => Self::DerivativeManifest,
         }
     }
 }
@@ -962,7 +968,9 @@ pub async fn create_upload(
     // refusal must not leave bytes. The reserved-but-unpublished row a refusal leaves behind
     // publishes nothing and is the discard worker's, exactly as an abandoned session's is.
     match crate::quota::charge_upload(&quota, &uploader, &address, request.size).await {
-        Ok(crate::quota::UploadCharge::Admitted) => {}
+        Ok(
+            crate::quota::UploadCharge::Admitted | crate::quota::UploadCharge::AlreadyAttributed,
+        ) => {}
         Ok(crate::quota::UploadCharge::Refused) => return Err(CreateRejection::quota_exceeded()),
         Err(error) => {
             store_unavailable(&error, "charge an upload against its quota");

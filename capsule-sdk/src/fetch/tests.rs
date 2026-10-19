@@ -1059,3 +1059,268 @@ async fn absent_derivative_still_degrades_as_gone() {
         );
     }
 }
+
+// ─── Admitting derivative manifests (#632) ───────────────────────────────────
+
+mod admission {
+    use capsule_core::crypto::authority::ReferenceAuthority;
+    use capsule_core::crypto::hash::Hash32;
+    use capsule_core::crypto::keys::{
+        DeviceDirectory, DeviceEntry, DirectoryCore, HybridSigningKey,
+    };
+    use capsule_core::crypto::provenance::{DERIVATIVE_MANIFEST_VERSION, DerivativeCore};
+
+    use super::*;
+
+    fn device() -> HybridSigningKey {
+        HybridSigningKey::from_seed_bytes(&[1; 32], &[2; 32])
+    }
+
+    fn write_key() -> HybridSigningKey {
+        HybridSigningKey::from_seed_bytes(&[3; 32], &[4; 32])
+    }
+
+    fn directory() -> DeviceDirectory {
+        DirectoryCore {
+            user_id: uuid::Uuid::from_u128(0x05E2),
+            directory_version: 1,
+            updated_at: "2026-10-01T00:00:00Z".into(),
+            devices: vec![DeviceEntry {
+                device_id: uuid::Uuid::from_u128(0xD1),
+                dsk_public: device().verifying_key(),
+                dek_public: None,
+                added_at: "2026-10-01T00:00:00Z".into(),
+                revoked_at: None,
+            }],
+        }
+        .sign(&HybridSigningKey::from_seed_bytes(&[10; 32], &[11; 32]))
+    }
+
+    /// The album authority attesting [`EPOCH`] under [`write_key`], with its AMK held or not.
+    fn authority(amk_present: bool) -> ReferenceAuthority {
+        let admin = HybridSigningKey::from_seed_bytes(&[7; 32], &[8; 32]);
+        ReferenceAuthority::new(uuid::Uuid::from_u128(0xA1), admin.verifying_key()).with_epoch(
+            &admin,
+            EPOCH,
+            &write_key().verifying_key(),
+            amk_present,
+        )
+    }
+
+    /// The core the shared [`manifest`] fixture signs, for `role` chained to `prior`.
+    fn core(role: DerivativeRole, prior: Option<Hash32>, ciphertext: &[u8]) -> DerivativeCore {
+        DerivativeCore {
+            version: DERIVATIVE_MANIFEST_VERSION.into(),
+            crypto_suite_id: capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
+            protocol_version: Some(capsule_core::crypto::primitives::PROTOCOL_VERSION.into()),
+            amk_version: Some(EPOCH),
+            source_asset_id: SOURCE_ASSET,
+            role,
+            format: "image/jxl".into(),
+            ciphertext_hash: capsule_core::crypto::hash::hash_bytes(ciphertext),
+            nonce_prefix: PREFIX,
+            generated_by_device: uuid::Uuid::from_u128(0xD1),
+            generated_by_client: "capsule-cli/0.1.0".into(),
+            model_id: None,
+            model_version: None,
+            generated_at: "2026-10-17T00:00:00Z".into(),
+            prior_provenance_hash: prior,
+        }
+    }
+
+    fn sign(core: DerivativeCore) -> DerivativeManifest {
+        core.sign(&device(), &write_key()).unwrap()
+    }
+
+    /// The exact bytes a feed entry carries for `manifest`.
+    fn wire(manifest: &DerivativeManifest) -> Vec<u8> {
+        capsule_core::cbor::to_canonical_vec(manifest).unwrap()
+    }
+
+    fn admit(encoded: &[Vec<u8>], amk_present: bool) -> VerifiedDerivatives {
+        verify_derivative_manifests(encoded, SOURCE_ASSET, &directory(), &authority(amk_present))
+    }
+
+    fn rejected(manifest: &DerivativeManifest, reason: RejectReason) -> QuarantinedDerivative {
+        QuarantinedDerivative {
+            address: sha(&wire(manifest)),
+            reason: DerivativeQuarantine::Rejected(reason),
+        }
+    }
+
+    /// A thumbnail chain of two (a first and its `derivative-replace`) plus a preview.
+    fn chain() -> (DerivativeManifest, DerivativeManifest, DerivativeManifest) {
+        let first = sign(core(DerivativeRole::Thumbnail, None, b"jxl"));
+        let replace = sign(core(
+            DerivativeRole::Thumbnail,
+            Some(first.link_hash()),
+            b"avif",
+        ));
+        let preview = sign(core(DerivativeRole::Preview, None, b"preview"));
+        (first, replace, preview)
+    }
+
+    /// The feed serves manifests in content-address order, not chain order: the chain is
+    /// rebuilt from its start whatever order the bytes arrive in.
+    #[test]
+    fn accepts_every_role_chain_whatever_order_it_is_served_in() {
+        let (first, replace, preview) = chain();
+        for encoded in [
+            vec![wire(&first), wire(&replace), wire(&preview)],
+            vec![wire(&preview), wire(&replace), wire(&first)],
+        ] {
+            assert_eq!(
+                admit(&encoded, true),
+                VerifiedDerivatives {
+                    accepted: vec![first.clone(), replace.clone(), preview.clone()],
+                    pending: Vec::new(),
+                    quarantined: Vec::new(),
+                }
+            );
+        }
+    }
+
+    /// **Derivative poisoning rejection**: a `derivative-replace` that does not chain to the
+    /// role's head is quarantined, and the head it tried to displace is still accepted.
+    #[test]
+    fn a_poisoned_replace_is_quarantined_and_the_existing_derivative_preserved() {
+        let (first, replace, _) = chain();
+        let poison = sign(core(
+            DerivativeRole::Thumbnail,
+            Some(capsule_core::crypto::hash::hash_bytes(
+                b"a link nobody holds",
+            )),
+            b"poison",
+        ));
+        let verified = admit(&[wire(&first), wire(&replace), wire(&poison)], true);
+        assert_eq!(verified.accepted, vec![first, replace]);
+        assert_eq!(
+            verified.quarantined,
+            vec![rejected(&poison, RejectReason::ForgedChain)]
+        );
+    }
+
+    /// Two replaces naming the same predecessor: the receiver cannot tell which is real, so
+    /// both are refused and the common prefix stands.
+    #[test]
+    fn a_fork_quarantines_both_branches_and_keeps_the_prefix() {
+        let (first, replace, _) = chain();
+        let rival = sign(core(
+            DerivativeRole::Thumbnail,
+            Some(first.link_hash()),
+            b"rival",
+        ));
+        let verified = admit(&[wire(&first), wire(&replace), wire(&rival)], true);
+        assert_eq!(verified.accepted, vec![first]);
+        let mut quarantined = verified.quarantined;
+        quarantined.sort_by(|a, b| a.address.cmp(&b.address));
+        let mut expected = vec![
+            rejected(&replace, RejectReason::ForgedChain),
+            rejected(&rival, RejectReason::ForgedChain),
+        ];
+        expected.sort_by(|a, b| a.address.cmp(&b.address));
+        assert_eq!(quarantined, expected);
+    }
+
+    /// A refused link stops its role's walk: it is quarantined with its own reason, and what
+    /// chains behind it cannot be placed.
+    #[test]
+    fn a_refused_link_quarantines_itself_and_everything_behind_it() {
+        let first = sign(core(DerivativeRole::Thumbnail, None, b"jxl"));
+        let reader = HybridSigningKey::from_seed_bytes(&[77; 32], &[78; 32]);
+        let reader_signed = core(DerivativeRole::Thumbnail, Some(first.link_hash()), b"avif")
+            .sign(&device(), &reader)
+            .unwrap();
+        let behind = sign(core(
+            DerivativeRole::Thumbnail,
+            Some(reader_signed.link_hash()),
+            b"behind",
+        ));
+        let verified = admit(&[wire(&behind), wire(&reader_signed), wire(&first)], true);
+        assert_eq!(verified.accepted, vec![first]);
+        assert_eq!(
+            verified.quarantined,
+            vec![
+                rejected(&reader_signed, RejectReason::BadWriteSig),
+                rejected(&behind, RejectReason::ForgedChain),
+            ]
+        );
+    }
+
+    #[test]
+    fn undecodable_bytes_are_quarantined_by_address() {
+        let (first, ..) = chain();
+        let junk = b"not a derivative manifest".to_vec();
+        let verified = admit(&[junk.clone(), wire(&first)], true);
+        assert_eq!(verified.accepted, vec![first]);
+        assert_eq!(
+            verified.quarantined,
+            vec![QuarantinedDerivative {
+                address: sha(&junk),
+                reason: DerivativeQuarantine::Undecodable,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_derivative_of_another_asset_is_quarantined() {
+        let mut transplanted = core(DerivativeRole::Thumbnail, None, b"jxl");
+        transplanted.source_asset_id = uuid::Uuid::from_u128(0xBEEF);
+        let transplanted = sign(transplanted);
+        let verified = admit(&[wire(&transplanted)], true);
+        assert!(verified.accepted.is_empty());
+        assert_eq!(
+            verified.quarantined,
+            vec![rejected(&transplanted, RejectReason::WrongAsset)]
+        );
+    }
+
+    #[test]
+    fn a_manifest_without_an_epoch_is_quarantined() {
+        let mut epochless = core(DerivativeRole::Thumbnail, None, b"jxl");
+        epochless.amk_version = None;
+        let epochless = sign(epochless);
+        let verified = admit(&[wire(&epochless)], true);
+        assert!(verified.accepted.is_empty());
+        assert_eq!(
+            verified.quarantined,
+            vec![rejected(&epochless, RejectReason::Structural)]
+        );
+    }
+
+    /// A manifest whose epoch AMK has not arrived is held, not quarantined — and it still
+    /// places what chains behind it.
+    #[test]
+    fn a_missing_amk_holds_the_chain_as_pending() {
+        let (first, replace, _) = chain();
+        let verified = admit(&[wire(&first), wire(&replace)], false);
+        assert_eq!(
+            verified,
+            VerifiedDerivatives {
+                accepted: Vec::new(),
+                pending: vec![first, replace],
+                quarantined: Vec::new(),
+            }
+        );
+    }
+
+    /// End to end: the feed's bytes, admitted, open the thumbnail they describe.
+    #[tokio::test]
+    async fn admitted_manifests_open_the_thumbnail_they_describe() {
+        let plaintext = b"\xff\x0aJXL thumbnail bytes".repeat(40);
+        let ciphertext = seal(&album_key(), &plaintext);
+        let signed = sign(core(DerivativeRole::Thumbnail, None, &ciphertext));
+
+        let verified = admit(&[wire(&signed)], true);
+        assert!(verified.quarantined.is_empty());
+        let asset = thumbnail_asset(&ciphertext, verified.accepted);
+
+        assert_eq!(
+            open_thumbnail(&serving(&ciphertext), &asset, &reader_keys()).await,
+            FetchResolution::Opened {
+                representation: Representation::Thumbnail,
+                plaintext,
+            }
+        );
+    }
+}

@@ -11,14 +11,14 @@
 //! 201 { token, jti, album_id, peer, member, scope, issued_at, expires_at, not_after,
 //!       renewable, min_protocol_version }
 //! 400 error.federation.capability_malformed
-//! 403 error.federation.not_configured | error.moderation.server_blocked
-//! 404 error.federation.album_not_found
+//! 403 error.moderation.server_blocked
+//! 404 error.federation.album_not_found | error.federation.not_configured
 //! 409 error.federation.member_not_on_roster
 //! 500 error.federation.unavailable
 //!
 //! DELETE /v1/albums/{album_id}/capabilities/{jti}
 //! 204 (idempotent)
-//! 404 error.federation.album_not_found
+//! 404 error.federation.album_not_found | error.federation.not_configured
 //! 500 error.federation.unavailable
 //!
 //! POST   /v1/federation/reports                    (the report's own signature is the credential)
@@ -26,7 +26,7 @@
 //! 400 error.moderation.report_malformed
 //! 401 error.moderation.report_unsigned
 //! 403 error.federation.peer_unknown | error.moderation.server_blocked
-//!     | error.federation.not_configured
+//! 404 error.federation.not_configured
 //! 429 error.moderation.report_rate_limited
 //! 500 error.moderation.unavailable
 //!
@@ -34,11 +34,23 @@
 //! 200 { token, jti, expires_at, replayed }
 //! 403 error.federation.capability_invalid | error.federation.capability_revoked
 //!     | error.federation.capability_expired | error.moderation.server_blocked
-//!     | error.federation.not_configured
+//! 404 error.federation.not_configured
 //! 409 error.federation.member_not_on_roster
 //! 429 error.federation.rate_budget_exceeded
 //! 500 error.federation.unavailable
 //! ```
+//!
+//! # Off unless switched on
+//!
+//! Federation is deferred (#476), and two of these operations do store work for callers this
+//! server has not authenticated: report intake budgets on a claimed origin before any signature
+//! is checked, and minting is unbounded per account. So the whole surface sits behind
+//! `FEDERATION_ENABLED` (#509), **off by default**. Off, each operation extracts [`Federating`]
+//! first and answers `404 error.federation.not_configured` before its credential, its body, a
+//! budget or a store is touched, and the read primitives honour no capability at all. Every
+//! operation stays mounted and described either way, so the committed contract does not depend
+//! on a runtime setting; the `404` is in it, and so is this rule, in each operation's
+//! description.
 //!
 //! # Who mints, and against what
 //!
@@ -59,14 +71,15 @@
 //! and the old capability dies without anyone revoking it. It is a stored fact rather than a
 //! claim because the token format is normative and parsed by every peer.
 //!
-//! # Revoking is not gated on the deployment federating
+//! # Revoking is gated too, and why that cuts nothing loose
 //!
-//! Minting and refreshing refuse `403 error.federation.not_configured` when `FEDERATION_URL` is
-//! unset: a server that does not federate does not hand out new grants. **Revoking is not**, and
-//! deliberately: turning federation off must never be the thing that takes away an operator's
-//! ability to cut a grant that is already out there. Nor does an unset `FEDERATION_URL` stop an
-//! already-minted capability verifying — a token is not un-minted by a configuration change, and
-//! silently refusing one would cut a peer off with no revocation anybody can see.
+//! An earlier version left revoking open on a deployment that did not federate, so turning
+//! federation off could not take away an owner's ability to cut a grant already out there. That
+//! reasoning held while an unconfigured server still *honoured* old capabilities. It no longer
+//! does: off, [`ReadBearer`] has no capability arm, so a grant minted while federation was on
+//! pulls nothing, and there is nothing a revoke would be needed to stop. Switching federation
+//! back on restores those grants exactly as they were — revocable, and on the published list if
+//! they were revoked — because the capability store is untouched by the switch.
 //!
 //! # Renewability is asked for, never assumed
 //!
@@ -105,8 +118,13 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use capsule_i18n::error_codes;
 use jiff::SignedDuration;
+use kynos::di::Provides;
+use kynos::extract::FromRequestParts;
+use kynos::extract::describe::Describe;
+use kynos::http::Parts;
 use kynos::prelude::*;
 use kynos::response::status::NoContent;
+use kynos::router::operation::OperationCx;
 use kynos::security::auth::Auth;
 use serde::{Deserialize, Serialize};
 
@@ -128,6 +146,65 @@ use crate::store::{AlbumId, UserId};
     description = "Minting, revoking and refreshing the capability a peer server pulls with."
 )]
 pub struct FederationTag;
+
+/// Proof that this deployment federates, extracted **first** by every federation operation.
+///
+/// The gate `FEDERATION_ENABLED` (#509) closes. An extractor rather than a check in each body
+/// for the one property that matters here: extractors run in argument order, so placed first it
+/// answers before the credential is authenticated, before the body is parsed and before any
+/// budget is charged or store is read. A deployment that does not federate does no federated
+/// work for anyone — which is the point, because report intake and minting both did store work
+/// for unauthenticated callers while federation was deferred (#476).
+///
+/// The router is the same either way and so is the document: the four operations are mounted
+/// and described, and each declares the `404` this answers. Unmounting them instead would make
+/// the emitted contract depend on a runtime setting, and the contract is committed.
+#[derive(Debug, Clone, Copy)]
+pub struct Federating;
+
+/// Why a federation operation was not served: this deployment does not federate.
+#[derive(Debug, thiserror::Error, ApiError)]
+pub enum NotFederating {
+    /// `FEDERATION_ENABLED` is off. `404 error.federation.not_configured`.
+    ///
+    /// `404` because the surface is not there, the answer an unmounted route gives; the code
+    /// says why, so a peer's operator can tell "this server does not federate" from a typo.
+    #[error("this server does not federate")]
+    #[problem(status = 404, title = "Not found")]
+    Disabled {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+}
+
+impl<C> FromRequestParts<C> for Federating
+where
+    C: Provides<FederationContext> + Sync,
+{
+    type Rejection = NotFederating;
+
+    async fn from_request_parts(parts: &mut Parts, context: &C) -> Result<Self, Self::Rejection> {
+        if context.provide().is_enabled() {
+            return Ok(Self);
+        }
+        tracing::debug!(
+            method = %parts.method,
+            path = parts.uri.path(),
+            "a federation operation was refused: this deployment does not federate"
+        );
+        Err(NotFederating::Disabled {
+            code: error_codes::FEDERATION_NOT_CONFIGURED,
+        })
+    }
+}
+
+/// Reads nothing a consumer sends; its one contribution is the `404` its rejection declares.
+impl Describe for Federating {
+    fn describe(operation: &mut OperationCx<'_>) {
+        let _ = operation;
+    }
+}
 
 /// The default life of a minted capability when the caller names none.
 ///
@@ -268,15 +345,6 @@ pub enum MintRejection {
         code: &'static str,
     },
 
-    /// This deployment does not federate.
-    #[error("this server does not federate")]
-    #[problem(status = 403, title = "Federation not configured")]
-    NotConfigured {
-        /// The stable catalog code.
-        #[problem(extension)]
-        code: &'static str,
-    },
-
     /// The peer is on this server's blocklist.
     #[error("this server is blocked")]
     #[problem(status = 403, title = "Server blocked")]
@@ -406,15 +474,6 @@ pub enum RefreshRejection {
         code: &'static str,
     },
 
-    /// This deployment does not federate.
-    #[error("this server does not federate")]
-    #[problem(status = 403, title = "Federation not configured")]
-    NotConfigured {
-        /// The stable catalog code.
-        #[problem(extension)]
-        code: &'static str,
-    },
-
     /// The peer's events-per-hour budget is spent.
     #[error("this peer has reached its request budget")]
     #[problem(status = 429, title = "Rate budget exceeded")]
@@ -461,12 +520,17 @@ impl From<Refusal> for RefreshRejection {
 ///
 /// The token is in the response and nowhere else: this server keeps the record, never the
 /// credential.
+///
+/// Answers `404 error.federation.not_configured` when this deployment does not federate —
+/// `FEDERATION_ENABLED` is off, which is the default — before the credential is read or a store
+/// is touched.
 #[kynos::post(
     "/v1/albums/{album_id}/capabilities",
     operation_id = "issue_capability",
     tag = FederationTag
 )]
 pub async fn issue_capability(
+    _: Federating,
     Inject(federation): Inject<FederationContext>,
     Inject(albums): Inject<AlbumContext>,
     Inject(membership): Inject<MembershipContext>,
@@ -474,12 +538,6 @@ pub async fn issue_capability(
     Path(path): Path<CapabilitiesPath>,
     Json(request): Json<MintCapabilityRequest>,
 ) -> Result<MintReply, MintRejection> {
-    if !federation.is_configured() {
-        tracing::info!("a capability was refused: this deployment does not federate");
-        return Err(MintRejection::NotConfigured {
-            code: error_codes::FEDERATION_NOT_CONFIGURED,
-        });
-    }
     let peer = PeerId::new(request.peer.trim());
     // A peer id is an origin, and an empty or whitespace one is a client bug rather than an
     // unknown server. Checked before the store so a blank never becomes a row.
@@ -639,12 +697,18 @@ pub enum MintReply {
 /// Idempotent, and silent about what it did: a `jti` that is not a live capability of this
 /// album — never issued, already revoked, or another album's — is the same `204` a revocation
 /// is, so the operation is not a probe over identifiers.
+///
+/// Answers `404 error.federation.not_configured` when this deployment does not federate —
+/// `FEDERATION_ENABLED` is off, which is the default — before the credential is read or a store
+/// is touched. No capability is honoured while federation is off, so there is nothing a revoke
+/// would need to cut in the meantime.
 #[kynos::delete(
     "/v1/albums/{album_id}/capabilities/{jti}",
     operation_id = "revoke_capability",
     tag = FederationTag
 )]
 pub async fn revoke_capability(
+    _: Federating,
     Inject(federation): Inject<FederationContext>,
     Inject(albums): Inject<AlbumContext>,
     Auth(credential): Auth<AccessToken>,
@@ -701,12 +765,17 @@ pub async fn revoke_capability(
 ///
 /// The credential **is** the capability being refreshed; a session token has nothing to refresh
 /// here and is refused.
+///
+/// Answers `404 error.federation.not_configured` when this deployment does not federate —
+/// `FEDERATION_ENABLED` is off, which is the default — before the credential is verified, a
+/// budget is charged or a store is touched.
 #[kynos::post(
     "/v1/federation/capabilities/refresh",
     operation_id = "refresh_capability",
     tag = FederationTag
 )]
 pub async fn refresh_capability(
+    _: Federating,
     Inject(federation): Inject<FederationContext>,
     Inject(membership): Inject<MembershipContext>,
     Inject(counters): Inject<CounterContext>,
@@ -720,14 +789,6 @@ pub async fn refresh_capability(
     };
     // The same admission every federated read passes: live grant, unblocked peer, budget.
     federation::admit(&federation, &counters, &capability, Presentation::Refresh).await?;
-    if !federation.is_configured() {
-        // A grant minted while this server federated still *verifies* — a token is not
-        // un-minted by a configuration change — but it is not continued.
-        tracing::info!(peer = %capability.record.peer_id, "a refresh was refused: this deployment does not federate");
-        return Err(RefreshRejection::NotConfigured {
-            code: error_codes::FEDERATION_NOT_CONFIGURED,
-        });
-    }
 
     let predecessor = &capability.record;
     let now = federation.clock().now();
@@ -971,15 +1032,6 @@ pub enum ReportRejection {
         code: &'static str,
     },
 
-    /// This deployment does not federate.
-    #[error("this server does not federate")]
-    #[problem(status = 403, title = "Federation not configured")]
-    NotConfigured {
-        /// The stable catalog code.
-        #[problem(extension)]
-        code: &'static str,
-    },
-
     /// Too many reports from this peer about this account.
     #[error("too many reports from this server about this account")]
     #[problem(status = 429, title = "Report rate limited")]
@@ -1017,7 +1069,11 @@ impl ReportRejection {
 
 /// File a signed moderation report from a peer server.
 ///
-/// # Its only reachable answer today is `403`
+/// Answers `404 error.federation.not_configured` when this deployment does not federate —
+/// `FEDERATION_ENABLED` is off, which is the default — before the body is read, a budget is
+/// charged or a store is touched.
+///
+/// # Its only reachable answer today is `403`, where federation is on
 ///
 /// A report is verified against the peer's **operator-pinned** key, and nothing can pin one:
 /// [`boot::assemble`](crate::boot::assemble) refuses the durable backend until #403 lands its
@@ -1093,18 +1149,13 @@ impl ReportRejection {
     tag = FederationTag
 )]
 pub async fn submit_federated_report(
+    _: Federating,
     Inject(federation): Inject<FederationContext>,
     Inject(moderation): Inject<ModerationContext>,
     Inject(auth): Inject<crate::auth::AuthContext>,
     Inject(counters): Inject<CounterContext>,
     Json(request): Json<FederatedReportRequest>,
 ) -> Result<ReportReply, ReportRejection> {
-    if !federation.is_configured() {
-        tracing::info!("a federated report was refused: this deployment does not federate");
-        return Err(ReportRejection::NotConfigured {
-            code: error_codes::FEDERATION_NOT_CONFIGURED,
-        });
-    }
     // Structural bounds first, on every field, before a store is touched or a byte is keyed on.
     // Each of these ends up in a row, a log line or a counter key, and none of them is bounded
     // by anything but this: the body cap the federation group mounts stops a caller sending

@@ -1297,6 +1297,7 @@ async fn finalization_crash_between_rename_and_commit_leaves_no_dangling_referen
         fixture.blobs.clone(),
         fixture.marks.clone(),
         fixture.quotas.clone(),
+        fixture.shares.clone(),
         fixture.clock.clone(),
         capsule_server::gc::DEFAULT_GRACE_WINDOW,
     );

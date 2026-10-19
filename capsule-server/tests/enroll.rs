@@ -382,37 +382,82 @@ async fn issuing_a_code_requires_a_credential_and_redeeming_one_does_not() {
     let _ = EMAIL;
 }
 
+/// The fallback budget the server enforces: `budgets::ENROLLMENT_REDEMPTION`'s limit.
+const FALLBACK_BUDGET: u32 = 30;
+
+/// Eight-digit fallback-shaped guesses, each one distinct and none of them `avoid`.
+fn distinct_guesses(count: u32, avoid: &str) -> impl Iterator<Item = String> + '_ {
+    (0..)
+        .map(|index: u32| format!("{index:08}"))
+        .filter(move |guess| guess != avoid)
+        .take(count as usize)
+}
+
+/// Brute force against the transcribable fallback (issue #528).
+///
+/// The limiter design/device-enrollment.md names as the reason the shorter fallback is safe to
+/// offer at all: it trades entropy for transcribability, and what keeps that trade honest is
+/// that the code cannot be ground through inside its ten-minute life. The limiter used to be
+/// keyed on the presented string, so a brute force — which never presents the same wrong guess
+/// twice — got a fresh budget on every attempt and was never limited at all. This is that
+/// attack: distinct guesses, each a different string.
 #[tokio::test]
-async fn redemption_is_rate_limited_per_code() {
-    // The limiter design/device-enrollment.md names as the reason the shorter transcribable
-    // fallback is safe to offer at all: it trades entropy for transcribability, and what keeps
-    // that trade honest is that the code cannot be ground through inside its ten-minute life.
+async fn brute_forcing_the_fallback_with_distinct_guesses_is_rate_limited() {
     let fixture = Fixture::working();
     let bearer = fresh(&fixture).await;
     let issued: Value = issue(&fixture, &bearer, StatusCode::OK).await.json();
     let code = issued["code"].as_str().expect("a code").to_owned();
+    let fallback = issued["text_fallback"]
+        .as_str()
+        .expect("a fallback")
+        .to_owned();
 
-    // Wrong guesses against the *same* string are what the budget counts. The string has to be
-    // shaped like a code — eight digits is the transcribable fallback's shape — because only a
-    // well-formed guess can name a pending enrollment, and only a well-formed guess gets a
-    // counter key of its own. Anything else shares one bucket; see
-    // `redemption_that_is_not_even_shaped_like_a_code_shares_one_bucket`.
-    const WRONG_BUT_CONSISTENT: &str = "00000001";
-    for _ in 0..10 {
-        redeem(&fixture, WRONG_BUT_CONSISTENT, StatusCode::NOT_FOUND).await;
+    for guess in distinct_guesses(FALLBACK_BUDGET, &fallback) {
+        redeem(&fixture, &guess, StatusCode::NOT_FOUND).await;
     }
-    let problem: Value = redeem(
-        &fixture,
-        WRONG_BUT_CONSISTENT,
-        StatusCode::TOO_MANY_REQUESTS,
-    )
-    .await
-    .json();
+    // A never-presented guess is refused: the budget is not the guess's own.
+    let problem: Value = redeem(&fixture, "99999999", StatusCode::TOO_MANY_REQUESTS)
+        .await
+        .json();
     assert_eq!(problem["code"], "error.enrollment.rate_limited");
+    assert!(problem["retry_after"].as_u64().is_some_and(|s| s > 0));
 
-    // A different code has its own budget — the limit is per pending enrollment, not global,
-    // so one attacker cannot lock every guest out of their own add.
+    // And so is the *right* fallback: the guess that would have won lands on a spent budget,
+    // which is the whole point. The redemption is not attempted, so the code stays pending.
+    redeem(&fixture, &fallback, StatusCode::TOO_MANY_REQUESTS).await;
+
+    // The full-entropy spelling has a bucket of its own, so the person whose typed code is
+    // throttled can still scan the QR — and the enrollment the brute force aimed at is intact.
     redeem(&fixture, &code, StatusCode::OK).await;
+}
+
+/// The budget is spent across guesses aimed at **different** pending enrollments too.
+///
+/// A miss names no pending enrollment, so an attacker spreading guesses over many live codes is
+/// charged the same bucket as one focused on a single code; there is no per-target allowance to
+/// multiply by opening more targets.
+#[tokio::test]
+async fn the_fallback_budget_is_shared_by_every_pending_enrollment() {
+    let fixture = Fixture::working();
+    let mut fallbacks = Vec::new();
+    for _ in 0..2 {
+        let bearer = fresh(&fixture).await;
+        let issued: Value = issue(&fixture, &bearer, StatusCode::OK).await.json();
+        fallbacks.push(
+            issued["text_fallback"]
+                .as_str()
+                .expect("a fallback")
+                .to_owned(),
+        );
+    }
+
+    // Redeeming one real fallback is charged like any other presentation...
+    redeem(&fixture, &fallbacks[0], StatusCode::OK).await;
+    for guess in distinct_guesses(FALLBACK_BUDGET - 1, &fallbacks[1]) {
+        redeem(&fixture, &guess, StatusCode::NOT_FOUND).await;
+    }
+    // ...so the other enrollment's fallback finds the budget already spent.
+    redeem(&fixture, &fallbacks[1], StatusCode::TOO_MANY_REQUESTS).await;
 }
 
 /// A code that is not even shaped like one cannot mint a counter key.
@@ -420,8 +465,8 @@ async fn redemption_is_rate_limited_per_code() {
 /// The presented value is an arbitrary caller-supplied string, and the limiter is charged before
 /// the code is resolved — deliberately, so probing costs the prober. Keying on an unchecked
 /// string would let an unauthenticated caller fill this partition a row at a time, so anything
-/// malformed is charged to one fixed bucket instead. Well-formed guesses keep their own budgets,
-/// which is the property the entropy argument for the short fallback rests on.
+/// malformed is charged to one fixed bucket instead, apart from the two spellings' buckets, so a
+/// flood of garbage cannot spend the budget the entropy argument for the short fallback rests on.
 #[tokio::test]
 async fn redemption_that_is_not_even_shaped_like_a_code_shares_one_bucket() {
     let fixture = Fixture::working();
@@ -451,50 +496,64 @@ async fn the_redemption_limiter_counts_successes_too() {
     // let a caller who guesses right on the last try escape it entirely.
     let fixture = Fixture::working();
     let bearer = fresh(&fixture).await;
-
-    // Eight digits: the transcribable fallback's shape, so this guess gets its own budget the
-    // way a real code does.
-    const ONE_STRING: &str = "00000002";
-    for _ in 0..10 {
-        redeem(&fixture, ONE_STRING, StatusCode::NOT_FOUND).await;
-    }
-    // Even the *right* code, presented under a spent budget, is refused — because the budget is
-    // keyed on the string presented, and this one has been presented ten times.
     let issued: Value = issue(&fixture, &bearer, StatusCode::OK).await.json();
-    let _ = issued;
-    redeem(&fixture, ONE_STRING, StatusCode::TOO_MANY_REQUESTS).await;
+    let code = issued["code"].as_str().expect("a code").to_owned();
+
+    // A successful redemption of the full spelling spends one of that bucket's attempts...
+    redeem(&fixture, &code, StatusCode::OK).await;
+    for _ in 1..FALLBACK_BUDGET {
+        redeem(&fixture, &code, StatusCode::NOT_FOUND).await;
+    }
+    // ...so after it and the misses, a never-seen code of the same spelling is refused.
+    let problem: Value = redeem(
+        &fixture,
+        "0193d2f4-a1b7-4c3e-8f5a-6b7c8d9e0f10",
+        StatusCode::TOO_MANY_REQUESTS,
+    )
+    .await
+    .json();
+    assert_eq!(problem["code"], "error.enrollment.rate_limited");
 }
 
 /// A saturated limiter partition must not impersonate an outage.
 ///
-/// The redemption limiter charges the presented code before it is resolved, so a caller minting
-/// well-formed codes fills the `EnrollmentRedemption` partition. A first-time redemption is then
-/// refused while it lasts — and it is told `429 error.enrollment.at_capacity` with a retry hint,
+/// The `EnrollmentRedemption` partition holds one window per spelling, so at its real ceiling
+/// it cannot fill; a deployment whose ceiling is overridden below two can. A spelling with no
+/// window is then refused — and it is told `429 error.enrollment.at_capacity` with a retry hint,
 /// not the `500 error.auth.unavailable` this used to render, which said the server was broken
 /// when the limiter was working exactly as designed.
 #[tokio::test]
 async fn a_saturated_limiter_partition_is_a_429_and_not_an_outage() {
     let fixture = Fixture::with_counter_ceiling(1);
 
-    // One well-formed code fills the partition.
+    // One fallback-shaped guess fills the partition.
     redeem(&fixture, "00000010", StatusCode::NOT_FOUND).await;
 
-    // A second, never-seen code finds no room.
-    let problem: Value = redeem(&fixture, "00000011", StatusCode::TOO_MANY_REQUESTS)
-        .await
-        .json();
+    // The other spelling finds no room.
+    let problem: Value = redeem(
+        &fixture,
+        "0193d2f4-a1b7-4c3e-8f5a-6b7c8d9e0f10",
+        StatusCode::TOO_MANY_REQUESTS,
+    )
+    .await
+    .json();
     assert_eq!(
         problem["code"], "error.enrollment.at_capacity",
         "a full partition has a code of its own, distinct from a spent budget and from an outage"
     );
     assert!(problem["retry_after"].as_u64().is_some_and(|s| s > 0));
 
-    // The code already being counted keeps being counted, to its own budget, and the spent
+    // The spelling already being counted keeps being counted, to its own budget, and the spent
     // budget keeps its own code — so the two causes stay distinguishable.
-    for _ in 0..9 {
-        redeem(&fixture, "00000010", StatusCode::NOT_FOUND).await;
+    for index in 1..FALLBACK_BUDGET {
+        redeem(
+            &fixture,
+            &format!("{:08}", 10 + index),
+            StatusCode::NOT_FOUND,
+        )
+        .await;
     }
-    let problem: Value = redeem(&fixture, "00000010", StatusCode::TOO_MANY_REQUESTS)
+    let problem: Value = redeem(&fixture, "00000099", StatusCode::TOO_MANY_REQUESTS)
         .await
         .json();
     assert_eq!(problem["code"], "error.enrollment.rate_limited");

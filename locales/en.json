@@ -6807,6 +6807,46 @@
     "message": "Back",
     "context": "Navigation action that returns to the previous screen."
   },
+  "cli.auth.escrow.already_stored": {
+    "message": "This account already has recovery set up. Run the command again with --replace to store a new recovery secret; the old one will stop working.",
+    "context": "CLI `capsule auth escrow` (#624): the account already has a master-key escrow on the server, so the command refused rather than retire the recovery secret that opens it. Nothing was written. --replace is the literal flag name."
+  },
+  "cli.auth.escrow.failed": {
+    "message": "Recovery setup failed: {reason}",
+    "context": "CLI failure line for `capsule auth escrow` (#624). {reason} is a localized or English error detail."
+  },
+  "cli.auth.escrow.in_progress": {
+    "message": "Setting up recovery for the library at {path}…",
+    "context": "CLI status line printed when `capsule auth escrow` has opened the library and starts setting up recovery. {path} is the library directory."
+  },
+  "cli.auth.escrow.library_has_assets": {
+    "message": "This library already holds assets created under its own account id, so it cannot be bound to your server account. Run 'capsule auth escrow' on a fresh library instead.",
+    "context": "CLI `capsule auth escrow` (#624): binding the library to the server's account id was refused because the library already signed assets naming its locally minted id. Nothing was stored on the server. 'capsule auth escrow' is a literal command."
+  },
+  "cli.auth.escrow.passphrase_prompt": {
+    "message": "Library passphrase",
+    "context": "CLI `capsule auth escrow` interactive prompt for the passphrase that opens the library being set up for recovery."
+  },
+  "cli.auth.escrow.replaced": {
+    "message": "This replaced the account's earlier recovery backup: the previous recovery secret no longer works. Re-export or destroy any backup made under it.",
+    "context": "CLI `capsule auth escrow --replace` (#624), printed after the success line when the stored escrow displaced an earlier one."
+  },
+  "cli.auth.escrow.secret_shown": {
+    "message": "Your recovery secret is shown once and never again. Write it down and keep it somewhere safe:\n\n    {secret}\n",
+    "context": "CLI `capsule auth escrow` (#624): the one showing of the freshly minted recovery secret. {secret} is 64 hexadecimal characters and must not be translated or reformatted."
+  },
+  "cli.auth.escrow.success": {
+    "message": "Recovery is set up. The library at {path} is bound to your account, and 'capsule auth recover' can restore your account on a new machine with the recovery secret you saved.",
+    "context": "CLI success line after `capsule auth escrow` (#624). {path} is the library directory; 'capsule auth recover' is a literal command."
+  },
+  "cli.auth.escrow.typeback_mismatch": {
+    "message": "That does not match the recovery secret shown above. Nothing was stored; run the command again for a new secret.",
+    "context": "CLI `capsule auth escrow` (#624): the type-back gate failed, so neither the escrow nor the identity was stored and the library was not changed."
+  },
+  "cli.auth.escrow.typeback_prompt": {
+    "message": "Type the recovery secret back to confirm you saved it",
+    "context": "CLI `capsule auth escrow` (#624) interactive prompt: the user re-enters the recovery secret just shown, proving they recorded it before it is stored."
+  },
   "cli.auth.login.email_prompt": {
     "message": "Email",
     "context": "CLI `capsule auth login` interactive prompt for the account email."
@@ -6818,6 +6858,78 @@
   "cli.auth.login.in_progress": {
     "message": "Logging in to Capsule…",
     "context": "CLI status line printed while `capsule auth login` authenticates."
+  },
+  "cli.auth.login.oidc_browser_unavailable": {
+    "message": "No browser could be opened from here. Open the address above in any browser.",
+    "context": "CLI `capsule auth login --oidc` (S-N2): the platform's browser opener could not be started (for example on a host with no graphical session). The authorization address has already been printed on the line before."
+  },
+  "cli.auth.login.oidc_denied": {
+    "message": "The identity provider did not sign you in ({error}).",
+    "context": "CLI `capsule auth login --oidc` (S-N2): the identity provider redirected back with an OAuth error instead of a sign-in. {error} is the provider's error code, e.g. access_denied, verbatim and untranslated."
+  },
+  "cli.auth.login.oidc_denied_described": {
+    "message": "The identity provider did not sign you in ({error}): {description}",
+    "context": "CLI `capsule auth login --oidc` (S-N2): as cli.auth.login.oidc_denied, when the provider also sent a description. {error} is the provider's error code; {description} is the provider's own text, usually English, shown verbatim."
+  },
+  "cli.auth.login.oidc_device_code": {
+    "message": "and enter this code: {code}",
+    "context": "CLI `capsule auth login --oidc --device` (issue #635): printed on the line after the verification address. {code} is the identity provider's user code, shown exactly as the provider issued it and never translated."
+  },
+  "cli.auth.login.oidc_device_complete": {
+    "message": "Or open this address, which already carries the code:",
+    "context": "CLI `capsule auth login --oidc --device` (issue #635): printed before the identity provider's verification address with the code already in it, when the provider offers one. The address itself follows on its own line."
+  },
+  "cli.auth.login.oidc_device_in_progress": {
+    "message": "Signing in to Capsule through your identity provider, from another device…",
+    "context": "CLI status line printed when `capsule auth login --oidc --device` (issue #635) starts a sign-in that the person finishes on any other device with a browser — for a terminal on a headless host or over SSH."
+  },
+  "cli.auth.login.oidc_device_timed_out": {
+    "message": "The sign-in was not approved in time. Run the command again to get a new code.",
+    "context": "CLI `capsule auth login --oidc --device` (issue #635): the person did not approve the sign-in at their identity provider before the code expired."
+  },
+  "cli.auth.login.oidc_device_visit": {
+    "message": "On any device with a browser, open this address:",
+    "context": "CLI `capsule auth login --oidc --device` (issue #635): printed on the line before the identity provider's verification address. The CLI never opens a browser in this mode; the person may use their phone or another computer."
+  },
+  "cli.auth.login.oidc_device_waiting": {
+    "message": "{count, plural, one {Waiting up to # minute for you to approve the sign-in…} other {Waiting up to # minutes for you to approve the sign-in…}}",
+    "context": "CLI `capsule auth login --oidc --device` (issue #635): printed while the CLI polls for the person to approve the sign-in on their other device. {count} is the whole number of minutes until the code expires."
+  },
+  "cli.auth.login.oidc_in_progress": {
+    "message": "Signing in to Capsule through your identity provider…",
+    "context": "CLI status line printed when `capsule auth login --oidc` (S-N2) starts a sign-in through the server's single sign-on provider."
+  },
+  "cli.auth.login.oidc_listener_failed": {
+    "message": "This computer could not listen for the sign-in to come back: {reason}",
+    "context": "CLI `capsule auth login --oidc` (S-N2): binding the local loopback port the identity provider redirects to failed. {reason} is an English operating-system error."
+  },
+  "cli.auth.login.oidc_loopback_refused": {
+    "message": "This server does not accept sign-ins from the command line through its identity provider. Its operator can allow them by setting OIDC_ALLOW_LOOPBACK_REDIRECT=true.",
+    "context": "CLI `capsule auth login --oidc` (S-N2): the server refused the CLI's loopback redirect because loopback redirects are off by default. OIDC_ALLOW_LOOPBACK_REDIRECT=true is a server configuration variable and must not be translated."
+  },
+  "cli.auth.login.oidc_page_received": {
+    "message": "Capsule received your sign-in. Return to the terminal, which finishes signing you in.",
+    "context": "Browser page shown by `capsule auth login --oidc` (S-N2) on the computer's own loopback address once the identity provider has sent the person back with a code. Shown before the terminal completes the sign-in, which can still fail or ask for a second-factor code, so it must not claim the person is signed in. Plain text in a minimal HTML page."
+  },
+  "cli.auth.login.oidc_page_refused": {
+    "message": "The sign-in did not complete. Return to the terminal to see why.",
+    "context": "Browser page shown by `capsule auth login --oidc` (S-N2) when the identity provider sent the person back with an error instead of a sign-in. Plain text in a minimal HTML page."
+  },
+  "cli.auth.login.oidc_success": {
+    "message": "Signed in through your identity provider.",
+    "context": "CLI success line after `capsule auth login --oidc` (S-N2) has stored the session."
+  },
+  "cli.auth.login.oidc_timed_out": {
+    "message": "No sign-in came back in time. Run the command again to start a new one.",
+    "context": "CLI `capsule auth login --oidc` (S-N2): the browser never returned from the identity provider before the wait (at most five minutes) ran out."
+  },
+  "cli.auth.login.oidc_visit": {
+    "message": "To sign in, open this address in a browser:",
+    "context": "CLI `capsule auth login --oidc` (S-N2): printed on the line before the identity provider's authorization address. The CLI also tries to open it in a browser itself unless --no-browser was given."
+  },
+  "cli.auth.login.oidc_waiting": {
+    "message": "{count, plural, one {Waiting up to # minute for the sign-in to finish…} other {Waiting up to # minutes for the sign-in to finish…}}",
+    "context": "CLI `capsule auth login --oidc` (S-N2): printed while the CLI waits for the browser to come back from the identity provider. {count} is the whole number of minutes it will wait."
   },
   "cli.auth.login.password_prompt": {
     "message": "Password",
@@ -6850,6 +6962,38 @@
   "cli.auth.not_authenticated": {
     "message": "Not authenticated. Run 'capsule auth login' first.",
     "context": "CLI error when a command needs a session but none is stored."
+  },
+  "cli.auth.recover.failed": {
+    "message": "Recovery failed: {reason}",
+    "context": "CLI failure line for `capsule auth recover` (#544). {reason} is a localized or English error detail."
+  },
+  "cli.auth.recover.in_progress": {
+    "message": "Recovering your account into {path}…",
+    "context": "CLI status line printed while `capsule auth recover` fetches the recovery backup and creates the library. {path} is the library directory."
+  },
+  "cli.auth.recover.passphrase_confirm": {
+    "message": "Repeat the library passphrase",
+    "context": "CLI `capsule auth recover` interactive prompt asking the user to type the new library passphrase a second time."
+  },
+  "cli.auth.recover.passphrase_mismatch": {
+    "message": "The passphrases do not match.",
+    "context": "CLI `capsule auth recover`: the two entries of the new library passphrase differed; the prompt asks again."
+  },
+  "cli.auth.recover.passphrase_prompt": {
+    "message": "New library passphrase",
+    "context": "CLI `capsule auth recover` interactive prompt for the passphrase that will protect the recovered library on this machine. It is new, not the recovery secret and not the account password."
+  },
+  "cli.auth.recover.secret_prompt": {
+    "message": "Recovery secret",
+    "context": "CLI `capsule auth recover` interactive prompt for the recovery secret the user saved when they set up recovery."
+  },
+  "cli.auth.recover.success": {
+    "message": "Recovered. The library at {path} opens as your account on this device ({device}).",
+    "context": "CLI success line after `capsule auth recover`. {path} is the library directory; {device} is the new device's id."
+  },
+  "cli.auth.recover.wrong_secret": {
+    "message": "That recovery secret does not open this account's recovery backup.",
+    "context": "CLI `capsule auth recover`: the typed recovery secret failed to unwrap the account's master-key escrow. Nothing was written."
   },
   "cli.auth.register.failed": {
     "message": "Could not create the account: {reason}",
@@ -6915,13 +7059,41 @@
     "message": "Authentication commands",
     "context": "clap --help: the one-line description of `capsule auth`. Shown in the parent's command list and at the top of its own --help."
   },
+  "cli.help.auth.escrow.about": {
+    "message": "Set up recovery for a library: bind it to the signed-in account and store its recovery backup under a new recovery secret",
+    "context": "clap --help: the one-line description of `capsule auth escrow` (#624). Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.auth.escrow.arg.library": {
+    "message": "Path to the Capsule library; it must not hold any assets yet",
+    "context": "clap --help: help for the `--library` option of `capsule auth escrow`."
+  },
+  "cli.help.auth.escrow.arg.passphrase_stdin": {
+    "message": "Read the library passphrase from stdin instead of prompting",
+    "context": "clap --help: help for the `--passphrase-stdin` flag of `capsule auth escrow`."
+  },
+  "cli.help.auth.escrow.arg.replace": {
+    "message": "Replace the account's existing recovery backup; the previous recovery secret stops working",
+    "context": "clap --help: help for the `--replace` flag of `capsule auth escrow`."
+  },
   "cli.help.auth.login.about": {
     "message": "Login to Capsule",
     "context": "clap --help: the one-line description of `capsule auth login`. Shown in the parent's command list and at the top of its own --help."
   },
+  "cli.help.auth.login.arg.device": {
+    "message": "With --oidc, sign in from another device: print an address and a code instead of using a browser here",
+    "context": "clap --help: help for the `--device` flag of `capsule auth login` (issue #635), the OAuth device authorization grant for a terminal with no browser, such as one on a remote host over SSH."
+  },
   "cli.help.auth.login.arg.email": {
     "message": "Account email (prompted when omitted)",
     "context": "clap --help: help for the `--email` option of `capsule auth login`."
+  },
+  "cli.help.auth.login.arg.no_browser": {
+    "message": "With --oidc, print the sign-in address without opening a browser",
+    "context": "clap --help: help for the `--no-browser` flag of `capsule auth login`."
+  },
+  "cli.help.auth.login.arg.oidc": {
+    "message": "Sign in through the server's identity provider in a browser instead of with a password. The server must allow loopback redirects (OIDC_ALLOW_LOOPBACK_REDIRECT=true)",
+    "context": "clap --help: help for the `--oidc` flag of `capsule auth login`. OIDC_ALLOW_LOOPBACK_REDIRECT=true is a server configuration variable and must not be translated."
   },
   "cli.help.auth.login.arg.password_stdin": {
     "message": "Read the password from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
@@ -6930,6 +7102,22 @@
   "cli.help.auth.logout.about": {
     "message": "Logout from Capsule",
     "context": "clap --help: the one-line description of `capsule auth logout`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.auth.recover.about": {
+    "message": "Recover the signed-in account onto this machine from its recovery backup",
+    "context": "clap --help: the one-line description of `capsule auth recover` (#544). Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.auth.recover.arg.library": {
+    "message": "Directory for the recovered library; it must not hold a library yet",
+    "context": "clap --help: help for the `--library` option of `capsule auth recover`."
+  },
+  "cli.help.auth.recover.arg.passphrase_stdin": {
+    "message": "Read the new library passphrase from the next line of stdin instead of prompting",
+    "context": "clap --help: help for the `--passphrase-stdin` flag of `capsule auth recover`. With --recovery-secret-stdin as well, the recovery secret is the first line and the passphrase the second."
+  },
+  "cli.help.auth.recover.arg.recovery_secret_stdin": {
+    "message": "Read the recovery secret from the first line of stdin instead of prompting",
+    "context": "clap --help: help for the `--recovery-secret-stdin` flag of `capsule auth recover`."
   },
   "cli.help.auth.register.about": {
     "message": "Create a Capsule account and sign in",
@@ -7171,6 +7359,50 @@
     "message": "Capsule CLI provides tools for managing your photos and albums:\n\n- Authentication management\n- Sync local and remote data\n- Check status and list files\n- Manage albums and collections",
     "context": "clap --help: the long description of `capsule`, shown at the top of `capsule --help` instead of the one-line form. Keep the Markdown list markers: the documentation site renders this text as prose."
   },
+  "cli.help.share.about": {
+    "message": "Issue and revoke view-only share links on the server",
+    "context": "clap --help: the one-line description of `capsule share`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.share.create.about": {
+    "message": "Issue a view-only share link for an album or one asset, and print the URL to send",
+    "context": "clap --help: the one-line description of `capsule share create`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.share.create.arg.album": {
+    "message": "Share every asset of this album that is not in trash",
+    "context": "clap --help: help for the `--album` option of `capsule share create`."
+  },
+  "cli.help.share.create.arg.asset": {
+    "message": "Share this one asset",
+    "context": "clap --help: help for the `--asset` option of `capsule share create`."
+  },
+  "cli.help.share.create.arg.expires_at": {
+    "message": "When the link stops opening, as an RFC 3339 timestamp (e.g. 2026-12-31T23:59:59Z)",
+    "context": "clap --help: help for the `--expires-at` option of `capsule share create`. Keep the timestamp example verbatim: it is the format the option parses."
+  },
+  "cli.help.share.create.arg.library": {
+    "message": "Path to the Capsule library",
+    "context": "clap --help: help for the `--library` option of `capsule share create`."
+  },
+  "cli.help.share.create.arg.link_passphrase_stdin": {
+    "message": "With --protect, read the link passphrase from stdin instead of prompting (the line after the library passphrase when --passphrase-stdin is also given)",
+    "context": "clap --help: help for the `--link-passphrase-stdin` flag of `capsule share create`."
+  },
+  "cli.help.share.create.arg.passphrase_stdin": {
+    "message": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+    "context": "clap --help: help for the `--passphrase-stdin` flag of `capsule share create`."
+  },
+  "cli.help.share.create.arg.protect": {
+    "message": "Protect the link with a passphrase the recipient must enter as well as open the URL",
+    "context": "clap --help: help for the `--protect` flag of `capsule share create`."
+  },
+  "cli.help.share.revoke.about": {
+    "message": "Revoke a share link, so its URL stops opening",
+    "context": "clap --help: the one-line description of `capsule share revoke`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.share.revoke.arg.opaque_id": {
+    "message": "The link's opaque id: the 32 hex characters after /s/ in its URL",
+    "context": "clap --help: help for the `<OPAQUE_ID>` positional of `capsule share revoke`."
+  },
   "cli.help.show.about": {
     "message": "Show what an imported asset's signed sidecar records: caption, rating, tags, GPS, timestamps",
     "context": "clap --help: the one-line description of `capsule show`. Shown in the parent's command list and at the top of its own --help."
@@ -7262,6 +7494,14 @@
   "cli.import.scanning": {
     "message": "Scanning source files…",
     "context": "CLI status line printed while `capsule import` walks the source paths, before any file is planned."
+  },
+  "cli.library.info.migrate_hint": {
+    "message": "{count, plural, one {Run `capsule library migrate` to admit the # unsigned sidecar.} other {Run `capsule library migrate` to admit the # unsigned sidecars.}}",
+    "context": "CLI line from `capsule library info`, printed only when the library holds sidecar files without a signature (written by an older version); their assets stay hidden until migrated. `capsule library migrate` is a command and stays verbatim."
+  },
+  "cli.library.info.unmigrated_sidecars": {
+    "message": "Unmigrated sidecars: {count}",
+    "context": "CLI row in the `capsule library info` listing. {count} is how many sidecar files in the library carry no signature (written by an older version) and so are hidden until `capsule library migrate` runs; 0 on an up-to-date library."
   },
   "cli.library.migrate.failed": {
     "message": "Migration failed: {reason}",
@@ -7455,6 +7695,74 @@
     "message": "Repair failed: {reason}",
     "context": "CLI failure line for `capsule repair`. {reason} is a localized or English error detail."
   },
+  "cli.share.create.empty_scope": {
+    "message": "Nothing to share: that album holds no assets outside trash.",
+    "context": "CLI refusal from `capsule share create --album` when the album has no asset that is not in trash; a link over it would open to an empty page."
+  },
+  "cli.share.create.expires_notice": {
+    "message": "The link stops opening at {expires_at}.",
+    "context": "CLI line after `capsule share create --expires-at`. {expires_at} is an RFC 3339 UTC timestamp."
+  },
+  "cli.share.create.expiry_not_in_future": {
+    "message": "--expires-at {value} is not in the future, so the link would never open.",
+    "context": "CLI refusal from `capsule share create`. {value} is the parsed RFC 3339 timestamp; keep `--expires-at` verbatim."
+  },
+  "cli.share.create.failed": {
+    "message": "Share link not issued: {reason}",
+    "context": "CLI failure line for `capsule share create`. {reason} is a localized or English error detail."
+  },
+  "cli.share.create.in_progress": {
+    "message": "Issuing a share link on {endpoint}…",
+    "context": "CLI status line printed while `capsule share create` runs. {endpoint} is the server URL."
+  },
+  "cli.share.create.invalid_expiry": {
+    "message": "--expires-at {value} is not an RFC 3339 timestamp (for example 2026-12-31T23:59:59Z).",
+    "context": "CLI refusal from `capsule share create`. {value} is what the user typed; keep `--expires-at` and the timestamp example verbatim."
+  },
+  "cli.share.create.link_passphrase_confirm": {
+    "message": "Repeat the link passphrase",
+    "context": "CLI prompt from `capsule share create --protect` asking for the link passphrase a second time."
+  },
+  "cli.share.create.link_passphrase_mismatch": {
+    "message": "The two link passphrases do not match.",
+    "context": "CLI error when the two link passphrases typed for `capsule share create --protect` differ."
+  },
+  "cli.share.create.link_passphrase_prompt": {
+    "message": "Link passphrase (the recipient types it to open the link)",
+    "context": "CLI prompt from `capsule share create --protect` for the passphrase protecting the link. Not the library passphrase."
+  },
+  "cli.share.create.not_held": {
+    "message": "{count, plural, one {# shared asset is not on the server yet, so the link could not show it. Run capsule push for this library first.} other {# shared assets are not on the server yet, so the link could not show them. Run capsule push for this library first.}}",
+    "context": "CLI refusal from `capsule share create` when an original the link covers has not been uploaded. {count} is a count; keep `capsule push` verbatim."
+  },
+  "cli.share.create.passphrase_notice": {
+    "message": "The link is passphrase-protected: send the passphrase separately from the URL.",
+    "context": "CLI line after `capsule share create --protect`."
+  },
+  "cli.share.create.revoke_hint": {
+    "message": "To revoke it: capsule share revoke {opaque_id}",
+    "context": "CLI hint after `capsule share create`. {opaque_id} is 32 hex characters; keep `capsule share revoke` verbatim."
+  },
+  "cli.share.create.scope_unavailable": {
+    "message": "This library does not hold that album or asset, or the asset is in trash.",
+    "context": "CLI refusal from `capsule share create` when --album or --asset names nothing shareable in the library."
+  },
+  "cli.share.create.success": {
+    "message": "{count, plural, one {Share link issued for # asset. Anyone with this URL can view it:} other {Share link issued for # assets. Anyone with this URL can view them:}}",
+    "context": "CLI line after `capsule share create` succeeds; the URL follows on its own line. {count} is a count."
+  },
+  "cli.share.revoke.failed": {
+    "message": "Share link not revoked: {reason}",
+    "context": "CLI failure line for `capsule share revoke`. {reason} is a localized or English error detail."
+  },
+  "cli.share.revoke.invalid_opaque_id": {
+    "message": "{value} is not a share link's opaque id: expected the 32 lowercase hex characters after /s/ in its URL.",
+    "context": "CLI refusal from `capsule share revoke`. {value} is what the user typed."
+  },
+  "cli.share.revoke.success": {
+    "message": "Share link {opaque_id} no longer opens for anyone.",
+    "context": "CLI line after `capsule share revoke` succeeds. {opaque_id} is 32 hex characters. The server answers the same for a link that was already revoked or never existed."
+  },
   "cli.show.album": {
     "message": "  Album:           {value}",
     "context": "CLI field row of `capsule show`: the owning album's UUID. Keep the label padded so values align in a monospace terminal."
@@ -7610,6 +7918,10 @@
   "cli.show.value.yes": {
     "message": "yes",
     "context": "CLI boolean value in `capsule show` rows (hidden, in trash)."
+  },
+  "cli.stdin.empty": {
+    "message": "{flag} was given but stdin was empty",
+    "context": "CLI error when a `--*-stdin` flag asked for a secret on stdin and the first line was empty. {flag} is the flag the user passed, verbatim (e.g. --password-stdin, --passphrase-stdin, --recovery-secret-stdin)."
   },
   "cli.sync.complete": {
     "message": "Sync complete: applied {applied} change(s) across {albums} album(s) in {pages} page(s).",
@@ -7959,6 +8271,26 @@
     "message": "Too many sign-ins are already in progress. Please try again in a moment.",
     "context": "HTTP 503 on POST /v1/auth/oidc/authorize (slice S-N1): the server is already holding as many unfinished single sign-on ceremonies as it will hold, so this one was not begun. Retryable within minutes - pending ceremonies expire ten minutes after they start. Distinct from error.auth.unavailable, which is a 500 meaning a store could not answer at all: this one means the server answered and said 'not now', and a client may retry it on a short timer rather than surfacing an outage."
   },
+  "error.auth.oidc_device_denied": {
+    "message": "The sign-in was declined at your identity provider.",
+    "context": "HTTP 401 on POST /v1/auth/oidc/device/poll (issue #635): the person declined the device sign-in at their identity provider (RFC 8628 access_denied). The ceremony is over; the person starts again if they meant to approve it."
+  },
+  "error.auth.oidc_device_expired": {
+    "message": "That sign-in code has expired or was already used. Start again.",
+    "context": "HTTP 401 on POST /v1/auth/oidc/device/poll (issue #635): the device sign-in is unknown, finished, past its window, or the identity provider says its code expired (RFC 8628 expired_token). One answer for all of them, so the poll is not an oracle; the person starts the sign-in again."
+  },
+  "error.auth.oidc_device_pending": {
+    "message": "Waiting for you to finish signing in on your other device.",
+    "context": "HTTP 400 on POST /v1/auth/oidc/device/poll (issue #635): the person has not yet approved the device sign-in at their identity provider (RFC 8628 authorization_pending, which RFC 8628 also answers with a 400). Not a failure: the client keeps polling at its interval."
+  },
+  "error.auth.oidc_device_slow_down": {
+    "message": "Checking too often; slowing down.",
+    "context": "HTTP 429 on POST /v1/auth/oidc/device/poll (issue #635): the client polled sooner than its interval allows, or the identity provider asked it to slow down (RFC 8628 slow_down). Not a failure: the client adds five seconds to its interval and keeps polling."
+  },
+  "error.auth.oidc_device_unsupported": {
+    "message": "Signing in without a browser isn't available with this server's identity provider.",
+    "context": "HTTP 404 on POST /v1/auth/oidc/device (issue #635): the server's identity provider does not offer the device authorization grant (RFC 8628) to Capsule - it publishes no device endpoint, or refuses this client one. The person signs in with the browser flow instead, or the operator enables the grant at the provider."
+  },
   "error.auth.oidc_exchange_failed": {
     "message": "Your identity provider didn't accept that sign-in. Try again.",
     "context": "HTTP 401 on POST /v1/auth/oidc/callback (slice S-N1): the identity provider refused to exchange the authorization code (an invalid, spent or mismatched code). The person starts the sign-in again."
@@ -8095,6 +8427,10 @@
     "message": "That device list couldn't be read.",
     "context": "HTTP 415 on POST /v1/auth/devices/directory (slice S-C9): the body was not sent as application/cbor. The signed device directory travels as canonical CBOR — the encoding it was signed in — so any other media type is a client that has misunderstood what it is sending."
   },
+  "error.directory.untrusted_signature": {
+    "message": "This account's device list isn't signed by the account key this device trusts.",
+    "context": "Client-side code: a fetched DeviceDirectory does not verify under the user identity key the client pinned (for example the identity a recovery opened), so it is treated as foreign or forged and never used. Shown when `capsule auth recover` cannot join the account's device list; nothing was changed on the server."
+  },
   "error.directory.version_conflict": {
     "message": "This device list is out of date. Capsule will refresh it before continuing.",
     "context": "HTTP 409 on device-directory publish (threat-model invariant 23): the submitted DeviceDirectory's directory_version does not strictly advance the version already stored for the user. A non-advancing or regressing publish is refused so the server cannot roll back a revocation."
@@ -8175,6 +8511,10 @@
     "message": "The device-add request could not be read.",
     "context": "HTTP 400 on the enrollment relay channel (slice S-C7): the request named an unknown direction or carried a missing/oversized opaque payload. The server never inspects the payload contents; this is a structural rejection only."
   },
+  "error.escrow.identity_not_stored": {
+    "message": "This account's recovery backup does not include its identity key, so this device cannot be recovered as the same account. Set recovery up again from a device where this account's library still opens, then recover with the new recovery secret.",
+    "context": "HTTP 404 on GET /v1/auth/escrow/identity (#544): this account has never stored its user identity key sealed under the master key, so a recovered device cannot open as the same account even if the master-key escrow is present. Distinct from error.escrow.not_stored because the remedy differs: the escrow exists but is not enough on its own. Setting recovery up (the CLI's `capsule auth escrow`, #624) stores both under a new recovery secret, which is why the message says to recover with the new one. Client-neutral: every client shows this code."
+  },
   "error.escrow.malformed": {
     "message": "The recovery backup could not be saved.",
     "context": "HTTP 400 on master-key escrow store (slice S-C12): the request body failed the coarse size sanity bound (empty, or larger than any legitimate wrapped master key). The server keeps the blob opaque and never inspects the wrap format; the recovery-secret entropy floor is enforced client-side in core, not here."
@@ -8221,7 +8561,7 @@
   },
   "error.federation.not_configured": {
     "message": "This server doesn't share albums with other servers.",
-    "context": "HTTP 403 on the federation lifecycle writes — minting, revoking or refreshing a capability, and federated report intake (slice S-E2): this deployment has no FEDERATION_URL, so it does not federate. A capability minted while it did still verifies; configuration does not un-mint a token."
+    "context": "HTTP 404 on all four federation operations — minting, revoking or refreshing a capability, and federated report intake (slice S-E2): this deployment has FEDERATION_ENABLED off, which is the default, so it does not federate. While it is off no capability is honoured, including one minted while it was on."
   },
   "error.federation.peer_unknown": {
     "message": "That server isn't one this server knows.",

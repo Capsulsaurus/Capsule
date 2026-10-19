@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-/// A software ``HardwareSigner`` — the no-secure-element fallback, mirroring the Rust
+/// A software ``FfiHardwareSigner`` — the no-secure-element fallback, mirroring the Rust
 /// `SoftwareSigner`. The classical Ed25519 key lives in process memory, derived deterministically
 /// (HKDF-SHA512, per `keyAlias`) from a 32-byte seed the caller is responsible for sealing.
 ///
@@ -13,7 +13,7 @@ import Foundation
 /// The derivation matches the Rust reference (salt = `keyAlias`, info =
 /// `capsule/software-signer/ed25519/v1`), so the same seed yields the same device key in either
 /// language.
-public final class SoftwareSigner: HardwareSigner, @unchecked Sendable {
+public final class SoftwareSigner: FfiHardwareSigner, @unchecked Sendable {
     private static let info = Data("capsule/software-signer/ed25519/v1".utf8)
     private let seed: Data
 
@@ -49,6 +49,6 @@ public final class SoftwareSigner: HardwareSigner, @unchecked Sendable {
     public func assertNonExportable(keyAlias: String) throws {
         // Honest by design: a software key is readable, so it can never meet the hardware
         // non-exportability contract a Secure Enclave / StrongBox / TPM does.
-        throw HardwareSignerError.Exportable(message: "software key is exportable")
+        throw FfiHardwareSignerError.Exportable(message: "software key is exportable")
     }
 }

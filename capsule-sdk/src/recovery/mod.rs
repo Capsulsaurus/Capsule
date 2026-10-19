@@ -13,7 +13,13 @@
 //! - **[`RecoveryClient`]** — the networked side: the cached copy of the escrow blob
 //!   ([`EscrowCache`]), the stale-cache-aware [`verify`](RecoveryClient::verify), and the
 //!   [`guided_rewrap`](RecoveryClient::guided_rewrap) that mints a fresh secret, re-wraps
-//!   the **same** master key, and replaces the server escrow through S-C12.
+//!   the **same** master key, and replaces the server escrow through S-C12. It also stores and
+//!   fetches the **sealed identity** beside the escrow
+//!   ([`store_sealed_identity`](RecoveryClient::store_sealed_identity),
+//!   [`fetch_sealed_identity`](RecoveryClient::fetch_sealed_identity),
+//!   `/v1/auth/escrow/identity`, #544): the user identity key sealed under the master key,
+//!   which a recovered device opens beside the recovered master key to come up as the same
+//!   account.
 //!
 //! The escrow blob on the wire is the opaque canonical-CBOR encoding of a
 //! [`WrappedSecret`] — byte-identical to what the server stores verbatim and to what the
@@ -54,7 +60,7 @@ use jiff::Timestamp;
 use tracing::instrument;
 
 use crate::auth::Session;
-use crate::client::{AuthenticatedClient, ClientError};
+use crate::client::{AuthenticatedClient, ClientError, describe_error, is_token_failure};
 use crate::rest;
 
 /// Everything the networked recovery flows can fail with. Callers switch on the typed
@@ -103,6 +109,11 @@ pub enum RecoveryError {
     /// The caller has no escrow stored yet (server returned a coded `404`). Enroll one first.
     #[error("no escrow stored for this account")]
     NotEnrolled,
+    /// The caller has stored no sealed identity (`GET /v1/auth/escrow/identity` answered a coded
+    /// `404`). The escrow alone cannot open the account as itself: a device that still holds the
+    /// identity has to store it ([`RecoveryClient::store_sealed_identity`]) first.
+    #[error("no sealed identity stored for this account")]
+    IdentityNotStored,
     /// The server refused the blob as one that cannot be an escrow at any version — empty or
     /// past the coarse ceiling (`400`), not the declared media type (`415`), or past the
     /// transport's body limit (`413`). Retrying the same bytes changes nothing.
@@ -162,6 +173,8 @@ impl RecoveryError {
             // ("this account has escrowed nothing"), not a message, and the server's own code
             // for that state is this constant — see `capsule-server/src/routes/escrow.rs`.
             Self::NotEnrolled => Some(error_codes::ESCROW_NOT_STORED),
+            // The same reasoning, for the sealed identity's own `404` state.
+            Self::IdentityNotStored => Some(error_codes::ESCROW_IDENTITY_NOT_STORED),
             _ => None,
         }
     }
@@ -191,6 +204,16 @@ impl EscrowStored {
         self.replaced
             .then_some(OldArtifactGuidance::ReexportOrDestroy)
     }
+}
+
+/// What storing a sealed identity did: the server's `StoreSealedIdentityResponse`, read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SealedIdentityStored {
+    /// When the server accepted the blob, on the server's clock.
+    pub stored_at: Timestamp,
+    /// Whether this displaced an earlier sealed identity. Unlike an escrow replacement it retires
+    /// no secret: the identity key is the same one, sealed again.
+    pub replaced: bool,
 }
 
 /// A client-side cached copy of the server escrow blob.
@@ -453,17 +476,7 @@ impl RecoveryClient {
             .await
             .map_err(store_escrow_error)?
             .into_inner();
-        let stored_at = stored.stored_at.parse::<Timestamp>().map_err(|error| {
-            tracing::warn!(
-                stored_at = %stored.stored_at,
-                %error,
-                "escrow stored, but the server's stored_at is not an RFC 3339 instant"
-            );
-            RecoveryError::InvalidResponse(format!(
-                "stored_at {:?} is not an RFC 3339 instant: {error}",
-                stored.stored_at
-            ))
-        })?;
+        let stored_at = stored_instant(&stored.stored_at, "escrow")?;
         tracing::info!(
             %stored_at,
             replaced = stored.replaced,
@@ -473,6 +486,70 @@ impl RecoveryClient {
             stored_at,
             replaced: stored.replaced,
         })
+    }
+
+    /// Store or replace the caller's **sealed identity** (`PUT /v1/auth/escrow/identity`): the
+    /// user identity key sealed under the master key, as `Workspace::sealed_identity` returns
+    /// it. The other half of what a recovered device needs beside the escrow — the identity is
+    /// random rather than master-derived, and the server pins it on first directory publish, so
+    /// a recovered device must carry this one rather than mint its own.
+    ///
+    /// Opaque on the wire and stored independently of the escrow: a
+    /// [`guided_rewrap`](Self::guided_rewrap) replaces the escrow and leaves this alone, because
+    /// re-wrapping the master key under a new recovery secret does not change the master key
+    /// the identity is sealed under.
+    ///
+    /// # Errors
+    ///
+    /// The same refusals [`store_escrow`](Self::store_escrow) maps, under this operation's
+    /// statuses, and [`RecoveryError::InvalidResponse`] for an unreadable `stored_at`.
+    #[instrument(skip_all, fields(len = sealed.len()))]
+    pub async fn store_sealed_identity(
+        &self,
+        sealed: &[u8],
+    ) -> Result<SealedIdentityStored, RecoveryError> {
+        let stored = self
+            .client
+            .store_sealed_identity(
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+                rest::StoreSealedIdentityParams::default(),
+                &rest::types::RequestBody::from(sealed.to_vec()),
+            )
+            .await
+            .map_err(store_sealed_identity_error)?
+            .into_inner();
+        let stored_at = stored_instant(&stored.stored_at, "sealed identity")?;
+        tracing::info!(
+            %stored_at,
+            replaced = stored.replaced,
+            "sealed identity stored (one per account: any prior one replaced)"
+        );
+        Ok(SealedIdentityStored {
+            stored_at,
+            replaced: stored.replaced,
+        })
+    }
+
+    /// Fetch the caller's sealed identity (`GET /v1/auth/escrow/identity`), verbatim — the
+    /// bytes `Workspace::create_from_master` opens under the recovered master key.
+    ///
+    /// # Errors
+    ///
+    /// [`RecoveryError::IdentityNotStored`] on the coded `404`; otherwise the refusals
+    /// [`fetch_escrow`](Self::fetch_escrow) maps.
+    #[instrument(skip_all)]
+    pub async fn fetch_sealed_identity(&self) -> Result<Vec<u8>, RecoveryError> {
+        let bytes = self
+            .client
+            .fetch_sealed_identity(
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+                rest::FetchSealedIdentityParams::default(),
+            )
+            .await
+            .map_err(fetch_sealed_identity_error)?
+            .into_inner();
+        tracing::debug!(len = bytes.len(), "fetched the sealed identity");
+        Ok(bytes.to_vec())
     }
 
     /// Local recovery-secret verification with the **stale-cache rule** (SSoT § Local
@@ -673,6 +750,76 @@ fn store_escrow_error(error: rest::Error<rest::StoreEscrowError>) -> RecoveryErr
     }
 }
 
+/// Map a `GET /v1/auth/escrow/identity` refusal onto its typed variant: the escrow fetch's
+/// table, except that the coded `404` is the sealed identity's own state.
+fn fetch_sealed_identity_error(
+    error: rest::Error<rest::FetchSealedIdentityError>,
+) -> RecoveryError {
+    match error {
+        rest::Error::Api(response) => match response.into_inner() {
+            rest::FetchSealedIdentityError::Status404(_) => RecoveryError::IdentityNotStored,
+            rest::FetchSealedIdentityError::Status400(problem) => RecoveryError::Malformed {
+                code: Some(problem.code.clone()),
+                detail: detail(&problem),
+            },
+            rest::FetchSealedIdentityError::Status401(problem)
+            | rest::FetchSealedIdentityError::Status403(problem) => refused(&problem),
+            rest::FetchSealedIdentityError::Status500(problem) => unavailable(&problem),
+            rest::FetchSealedIdentityError::Status413 => RecoveryError::Unexpected {
+                status: 413,
+                code: None,
+            },
+        },
+        other => wire_error(&other),
+    }
+}
+
+/// Map a `PUT /v1/auth/escrow/identity` refusal onto its typed variant — the escrow store's
+/// table, status for status.
+fn store_sealed_identity_error(
+    error: rest::Error<rest::StoreSealedIdentityError>,
+) -> RecoveryError {
+    match error {
+        rest::Error::Api(response) => match response.into_inner() {
+            rest::StoreSealedIdentityError::Status400(problem)
+            | rest::StoreSealedIdentityError::Status415(problem) => RecoveryError::Malformed {
+                code: Some(problem.code.clone()),
+                detail: detail(&problem),
+            },
+            rest::StoreSealedIdentityError::Status426(problem) => RecoveryError::Unexpected {
+                status: 426,
+                code: Some(problem.code.clone()),
+            },
+            rest::StoreSealedIdentityError::Status401(problem)
+            | rest::StoreSealedIdentityError::Status403(problem) => refused(&problem),
+            rest::StoreSealedIdentityError::Status500(problem) => unavailable(&problem),
+            rest::StoreSealedIdentityError::Status413 => RecoveryError::Malformed {
+                code: None,
+                detail: "the sealed identity exceeds the server's request-body limit".to_owned(),
+            },
+        },
+        other => wire_error(&other),
+    }
+}
+
+/// Read a success answer's `stored_at`, which the server renders as RFC 3339.
+///
+/// The server *did* answer `200`, so the blob may well be stored; an unreadable instant is the
+/// answer being unreadable, which is [`RecoveryError::InvalidResponse`] rather than a refusal.
+fn stored_instant(stored_at: &str, what: &str) -> Result<Timestamp, RecoveryError> {
+    stored_at.parse::<Timestamp>().map_err(|error| {
+        tracing::warn!(
+            %stored_at,
+            %error,
+            what,
+            "stored, but the server's stored_at is not an RFC 3339 instant"
+        );
+        RecoveryError::InvalidResponse(format!(
+            "stored_at {stored_at:?} is not an RFC 3339 instant: {error}"
+        ))
+    })
+}
+
 /// A refused credential, carrying the problem body's stable code. `CodedProblem.code` is a
 /// required member, so a refusal that parsed always has one.
 fn refused(problem: &rest::types::CodedProblem) -> RecoveryError {
@@ -709,28 +856,13 @@ where
             status: status.as_u16(),
             code: None,
         },
-        // `RequestConstruction` is **not** a pre-flight-only class. reqwest builds every
-        // failure of the request it executes with `error::request(..)`, so `is_request()` is
-        // true for connection-refused, DNS and TLS failures too, and the generated taxonomy
-        // routes all of them here alongside the genuine pre-flight ones. Splitting them by
-        // class alone would report an unreachable server as "sign in again", which on an
-        // offline device is the one remedy that cannot work.
-        //
-        // The *source* discriminates them: a bearer provider that could not produce a token is
-        // boxed as the generated runtime's own `AuthError`, and nothing else on this path is.
-        // A dead session must reach a caller as an auth failure rather than as a transport
-        // blip, because the two have opposite remedies.
-        rest::Error::RequestConstruction(inner) => {
-            if std::error::Error::source(inner)
-                .and_then(|source| source.downcast_ref::<rest::AuthError>())
-                .is_some()
-            {
-                RecoveryError::Unauthorized {
-                    code: None,
-                    detail: describe(error),
-                }
-            } else {
-                RecoveryError::Transport(describe(error))
+        // Splitting `RequestConstruction` by class alone would report an unreachable server as
+        // "sign in again", which on an offline device is the one remedy that cannot work; the
+        // shared classifier reads the source instead.
+        rest::Error::RequestConstruction(_) if is_token_failure(error) => {
+            RecoveryError::Unauthorized {
+                code: None,
+                detail: describe_error(error),
             }
         }
         // A *declared* refusal whose body was not the coded problem the document promises.
@@ -742,26 +874,8 @@ where
         rest::Error::Decode { path, .. } => RecoveryError::Transport(format!(
             "the escrow endpoint answered a refusal this client could not parse ({path})"
         )),
-        other => RecoveryError::Transport(describe(other)),
+        other => RecoveryError::Transport(describe_error(other)),
     }
-}
-
-/// Render a generated-client failure together with its source chain. The taxonomy's own
-/// `Display` names the class and, for the wire classes, little else (`"transport failed"`,
-/// `"request construction failed"`) — the source chain is where the reqwest/hyper reason a log
-/// reader needs actually lives.
-fn describe<E>(error: &rest::Error<E>) -> String
-where
-    E: std::error::Error + 'static,
-{
-    let mut rendered = error.to_string();
-    let mut source = std::error::Error::source(error);
-    while let Some(cause) = source {
-        rendered.push_str(": ");
-        rendered.push_str(&cause.to_string());
-        source = cause.source();
-    }
-    rendered
 }
 
 #[cfg(test)]

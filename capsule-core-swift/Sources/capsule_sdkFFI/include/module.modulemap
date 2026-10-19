@@ -1,0 +1,4 @@
+module capsule_sdkFFI {
+    header "capsule_sdkFFI.h"
+    export *
+}

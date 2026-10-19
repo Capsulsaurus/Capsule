@@ -23,13 +23,15 @@ use jiff::{SignedDuration, Timestamp};
 
 use super::auth::{AuthStateStore, CohortRecord, CohortStore, DEFAULT_SESSION_TTL, SessionRecord};
 use super::ceremony::{
-    CHALLENGE_TTL, ChallengeStore, ChannelStore, Direction, DrainOutcome, ENROLLMENT_CODE_TTL,
-    EnrollmentStore, OIDC_AUTHORIZATION_TTL, OidcAuthorizationStore, PendingAuthorization,
+    CHALLENGE_TTL, ChallengeStore, ChannelStore, DEVICE_SLOW_DOWN_STEP, DevicePollSlot, Direction,
+    DrainOutcome, ENROLLMENT_CODE_TTL, EnrollmentStore, OIDC_AUTHORIZATION_TTL, OIDC_DEVICE_TTL,
+    OidcAuthorizationStore, OidcDeviceStore, PendingAuthorization, PendingDeviceAuthorization,
     PendingEnrollment, RELAY_CHANNEL_TTL, RelayChannel, RelayOutcome, RelayPayload,
     RevokeAllChallenge,
 };
 use super::ids::{
-    AlbumId, ChallengeToken, ChannelId, EnrollmentCode, OidcState, SessionId, UploadId, UserId,
+    AlbumId, ChallengeToken, ChannelId, EnrollmentCode, OidcDeviceHandle, OidcState, SessionId,
+    UploadId, UserId,
 };
 use super::upload::{
     AcceptedChunk, FinalizeClaim, LIFETIME_CAP, UploadSessionRecord, UploadSessionStatus,
@@ -790,7 +792,9 @@ impl ChallengeStore for InMemoryChallenges {
 /// minute before anything is refused, which is far beyond a self-hosted deployment's sign-in
 /// rate and well inside the memory a record of four short strings costs. The ceiling exists so
 /// that a caller who begins ceremonies without ever finishing them grows this map to a bound and
-/// not to the heap; the Valkey adapter (#460) gets the same property from the TTL alone.
+/// not to the heap. [`ValkeyOidcAuthorizations`](super::valkey::ValkeyOidcAuthorizations) has no
+/// ceiling: its records carry a `PEXPIRE`, and the authorize route's per-host budget bounds the
+/// rate they are written at — see that adapter's docs.
 pub const PENDING_AUTHORIZATION_CEILING: usize = 10_000;
 
 /// In-memory [`OidcAuthorizationStore`] (slice `S-N1`).
@@ -886,6 +890,163 @@ impl OidcAuthorizationStore for InMemoryOidcAuthorizations {
                 "consumed a pending OIDC authorization"
             );
             Ok(taken.map(|entry| entry.record))
+        })
+    }
+}
+
+/// How many pending OIDC device authorizations the in-memory store will hold at once.
+///
+/// The same ten thousand as [`PENDING_AUTHORIZATION_CEILING`], for the same reason: the begin is
+/// an unauthenticated write, budgeted deployment-wide at sixty a minute, so at the fifteen-minute
+/// lifetime the budget alone holds the live set under a thousand, and this is the bound that
+/// holds when the budget is somehow not in front of it.
+pub const PENDING_DEVICE_CEILING: usize = 10_000;
+
+/// One held device ceremony: the record and the store's own poll stamp.
+#[derive(Debug)]
+struct HeldDevice {
+    record: PendingDeviceAuthorization,
+    polled_at: Timestamp,
+}
+
+/// In-memory [`OidcDeviceStore`] (issue #635).
+///
+/// The same shape as [`InMemoryOidcAuthorizations`] — purge on every begin, refuse past the
+/// ceiling — plus the poll schedule, which one lock makes atomic.
+#[derive(Debug)]
+pub struct InMemoryOidcDevices {
+    clock: Arc<dyn Clock>,
+    ttl: SignedDuration,
+    ceiling: usize,
+    state: Mutex<BTreeMap<OidcDeviceHandle, Entry<HeldDevice>>>,
+}
+
+impl InMemoryOidcDevices {
+    /// A store on `clock` with the given ceremony lifetime and the default ceiling.
+    pub fn new(clock: Arc<dyn Clock>, ttl: SignedDuration) -> Self {
+        Self {
+            clock,
+            ttl,
+            ceiling: PENDING_DEVICE_CEILING,
+            state: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    /// A store on `clock` with the [`OIDC_DEVICE_TTL`].
+    pub fn with_default_ttl(clock: Arc<dyn Clock>) -> Self {
+        Self::new(clock, OIDC_DEVICE_TTL)
+    }
+
+    /// The same store holding at most `ceiling` pending ceremonies.
+    #[must_use]
+    pub fn with_ceiling(mut self, ceiling: usize) -> Self {
+        self.ceiling = ceiling;
+        self
+    }
+}
+
+impl OidcDeviceStore for InMemoryOidcDevices {
+    fn ttl(&self) -> SignedDuration {
+        self.ttl
+    }
+
+    fn begin<'a>(
+        &'a self,
+        handle: &'a OidcDeviceHandle,
+        record: PendingDeviceAuthorization,
+    ) -> StoreFuture<'a, ()> {
+        Box::pin(async move {
+            let now = self.clock.now();
+            let mut held = lock(&self.state);
+            held.retain(|_, entry| entry.is_live_at(now));
+            if held.len() >= self.ceiling && !held.contains_key(handle) {
+                tracing::warn!(
+                    pending = held.len(),
+                    ceiling = self.ceiling,
+                    "the pending OIDC device store is full; a ceremony was refused"
+                );
+                return Err(StoreError::Rejected {
+                    store: "oidc devices",
+                    detail: format!("{} pending ceremonies is the ceiling", self.ceiling),
+                });
+            }
+            held.insert(
+                handle.clone(),
+                Entry {
+                    record: HeldDevice {
+                        record,
+                        polled_at: now,
+                    },
+                    expires_at: deadline(now, self.ttl),
+                },
+            );
+            tracing::debug!("recorded a pending OIDC device authorization");
+            Ok(())
+        })
+    }
+
+    fn claim<'a>(&'a self, handle: &'a OidcDeviceHandle) -> StoreFuture<'a, DevicePollSlot> {
+        Box::pin(async move {
+            let now = self.clock.now();
+            let mut held = lock(&self.state);
+            let Some(entry) = held.get_mut(handle).filter(|entry| entry.is_live_at(now)) else {
+                tracing::debug!("claimed a poll on no live OIDC device authorization");
+                return Ok(DevicePollSlot::Unknown);
+            };
+            let held = &mut entry.record;
+            let due = deadline(held.polled_at, held.record.interval);
+            held.polled_at = now;
+            if now < due {
+                held.record.interval += DEVICE_SLOW_DOWN_STEP;
+                tracing::debug!(
+                    interval_secs = held.record.interval.as_secs(),
+                    "an OIDC device authorization was polled too soon"
+                );
+                return Ok(DevicePollSlot::TooSoon {
+                    interval: held.record.interval,
+                });
+            }
+            tracing::debug!("claimed a poll on an OIDC device authorization");
+            Ok(DevicePollSlot::Due(held.record.clone()))
+        })
+    }
+
+    fn slow_down<'a>(
+        &'a self,
+        handle: &'a OidcDeviceHandle,
+    ) -> StoreFuture<'a, Option<SignedDuration>> {
+        Box::pin(async move {
+            let now = self.clock.now();
+            let mut held = lock(&self.state);
+            let raised = held
+                .get_mut(handle)
+                .filter(|entry| entry.is_live_at(now))
+                .map(|entry| {
+                    entry.record.record.interval += DEVICE_SLOW_DOWN_STEP;
+                    entry.record.record.interval
+                });
+            tracing::debug!(
+                hit = raised.is_some(),
+                "raised an OIDC device authorization's interval"
+            );
+            Ok(raised)
+        })
+    }
+
+    fn finish<'a>(
+        &'a self,
+        handle: &'a OidcDeviceHandle,
+    ) -> StoreFuture<'a, Option<PendingDeviceAuthorization>> {
+        Box::pin(async move {
+            let now = self.clock.now();
+            let taken = lock(&self.state)
+                .remove(handle)
+                .filter(|entry| entry.is_live_at(now));
+            tracing::debug!(
+                hit = taken.is_some(),
+                "finished an OIDC device authorization"
+            );
+            Ok(taken.map(|entry| entry.record.record))
         })
     }
 }
@@ -1161,6 +1322,7 @@ pub struct InMemoryStores {
     /// The one store here with no TTL and no clock — see [`InMemoryCohorts`].
     cohorts: InMemoryCohorts,
     oidc_authorizations: InMemoryOidcAuthorizations,
+    oidc_devices: InMemoryOidcDevices,
 }
 
 impl InMemoryStores {
@@ -1174,6 +1336,7 @@ impl InMemoryStores {
             ENROLLMENT_CODE_TTL,
             RELAY_CHANNEL_TTL,
             OIDC_AUTHORIZATION_TTL,
+            OIDC_DEVICE_TTL,
         )
     }
 
@@ -1183,7 +1346,7 @@ impl InMemoryStores {
     /// one operation rather than five, and it is legitimate precisely because the TTL is a
     /// property of the *store instance* — varying it is configuration, not a per-call argument.
     pub fn with_uniform_ttl(ttl: SignedDuration) -> Self {
-        Self::with_ttl(ManualClock::default(), ttl, ttl, ttl, ttl, ttl, ttl)
+        Self::with_ttl(ManualClock::default(), ttl, ttl, ttl, ttl, ttl, ttl, ttl)
     }
 
     #[allow(
@@ -1198,6 +1361,7 @@ impl InMemoryStores {
         enrollment: SignedDuration,
         channel: SignedDuration,
         oidc_authorization: SignedDuration,
+        oidc_device: SignedDuration,
     ) -> Self {
         let shared: Arc<dyn Clock> = Arc::new(clock.clone());
         Self {
@@ -1211,6 +1375,7 @@ impl InMemoryStores {
                 Arc::clone(&shared),
                 oidc_authorization,
             ),
+            oidc_devices: InMemoryOidcDevices::new(Arc::clone(&shared), oidc_device),
             clock,
         }
     }
@@ -1261,8 +1426,12 @@ impl super::conformance::Harness for InMemoryStores {
         &self.channels
     }
 
-    fn oidc_authorizations(&self) -> Option<&dyn OidcAuthorizationStore> {
-        Some(&self.oidc_authorizations)
+    fn oidc_authorizations(&self) -> &dyn OidcAuthorizationStore {
+        &self.oidc_authorizations
+    }
+
+    fn oidc_devices(&self) -> &dyn OidcDeviceStore {
+        &self.oidc_devices
     }
 }
 
@@ -1325,6 +1494,13 @@ mod tests {
         closing_a_channel_drops_both_mailboxes,
         an_oidc_authorization_is_single_use,
         an_oidc_authorization_expires_with_its_store,
+        an_oidc_authorization_is_live_until_its_deadline,
+        a_device_poll_is_due_only_after_its_interval,
+        a_device_poll_too_soon_raises_the_interval,
+        two_polls_racing_one_handle_claim_one_slot,
+        a_provider_slow_down_raises_the_interval,
+        a_finished_device_authorization_is_gone,
+        a_device_authorization_expires_with_its_store,
     }
 
     /// The same, for the cases that take a [`conformance::CohortHarness`].
@@ -1381,6 +1557,7 @@ mod tests {
             OidcAuthorizationStore::ttl(&stores.oidc_authorizations),
             OIDC_AUTHORIZATION_TTL
         );
+        assert_eq!(OidcDeviceStore::ttl(&stores.oidc_devices), OIDC_DEVICE_TTL);
         assert_ne!(
             CHALLENGE_TTL, ENROLLMENT_CODE_TTL,
             "a ceremony's window belongs to what it is; if these ever coincide by accident \
@@ -1433,6 +1610,39 @@ mod tests {
                 .expect("answers")
                 .is_none()
         );
+    }
+
+    /// A full device store refuses, and expired ceremonies never count against it.
+    #[tokio::test]
+    async fn a_full_device_store_refuses_until_its_ceremonies_expire() {
+        use super::super::ids::DeviceCode;
+
+        let clock = ManualClock::default();
+        let store =
+            InMemoryOidcDevices::new(Arc::new(clock.clone()), SignedDuration::from_mins(15))
+                .with_ceiling(1);
+        let pending = |tag: &str| PendingDeviceAuthorization {
+            device_code: DeviceCode::new(format!("{tag}-code")),
+            binding_challenge: format!("{tag}-binding"),
+            interval: SignedDuration::from_secs(5),
+            issued_at: clock.now(),
+        };
+        store
+            .begin(&OidcDeviceHandle::new("a"), pending("a"))
+            .await
+            .expect("room");
+        assert!(
+            matches!(
+                store.begin(&OidcDeviceHandle::new("b"), pending("b")).await,
+                Err(StoreError::Rejected { .. })
+            ),
+            "the second is refused at a ceiling of one"
+        );
+        clock.advance(SignedDuration::from_mins(15));
+        store
+            .begin(&OidcDeviceHandle::new("b"), pending("b"))
+            .await
+            .expect("the expired ceremony made room");
     }
 
     /// The manual clock only moves when a test moves it.

@@ -97,6 +97,19 @@ pub struct UploadBundle {
     pub metadata_blob_hash: Option<Hash32>,
     /// The asset's derivative blobs, if any were generated and persisted.
     pub derivatives: Vec<DerivativeBlob>,
+    /// The **exact** `derivative_manifest`-blob wire bytes: the canonical CBOR of each signed
+    /// [`DerivativeManifest`] a receiver needs to open this bundle's derivative tiers (#556).
+    ///
+    /// One per shipped [`DerivativeBlob`], plus one per `format = "original"` sentinel tier,
+    /// which has no blob of its own and is *only* this manifest: without it a receiver could
+    /// not tell "this tier is the original" from "this tier is missing". In the order the
+    /// library recorded them. A manifest whose derivative is skipped is skipped with it, so
+    /// nothing here names a blob the bundle does not carry.
+    ///
+    /// Signed CBOR, not ciphertext: like [`Self::provenance_blob`] it is deliberately
+    /// server-visible (it holds no plaintext secret by construction), and it is served back
+    /// unchanged so the receiver verifies the bytes the producer signed.
+    pub derivative_manifests: Vec<Vec<u8>>,
     /// The authoring user.
     pub created_by_user: Uuid,
     /// The authoring device.
@@ -170,7 +183,10 @@ impl Workspace {
             return Err(LifecycleError::CiphertextMismatch(asset.asset_id));
         }
 
-        let derivatives = self.derivative_blobs(asset, album, epoch);
+        let DerivativeSet {
+            blobs: derivatives,
+            manifests: derivative_manifests,
+        } = self.derivative_blobs(asset, album, epoch);
         tracing::debug!(
             album_id = %asset.album_id,
             amk_version = epoch,
@@ -178,6 +194,7 @@ impl Workspace {
             metadata_blob_bytes = asset.metadata_blob.len(),
             provenance_blob_bytes = provenance_blob.len(),
             derivatives = derivatives.len(),
+            derivative_manifests = derivative_manifests.len(),
             action = ?head.action,
             "upload bundle built"
         );
@@ -198,6 +215,7 @@ impl Workspace {
             metadata_blob_hash: head.metadata_blob_hash,
             provenance_blob,
             derivatives,
+            derivative_manifests,
             created_by_user: head.created_by_user,
             created_by_device: head.created_by_device,
             client_version: head.client_version.clone(),
@@ -226,7 +244,7 @@ impl Workspace {
     /// Five reasons a manifest is skipped rather than shipped, and two of them are quiet:
     ///
     /// - the `original` sentinel, which references the original blob and has no bytes of its
-    ///   own — an **expected** absence, logged at `debug!`;
+    ///   own — an **expected** absence, logged at `debug!`, whose manifest still ships;
     /// - an embedding-role manifest, out of scope as above — also `debug!`;
     /// - a still-role `format` outside the closed set, which is the structural rejection the
     ///   tier table specifies;
@@ -237,17 +255,16 @@ impl Workspace {
     ///
     /// None of them fails the bundle: the original and its metadata are what a backup must not
     /// lose, and a stale thumbnail is regenerable.
-    fn derivative_blobs(
-        &self,
-        asset: &AssetState,
-        album: &AlbumKeys,
-        epoch: u32,
-    ) -> Vec<DerivativeBlob> {
+    ///
+    /// Beside the blobs it returns the signed manifests a receiver opens them with (#556): one
+    /// for each blob it keeps and one for each `original` sentinel, canonically encoded. A
+    /// manifest whose derivative is skipped is skipped with it.
+    fn derivative_blobs(&self, asset: &AssetState, album: &AlbumKeys, epoch: u32) -> DerivativeSet {
         let dir = media_dir(&self.root, asset.capture_utc).join("derivatives");
         let stem = asset.asset_id.simple().to_string();
         let bundle_path = dir.join(format!("{stem}.derivatives.cbor"));
         let Ok(bytes) = fs::read(&bundle_path) else {
-            return Vec::new();
+            return DerivativeSet::default();
         };
         let manifests: Vec<DerivativeManifest> = match cbor::from_slice(&bytes) {
             Ok(m) => m,
@@ -257,11 +274,14 @@ impl Workspace {
                     error = %e,
                     "upload bundle: undecodable derivative manifest bundle; skipping derivatives"
                 );
-                return Vec::new();
+                return DerivativeSet::default();
             }
         };
 
-        let mut blobs = Vec::with_capacity(manifests.len());
+        let mut set = DerivativeSet {
+            blobs: Vec::with_capacity(manifests.len()),
+            manifests: Vec::with_capacity(manifests.len()),
+        };
         for manifest in manifests {
             let role_name = derivative_role_name(manifest.core.role);
 
@@ -273,12 +293,17 @@ impl Workspace {
                     // A reference to the original blob, not a missing file: the receiver
                     // resolves it against the original it already has. `debug!`, because an
                     // expected absence logged as a warning trains people to ignore warnings.
+                    // The manifest still ships: it is how the receiver learns the tier *is*
+                    // the original rather than missing.
                     tracing::debug!(
                         asset_id = %asset.asset_id,
                         role = role_name,
                         "upload bundle: `original` sentinel references the original blob; \
-                         nothing to upload for this tier"
+                         shipping its manifest and no derivative bytes"
                     );
+                    if let Some(encoded) = encode_manifest(&manifest, asset, role_name) {
+                        set.manifests.push(encoded);
+                    }
                     continue;
                 }
                 Ok(None) => {
@@ -308,7 +333,7 @@ impl Workspace {
                 }
             }
 
-            let core = manifest.core;
+            let core = &manifest.core;
             let Some(plaintext) = read_derivative_bytes(&dir, &stem, role_name, &core.format)
             else {
                 tracing::warn!(
@@ -352,15 +377,52 @@ impl Workspace {
                 );
                 continue;
             }
-            blobs.push(DerivativeBlob {
+            let Some(encoded) = encode_manifest(&manifest, asset, role_name) else {
+                continue;
+            };
+            set.manifests.push(encoded);
+            set.blobs.push(DerivativeBlob {
                 role: core.role,
-                format: core.format,
+                format: core.format.clone(),
                 amk_version: core.amk_version.map(|v| v.0),
                 bytes: ciphertext,
                 ciphertext_hash: observed,
             });
         }
-        blobs
+        set
+    }
+}
+
+/// What [`Workspace::derivative_blobs`] reads back: the derivative ciphertexts and the signed
+/// manifests that open them, as the two [`UploadBundle`] fields they become.
+#[derive(Debug, Default)]
+struct DerivativeSet {
+    blobs: Vec<DerivativeBlob>,
+    manifests: Vec<Vec<u8>>,
+}
+
+/// The canonical CBOR of one signed derivative manifest — the `derivative_manifest` blob's
+/// bytes — or `None`, logged, when it will not encode.
+///
+/// Canonical for the reason the provenance blob is: one encoding, so the bytes this device
+/// ships and the bytes every receiver verifies are the same bytes, and a re-push of an
+/// unchanged library names the same content address.
+fn encode_manifest(
+    manifest: &DerivativeManifest,
+    asset: &AssetState,
+    role_name: &str,
+) -> Option<Vec<u8>> {
+    match cbor::to_canonical_vec(manifest) {
+        Ok(encoded) => Some(encoded),
+        Err(e) => {
+            tracing::warn!(
+                asset_id = %asset.asset_id,
+                role = role_name,
+                error = %e,
+                "upload bundle: a derivative manifest will not encode; skipping its tier"
+            );
+            None
+        }
     }
 }
 

@@ -26,6 +26,10 @@ Each state port therefore has **two adapters**, and which two is a property of t
 
 `serve` **never migrates**. On a durable boot it opens `DATABASE_URL`, reads `seaql_migrations`, and refuses a schema behind the one it was built for, naming `capsule-server-migration up`; an operator runs that command explicitly, before the rollout. A schema *ahead* of the binary is not fatal, because during a rolling deploy the migration runs first and the old replicas keep serving on it — so a migration that removes something an older binary reads has to be split in two. Migrating on start would instead race once per replica, and the server crate cannot link the migrator in any case (its `chrono` gate, [Dependencies](/design/dependencies/)). The check is `capsule-server::postgres::assert_schema_current`.
 
+Names alone do not prove the schema, because a migration edited after it ran keeps its name. Every migration therefore also records a **checksum** — lowercase-hex SHA-256 of its source file, `\r\n` normalised to `\n` — in the companion ledger `capsule_migration_checksums (version, checksum)`, written by the migrator in the same transaction as its `seaql_migrations` row and deleted by its `down`. The boot check compares that ledger against checksums compiled into the binary (the server hashes nothing at boot): an expected ordinal whose recorded checksum differs, or is absent, refuses with `PostgresError::SchemaDrift`, which deliberately does **not** name `capsule-server-migration up`, since nothing is pending and migrating cannot repair it. Ordinals unknown to the binary stay unchecked, by the same rolling-deploy asymmetry. A database migrated before the ledger existed is backfilled by `000017`, trust-on-first-record: it takes the current source of each applied migration as the text that ran.
+
+The rule this imposes: **an applied migration is never edited** — not its SQL, not its comments, not its formatting. Any byte change alters its checksum, the drift test in `capsule-server::postgres` fails in the same pull request, and a deployed database would refuse to boot. A schema change is always a new ordinal.
+
 ## Blob Store Layout
 
 ```text

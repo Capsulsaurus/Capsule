@@ -68,17 +68,33 @@
 //! | `capsule:upload:uploader:{uid}` | set | refreshed on open |
 //! | `capsule:upload:album:{album}` | set | refreshed on open |
 //! | `capsule:upload:pending:{uploader}:{hash}` | set | refreshed on open |
-//! | `capsule:upload:progress` | zset (score = `last_progress_at` µs) | none — heals only when the pressure sweep (`least_recently_progressed`) runs |
+//! | `capsule:upload:progress` | zset (score = `last_progress_at` µs) | none — heals when the pressure sweep (`least_recently_progressed`) walks it, which every `gc --apply` pass does over the whole set (#519) |
+//! | `capsule:counter:{kind}:{scope}` | hash (`hits`, `opened_at`) | the counter's window |
+//! | `capsule:counter_index:{kind}` | zset (score = window end µs), the partition its ceiling bounds | raised to the longest window, never lowered |
 //! | `capsule:challenge:{token}` | hash | challenge TTL |
 //! | `capsule:enroll:code:{spelling}` | hash, written under both spellings | code TTL |
 //! | `capsule:enroll:channel:{id}` | hash | channel TTL |
 //! | `capsule:enroll:mbox:{id}:{a\|b}` | list | the channel's remaining TTL |
+//! | `capsule:oidc:authorization:{state}` | hash | authorization TTL |
+//! | `capsule:oidc:device:{handle}` | hash | device-authorization TTL |
 //! | `capsule:cohorts:{uid}` | hash (`cohort_hash` → `first last`) | **none** |
 //!
 //! Scripts derive a few of these keys from a record they have just read (`SREM` the previous
 //! user's index on close, for instance) rather than taking them as `KEYS`. That is legal on a
 //! standalone server, which is the only topology this adapter supports; Redis Cluster is out of
 //! scope by the #403 decision record.
+//!
+//! # The server must run `maxmemory-policy noeviction`
+//!
+//! Every key above is correctness state, not cache. An evicting policy picks keys without
+//! regard to which fact they carry: `volatile-lru` drops any key with a TTL, and the index sets
+//! carry one, so it can remove `capsule:user_sessions:{uid}` while the sessions it lists live on
+//! — and *revoke all sessions* then revokes none of them — or remove a counter partition's index
+//! and so reopen its ceiling. Under `noeviction` a full server refuses the write instead, which
+//! every port reports as a failure and every consumer treats as a refusal. That is the
+//! fail-closed answer; silently forgetting state is not. The ceilings on the counter partitions
+//! and the collector's sweep of the progress set are what keep the key space bounded, so memory
+//! pressure is a sizing question rather than something eviction has to answer (#519).
 //!
 //! # Encoding
 //!
@@ -107,13 +123,15 @@ use uuid::Uuid;
 
 use super::auth::{AuthStateStore, CohortRecord, CohortStore, DEFAULT_SESSION_TTL, SessionRecord};
 use super::ceremony::{
-    CHALLENGE_TTL, ChallengeStore, ChannelStore, Direction, DrainOutcome, ENROLLMENT_CODE_TTL,
-    EnrollmentStore, PendingEnrollment, RELAY_CHANNEL_TTL, RelayChannel, RelayOutcome,
-    RelayPayload, RevokeAllChallenge,
+    CHALLENGE_TTL, ChallengeStore, ChannelStore, DEVICE_SLOW_DOWN_STEP, DevicePollSlot, Direction,
+    DrainOutcome, ENROLLMENT_CODE_TTL, EnrollmentStore, OIDC_AUTHORIZATION_TTL, OIDC_DEVICE_TTL,
+    OidcAuthorizationStore, OidcDeviceStore, PendingAuthorization, PendingDeviceAuthorization,
+    PendingEnrollment, RELAY_CHANNEL_TTL, RelayChannel, RelayOutcome, RelayPayload,
+    RevokeAllChallenge,
 };
 use super::ids::{
-    AlbumId, AssetId, ChallengeToken, ChannelId, EnrollmentCode, OwnerId, SessionId, UploadId,
-    UserId,
+    AlbumId, AssetId, ChallengeToken, ChannelId, DeviceCode, EnrollmentCode, OidcDeviceHandle,
+    OidcNonce, OidcState, OwnerId, PkceVerifier, SessionId, UploadId, UserId,
 };
 use super::upload::{
     AcceptedChunk, BlobRole, FinalizeClaim, LIFETIME_CAP, UploadSessionRecord, UploadSessionStatus,
@@ -473,15 +491,7 @@ fn decode_session(flat: Vec<String>) -> Result<SessionRecord, StoreError> {
 }
 
 fn parse_role(text: &str) -> Option<BlobRole> {
-    [
-        BlobRole::Original,
-        BlobRole::Derivative,
-        BlobRole::Metadata,
-        BlobRole::Provenance,
-        BlobRole::Backup,
-    ]
-    .into_iter()
-    .find(|role| role.as_str() == text)
+    BlobRole::from_token(text)
 }
 
 fn parse_status(text: &str) -> Option<UploadSessionStatus> {
@@ -596,6 +606,8 @@ const CHALLENGES: &str = "challenges";
 const ENROLLMENTS: &str = "enrollments";
 const CHANNELS: &str = "channels";
 const COHORTS: &str = "cohorts";
+const OIDC_AUTHORIZATIONS: &str = "oidc authorizations";
+const OIDC_DEVICES: &str = "oidc devices";
 
 /// The global eviction view.
 const PROGRESS_KEY: &str = "capsule:upload:progress";
@@ -656,6 +668,14 @@ fn channel_key(channel: &ChannelId) -> String {
 
 fn mailbox_key(channel: &ChannelId, direction: Direction) -> String {
     format!("capsule:enroll:mbox:{channel}:{}", direction.as_str())
+}
+
+fn oidc_authorization_key(state: &OidcState) -> String {
+    format!("capsule:oidc:authorization:{}", state.as_str())
+}
+
+fn oidc_device_key(handle: &OidcDeviceHandle) -> String {
+    format!("capsule:oidc:device:{}", handle.as_str())
 }
 
 fn cohorts_key(user: &UserId) -> String {
@@ -1013,17 +1033,27 @@ return {gone, mismatched, count}"
 // KEYS: progress zset. ARGV: now, inclusive score bound, limit. Returns
 // {gone, {{upload_id, last_progress_at}…}}, least recently progressed first; a member whose
 // record is gone or no longer evictable is dropped from the view here.
+//
+// Paged by a score cursor, not a growing offset: each page resumes at the last kept member's
+// score, inclusive, skipping only the kept members already seen at that one score (ties sort by
+// member, and a dropped member is gone from the set). A `LIMIT` offset is walked node by node, so
+// an offset that grew with every page made a K-member walk cost O(K²); this cursor makes each
+// page O(log N + T + 32), T being the kept members sharing the cursor's microsecond, and the
+// whole walk O(K log N) while T stays small. The reply still carries every kept member (#519).
 script!(
     LEAST_RECENTLY_PROGRESSED,
     "local gone = 0
 local found = {}
-local offset = 0
+local min = '-inf'
+local cursor = nil
+local skip = 0
 local limit = tonumber(ARGV[3])
 while #found < limit do
-  local page = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[2], 'LIMIT', offset, 32)
+  local page = redis.call('ZRANGEBYSCORE', KEYS[1], min, ARGV[2], 'WITHSCORES', 'LIMIT', skip, 32)
   if #page == 0 then break end
-  local kept = 0
-  for _, id in ipairs(page) do
+  for i = 1, #page, 2 do
+    local id = page[i]
+    local score = page[i + 1]
     local key = 'capsule:upload:session:' .. id
     local keep = false
     local r
@@ -1032,15 +1062,20 @@ while #found < limit do
       keep = r[1] == 'pending' or r[1] == 'uploading'
     end
     if keep then
-      kept = kept + 1
       found[#found + 1] = {id, r[2]}
+      if score == cursor then
+        skip = skip + 1
+      else
+        cursor = score
+        skip = 1
+      end
     else
       redis.call('ZREM', KEYS[1], id)
       gone = gone + 1
     end
   end
-  offset = offset + kept
-  if #page < 32 then break end
+  if cursor ~= nil then min = cursor end
+  if #page < 64 then break end
 end
 return {gone, found}"
 );
@@ -1066,6 +1101,34 @@ script!(
 redis.call('DEL', KEYS[1])
 if #record == 0 or expired(record, ARGV[1]) then return nil end
 return record"
+);
+
+// KEYS: device record. ARGV: now (µs), now (ms), slow-down step (s). Claims the next poll slot
+// in one step, so two racing polls cannot both find it free. Every value written is either an
+// argument Rust formatted or a small whole number of seconds, so no large Lua number is ever
+// converted to a string. Returns nil (no live ceremony), {'too_soon', interval}, or {'due',
+// field, value, …}.
+script!(
+    CLAIM_DEVICE,
+    "if not live(KEYS[1], ARGV[1]) then return nil end
+local interval = tonumber(redis.call('HGET', KEYS[1], 'interval_secs'))
+local polled = tonumber(redis.call('HGET', KEYS[1], 'polled_at_ms'))
+redis.call('HSET', KEYS[1], 'polled_at_ms', ARGV[2])
+if tonumber(ARGV[2]) - polled < interval * 1000 then
+  interval = interval + tonumber(ARGV[3])
+  redis.call('HSET', KEYS[1], 'interval_secs', tostring(interval))
+  return {'too_soon', tostring(interval)}
+end
+local reply = {'due'}
+for _, item in ipairs(redis.call('HGETALL', KEYS[1])) do reply[#reply + 1] = item end
+return reply"
+);
+
+// KEYS: device record. ARGV: now (µs), slow-down step (s). Returns the raised interval, or nil.
+script!(
+    SLOW_DOWN_DEVICE,
+    "if not live(KEYS[1], ARGV[1]) then return nil end
+return redis.call('HINCRBY', KEYS[1], 'interval_secs', ARGV[2])"
 );
 
 // KEYS: record. ARGV: now.
@@ -2168,6 +2231,303 @@ impl ChannelStore for ValkeyChannels {
     }
 }
 
+/// Valkey [`OidcAuthorizationStore`] (#460).
+///
+/// One hash per pending ceremony, written by `PUT_RECORD` and burned by `CONSUME_RECORD` — the
+/// same two scripts the revoke-all challenge runs on, because the shape is the same: a
+/// single-use, short-window credential whose read *is* its removal. Two callbacks racing one
+/// `state` are serialized by the server running the script, so exactly one gets the record.
+///
+/// # No ceiling, unlike the in-memory adapter
+///
+/// [`InMemoryOidcAuthorizations`](super::memory::InMemoryOidcAuthorizations) refuses past
+/// [`PENDING_AUTHORIZATION_CEILING`](super::memory::PENDING_AUTHORIZATION_CEILING) because its
+/// map is process heap, and a heap that grows with every unfinished ceremony is a crash. Here the
+/// key space is bounded without one. Every record carries a `PEXPIRE` at the store's lifetime, so
+/// the live set is at most the begin rate times the TTL; and the begin rate is bounded **before**
+/// this store is reached, because the authorize route charges `budgets::OIDC_AUTHORIZE` per
+/// allow-listed redirect host on the shared counter store, and every refused redirect is charged
+/// to one fixed bucket. A full server is `noeviction`'s to refuse (module docs), which this port
+/// reports as a failure and the route renders as a refusal. A ceiling here would need an index to
+/// count against, and that index would be a second statement of what the TTL already bounds.
+#[derive(Debug)]
+pub struct ValkeyOidcAuthorizations {
+    valkey: Valkey,
+    clock: Arc<dyn Clock>,
+    ttl: SignedDuration,
+}
+
+impl ValkeyOidcAuthorizations {
+    /// A store on `valkey` and `clock` with the given authorization lifetime.
+    pub fn new(valkey: Valkey, clock: Arc<dyn Clock>, ttl: SignedDuration) -> Self {
+        Self { valkey, clock, ttl }
+    }
+
+    /// A store with the [`OIDC_AUTHORIZATION_TTL`].
+    pub fn with_default_ttl(valkey: Valkey, clock: Arc<dyn Clock>) -> Self {
+        Self::new(valkey, clock, OIDC_AUTHORIZATION_TTL)
+    }
+}
+
+fn encode_authorization(record: &PendingAuthorization, expires_at: Timestamp) -> Vec<String> {
+    let mut encoder = Encoder::default();
+    encoder
+        .field("nonce", record.nonce.as_str())
+        .field("verifier", record.verifier.as_str())
+        .field("redirect_uri", &record.redirect_uri)
+        .field("binding_challenge", &record.binding_challenge)
+        .field("issued_at", record.issued_at)
+        .field("expires_at", micros(expires_at));
+    encoder.finish()
+}
+
+fn decode_authorization(flat: Vec<String>) -> Result<PendingAuthorization, StoreError> {
+    let fields = Fields::from_flat(OIDC_AUTHORIZATIONS, "PendingAuthorization", flat)?;
+    Ok(PendingAuthorization {
+        nonce: OidcNonce::new(fields.required("nonce")?),
+        verifier: PkceVerifier::new(fields.required("verifier")?),
+        redirect_uri: fields.required("redirect_uri")?.to_owned(),
+        binding_challenge: fields.required("binding_challenge")?.to_owned(),
+        issued_at: fields.timestamp("issued_at")?,
+    })
+}
+
+impl OidcAuthorizationStore for ValkeyOidcAuthorizations {
+    fn ttl(&self) -> SignedDuration {
+        self.ttl
+    }
+
+    fn begin<'a>(
+        &'a self,
+        state: &'a OidcState,
+        record: PendingAuthorization,
+    ) -> StoreFuture<'a, ()> {
+        Box::pin(async move {
+            let expires_at = deadline(self.clock.now(), self.ttl);
+            let mut args = vec![ttl_millis(self.ttl)];
+            args.extend(encode_authorization(&record, expires_at));
+            let _: i64 = self
+                .valkey
+                .eval(
+                    OIDC_AUTHORIZATIONS,
+                    &PUT_RECORD,
+                    &[oidc_authorization_key(state)],
+                    &args,
+                )
+                .await?;
+            tracing::debug!("recorded a pending OIDC authorization");
+            Ok(())
+        })
+    }
+
+    fn consume<'a>(
+        &'a self,
+        state: &'a OidcState,
+    ) -> StoreFuture<'a, Option<PendingAuthorization>> {
+        Box::pin(async move {
+            // Burned on every attempt, live or not: `CONSUME_RECORD` deletes before it judges.
+            let flat: Option<Vec<String>> = self
+                .valkey
+                .eval(
+                    OIDC_AUTHORIZATIONS,
+                    &CONSUME_RECORD,
+                    &[oidc_authorization_key(state)],
+                    &[micros(self.clock.now()).to_string()],
+                )
+                .await?;
+            tracing::debug!(
+                hit = flat.is_some(),
+                "consumed a pending OIDC authorization"
+            );
+            flat.map(decode_authorization).transpose()
+        })
+    }
+}
+
+/// Valkey [`OidcDeviceStore`] (issue #635).
+///
+/// One hash per pending device ceremony under `capsule:oidc:device:{handle}`, written by
+/// `PUT_RECORD` and ended by `CONSUME_RECORD` as the authorization store's are. What the
+/// authorization store does not have is the poll schedule: `polled_at_ms` (whole milliseconds,
+/// stamped by the store) and `interval_secs` live in the same hash, and `CLAIM_DEVICE` reads and
+/// advances both in one script, so two polls racing one handle claim one slot.
+///
+/// No ceiling, for the reason [`ValkeyOidcAuthorizations`] has none: every record carries a
+/// `PEXPIRE` at the store's lifetime, and the begin is budgeted deployment-wide before this
+/// store is reached.
+#[derive(Debug)]
+pub struct ValkeyOidcDevices {
+    valkey: Valkey,
+    clock: Arc<dyn Clock>,
+    ttl: SignedDuration,
+}
+
+impl ValkeyOidcDevices {
+    /// A store on `valkey` and `clock` with the given ceremony lifetime.
+    pub fn new(valkey: Valkey, clock: Arc<dyn Clock>, ttl: SignedDuration) -> Self {
+        Self { valkey, clock, ttl }
+    }
+
+    /// A store with the [`OIDC_DEVICE_TTL`].
+    pub fn with_default_ttl(valkey: Valkey, clock: Arc<dyn Clock>) -> Self {
+        Self::new(valkey, clock, OIDC_DEVICE_TTL)
+    }
+}
+
+fn encode_device(
+    record: &PendingDeviceAuthorization,
+    polled_at: Timestamp,
+    expires_at: Timestamp,
+) -> Vec<String> {
+    let mut encoder = Encoder::default();
+    encoder
+        .field("device_code", record.device_code.as_str())
+        .field("binding_challenge", &record.binding_challenge)
+        .field("interval_secs", record.interval.as_secs())
+        .field("issued_at", record.issued_at)
+        .field("polled_at_ms", polled_at.as_millisecond())
+        .field("expires_at", micros(expires_at));
+    encoder.finish()
+}
+
+fn decode_device(flat: Vec<String>) -> Result<PendingDeviceAuthorization, StoreError> {
+    let fields = Fields::from_flat(OIDC_DEVICES, "PendingDeviceAuthorization", flat)?;
+    Ok(PendingDeviceAuthorization {
+        device_code: DeviceCode::new(fields.required("device_code")?),
+        binding_challenge: fields.required("binding_challenge")?.to_owned(),
+        interval: SignedDuration::from_secs(fields.number("interval_secs")?),
+        issued_at: fields.timestamp("issued_at")?,
+    })
+}
+
+/// What `CLAIM_DEVICE` answered, decoded.
+fn decode_claim(reply: Option<Vec<String>>) -> Result<DevicePollSlot, StoreError> {
+    let corrupt = |detail: String| StoreError::Corrupt {
+        store: OIDC_DEVICES,
+        record: "DevicePollSlot",
+        detail,
+    };
+    let Some(mut reply) = reply else {
+        return Ok(DevicePollSlot::Unknown);
+    };
+    if reply.is_empty() {
+        return Err(corrupt("the claim answered an empty reply".to_owned()));
+    }
+    let tag = reply.remove(0);
+    match tag.as_str() {
+        "due" => Ok(DevicePollSlot::Due(decode_device(reply)?)),
+        "too_soon" => {
+            let interval = reply
+                .first()
+                .and_then(|secs| secs.parse::<i64>().ok())
+                .ok_or_else(|| corrupt(format!("the raised interval is unreadable: {reply:?}")))?;
+            Ok(DevicePollSlot::TooSoon {
+                interval: SignedDuration::from_secs(interval),
+            })
+        }
+        other => Err(corrupt(format!(
+            "the claim answered an unknown tag {other:?}"
+        ))),
+    }
+}
+
+impl OidcDeviceStore for ValkeyOidcDevices {
+    fn ttl(&self) -> SignedDuration {
+        self.ttl
+    }
+
+    fn begin<'a>(
+        &'a self,
+        handle: &'a OidcDeviceHandle,
+        record: PendingDeviceAuthorization,
+    ) -> StoreFuture<'a, ()> {
+        Box::pin(async move {
+            let now = self.clock.now();
+            let mut args = vec![ttl_millis(self.ttl)];
+            args.extend(encode_device(&record, now, deadline(now, self.ttl)));
+            let _: i64 = self
+                .valkey
+                .eval(OIDC_DEVICES, &PUT_RECORD, &[oidc_device_key(handle)], &args)
+                .await?;
+            tracing::debug!("recorded a pending OIDC device authorization");
+            Ok(())
+        })
+    }
+
+    fn claim<'a>(&'a self, handle: &'a OidcDeviceHandle) -> StoreFuture<'a, DevicePollSlot> {
+        Box::pin(async move {
+            let now = self.clock.now();
+            let reply: Option<Vec<String>> = self
+                .valkey
+                .eval(
+                    OIDC_DEVICES,
+                    &CLAIM_DEVICE,
+                    &[oidc_device_key(handle)],
+                    &[
+                        micros(now).to_string(),
+                        now.as_millisecond().to_string(),
+                        DEVICE_SLOW_DOWN_STEP.as_secs().to_string(),
+                    ],
+                )
+                .await?;
+            let slot = decode_claim(reply)?;
+            tracing::debug!(
+                due = matches!(slot, DevicePollSlot::Due(_)),
+                known = !matches!(slot, DevicePollSlot::Unknown),
+                "claimed a poll on an OIDC device authorization"
+            );
+            Ok(slot)
+        })
+    }
+
+    fn slow_down<'a>(
+        &'a self,
+        handle: &'a OidcDeviceHandle,
+    ) -> StoreFuture<'a, Option<SignedDuration>> {
+        Box::pin(async move {
+            let raised: Option<i64> = self
+                .valkey
+                .eval(
+                    OIDC_DEVICES,
+                    &SLOW_DOWN_DEVICE,
+                    &[oidc_device_key(handle)],
+                    &[
+                        micros(self.clock.now()).to_string(),
+                        DEVICE_SLOW_DOWN_STEP.as_secs().to_string(),
+                    ],
+                )
+                .await?;
+            tracing::debug!(
+                hit = raised.is_some(),
+                "raised an OIDC device authorization's interval"
+            );
+            Ok(raised.map(SignedDuration::from_secs))
+        })
+    }
+
+    fn finish<'a>(
+        &'a self,
+        handle: &'a OidcDeviceHandle,
+    ) -> StoreFuture<'a, Option<PendingDeviceAuthorization>> {
+        Box::pin(async move {
+            let flat: Option<Vec<String>> = self
+                .valkey
+                .eval(
+                    OIDC_DEVICES,
+                    &CONSUME_RECORD,
+                    &[oidc_device_key(handle)],
+                    &[micros(self.clock.now()).to_string()],
+                )
+                .await?;
+            tracing::debug!(
+                hit = flat.is_some(),
+                "finished an OIDC device authorization"
+            );
+            flat.map(decode_device).transpose()
+        })
+    }
+}
+
 // ===========================================================================================
 // The bundle
 // ===========================================================================================
@@ -2183,6 +2543,8 @@ pub struct ValkeyStores {
     enrollments: Arc<ValkeyEnrollments>,
     channels: Arc<ValkeyChannels>,
     cohorts: Arc<ValkeyCohorts>,
+    oidc_authorizations: Arc<ValkeyOidcAuthorizations>,
+    oidc_devices: Arc<ValkeyOidcDevices>,
 }
 
 impl ValkeyStores {
@@ -2201,6 +2563,8 @@ impl ValkeyStores {
             CHALLENGE_TTL,
             ENROLLMENT_CODE_TTL,
             RELAY_CHANNEL_TTL,
+            OIDC_AUTHORIZATION_TTL,
+            OIDC_DEVICE_TTL,
         ))
     }
 
@@ -2215,9 +2579,15 @@ impl ValkeyStores {
         ttl: SignedDuration,
     ) -> Result<Self, StoreError> {
         let valkey = Valkey::connect(url).await?;
-        Ok(Self::with_ttl(valkey, clock, ttl, ttl, ttl, ttl, ttl))
+        Ok(Self::with_ttl(
+            valkey, clock, ttl, ttl, ttl, ttl, ttl, ttl, ttl,
+        ))
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one lifetime per store, named in the order the stores are declared"
+    )]
     fn with_ttl(
         valkey: Valkey,
         clock: Arc<dyn Clock>,
@@ -2226,6 +2596,8 @@ impl ValkeyStores {
         challenge: SignedDuration,
         enrollment: SignedDuration,
         channel: SignedDuration,
+        oidc_authorization: SignedDuration,
+        oidc_device: SignedDuration,
     ) -> Self {
         Self {
             auth: Arc::new(ValkeyAuthState::new(
@@ -2248,7 +2620,17 @@ impl ValkeyStores {
                 Arc::clone(&clock),
                 enrollment,
             )),
-            channels: Arc::new(ValkeyChannels::new(valkey.clone(), clock, channel)),
+            channels: Arc::new(ValkeyChannels::new(
+                valkey.clone(),
+                Arc::clone(&clock),
+                channel,
+            )),
+            oidc_authorizations: Arc::new(ValkeyOidcAuthorizations::new(
+                valkey.clone(),
+                Arc::clone(&clock),
+                oidc_authorization,
+            )),
+            oidc_devices: Arc::new(ValkeyOidcDevices::new(valkey.clone(), clock, oidc_device)),
             cohorts: Arc::new(ValkeyCohorts::new(valkey.clone())),
             valkey,
         }
@@ -2287,6 +2669,16 @@ impl ValkeyStores {
     /// The device-cohort map.
     pub fn cohorts(&self) -> Arc<ValkeyCohorts> {
         Arc::clone(&self.cohorts)
+    }
+
+    /// The pending OIDC authorization store.
+    pub fn oidc_authorizations(&self) -> Arc<ValkeyOidcAuthorizations> {
+        Arc::clone(&self.oidc_authorizations)
+    }
+
+    /// The pending OIDC device authorization store.
+    pub fn oidc_devices(&self) -> Arc<ValkeyOidcDevices> {
+        Arc::clone(&self.oidc_devices)
     }
 }
 
@@ -2374,6 +2766,112 @@ mod tests {
             "absent stays absent"
         );
         assert_eq!(decode_session(flat).expect("decodes"), record);
+    }
+
+    #[test]
+    fn a_pending_authorization_round_trips_through_its_hash_encoding() {
+        let record = PendingAuthorization {
+            nonce: OidcNonce::new("nonce"),
+            verifier: PkceVerifier::new("verifier"),
+            redirect_uri: "http://127.0.0.1:4242/cb?x=1".to_owned(),
+            binding_challenge: "binding".to_owned(),
+            issued_at: deadline(Timestamp::UNIX_EPOCH, SignedDuration::from_nanos(1)),
+        };
+        let flat = encode_authorization(&record, Timestamp::UNIX_EPOCH);
+        assert!(flat.contains(&"expires_at".to_owned()));
+        assert_eq!(decode_authorization(flat).expect("decodes"), record);
+        assert_eq!(
+            oidc_authorization_key(&OidcState::new("s")),
+            "capsule:oidc:authorization:s"
+        );
+    }
+
+    #[test]
+    fn a_pending_device_authorization_round_trips_through_its_hash_encoding() {
+        let record = PendingDeviceAuthorization {
+            device_code: DeviceCode::new("device-code"),
+            binding_challenge: "binding".to_owned(),
+            interval: SignedDuration::from_secs(10),
+            issued_at: deadline(Timestamp::UNIX_EPOCH, SignedDuration::from_nanos(1)),
+        };
+        let flat = encode_device(&record, Timestamp::UNIX_EPOCH, Timestamp::UNIX_EPOCH);
+        for field in ["expires_at", "polled_at_ms", "interval_secs"] {
+            assert!(flat.contains(&field.to_owned()), "{field} is encoded");
+        }
+        assert_eq!(decode_device(flat).expect("decodes"), record);
+        assert_eq!(
+            oidc_device_key(&OidcDeviceHandle::new("h")),
+            "capsule:oidc:device:h"
+        );
+        // The script reads the two schedule fields by these names.
+        for field in ["'interval_secs'", "'polled_at_ms'"] {
+            assert!(CLAIM_DEVICE.source.contains(field), "{field}");
+        }
+        assert!(SLOW_DOWN_DEVICE.source.contains("'interval_secs'"));
+    }
+
+    #[test]
+    fn a_claim_reply_decodes_to_its_slot() {
+        let record = PendingDeviceAuthorization {
+            device_code: DeviceCode::new("device-code"),
+            binding_challenge: "binding".to_owned(),
+            interval: SignedDuration::from_secs(5),
+            issued_at: Timestamp::UNIX_EPOCH,
+        };
+        let mut due = vec!["due".to_owned()];
+        due.extend(encode_device(
+            &record,
+            Timestamp::UNIX_EPOCH,
+            Timestamp::UNIX_EPOCH,
+        ));
+        assert_eq!(
+            decode_claim(Some(due)).expect("decodes"),
+            DevicePollSlot::Due(record)
+        );
+        assert_eq!(
+            decode_claim(Some(vec!["too_soon".to_owned(), "10".to_owned()])).expect("decodes"),
+            DevicePollSlot::TooSoon {
+                interval: SignedDuration::from_secs(10)
+            }
+        );
+        assert_eq!(
+            decode_claim(None).expect("decodes"),
+            DevicePollSlot::Unknown
+        );
+        for broken in [
+            vec![],
+            vec!["too_soon".to_owned()],
+            vec!["too_soon".to_owned(), "1.5".to_owned()],
+            vec!["later".to_owned()],
+        ] {
+            assert!(
+                matches!(decode_claim(Some(broken)), Err(StoreError::Corrupt { .. })),
+                "an unreadable claim is corrupt, not a slot"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pending_authorization_missing_a_field_is_corrupt() {
+        let mut flat = encode_authorization(
+            &PendingAuthorization {
+                nonce: OidcNonce::new("nonce"),
+                verifier: PkceVerifier::new("verifier"),
+                redirect_uri: "http://127.0.0.1:4242/cb".to_owned(),
+                binding_challenge: "binding".to_owned(),
+                issued_at: Timestamp::UNIX_EPOCH,
+            },
+            Timestamp::UNIX_EPOCH,
+        );
+        let at = flat
+            .iter()
+            .position(|field| field == "verifier")
+            .expect("the verifier is encoded");
+        flat.drain(at..at + 2);
+        assert!(matches!(
+            decode_authorization(flat),
+            Err(StoreError::Corrupt { .. })
+        ));
     }
 
     #[test]

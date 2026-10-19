@@ -151,6 +151,11 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         command: RepairCommands,
     },
+    /// Issue and revoke view-only share links on the server
+    Share {
+        #[command(subcommand)]
+        command: ShareCommands,
+    },
     /// Run the offline end-to-end data-plane showcase (real cryptography, no network)
     Demo {
         /// Working directory for the demo libraries (a temp dir is used if omitted)
@@ -264,6 +269,47 @@ pub(crate) enum RepairCommands {
 }
 
 #[derive(Subcommand, Debug)]
+pub(crate) enum ShareCommands {
+    /// Issue a view-only share link for an album or one asset, and print the URL to send
+    Create {
+        /// Path to the Capsule library
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// Share every asset of this album that is not in trash
+        #[arg(
+            long,
+            value_name = "ALBUM_ID",
+            required_unless_present = "asset",
+            conflicts_with = "asset"
+        )]
+        album: Option<Uuid>,
+        /// Share this one asset
+        #[arg(long, value_name = "ASSET_ID")]
+        asset: Option<Uuid>,
+        /// When the link stops opening, as an RFC 3339 timestamp (e.g. 2026-12-31T23:59:59Z)
+        #[arg(long, value_name = "TIMESTAMP")]
+        expires_at: Option<String>,
+        /// Read the library passphrase from stdin instead of prompting, so the command
+        /// works in scripts and CI where there is no terminal.
+        #[arg(long)]
+        passphrase_stdin: bool,
+        /// Protect the link with a passphrase the recipient must enter as well as open the URL
+        #[arg(long)]
+        protect: bool,
+        /// With --protect, read the link passphrase from stdin instead of prompting (the line
+        /// after the library passphrase when --passphrase-stdin is also given)
+        #[arg(long, requires = "protect")]
+        link_passphrase_stdin: bool,
+    },
+    /// Revoke a share link, so its URL stops opening
+    Revoke {
+        /// The link's opaque id: the 32 hex characters after /s/ in its URL
+        #[arg(value_name = "OPAQUE_ID")]
+        opaque_id: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 pub(crate) enum AuthCommands {
     /// Create a Capsule account and sign in
     Register {
@@ -284,6 +330,47 @@ pub(crate) enum AuthCommands {
         /// works in scripts and CI where there is no terminal.
         #[arg(long)]
         password_stdin: bool,
+        /// Sign in through the server's identity provider in a browser instead of with a
+        /// password. The server must allow loopback redirects (OIDC_ALLOW_LOOPBACK_REDIRECT=true).
+        #[arg(long, conflicts_with_all = ["email", "password_stdin"])]
+        oidc: bool,
+        /// With --oidc, print the sign-in address without opening a browser
+        #[arg(long, requires = "oidc")]
+        no_browser: bool,
+        /// With --oidc, sign in from another device: print an address and a code instead of
+        /// using a browser here
+        #[arg(
+            long,
+            requires = "oidc",
+            conflicts_with_all = ["no_browser", "email", "password_stdin"]
+        )]
+        device: bool,
+    },
+    /// Set up recovery for a library: bind it to the signed-in account and store its recovery
+    /// backup under a new recovery secret
+    Escrow {
+        /// Path to the Capsule library; it must not hold any assets yet
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// Read the library passphrase from stdin instead of prompting
+        #[arg(long)]
+        passphrase_stdin: bool,
+        /// Replace the account's existing recovery backup; the previous recovery secret stops
+        /// working
+        #[arg(long)]
+        replace: bool,
+    },
+    /// Recover the signed-in account onto this machine from its recovery backup
+    Recover {
+        /// Directory for the recovered library; it must not hold a library yet
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// Read the recovery secret from the first line of stdin instead of prompting
+        #[arg(long)]
+        recovery_secret_stdin: bool,
+        /// Read the new library passphrase from the next line of stdin instead of prompting
+        #[arg(long)]
+        passphrase_stdin: bool,
     },
     /// Logout from Capsule
     Logout,

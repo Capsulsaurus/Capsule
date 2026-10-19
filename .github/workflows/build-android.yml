@@ -98,10 +98,10 @@ jobs:
           install: false
 
       # `-Pcapsule.wireFfi` turns on the S-F3 FFI-staging tasks in :core: generate the
-      # uniffi Kotlin bindings (host libcapsule_core) + build the per-ABI JNI libs via
-      # cargo-ndk, both as Gradle build inputs. assembleDebug proves the app consumes
-      # them; :core:test runs the software-signer FfiWorkspace smoke on the JVM (JNA
-      # loads the host libcapsule_core).
+      # `capsule_sdk` uniffi Kotlin bindings (host libcapsule_sdk) + build the per-ABI
+      # libcapsule_sdk.so JNI libs via cargo-ndk, both as Gradle build inputs.
+      # assembleDebug proves the app consumes them; :core:test runs the software-signer
+      # FfiWorkspace smoke on the JVM (JNA loads the host libcapsule_sdk).
       - name: Build app + run :core JVM smoke
         run: ./gradlew :android:assembleDebug :core:test -Pcapsule.wireFfi
 

@@ -39,8 +39,9 @@ written *against*, and a port with two implementations before it has one suite i
 implementations will disagree.
 
 Every durable port now has the second implementation on Postgres (#402, #446), and every volatile
-one on Valkey (#403), each passing the same case list as its double against a container. The two
-OIDC stores are the exception (#460): a durable `serve` that configures OIDC is refused.
+one on Valkey (#403), each passing the same case list as its double against a container — the two
+OIDC stores included (#460): the pending ceremonies are on Valkey, and the federated accounts are
+rows of the Postgres account table, with a null credential no password can sign in to.
 
 **The test suite still runs without a container.** Every Postgres case is gated on
 `CAPSULE_TEST_POSTGRES=1` and prints one line naming itself when it is skipped:
@@ -121,25 +122,35 @@ manufacture custody evidence, and a different HKDF label over the same input is 
 `serve --memory` derives it, because a development server's whole state is discarded on exit.
 
 `boot::assemble` is the one composition root. `--memory` takes every in-crate adapter over a real
-filesystem blob store; anything else refuses, so a deployment that forgot `VALKEY_URL` fails
-closed rather than coming up on state it loses at the next restart.
+filesystem blob store; anything else needs both `DATABASE_URL` and `VALKEY_URL`, and a deployment
+that forgot either is refused at startup with exit code 2, naming every missing variable at once,
+rather than coming up on state it loses at the next restart.
 
 Logs go to stderr. stdout is a data channel: `serve` writes one `listening on <url>` line there,
 which is how a `--listen 127.0.0.1:0` caller learns its port.
 
-`gc`, `purge` and `scrub` need a blob root and no key material at all. Dry run is the default for
-the two that write; `scrub` mutates nothing and exits non-zero on a non-empty report.
+`gc`, `purge` and `scrub` need a blob root and no key material at all; without `--memory` they
+read the durable stores, so they need `DATABASE_URL` and `VALKEY_URL` as `serve` does. Dry run is the default for
+the two that write; `scrub` mutates nothing and exits non-zero on a non-empty report. `gc --apply`
+also sweeps the upload-progress set, the one Valkey index with no lifetime of its own, so run it
+on a schedule rather than only when blobs need collecting (#519).
+
+Valkey must run with `--maxmemory-policy noeviction`, as `compose.yaml` does. Every key the
+server writes there is correctness state rather than cache: an evicting policy such as
+`volatile-lru` can drop a per-user session index while its sessions live on, and *revoke all
+sessions* then revokes none of them. Under `noeviction` a full server refuses writes and the server
+fails closed; the per-kind counter ceilings and the `gc --apply` sweep keep the key space bounded,
+so size `maxmemory` for live state rather than relying on eviction to make room.
 
 ## What is owed
 
-**A durable `serve` runs, except with OIDC configured.** It opens the pool from `DATABASE_URL`
-and refuses a schema it was not built for, naming `capsule-server-migration up`. It then proves
-`VALKEY_URL` answers `PING`, and builds every port on one of the two: Postgres for every record a
-restart must not lose, Valkey for the session, upload-session, ceremony and counter state. The
-OIDC ceremony and federated-account stores have in-memory adapters only (#460), so a durable
-`serve` with `OIDC_ISSUER` set refuses and names that issue.
+**A durable `serve` runs, OIDC included.** It opens the pool from `DATABASE_URL` and refuses a
+schema it was not built for, naming `capsule-server-migration up`. It then proves `VALKEY_URL`
+answers `PING`, and builds every port on one of the two: Postgres for every record a restart must
+not lose — the accounts, federated ones among them (#460) — and Valkey for the session,
+upload-session, ceremony and counter state, the pending OIDC authorizations among them.
 
-Refusing rather than filling those two ports with in-memory adapters is the point:
+No port on that path is in-memory:
 [Filesystem — Server](../capsule-docs/src/content/docs/design/filesystem/server.md) says required
 means required, and a server that came up holding state it will lose on the next restart is worse
 than one that does not start. What `--memory` buys is not durability, but a running surface

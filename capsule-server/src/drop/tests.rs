@@ -64,10 +64,13 @@ fn entry(drop_id: &str, seed: u8) -> InboxEntry {
 async fn store_with(caps: LinkCaps) -> (InMemoryDrops, String) {
     let store = InMemoryDrops::new();
     let id = opaque(1);
-    store
-        .provision(link(&id, caps))
-        .await
-        .expect("the store provisions");
+    assert_eq!(
+        store
+            .provision(link(&id, caps))
+            .await
+            .expect("the store provisions"),
+        LinkProvisionOutcome::Provisioned
+    );
     (store, id)
 }
 

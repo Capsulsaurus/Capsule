@@ -57,9 +57,11 @@ pub(super) struct StillSource<'a> {
     pub(super) plaintext: &'a [u8],
     /// Its lowercase extension without the dot, `""` when it has none.
     pub(super) ext: &'a str,
-    /// Where it came from — for logs only; the bytes above are authoritative.
+    /// Where it came from — for logs only; the bytes above are authoritative. An adopted guest
+    /// drop has no path, so it passes a `drop:{id}` label instead.
     pub(super) src: &'a Path,
-    /// What `capsule_core::exif` read off it, the fallback for dimensions.
+    /// What `capsule_core::exif` read off it, the fallback for dimensions. An adopted drop
+    /// passes the empty extract: its bytes arrive in memory and nothing has scanned them.
     pub(super) exif: &'a ExifExtract,
 }
 
@@ -482,7 +484,7 @@ impl Workspace {
         // Reported as `DecodeFailed` — the "a supported path produced no derivative and somebody
         // should look at it" bucket — so the run summary counts it instead of staying silent.
         let generated = guarded("derivatives", || {
-            generate_still_derivatives(&decoded, &DerivativeTier::GENERATED, &ctx)
+            generate_still_derivatives(&decoded, DerivativeTier::GENERATED, &ctx)
         });
         let derivatives = match generated {
             Ok(derivatives) => derivatives,
@@ -500,7 +502,10 @@ impl Workspace {
                 return Err(LifecycleError::Io(format!("derivative signing: {error}")));
             }
             // Everything else is about *pixels*: a codec refused a frame, a resize was rejected,
-            // a third-party encoder panicked. The signed original, its dimensions and its
+            // a third-party encoder panicked. A refusal on *some* pairs never reaches here —
+            // generation records it as a deferral and ships the rest, so a failed preview AVIF
+            // does not cost the thumbnail JXL — this arm is the asset with no derivative at all.
+            // The signed original, its dimensions and its
             // placeholder are all still right, and failing the import would trade a missing
             // thumbnail for a missing backup — which is the whole of `S-B13`'s reasoning and
             // this module's stated contract. Reported as `DecodeFailed`, the "a supported path
@@ -652,6 +657,19 @@ mod tests {
     use crate::media::Decoder as _;
     use crate::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1};
 
+    /// Delivery formats this build encodes: JXL, plus AVIF under `media-linked-codecs`.
+    const DELIVERY_FORMATS_ENCODED: usize = if cfg!(feature = "media-linked-codecs") {
+        2
+    } else {
+        1
+    };
+
+    /// Manifests a still larger than the thumbnail cap yields: every generated tier times every
+    /// encoded delivery format.
+    fn encoded_pairs_per_large_still() -> usize {
+        DerivativeTier::GENERATED.len() * DELIVERY_FORMATS_ENCODED
+    }
+
     /// A deterministic RGB gradient, `width` x `height`, as interleaved RGB `u16`.
     fn frame(width: u32, height: u32) -> rawshift_image::core::image::RgbImage {
         let (w, h) = (width as usize, height as usize);
@@ -795,7 +813,8 @@ mod tests {
         assert_eq!(receipt.derivatives, DerivativeStatus::Decoded);
         assert_eq!(
             receipt.deferred_formats, 2,
-            "the JXL master and the AVIF delivery variant have no encoder in this build"
+            "two (tier, format) pairs have no encoder: the thumbnail's AVIF and WebP without \
+             `media-linked-codecs`, or WebP for both the thumbnail and the preview with it"
         );
 
         let sidecar = sidecar_of(lib.path(), receipt.asset_id);
@@ -821,6 +840,49 @@ mod tests {
             sidecar.verify(&ws.user_ik_public()),
             "the sidecar signature covers the placeholder it now carries"
         );
+    }
+
+    /// **Issue #588, through the real import.** With `media-avif-decode` an AVIF original is a
+    /// decodable still: it imports `Decoded`, with pixel dimensions, a placeholder and a JXL
+    /// thumbnail, where without the feature it would be `DeferredNoCodec`. The source AVIF comes
+    /// from ravif (`media-linked-codecs`) because the suite commits no binary fixtures.
+    #[cfg(all(feature = "media-avif-decode", feature = "media-linked-codecs"))]
+    #[test]
+    fn an_avif_original_imports_with_dimensions_an_lqip_and_derivatives() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let (mut ws, album) = workspace(lib.path());
+
+        let avif = encode_rgb_image_to_vec(
+            &frame(512, 384),
+            &ImageMetadata::default(),
+            &EncodeOptions::AvifRavif(rawshift_image::formats::export::RavifEncodeConfig {
+                common: common(MetadataEmbedOptions::none()),
+                quality: 90,
+                speed: 6,
+            }),
+        )
+        .expect("the fixture AVIF encodes");
+        let receipt = import(&mut ws, album, src.path(), "photo.avif", &avif);
+        assert_eq!(receipt.derivatives, DerivativeStatus::Decoded);
+
+        let sidecar = sidecar_of(lib.path(), receipt.asset_id);
+        assert_eq!(sidecar.content_type, "image/avif");
+        let dimensions = sidecar.dimensions.as_ref().expect("pixel dimensions");
+        assert_eq!((dimensions.width, dimensions.height), (512, 384));
+        assert!(
+            sidecar.lqip.is_some(),
+            "the placeholder came from the AVIF's pixels"
+        );
+        assert!(sidecar.verify(&ws.user_ik_public()));
+
+        let stem = receipt.asset_id.simple().to_string();
+        let thumb =
+            derivatives_dir(lib.path(), receipt.asset_id).join(format!("{stem}.thumbnail.jxl"));
+        let decoded = crate::media::RawshiftDecoder
+            .decode(&fs::read(&thumb).unwrap(), "jxl")
+            .expect("the thumbnail decodes");
+        assert_eq!((decoded.width(), decoded.height()), (256, 192));
     }
 
     /// The sidecar's dimensions are the **upright** ones. A quarter-turned JPEG's stored width
@@ -871,7 +933,10 @@ mod tests {
         let bytes = fs::read(&thumb).unwrap();
         let manifests: Vec<DerivativeManifest> =
             cbor::from_slice(&fs::read(&bundle_path).unwrap()).expect("the bundle decodes");
-        assert_eq!(manifests.len(), 1);
+        // One manifest per generated (tier, format) pair: the thumbnail JXL alone without
+        // `media-linked-codecs`, thumbnail and preview in JXL and AVIF with it. The thumbnail
+        // JXL is first either way.
+        assert_eq!(manifests.len(), encoded_pairs_per_large_still());
         let core = &manifests[0].core;
         assert_ne!(
             core.ciphertext_hash,
@@ -914,9 +979,18 @@ mod tests {
         let original = png(128, 96);
         let receipt = import(&mut ws, album, src.path(), "small.png", &original);
         assert_eq!(receipt.derivatives, DerivativeStatus::Decoded);
+        // The sentinel satisfies the thumbnail tier, so nothing is deferred there. The preview
+        // tier (generated under `media-linked-codecs`) has no cap, so it is a re-encode and
+        // defers whatever this build cannot encode — WebP.
+        let preview_deferred: u32 = if DerivativeTier::GENERATED.contains(&DerivativeTier::Preview)
+        {
+            (DerivativeFormat::STILL_DELIVERY_ORDER.len() - DELIVERY_FORMATS_ENCODED) as u32
+        } else {
+            0
+        };
         assert_eq!(
-            receipt.deferred_formats, 0,
-            "the sentinel satisfies the tier, so nothing was deferred"
+            receipt.deferred_formats, preview_deferred,
+            "the sentinel satisfies the thumbnail tier, so nothing was deferred for it"
         );
 
         let dir = derivatives_dir(lib.path(), receipt.asset_id);
@@ -926,16 +1000,21 @@ mod tests {
             .unwrap()
             .flatten()
             .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| !name.contains(".preview."))
             .collect();
         assert_eq!(
             files,
             vec![format!("{stem}.derivatives.cbor")],
-            "the sentinel writes its manifest and no derivative bytes"
+            "the sentinel writes its manifest and no thumbnail bytes"
         );
 
         let manifests: Vec<DerivativeManifest> =
             cbor::from_slice(&fs::read(dir.join(format!("{stem}.derivatives.cbor"))).unwrap())
                 .expect("the bundle decodes");
+        let manifests: Vec<DerivativeManifest> = manifests
+            .into_iter()
+            .filter(|m| m.core.role == DerivativeRole::Thumbnail)
+            .collect();
         assert_eq!(manifests.len(), 1);
         assert_eq!(manifests[0].core.format, "original");
         // The sentinel references the original *blob*: it signs the original manifest's own
@@ -1100,6 +1179,152 @@ mod tests {
         for id in [deferred.asset_id, video.asset_id] {
             assert_eq!(
                 ws.verify(&id).unwrap(),
+                crate::crypto::verify_asset::VerifyOutcome::Accept
+            );
+        }
+    }
+
+    /// Seal `bytes` as a guest drop claiming `content_type`, stage it, and adopt it.
+    fn adopt(
+        ws: &mut Workspace,
+        album: Uuid,
+        bytes: &[u8],
+        content_type: &str,
+    ) -> (crate::drop::AdoptedDrop, Vec<u8>) {
+        use crate::drop::{DropAdopter, LinkCaps, UploadLinkIssuer, seal_drop};
+
+        let link = UploadLinkIssuer::create_link(ws, LinkCaps::default(), None).unwrap();
+        let sealed = seal_drop(bytes, &link.drop_pubkey, content_type).unwrap();
+        let ciphertext = sealed.ciphertext.clone();
+        let drop_id = ws.receive_drop(link.link_id, sealed).unwrap();
+        let adopted = DropAdopter::adopt(ws, drop_id, album).expect("the adoption commits");
+        (adopted, ciphertext)
+    }
+
+    /// **Issue #555's acceptance case.** An adopted drop runs the import's still pipeline: a
+    /// decodable JPEG gets pixel dimensions, a chromahash LQIP and a header-derived
+    /// `content_type` in its signed sidecar, and signed thumbnail derivatives on disk — under
+    /// their own AMK-derived keys, beside an original whose key is the guest's wrapped `K` —
+    /// and the asset still `verify`-accepts and pushes with those derivatives in its bundle.
+    #[test]
+    fn a_decodable_drop_adopts_with_dimensions_an_lqip_and_derivatives() {
+        let lib = TempDir::new().unwrap();
+        let (mut ws, album) = workspace(lib.path());
+
+        // The guest claims a generic type; the header is what the sidecar records.
+        let (adopted, staged) = adopt(
+            &mut ws,
+            album,
+            &jpeg(512, 384, None),
+            "application/octet-stream",
+        );
+        let asset_id = adopted.asset_id();
+        assert_eq!(adopted.derivatives, DerivativeStatus::Decoded);
+        assert_eq!(
+            adopted.manifest.core.key_mode,
+            crate::crypto::provenance::KeyMode::Wrapped
+        );
+
+        let sidecar = sidecar_of(lib.path(), asset_id);
+        let dimensions = sidecar.dimensions.as_ref().expect("dimensions from pixels");
+        assert_eq!((dimensions.width, dimensions.height), (512, 384));
+        assert_eq!(sidecar.content_type, "image/jpeg", "header-derived");
+        let lqip = sidecar.lqip.as_ref().expect("the LQIP producer ran");
+        assert_eq!(lqip.chromahash.len(), 32);
+        assert!(sidecar.verify(&ws.user_ik_public()));
+
+        // At least one signed derivative manifest, sealed under a prefix other than the
+        // guest's, beside thumbnail bytes on disk.
+        let dir = derivatives_dir(lib.path(), asset_id);
+        let stem = asset_id.simple().to_string();
+        let manifests: Vec<DerivativeManifest> =
+            cbor::from_slice(&fs::read(dir.join(format!("{stem}.derivatives.cbor"))).unwrap())
+                .expect("the bundle decodes");
+        assert_eq!(manifests.len(), encoded_pairs_per_large_still());
+        assert_eq!(manifests[0].core.source_asset_id, asset_id);
+        assert_eq!(
+            verify_still_format(&manifests[0]),
+            Ok(Some(DerivativeFormat::Jxl))
+        );
+        assert_ne!(
+            manifests[0].core.nonce_prefix,
+            adopted.manifest.core.nonce_prefix
+        );
+        assert!(dir.join(format!("{stem}.thumbnail.jxl")).is_file());
+
+        // The asset still verifies, its index row carries the dimensions, and a push bundle
+        // carries the guest's ciphertext byte for byte plus derivatives whose re-derived
+        // ciphertext matches their signed address (the bundle reader drops any that do not).
+        assert_eq!(
+            ws.verify(&asset_id).unwrap(),
+            crate::crypto::verify_asset::VerifyOutcome::Accept
+        );
+        let row = ws
+            .db()
+            .find_by_uuid(&asset_id.to_string())
+            .unwrap()
+            .expect("an index row");
+        assert_eq!((row.width, row.height), (Some(512), Some(384)));
+        let bundle = ws.upload_bundle(&asset_id).unwrap();
+        assert_eq!(bundle.ciphertext, staged);
+        assert_eq!(bundle.content_type, "image/jpeg");
+        assert!(
+            !bundle.derivatives.is_empty(),
+            "the derived-key derivatives ship beside the wrapped-key original"
+        );
+    }
+
+    /// An undecodable drop still adopts: no placeholder, no derivatives, the reason reported in
+    /// [`AdoptedDrop::derivatives`](crate::drop::AdoptedDrop::derivatives), and a
+    /// `verify`-accepting asset regardless.
+    #[test]
+    fn an_undecodable_drop_still_adopts_with_the_reason_reported() {
+        let lib = TempDir::new().unwrap();
+        let (mut ws, album) = workspace(lib.path());
+
+        let mut heic = vec![0, 0, 0, 0x20];
+        heic.extend_from_slice(b"ftypheic");
+        heic.extend_from_slice(&[0; 16]);
+        let cases: [(&[u8], &str, DerivativeStatus, &str); 3] = [
+            // Recognised by its header, no codec in this build.
+            (
+                &heic,
+                "image/jpeg",
+                DerivativeStatus::DeferredNoCodec,
+                "image/heic",
+            ),
+            // A JPEG header over bytes that do not decode.
+            (
+                b"\xFF\xD8\xFF not really a photo",
+                "image/jpeg",
+                DerivativeStatus::DecodeFailed,
+                "image/jpeg",
+            ),
+            // No still at all: the guest's claimed type is the fallback.
+            (
+                b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom",
+                "video/mp4",
+                DerivativeStatus::NotAKnownStill,
+                "video/mp4",
+            ),
+        ];
+        for (bytes, claimed, status, content_type) in cases {
+            let (adopted, _) = adopt(&mut ws, album, bytes, claimed);
+            let asset_id = adopted.asset_id();
+            assert_eq!(adopted.derivatives, status, "{content_type}");
+            assert_eq!(adopted.deferred_formats, 0, "nothing was attempted");
+            let sidecar = sidecar_of(lib.path(), asset_id);
+            assert_eq!(sidecar.content_type, content_type);
+            assert!(sidecar.lqip.is_none());
+            assert!(sidecar.dimensions.is_none(), "no pixels and no EXIF");
+            assert!(
+                !derivatives_dir(lib.path(), asset_id)
+                    .join(format!("{}.derivatives.cbor", asset_id.simple()))
+                    .exists(),
+                "no derivative bundle for an asset with no derivatives"
+            );
+            assert_eq!(
+                ws.verify(&asset_id).unwrap(),
                 crate::crypto::verify_asset::VerifyOutcome::Accept
             );
         }

@@ -34,22 +34,27 @@
 //! could have typed. Reserving it would let a person register an unverified address at the
 //! provider and thereby block the address's real owner from ever signing in here — a targeted
 //! denial of service costing one sign-up — so an unverified address is carried on the identity
-//! and otherwise ignored: it reserves nothing and collides with nothing. That makes
-//! [`VerifiedIdentity::email_verified`] the one production reader of the claim. It is the
-//! interim rule until #460 folds federated rows into the one account table, where the address
-//! is the verified one a password account registered with.
+//! and otherwise ignored: it reserves nothing and collides with nothing. [`reserved_address`] is
+//! that rule, and both adapters read the claim through it and nowhere else.
 //!
-//! # The in-memory adapter holds its own rows
+//! The comparison is against **every** address the account table holds: the one each password
+//! account registered with, and the verified one each earlier federated account recorded. The
+//! verified-only rule applies to the side that is asserting (decision 11 of #459, kept by #460).
 //!
-//! [`InMemoryFederatedAccounts`] is the development profile's adapter and it does **not** share
-//! rows with [`InMemoryAccounts`](crate::auth::InMemoryAccounts), the password directory. That is
-//! a gap, recorded in issue #460 rather than papered over: under `serve --memory` an identity
-//! whose address matches a password account is not refused, and an OIDC account has no profile
-//! row. The Postgres adapter is written over one account table, where both properties hold.
+//! # One account table, two adapters
+//!
+//! Both adapters implement this port on the object that implements the four password ports,
+//! over the same rows: [`InMemoryAccounts`](crate::auth::InMemoryAccounts) for the development
+//! profile and [`PostgresAccounts`](crate::auth::PostgresAccounts) for the durable one. That is
+//! what makes the `409` cross-directory, what gives a federated account a profile row, and what
+//! lets [`crate::auth::conformance`] assert both properties — and the null-credential invariant
+//! above — against both adapters with one suite.
+//!
+//! A federated account whose provider asserted no verified address still has a profile: both
+//! adapters answer it with [`ProfileRecord::email`](crate::auth::ProfileRecord) `None`, and
+//! `GET /v1/auth/profile` serves it with the `email` key absent (#603).
 
-use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use jiff::Timestamp;
 
@@ -98,93 +103,14 @@ impl FederatedAccounts for Disabled {
     }
 }
 
-/// One federated account, as this adapter holds it.
-#[derive(Debug, Clone)]
-struct Row {
-    user_id: UserId,
-    #[allow(
-        dead_code,
-        reason = "held for the profile row the Postgres adapter will expose"
-    )]
-    created_at: Timestamp,
-}
-
-#[derive(Debug, Default)]
-struct Held {
-    /// `(issuer, subject)` → the account.
-    links: BTreeMap<(String, String), Row>,
-    /// Address → the account that asserted it first.
-    addresses: BTreeMap<String, UserId>,
-}
-
-/// Federated accounts held in this process.
-///
-/// See the module docs for what it does and does not share with the password directory.
-#[derive(Debug, Default)]
-pub struct InMemoryFederatedAccounts {
-    held: Mutex<Held>,
-}
-
-impl InMemoryFederatedAccounts {
-    /// An empty directory.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// How many federated accounts are held.
-    pub fn len(&self) -> usize {
-        self.held().links.len()
-    }
-
-    /// Whether none is held yet.
-    pub fn is_empty(&self) -> bool {
-        self.held().links.is_empty()
-    }
-
-    fn held(&self) -> MutexGuard<'_, Held> {
-        self.held.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-}
-
-impl FederatedAccounts for InMemoryFederatedAccounts {
-    fn resolve_or_create<'a>(
-        &'a self,
-        identity: &'a VerifiedIdentity,
-        user: &'a UserId,
-        at: Timestamp,
-    ) -> DirectoryFuture<'a, FederatedLink> {
-        Box::pin(async move {
-            // One critical section, as the port requires.
-            let mut held = self.held();
-            let key = (identity.issuer.clone(), identity.subject.clone());
-            if let Some(row) = held.links.get(&key) {
-                return Ok(FederatedLink::Linked(row.user_id.clone()));
-            }
-            // Verified addresses only, both ways: an unverified one neither blocks nor reserves.
-            let verified_address = identity
-                .email
-                .as_deref()
-                .filter(|_| identity.email_verified);
-            if let Some(email) = verified_address
-                && held.addresses.contains_key(email)
-            {
-                tracing::info!(issuer = %identity.issuer, "a federated sign-in asserted an address another account holds");
-                return Ok(FederatedLink::AddressTaken);
-            }
-            if let Some(email) = verified_address {
-                held.addresses.insert(email.to_owned(), user.clone());
-            }
-            held.links.insert(
-                key,
-                Row {
-                    user_id: user.clone(),
-                    created_at: at,
-                },
-            );
-            tracing::info!(%user, issuer = %identity.issuer, "created an account for a federated identity");
-            Ok(FederatedLink::Created(user.clone()))
-        })
-    }
+/// The address `identity` reserves and is compared by: its `email`, only when the provider
+/// asserted it verified (module docs). Every adapter reads the claim through this and nowhere
+/// else, so the rule cannot be applied in one and forgotten in the other.
+pub fn reserved_address(identity: &VerifiedIdentity) -> Option<&str> {
+    identity
+        .email
+        .as_deref()
+        .filter(|_| identity.email_verified)
 }
 
 #[cfg(test)]
@@ -204,157 +130,20 @@ mod tests {
         UserId::new(format!("user-{tag}"))
     }
 
-    #[tokio::test]
-    async fn the_first_sign_in_creates_and_the_second_links_the_same_account() {
-        let accounts = InMemoryFederatedAccounts::new();
-        let first = accounts
-            .resolve_or_create(
-                &identity("sub-1", Some("a@example.test")),
-                &user("1"),
-                Timestamp::UNIX_EPOCH,
-            )
-            .await
-            .expect("answers");
-        assert_eq!(first, FederatedLink::Created(user("1")));
+    // What each adapter does with an identity is asserted once, against both adapters, by the
+    // shared suite in `crate::auth::conformance`. What is left here is the rule itself and the
+    // null object.
 
-        // A different minted id: the existing link wins, and the new id is discarded.
-        let second = accounts
-            .resolve_or_create(
-                &identity("sub-1", Some("a@example.test")),
-                &user("2"),
-                Timestamp::UNIX_EPOCH,
-            )
-            .await
-            .expect("answers");
-        assert_eq!(second, FederatedLink::Linked(user("1")));
-        assert_eq!(accounts.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn the_same_subject_at_another_issuer_is_another_person() {
-        let accounts = InMemoryFederatedAccounts::new();
-        accounts
-            .resolve_or_create(&identity("sub-1", None), &user("1"), Timestamp::UNIX_EPOCH)
-            .await
-            .expect("answers");
-        let mut elsewhere = identity("sub-1", None);
-        elsewhere.issuer = "https://other.example.test".to_owned();
+    #[test]
+    fn only_a_verified_address_is_reserved() {
         assert_eq!(
-            accounts
-                .resolve_or_create(&elsewhere, &user("2"), Timestamp::UNIX_EPOCH)
-                .await
-                .expect("answers"),
-            FederatedLink::Created(user("2"))
+            reserved_address(&identity("sub-1", Some("a@example.test"))),
+            Some("a@example.test")
         );
-    }
-
-    #[tokio::test]
-    async fn an_asserted_address_another_account_holds_is_refused_and_nothing_is_written() {
-        let accounts = InMemoryFederatedAccounts::new();
-        accounts
-            .resolve_or_create(
-                &identity("sub-1", Some("a@example.test")),
-                &user("1"),
-                Timestamp::UNIX_EPOCH,
-            )
-            .await
-            .expect("answers");
-        assert_eq!(
-            accounts
-                .resolve_or_create(
-                    &identity("sub-2", Some("a@example.test")),
-                    &user("2"),
-                    Timestamp::UNIX_EPOCH,
-                )
-                .await
-                .expect("answers"),
-            FederatedLink::AddressTaken
-        );
-        assert_eq!(accounts.len(), 1, "the refused identity created nothing");
-        // And it is still refused, rather than having been half-linked.
-        assert_eq!(
-            accounts
-                .resolve_or_create(
-                    &identity("sub-2", Some("a@example.test")),
-                    &user("3"),
-                    Timestamp::UNIX_EPOCH,
-                )
-                .await
-                .expect("answers"),
-            FederatedLink::AddressTaken
-        );
-    }
-
-    #[tokio::test]
-    async fn an_unverified_address_neither_blocks_nor_reserves() {
-        // A person who registers somebody else's address at the provider, unverified, must not
-        // be able to lock that person out of signing in here.
-        let accounts = InMemoryFederatedAccounts::new();
-        let mut squatter = identity("squatter", Some("owner@example.test"));
-        squatter.email_verified = false;
-        assert_eq!(
-            accounts
-                .resolve_or_create(&squatter, &user("1"), Timestamp::UNIX_EPOCH)
-                .await
-                .expect("answers"),
-            FederatedLink::Created(user("1")),
-            "the squatter gets an account of their own"
-        );
-        // The real owner, verified, is not blocked.
-        assert_eq!(
-            accounts
-                .resolve_or_create(
-                    &identity("owner", Some("owner@example.test")),
-                    &user("2"),
-                    Timestamp::UNIX_EPOCH,
-                )
-                .await
-                .expect("answers"),
-            FederatedLink::Created(user("2"))
-        );
-        // And the reserved, verified address now blocks a *different* unverified claimant? No:
-        // an unverified claim is never compared either, so it is created rather than refused.
-        let mut another = identity("another", Some("owner@example.test"));
-        another.email_verified = false;
-        assert_eq!(
-            accounts
-                .resolve_or_create(&another, &user("3"), Timestamp::UNIX_EPOCH)
-                .await
-                .expect("answers"),
-            FederatedLink::Created(user("3"))
-        );
-        // A verified claim on the reserved address is what the 409 exists for.
-        assert_eq!(
-            accounts
-                .resolve_or_create(
-                    &identity("impersonator", Some("owner@example.test")),
-                    &user("4"),
-                    Timestamp::UNIX_EPOCH,
-                )
-                .await
-                .expect("answers"),
-            FederatedLink::AddressTaken
-        );
-    }
-
-    #[tokio::test]
-    async fn an_identity_without_an_address_is_an_account_too() {
-        let accounts = InMemoryFederatedAccounts::new();
-        assert_eq!(
-            accounts
-                .resolve_or_create(&identity("sub-1", None), &user("1"), Timestamp::UNIX_EPOCH)
-                .await
-                .expect("answers"),
-            FederatedLink::Created(user("1"))
-        );
-        assert_eq!(
-            accounts
-                .resolve_or_create(&identity("sub-2", None), &user("2"), Timestamp::UNIX_EPOCH)
-                .await
-                .expect("answers"),
-            FederatedLink::Created(user("2")),
-            "two addressless identities do not collide on the absent address"
-        );
+        let mut unverified = identity("sub-1", Some("a@example.test"));
+        unverified.email_verified = false;
+        assert_eq!(reserved_address(&unverified), None);
+        assert_eq!(reserved_address(&identity("sub-1", None)), None);
     }
 
     #[tokio::test]

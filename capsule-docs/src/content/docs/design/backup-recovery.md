@@ -64,11 +64,13 @@ The account master key is the single backed-up root of the key hierarchy (see [C
 - Derive the wrapping key with the [password-based KDF](/design/cryptography/primitives/#password-based-kdf). Store the wrapped blob server-side.
 - If you can run enclaves (SGX/Nitro/SEV-SNP), Signal's SVR pattern is the *only* sanctioned way to soften that floor: rate-limit unwrap attempts inside the enclave so a shorter, human-friendly PIN is still safe. Without an attested enclave, the ≥128-bit floor is mandatory — never a 4-digit PIN, never a short numeric code.
 
+On the CLI, `capsule auth escrow --library PATH` is the setup and `capsule auth recover --library PATH` the restore. Setup reads the signed-in account's server id and binds the library to it (`Workspace::bind_account_id`). A library that already holds assets cannot be rebound, because its signed manifests name its own id, so setup refuses before minting a secret and points at a fresh library. Setup then mints a 256-bit secret, shows it once as hex behind a type-back gate, and stores the escrow and the sealed identity beside it. It refuses an account that already has an escrow unless `--replace` is given, since replacing retires the secret that opens the old one. Every refusal before the bind writes nothing.
+
 ## Single-Root Invariant
 
 **Every recovery path terminates at the one account master key, and the recovery secret (or a quorum of its Shamir shares) is the only user-held secret class. No feature may introduce a second escrowed secret class or a recovery path that bypasses the master key.**
 
-This is already true; the invariant fixes it against drift. The audit, stated so nobody has to re-derive it: the server **escrow** is the master key wrapped by the recovery secret (above); the **backup artifact's** wrap key derives from that same recovery passphrase; **Shamir** splits that same seed; the [OGK](/design/cryptography/keys/#owner-group-keys-ogks) and Drop-Key escrows are wraps *reachable from* the master key, not additional roots; [sponsored accounts](/design/authentication/#account-types) deliberately hold no root of their own — every path routes through the sponsor's, which is why the verification cadence below never prompts a sponsoree. These are **wraps, not roots** — holding the recovery secret reaches all of them; losing everything but the recovery secret loses nothing.
+This is already true; the invariant fixes it against drift. The audit, stated so nobody has to re-derive it: the server **escrow** is the master key wrapped by the recovery secret (above); the **backup artifact's** wrap key derives from that same recovery passphrase; **Shamir** splits that same seed; the [OGK](/design/cryptography/keys/#owner-group-keys-ogks) and Drop-Key escrows, and the [sealed user identity](/design/cryptography/keys/#registered-accounts) stored beside the master-key escrow (`/v1/auth/escrow/identity`), are wraps *reachable from* the master key, not additional roots; [sponsored accounts](/design/authentication/#account-types) deliberately hold no root of their own — every path routes through the sponsor's, which is why the verification cadence below never prompts a sponsoree. These are **wraps, not roots** — holding the recovery secret reaches all of them; losing everything but the recovery secret loses nothing.
 
 One versioning seam to know about, not remove: an already-exported backup artifact stays bound to the passphrase in force at export. Rotating the recovery secret (below) therefore ends with "re-export or destroy old artifacts" guidance — a property of offline artifacts, not a second secret class.
 
@@ -93,6 +95,12 @@ Users who want to spread recovery across trusted parties or storage locations ca
 - Custom `m`-of-`n` (e.g. 3-of-5 for users who want broader distribution) is supported but not the default.
 
 This is the social-recovery escape hatch — useful for users who would otherwise lose access from a single forgotten passphrase plus a single dead device.
+
+#### Share Wire Format
+
+A share is `x ‖ y`: one byte holding the nonzero evaluation point `x ∈ [1, 255]`, then one GF(256) byte per seed byte — **33 bytes** for the 32-byte seed. The split is byte-wise over GF(256) with the reduction polynomial `0x11d` (x⁸ + x⁴ + x³ + x² + 1), the seed byte as the constant term, and every other coefficient drawn uniformly from all 256 field elements by `rand`'s thread-local generator (`rand::rng()`, a ChaCha12 CSPRNG seeded from the OS and reseeded from it every 64 KiB of output), which is what `blahaj::Sharks::dealer` uses. `recover_seed` accepts a set of 33-byte shares with nonzero, distinct `x`; anything else is a typed `BackupError::Format`, never a panic.
+
+The implementation is `blahaj` (see [Dependencies](/design/dependencies/#rust)). It replaced `sharks`, which drew the non-constant coefficients from `[1, 255]` (RUSTSEC-2024-0398, no patched release). The two crates share the encoding and the interpolation, so the decision is **shares issued under `sharks` stay recoverable, with no legacy decoder and no forced re-issue**: they decode and reconstruct through the same path as new ones. What the old bias cost them is bounded: with a nonzero degree-1 coefficient a single share rules out exactly one value per seed byte (`y ≠ s`), about 0.18 bits across the whole seed — not a usable break. Re-issuing under the fixed dealer is still the clean state, so the [guided rotation](#recovery-verification-cadence) re-issue, which mints fresh shares anyway, is where old ones go away.
 
 ## Recovery Verification Cadence
 

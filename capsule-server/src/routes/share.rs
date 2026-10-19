@@ -22,7 +22,9 @@
 //! | Status | Verdict |
 //! | --- | --- |
 //! | issue `201` / revoke `204` | the owner's two operations |
-//! | issue `400 error.share.malformed` | a body that cannot be a link record |
+//! | issue `400 error.share.malformed` | a body that cannot be a link record, including a `metadata_blob` that is not base64, exceeds 8 MiB, or does not hash to `metadata_hash` |
+//! | issue `403 error.quota.grace_locked` | any link from an account past its quota grace window (`S-C6`) |
+//! | issue `403 error.quota.exceeded` | a `metadata_blob` whose new bytes would carry the account to its hard limit (`S-C6`) |
 //! | serve `200` / `206` / `416` | the metadata, the wrapped secret, and ranged ciphertext |
 //! | serve `404` | **one answer** for a malformed id, an unknown link, a revoked one, an expired one, a blob the link does not name, and a link with no wrapped secret |
 //! | `401` / `403` | the framework's, on the two owner operations only |
@@ -35,6 +37,7 @@ use std::collections::BTreeSet;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use capsule_core::crypto::hash::hash_bytes;
 use capsule_i18n::error_codes;
 use kynos::extract::body::binary::Binary;
 use kynos::extract::media::OctetStream;
@@ -47,8 +50,11 @@ use serde::{Deserialize, Serialize};
 use crate::auth::AccessToken;
 use crate::blob::ContentAddress;
 use crate::counter::{CounterContext, CounterKey, Verdict, budgets, unix_seconds};
+use crate::quota::{QuotaContext, WriteClass};
 use crate::serve::BlobSource;
-use crate::share::{ShareContext, ShareRecord, is_opaque_id};
+use crate::share::{
+    IssueOutcome, MAX_SHARE_METADATA_BYTES, ShareContext, ShareRecord, is_opaque_id,
+};
 use crate::store::UserId;
 
 /// The public share surface, and the owner operations behind it.
@@ -69,6 +75,9 @@ pub struct IssueShareRequest {
     /// fragment secret the id is paired with; the server checks its shape and stores it.
     pub opaque_id: String,
     /// The metadata blob a viewer starts from. Must appear in `serves`.
+    ///
+    /// The blob is the issuer's sealed share metadata record (`share-metadata/v1`, built by
+    /// `capsule_core::sharing::publish_share`), opaque to this server.
     pub metadata_hash: String,
     /// Every blob this link may serve, and nothing else.
     ///
@@ -79,11 +88,25 @@ pub struct IssueShareRequest {
     /// The passphrase-wrapped scope material, base64, when the link is passphrase-protected.
     ///
     /// Opaque to this server. The passphrase never crosses the wire — unwrap is client-side.
+    /// Absent for a link with no passphrase, whose scope travels inside the sealed metadata blob.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wrapped_secret: Option<String>,
     /// When the link stops being live, RFC 3339. Absent means no expiry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<String>,
+    /// The sealed metadata record itself, base64.
+    ///
+    /// Its SHA-256 must equal `metadata_hash`, and it may be at most 8 MiB decoded. The server
+    /// stores it before it records the link, so a viewer's first fetch finds it, and keeps it
+    /// for as long as the link is live. It counts against the caller's storage quota, and is
+    /// refused when its new bytes would carry the account to its hard limit. Opaque to this
+    /// server: it is sealed under material derived from the URL fragment, which never reaches
+    /// it.
+    ///
+    /// Optional so an older client still registers a link; such a link serves its metadata
+    /// only if the blob is already in the store.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata_blob: Option<String>,
 }
 
 /// The two ways issuing answers.
@@ -146,6 +169,31 @@ pub enum IssueShareRejection {
     Malformed {
         /// What was wrong, in English.
         detail: String,
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// The account is over its storage limit and past the grace window.
+    ///
+    /// The same refusal, and the same code, a lifecycle write's metadata blob gets: a share
+    /// link is metadata growth (`S-C6`), whether or not it carries its record. Never returned
+    /// by a revocation, which frees nothing but must never be refused either.
+    #[error("this account is over its storage limit and past the grace window")]
+    #[problem(status = 403, title = "Quota grace expired")]
+    QuotaGraceExpired {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// Storing the link's metadata record would carry the account to its hard storage limit.
+    ///
+    /// The refusal an upload of the same bytes gets, under the same code. Never returned for a
+    /// record the ledger already attributes, which adds nothing.
+    #[error("this share link's metadata record would cross the account's storage limit")]
+    #[problem(status = 403, title = "Quota exceeded")]
+    QuotaExceeded {
         /// The stable catalog code.
         #[problem(extension)]
         code: &'static str,
@@ -218,6 +266,7 @@ pub enum ShareRejection {
 #[kynos::post("/v1/shares", operation_id = "issue_share", tag = SharesTag)]
 pub async fn issue_share(
     Inject(share): Inject<ShareContext>,
+    Inject(quota): Inject<QuotaContext>,
     Auth(credential): Auth<AccessToken>,
     Json(request): Json<IssueShareRequest>,
 ) -> Result<IssueShareReply, IssueShareRejection> {
@@ -263,7 +312,43 @@ pub async fn issue_share(
         ),
     };
 
-    share
+    let record = request
+        .metadata_blob
+        .as_deref()
+        .map(|encoded| metadata_record(encoded, &metadata))
+        .transpose()?;
+    // Every issue, with a record or without: past the grace window a new share link is refused
+    // (quota.md, "Grace expired"), and a link is metadata growth whether or not this request
+    // carries the bytes.
+    admit_metadata_growth(&quota, &owner).await?;
+
+    if let Some(record) = record {
+        // Stored before the link is recorded, so no viewer ever resolves a link whose record is
+        // not yet servable. A link refused below leaves a blob no live link names, which the
+        // collector reclaims on its ordinary terms; the reverse order would leave a live link
+        // pointing at nothing.
+        //
+        // Run as its own task and awaited, so a request cancelled between the charge and the
+        // store finishing — a client that hangs up, a server timeout — cannot drop the future
+        // halfway: the charge, the `put`, and the release a failed `put` owes all run to the
+        // end whether or not anyone is still waiting for the answer.
+        tokio::spawn(store_metadata_record(
+            share.clone(),
+            quota.clone(),
+            owner.clone(),
+            metadata.clone(),
+            record,
+        ))
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %owner, "the task storing a share's metadata record did not finish");
+            IssueShareRejection::Unavailable {
+                code: error_codes::SHARE_UNAVAILABLE,
+            }
+        })??;
+    }
+
+    let outcome = share
         .shares()
         .issue(ShareRecord {
             opaque_id: request.opaque_id.clone(),
@@ -284,6 +369,15 @@ pub async fn issue_share(
                 code: error_codes::SHARE_UNAVAILABLE,
             }
         })?;
+    if outcome == IssueOutcome::Conflict {
+        // One answer whoever holds the id, the caller included, so this is no oracle over
+        // whose a known id is. A `400` under the existing malformed code rather than a new
+        // `409`: a client's CSPRNG never repeats 128 bits, so only a replayed or hostile
+        // request lands here (#553).
+        return Err(IssueShareRejection::malformed(
+            "opaque_id is already in use",
+        ));
+    }
 
     Ok(IssueShareReply::Created(IssueShareResponse {
         opaque_id: request.opaque_id,
@@ -339,6 +433,10 @@ pub async fn share_metadata(
 }
 
 /// The passphrase-wrapped scope material, when there is one.
+///
+/// The octets the issuer registered as `wrapped_secret`, byte for byte. A viewer fetches this only
+/// for a passphrase-protected link; a link with no passphrase carries its scope in the sealed
+/// metadata blob instead.
 ///
 /// A link with no passphrase answers `404` rather than `204` or an empty body: whether a link is
 /// passphrase-protected is already disclosed by the metadata record, and a *second* way to ask
@@ -469,6 +567,159 @@ async fn live(share: &ShareContext, opaque_id: &str) -> Result<ShareRecord, Shar
     record
         .filter(|record| record.is_live_at(share.clock().now()))
         .ok_or(ShareRejection::NotFound)
+}
+
+/// Decode an inline metadata record and prove it is the one `metadata_hash` names (#653).
+///
+/// The size is checked on the encoded length first, so an oversized body is refused before it
+/// is decoded into a second copy, and then on the decoded bytes, which is the bound itself.
+fn metadata_record(
+    encoded: &str,
+    metadata: &ContentAddress,
+) -> Result<Vec<u8>, IssueShareRejection> {
+    let too_large = "metadata_blob exceeds the 8 MiB bound on a share's metadata record";
+    if encoded.len() / 4 * 3 > MAX_SHARE_METADATA_BYTES + 2 {
+        return Err(IssueShareRejection::malformed(too_large));
+    }
+    let record = BASE64
+        .decode(encoded)
+        .map_err(|_| IssueShareRejection::malformed("metadata_blob is not base64"))?;
+    if record.len() > MAX_SHARE_METADATA_BYTES {
+        return Err(IssueShareRejection::malformed(too_large));
+    }
+    // The server addresses a blob by the SHA-256 of its bytes, and a committed blob is
+    // immutable and deduplicated by address: bytes stored under the wrong address would be what
+    // every reader of that address gets.
+    if hash_bytes(&record).to_hex() != metadata.as_str() {
+        return Err(IssueShareRejection::malformed(
+            "metadata_blob's SHA-256 is not metadata_hash",
+        ));
+    }
+    Ok(record)
+}
+
+/// Refuse a share link from an account past its quota grace window (`S-C6`).
+async fn admit_metadata_growth(
+    quota: &QuotaContext,
+    owner: &UserId,
+) -> Result<(), IssueShareRejection> {
+    let state = crate::quota::current_state(quota, owner)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %owner, "the quota ledger could not answer");
+            IssueShareRejection::Unavailable {
+                code: error_codes::SHARE_UNAVAILABLE,
+            }
+        })?;
+    if crate::quota::admits(state, WriteClass::MetadataGrowth, 0, 0, quota.limits()) {
+        return Ok(());
+    }
+    tracing::info!(%owner, ?state, "a share link was refused: past the quota grace window");
+    Err(IssueShareRejection::QuotaGraceExpired {
+        code: error_codes::QUOTA_GRACE_LOCKED,
+    })
+}
+
+/// Charge a link's metadata record, then store it, releasing the charge when the store fails.
+///
+/// Charged before it is stored, as an upload session is charged before its stage opens (#662):
+/// a record refused at the hard limit never reaches the store, so an account over its limit
+/// cannot leave uncharged records behind for the collector to find.
+///
+/// Owns its arguments so [`issue_share`] can run it as a task of its own. Between the charge and
+/// the end of the `put`, a dropped future would leave a charge with no stored blob behind it,
+/// which the collector never credits back because it credits only the blobs it sweeps. A
+/// spawned task is not dropped with the request. A process that stops inside that window still
+/// leaves the charge behind, a residue share-links.md ("The order") accepts.
+async fn store_metadata_record(
+    share: ShareContext,
+    quota: QuotaContext,
+    owner: UserId,
+    metadata: ContentAddress,
+    record: Vec<u8>,
+) -> Result<(), IssueShareRejection> {
+    let charge = charge_metadata(&quota, &owner, &metadata, record.len() as u64).await?;
+    if let Err(error) = share.blobs().put(&metadata, &record).await {
+        tracing::error!(%error, %owner, "the blob store could not hold a share's metadata record");
+        release_metadata_charge(&quota, &owner, &metadata, charge).await;
+        return Err(IssueShareRejection::Unavailable {
+            code: error_codes::SHARE_UNAVAILABLE,
+        });
+    }
+    tracing::info!(%owner, size = record.len(), "stored a share's sealed metadata record");
+    Ok(())
+}
+
+/// Attribute a metadata record to the link's owner before it is stored, refusing one that would
+/// cross the hard limit (`S-C6`).
+///
+/// Charged, not only admitted: a link holds its record from the collector for as long as it is
+/// live, which may be forever, so an uncharged record would be storage an account could grow
+/// without limit by issuing links. A record the ledger already attributes — the same bytes under a second link — is
+/// not charged twice, and is never refused. The collector credits it back when it sweeps the
+/// blob, as it does every blob (`release_attribution`).
+///
+/// Refused, like an upload, when the new bytes would carry the account to its hard limit
+/// ([`crate::quota::charge_upload`] charges, checks, and releases a refused charge). Without
+/// that, an account over the limit but inside its grace window could store any number of
+/// distinct 8 MiB records, each publicly servable through its link.
+///
+/// Charged **before** the store (#662), as an upload session is charged before its stage
+/// opens, so a refused record is never stored. A store that then fails hands the returned
+/// charge to [`release_metadata_charge`], which undoes it only when this call made it.
+async fn charge_metadata(
+    quota: &QuotaContext,
+    owner: &UserId,
+    address: &ContentAddress,
+    size: u64,
+) -> Result<crate::quota::UploadCharge, IssueShareRejection> {
+    let outcome = crate::quota::charge_upload(quota, owner, address, size)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %owner, "the quota ledger could not charge a share's metadata record");
+            IssueShareRejection::Unavailable {
+                code: error_codes::SHARE_UNAVAILABLE,
+            }
+        })?;
+    tracing::debug!(%owner, size, ?outcome, "charged a share's metadata record");
+    match outcome {
+        crate::quota::UploadCharge::Admitted | crate::quota::UploadCharge::AlreadyAttributed => {
+            Ok(outcome)
+        }
+        crate::quota::UploadCharge::Refused => {
+            tracing::info!(%owner, size, "a share link was refused: its record would cross the hard quota limit");
+            Err(IssueShareRejection::QuotaExceeded {
+                code: error_codes::QUOTA_EXCEEDED,
+            })
+        }
+    }
+}
+
+/// Undo [`charge_metadata`]'s debit for a record the store did not take.
+///
+/// Only a charge this request made is released. A record the ledger already attributed was
+/// charged by an earlier write whose bytes may be stored and linked, and releasing it would
+/// leave them uncharged. A release that itself fails is logged and swallowed: the caller is
+/// already answering `500`, and the residue is an attribution with no blob behind it, which
+/// the log line names for an operator to credit back.
+async fn release_metadata_charge(
+    quota: &QuotaContext,
+    owner: &UserId,
+    address: &ContentAddress,
+    charge: crate::quota::UploadCharge,
+) {
+    if charge != crate::quota::UploadCharge::Admitted {
+        tracing::debug!(%owner, %address, ?charge, "no charge of this request's to release");
+        return;
+    }
+    match quota.quotas().release(owner, address).await {
+        Ok(released) => {
+            tracing::info!(%owner, %address, released, "released the charge for a share record the store did not take");
+        }
+        Err(error) => {
+            tracing::error!(%error, %owner, %address, "the quota ledger could not release the charge for a share record the store did not take");
+        }
+    }
 }
 
 impl IssueShareRejection {

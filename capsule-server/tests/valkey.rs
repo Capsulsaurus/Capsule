@@ -38,7 +38,8 @@ use capsule_server::store::upload::{
 use capsule_server::store::valkey::ValkeyStores;
 use capsule_server::store::{
     AssetId, AuthStateStore, ChallengeStore, ChannelStore, Clock, CohortStore, EnrollmentStore,
-    OwnerId, SessionId, SessionRecord, StoreError, StoreFuture, UploadId, UserId,
+    OidcAuthorizationStore, OidcDeviceStore, OwnerId, SessionId, SessionRecord, StoreError,
+    StoreFuture, UploadId, UserId,
 };
 use jiff::{SignedDuration, Timestamp};
 use testcontainers::runners::AsyncRunner;
@@ -106,6 +107,8 @@ struct ValkeyHarness {
     enrollments: Arc<dyn EnrollmentStore>,
     channels: Arc<dyn ChannelStore>,
     cohorts: Arc<dyn CohortStore>,
+    oidc_authorizations: Arc<dyn OidcAuthorizationStore>,
+    oidc_devices: Arc<dyn OidcDeviceStore>,
 }
 
 impl ValkeyHarness {
@@ -124,6 +127,8 @@ impl ValkeyHarness {
             enrollments: stores.enrollments(),
             channels: stores.channels(),
             cohorts: stores.cohorts(),
+            oidc_authorizations: stores.oidc_authorizations(),
+            oidc_devices: stores.oidc_devices(),
             stores,
         }
     }
@@ -167,6 +172,14 @@ impl Harness for ValkeyHarness {
 
     fn channels(&self) -> &dyn ChannelStore {
         &*self.channels
+    }
+
+    fn oidc_authorizations(&self) -> &dyn OidcAuthorizationStore {
+        &*self.oidc_authorizations
+    }
+
+    fn oidc_devices(&self) -> &dyn OidcDeviceStore {
+        &*self.oidc_devices
     }
 }
 
@@ -246,6 +259,185 @@ async fn a_logically_expired_record_is_dead_but_left_for_the_collector() {
         .expect("cleans up");
 }
 
+/// The collector's sweep drops an expired session from the progress view (#519).
+///
+/// The sorted set has no lifetime of its own, so a member whose record expired stays until a
+/// walk heals it; `gc --apply` is that walk.
+#[tokio::test]
+async fn the_progress_sweep_drops_an_expired_session_from_the_view() {
+    use capsule_server::gc::ProgressSweep;
+
+    let Some(server) = server().await else {
+        return;
+    };
+    let harness = ValkeyHarness::connect(&server.url).await;
+    let upload_id = UploadId::new("valkey-progress-sweep");
+    harness
+        .uploads
+        .open(UploadSessionRecord {
+            upload_id: upload_id.clone(),
+            asset_id: AssetId::new("valkey-progress-sweep-asset"),
+            owner_id: OwnerId::new("valkey-progress-sweep-owner"),
+            upload_user_id: UserId::new("valkey-progress-sweep-uploader"),
+            album_id: None,
+            content_type: None,
+            expected_hash: "d".repeat(64),
+            crypto_suite_id: 1,
+            protocol_version: "2026-08-29".to_owned(),
+            blob_role: BlobRole::Original,
+            intent_id: None,
+            manifest_envelope: "{}".to_owned(),
+            received_bytes: 0,
+            total_size: 1,
+            status: UploadSessionStatus::Pending,
+            created_at: harness.clock.now(),
+            last_progress_at: harness.clock.now(),
+        })
+        .await
+        .expect("the session opens");
+
+    let client = redis::Client::open(server.url.as_str()).expect("the URL opens");
+    let mut connection = client
+        .get_multiplexed_async_connection()
+        .await
+        .expect("a second connection");
+    let mut score = redis::cmd("ZSCORE");
+    score
+        .arg("capsule:upload:progress")
+        .arg(upload_id.to_string());
+    let indexed = |score: Option<f64>| score.is_some();
+
+    let before: Option<f64> = score.query_async(&mut connection).await.expect("answers");
+    assert!(indexed(before), "an open session is in the view");
+
+    harness
+        .advance(harness.uploads.ttl())
+        .await
+        .expect("advances");
+    let expired: Option<f64> = score.query_async(&mut connection).await.expect("answers");
+    assert!(
+        indexed(expired),
+        "an expired session's member outlives its record until something walks over it"
+    );
+
+    harness
+        .uploads
+        .sweep_progress(harness.clock.now())
+        .await
+        .expect("the sweep answers");
+    let after: Option<f64> = score.query_async(&mut connection).await.expect("answers");
+    assert!(!indexed(after), "and the collector's sweep is that walk");
+}
+
+/// The sweep pages by score cursor across many pages, ties and drops alike (#519).
+///
+/// Every session opens at one instant, so every member shares one score and each page resumes
+/// by skipping the kept members already seen at it; every third record is deleted under the
+/// walk, so pages also shrink as it heals. A cursor that skipped too few would answer a member
+/// twice, and one that skipped too many would leave a dead member in the view.
+#[tokio::test]
+async fn the_progress_sweep_pages_by_score_cursor_across_ties_and_drops() {
+    use capsule_server::gc::ProgressSweep;
+
+    let Some(server) = server().await else {
+        return;
+    };
+    let harness = ValkeyHarness::connect(&server.url).await;
+    // Scoped to this run, so a server still holding a previous run's sessions changes nothing.
+    let run = uuid::Uuid::now_v7();
+    let ids: Vec<UploadId> = (0..100)
+        .map(|n| UploadId::new(format!("valkey-progress-cursor-{run}-{n:03}")))
+        .collect();
+    for id in &ids {
+        harness
+            .uploads
+            .open(UploadSessionRecord {
+                upload_id: id.clone(),
+                asset_id: AssetId::new(format!("{id}-asset")),
+                owner_id: OwnerId::new("valkey-progress-cursor-owner"),
+                upload_user_id: UserId::new("valkey-progress-cursor-uploader"),
+                album_id: None,
+                content_type: None,
+                expected_hash: "e".repeat(64),
+                crypto_suite_id: 1,
+                protocol_version: "2026-08-29".to_owned(),
+                blob_role: BlobRole::Original,
+                intent_id: None,
+                manifest_envelope: "{}".to_owned(),
+                received_bytes: 0,
+                total_size: 1,
+                status: UploadSessionStatus::Pending,
+                created_at: harness.clock.now(),
+                last_progress_at: harness.clock.now(),
+            })
+            .await
+            .expect("the session opens");
+    }
+
+    let client = redis::Client::open(server.url.as_str()).expect("the URL opens");
+    let mut connection = client
+        .get_multiplexed_async_connection()
+        .await
+        .expect("a second connection");
+    let (dropped, kept): (Vec<_>, Vec<_>) = ids.iter().enumerate().partition(|(n, _)| n % 3 == 0);
+    for (_, id) in &dropped {
+        let _: i64 = redis::cmd("DEL")
+            .arg(format!("capsule:upload:session:{id}"))
+            .query_async(&mut connection)
+            .await
+            .expect("DEL answers");
+    }
+
+    // The walk lists only sessions that progressed strictly before its instant, so it runs a
+    // second later — well inside the TTL, so every kept session is still live when it is read.
+    harness
+        .advance(SignedDuration::from_secs(1))
+        .await
+        .expect("advances");
+    let swept = harness
+        .uploads
+        .least_recently_progressed(harness.clock.now(), usize::MAX)
+        .await
+        .expect("the walk answers");
+    let mine: Vec<&UploadId> = swept.iter().filter(|id| ids.contains(id)).collect();
+    let mut unique = mine.clone();
+    unique.sort_by_key(ToString::to_string);
+    unique.dedup();
+    assert_eq!(unique.len(), mine.len(), "no member is answered twice");
+    assert_eq!(mine.len(), kept.len(), "every live member is answered");
+    for (_, id) in &kept {
+        assert!(mine.contains(id), "{id} is answered");
+    }
+
+    let score = |id: &UploadId| {
+        let mut command = redis::cmd("ZSCORE");
+        command.arg("capsule:upload:progress").arg(id.to_string());
+        command
+    };
+    for (_, id) in &dropped {
+        let left: Option<f64> = score(id)
+            .query_async(&mut connection)
+            .await
+            .expect("answers");
+        assert!(
+            left.is_none(),
+            "{id}'s dead member is healed out of the view"
+        );
+    }
+    harness
+        .uploads
+        .sweep_progress(harness.clock.now())
+        .await
+        .expect("the sweep answers");
+    for (_, id) in &kept {
+        let left: Option<f64> = score(id)
+            .query_async(&mut connection)
+            .await
+            .expect("answers");
+        assert!(left.is_some(), "{id}'s live member stays in the view");
+    }
+}
+
 /// The whole counter suite, including the race, on one server.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_counter_suite_passes_against_valkey() {
@@ -256,6 +448,65 @@ async fn the_counter_suite_passes_against_valkey() {
     let store: Arc<dyn CounterStore> =
         Arc::new(ValkeyCounters::new(harness.stores.valkey().clone()));
     counters::run_all(store).await;
+}
+
+/// The partition ceiling, against a real server (#519).
+#[tokio::test]
+async fn a_full_counter_partition_refuses_a_new_key_against_valkey() {
+    let Some(server) = server().await else {
+        return;
+    };
+    let harness = ValkeyHarness::connect(&server.url).await;
+    let store =
+        ValkeyCounters::new(harness.stores.valkey().clone()).with_ceiling(counters::CEILING);
+    counters::a_full_partition_refuses_only_a_new_key_in_that_partition(&store).await;
+}
+
+/// First hits racing into one partition admit exactly its ceiling of new keys.
+///
+/// The check and the open are one script, so a burst of first hits cannot all read the same
+/// under-ceiling occupancy — the race a read-then-`ZADD` adapter loses.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn first_hits_race_to_the_partition_ceiling() {
+    let Some(server) = server().await else {
+        return;
+    };
+    let harness = ValkeyHarness::connect(&server.url).await;
+    let store: Arc<dyn CounterStore> = Arc::new(
+        ValkeyCounters::new(harness.stores.valkey().clone()).with_ceiling(counters::CEILING),
+    );
+    let keys: Vec<CounterKey> = (0..24)
+        .map(|n| CounterKey::DropSource(format!("valkey-race-ceiling-{n}")))
+        .collect();
+    for key in &keys {
+        store.reset(key).await.expect("resets");
+    }
+    // Far past every other case's instants, so nothing they left in the partition is live.
+    let at = jiff::Timestamp::from_second(4_000_000_000).expect("a valid instant");
+    let budget = Budget::new(5, SignedDuration::from_mins(1));
+    let mut tasks = tokio::task::JoinSet::new();
+    for key in keys.clone() {
+        let store = Arc::clone(&store);
+        tasks.spawn(async move { store.hit(&key, budget, at).await });
+    }
+    let (mut admitted, mut refused) = (0, 0);
+    while let Some(outcome) = tasks.join_next().await {
+        match outcome.expect("a hit task completes") {
+            Ok(verdict) if verdict.admits() => admitted += 1,
+            Ok(verdict) => panic!("a first hit is never rate-limited: {verdict:?}"),
+            Err(error) => {
+                assert!(capsule_server::counter::is_at_capacity(&error), "{error}");
+                refused += 1;
+            }
+        }
+    }
+    assert_eq!(
+        (admitted, refused),
+        (counters::CEILING, 24 - counters::CEILING)
+    );
+    for key in &keys {
+        store.reset(key).await.expect("cleans up");
+    }
 }
 
 /// Sixteen finalizers race for one session; exactly one wins.
@@ -314,6 +565,99 @@ async fn finalization_claims_race_to_one_winner() {
     }
     assert_eq!((won, lost), (1, 15), "exactly one finalizer wins");
     uploads.discard(&upload_id).await.expect("cleans up");
+}
+
+/// Sixteen callbacks race one `state`; exactly one gets the pending authorization (#460).
+///
+/// `an_oidc_authorization_is_single_use` asserts it in sequence. Contested for real, the read and
+/// the removal are one script, so no two callbacks can both redeem one nonce and one verifier.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn oidc_callbacks_race_to_one_redemption() {
+    use capsule_server::store::{OidcNonce, OidcState, PendingAuthorization, PkceVerifier};
+
+    let Some(server) = server().await else {
+        return;
+    };
+    let harness = ValkeyHarness::connect(&server.url).await;
+    let store = Arc::clone(&harness.oidc_authorizations);
+    let state = OidcState::new("valkey-race-oidc");
+    store
+        .begin(
+            &state,
+            PendingAuthorization {
+                nonce: OidcNonce::new("valkey-race-nonce"),
+                verifier: PkceVerifier::new("valkey-race-verifier"),
+                redirect_uri: "http://127.0.0.1:4242/cb".to_owned(),
+                binding_challenge: "valkey-race-binding".to_owned(),
+                issued_at: harness.clock.now(),
+            },
+        )
+        .await
+        .expect("the ceremony begins");
+
+    let mut tasks = tokio::task::JoinSet::new();
+    for _ in 0..16 {
+        let store = Arc::clone(&store);
+        let state = state.clone();
+        tasks.spawn(async move { store.consume(&state).await.expect("answers") });
+    }
+    let mut redeemed = 0;
+    let mut refused = 0;
+    while let Some(taken) = tasks.join_next().await {
+        match taken.expect("a callback task completes") {
+            Some(_) => redeemed += 1,
+            None => refused += 1,
+        }
+    }
+    assert_eq!((redeemed, refused), (1, 15), "exactly one callback redeems");
+}
+
+/// Sixteen polls race one due device handle; exactly one claims the slot (#635).
+///
+/// `two_polls_racing_one_handle_claim_one_slot` asserts it for two. Contested for real, the read
+/// of the schedule and its advance are one script, so one poll at most reaches the provider.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn device_polls_race_to_one_slot() {
+    use capsule_server::store::{
+        DeviceCode, DevicePollSlot, OidcDeviceHandle, PendingDeviceAuthorization,
+    };
+
+    let Some(server) = server().await else {
+        return;
+    };
+    let harness = ValkeyHarness::connect(&server.url).await;
+    let store = Arc::clone(&harness.oidc_devices);
+    let handle = OidcDeviceHandle::new("valkey-race-device");
+    store
+        .begin(
+            &handle,
+            PendingDeviceAuthorization {
+                device_code: DeviceCode::new("valkey-race-device-code"),
+                binding_challenge: "valkey-race-binding".to_owned(),
+                interval: SignedDuration::from_secs(5),
+                issued_at: harness.clock.now(),
+            },
+        )
+        .await
+        .expect("the ceremony begins");
+    harness.clock.advance(SignedDuration::from_secs(5));
+
+    let mut tasks = tokio::task::JoinSet::new();
+    for _ in 0..16 {
+        let store = Arc::clone(&store);
+        let handle = handle.clone();
+        tasks.spawn(async move { store.claim(&handle).await.expect("answers") });
+    }
+    let mut due = 0;
+    let mut too_soon = 0;
+    while let Some(slot) = tasks.join_next().await {
+        match slot.expect("a poll task completes") {
+            DevicePollSlot::Due(_) => due += 1,
+            DevicePollSlot::TooSoon { .. } => too_soon += 1,
+            DevicePollSlot::Unknown => panic!("the ceremony is live"),
+        }
+    }
+    assert_eq!((due, too_soon), (1, 15), "exactly one poll claims the slot");
 }
 
 /// A counter hit is charged and decided on the server: many tasks, one budget.
@@ -380,6 +724,10 @@ async fn a_durable_boot_without_a_database_url_refuses_and_names_it() {
             "JWT_ED25519_DER".to_owned(),
             "MC4CAQAwBQYDK2VwBCIEIN6eTvXEL7xMZWHY8rTk7VbQSGSuRkle5MVfiiYUStLF".to_owned(),
         ),
+        (
+            "DATABASE_URL".to_owned(),
+            "postgres://127.0.0.1:1/capsule".to_owned(),
+        ),
         ("VALKEY_URL".to_owned(), server.url.clone()),
         (
             "ATTESTATION_KEY_SEED".to_owned(),
@@ -391,8 +739,11 @@ async fn a_durable_boot_without_a_database_url_refuses_and_names_it() {
     ]
     .into_iter()
     .collect();
-    let config = Config::load(&environment, &Overrides::default(), Demands::Serve)
+    let mut config = Config::load(&environment, &Overrides::default(), Demands::Serve)
         .expect("it is well-formed");
+    // `Config::load` demands `DATABASE_URL` itself (#520); dropping it after loading reaches the
+    // boot path's own backstop, which is what this case asserts.
+    config.database_url = None;
     let error = assemble(&config)
         .await
         .expect_err("a durable backend with no database refuses");

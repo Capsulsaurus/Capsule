@@ -127,7 +127,7 @@ Every public route applies the same headers:
 | --- | --- |
 | `X-Capsule-Protocol` | request, required on every gated route |
 | `X-Capsule-Crypto-Suite` | request for writes; validated when present |
-| `X-Capsule-Sidecar-Schema` | request on metadata updates; validated when present |
+| `X-Capsule-Sidecar-Schema` | request, sent by clients on metadata updates and accepted on any request (`capsule-sdk` sends it on every one); validated when present, absence not refused |
 | `X-Capsule-Protocol-Min` | response, on every response of every operation |
 | `X-Capsule-Protocol-Max` | response, on every response of every operation |
 | `X-Capsule-Min-Client-Build` | response, on every response of every operation; advisory (`0.0.0` = no cutoff) |
@@ -149,7 +149,7 @@ at boot — so the window a client is told and the window it is held to cannot b
 `426` carries the window on the headers and the stable `error.protocol.version_unsupported` code
 in the body; nothing restates the window as a body member.
 
-**Exempt from the request gate** (and still carrying the response headers), ten operations:
+**Exempt from the request gate** (and still carrying the response headers), twelve operations:
 
 - `GET /v1/version` — the reachability probe a client hits before it knows the window.
 - `GET /.well-known/capsule/attestation-keys`, `GET /.well-known/capsule/server-info`,
@@ -161,6 +161,12 @@ in the body; nothing restates the window as a body member.
 - `POST /d/{opaque_id}`, `PATCH /d/{opaque_id}/{upload_id}` — the link record pins
   `protocol_version` and `crypto_suite_id` at issuance ([Web Upload](/design/web-upload/)), so a
   browser guest has nothing to assert.
+- `POST /v1/auth/refresh`, `POST /v1/auth/logout` — session upkeep, not library writes. Reads
+  are admitted at any protocol date, so a `426` on the refresh that keeps a read's access token
+  alive would sign an out-of-window client out of reads it is still allowed, and a `426` on
+  logout would leave open a session its holder asked to close. Opening a session
+  (`POST /v1/auth/login`, `POST /v1/auth/register`) stays gated, so an out-of-window client
+  still learns it must upgrade before it signs in again.
 
 `capsule-server/tests/conformance.rs` pins both the gated set and this exempt set against the
 emitted document, and walks every operation on the wire, so a route cannot join or leave the

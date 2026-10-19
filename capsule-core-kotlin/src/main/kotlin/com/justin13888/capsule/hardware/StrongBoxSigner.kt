@@ -3,8 +3,8 @@ package com.justin13888.capsule.hardware
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyInfo
 import android.security.keystore.KeyProperties
-import uniffi.capsule_core.HardwareSigner
-import uniffi.capsule_core.HardwareSignerException
+import uniffi.capsule_sdk.FfiHardwareSigner
+import uniffi.capsule_sdk.FfiHardwareSignerException
 import java.security.KeyFactory
 import java.security.KeyPairGenerator
 import java.security.KeyStore
@@ -13,7 +13,7 @@ import java.security.interfaces.ECPrivateKey
 import java.security.interfaces.ECPublicKey
 
 /**
- * Android StrongBox–backed [HardwareSigner]. The private key is generated inside the
+ * Android StrongBox–backed [FfiHardwareSigner].The private key is generated inside the
  * AndroidKeyStore — StrongBox (a dedicated secure element) when [strongBoxBacked] is true, else
  * the TEE — and never leaves it.
  *
@@ -30,7 +30,7 @@ import java.security.interfaces.ECPublicKey
  */
 class StrongBoxSigner(
     private val strongBoxBacked: Boolean = true,
-) : HardwareSigner {
+) : FfiHardwareSigner {
     private val keyStore: KeyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
 
     private fun privateKey(keyAlias: String): ECPrivateKey {
@@ -55,7 +55,7 @@ class StrongBoxSigner(
     override fun classicalPublicKey(keyAlias: String): ByteArray {
         val pub =
             keyStore.getCertificate(keyAlias)?.publicKey as? ECPublicKey
-                ?: throw HardwareSignerException.NotFound("no StrongBox key for alias $keyAlias")
+                ?: throw FfiHardwareSignerException.NotFound("no StrongBox key for alias $keyAlias")
         // Emit uncompressed SEC1 (0x04‖x‖y, 65 bytes) — the shape `P256HybridSigningKey` ingests —
         // rather than the JCA default X.509 SubjectPublicKeyInfo, which the Rust side cannot parse.
         val w = pub.w
@@ -79,12 +79,12 @@ class StrongBoxSigner(
     override fun assertNonExportable(keyAlias: String) {
         val key =
             keyStore.getKey(keyAlias, null)
-                ?: throw HardwareSignerException.NotFound("no StrongBox key for alias $keyAlias")
+                ?: throw FfiHardwareSignerException.NotFound("no StrongBox key for alias $keyAlias")
         val factory = KeyFactory.getInstance(key.algorithm, ANDROID_KEYSTORE)
         val info = factory.getKeySpec(key, KeyInfo::class.java) as KeyInfo
         // The private bytes are unreadable by construction; confirm the key is in secure hardware.
         if (!info.isInsideSecureHardware) {
-            throw HardwareSignerException.Exportable("key for $keyAlias is not in secure hardware")
+            throw FfiHardwareSignerException.Exportable("key for $keyAlias is not in secure hardware")
         }
     }
 

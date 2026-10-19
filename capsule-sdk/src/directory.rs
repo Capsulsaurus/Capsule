@@ -100,6 +100,7 @@ impl DirectoryError {
             Self::Malformed => Some(error_codes::DIRECTORY_MALFORMED),
             Self::IdentityMismatch => Some(error_codes::DIRECTORY_IDENTITY_MISMATCH),
             Self::VersionConflict => Some(error_codes::DIRECTORY_VERSION_CONFLICT),
+            Self::UntrustedSignature => Some(error_codes::DIRECTORY_UNTRUSTED_SIGNATURE),
             _ => None,
         }
     }

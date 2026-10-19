@@ -28,7 +28,7 @@
 //! path that resolves under both.
 //!
 //! LQIP is *not* here: it lives in the unconditional [`crate::lqip`] module so the import
-//! pipeline, the uniffi FFI and `capsule-wasm` share one implementation (slice `S-B14`). This
+//! pipeline, the app FFI and `capsule-wasm` share one implementation (slice `S-B14`). This
 //! module produces the pixels [`crate::lqip::Lqip::encode`] consumes.
 //!
 //! # What this build can and cannot do
@@ -37,13 +37,21 @@
 //! [`UnsupportedFormat`](crate::media::MediaError::UnsupportedFormat) or a recorded per-format
 //! deferral — never a silent absence, and never a panic (slice `S-B13`).
 //!
-//! **Decode** covers JPEG, PNG, JXL, TIFF and GIF. **Encode** covers JXL alone, and losslessly:
-//! `image/jxl` is the tier table's committed master format, but the pure-Rust backend is
-//! `zune-jpegxl`'s `JxlSimpleEncoder`, so the tier's declared `q=50` is advisory today.
+//! **Decode** covers JPEG, PNG, JXL, TIFF and GIF, the ARW and DNG RAW families (issue #589,
+//! through `rawshift-image`'s RAW pipeline rather than its standard-image one; see
+//! `media::decode`), plus AVIF under the opt-in `media-avif-decode` feature, which links a
+//! system libdav1d and which the CLI enables on every target but Windows (issue #588). An ARW
+//! or DNG variant upstream has no decoder for — Sony's lossy compressed ARW, a lossless-JPEG
+//! DNG — defers like a missing codec. **Encode** depends on the opt-in
+//! `media-linked-codecs` feature, which the CLI enables and the mobile FFI does not. With it,
+//! the thumbnail and preview tiers are encoded as **lossy** JXL (libjxl) and AVIF (ravif).
+//! Without it, only the thumbnail is encoded, as JXL alone and losslessly: the pure-Rust backend
+//! is `zune-jpegxl`'s `JxlSimpleEncoder`, so the tier's declared `q=50` is advisory there.
 //!
-//! HEIC, AVIF, WebP and the RAW families sniff correctly and refuse to decode. HEIC and AVIF
-//! need system libraries (libheif, libdav1d), AVIF encode needs an assembler (nasm) the cross
-//! and cargo-ndk builds do not have, and **WebP is a compile failure rather than a missing
+//! HEIC, WebP and the other five RAW families (CR2, CR3, CRW, NEF, RAF) — and AVIF without
+//! `media-avif-decode` — sniff correctly and refuse to decode. HEIC is refused by decision: libheif and libde265 are LGPL-3.0 and excluded
+//! by policy, and no permissive backend exists in `rawshift-image`. **WebP is a compile failure
+//! rather than a missing
 //! toolchain**: `rawshift-image`'s WebP module passes `*const i8` where `libwebp-sys` declares
 //! `*const c_char`, which is `u8` on aarch64 — every mobile target — and the module is compiled
 //! by decode *or* encode, so there is no decode-only escape.
@@ -55,6 +63,7 @@ mod derivative;
 mod detect;
 mod error;
 mod resize;
+mod tiff_bounds;
 
 // `native`-gated because `lifecycle` is its only caller and `lifecycle` is `native`-gated: a
 // `--features media` build without `native` (which the aarch64 cross-check uses, to isolate the

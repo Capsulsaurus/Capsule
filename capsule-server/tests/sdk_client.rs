@@ -402,6 +402,105 @@ async fn the_sdk_stores_and_fetches_an_escrow_over_a_socket() {
     );
 }
 
+/// The sealed identity round trip (#544), over a socket, pinned to the contract's route the same
+/// way the escrow case above is: what the SDK stored is read back at
+/// `/v1/auth/escrow/identity`, and what was seeded there is what the SDK fetches.
+#[tokio::test]
+async fn the_sdk_stores_and_fetches_a_sealed_identity_over_a_socket() {
+    use capsule_sdk::recovery::{RecoveryClient, RecoveryError};
+
+    const PATH: &str = "/v1/auth/escrow/identity";
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let base_url = serve(&fixture).await;
+    let client =
+        RecoveryClient::new(session(&base_url).await, &base_url).expect("an API root parses");
+
+    // Nothing stored yet: its own typed state and its own code, not the escrow's.
+    let missing = client
+        .fetch_sealed_identity()
+        .await
+        .expect_err("a fresh account has stored no sealed identity");
+    assert!(
+        matches!(missing, RecoveryError::IdentityNotStored),
+        "got {missing:?}"
+    );
+    assert_eq!(
+        missing.error_code(),
+        Some(capsule_i18n::error_codes::ESCROW_IDENTITY_NOT_STORED)
+    );
+
+    // The SDK writes; the contract's route is where it landed.
+    let sealed = b"\x00 sealed identity \xff".to_vec();
+    let stored = client
+        .store_sealed_identity(&sealed)
+        .await
+        .expect("the sealed identity stores");
+    assert!(!stored.replaced, "the account's first");
+    let response = fixture
+        .client
+        .get(PATH)
+        .header("authorization", &bearer)
+        .send()
+        .await;
+    let seen = response.assert_status(kynos::http::StatusCode::OK).bytes();
+    assert_eq!(seen.as_ref(), sealed.as_slice());
+    assert_eq!(
+        client
+            .fetch_sealed_identity()
+            .await
+            .expect("and comes back"),
+        sealed
+    );
+
+    // A reseal seeded at the contract's route is the one the SDK sees next, and storing one
+    // more through the SDK reports the replacement.
+    let resealed = b"resealed under a rotated master key".to_vec();
+    fixture
+        .client
+        .put(PATH)
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .body("application/octet-stream", resealed.clone())
+        .send()
+        .await
+        .assert_status(kynos::http::StatusCode::OK);
+    assert_eq!(
+        client
+            .fetch_sealed_identity()
+            .await
+            .expect("the reseal comes back"),
+        resealed
+    );
+    assert!(
+        client
+            .store_sealed_identity(&sealed)
+            .await
+            .expect("stores again")
+            .replaced
+    );
+
+    // An empty seal is refused like an empty escrow, with the server's code.
+    let refused = client
+        .store_sealed_identity(&[])
+        .await
+        .expect_err("an empty body cannot be a sealed identity");
+    assert!(
+        matches!(&refused, RecoveryError::Malformed { .. }),
+        "got {refused:?}"
+    );
+    assert_eq!(
+        refused.error_code(),
+        Some(capsule_i18n::error_codes::ESCROW_MALFORMED)
+    );
+
+    // The escrow slot was never touched.
+    assert!(matches!(
+        client.fetch_escrow().await,
+        Err(RecoveryError::NotEnrolled)
+    ));
+}
+
 /// **`S-D17`'s Done-when, against the server that decides.** A token the client still believes
 /// in and the server has stopped honouring is refreshed once and the call replayed once.
 ///
@@ -740,7 +839,14 @@ async fn a_pushed_asset_reaches_the_feed_and_the_entry_decodes_and_verifies() {
         .ensure_album(album_id, "Imports")
         .expect("an album");
     let asset_id = workspace.import_asset(album_id, &src).expect("an import");
-    let bundle = workspace.upload_bundle(&asset_id).expect("a bundle");
+    let mut bundle = workspace.upload_bundle(&asset_id).expect("a bundle");
+    // This fixture earns no derivative tier, so it carries a derivative manifest by hand (#556):
+    // the server stores the role's bytes without parsing them, so what is under test is the
+    // rung — the gate admitting the SDK's request, the feed handing the bytes back unchanged.
+    assert!(bundle.derivative_manifests.is_empty());
+    bundle
+        .derivative_manifests
+        .push(b"a signed derivative manifest, as canonical CBOR".to_vec());
 
     // ── A server that admits this library's album and device ──────────────────────────────
     let fixture = Fixture::working();
@@ -831,6 +937,19 @@ async fn a_pushed_asset_reaches_the_feed_and_the_entry_decodes_and_verifies() {
     assert_eq!(
         entry.manifest_cbor, bundle.provenance_blob,
         "the feed serves the provenance blob's bytes back unchanged"
+    );
+    assert_eq!(
+        entry.derivative_manifests, bundle.derivative_manifests,
+        "the feed serves each derivative manifest's bytes back unchanged"
+    );
+    let held = capsule_sdk::staged::held_from_feed(entry);
+    let replan = capsule_sdk::push::plan(&scheduler, &bundle, &held, false);
+    assert!(
+        replan
+            .blobs
+            .iter()
+            .all(|blob| blob.tier != capsule_core::import::UploadTier::Preview),
+        "a re-push reads the manifest as held from the feed and opens no session for it"
     );
 
     // ── …and a receiving device can decode and verify them ────────────────────────────────
@@ -1005,7 +1124,8 @@ async fn e2e_case_4_a_peer_pulls_a_shared_album_through_the_sdk_over_a_socket() 
 /// served JSON, so the mock encoded the same wrong belief as the client and nothing caught it.
 /// Only a socket shows the two ends agree: an upload is finalized through the router, the SDK
 /// fetches its receipt over the wire, and the receipt verifies under the server's own
-/// attestation key with the fields the uploader sent.
+/// attestation key with the fields the uploader sent — the key itself fetched through the SDK
+/// from the origin's `.well-known` record, not pinned from the fixture (issue #547).
 #[tokio::test]
 async fn the_sdk_fetches_a_custody_receipt_and_verifies_it_under_the_attestation_key() {
     use capsule_core::crypto::hash::hash_bytes;
@@ -1074,15 +1194,23 @@ async fn the_sdk_fetches_a_custody_receipt_and_verifies_it_under_the_attestation
         .parse::<Timestamp>()
         .expect("an instant")
         .as_second();
+
+    // The pin comes over the wire too (issue #547): the same client, built on the `/v1` API
+    // root, fetches the attestation-key record from the origin's `.well-known`, and what it
+    // pins is the key the server signs with.
+    let pinned = client
+        .fetch_attestation_keys()
+        .await
+        .expect("the SDK fetches the attestation keys from the origin");
+    let signing = fixture.attestation_key.verifying_key().to_bytes();
+    assert!(
+        pinned.iter().any(|key| key.to_bytes() == signing),
+        "the published history holds the server's signing key"
+    );
     assert_eq!(
-        verify_receipt(
-            &receipt,
-            &[fixture.attestation_key.verifying_key()],
-            &expectations,
-            at
-        ),
+        verify_receipt(&receipt, &pinned, &expectations, at),
         Ok(()),
-        "the fetched receipt verifies under the pinned attestation key"
+        "the fetched receipt verifies under the fetched attestation keys"
     );
 
     // The pin is load-bearing: the same receipt under any other key does not verify.

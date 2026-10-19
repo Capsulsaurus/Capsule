@@ -10,7 +10,7 @@ Every command in this repository runs through **[mise](https://mise.jdx.dev/)**.
 
 ```bash
 mise install          # installs the pinned tools from [tools] in mise.toml
-mise run setup        # bun install in capsule-web + capsule-docs, uv sync in capsule-vision
+mise run setup        # bun install in capsule-web + capsule-docs
 mise run hooks-install # installs the git hooks (hk)
 ```
 
@@ -38,12 +38,11 @@ mise run hooks-install # installs the git hooks (hk)
 | `mise run check-web` | `format-check-web`, `lint-check-web`, `test-web`, `build-web` |
 | `mise run check-docs` | `format-check-docs`, `lint-check-docs`, `build-docs` (a real Astro build — a broken internal link fails it) |
 | `mise run check-md` | `lint-check-md` (markdownlint over every `.md` in the repo) |
-| `mise run check-vision` | `format-check-vision`, `lint-check-vision` |
 | `mise run check-kotlin` | `format-check-kotlin`, `lint-check-kotlin` |
 
 ### The ones you run most
 
-- **Rust:** `format-rust` (`cargo fmt`), `lint-rust` / `lint-check-rust` (`cargo clippy --workspace` with the shared `$CLIPPY_FLAGS` set — lints are configured once in `mise.toml`, never per crate), `test-rust` (`cargo nextest run`, three invocations: the workspace, then `capsule-core` and `capsule-sdk` with `--features ffi`), `test-rust-release` (the `#[cfg(not(debug_assertions))]` tests, which every test-profile build compiles out: `cargo nextest run --cargo-profile release` over the crates listed in `RELEASE_TEST_CRATES`, after a guard that fails when such a test appears in any other crate — CI's test job and pre-push both run it), `test-rust-containers` (the Postgres and Valkey container tiers `test-rust` skips, failing on any skip — see [The container tiers](#the-container-tiers)), `build-rust`, `test-coverage-rust`.
+- **Rust:** `format-rust` (`cargo fmt`), `lint-rust` / `lint-check-rust` (`cargo clippy --workspace` with the shared `$CLIPPY_FLAGS` set — lints are configured once in `mise.toml`, never per crate), `test-rust` (`cargo nextest run`, two invocations: the workspace, then `capsule-sdk` with `--features ffi`), `test-rust-release` (the `#[cfg(not(debug_assertions))]` tests, which every test-profile build compiles out: `cargo nextest run --cargo-profile release` over the crates listed in `RELEASE_TEST_CRATES`, after a guard that fails when such a test appears in any other crate — CI's test job and pre-push both run it), `test-rust-containers` (the Postgres and Valkey container tiers `test-rust` skips, failing on any skip — see [The container tiers](#the-container-tiers)), `build-rust`, `test-coverage-rust`.
 - **Web:** `format-web` / `lint-web` (biome), `test-web` (bun; depends on `build-wasm`, `share-kat`, and `drop-kat`, which generate the WASM glue and the cross-language KAT fixtures the tests load), `build-web`.
 - **Docs:** `format-docs` / `lint-docs` (biome over `capsule-docs`), `build-docs` (Astro/Starlight).
 - **Markdown:** `lint-md` / `lint-check-md`.
@@ -125,11 +124,11 @@ a task that leaks them. Bring them down with
 opened first and its schema checked against the migrations this binary was built for — a
 database that is behind refuses, naming `capsule-server-migration up`. Then `VALKEY_URL` is
 connected to and `PING`ed, and a server that cannot be reached is a refusal naming the failure
-(never the URL). Every port is then on one of the two. Without `VALKEY_URL` and without
-`--memory` it exits 2 naming the variable — the refusal `capsule-server/src/store/mod.rs` has
-documented since `S-C29`. With `OIDC_ISSUER` set it refuses too, because the OIDC stores have no
-durable adapter yet (#460). None of these ever silently falls back to the in-memory adapters,
-which is the whole point: a deployment that forgot a variable must fail closed.
+(never the URL). Every port is then on one of the two, the OIDC ceremony and federated-account
+stores included (#460). Without `VALKEY_URL` and without `--memory` it exits 2 naming the
+variable — the refusal `capsule-server/src/store/mod.rs` has documented since `S-C29`. Neither
+refusal ever silently falls back to the in-memory adapters, which is the whole point: a
+deployment that forgot a variable must fail closed.
 
 The Valkey adapters are proven against a live server by `capsule-server/tests/valkey.rs`, which
 runs the same conformance suites the in-memory doubles pass. It is env-gated so `mise run

@@ -1,7 +1,7 @@
 //! **E2E case 2** — full import + upload + finalize.
 //!
 //! Local import → the library's upload bundle → the SDK's staged ladder (the index tier's
-//! provenance and metadata blobs, then the JXL thumbnail, then the original) → every blob
+//! provenance and metadata blobs, then the JXL/AVIF thumbnail and preview, then the original) → every blob
 //! finalized at its content address under the server's blob root, byte for byte → the server's
 //! storage-verify answer is durable → the asset is on the feed with its original held, its
 //! derivative referenced and its metadata blob named.
@@ -10,7 +10,7 @@
 //! it and encodes a real thumbnail, and T1 is a real upload rather than the byte-free sentinel
 //! an 8×8 still gets.
 
-use capsule_core::crypto::hash::Hash32;
+use capsule_core::crypto::hash::{Hash32, hash_bytes};
 use capsule_core::import::UploadTier;
 use capsule_e2e::fixtures::large_synthetic_jpeg;
 use capsule_e2e::push::push_asset;
@@ -30,9 +30,14 @@ async fn e2e_case_2_import_upload_finalize_lands_every_blob_at_its_content_addre
         !bundle.derivatives.is_empty(),
         "a still past the thumbnail cap yields derivative bytes"
     );
+    // The workspace build links `media-linked-codecs` through capsule-cli, so both delivery
+    // formats are encoded; a pure-Rust `media` build would yield JXL alone.
     assert!(
-        bundle.derivatives.iter().all(|d| d.format == "image/jxl"),
-        "this build encodes thumbnails as JXL: {:?}",
+        bundle
+            .derivatives
+            .iter()
+            .all(|d| d.format == "image/jxl" || d.format == "image/avif"),
+        "this build encodes derivatives as JXL and AVIF: {:?}",
         bundle
             .derivatives
             .iter()
@@ -40,10 +45,24 @@ async fn e2e_case_2_import_upload_finalize_lands_every_blob_at_its_content_addre
             .collect::<Vec<_>>()
     );
 
+    // Every derivative ships beside the signed manifest a receiver opens it with.
+    assert!(
+        bundle.derivative_manifests.len() >= bundle.derivatives.len(),
+        "each derivative has its manifest: {} manifests for {} derivatives",
+        bundle.derivative_manifests.len(),
+        bundle.derivatives.len()
+    );
+
     // The ladder ran every tier: two T0 rungs (provenance, then metadata), one T1 per
-    // derivative, then T2.
+    // derivative manifest and one per derivative, then T2.
     let mut expected = vec![UploadTier::Index, UploadTier::Index];
-    expected.extend(bundle.derivatives.iter().map(|_| UploadTier::Preview));
+    expected.extend(
+        bundle
+            .derivative_manifests
+            .iter()
+            .chain(bundle.derivatives.iter().map(|d| &d.bytes))
+            .map(|_| UploadTier::Preview),
+    );
     expected.push(UploadTier::Original);
     assert_eq!(pushed.report.tier_sequence(), expected);
     assert_eq!(pushed.report.deferred, 0);
@@ -61,6 +80,9 @@ async fn e2e_case_2_import_upload_finalize_lands_every_blob_at_its_content_addre
             on_disk(&derivative.ciphertext_hash.to_hex()),
             derivative.bytes
         );
+    }
+    for manifest in &bundle.derivative_manifests {
+        assert_eq!(&on_disk(&hash_bytes(manifest).to_hex()), manifest);
     }
     assert_eq!(on_disk(&pushed.provenance_hash), bundle.provenance_blob);
 

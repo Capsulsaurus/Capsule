@@ -24,7 +24,11 @@ path = "src/lib.rs"
 [dependencies]
 capsule-cli-entity = { path = "./entity" }
 capsule-cli-migration = { path = "./migration" }
-capsule-core = { path = "../capsule-core" }
+# `media-linked-codecs`: the lossy libjxl master, the AVIF delivery variant and the preview tier
+# (issue #437). The CLI is the stabilize-first client that imports real libraries, and it builds
+# only for desktop hosts, so it takes the native-code encoders the mobile FFI deliberately does
+# not. Building it needs cmake, a C++17 compiler, libclang and — on x86_64 — nasm.
+capsule-core = { path = "../capsule-core", features = ["media-linked-codecs"] }
 # The CLI is a client: every network flow (auth login/refresh/logout, the sync
 # feed) rides `capsule-sdk`, the sanctioned network path — the CLI never
 # hand-rolls a request (S-D5). `capsule-i18n` supplies the localized user-facing
@@ -34,6 +38,8 @@ capsule-i18n = { path = "../capsule-i18n" }
 secrecy = { workspace = true }
 serde_json = { workspace = true }
 base64 = { workspace = true }
+# `capsule auth recover` reads a minted recovery secret, which is shown as hex (#544).
+hex = { workspace = true }
 capitalize = "0.3.4"
 jiff = { workspace = true }
 clap = { version = "4.6.1", features = ["derive"] }
@@ -64,4 +70,27 @@ tracing-subscriber = { version = "0.3.23", features = [
 # Asset ids on the `capsule cull` argument surface (S-D16). Already the workspace-wide
 # identifier pin; the CLI simply needs to name and parse the type it prints.
 uuid = { workspace = true }
+# `capsule auth login --oidc` (S-N2): decoding the provider's redirect query on the loopback
+# listener. Already in the graph under reqwest; named here so the listener does not hand-roll
+# percent-decoding.
+url = "2.5.8"
 walkdir = "2.5.0"
+
+# `media-avif-decode`: AVIF stills decode, so an AVIF original gets its dimensions, placeholder and
+# thumbnail instead of a no-codec deferral (issue #588). It links a **system** libdav1d (BSD-2)
+# through pkg-config, so the build host needs `libdav1d-dev` / `dav1d` and the binary needs the
+# shared library at run time. Gated off Windows, which has no system package that ships libdav1d
+# with a pkg-config file on the release runner, and which is a deferred platform tier: there an
+# AVIF original is still recognised and deferred with a typed no-codec status, never silently
+# skipped. Cargo unifies this with the unconditional dependency above.
+[target.'cfg(not(windows))'.dependencies]
+capsule-core = { path = "../capsule-core", features = ["media-avif-decode"] }
+
+[dev-dependencies]
+# `tests/oidc_dex.rs` plays the person at the browser against dex (S-N2): it follows the
+# authorization URL, submits dex's password form, and follows the redirect to the CLI's loopback
+# listener. The workspace pin, already in the graph through capsule-sdk.
+reqwest = { workspace = true }
+# `test-util` gives the OIDC loopback listener's tests a paused clock, so its ten-second read
+# timeout is exercised without the test waiting ten seconds.
+tokio = { workspace = true, features = ["test-util"] }

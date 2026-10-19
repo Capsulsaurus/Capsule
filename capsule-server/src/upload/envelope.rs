@@ -286,8 +286,38 @@ fn check_shared(
     check_consistency(declared, envelope)?;
 
     // The closed still-derivative format set, on receipt.
-    check_derivative(declared, envelope)
+    check_derivative(declared, envelope)?;
+
+    check_derivative_manifest(declared)
 }
+
+/// The two shape rules a `derivative_manifest` blob owes (#556), both key-free.
+///
+/// - It is signed CBOR with no media type of its own, so it declares the opaque type, exactly as
+///   the asset's `provenance` blob does. A media type would claim the bytes are something a
+///   viewer could render.
+/// - It fits under the sync feed's inline cap, because the feed is where a receiver gets it: a
+///   manifest the feed would omit is one no receiver could open its derivative with, so it is
+///   refused here with a `413` rather than accepted and silently dropped from every page.
+///
+/// What it does **not** check is the manifest's content. The server holds no key, and every
+/// field a receiver relies on is under the manifest's own signatures, which the receiver
+/// verifies; a server-side parse would be a second, weaker reader of a signed document.
+fn check_derivative_manifest(declared: &DeclaredBlob<'_>) -> Result<(), GateReject> {
+    if declared.blob_role != BlobRole::DerivativeManifest {
+        return Ok(());
+    }
+    if declared.content_type != OPAQUE_CONTENT_TYPE {
+        return Err(GateReject::UnsupportedContentType);
+    }
+    if declared.size > crate::sync::MAX_MANIFEST_BYTES {
+        return Err(GateReject::FileTooLarge);
+    }
+    Ok(())
+}
+
+/// The content type a blob the server may not parse declares.
+const OPAQUE_CONTENT_TYPE: &str = "application/octet-stream";
 
 /// The tier table's closed-format rule, run by the receiver: a `thumbnail` or `preview`
 /// derivative whose declared format is outside the closed still set is a structural rejection.
@@ -1053,6 +1083,52 @@ mod tests {
         assert_eq!(
             check_create(&view, &format_only, &context(&policy)),
             Err(GateReject::EnvelopeMismatch("derivative_format"))
+        );
+    }
+
+    #[test]
+    fn a_derivative_manifest_is_opaque_and_fits_the_feed() {
+        // #556: the signed manifest that opens a derivative. Opaque CBOR, and small enough for
+        // the feed to inline, because the feed is the only way a receiver gets it.
+        let envelope = self::envelope();
+        let policy = policy();
+        let mut view = declared(&envelope, BlobRole::DerivativeManifest);
+        view.content_type = OPAQUE_CONTENT_TYPE;
+        assert_eq!(check_create(&view, &envelope, &context(&policy)), Ok(()));
+
+        // At the cap is accepted; one byte past it would be dropped from every page, so it is
+        // refused instead.
+        view.size = crate::sync::MAX_MANIFEST_BYTES;
+        assert_eq!(check_create(&view, &envelope, &context(&policy)), Ok(()));
+        view.size = crate::sync::MAX_MANIFEST_BYTES + 1;
+        assert_eq!(
+            check_create(&view, &envelope, &context(&policy)),
+            Err(GateReject::FileTooLarge)
+        );
+
+        // A media type would claim the bytes are something a viewer could render.
+        let mut typed = declared(&envelope, BlobRole::DerivativeManifest);
+        typed.content_type = "image/jxl";
+        assert_eq!(
+            check_create(&typed, &envelope, &context(&policy)),
+            Err(GateReject::UnsupportedContentType)
+        );
+
+        // It is not a derivative, so it may not carry the derivative pair.
+        let carried = derivative_envelope("thumbnail", "image/jxl");
+        let mut view = declared(&carried, BlobRole::DerivativeManifest);
+        view.content_type = OPAQUE_CONTENT_TYPE;
+        assert_eq!(
+            check_create(&view, &carried, &context(&policy)),
+            Err(GateReject::EnvelopeMismatch("derivative_role"))
+        );
+
+        // And the cap is this role's alone: an original of the same size is unaffected.
+        let mut original = declared(&envelope, BlobRole::Original);
+        original.size = crate::sync::MAX_MANIFEST_BYTES + 1;
+        assert_eq!(
+            check_create(&original, &envelope, &context(&policy)),
+            Ok(())
         );
     }
 

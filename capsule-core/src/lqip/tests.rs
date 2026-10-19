@@ -109,7 +109,7 @@ fn encode_is_exactly_thirty_two_bytes() {
 /// Pinned known-answer vector for a small frame.
 ///
 /// chromahash is bit-exact across platforms and this module is the single, unconditional
-/// implementation linked by the CLI, the uniffi FFI and `capsule-wasm` alike — so pinning the
+/// implementation linked by the CLI, the app FFI and `capsule-wasm` alike — so pinning the
 /// bytes here pins them for every surface. A change to this value is a change to a *signed*
 /// sidecar field and must be a deliberate, version-bumped decision.
 #[test]

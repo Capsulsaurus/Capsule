@@ -26,14 +26,13 @@
 //! `VALKEY_URL`"*. Every durable port is then on one of the two (#402, #403, #446): Postgres for
 //! every record a restart must not lose, Valkey for the volatile state.
 //!
-//! The one exception is OIDC, whose ceremony and federated-account stores have in-memory
-//! adapters only (#460). A durable boot that configures it is refused before either probe runs
-//! rather than given an in-memory store beside a real Valkey. design/filesystem/server.md is
-//! explicit — *"Required means required"* — and a server that came up holding state it will lose
-//! on the next restart is worse than one that does not start.
+//! OIDC is no exception since #460: the pending ceremonies are on Valkey and the federated
+//! accounts are rows of the Postgres account table, so a durable boot that configures
+//! `OIDC_ISSUER` runs on the same two backends as everything else and holds no state a restart,
+//! or a callback landing on another replica, would lose.
 //!
-//! No `VALKEY_URL` and no `--memory` is a configuration fault naming the variable
-//! ([`Config::load`]). Nothing here ever silently becomes an in-memory server.
+//! No `DATABASE_URL` or no `VALKEY_URL`, and no `--memory`, is a configuration fault naming every
+//! missing variable ([`Config::load`]). Nothing here ever silently becomes an in-memory server.
 //!
 //! # What the memory profile is, precisely
 //!
@@ -61,8 +60,8 @@ use crate::app::{App, Modules};
 use crate::attestation::postgres::PostgresReceipts;
 use crate::attestation::{AttestationContext, InMemoryReceipts, LocalAttestationKey, ReceiptLog};
 use crate::auth::oidc::{
-    HttpIdentityProvider, IdentityProvider, InMemoryFederatedAccounts, OidcCollaborators,
-    OidcContext, OidcSettings,
+    FederatedAccounts, HttpIdentityProvider, IdentityProvider, OidcCollaborators, OidcContext,
+    OidcSettings,
 };
 use crate::auth::totp::postgres::PostgresTotp;
 use crate::auth::{
@@ -106,12 +105,12 @@ use crate::share::postgres::PostgresShares;
 use crate::share::{InMemoryShares, ShareContext, ShareStore};
 use crate::store::memory::{
     InMemoryAuthState, InMemoryChallenges, InMemoryChannels, InMemoryCohorts, InMemoryEnrollments,
-    InMemoryOidcAuthorizations, InMemoryUploadSessions,
+    InMemoryOidcAuthorizations, InMemoryOidcDevices, InMemoryUploadSessions,
 };
 use crate::store::valkey::ValkeyStores;
 use crate::store::{
-    AuthStateStore, ChallengeStore, ChannelStore, CohortStore, EnrollmentStore, PostgresCohorts,
-    SystemClock, UploadSessionStore,
+    AuthStateStore, ChallengeStore, ChannelStore, CohortStore, EnrollmentStore,
+    OidcAuthorizationStore, OidcDeviceStore, PostgresCohorts, SystemClock, UploadSessionStore,
 };
 use crate::sync::{CursorCodec, SyncContext};
 use crate::upload::{UploadContext, UploadPolicy};
@@ -177,17 +176,6 @@ pub enum BootError {
     OidcClient {
         /// What went wrong; names the bundle's path, never its contents.
         detail: String,
-    },
-    /// A durable backend was selected and its adapter is not written yet.
-    ///
-    /// Named with the issue that will honour it, because "not implemented" without a pointer is
-    /// a dead end for whoever reads it.
-    #[error("{key} selects a durable adapter that is not implemented yet (see {issue})")]
-    AdapterUnavailable {
-        /// The setting that selected it.
-        key: &'static str,
-        /// Where the work is tracked.
-        issue: &'static str,
     },
     /// The Valkey at `VALKEY_URL` could not be reached, or did not answer `PING`.
     ///
@@ -270,17 +258,6 @@ pub async fn assemble(config: &Config) -> Result<Assembled, BootError> {
             compose(config, stores, ports, "the in-memory adapters")
         }
         Backends::Durable => {
-            // Checked before anything else the durable arm does, so it survives the adapters
-            // filling that arm: the OIDC ceremony store and the federated-account directory have
-            // in-memory adapters only (#460), and a durable profile must never run one of those
-            // beside a real Valkey — a pending authorization that lives in one replica's memory
-            // is a sign-in that fails whenever the callback lands on another.
-            if config.oidc.is_some() {
-                return Err(BootError::AdapterUnavailable {
-                    key: "OIDC_ISSUER",
-                    issue: "#460 (the OIDC ceremony and federated-account adapters)",
-                });
-            }
             // Both probes run for real, in the order the ports are declared: `DATABASE_URL` is
             // demanded and the pool opened first — a schema that is not the one this binary was
             // built for refuses here — and then Valkey must answer `PING`. Only then is any
@@ -315,8 +292,9 @@ fn warn_in_memory() {
 /// What it does instead is read `seaql_migrations` and refuse, naming the command an operator has
 /// to run.
 ///
-/// `DATABASE_URL` is demanded here rather than by [`crate::config::Demands`] because it is this
-/// *path* that needs it: `serve --memory` and the `--memory` operator commands never reach here.
+/// `DATABASE_URL` is demanded by [`crate::config::Demands`] for every durable subcommand, so an
+/// operator is refused with the configuration exit code and every missing variable at once; the
+/// demand here is the [`BootError::Missing`] backstop behind it.
 async fn open_durable_database(config: &Config) -> Result<sea_orm::DatabaseConnection, BootError> {
     let database_url = config.database_url.as_ref().ok_or(BootError::Missing {
         key: "DATABASE_URL",
@@ -435,6 +413,9 @@ struct Stores {
     uploads: Arc<dyn UploadSessionStore>,
     marks: Arc<dyn CollectionStore>,
     quotas: Arc<dyn QuotaStore>,
+    /// The share links: read by the application, and by the collector, which must not sweep a
+    /// blob a live link serves (#653). Here rather than in [`Ports`] so both are one store.
+    shares: Arc<dyn ShareStore>,
 }
 
 impl Stores {
@@ -446,10 +427,22 @@ impl Stores {
                 self.blobs.clone(),
                 self.marks.clone(),
                 self.quotas.clone(),
+                self.shares.clone(),
                 self.clock.clone(),
                 grace_window,
+            )
+            // The upload-progress view has no lifetime of its own, so `gc --apply` is what
+            // keeps it from growing with every abandoned upload (#519).
+            .with_progress_sweep(Arc::new(self.uploads.clone())),
+            // The same share store as the collector's, so a record the collector keeps for a
+            // live link is not one the scrub reports as an orphan (#653).
+            scrub: ScrubContext::new(
+                self.index.clone(),
+                self.blobs.clone(),
+                self.uploads.clone(),
+                self.shares.clone(),
+                self.clock.clone(),
             ),
-            scrub: ScrubContext::new(self.index.clone(), self.blobs.clone(), self.uploads.clone()),
         }
     }
 }
@@ -470,6 +463,7 @@ impl Base {
             uploads: Arc::new(InMemoryUploadSessions::with_default_ttl(self.clock.clone())),
             marks: Arc::new(InMemoryCollection::new()),
             quotas: Arc::new(InMemoryQuota::new()),
+            shares: Arc::new(InMemoryShares::new()),
             root: self.root,
             clock: self.clock,
             blobs: self.blobs,
@@ -483,6 +477,7 @@ impl Base {
             uploads: valkey.uploads(),
             marks: Arc::new(PostgresCollection::new(connection.clone())),
             quotas: Arc::new(PostgresQuota::new(connection.clone())),
+            shares: Arc::new(PostgresShares::new(connection.clone())),
             root: self.root,
             clock: self.clock,
             blobs: self.blobs,
@@ -517,26 +512,37 @@ async fn base(config: &Config) -> Result<Base, BootError> {
     })
 }
 
-/// The four account ports, which every adapter family implements on one object.
+/// The five account ports, which every adapter family implements on one object.
+///
+/// One object is the point (#460): the federated accounts are rows of the same table as the
+/// password accounts, so the OIDC `409` and the federated profile are answered from the rows the
+/// password ports read. Built from one `Arc`, the five cannot be wired to two stores.
 #[derive(Debug, Clone)]
 struct AccountPorts {
     accounts: Arc<dyn AccountDirectory>,
     registry: Arc<dyn AccountRegistry>,
     profiles: Arc<dyn AccountProfiles>,
     passwords: Arc<dyn PasswordChange>,
+    federated: Arc<dyn FederatedAccounts>,
 }
 
 impl AccountPorts {
-    /// All four, out of one store.
+    /// All five, out of one store.
     fn of<A>(store: Arc<A>) -> Self
     where
-        A: AccountDirectory + AccountRegistry + AccountProfiles + PasswordChange + 'static,
+        A: AccountDirectory
+            + AccountRegistry
+            + AccountProfiles
+            + PasswordChange
+            + FederatedAccounts
+            + 'static,
     {
         Self {
             accounts: store.clone(),
             registry: store.clone(),
             profiles: store.clone(),
-            passwords: store,
+            passwords: store.clone(),
+            federated: store,
         }
     }
 }
@@ -565,9 +571,13 @@ struct Ports {
     enrollments: Arc<dyn EnrollmentStore>,
     channels: Arc<dyn ChannelStore>,
     moderation: Arc<dyn ModerationStore>,
-    shares: Arc<dyn ShareStore>,
     drops: Arc<dyn DropStore>,
     counters: Arc<dyn CounterStore>,
+    /// The pending OIDC ceremonies. Built on both arms whether or not `OIDC_ISSUER` is set, and
+    /// read only when it is.
+    oidc_authorizations: Arc<dyn OidcAuthorizationStore>,
+    /// The pending OIDC device authorizations (issue #635), on the same terms.
+    oidc_devices: Arc<dyn OidcDeviceStore>,
 }
 
 /// The credential verifier, built once.
@@ -603,18 +613,18 @@ fn memory_ports(config: &Config, clock: &Arc<SystemClock>) -> Result<Ports, Boot
         enrollments: Arc::new(InMemoryEnrollments::with_default_ttl(clock.clone())),
         channels: Arc::new(InMemoryChannels::with_default_ttl(clock.clone())),
         moderation: Arc::new(InMemoryModeration::new()),
-        shares: Arc::new(InMemoryShares::new()),
         drops: Arc::new(InMemoryDrops::new()),
         counters: Arc::new(InMemoryCounters::new()),
+        oidc_authorizations: Arc::new(InMemoryOidcAuthorizations::with_default_ttl(clock.clone())),
+        oidc_devices: Arc::new(InMemoryOidcDevices::with_default_ttl(clock.clone())),
     })
 }
 
 /// The durable profile's ports: Postgres for every record a restart must not lose, Valkey for
 /// the volatile state design/filesystem/server.md assigns it.
 ///
-/// Nothing here is in-memory. The two OIDC adapters are the only ports with no durable
-/// implementation (#460), and [`assemble`] refuses a durable boot that configures OIDC before
-/// reaching here, so [`compose`] never builds them on this path.
+/// Nothing here is in-memory, the OIDC ports included (#460): the federated accounts are the
+/// account table's rows and the pending ceremonies are Valkey's.
 fn durable_ports(
     config: &Config,
     clock: &Arc<SystemClock>,
@@ -646,9 +656,10 @@ fn durable_ports(
         enrollments: valkey.enrollments(),
         channels: valkey.channels(),
         moderation: Arc::new(PostgresModeration::new(db())),
-        shares: Arc::new(PostgresShares::new(db())),
         drops: Arc::new(PostgresDrops::new(db())),
         counters: Arc::new(ValkeyCounters::new(valkey.valkey().clone())),
+        oidc_authorizations: valkey.oidc_authorizations(),
+        oidc_devices: valkey.oidc_devices(),
     })
 }
 
@@ -685,6 +696,7 @@ fn compose(
     let uploads = stores.uploads.clone();
     let marks = stores.marks.clone();
     let quotas = stores.quotas.clone();
+    let shares = stores.shares.clone();
 
     // The signer is built from the private key alone and derives its own public half, which is
     // what lets `ServerInfo` below publish the key tokens actually verify under rather than one
@@ -713,9 +725,10 @@ fn compose(
         enrollments,
         channels,
         moderation,
-        shares,
         drops,
         counters,
+        oidc_authorizations,
+        oidc_devices,
     } = ports;
     // The production write authority (`S-C19`/`S-C20`), not a permissive double: it reads the
     // album's own pin and the account's published device directory, so invariants 6 and 7 mean
@@ -763,8 +776,15 @@ fn compose(
         // Endpoints only; the issuer and client id stay the server's.
         server_info = server_info.with_oidc();
     }
-    if let Some(url) = &config.federation_url {
-        server_info = server_info.with_federation(url.clone());
+    // Published only when the deployment federates (#509): a `FEDERATION_URL` without
+    // `FEDERATION_ENABLED` is an endpoint nothing behind it would answer.
+    if let Some(url) = config.federation_endpoint() {
+        server_info = server_info.with_federation(url.to_owned());
+    } else if config.federation_url.is_some() {
+        tracing::warn!(
+            "FEDERATION_URL is set but FEDERATION_ENABLED is not; this server does not federate \
+             and publishes no federation endpoint"
+        );
     }
     let server_info = Arc::new(server_info);
     // The same object as `issued`, seen through the port discovery publishes it under.
@@ -797,10 +817,9 @@ fn compose(
             tracing::info!(issuer = %oidc.issuer, "the OIDC relying party is configured");
             OidcContext::new(OidcCollaborators {
                 provider,
-                authorizations: Arc::new(InMemoryOidcAuthorizations::with_default_ttl(
-                    clock.clone(),
-                )),
-                accounts: Arc::new(InMemoryFederatedAccounts::new()),
+                authorizations: oidc_authorizations,
+                devices: oidc_devices,
+                accounts: accounts.federated.clone(),
                 clock: clock.clone(),
             })
         }
@@ -875,7 +894,7 @@ fn compose(
             capabilities: issued,
             peers,
             clock: clock.clone(),
-            federation_url: config.federation_url.clone(),
+            enabled: Arc::new(config.federation_endpoint().is_some()),
         }),
         enrollment: EnrollmentContext::new(enrollments, channels, clock.clone()),
         moderation: ModerationContext::new(moderation),
@@ -889,6 +908,7 @@ fn compose(
         server_id = %config.server_domain,
         protocol_min = %config.protocol_min,
         protocol_max = %config.protocol_max,
+        federation = config.federation_endpoint().is_some(),
         adapters,
         "assembled a server"
     );
@@ -1015,17 +1035,17 @@ mod tests {
 
     #[tokio::test]
     async fn a_durable_backend_without_a_database_url_refuses_by_name() {
-        // `Config::load` demands `VALKEY_URL` for a durable `serve` and deliberately does not
-        // demand `DATABASE_URL` — `gc`, `purge` and `scrub` load the same configuration under
-        // `--memory` and need neither. So the demand belongs to this *path*, and this is the
-        // assertion that it is made rather than discovered as a `None` somewhere further in.
+        // `Config::load` is the front door that demands `DATABASE_URL` for a durable boot (#520),
+        // so this path's own demand is the backstop for a `Config` that reached it without one —
+        // asserted to be made by name rather than discovered as a `None` somewhere further in.
         let root = tempfile::tempdir().expect("a scratch directory");
-        let config = Config::load(
+        let mut config = Config::load(
             &durable_environment(root.path()),
             &Overrides::default(),
             Demands::Serve,
         )
         .expect("it is well-formed");
+        config.database_url = None;
         let error = assemble(&config).await.expect_err("it refuses");
         assert!(
             matches!(
@@ -1038,11 +1058,18 @@ mod tests {
         );
     }
 
-    /// The environment a durable `serve` needs, minus the backend URLs a case adds itself.
+    /// The environment a durable `serve` needs, with backend URLs nothing answers on.
+    ///
+    /// `DATABASE_URL` names a port nothing listens on; a case that reaches a database replaces
+    /// it.
     fn durable_environment(root: &std::path::Path) -> BTreeMap<String, String> {
         [
             ("BLOB_ROOT".to_owned(), root.display().to_string()),
             ("JWT_ED25519_DER".to_owned(), EXAMPLE_DER.to_owned()),
+            (
+                "DATABASE_URL".to_owned(),
+                "postgres://127.0.0.1:1/capsule".to_owned(),
+            ),
             ("VALKEY_URL".to_owned(), "redis://127.0.0.1:1".to_owned()),
             // A durable deployment supplies its own attestation identity rather than having one
             // derived from the token signer; `config` refuses without it.
@@ -1201,6 +1228,36 @@ mod tests {
             );
         }
 
+        /// A durable `serve` that configures OIDC assembles on Postgres and Valkey (#460).
+        ///
+        /// It used to be refused by name before either probe, because its two stores had
+        /// in-memory adapters only. Discovery is lazy, so an issuer nothing answers at still
+        /// assembles; what this proves is that the durable arm now builds both OIDC ports.
+        #[tokio::test]
+        async fn the_durable_arm_assembles_with_a_relying_party() {
+            let Some(database) = testing::start("the durable boot arm, with OIDC").await else {
+                return;
+            };
+            let Some((valkey_url, _valkey)) = valkey("the durable boot arm, with OIDC").await
+            else {
+                return;
+            };
+            let root = tempfile::tempdir().expect("a scratch directory");
+            let mut environment: BTreeMap<String, String> = durable_environment(root.path());
+            environment.insert("DATABASE_URL".to_owned(), database.url().to_owned());
+            environment.insert("VALKEY_URL".to_owned(), valkey_url);
+            environment.insert(
+                "OIDC_ISSUER".to_owned(),
+                "http://127.0.0.1:9/nothing-listens-here".to_owned(),
+            );
+            environment.insert("OIDC_CLIENT_ID".to_owned(), "capsule".to_owned());
+            let config = Config::load(&environment, &Overrides::default(), Demands::Serve)
+                .expect("it is well-formed");
+            assert!(config.oidc.is_some(), "the relying party is configured");
+            let assembled = assemble(&config).await.expect("the durable arm assembles");
+            assembled.service().expect("the router builds");
+        }
+
         /// A durable `gc` keeps its marks between processes, so a later pass can sweep.
         ///
         /// The reason the maintenance arm exists: the collector marks a blob on one pass and
@@ -1261,13 +1318,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_durable_backend_with_oidc_configured_names_the_adapter_issue() {
-        // The in-memory ceremony and federated-account adapters are the only ones written; a
-        // durable profile must never run one of them beside a real Valkey.
+    async fn a_durable_backend_with_oidc_configured_goes_on_to_the_probes() {
+        // Until #460 a durable boot with `OIDC_ISSUER` was refused before either probe, naming
+        // the adapters it lacked. Both exist now, so it proceeds exactly as one without OIDC
+        // does — to the first probe, which refuses here only because no database is named. The
+        // name is dropped after loading, because `Config::load` demands it.
         let root = tempfile::tempdir().expect("a scratch directory");
         let environment: BTreeMap<String, String> = [
             ("BLOB_ROOT".to_owned(), root.path().display().to_string()),
             ("JWT_ED25519_DER".to_owned(), EXAMPLE_DER.to_owned()),
+            (
+                "DATABASE_URL".to_owned(),
+                "postgres://127.0.0.1:1/capsule".to_owned(),
+            ),
             ("VALKEY_URL".to_owned(), "redis://127.0.0.1:6379".to_owned()),
             (
                 "ATTESTATION_KEY_SEED".to_owned(),
@@ -1284,20 +1347,20 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        let config = Config::load(&environment, &Overrides::default(), Demands::Serve)
+        let mut config = Config::load(&environment, &Overrides::default(), Demands::Serve)
             .expect("it is well-formed");
+        config.database_url = None;
+        assert!(config.oidc.is_some(), "the relying party is configured");
         let error = assemble(&config).await.expect_err("it refuses");
         assert!(
             matches!(
                 error,
-                BootError::AdapterUnavailable {
-                    key: "OIDC_ISSUER",
-                    ..
+                BootError::Missing {
+                    key: "DATABASE_URL"
                 }
             ),
             "{error:?}"
         );
-        assert!(format!("{error}").contains("#460"), "{error}");
     }
 
     #[tokio::test]
@@ -1435,23 +1498,51 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn federation_url_is_published_when_configured() {
-        // Opt-in by one variable, and the record is the only way a peer learns it.
+    async fn federation_url_is_published_only_when_federation_is_switched_on() {
+        // Opt-in by the switch (#509), and the record is the only way a peer learns it. A URL
+        // on its own is a deployment that never decided, so it publishes nothing and mounts a
+        // federation surface that answers `404`.
         let root = tempfile::tempdir().expect("a scratch directory");
-        let config = memory_config_with(
-            root.path(),
-            &[("FEDERATION_URL", "https://capsule.example/v1")],
-        );
-        let assembled = assemble(&config).await.expect("it assembles");
-        let client = kynos::test::TestClient::new(assembled.service().expect("the router builds"));
-        let body: serde_json::Value = client
-            .get("/.well-known/capsule/server-info")
-            .header("accept", "application/json")
-            .send()
-            .await
-            .assert_status(kynos::http::StatusCode::OK)
-            .json();
-        assert_eq!(body["federation_url"], "https://capsule.example/v1");
+        for (enabled, published) in [(false, None), (true, Some("https://capsule.example/v1"))] {
+            let mut pairs = vec![("FEDERATION_URL", "https://capsule.example/v1")];
+            if enabled {
+                pairs.push(("FEDERATION_ENABLED", "true"));
+            }
+            let config = memory_config_with(root.path(), &pairs);
+            let assembled = assemble(&config).await.expect("it assembles");
+            let client =
+                kynos::test::TestClient::new(assembled.service().expect("the router builds"));
+            let body: serde_json::Value = client
+                .get("/.well-known/capsule/server-info")
+                .header("accept", "application/json")
+                .send()
+                .await
+                .assert_status(kynos::http::StatusCode::OK)
+                .json();
+            assert_eq!(
+                body.get("federation_url")
+                    .and_then(serde_json::Value::as_str),
+                published,
+                "FEDERATION_ENABLED={enabled}"
+            );
+
+            let report = client
+                .post("/v1/federation/reports")
+                .header("accept", "application/json")
+                .header(
+                    "x-capsule-protocol",
+                    capsule_core::crypto::primitives::PROTOCOL_VERSION,
+                )
+                .json(&serde_json::json!({}))
+                .send()
+                .await;
+            assert_eq!(
+                report.status() == kynos::http::StatusCode::NOT_FOUND,
+                !enabled,
+                "FEDERATION_ENABLED={enabled}: report intake answered {}",
+                report.status()
+            );
+        }
     }
 
     #[tokio::test]
@@ -1575,6 +1666,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_assembled_maintenance_workers_see_the_links_the_application_issues() {
+        // #653, Decision 5: the share store lives in `Stores`, so the collector and the scrub
+        // read the very store `issue_share` writes. Two stores would mean a collector that sees
+        // no links and sweeps every record, which only an assembly-level case can catch.
+        use base64::Engine as _;
+
+        let root = tempfile::tempdir().expect("a scratch directory");
+        let assembled = assemble(&memory_config(root.path()))
+            .await
+            .expect("it assembles");
+        let client = kynos::test::TestClient::new(assembled.service().expect("the router builds"));
+
+        let registered: serde_json::Value = client
+            .post("/v1/auth/register")
+            .header(
+                "x-capsule-protocol",
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            )
+            .header("accept", "application/json")
+            .json(&serde_json::json!({
+                "email": "somebody@example.test",
+                "password": "correct horse battery staple",
+            }))
+            .send()
+            .await
+            .assert_status(kynos::http::StatusCode::OK)
+            .json();
+        let token = registered["access_token"]
+            .as_str()
+            .expect("an access token");
+
+        let record = b"a share's sealed metadata record";
+        let metadata = capsule_core::crypto::hash::hash_bytes(record).to_hex();
+        client
+            .post("/v1/shares")
+            .header(
+                "x-capsule-protocol",
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            )
+            .header("authorization", &format!("Bearer {token}"))
+            .header("accept", "application/json")
+            .json(&serde_json::json!({
+                "opaque_id": "0123456789abcdef0123456789abcdef",
+                "metadata_hash": metadata,
+                "serves": [metadata],
+                "metadata_blob": base64::engine::general_purpose::STANDARD.encode(record),
+            }))
+            .send()
+            .await
+            .assert_status(kynos::http::StatusCode::CREATED);
+
+        let address = crate::blob::ContentAddress::parse(&metadata).expect("an address");
+        let report = crate::gc::collect(&assembled.maintenance.collection, crate::gc::Mode::Apply)
+            .await
+            .expect("a collection pass");
+        assert!(
+            !report.marked.contains(&address),
+            "the collector must read the store the link was issued into: {report:?}"
+        );
+        let scrubbed = crate::scrub::scrub(
+            &assembled.maintenance.scrub,
+            crate::scrub::Depth::Structural,
+        )
+        .await
+        .expect("a scrub pass");
+        assert_eq!(
+            scrubbed.count("orphan"),
+            0,
+            "and so must the scrub: {:?}",
+            scrubbed.findings
+        );
+    }
+
+    #[tokio::test]
     async fn a_locked_account_recovers_through_the_login_route_once_the_window_passes() {
         // Asserted through the **route** rather than against the adapter, because that is where
         // the property actually has to hold: `login` asks the directory first and answers `423`
@@ -1622,13 +1787,23 @@ mod tests {
         // An operator running `capsule-server scrub` without `--memory` is asking for the
         // durable stores, and the first one those workers read is the index. Naming
         // `VALKEY_URL` first would send them to configure the second thing before the first.
+        // `Config::load` names both at once (#520); this is the boot path's backstop, reached by
+        // a `Config` that lost both after loading.
         let root = tempfile::tempdir().expect("a scratch directory");
-        let environment: BTreeMap<String, String> =
-            [("BLOB_ROOT".to_owned(), root.path().display().to_string())]
-                .into_iter()
-                .collect();
-        let config = Config::load(&environment, &Overrides::default(), Demands::Maintenance)
+        let environment: BTreeMap<String, String> = [
+            ("BLOB_ROOT".to_owned(), root.path().display().to_string()),
+            (
+                "DATABASE_URL".to_owned(),
+                "postgres://127.0.0.1:1/capsule".to_owned(),
+            ),
+            ("VALKEY_URL".to_owned(), "redis://127.0.0.1:1".to_owned()),
+        ]
+        .into_iter()
+        .collect();
+        let mut config = Config::load(&environment, &Overrides::default(), Demands::Maintenance)
             .expect("maintenance demands nothing else");
+        config.database_url = None;
+        config.valkey_url = None;
         let error = super::assemble_maintenance(&config)
             .await
             .expect_err("it refuses");

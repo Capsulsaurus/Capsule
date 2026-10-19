@@ -83,8 +83,8 @@ pub struct BundleBlob<'a> {
 }
 
 /// Every transferable blob of `bundle`, in ladder order: the **index tier** (T0) — the
-/// provenance blob then the sealed metadata blob — each derivative (T1), then the original
-/// (T2).
+/// provenance blob then the sealed metadata blob — the **preview tier** (T1) — each derivative
+/// tier's signed manifest, then each derivative — then the original (T2).
 ///
 /// The provenance blob is unconditional: a managed asset always has a chain head, and the
 /// server needs that blob both to publish the asset and to hold a chain head for the next
@@ -93,7 +93,8 @@ pub struct BundleBlob<'a> {
 /// manifest actually commits to and never a fabrication.
 #[must_use]
 pub fn bundle_blobs(bundle: &UploadBundle) -> Vec<(BundleBlob<'_>, String)> {
-    let mut blobs = Vec::with_capacity(3 + bundle.derivatives.len());
+    let mut blobs =
+        Vec::with_capacity(3 + bundle.derivative_manifests.len() + bundle.derivatives.len());
     blobs.push((
         BundleBlob {
             tier: UploadTier::Index,
@@ -117,6 +118,22 @@ pub fn bundle_blobs(bundle: &UploadBundle) -> Vec<(BundleBlob<'_>, String)> {
                 bytes: &bundle.metadata_blob,
             },
             hash.to_hex(),
+        ));
+    }
+    // Each derivative tier's signed manifest, ahead of the derivatives: it is what a receiver
+    // opens them with, so a device that sees a derivative has already been handed its manifest.
+    for manifest in &bundle.derivative_manifests {
+        blobs.push((
+            BundleBlob {
+                tier: UploadTier::Preview,
+                role: BlobRole::DerivativeManifest,
+                content_type: OPAQUE_CONTENT_TYPE,
+                derivative_role: None,
+                bytes: manifest,
+            },
+            // Signed CBOR, not ciphertext, so — as for the provenance blob — its address is
+            // derived from the bytes rather than read off a field.
+            hash_bytes(manifest).to_hex(),
         ));
     }
     for derivative in &bundle.derivatives {

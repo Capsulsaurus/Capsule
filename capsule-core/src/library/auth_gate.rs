@@ -29,7 +29,6 @@ pub const DEFAULT_GRACE: Duration = Duration::from_mins(5);
 /// A view that requires fresh local auth before it opens (SR1). A grant is **per-view**:
 /// authenticating for one view never opens the other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
 pub enum GatedView {
     /// The trash / "Recently Deleted" listing of soft-deleted assets.
     RecentlyDeleted,
@@ -37,15 +36,15 @@ pub enum GatedView {
     Hidden,
 }
 
-/// The per-platform local-authentication seam, implemented by native code (Swift/Kotlin) over the
-/// uniffi foreign-trait boundary under the `ffi` feature, a plain Rust trait otherwise. Rust calls
-/// *into* it to perform the fresh-auth challenge; core never sees the biometric or the credential.
+/// The per-platform local-authentication seam, implemented by native code (Swift/Kotlin) behind the
+/// `capsule_core_ffi` namespace's `LocalAuthGate` foreign-trait mirror; a plain Rust trait here.
+/// Rust calls *into* it to perform the fresh-auth challenge; core never sees the biometric or the
+/// credential.
 ///
 /// The **biometric → credential fallback** is entirely the implementation's concern: an adapter
 /// tries the enrolled biometric first (Face ID / Touch ID / BiometricPrompt) and falls back to the
 /// device or account credential, surfacing only the *outcome* through this trait. Core treats any
 /// [`Ok`] as a successful fresh auth regardless of which method produced it.
-#[cfg_attr(feature = "ffi", uniffi::export(with_foreign))]
 pub trait LocalAuthGate: Send + Sync {
     /// Perform a fresh local-authentication challenge for `view`. Returns [`Ok`] on success (by
     /// any enrolled method), or a [`LocalAuthError`] on denial, cancellation, or unavailability.
@@ -54,7 +53,6 @@ pub trait LocalAuthGate: Send + Sync {
 
 /// Failure surfaced by a [`LocalAuthGate`] backend.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[cfg_attr(feature = "ffi", derive(uniffi::Error), uniffi(flat_error))]
 pub enum LocalAuthError {
     /// The user dismissed or cancelled the authentication prompt.
     #[error("local authentication was cancelled")]

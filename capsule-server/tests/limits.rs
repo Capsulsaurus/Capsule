@@ -16,7 +16,9 @@
 
 mod support;
 
-use capsule_server::limits::{MAX_FEDERATION_BODY_BYTES, MAX_REQUEST_BODY_BYTES};
+use capsule_server::limits::{
+    MAX_BOUNDED_BODY_BYTES, MAX_FEDERATION_BODY_BYTES, MAX_REQUEST_BODY_BYTES,
+};
 use capsule_server::upload::chunk::MAX_CHUNK_BYTES;
 use kynos::http::StatusCode;
 use kynos::test::TestClient;
@@ -26,13 +28,15 @@ fn client() -> TestClient<capsule_server::App> {
     TestClient::new(capsule_server::service(Fixture::working_app()).expect("router builds"))
 }
 
-/// A declared length over the cap is refused before the body is read.
+/// A declared length over the backstop is refused before the body is read.
+///
+/// `create_drop` keeps the backstop (#576), so it is where the backstop itself is exercised.
 #[tokio::test]
 async fn an_over_declared_content_length_is_refused_without_reading_the_body() {
     let client = client();
 
     client
-        .post("/v1/auth/login")
+        .post("/d/anything")
         .header("content-length", &(MAX_REQUEST_BODY_BYTES + 1).to_string())
         // A body nowhere near the declared length: the refusal is decided from the head, so the
         // bytes never matter. This is what keeps an oversized upload from costing bandwidth.
@@ -44,7 +48,7 @@ async fn an_over_declared_content_length_is_refused_without_reading_the_body() {
     client.assert_conformance();
 }
 
-/// A body that declares no length is counted, and abandoned once it passes the cap.
+/// A body that declares no length is counted, and abandoned once it passes the backstop.
 ///
 /// The path a chunked request takes, and the only bound there is on one — a client that declares
 /// nothing cannot be refused from the head.
@@ -54,7 +58,7 @@ async fn an_oversized_body_with_no_declared_length_is_refused_by_the_running_cou
     let body = vec![b'x'; usize::try_from(MAX_REQUEST_BODY_BYTES).expect("the cap fits") + 1];
 
     client
-        .post("/v1/auth/login")
+        .post("/d/anything")
         .body("application/json", body)
         .send()
         .await
@@ -63,24 +67,25 @@ async fn an_oversized_body_with_no_declared_length_is_refused_by_the_running_cou
     client.assert_conformance();
 }
 
-/// The limit refuses only what is over it.
+/// The backstop refuses only what is over it.
 ///
 /// A cap that also refused legitimate traffic would be a worse failure than none, and a cap that
 /// silently truncated would be worse still — so the body must arrive *whole* at the extractor,
 /// which is what the `400` proves: the handler was reached and rejected the JSON on its merits.
+/// The body is past the bounded cap, so this also proves `create_drop` is not under it.
 #[tokio::test]
 async fn a_large_body_within_the_limit_reaches_the_handler_whole() {
     let client = client();
-    let filler = "a".repeat(1024 * 1024);
-    let body = format!("{{ \"email\": \"{filler}\" ");
+    let filler = "a".repeat(usize::try_from(MAX_BOUNDED_BODY_BYTES).expect("the cap fits"));
+    let body = format!("{{ \"kem_ct\": \"{filler}\" ");
 
     assert!(
         body.len() as u64 <= MAX_REQUEST_BODY_BYTES,
-        "the fixture must be inside the cap for this test to mean anything"
+        "the fixture must be inside the backstop for this test to mean anything"
     );
 
     client
-        .post("/v1/auth/login")
+        .post("/d/anything")
         .body("application/json", body)
         .send()
         .await
@@ -89,18 +94,119 @@ async fn a_large_body_within_the_limit_reaches_the_handler_whole() {
     client.assert_conformance();
 }
 
+/// A bounded write's declared length over the bounded cap is refused from the head (#576).
+///
+/// `login` is an unauthenticated write: under the backstop it could be handed 32 MiB to parse.
+#[tokio::test]
+async fn a_bounded_write_over_the_bounded_cap_is_refused() {
+    let client = client();
+
+    client
+        .post("/v1/auth/login")
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .header("content-length", &(MAX_BOUNDED_BODY_BYTES + 1).to_string())
+        .body("application/json", "{}")
+        .send()
+        .await
+        .assert_status(StatusCode::PAYLOAD_TOO_LARGE);
+
+    client.assert_conformance();
+}
+
+/// The bounded cap holds for a body that declares no length, by the running count.
+#[tokio::test]
+async fn an_undeclared_bounded_body_over_its_cap_is_refused_by_the_running_count() {
+    let client = client();
+    let body = vec![b'x'; usize::try_from(MAX_BOUNDED_BODY_BYTES).expect("the cap fits") + 1];
+
+    client
+        .post("/v1/auth/login")
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .body("application/json", body)
+        .send()
+        .await
+        .assert_status(StatusCode::PAYLOAD_TOO_LARGE);
+
+    client.assert_conformance();
+}
+
+/// A bounded write's body at exactly the bounded cap reaches the handler whole.
+///
+/// The `400` is the extractor refusing the bytes on their merits, which it can only do once the
+/// cap has let them through.
+#[tokio::test]
+async fn a_bounded_body_at_its_cap_reaches_the_handler() {
+    let client = client();
+    let body = vec![b'x'; usize::try_from(MAX_BOUNDED_BODY_BYTES).expect("the cap fits")];
+
+    client
+        .post("/v1/auth/login")
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .body("application/json", body)
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    client.assert_conformance();
+}
+
+/// The exempt group's non-drop operations carry the bounded cap too.
+///
+/// `refresh_token` is exempt from the gate and takes a token, never a document.
+#[tokio::test]
+async fn an_exempt_write_over_the_bounded_cap_is_refused() {
+    let client = client();
+
+    client
+        .post("/v1/auth/refresh")
+        .header("content-length", &(MAX_BOUNDED_BODY_BYTES + 1).to_string())
+        .body("application/json", "{}")
+        .send()
+        .await
+        .assert_status(StatusCode::PAYLOAD_TOO_LARGE);
+
+    client.assert_conformance();
+}
+
+/// The two writes the protocol leaves unbounded keep the backstop (#576).
+///
+/// A `metadata-update` op carries the whole encrypted sidecar inline and a whole-album share
+/// enumerates every blob it serves; neither has a size the protocol bounds. Neither request
+/// carries a bearer, so the proof is that each is answered by the route's own `401` rather than
+/// the body-size `413` a bounded cap would give.
+#[tokio::test]
+async fn the_unbounded_writes_keep_the_backstop() {
+    let client = client();
+    let body = vec![b'x'; usize::try_from(MAX_BOUNDED_BODY_BYTES).expect("the cap fits") + 1];
+
+    for path in ["/v1/albums/anything/ops", "/v1/shares"] {
+        client
+            .post(path)
+            .header("x-capsule-protocol", PROTOCOL_VERSION)
+            // Declared, so a bounded cap would refuse it from the head whether or not the route
+            // ever reads the body.
+            .header("content-length", &body.len().to_string())
+            .body("application/json", body.clone())
+            .send()
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    client.assert_conformance();
+}
+
 /// The cap covers operations that take no body at all.
 ///
-/// Every group carries one, the exempt ten's included, rather than only the operations that
+/// Every group carries one, the exempt twelve's included, rather than only the operations that
 /// happen to accept a body today, so a body sent where none is expected is refused rather than
-/// read into memory and discarded.
+/// read into memory and discarded. `GET /v1/version` carries the bounded cap.
 #[tokio::test]
 async fn the_cap_covers_an_operation_that_takes_no_body() {
     let client = client();
 
     client
         .get("/v1/version")
-        .header("content-length", &(MAX_REQUEST_BODY_BYTES + 1).to_string())
+        .header("content-length", &(MAX_BOUNDED_BODY_BYTES + 1).to_string())
         .body("application/json", "{}")
         .send()
         .await

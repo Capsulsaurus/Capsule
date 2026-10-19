@@ -5,18 +5,10 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
-[lib]
-# `lib` (rlib) keeps the rest of the workspace linking capsule-core unchanged.
-# `cdylib` is the Android `.so` and `staticlib` the iOS XCFramework input for the
-# uniffi bindings (see the `ffi` feature). Cargo cannot gate crate-type by feature,
-# so host builds also emit these artifacts — an accepted, cheap cost.
-crate-type = ["lib", "cdylib", "staticlib"]
-
-# Generates the Kotlin/Swift bindings from the compiled cdylib (library mode). Built
-# only with `--features ffi-bindgen`, so the `cli` deps never enter the mobile artifact.
-[[bin]]
-name = "uniffi-bindgen"
-required-features = ["ffi-bindgen"]
+# A plain rlib. capsule-core exports no uniffi namespace of its own: the apps reach it through
+# `capsule-sdk`'s `capsule_sdk` namespace (cdylib for Android, staticlib via the
+# `capsule-core-ffi` umbrella for Apple), which links this crate like any other dependent
+# (ADR-0005).
 
 [features]
 # `native` (default) is the on-device library/import/lifecycle surface: it links SQLite,
@@ -34,6 +26,49 @@ native = ["dep:rusqlite", "dep:sqlite-vec", "mls", "media"]
 # is not among them. `capsule_core::lqip` stays unconditional and is NOT behind this feature — a
 # placeholder must not depend on which client imported the photo (slice `S-B14`).
 media = ["dep:rawshift-image"]
+# `media-linked-codecs` adds the two still **encoders** that link native code, and is therefore
+# **opt-in and never in `default`** (issue #437). `default` (via `native`) is what the mobile FFI
+# and every `rust-cross` target build, so keeping these out of it is what keeps those builds pure
+# Rust. `capsule-cli` enables it — the stabilize-first consumer that runs on real libraries.
+#
+# - `jxl-encode-libjxl-vendored` — the **lossy** JXL master: the reference C++ libjxl, built from
+#   the `jpegxl-src` crate's vendored tree by cmake and bound by bindgen (so the build host needs
+#   cmake, a C++17 compiler and libclang). Replaces the lossless `zune-jpegxl` encode, so the tier
+#   table's q=50 / q=70 finally reach the codec. Vendored rather than system libjxl because no
+#   build host Capsule targets ships one reliably and a pkg-config miss would be a silent build
+#   break on a fresh machine. libjxl and its bundled highway, brotli and skcms are BSD-3 / MIT /
+#   Apache-2.0: attribution-only.
+# - `avif-encode-ravif` — the AVIF delivery variant via `ravif` -> rav1e. rav1e's default `asm`
+#   feature stays on (a transitive default cannot be turned off from here, and it is the fast
+#   path), so every **x86_64** build host needs `nasm` on PATH; aarch64 assembles with the C
+#   compiler. CI installs nasm for every job that builds `capsule-cli`.
+#
+# With both on, the preview tier is generated too (`media::DerivativeTier::GENERATED`): a
+# source-resolution still is only worth its bytes in a lossy codec.
+#
+# HEIC decode is **not** here and cannot be by policy rather than toolchain: libheif and its HEVC
+# decoder libde265 are both LGPL-3.0, which CLAUDE.md and `deny.toml` exclude outright (issue
+# #588; the decision is recorded in the Dependencies design doc). AVIF decode is its own feature,
+# `media-avif-decode`, below.
+media-linked-codecs = [
+    "media",
+    "rawshift-image/jxl-encode-libjxl-vendored",
+    "rawshift-image/avif-encode-ravif",
+]
+# `media-avif-decode` adds the AVIF still **decoder** (issue #588): `rawshift-image`'s
+# `avif-decode-image`, which is `image` 0.25's `avif-native` — `mp4parse` (MPL-2.0) for the
+# container and `dav1d` for the AV1 bitstream. `dav1d-sys` links a **system** libdav1d (BSD-2)
+# through pkg-config and has no vendored build, so the build host needs `libdav1d-dev` (Debian /
+# Ubuntu), `dav1d` (Homebrew) or `libdav1d-devel` (Fedora), and the binary links it dynamically.
+# **Opt-in and never in `default`**, for the same reason as `media-linked-codecs`: `default` is
+# what the mobile FFI and every `rust-cross` target build, and a pkg-config dependency on a
+# cross-compiled C library is exactly what those builds must not grow. A separate feature rather
+# than a third arm of `media-linked-codecs`, because the two need different build hosts (cmake +
+# nasm versus a system library) and a caller may want one without the other. `capsule-cli`
+# enables it on every host but Windows. `dep:dav1d` and `dep:mp4parse` are the same two crates
+# `image` already links, named directly so `media::decode` can bound every AV1 frame with
+# dav1d's own `frame_size_limit` before `image` (which sets none) decodes it.
+media-avif-decode = ["media", "rawshift-image/avif-decode-image", "dep:dav1d", "dep:mp4parse"]
 # `mls` links the live OpenMLS group backend (`crypto::authority::OpenMlsAuthority`, slice
 # S-X1) pinned to the X-Wing PQ ciphersuite `MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519`
 # (`0x004D`) via its formally-verified libcrux provider. Implied by `native` so the default
@@ -47,11 +82,6 @@ mls = [
     "dep:openmls_basic_credential",
     "dep:openmls_memory_storage",
 ]
-# `ffi` exposes the uniffi-annotated surface (FfiWorkspace + foreign traits). It wraps the
-# native `lifecycle::Workspace`, so it implies `native`. `ffi-bindgen` additionally pulls
-# uniffi's CLI so the `uniffi-bindgen` bin can emit the bindings.
-ffi = ["native", "dep:uniffi"]
-ffi-bindgen = ["ffi", "uniffi/cli"]
 # `test-support` exposes the entry points that let a caller choose the backup artifact's Argon2id
 # wrap cost (`backup::export_with_params`, `backup::export_with_salt_and_params`,
 # `Workspace::export_backup_with_params`). **Never in `default`, and never in a shipping
@@ -84,7 +114,7 @@ ciborium = "0.2"
 half = "2"               # IEEE-754 f16 for RFC 8949 §4.2 shortest-float canonical CBOR
 globset = "0.4.18"
 # The LQIP placeholder codec (SSoT: Thumbnails — LQIP; slice S-B14). **Not optional and not
-# feature-gated**: `capsule_core::lqip` is linked identically by the CLI, the uniffi FFI and
+# feature-gated**: `capsule_core::lqip` is linked identically by the CLI, the app FFI and
 # `capsule-wasm`, so a photo's placeholder never depends on which client imported it. Safe to
 # keep unconditional because chromahash has zero runtime dependencies and builds for
 # `wasm32-unknown-unknown` (it ships a `simd128` backend alongside AVX2/SSE2 and NEON).
@@ -112,9 +142,17 @@ kamadak-exif = "0.5"
 # - `jxl`           — jxl-oxide decode plus the `zune-jpegxl` encoder that produces the thumbnail
 #                     tier. Pure Rust, and `image/jxl` is the tier table's committed *master*
 #                     format. The backend is `JxlSimpleEncoder`, which is lossless — a thumbnail
-#                     therefore costs more bytes than the table's q=50 intends, and closing that
-#                     needs C libjxl (`jxl-encode-libjxl`: `bindgen` + `pkg-config`).
+#                     therefore costs more bytes than the table's q=50 intends. The lossy libjxl
+#                     backend is the opt-in `media-linked-codecs` feature above; `jxl` stays on
+#                     for the jxl-oxide decoder either way.
 # - `tiff-decode` / `gif-decode` — pure Rust, no encoder needed.
+# - `arw-decode` / `dng-decode` — the two RAW families upstream calls `raw-stabilizing` (issue
+#                     #589), decoded through `RawFile::open(..).process(..)`: rawshift's own TIFF
+#                     parser (`binrw`, MIT) plus its lossless-JPEG and JXL tile decoders. Pure
+#                     Rust. **Decode only**: the `arw` / `dng` umbrellas would add `dng-encode`,
+#                     which nothing a user does needs and which the fixtures do not use either —
+#                     they are written with the parser's own `tiff::TiffWriter`, because
+#                     `export_dng` writes a photometric-RGB IFD that `dng-decode` cannot read back.
 #
 # **`webp` is deliberately absent, and it is not a preference.** It does not compile for any
 # aarch64 target: `codecs/webp.rs:164,177,190` pass `b"EXIF".as_ptr() as *const i8` to
@@ -124,9 +162,10 @@ kamadak-exif = "0.5"
 # Every mobile target Capsule ships is aarch64, so WebP is a recognised-but-undecodable format
 # here until upstream fixes the cast.
 #
-# Also absent: `heic` (system libheif), `avif` (image's `avif-native` -> system libdav1d for
-# decode; `ravif` -> `rav1e/asm` -> nasm on every x86_64 build host for encode), `svg`, and the
-# RAW families (`experimental`; CR3 pixel decode unimplemented upstream). Each is a typed
+# Also absent: `heic` (libheif + libde265, both LGPL-3.0), AVIF *decode* (image's `avif-native` ->
+# system libdav1d), AVIF *encode* and lossy JXL by default (both in `media-linked-codecs`), `svg`, and the
+# other five RAW families (`raw-incomplete`: CR2, CR3, CRW, NEF, RAF; CR3 pixel decode is
+# unimplemented upstream). Each is a typed
 # `media::MediaError::UnsupportedFormat` today rather than a silent gap. MPL-2.0, already
 # allow-listed in `deny.toml`; see the Media row in design/dependencies.md.
 rawshift-image = { version = "0.1.1", default-features = false, features = [
@@ -135,7 +174,13 @@ rawshift-image = { version = "0.1.1", default-features = false, features = [
     "jxl",
     "tiff-decode",
     "gif-decode",
+    "arw-decode",
+    "dng-decode",
 ], optional = true }
+# The AVIF frame-size pre-flight (`media-avif-decode` only): the versions `image` 0.25's
+# `avif-native` already resolves, so the graph gains no crate. See `media::decode`.
+dav1d = { version = "0.11.1", optional = true }
+mp4parse = { version = "0.17.0", optional = true }
 # Bundled SQLite (C) — the on-device library index. Optional + gated by `native` because it
 # cannot target `wasm32-unknown-unknown`; the WASM sealing build drops it.
 rusqlite = { version = "0.32", features = ["bundled"], optional = true }
@@ -174,17 +219,14 @@ ml-kem = "0.3"           # RustCrypto FIPS-203 (ML-KEM-768) — PQ half of the X
 x25519-dalek = "2"       # RustCrypto X25519 — classical half of the X-Wing device KEM
 getrandom = "0.3"        # OS CSPRNG for keys, salts, nonce prefixes
 tar = "0.4"              # deterministic uncompressed POSIX tar backup container
-sharks = "0.5"           # Shamir secret sharing (opt-in 2-of-3 recovery)
+# Shamir secret sharing (opt-in 2-of-3 recovery). The maintained `sharks` fork with uniform
+# polynomial coefficients (RUSTSEC-2024-0398 fix) and the same share encoding; `sharks` is retired.
+blahaj = "0.7"
 
 # Sole logging facade (the `log` crate is forbidden in new code; see the Dependencies doc).
 # Non-optional: the native library/import/lifecycle surface instruments hot-path spans and
 # events, and the WASM sealing build links only the facade (no subscriber), which is free.
 tracing = { workspace = true }
-
-# ── FFI (optional; `ffi` feature) ──────────────────────────────────────────
-# uniffi proc-macro bindings for Kotlin/Swift. Optional so the default library
-# build (CLI, server, tests) never compiles it.
-uniffi = { version = "0.31", optional = true }
 
 # ── MLS group layer (optional; `mls` feature, implied by `native`) ──────────
 # RFC 9420 MLS backing the live `OpenMlsAuthority`, pinned to the X-Wing PQ ciphersuite
@@ -194,16 +236,22 @@ uniffi = { version = "0.31", optional = true }
 # supplies the leaf `SignatureKeyPair`; `openmls_traits` exposes the `Ciphersuite` type. All four
 # are host-only (libcrux does not target `wasm32-unknown-unknown`), so they sit behind `mls`,
 # which `native` implies and the wasm sealing build excludes. See `crypto::authority::openmls`.
-openmls = { version = "0.8.1", default-features = false, features = [
+# From 0.9 the X-Wing suite sits behind `draft-ietf-mls-pq-ciphersuites`. It is enabled on the
+# four leaf crates, not on `openmls`: openmls's own feature names `openmls_sqlite_storage?/…`, and
+# Cargo's resolver then pulls that optional crate's rusqlite 0.37 into the `links = "sqlite3"`
+# check, where it conflicts with this crate's rusqlite 0.32. openmls's feature only adds the PQ
+# suites to its *default* leaf capabilities, which `openmls_authority::pinned_capabilities` sets
+# explicitly instead.
+openmls = { version = "0.9.1", default-features = false, features = [
     "libcrux-provider",
 ], optional = true }
-openmls_traits = { version = "0.5", optional = true }
-openmls_libcrux_crypto = { version = "0.3.1", optional = true }
-openmls_basic_credential = { version = "0.5", optional = true }
+openmls_traits = { version = "0.6", features = ["draft-ietf-mls-pq-ciphersuites"], optional = true }
+openmls_libcrux_crypto = { version = "0.4.0", features = ["draft-ietf-mls-pq-ciphersuites"], optional = true }
+openmls_basic_credential = { version = "0.6", features = ["draft-ietf-mls-pq-ciphersuites"], optional = true }
 # The OpenMLS storage provider Capsule owns (rather than the libcrux provider's private one), so
 # durable group state serializes for `OpenMlsAuthority::export_state`/`import_state` (slice S-X2).
 # Same version the libcrux provider already pulls transitively; host-only alongside the rest of `mls`.
-openmls_memory_storage = { version = "0.5.0", optional = true }
+openmls_memory_storage = { version = "0.6.0", features = ["draft-ietf-mls-pq-ciphersuites"], optional = true }
 
 # ── TPM (optional; `tpm` feature) — desktop reference HardwareSigner ─────────
 # RustCrypto-adjacent bindings to the TPM 2.0 Enhanced System API (links system

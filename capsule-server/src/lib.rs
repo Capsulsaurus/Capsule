@@ -54,8 +54,8 @@
 //! suite is a port whose two implementations will disagree.
 //!
 //! Every durable port now has the second implementation on Postgres (#402, #446) and every
-//! volatile one on Valkey (#403), each passing the same case list as its double. The two OIDC
-//! stores are the exception (#460), and a durable boot that configures OIDC is refused.
+//! volatile one on Valkey (#403), each passing the same case list as its double — the two OIDC
+//! stores included since #460, so a durable boot that configures OIDC runs on them.
 //!
 //! **The suite still runs without a container.** Every Postgres case is gated on
 //! `CAPSULE_TEST_POSTGRES=1` and prints one line naming itself when it is skipped, so
@@ -129,12 +129,12 @@ pub fn router() -> ServerRouter {
         // The body-size cap is **not** mounted here. It sits on every group below instead — each
         // group carrying the cap its own operations need — because Kynos refuses two `413`
         // producers on one route, so a router-wide cap would leave no group room for a tighter
-        // one (#478). Every operation is still covered by exactly one, including the ten the
-        // protocol gate exempts, which get a group holding nothing but the cap. The group's cap
+        // one (#478). Every operation is still covered by exactly one, including the twelve the
+        // protocol gate exempts, which get groups holding nothing but the cap. The group's cap
         // is its **first** interceptor, so it stays outermost beneath `Negotiation` and an
         // oversized body is refused before the gate reads anything. See [`limits`].
         // The protocol gate is two `Group`s, not a router interceptor, for two reasons the type
-        // system makes concrete. First, the design exempts ten operations, and a group is how
+        // system makes concrete. First, the design exempts twelve operations, and a group is how
         // Kynos spells "these and not those": an operation mounted inside declares the handshake
         // parameters and the gate's statuses, one in the cap-only group below does not and still
         // carries the response headers. Second, the design holds a **write** to the window (a
@@ -143,7 +143,7 @@ pub fn router() -> ServerRouter {
         // declaration is its type, a read operation must sit behind a gate whose `Short` has no
         // `426` in it, or the document would promise a status the read never renders. So the
         // non-safe operations sit behind `ProtocolGate` and the `GET`/`HEAD` ones behind
-        // `ProtocolReadGate`. `tests/conformance.rs` pins both sets and the exempt ten against
+        // `ProtocolReadGate`. `tests/conformance.rs` pins both sets and the exempt twelve against
         // the emitted document and walks every operation on the wire, so a route cannot change
         // gate by accident.
         //
@@ -151,22 +151,27 @@ pub fn router() -> ServerRouter {
         // tuples up to sixteen and the seventeenth operation is a compile error, so a split is
         // forced — but grouping by surface rather than cutting at the arbitrary boundary is what
         // makes the next addition obvious rather than a puzzle.
+        //
+        // The gated writes are two groups split by **cap**, not by surface (#576): everything
+        // whose largest legitimate body is bounded carries [`limits::bounded_body_size`], and only
+        // the chunk-carrying and protocol-unbounded writes, in the group after it, keep the
+        // backstop.
         .group(
             Group::<App>::new("/")
-                .intercept(limits::body_size())
+                .intercept(limits::bounded_body_size())
                 .intercept(negotiation::ProtocolGate::new())
-                // The account: opening, refreshing and closing sessions, revoking them all.
+                // The account: opening sessions and revoking them all. Refreshing and closing one
+                // are exempt, in the cap-only group at the end.
                 .mount(kynos::routes![
                     routes::auth::register_user,
                     routes::auth::login_user,
-                    routes::auth::refresh_token,
-                    routes::auth::logout,
                     routes::auth::revoke_all_challenge,
                     routes::auth::revoke_all,
                     routes::auth::reauthenticate,
                     routes::devices::revoke_session,
                     routes::directory::publish_device_directory,
                     routes::escrow::store_escrow,
+                    routes::escrow::store_sealed_identity,
                 ])
                 // What an account changes about itself, its second factor, and the other way
                 // a session is opened: through an external identity provider (`S-N1`).
@@ -179,6 +184,8 @@ pub fn router() -> ServerRouter {
                     routes::totp::totp_verify_login,
                     routes::oidc::begin_oidc_login,
                     routes::oidc::complete_oidc_login,
+                    routes::oidc::begin_oidc_device_login,
+                    routes::oidc::poll_oidc_device_login,
                 ])
                 // The cross-device add: one code, one channel, and the writes into it.
                 .mount(kynos::routes![
@@ -187,26 +194,38 @@ pub fn router() -> ServerRouter {
                     routes::enroll::relay_enrollment_payload,
                     routes::enroll::close_enrollment_channel,
                 ])
-                // The library's own writes: albums, upgrades, uploads, operations, verification.
+                // The library's own bounded writes: albums, upgrades, rosters, verification.
                 .mount(kynos::routes![
                     routes::albums::provision_album,
                     routes::upgrade::begin_album_upgrade,
                     routes::upgrade::abort_album_upgrade,
                     routes::roster::publish_album_roster,
-                    routes::upload::create_upload,
-                    routes::upload::append_chunk,
                     routes::upload::cancel_upload,
-                    routes::ops::apply_op,
                     routes::storage::verify_storage,
                 ])
-                // Share links and guest drops: the owner's writes on both.
+                // Share links and guest drops: the owner's bounded writes on both.
                 .mount(kynos::routes![
-                    routes::share::issue_share,
                     routes::share::revoke_share,
                     routes::drop::provision_link,
                     routes::drop::revoke_link,
                     routes::drop::adopt_drop,
                     routes::drop::discard_drop,
+                ]),
+        )
+        // The gated writes that keep the backstop. The two chunk routes, so the upload route
+        // answers a breach of the protocol's chunk bound itself with
+        // `413 error.upload.chunk_too_large`; `apply_op`, whose `metadata-update` carries the
+        // encrypted sidecar inline and nothing bounds a sidecar's size; and `issue_share`, whose
+        // `serves` enumerates every blob a whole-album link may serve. See [`limits::body_size`].
+        .group(
+            Group::<App>::new("/")
+                .intercept(limits::body_size())
+                .intercept(negotiation::ProtocolGate::new())
+                .mount(kynos::routes![
+                    routes::upload::create_upload,
+                    routes::upload::append_chunk,
+                    routes::ops::apply_op,
+                    routes::share::issue_share,
                 ]),
         )
         // Federation's lifecycle: minting, revoking and refreshing the capability a peer pulls
@@ -230,15 +249,16 @@ pub fn router() -> ServerRouter {
                 ]),
         )
         // The reads: every gated `GET` and `HEAD`. Held to the handshake's grammar, admitted at
-        // any protocol date, and declaring the `400` alone.
+        // any protocol date, and declaring the `400` alone. None takes a body, so the bounded cap.
         .group(
             Group::<App>::new("/")
-                .intercept(limits::body_size())
+                .intercept(limits::bounded_body_size())
                 .intercept(negotiation::ProtocolReadGate::new())
                 .mount(kynos::routes![
                     routes::devices::list_devices,
                     routes::directory::fetch_device_directory,
                     routes::escrow::fetch_escrow,
+                    routes::escrow::fetch_sealed_identity,
                     routes::profile::get_profile,
                     routes::enroll::drain_enrollment_channel,
                     routes::upgrade::album_upgrade_phase,
@@ -253,22 +273,28 @@ pub fn router() -> ServerRouter {
                     routes::drop::list_inbox,
                 ]),
         )
-        // **The ten operations the design exempts from the gate**, in a group of their
+        // **The twelve operations the design exempts from the gate**, in a group of their
         // own so neither gated group above covers them (`api-surfaces.md`, "Negotiation Across
         // Transports"). `GET /v1/version` is the reachability probe a client hits before it
         // knows the window. The four `/.well-known/capsule/*` records are public discovery,
         // read before any handshake. The three `/s/{opaque_id}*` share reads must answer an
         // indistinguishable `404` (share-links.md), which a `426` would turn into a probing
         // oracle. The two `/d/{opaque_id}*` guest deposits have their protocol pinned at link
-        // issuance (web-upload.md), so a browser guest has nothing to assert. All ten still
-        // carry the response headers, because `Negotiation` is the router's.
+        // issuance (web-upload.md), so a browser guest has nothing to assert. Refreshing and
+        // closing a session (`POST /v1/auth/refresh`, `POST /v1/auth/logout`) are session
+        // upkeep, not library writes: reads are admitted at any protocol date, so a `426` on the
+        // refresh that keeps the read's access token alive would sign an out-of-window client
+        // out of the reads it is still allowed, and a `426` on logout would leave open a session
+        // its holder asked to close (#527). Opening one (`login`, `register`) stays gated. All
+        // twelve still carry the response headers, because `Negotiation` is the router's.
         //
-        // A group holding the body-size cap and nothing else: the cap is per-group now, and these
-        // ten are still covered by one — the backstop, because a guest's drop chunk is as large
-        // as an upload chunk.
+        // Two groups holding the body-size cap and nothing else: the cap is per-group, and these
+        // twelve are still covered by one each. The ten that are not drop routes take the
+        // bounded cap — reads, and two session-upkeep writes carrying a token; the two drop
+        // routes keep the backstop, because a guest's drop chunk is as large as an upload chunk.
         .group(
             Group::<App>::new("/")
-                .intercept(limits::body_size())
+                .intercept(limits::bounded_body_size())
                 .mount(kynos::routes![
                     routes::version::get_version,
                     routes::well_known::attestation_keys,
@@ -278,6 +304,14 @@ pub fn router() -> ServerRouter {
                     routes::share::share_metadata,
                     routes::share::share_wrapped_secret,
                     routes::share::share_blob,
+                    routes::auth::refresh_token,
+                    routes::auth::logout,
+                ]),
+        )
+        .group(
+            Group::<App>::new("/")
+                .intercept(limits::body_size())
+                .mount(kynos::routes![
                     routes::drop::create_drop,
                     routes::drop::append_drop_chunk,
                 ]),

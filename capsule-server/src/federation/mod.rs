@@ -108,12 +108,40 @@ pub struct FederationCollaborators {
     pub peers: Arc<dyn PeerStore>,
     /// The clock every record and every deadline is stamped from.
     pub clock: Arc<dyn Clock>,
-    /// Where peers reach this server, when it federates at all.
+    /// Whether this deployment federates at all (`FEDERATION_ENABLED`, #509).
     ///
-    /// `None` is a deployment that does not federate: the lifecycle writes refuse with
-    /// `error.federation.not_configured`, while a capability minted earlier still verifies —
-    /// a token is not un-minted by a configuration change.
-    pub federation_url: Option<String>,
+    /// Off is the default, and off means the federation surface is not there: the four
+    /// federation operations answer `404` before any credential, budget or store is touched,
+    /// and [`ReadBearer`] refuses every capability on the two read primitives. See
+    /// [`FederationSetting`] for why this is a port rather than a `bool`.
+    pub enabled: Arc<dyn FederationSetting>,
+}
+
+/// Whether this deployment federates (`FEDERATION_ENABLED`, #509).
+///
+/// Federation is deferred (#476), and a deployment that has not asked for it must not carry its
+/// unauthenticated surface: report intake and minting were both reachable in `serve` before
+/// this gate, and both do store work for whoever asks. So federation is **off unless an operator
+/// turns it on**, and off is enforced at the two places a federated request can enter — the
+/// gate every federation operation extracts first, and the capability arm of [`ReadBearer`].
+///
+/// # Why a port and not a `bool`
+///
+/// Production reads the setting once at boot and never changes it: `boot::assemble` hands in a
+/// plain `bool`, which implements this trait. It is a trait only because the conformance walk
+/// (`tests/conformance.rs`) proves every response the document declares through **one** server,
+/// and the `404` this gate declares has to be produced by the same server that produces every
+/// federated `200` — so the test double is a switch, the way the suite's other doubles are.
+pub trait FederationSetting: fmt::Debug + Send + Sync {
+    /// Whether federated requests are served at all.
+    fn is_enabled(&self) -> bool;
+}
+
+/// The setting as boot reads it: fixed for the life of the process.
+impl FederationSetting for bool {
+    fn is_enabled(&self) -> bool {
+        *self
+    }
 }
 
 /// The federation module's collaborators.
@@ -123,7 +151,7 @@ pub struct FederationContext {
     capabilities: Arc<dyn CapabilityStore>,
     peers: Arc<dyn PeerStore>,
     clock: Arc<dyn Clock>,
-    federation_url: Option<String>,
+    enabled: Arc<dyn FederationSetting>,
 }
 
 impl FederationContext {
@@ -134,14 +162,14 @@ impl FederationContext {
             capabilities,
             peers,
             clock,
-            federation_url,
+            enabled,
         } = collaborators;
         Self {
             codec,
             capabilities,
             peers,
             clock,
-            federation_url,
+            enabled,
         }
     }
 
@@ -165,18 +193,14 @@ impl FederationContext {
         self.clock.as_ref()
     }
 
-    /// Where peers reach this server, if it federates.
-    pub fn federation_url(&self) -> Option<&str> {
-        self.federation_url.as_deref()
-    }
-
     /// Whether this deployment federates at all.
     ///
-    /// The gate on every lifecycle write. Reads are not gated on it: a capability that was
-    /// minted while federation was on still verifies, and refusing it would cut a peer off
-    /// without a revocation anybody can see.
-    pub fn is_configured(&self) -> bool {
-        self.federation_url.is_some()
+    /// The gate on every federated request: the four federation operations and the capability
+    /// arm of [`ReadBearer`]. A capability minted while federation was on is not un-minted by
+    /// turning it off, but it is not honoured either — nothing federated is served while the
+    /// surface is off, which is what makes "off" a statement an operator can rely on.
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.is_enabled()
     }
 }
 
@@ -475,7 +499,7 @@ mod tests {
             capabilities: Arc::new(InMemoryCapabilities::new(clock.clone())),
             peers,
             clock,
-            federation_url: None,
+            enabled: Arc::new(true),
         })
     }
 

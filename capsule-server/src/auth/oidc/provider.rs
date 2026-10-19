@@ -36,12 +36,16 @@ use std::sync::Arc;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use jiff::SignedDuration;
 use serde::Deserialize;
 
 use super::claims::{ClaimRejection, Expectations, VerifiedIdentity, bounded, verify_id_token};
-use super::discovery::{DiscoveryError, MetadataCache};
+use super::discovery::{DiscoveryError, MetadataCache, admit_url};
 use super::jwks::{KeyCache, KeyError, Refresh};
-use crate::store::{AuthorizationCode, Clock, OidcNonce, OidcState, PkceVerifier};
+use crate::store::{
+    AuthorizationCode, Clock, DEVICE_POLL_FLOOR, DeviceCode, OidcDeviceHandle, OidcNonce,
+    OidcState, PkceVerifier,
+};
 
 /// The scopes every authorization request asks for.
 ///
@@ -118,6 +122,70 @@ pub enum ProviderError {
     /// The provider answered with an ID token this relying party refuses.
     #[error("the ID token was refused: {0}")]
     TokenRejected(#[from] ClaimRejection),
+    /// The provider does not offer the device authorization grant to this client: its discovery
+    /// document names no `device_authorization_endpoint`, or that endpoint answered
+    /// `unauthorized_client` or `unsupported_grant_type`. Any other refusal is
+    /// [`ProviderError::Unavailable`].
+    #[error("the identity provider does not offer the device grant: {detail}")]
+    DeviceUnsupported {
+        /// Why, for the log line.
+        detail: String,
+    },
+}
+
+/// The grant type a device code is redeemed under (RFC 8628 §3.4).
+pub const DEVICE_CODE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
+
+/// The longest `user_code` the relying party will show a person.
+///
+/// RFC 8628 §6.1 recommends eight characters; sixty-four is generous headroom for a provider
+/// that adds separators or uses words, and small enough that a provider sending a page of text
+/// as a "code" is refused rather than printed.
+pub const MAX_USER_CODE_LENGTH: usize = 64;
+
+/// What a provider answered a device authorization request with (RFC 8628 §3.2), checked.
+#[derive(Clone, PartialEq, Eq)]
+pub struct DeviceAuthorization {
+    /// The code the relying party redeems at the token endpoint. Never sent to the client.
+    pub device_code: DeviceCode,
+    /// The code the person types at the verification page.
+    pub user_code: String,
+    /// Where the person goes to type it. Held to discovery's scheme rule.
+    pub verification_uri: String,
+    /// The same address with the code already in it, when the provider offers one.
+    pub verification_uri_complete: Option<String>,
+    /// How long the provider will honour the device code.
+    pub expires_in: SignedDuration,
+    /// How long to wait between polls: the provider's, never below [`DEVICE_POLL_FLOOR`].
+    pub interval: SignedDuration,
+}
+
+impl fmt::Debug for DeviceAuthorization {
+    /// Redacted: the user code is what approves the grant at the provider.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DeviceAuthorization")
+            .field("device_code", &self.device_code)
+            .field("user_code", &"<redacted>")
+            .field("verification_uri", &self.verification_uri)
+            .field("expires_in", &self.expires_in)
+            .field("interval", &self.interval)
+            .finish_non_exhaustive()
+    }
+}
+
+/// What one poll of the token endpoint answered (RFC 8628 §3.5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DevicePoll {
+    /// `authorization_pending`: the person has not finished yet.
+    Pending,
+    /// `slow_down`: poll less often.
+    SlowDown,
+    /// `access_denied`: the person declined.
+    Denied,
+    /// `expired_token`: the device code is past its life.
+    Expired,
+    /// The person approved, and this is who they are.
+    Verified(VerifiedIdentity),
 }
 
 impl From<DiscoveryError> for ProviderError {
@@ -168,6 +236,17 @@ pub trait IdentityProvider: fmt::Debug + Send + Sync {
     /// Exchange the code for an ID token, verify it, and say who it is.
     fn redeem<'a>(&'a self, redemption: &'a Redemption<'a>)
     -> ProviderFuture<'a, VerifiedIdentity>;
+
+    /// Ask the provider for a device code (RFC 8628 §3.1).
+    ///
+    /// [`ProviderError::DeviceUnsupported`] when the provider has no device endpoint or refuses
+    /// this client one.
+    fn begin_device(&self) -> ProviderFuture<'_, DeviceAuthorization>;
+
+    /// Poll the token endpoint once for `device_code` (RFC 8628 §3.4), verifying the ID token
+    /// if the person has approved. The token must carry no nonce; see
+    /// [`Expectations::nonce`](super::claims::Expectations::nonce).
+    fn poll_device<'a>(&'a self, device_code: &'a DeviceCode) -> ProviderFuture<'a, DevicePoll>;
 }
 
 /// Which redirect URIs a deployment admits.
@@ -269,6 +348,12 @@ pub fn fresh_nonce() -> OidcNonce {
     OidcNonce::new(random_token(16))
 }
 
+/// A fresh device-ceremony handle: 128 bits, base64url, the same entropy as a `state`.
+#[must_use]
+pub fn fresh_device_handle() -> OidcDeviceHandle {
+    OidcDeviceHandle::new(random_token(16))
+}
+
 /// A fresh PKCE verifier: 256 bits, base64url — 43 characters, inside RFC 7636 §4.1's 43–128.
 #[must_use]
 pub fn fresh_verifier() -> PkceVerifier {
@@ -300,6 +385,105 @@ struct TokenRefusal {
     error: String,
     #[serde(default)]
     error_description: Option<String>,
+}
+
+impl TokenRefusal {
+    /// The refusal as one log-safe line. Bounded before it reaches the log: both strings are
+    /// the provider's to fill.
+    fn describe(&self, status: reqwest::StatusCode, endpoint: &str) -> String {
+        match &self.error_description {
+            Some(description) => format!("{} ({})", bounded(&self.error), bounded(description)),
+            None if self.error.is_empty() => format!("the {endpoint} answered {status}"),
+            None => bounded(&self.error),
+        }
+    }
+
+    /// Whether the `error` member says the provider will not run the requested grant for this
+    /// client at all (RFC 6749 §5.2): `unauthorized_client`, or `unsupported_grant_type`.
+    fn refuses_the_grant(&self) -> bool {
+        matches!(
+            self.error.as_str(),
+            "unauthorized_client" | "unsupported_grant_type"
+        )
+    }
+}
+
+/// What the token endpoint answered one request with.
+enum TokenAnswer {
+    /// An ID token, not yet verified.
+    Issued(String),
+    /// A refusal: its `error` member, and the line that describes it.
+    Refused { error: String, detail: String },
+}
+
+/// The device authorization endpoint's success body (RFC 8628 §3.2).
+#[derive(Deserialize)]
+struct DeviceAuthorizationResponse {
+    device_code: String,
+    user_code: String,
+    verification_uri: String,
+    #[serde(default)]
+    verification_uri_complete: Option<String>,
+    expires_in: u64,
+    #[serde(default)]
+    interval: Option<u64>,
+}
+
+/// Check a device authorization response from the provider for `issuer`.
+///
+/// Pure, so each refusal is a unit test. The `verification_uri` is an address the person is told
+/// to visit, so it is held to the scheme rule every endpoint is; the `user_code` is printed to a
+/// terminal, so it is bounded and may hold no control character; the interval is floored at
+/// [`DEVICE_POLL_FLOOR`], RFC 8628 §3.2's default when the provider names none.
+fn admit_device_authorization(
+    body: DeviceAuthorizationResponse,
+    issuer: &str,
+) -> Result<DeviceAuthorization, ProviderError> {
+    let unusable = |detail: String| ProviderError::Unavailable {
+        detail: format!("the device authorization endpoint's answer was not usable: {detail}"),
+    };
+    admit_url("verification_uri", &body.verification_uri, issuer)
+        .map_err(|error| unusable(error.to_string()))?;
+    if let Some(complete) = &body.verification_uri_complete {
+        admit_url("verification_uri_complete", complete, issuer)
+            .map_err(|error| unusable(error.to_string()))?;
+    }
+    let printable = !body.user_code.is_empty()
+        && body.user_code.chars().count() <= MAX_USER_CODE_LENGTH
+        && !body.user_code.chars().any(char::is_control);
+    if !printable {
+        return Err(unusable(
+            "the user_code is empty, too long, or not printable".to_owned(),
+        ));
+    }
+    if body.device_code.is_empty() || body.expires_in == 0 {
+        return Err(unusable(
+            "the device_code is empty or already expired".to_owned(),
+        ));
+    }
+    let seconds = |value: u64| SignedDuration::from_secs(i64::try_from(value).unwrap_or(i64::MAX));
+    Ok(DeviceAuthorization {
+        device_code: DeviceCode::new(body.device_code),
+        user_code: body.user_code,
+        verification_uri: body.verification_uri,
+        verification_uri_complete: body.verification_uri_complete,
+        expires_in: seconds(body.expires_in),
+        interval: body
+            .interval
+            .map_or(DEVICE_POLL_FLOOR, seconds)
+            .max(DEVICE_POLL_FLOOR),
+    })
+}
+
+/// Read a device poll's refusal (RFC 8628 §3.5) into its answer.
+fn device_poll_refusal(error: &str, detail: String) -> Result<DevicePoll, ProviderError> {
+    match error {
+        "authorization_pending" => Ok(DevicePoll::Pending),
+        "slow_down" => Ok(DevicePoll::SlowDown),
+        "access_denied" => Ok(DevicePoll::Denied),
+        "expired_token" => Ok(DevicePoll::Expired),
+        _ => Err(ProviderError::ExchangeRefused { detail }),
+    }
 }
 
 /// The relying party over a real provider.
@@ -350,30 +534,39 @@ impl HttpIdentityProvider {
         &self.settings
     }
 
-    async fn exchange(&self, redemption: &Redemption<'_>) -> Result<String, ProviderError> {
-        let metadata = self.metadata.current().await?;
-        let mut form = vec![
-            ("grant_type", "authorization_code"),
-            ("code", redemption.code.as_str()),
-            ("redirect_uri", redemption.redirect_uri),
-            ("client_id", self.settings.client_id.as_str()),
-            ("code_verifier", redemption.verifier.as_str()),
-        ];
-        // A public client identifies itself in the body; a confidential one authenticates.
-        let mut request = self.http.post(&metadata.token_endpoint);
+    /// A form `POST` to `endpoint`, authenticated as this client.
+    ///
+    /// A public client identifies itself with `client_id` in the body; a confidential one
+    /// authenticates with HTTP Basic instead (RFC 6749 §2.3.1), and the body names no client.
+    /// One function, so the code exchange, the device request and the device poll cannot
+    /// authenticate differently.
+    async fn post_as_client(
+        &self,
+        endpoint: &str,
+        what: &'static str,
+        mut form: Vec<(&str, &str)>,
+    ) -> Result<reqwest::Response, ProviderError> {
+        form.push(("client_id", self.settings.client_id.as_str()));
+        let mut request = self.http.post(endpoint);
         if let Some(secret) = &self.settings.client_secret {
             request = request.basic_auth(&self.settings.client_id, Some(secret.expose()));
             form.retain(|(name, _)| *name != "client_id");
         }
-        let response =
-            request
-                .form(&form)
-                .send()
-                .await
-                .map_err(|error| ProviderError::Unavailable {
-                    detail: format!("the token endpoint could not be reached: {error}"),
-                })?;
+        request
+            .form(&form)
+            .send()
+            .await
+            .map_err(|error| ProviderError::Unavailable {
+                detail: format!("the {what} could not be reached: {error}"),
+            })
+    }
 
+    /// One request to the token endpoint, read into an issued ID token or a refusal.
+    async fn token_request(&self, form: Vec<(&str, &str)>) -> Result<TokenAnswer, ProviderError> {
+        let metadata = self.metadata.current().await?;
+        let response = self
+            .post_as_client(&metadata.token_endpoint, "token endpoint", form)
+            .await?;
         let status = response.status();
         if status.is_success() {
             let body: TokenResponse =
@@ -383,37 +576,92 @@ impl HttpIdentityProvider {
                     .map_err(|error| ProviderError::Unavailable {
                         detail: format!("the token endpoint's answer was not usable: {error}"),
                     })?;
-            return Ok(body.id_token);
+            return Ok(TokenAnswer::Issued(body.id_token));
         }
         if status.is_client_error() {
             // RFC 6749 §5.2: a refused grant is a `400` with an `error` member. Anything else in
-            // the 4xx range is still the provider saying no to *this* request.
+            // the 4xx range is still the provider saying no to *this* request — some providers
+            // answer RFC 8628's `authorization_pending` with a `401`, so the member, not the
+            // status, is what is read.
             let refusal: TokenRefusal = response.json().await.unwrap_or_default();
-            // Bounded before it reaches the log: both strings are the provider's to fill.
-            let detail = match refusal.error_description {
-                Some(description) => {
-                    format!("{} ({})", bounded(&refusal.error), bounded(&description))
-                }
-                None if refusal.error.is_empty() => format!("the token endpoint answered {status}"),
-                None => bounded(&refusal.error),
-            };
-            return Err(ProviderError::ExchangeRefused { detail });
+            let detail = refusal.describe(status, "token endpoint");
+            return Ok(TokenAnswer::Refused {
+                error: refusal.error,
+                detail,
+            });
         }
         Err(ProviderError::Unavailable {
             detail: format!("the token endpoint answered {status}"),
         })
     }
 
+    async fn exchange(&self, redemption: &Redemption<'_>) -> Result<String, ProviderError> {
+        let form = vec![
+            ("grant_type", "authorization_code"),
+            ("code", redemption.code.as_str()),
+            ("redirect_uri", redemption.redirect_uri),
+            ("code_verifier", redemption.verifier.as_str()),
+        ];
+        match self.token_request(form).await? {
+            TokenAnswer::Issued(id_token) => Ok(id_token),
+            TokenAnswer::Refused { detail, .. } => Err(ProviderError::ExchangeRefused { detail }),
+        }
+    }
+
+    async fn request_device_code(&self) -> Result<DeviceAuthorization, ProviderError> {
+        let metadata = self.metadata.current().await?;
+        let Some(endpoint) = metadata.device_authorization_endpoint.as_deref() else {
+            return Err(ProviderError::DeviceUnsupported {
+                detail: "the discovery document names no device_authorization_endpoint".to_owned(),
+            });
+        };
+        let response = self
+            .post_as_client(
+                endpoint,
+                "device authorization endpoint",
+                vec![("scope", SCOPES)],
+            )
+            .await?;
+        let status = response.status();
+        if status.is_client_error() {
+            // RFC 8628 §3.2 answers a refusal in RFC 6749 §5.2's shape. Only the members that
+            // say the provider will not run this grant for this client are configuration; any
+            // other 4xx (a `429`, an `invalid_request`, a body with no member) is the provider
+            // failing this one request, and an outage rather than a standing refusal.
+            let refusal: TokenRefusal = response.json().await.unwrap_or_default();
+            let detail = refusal.describe(status, "device authorization endpoint");
+            if refusal.refuses_the_grant() {
+                return Err(ProviderError::DeviceUnsupported { detail });
+            }
+            return Err(ProviderError::Unavailable { detail });
+        }
+        if !status.is_success() {
+            return Err(ProviderError::Unavailable {
+                detail: format!("the device authorization endpoint answered {status}"),
+            });
+        }
+        let body: DeviceAuthorizationResponse =
+            response
+                .json()
+                .await
+                .map_err(|error| ProviderError::Unavailable {
+                    detail: format!(
+                        "the device authorization endpoint's answer was not usable: {error}"
+                    ),
+                })?;
+        admit_device_authorization(body, &self.settings.issuer)
+    }
+
     async fn verify(
         &self,
         raw: &str,
-        nonce: &OidcNonce,
+        nonce: Option<&OidcNonce>,
     ) -> Result<VerifiedIdentity, ProviderError> {
         let metadata = self.metadata.current().await?;
         let expect = Expectations {
             issuer: self.settings.issuer.clone(),
             client_id: self.settings.client_id.clone(),
-            nonce: nonce.as_str().to_owned(),
+            nonce: nonce.map(|nonce| nonce.as_str().to_owned()),
         };
         let now = self.clock.now();
         let keys = self.keys.current(&metadata.jwks_uri).await?;
@@ -472,7 +720,26 @@ impl IdentityProvider for HttpIdentityProvider {
     ) -> ProviderFuture<'a, VerifiedIdentity> {
         Box::pin(async move {
             let raw = self.exchange(redemption).await?;
-            self.verify(&raw, redemption.nonce).await
+            self.verify(&raw, Some(redemption.nonce)).await
+        })
+    }
+
+    fn begin_device(&self) -> ProviderFuture<'_, DeviceAuthorization> {
+        Box::pin(self.request_device_code())
+    }
+
+    fn poll_device<'a>(&'a self, device_code: &'a DeviceCode) -> ProviderFuture<'a, DevicePoll> {
+        Box::pin(async move {
+            let form = vec![
+                ("grant_type", DEVICE_CODE_GRANT),
+                ("device_code", device_code.as_str()),
+            ];
+            match self.token_request(form).await? {
+                TokenAnswer::Issued(raw) => {
+                    Ok(DevicePoll::Verified(self.verify(&raw, None).await?))
+                }
+                TokenAnswer::Refused { error, detail } => device_poll_refusal(&error, detail),
+            }
         })
     }
 }
@@ -507,6 +774,14 @@ impl IdentityProvider for Disabled {
         &'a self,
         _redemption: &'a Redemption<'a>,
     ) -> ProviderFuture<'a, VerifiedIdentity> {
+        Box::pin(async { Err(ProviderError::NotConfigured) })
+    }
+
+    fn begin_device(&self) -> ProviderFuture<'_, DeviceAuthorization> {
+        Box::pin(async { Err(ProviderError::NotConfigured) })
+    }
+
+    fn poll_device<'a>(&'a self, _device_code: &'a DeviceCode) -> ProviderFuture<'a, DevicePoll> {
         Box::pin(async { Err(ProviderError::NotConfigured) })
     }
 }
@@ -584,8 +859,117 @@ mod tests {
         assert!(printed.contains("<redacted>"), "{printed}");
     }
 
+    fn device_body() -> DeviceAuthorizationResponse {
+        DeviceAuthorizationResponse {
+            device_code: "device-code".to_owned(),
+            user_code: "WDJB-MJHT".to_owned(),
+            verification_uri: "https://idp.example.test/device".to_owned(),
+            verification_uri_complete: Some(
+                "https://idp.example.test/device?user_code=WDJB-MJHT".to_owned(),
+            ),
+            expires_in: 900,
+            interval: Some(8),
+        }
+    }
+
+    #[test]
+    fn a_device_authorization_is_admitted_with_its_interval_floored() {
+        let issuer = "https://idp.example.test";
+        let admitted = admit_device_authorization(device_body(), issuer).expect("admitted");
+        assert_eq!(admitted.device_code, DeviceCode::new("device-code"));
+        assert_eq!(admitted.user_code, "WDJB-MJHT");
+        assert_eq!(admitted.expires_in, SignedDuration::from_secs(900));
+        assert_eq!(admitted.interval, SignedDuration::from_secs(8));
+        assert!(
+            !format!("{admitted:?}").contains("WDJB"),
+            "the user code never prints itself"
+        );
+
+        let mut quick = device_body();
+        quick.interval = Some(1);
+        assert_eq!(
+            admit_device_authorization(quick, issuer)
+                .expect("admitted")
+                .interval,
+            DEVICE_POLL_FLOOR,
+            "a provider naming less than the floor is raised to it"
+        );
+        let mut silent = device_body();
+        silent.interval = None;
+        silent.verification_uri_complete = None;
+        let silent = admit_device_authorization(silent, issuer).expect("admitted");
+        assert_eq!(
+            silent.interval, DEVICE_POLL_FLOOR,
+            "RFC 8628 §3.2's default"
+        );
+        assert_eq!(silent.verification_uri_complete, None);
+    }
+
+    #[test]
+    fn a_device_authorization_that_would_mislead_the_person_is_refused() {
+        let issuer = "https://idp.example.test";
+        let mut cases = Vec::new();
+        let mut plain = device_body();
+        plain.verification_uri = "http://idp.example.test/device".to_owned();
+        cases.push(("a plain-http verification address", plain));
+        let mut complete = device_body();
+        complete.verification_uri_complete = Some("javascript:alert(1)".to_owned());
+        cases.push(("a complete address that is not https", complete));
+        let mut empty = device_body();
+        empty.user_code = String::new();
+        cases.push(("an empty user code", empty));
+        let mut long = device_body();
+        long.user_code = "A".repeat(MAX_USER_CODE_LENGTH + 1);
+        cases.push(("an over-long user code", long));
+        let mut control = device_body();
+        control.user_code = "WDJB\u{1b}[2J".to_owned();
+        cases.push(("a user code carrying a terminal escape", control));
+        let mut expired = device_body();
+        expired.expires_in = 0;
+        cases.push(("a code already expired", expired));
+        for (case, body) in cases {
+            assert!(
+                matches!(
+                    admit_device_authorization(body, issuer),
+                    Err(ProviderError::Unavailable { .. })
+                ),
+                "{case} is refused"
+            );
+        }
+    }
+
+    #[test]
+    fn every_device_poll_refusal_is_its_own_answer() {
+        for (error, expected) in [
+            ("authorization_pending", DevicePoll::Pending),
+            ("slow_down", DevicePoll::SlowDown),
+            ("access_denied", DevicePoll::Denied),
+            ("expired_token", DevicePoll::Expired),
+        ] {
+            assert_eq!(
+                device_poll_refusal(error, String::new()),
+                Ok(expected),
+                "{error}"
+            );
+        }
+        assert_eq!(
+            device_poll_refusal("invalid_grant", "invalid_grant".to_owned()),
+            Err(ProviderError::ExchangeRefused {
+                detail: "invalid_grant".to_owned()
+            })
+        );
+    }
+
     #[tokio::test]
     async fn the_disabled_provider_answers_not_configured() {
+        assert_eq!(
+            Disabled.begin_device().await,
+            Err(ProviderError::NotConfigured)
+        );
+        assert_eq!(
+            Disabled.poll_device(&DeviceCode::new("code")).await,
+            Err(ProviderError::NotConfigured)
+        );
         let state = fresh_state();
         let nonce = fresh_nonce();
         let request = AuthorizationRequest {

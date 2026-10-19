@@ -18,10 +18,12 @@ use capsule_core::import::{
     execute_with_source_metadata, plan, scan_paths as scan_files,
 };
 use capsule_core::library::{Library, LibraryError, init_library, open_library, rebuild_index};
-use capsule_core::lifecycle::Workspace;
+use capsule_core::lifecycle::{Workspace, unmigrated_sidecars};
 use capsule_core::metadata::FileMetadata;
 use capsule_sdk::net::ConnectionClass;
-use cli::{AuthCommands, Cli, Commands, ImportProviderArg, LibraryCommands, RepairCommands};
+use cli::{
+    AuthCommands, Cli, Commands, ImportProviderArg, LibraryCommands, RepairCommands, ShareCommands,
+};
 use colored::*;
 use dialoguer::{Confirm, Input, Password};
 use eyre::{Result, eyre};
@@ -37,9 +39,11 @@ pub mod db;
 pub mod demo;
 pub mod i18n;
 pub mod migrate;
+pub mod oidc;
 pub mod remote;
 pub mod repair;
 pub mod session;
+pub mod share;
 pub mod show;
 pub mod status;
 pub mod syncstore;
@@ -64,6 +68,17 @@ fn as_capsule_cli(ws: Workspace) -> Workspace {
 #[must_use]
 fn as_count(n: usize) -> i64 {
     i64::try_from(n).unwrap_or(i64::MAX)
+}
+
+/// The `capsule library info` row for the unmigrated-sidecar count, plus the pointer at
+/// `capsule library migrate` — `None` when nothing is left to migrate. The count comes from
+/// the keyless scan, since `info` opens the library without a passphrase.
+#[must_use]
+fn library_info_unmigrated(bundle: &Bundle, unmigrated: usize) -> (String, Option<String>) {
+    let count = [("count", Value::Int(as_count(unmigrated)))];
+    let row = bundle.format(keys::LIBRARY_INFO_UNMIGRATED_SIDECARS, &count);
+    let hint = (unmigrated > 0).then(|| bundle.format(keys::LIBRARY_INFO_MIGRATE_HINT, &count));
+    (row, hint)
 }
 
 /// Resolve the persisted-session file path, erroring if the config directory
@@ -201,9 +216,30 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 password_stdin,
             } => auth_register(email, password_stdin).await?,
             AuthCommands::Login {
+                oidc: true,
+                device: true,
+                ..
+            } => auth_login_oidc_device().await?,
+            AuthCommands::Login {
+                oidc: true,
+                no_browser,
+                ..
+            } => auth_login_oidc(no_browser).await?,
+            AuthCommands::Login {
                 email,
                 password_stdin,
+                ..
             } => auth_login(email, password_stdin).await?,
+            AuthCommands::Escrow {
+                library,
+                passphrase_stdin,
+                replace,
+            } => auth_escrow(&library, passphrase_stdin, replace).await?,
+            AuthCommands::Recover {
+                library,
+                recovery_secret_stdin,
+                passphrase_stdin,
+            } => auth_recover(&library, recovery_secret_stdin, passphrase_stdin).await?,
             AuthCommands::Logout => auth_logout().await?,
             AuthCommands::Status => {
                 println!("{}", "Checking authentication status...".blue());
@@ -243,6 +279,17 @@ async fn dispatch(cli: Cli) -> Result<()> {
                     cfg.last_scrubbed_at
                         .map_or_else(|| "never".to_string(), |t| t.to_string())
                 );
+                let unmigrated = unmigrated_sidecars(&path).len();
+                tracing::debug!(
+                    library = %path.display(),
+                    unmigrated,
+                    "library info: unmigrated-sidecar count"
+                );
+                let (count_line, hint) = library_info_unmigrated(&i18n::cli_bundle(), unmigrated);
+                println!("  {count_line}");
+                if let Some(hint) = hint {
+                    println!("{}", hint.yellow());
+                }
                 lib.close()
                     .map_err(|e| eyre!("Failed to close library: {e}"))?;
             }
@@ -608,6 +655,37 @@ async fn dispatch(cli: Cli) -> Result<()> {
             }
         },
 
+        // ── Share ─────────────────────────────────────────────────────────
+        Commands::Share { command } => match command {
+            ShareCommands::Create {
+                library,
+                album,
+                asset,
+                expires_at,
+                passphrase_stdin,
+                protect,
+                link_passphrase_stdin,
+            } => {
+                let scope = match (album, asset) {
+                    (_, Some(asset)) => capsule_core::sharing::ShareScope::Asset(asset),
+                    (Some(album), None) => capsule_core::sharing::ShareScope::Album(album),
+                    (None, None) => {
+                        unreachable!("clap requires --album unless --asset is present")
+                    }
+                };
+                share_create(
+                    &library,
+                    scope,
+                    expires_at,
+                    passphrase_stdin,
+                    protect,
+                    link_passphrase_stdin,
+                )
+                .await?;
+            }
+            ShareCommands::Revoke { opaque_id } => share_revoke(&opaque_id).await?,
+        },
+
         // ── Demo ──────────────────────────────────────────────────────────
         Commands::Demo { workdir, image } => {
             demo::run(workdir, image)?;
@@ -754,25 +832,37 @@ fn flag_or_prompt(value: Option<String>, prompt: String) -> Result<String> {
     }
 }
 
-/// Read the password from stdin (`--password-stdin`) or prompt for it.
+/// Read a secret from stdin when `stdin_flag` names the `--*-stdin` flag that asked for it,
+/// or prompt for it.
 ///
-/// The stdin form takes the first line and trims the trailing newline only, so a password
-/// containing spaces survives; it is the same convention `docker login --password-stdin` uses.
-fn read_password(from_stdin: bool, prompt: String) -> Result<String> {
-    if from_stdin {
-        let mut line = String::new();
-        std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut line)
-            .map_err(|e| eyre!("Failed to read password from stdin: {e}"))?;
-        let password = line.trim_end_matches(['\n', '\r']).to_string();
-        if password.is_empty() {
-            return Err(eyre!("--password-stdin was given but stdin was empty"));
-        }
-        return Ok(password);
+/// The flag is passed through so an empty stdin is reported against the flag this command
+/// actually has (`--password-stdin`, `--passphrase-stdin`, `--recovery-secret-stdin`).
+fn read_password(stdin_flag: Option<&str>, prompt: String) -> Result<String> {
+    if let Some(flag) = stdin_flag {
+        return read_stdin_secret(&mut std::io::stdin().lock(), flag);
     }
     Password::new()
         .with_prompt(prompt)
         .interact()
         .map_err(|e| eyre!("Failed to read password: {e}"))
+}
+
+/// The stdin half of [`read_password`]: the first line of `reader`, with only the trailing
+/// newline trimmed so a secret containing spaces survives (the convention
+/// `docker login --password-stdin` uses). An empty line is refused, naming `flag`.
+fn read_stdin_secret(reader: &mut impl std::io::BufRead, flag: &str) -> Result<String> {
+    let mut line = String::new();
+    reader
+        .read_line(&mut line)
+        .map_err(|e| eyre!("Failed to read password from stdin: {e}"))?;
+    let secret = line.trim_end_matches(['\n', '\r']).to_string();
+    if secret.is_empty() {
+        return Err(eyre!(
+            "{}",
+            i18n::cli_bundle().format(keys::STDIN_EMPTY, &[("flag", Value::Str(flag))])
+        ));
+    }
+    Ok(secret)
 }
 
 /// `capsule auth register`: create an account over the SDK and persist the session.
@@ -787,7 +877,7 @@ async fn auth_register(email: Option<String>, password_stdin: bool) -> Result<()
     // not asking.
     let email = flag_or_prompt(email, bundle.format(keys::AUTH_LOGIN_EMAIL_PROMPT, &[]))?;
     let password = read_password(
-        password_stdin,
+        password_stdin.then_some("--password-stdin"),
         bundle.format(keys::AUTH_LOGIN_PASSWORD_PROMPT, &[]),
     )?;
 
@@ -830,7 +920,7 @@ async fn auth_login(email: Option<String>, password_stdin: bool) -> Result<()> {
 
     let email = flag_or_prompt(email, bundle.format(keys::AUTH_LOGIN_EMAIL_PROMPT, &[]))?;
     let password = read_password(
-        password_stdin,
+        password_stdin.then_some("--password-stdin"),
         bundle.format(keys::AUTH_LOGIN_PASSWORD_PROMPT, &[]),
     )?;
 
@@ -849,27 +939,7 @@ async fn auth_login(email: Option<String>, password_stdin: bool) -> Result<()> {
         }
     };
 
-    // The password verified and the sign-in may not be finished (`S-C55`). The CLI is
-    // interactive, so it asks — a client that could not would have to report a second factor as
-    // a failure, which is what the SDK's `LoginOutcome::into_session` is for and what this is
-    // deliberately not.
-    if let remote::LoginStep::SecondFactorRequired { mfa_token } = step {
-        println!(
-            "{}",
-            bundle
-                .format(keys::AUTH_LOGIN_SECOND_FACTOR_REQUIRED, &[])
-                .yellow()
-        );
-        let code = flag_or_prompt(None, bundle.format(keys::AUTH_LOGIN_TOTP_PROMPT, &[]))?;
-        if let Err(error) = remote::auth_verify_totp(&remote, &store, &mfa_token, code.trim()).await
-        {
-            let reason = describe_remote_error(&bundle, &error);
-            return Err(eyre!(
-                "{}",
-                bundle.format(keys::AUTH_LOGIN_FAILED, &[("reason", Value::Str(&reason))])
-            ));
-        }
-    }
+    finish_second_factor(&bundle, &remote, &store, step).await?;
 
     println!(
         "{}",
@@ -878,6 +948,406 @@ async fn auth_login(email: Option<String>, password_stdin: bool) -> Result<()> {
             .green()
     );
     Ok(())
+}
+
+/// Finish a sign-in that answered a second-factor challenge, by asking for the code.
+///
+/// The first factor verified and the sign-in may not be finished (`S-C55`). The CLI is
+/// interactive, so it asks — a client that could not would have to report a second factor as
+/// a failure, which is what the SDK's `LoginOutcome::into_session` is for and what this is
+/// deliberately not. Shared by the password and the identity-provider sign-ins, which honour the
+/// same factor.
+async fn finish_second_factor(
+    bundle: &capsule_i18n::Bundle,
+    remote: &remote::RemoteConfig,
+    store: &session::SessionStore,
+    step: remote::LoginStep,
+) -> Result<()> {
+    if let remote::LoginStep::SecondFactorRequired { mfa_token } = step {
+        println!(
+            "{}",
+            bundle
+                .format(keys::AUTH_LOGIN_SECOND_FACTOR_REQUIRED, &[])
+                .yellow()
+        );
+        let code = flag_or_prompt(None, bundle.format(keys::AUTH_LOGIN_TOTP_PROMPT, &[]))?;
+        if let Err(error) = remote::auth_verify_totp(remote, store, &mfa_token, code.trim()).await {
+            let reason = describe_remote_error(bundle, &error);
+            return Err(eyre!(
+                "{}",
+                bundle.format(keys::AUTH_LOGIN_FAILED, &[("reason", Value::Str(&reason))])
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// `capsule auth login --oidc`: sign in through the server's identity provider in a browser,
+/// over a loopback listener, and persist the session ([`oidc`] owns the flow).
+async fn auth_login_oidc(no_browser: bool) -> Result<()> {
+    let bundle = i18n::cli_bundle();
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let ceremony = oidc::SdkCeremony::new(&remote, &store)
+        .map_err(|error| login_failed(&bundle, &describe_remote_error(&bundle, &error)))?;
+    let pages = oidc::CallbackPages {
+        received: bundle.format(keys::AUTH_LOGIN_OIDC_PAGE_RECEIVED, &[]),
+        refused: bundle.format(keys::AUTH_LOGIN_OIDC_PAGE_REFUSED, &[]),
+    };
+
+    println!(
+        "{}",
+        bundle
+            .format(keys::AUTH_LOGIN_OIDC_IN_PROGRESS, &[])
+            .green()
+    );
+    let show = |authorization_url: &str, waited: std::time::Duration| {
+        println!("{}", bundle.format(keys::AUTH_LOGIN_OIDC_VISIT, &[]));
+        println!("{authorization_url}");
+        if !no_browser && !oidc::open_in_browser(authorization_url) {
+            println!(
+                "{}",
+                bundle
+                    .format(keys::AUTH_LOGIN_OIDC_BROWSER_UNAVAILABLE, &[])
+                    .yellow()
+            );
+        }
+        println!(
+            "{}",
+            bundle.format(
+                keys::AUTH_LOGIN_OIDC_WAITING,
+                &[(
+                    "count",
+                    Value::Int(i64::try_from(waited.as_secs().div_ceil(60)).unwrap_or(i64::MAX))
+                )]
+            )
+        );
+    };
+    let step = oidc::login(&ceremony, show, &pages, oidc::LISTENER_TIMEOUT)
+        .await
+        .map_err(|error| login_failed(&bundle, &describe_oidc_error(&bundle, &error)))?;
+
+    finish_second_factor(&bundle, &remote, &store, step).await?;
+    println!(
+        "{}",
+        bundle.format(keys::AUTH_LOGIN_OIDC_SUCCESS, &[]).green()
+    );
+    Ok(())
+}
+
+/// `capsule auth login --oidc --device`: sign in through the server's identity provider from
+/// another device (RFC 8628, issue #635) — print the address and the code, poll until the person
+/// approves, and persist the session ([`oidc::login_device`] owns the flow).
+async fn auth_login_oidc_device() -> Result<()> {
+    let bundle = i18n::cli_bundle();
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let ceremony = oidc::SdkCeremony::new(&remote, &store)
+        .map_err(|error| login_failed(&bundle, &describe_remote_error(&bundle, &error)))?;
+
+    println!(
+        "{}",
+        bundle
+            .format(keys::AUTH_LOGIN_OIDC_DEVICE_IN_PROGRESS, &[])
+            .green()
+    );
+    let show = |pending: &capsule_sdk::auth::OidcDeviceAuthorization,
+                waited: std::time::Duration| {
+        // Provider-authored, printed to a terminal: control characters are dropped, as the
+        // server already refused any code carrying one.
+        let printable = |text: &str| text.chars().filter(|c| !c.is_control()).collect::<String>();
+        println!("{}", bundle.format(keys::AUTH_LOGIN_OIDC_DEVICE_VISIT, &[]));
+        println!("{}", printable(&pending.verification_uri));
+        println!(
+            "{}",
+            bundle
+                .format(
+                    keys::AUTH_LOGIN_OIDC_DEVICE_CODE,
+                    &[("code", Value::Str(&printable(&pending.user_code)))]
+                )
+                .bold()
+        );
+        if let Some(complete) = &pending.verification_uri_complete {
+            println!(
+                "{}",
+                bundle.format(keys::AUTH_LOGIN_OIDC_DEVICE_COMPLETE, &[])
+            );
+            println!("{}", printable(complete));
+        }
+        println!(
+            "{}",
+            bundle.format(
+                keys::AUTH_LOGIN_OIDC_DEVICE_WAITING,
+                &[(
+                    "count",
+                    Value::Int(i64::try_from(waited.as_secs().div_ceil(60)).unwrap_or(i64::MAX))
+                )]
+            )
+        );
+    };
+    let step = oidc::login_device(&ceremony, show, oidc::DEVICE_TIMEOUT)
+        .await
+        .map_err(|error| login_failed(&bundle, &describe_oidc_error(&bundle, &error)))?;
+
+    finish_second_factor(&bundle, &remote, &store, step).await?;
+    println!(
+        "{}",
+        bundle.format(keys::AUTH_LOGIN_OIDC_SUCCESS, &[]).green()
+    );
+    Ok(())
+}
+
+/// The `capsule auth login` failure line, carrying `reason`.
+fn login_failed(bundle: &capsule_i18n::Bundle, reason: &str) -> eyre::Report {
+    eyre!(
+        "{}",
+        bundle.format(keys::AUTH_LOGIN_FAILED, &[("reason", Value::Str(reason))])
+    )
+}
+
+/// A localized reason for an OIDC sign-in failure.
+///
+/// A refused loopback redirect gets the remedy rather than only the code: the server's operator
+/// has to set `OIDC_ALLOW_LOOPBACK_REDIRECT=true`, which is off by default, and nothing the person
+/// at the terminal does will change that.
+fn describe_oidc_error(bundle: &capsule_i18n::Bundle, error: &oidc::OidcLoginError) -> String {
+    match error {
+        oidc::OidcLoginError::Remote(remote::RemoteError::Auth(
+            capsule_sdk::auth::AuthError::OidcRedirectInvalid,
+        )) => bundle.format(keys::AUTH_LOGIN_OIDC_LOOPBACK_REFUSED, &[]),
+        oidc::OidcLoginError::Remote(error) => describe_remote_error(bundle, error),
+        oidc::OidcLoginError::Listener(error) => bundle.format(
+            keys::AUTH_LOGIN_OIDC_LISTENER_FAILED,
+            &[("reason", Value::Str(&error.to_string()))],
+        ),
+        oidc::OidcLoginError::TimedOut { .. } => {
+            bundle.format(keys::AUTH_LOGIN_OIDC_TIMED_OUT, &[])
+        }
+        oidc::OidcLoginError::DeviceTimedOut { .. } => {
+            bundle.format(keys::AUTH_LOGIN_OIDC_DEVICE_TIMED_OUT, &[])
+        }
+        oidc::OidcLoginError::Denied { error, description } => {
+            // Provider-authored text, printed to a terminal: control characters are dropped so
+            // a provider cannot write escape sequences into it.
+            let printable =
+                |text: &str| text.chars().filter(|c| !c.is_control()).collect::<String>();
+            let error = printable(error);
+            match description {
+                Some(description) => bundle.format(
+                    keys::AUTH_LOGIN_OIDC_DENIED_DESCRIBED,
+                    &[
+                        ("error", Value::Str(&error)),
+                        ("description", Value::Str(&printable(description))),
+                    ],
+                ),
+                None => bundle.format(
+                    keys::AUTH_LOGIN_OIDC_DENIED,
+                    &[("error", Value::Str(&error))],
+                ),
+            }
+        }
+    }
+}
+
+/// `capsule auth escrow`: set recovery up for the library at `library`, as the signed-in
+/// account (#624). [`remote::auth_escrow`] owns the flow; this is its terminal: the library
+/// passphrase, the one showing of the minted secret, and the type-back gate.
+async fn auth_escrow(library: &Path, passphrase_stdin: bool, replace: bool) -> Result<()> {
+    let bundle = i18n::cli_bundle();
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+
+    let passphrase = read_password(
+        passphrase_stdin.then_some("--passphrase-stdin"),
+        bundle.format(keys::AUTH_ESCROW_PASSPHRASE_PROMPT, &[]),
+    )?;
+    let mut workspace = as_capsule_cli(
+        Workspace::open(library, passphrase.as_bytes(), DeviceTier::Normal.params()).map_err(
+            |e| {
+                let reason = e.to_string();
+                eyre!(
+                    "{}",
+                    bundle.format(keys::AUTH_ESCROW_FAILED, &[("reason", Value::Str(&reason))])
+                )
+            },
+        )?,
+    );
+
+    let path = library.display().to_string();
+    println!(
+        "{}",
+        bundle
+            .format(
+                keys::AUTH_ESCROW_IN_PROGRESS,
+                &[("path", Value::Str(&path))]
+            )
+            .green()
+    );
+    let confirm = |secret: &capsule_sdk::recovery::MintedSecret| {
+        let hex = secret.to_hex();
+        println!(
+            "{}",
+            bundle.format(
+                keys::AUTH_ESCROW_SECRET_SHOWN,
+                &[("secret", Value::Str(&hex))]
+            )
+        );
+        match Input::<String>::new()
+            .with_prompt(bundle.format(keys::AUTH_ESCROW_TYPEBACK_PROMPT, &[]))
+            .interact_text()
+        {
+            Ok(typed) => typed_back_matches(secret, &typed),
+            Err(error) => {
+                tracing::warn!(%error, "escrow: the type-back prompt could not be read");
+                false
+            }
+        }
+    };
+    match remote::auth_escrow(
+        &remote,
+        &store,
+        &mut workspace,
+        replace,
+        DeviceTier::Normal,
+        confirm,
+    )
+    .await
+    {
+        Ok(setup) => {
+            println!(
+                "{}",
+                bundle
+                    .format(keys::AUTH_ESCROW_SUCCESS, &[("path", Value::Str(&path))])
+                    .green()
+            );
+            if setup.replaced {
+                println!(
+                    "{}",
+                    bundle.format(keys::AUTH_ESCROW_REPLACED, &[]).yellow()
+                );
+            }
+            Ok(())
+        }
+        Err(remote::RemoteError::NotAuthenticated) => Err(eyre!(
+            "{}",
+            bundle.format(keys::AUTH_NOT_AUTHENTICATED, &[])
+        )),
+        Err(error) => Err(eyre!("{}", describe_escrow_error(&bundle, &error))),
+    }
+}
+
+/// The line `capsule auth escrow` prints for a refusal: the three it names itself (an escrow
+/// already stored, the type-back gate, a library that already holds assets), and the
+/// generic failure line wrapping any other reason.
+fn describe_escrow_error(bundle: &Bundle, error: &remote::RemoteError) -> String {
+    match error {
+        remote::RemoteError::EscrowAlreadyStored => {
+            bundle.format(keys::AUTH_ESCROW_ALREADY_STORED, &[])
+        }
+        remote::RemoteError::RecoverySecretNotConfirmed => {
+            bundle.format(keys::AUTH_ESCROW_TYPEBACK_MISMATCH, &[])
+        }
+        remote::RemoteError::Lifecycle(capsule_core::lifecycle::LifecycleError::AccountRebind(
+            _,
+        )) => bundle.format(keys::AUTH_ESCROW_LIBRARY_HAS_ASSETS, &[]),
+        other => {
+            let reason = describe_remote_error(bundle, other);
+            bundle.format(keys::AUTH_ESCROW_FAILED, &[("reason", Value::Str(&reason))])
+        }
+    }
+}
+
+/// The type-back gate's compare: `typed` is the hex the user was shown, surrounding
+/// whitespace dropped and either case accepted; anything that is not 64 hex characters of
+/// this secret fails.
+fn typed_back_matches(secret: &capsule_sdk::recovery::MintedSecret, typed: &str) -> bool {
+    hex::decode(typed.trim()).is_ok_and(|bytes| secret.matches(&bytes))
+}
+
+/// `capsule auth recover`: open a new library on this machine as the signed-in account, from
+/// its escrow, its sealed identity and the recovery secret (#544).
+///
+/// The recovery secret is read first and the new library passphrase second, which is also
+/// the order of the two stdin lines when both `--*-stdin` flags are given.
+async fn auth_recover(
+    library: &Path,
+    recovery_secret_stdin: bool,
+    passphrase_stdin: bool,
+) -> Result<()> {
+    let bundle = i18n::cli_bundle();
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+
+    let secret = read_password(
+        recovery_secret_stdin.then_some("--recovery-secret-stdin"),
+        bundle.format(keys::AUTH_RECOVER_SECRET_PROMPT, &[]),
+    )?;
+    let passphrase = if passphrase_stdin {
+        read_password(Some("--passphrase-stdin"), String::new())?
+    } else {
+        Password::new()
+            .with_prompt(bundle.format(keys::AUTH_RECOVER_PASSPHRASE_PROMPT, &[]))
+            .with_confirmation(
+                bundle.format(keys::AUTH_RECOVER_PASSPHRASE_CONFIRM, &[]),
+                bundle.format(keys::AUTH_RECOVER_PASSPHRASE_MISMATCH, &[]),
+            )
+            .interact()
+            .map_err(|e| eyre!("Failed to read password: {e}"))?
+    };
+
+    let path = library.display().to_string();
+    println!(
+        "{}",
+        bundle
+            .format(
+                keys::AUTH_RECOVER_IN_PROGRESS,
+                &[("path", Value::Str(&path))]
+            )
+            .green()
+    );
+    match remote::auth_recover(
+        &remote,
+        &store,
+        library,
+        &secret,
+        passphrase.as_bytes(),
+        DeviceTier::Normal.params(),
+    )
+    .await
+    {
+        Ok(workspace) => {
+            let device = workspace.device_id().to_string();
+            println!(
+                "{}",
+                bundle
+                    .format(
+                        keys::AUTH_RECOVER_SUCCESS,
+                        &[("path", Value::Str(&path)), ("device", Value::Str(&device))],
+                    )
+                    .green()
+            );
+            Ok(())
+        }
+        Err(remote::RemoteError::NotAuthenticated) => Err(eyre!(
+            "{}",
+            bundle.format(keys::AUTH_NOT_AUTHENTICATED, &[])
+        )),
+        Err(error) => {
+            let reason = match error {
+                remote::RemoteError::WrongRecoverySecret => {
+                    bundle.format(keys::AUTH_RECOVER_WRONG_SECRET, &[])
+                }
+                other => describe_remote_error(&bundle, &other),
+            };
+            Err(eyre!(
+                "{}",
+                bundle.format(
+                    keys::AUTH_RECOVER_FAILED,
+                    &[("reason", Value::Str(&reason))]
+                )
+            ))
+        }
+    }
 }
 
 /// `capsule auth logout`: revoke the session over the SDK and clear local state.
@@ -996,7 +1466,10 @@ fn open_workspace(library: &Path, passphrase_stdin: bool) -> Result<Workspace> {
 /// [`open_workspace`] without the unmigrated-sidecar notice: for `capsule library migrate`,
 /// which reports the same count as the work it is about to do.
 fn open_workspace_quiet(library: &Path, passphrase_stdin: bool) -> Result<Workspace> {
-    let passphrase = read_password(passphrase_stdin, "Library passphrase".to_string())?;
+    let passphrase = read_password(
+        passphrase_stdin.then_some("--passphrase-stdin"),
+        "Library passphrase".to_string(),
+    )?;
     let mut ws = as_capsule_cli(
         Workspace::open(library, passphrase.as_bytes(), DeviceTier::Normal.params())
             .map_err(|e| eyre!("Failed to open signed workspace: {e}"))?,
@@ -1114,6 +1587,102 @@ async fn push_workspace(workspace: &Workspace, options: remote::PushOptions) -> 
     }
 }
 
+/// `capsule share create`: issue a view-only link over `scope` and print its URL.
+async fn share_create(
+    library: &Path,
+    scope: capsule_core::sharing::ShareScope,
+    expires_at: Option<String>,
+    passphrase_stdin: bool,
+    protect: bool,
+    link_passphrase_stdin: bool,
+) -> Result<()> {
+    let bundle = i18n::cli_bundle();
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let mut ws = open_workspace(library, passphrase_stdin)?;
+    let passphrase = if !protect {
+        None
+    } else if link_passphrase_stdin {
+        Some(read_password(
+            Some("--link-passphrase-stdin"),
+            String::new(),
+        )?)
+    } else {
+        Some(
+            Password::new()
+                .with_prompt(bundle.format(keys::SHARE_CREATE_LINK_PASSPHRASE_PROMPT, &[]))
+                .with_confirmation(
+                    bundle.format(keys::SHARE_CREATE_LINK_PASSPHRASE_CONFIRM, &[]),
+                    bundle.format(keys::SHARE_CREATE_LINK_PASSPHRASE_MISMATCH, &[]),
+                )
+                .interact()
+                .map_err(|e| eyre!("Failed to read password: {e}"))?,
+        )
+    };
+    let request = share::CreateRequest {
+        scope,
+        expires_at,
+        passphrase,
+    };
+
+    println!(
+        "{}",
+        bundle
+            .format(
+                keys::SHARE_CREATE_IN_PROGRESS,
+                &[("endpoint", Value::Str(&remote.sync_endpoint))],
+            )
+            .green()
+    );
+    match share::create(&remote, &store, &mut ws, &request, jiff::Timestamp::now()).await {
+        Ok(issued) => {
+            share::render_issued(&bundle, &issued);
+            Ok(())
+        }
+        Err(error) => {
+            let reason = share::describe_error(&bundle, &error);
+            Err(eyre!(
+                "{}",
+                bundle.format(
+                    keys::SHARE_CREATE_FAILED,
+                    &[("reason", Value::Str(&reason))]
+                )
+            ))
+        }
+    }
+}
+
+/// `capsule share revoke`: stop the link `opaque_id` from opening.
+async fn share_revoke(opaque_id: &str) -> Result<()> {
+    let bundle = i18n::cli_bundle();
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    match share::revoke(&remote, &store, opaque_id).await {
+        Ok(id) => {
+            println!(
+                "{}",
+                bundle
+                    .format(
+                        keys::SHARE_REVOKE_SUCCESS,
+                        &[("opaque_id", Value::Str(&id))]
+                    )
+                    .green()
+            );
+            Ok(())
+        }
+        Err(error) => {
+            let reason = share::describe_error(&bundle, &error);
+            Err(eyre!(
+                "{}",
+                bundle.format(
+                    keys::SHARE_REVOKE_FAILED,
+                    &[("reason", Value::Str(&reason))]
+                )
+            ))
+        }
+    }
+}
+
 /// `capsule list`: query the sync-fed local store and render it.
 async fn list(include_deleted: bool) -> Result<()> {
     let bundle = i18n::cli_bundle();
@@ -1191,6 +1760,354 @@ fn open_library_or_err(path: &Path) -> Result<Library> {
         }
         other => eyre!("Failed to open library at {}: {other}", path.display()),
     })
+}
+
+#[cfg(test)]
+mod library_info_tests {
+    use super::library_info_unmigrated;
+    use crate::i18n::Bundle;
+
+    fn en() -> Bundle {
+        Bundle::for_locale("en")
+    }
+
+    /// An up-to-date library still shows the row, with a zero, and no migrate pointer.
+    #[test]
+    fn a_fully_signed_library_shows_zero_and_no_hint() {
+        let (row, hint) = library_info_unmigrated(&en(), 0);
+        assert_eq!(row, "Unmigrated sidecars: 0");
+        assert_eq!(hint, None);
+    }
+
+    /// One unsigned sidecar takes the singular hint, still carrying the count (every arm of
+    /// a `#` plural must, or a locale whose `one` covers other numbers drops it); the
+    /// pointer names the verb verbatim.
+    #[test]
+    fn one_unmigrated_sidecar_points_at_the_migrate_verb() {
+        let (row, hint) = library_info_unmigrated(&en(), 1);
+        assert_eq!(row, "Unmigrated sidecars: 1");
+        assert_eq!(
+            hint.as_deref(),
+            Some("Run `capsule library migrate` to admit the 1 unsigned sidecar.")
+        );
+    }
+
+    /// Several take the plural hint, carrying the count.
+    #[test]
+    fn several_unmigrated_sidecars_take_the_plural_hint() {
+        let (row, hint) = library_info_unmigrated(&en(), 3);
+        assert_eq!(row, "Unmigrated sidecars: 3");
+        assert_eq!(
+            hint.as_deref(),
+            Some("Run `capsule library migrate` to admit the 3 unsigned sidecars.")
+        );
+    }
+}
+
+#[cfg(test)]
+mod escrow_tests {
+    use capsule_core::lifecycle::LifecycleError;
+    use capsule_sdk::recovery::{MintedSecret, RecoveryError};
+
+    use super::{describe_escrow_error, typed_back_matches};
+    use crate::i18n::{Bundle, keys};
+    use crate::remote::RemoteError;
+
+    /// The hex the user was shown passes, in either case and with the newline a terminal adds.
+    #[test]
+    fn the_type_back_gate_accepts_the_shown_hex() {
+        let secret = MintedSecret::generate();
+        let hex = secret.to_hex();
+        assert!(typed_back_matches(&secret, &hex));
+        assert!(typed_back_matches(
+            &secret,
+            &format!("  {}\n", hex.to_uppercase())
+        ));
+    }
+
+    /// Another secret, a truncated copy, and text that is not hex all fail the gate.
+    #[test]
+    fn the_type_back_gate_refuses_anything_else() {
+        let secret = MintedSecret::generate();
+        let hex = secret.to_hex();
+        assert!(!typed_back_matches(
+            &secret,
+            &MintedSecret::generate().to_hex()
+        ));
+        assert!(!typed_back_matches(&secret, &hex[..62]));
+        assert!(!typed_back_matches(&secret, ""));
+        assert!(!typed_back_matches(&secret, &"z".repeat(64)));
+    }
+
+    /// Each refusal the command names renders its own catalog line, and the rebind refusal
+    /// tells the user to use a fresh library (#624 decision).
+    #[test]
+    fn each_named_refusal_has_its_own_line() {
+        let bundle = Bundle::for_locale("en");
+        let cases = [
+            (
+                RemoteError::EscrowAlreadyStored,
+                keys::AUTH_ESCROW_ALREADY_STORED,
+            ),
+            (
+                RemoteError::RecoverySecretNotConfirmed,
+                keys::AUTH_ESCROW_TYPEBACK_MISMATCH,
+            ),
+            (
+                RemoteError::Lifecycle(LifecycleError::AccountRebind("1 asset".into())),
+                keys::AUTH_ESCROW_LIBRARY_HAS_ASSETS,
+            ),
+        ];
+        for (error, key) in cases {
+            assert_eq!(
+                describe_escrow_error(&bundle, &error),
+                bundle.format(key, &[])
+            );
+        }
+        assert!(
+            bundle
+                .format(keys::AUTH_ESCROW_LIBRARY_HAS_ASSETS, &[])
+                .contains("fresh library")
+        );
+    }
+
+    /// Any other failure is wrapped in the generic line, localized by its code when it has one.
+    #[test]
+    fn other_failures_are_wrapped_in_the_failed_line() {
+        let bundle = Bundle::for_locale("en");
+        let line =
+            describe_escrow_error(&bundle, &RemoteError::Recovery(RecoveryError::NotEnrolled));
+        let reason = bundle.format(capsule_i18n::error_codes::ESCROW_NOT_STORED, &[]);
+        assert_eq!(
+            line,
+            bundle.format(
+                keys::AUTH_ESCROW_FAILED,
+                &[("reason", crate::i18n::Value::Str(&reason))]
+            )
+        );
+    }
+}
+
+#[cfg(test)]
+mod oidc_login_tests {
+    use capsule_sdk::auth::AuthError;
+    use clap::Parser as _;
+
+    use super::describe_oidc_error;
+    use crate::cli::{AuthCommands, Cli, Commands};
+    use crate::i18n::{Bundle, Value, keys};
+    use crate::oidc::OidcLoginError;
+    use crate::remote::RemoteError;
+
+    /// `--oidc` is its own sign-in: it takes no password inputs, and `--no-browser` means
+    /// nothing without it.
+    #[test]
+    fn the_oidc_flag_excludes_the_password_inputs() {
+        let parsed = Cli::try_parse_from(["capsule", "auth", "login", "--oidc", "--no-browser"])
+            .expect("--oidc --no-browser parses");
+        assert!(matches!(
+            parsed.command,
+            Commands::Auth {
+                command: AuthCommands::Login {
+                    oidc: true,
+                    no_browser: true,
+                    ..
+                }
+            }
+        ));
+        for refused in [
+            &["capsule", "auth", "login", "--oidc", "--email", "a@b.c"][..],
+            &["capsule", "auth", "login", "--oidc", "--password-stdin"][..],
+            &["capsule", "auth", "login", "--no-browser"][..],
+        ] {
+            assert!(Cli::try_parse_from(refused).is_err(), "{refused:?}");
+        }
+    }
+
+    /// `--device` is an arm of `--oidc` and opens no browser, so `--no-browser` has nothing to
+    /// add to it (issue #635).
+    #[test]
+    fn the_device_flag_rides_oidc_alone() {
+        let parsed = Cli::try_parse_from(["capsule", "auth", "login", "--oidc", "--device"])
+            .expect("--oidc --device parses");
+        assert!(matches!(
+            parsed.command,
+            Commands::Auth {
+                command: AuthCommands::Login {
+                    oidc: true,
+                    device: true,
+                    no_browser: false,
+                    ..
+                }
+            }
+        ));
+        for refused in [
+            &["capsule", "auth", "login", "--device"][..],
+            &[
+                "capsule",
+                "auth",
+                "login",
+                "--oidc",
+                "--device",
+                "--no-browser",
+            ][..],
+            &["capsule", "auth", "login", "--device", "--email", "a@b.c"][..],
+        ] {
+            assert!(Cli::try_parse_from(refused).is_err(), "{refused:?}");
+        }
+    }
+
+    /// The device sign-in's own failures render their own lines: the timeout, and the server's
+    /// denial, expiry and unsupported answers through their catalog codes.
+    #[test]
+    fn each_device_failure_has_its_own_line() {
+        let bundle = Bundle::for_locale("en");
+        assert_eq!(
+            describe_oidc_error(
+                &bundle,
+                &OidcLoginError::DeviceTimedOut {
+                    waited: std::time::Duration::from_secs(600)
+                }
+            ),
+            bundle.format(keys::AUTH_LOGIN_OIDC_DEVICE_TIMED_OUT, &[])
+        );
+        for (error, code) in [
+            (
+                AuthError::OidcDeviceDenied,
+                capsule_i18n::error_codes::AUTH_OIDC_DEVICE_DENIED,
+            ),
+            (
+                AuthError::OidcDeviceExpired,
+                capsule_i18n::error_codes::AUTH_OIDC_DEVICE_EXPIRED,
+            ),
+            (
+                AuthError::OidcDeviceUnsupported,
+                capsule_i18n::error_codes::AUTH_OIDC_DEVICE_UNSUPPORTED,
+            ),
+        ] {
+            assert_eq!(
+                describe_oidc_error(&bundle, &OidcLoginError::Remote(RemoteError::Auth(error))),
+                bundle.format(code, &[])
+            );
+        }
+    }
+
+    /// A refused loopback redirect names the server variable the operator has to set.
+    #[test]
+    fn a_refused_loopback_redirect_names_the_server_setting() {
+        let bundle = Bundle::for_locale("en");
+        let line = describe_oidc_error(
+            &bundle,
+            &OidcLoginError::Remote(RemoteError::Auth(AuthError::OidcRedirectInvalid)),
+        );
+        assert_eq!(
+            line,
+            bundle.format(keys::AUTH_LOGIN_OIDC_LOOPBACK_REFUSED, &[])
+        );
+        assert!(line.contains("OIDC_ALLOW_LOOPBACK_REDIRECT=true"), "{line}");
+    }
+
+    /// Each terminal failure renders its own line, and provider text cannot carry control
+    /// characters into the terminal.
+    #[test]
+    fn each_oidc_failure_has_its_own_line() {
+        let bundle = Bundle::for_locale("en");
+        assert_eq!(
+            describe_oidc_error(
+                &bundle,
+                &OidcLoginError::TimedOut {
+                    waited: std::time::Duration::from_secs(300)
+                }
+            ),
+            bundle.format(keys::AUTH_LOGIN_OIDC_TIMED_OUT, &[])
+        );
+        assert_eq!(
+            describe_oidc_error(
+                &bundle,
+                &OidcLoginError::Denied {
+                    error: "access_denied".to_owned(),
+                    description: None,
+                }
+            ),
+            bundle.format(
+                keys::AUTH_LOGIN_OIDC_DENIED,
+                &[("error", Value::Str("access_denied"))]
+            )
+        );
+        let described = describe_oidc_error(
+            &bundle,
+            &OidcLoginError::Denied {
+                error: "access_\u{1b}denied".to_owned(),
+                description: Some("no\u{1b}[31m thanks".to_owned()),
+            },
+        );
+        assert_eq!(
+            described,
+            bundle.format(
+                keys::AUTH_LOGIN_OIDC_DENIED_DESCRIBED,
+                &[
+                    ("error", Value::Str("access_denied")),
+                    ("description", Value::Str("no[31m thanks")),
+                ]
+            )
+        );
+        assert!(
+            describe_oidc_error(
+                &bundle,
+                &OidcLoginError::Remote(RemoteError::Auth(AuthError::OidcNotConfigured))
+            )
+            .contains(&bundle.format(capsule_i18n::error_codes::AUTH_OIDC_NOT_CONFIGURED, &[]))
+        );
+    }
+
+    /// The wait line pluralizes on whole minutes.
+    #[test]
+    fn the_wait_line_counts_minutes() {
+        let bundle = Bundle::for_locale("en");
+        assert!(
+            bundle
+                .format(keys::AUTH_LOGIN_OIDC_WAITING, &[("count", Value::Int(1))])
+                .contains("1 minute ")
+        );
+        assert!(
+            bundle
+                .format(keys::AUTH_LOGIN_OIDC_WAITING, &[("count", Value::Int(5))])
+                .contains("5 minutes ")
+        );
+    }
+}
+
+#[cfg(test)]
+mod stdin_secret_tests {
+    use super::read_stdin_secret;
+
+    /// Only the trailing newline is trimmed, so inner and leading spaces survive.
+    #[test]
+    fn the_first_line_is_read_with_only_its_newline_trimmed() {
+        let mut input = std::io::Cursor::new(" two words \r\nsecond line\n");
+        let secret = read_stdin_secret(&mut input, "--password-stdin").unwrap();
+        assert_eq!(secret, " two words ");
+    }
+
+    /// An empty line is refused against the flag the command was given, not a fixed one:
+    /// `capsule auth recover` has no `--password-stdin` (#618 D2).
+    #[test]
+    fn an_empty_line_names_the_flag_that_asked_for_it() {
+        for flag in ["--recovery-secret-stdin", "--passphrase-stdin"] {
+            let mut input = std::io::Cursor::new("\n");
+            let err = read_stdin_secret(&mut input, flag).unwrap_err().to_string();
+            assert!(err.starts_with(flag), "{flag}: got {err}");
+            assert!(!err.contains("--password-stdin"), "{flag}: got {err}");
+        }
+    }
+
+    /// End of input with nothing read is the same refusal as an empty line.
+    #[test]
+    fn no_input_at_all_is_refused() {
+        let mut input = std::io::Cursor::new("");
+        let err = read_stdin_secret(&mut input, "--passphrase-stdin").unwrap_err();
+        assert!(err.to_string().contains("--passphrase-stdin"));
+    }
 }
 
 #[cfg(test)]

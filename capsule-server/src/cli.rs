@@ -535,7 +535,11 @@ impl std::fmt::Display for Rendered<'_, PurgeReport> {
         let Self(report, mode) = *self;
         writeln!(f, "retention purge ({})", posture(mode))?;
         let mut quiet = true;
-        for (class, assets) in [("purged", &report.purged), ("retained", &report.retained)] {
+        for (class, assets) in [
+            ("purged", &report.purged),
+            ("retained", &report.retained),
+            ("skipped", &report.skipped),
+        ] {
             if assets.is_empty() {
                 continue;
             }
@@ -766,12 +770,15 @@ mod tests {
         let report = PurgeReport {
             purged: vec![crate::store::AssetId::new("gone")],
             retained: vec![crate::store::AssetId::new("waiting")],
+            skipped: vec![crate::store::AssetId::new("restored")],
         };
         let rendered = render_purge(&report, Mode::DryRun).to_string();
         assert!(rendered.contains("purged (1)"), "{rendered}");
         assert!(rendered.contains("gone"), "{rendered}");
         assert!(rendered.contains("retained (1)"), "{rendered}");
         assert!(rendered.contains("waiting"), "{rendered}");
+        assert!(rendered.contains("skipped (1)"), "{rendered}");
+        assert!(rendered.contains("restored"), "{rendered}");
     }
 
     #[test]

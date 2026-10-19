@@ -97,7 +97,7 @@ async fn e2e_case_9_a_server_outside_this_builds_window_refuses_writes_with_426(
     assert_eq!(refused.error_code(), Some(VERSION_UNSUPPORTED));
 
     // The window rides every response, an exempt operation's included (`GET /v1/version` is
-    // one of the ten the design exempts, and this client sends no handshake at all).
+    // one of the twelve the design exempts, and this client sends no handshake at all).
     let exempt = rest::Client::new(server.base_url()).expect("the API root parses");
     let version = exempt.get_version().await.expect("the version is public");
     let header = |name: &str| {
@@ -171,7 +171,8 @@ async fn a_body_past_the_transport_limit_reaches_the_sdk_as_a_codeless_413() {
     let recovery = RecoveryClient::new(device.session.clone(), server.base_url())
         .expect("the API root parses");
 
-    // 33 MiB: one past the 32 MiB `BodySize` backstop. Fast Argon2id parameters, because
+    // 33 MiB: past the 1 MiB `MAX_BOUNDED_BODY_BYTES` cap the escrow route's group mounts
+    // (and past the 32 MiB backstop besides). Fast Argon2id parameters, because
     // nothing here derives — the bytes never reach the escrow route's own checks.
     let oversized = WrappedSecret {
         mem_kib: 64,

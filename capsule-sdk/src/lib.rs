@@ -33,6 +33,7 @@ pub mod net;
 pub mod peering;
 pub mod push;
 pub mod recovery;
+pub mod share;
 pub mod staged;
 pub mod sync;
 /// The album-upgrade proposal client (`S-C24`). Hand-written for one reason only: its request

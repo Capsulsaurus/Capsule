@@ -65,8 +65,10 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-14
             optional: false
+          # An Intel runner rather than a cross build from Apple Silicon: the CLI links the
+          # system libdav1d (#588), and Homebrew on an arm64 host only installs an arm64 one.
           - target: x86_64-apple-darwin
-            os: macos-14
+            os: macos-15-intel
             optional: false
           - target: x86_64-pc-windows-msvc
             os: windows-latest
@@ -81,6 +83,20 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: release-${{ matrix.target }}
+      # The CLI enables capsule-core's `media-linked-codecs` (#437): rav1e's x86_64 assembly
+      # needs nasm on PATH. libjxl's cmake build and bindgen's libclang are already on every
+      # hosted runner image.
+      - name: Install nasm
+        uses: ilammy/setup-nasm@v1
+      # The CLI also enables `media-avif-decode` off Windows (#588): `dav1d-sys` links the
+      # system libdav1d through pkg-config and has no vendored build. The released binary
+      # links it dynamically, so it needs libdav1d installed where it runs.
+      - name: Install libdav1d (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libdav1d-dev
+      - name: Install libdav1d (macOS)
+        if: runner.os == 'macOS'
+        run: brew install dav1d pkgconf
       - name: Build the CLI
         run: cargo build -p capsule-cli --release --target ${{ matrix.target }}
       - name: Build the server

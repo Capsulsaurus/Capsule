@@ -11,6 +11,11 @@
 //! of a derivable fact, and the failure mode of a counter that drifts low is deleting a live
 //! blob — which is the one outcome this module exists to prevent.
 //!
+//! A **live share link** is the other kind of reference (#653). Its sealed metadata record —
+//! and any blob its issuer prepared for the boundary crossing — has no asset row, so the index
+//! answers zero for it, and [`ShareStore::names_live`] is asked instead. A link that is revoked
+//! or past its expiry holds nothing, so its blobs fall back to the ordinary mark-then-sweep.
+//!
 //! A **tombstoned** asset still holds its references. Deleting is not purging: the bytes stay
 //! until the retention window the user signed into the delete manifest has passed, which is
 //! what makes trash recoverable.
@@ -57,6 +62,17 @@
 //! Both workers take a [`Mode`], and a [`Mode::DryRun`] pass reports precisely what a real one
 //! would do without touching anything. A sweep that looks wrong should be inspectable before it
 //! runs, and an operator who cannot preview a destructive batch will eventually run one blind.
+//!
+//! # The pass also sweeps the upload-progress view (#519)
+//!
+//! The Valkey upload-session adapter keeps one global sorted set of evictable sessions by last
+//! progress, and that set has no lifetime of its own: a session whose record expired leaves its
+//! member behind until something walks over it, and the only walk is the pressure sweep,
+//! [`UploadSessionStore::least_recently_progressed`].
+//! Nothing on the request path runs it, so the set grew with every abandoned upload. A collection
+//! pass is the server's periodic housekeeping already, so an **applied** pass ends by running
+//! that sweep over the whole view — see [`ProgressSweep`]. A dry run skips it, because it
+//! removes entries, and a dry run removes nothing.
 
 use std::sync::Arc;
 
@@ -64,7 +80,8 @@ use jiff::{SignedDuration, Timestamp};
 
 use crate::blob::{BlobStore, ContentAddress};
 use crate::index::{AssetIndex, PurgeOutcome, purge_refusal};
-use crate::store::{AssetId, StoreError};
+use crate::share::ShareStore;
+use crate::store::{AssetId, StoreError, StoreFuture, UploadSessionStore};
 
 /// How long a blob must sit at zero references before it is swept.
 ///
@@ -128,6 +145,12 @@ pub struct PurgeReport {
     /// Reported so a dry run shows what is *waiting*, which is what an operator asking "why has
     /// this not gone yet" wants to see.
     pub retained: Vec<AssetId>,
+    /// Listed tombstones the purge re-check found were no longer tombstones — restored since
+    /// the listing — or no longer existed. Nothing was dropped for them.
+    ///
+    /// Reported rather than only logged, so the report accounts for every row the pass listed:
+    /// a listed asset that is in none of the three would be one the pass lost track of.
+    pub skipped: Vec<AssetId>,
 }
 
 /// Where the collectable marks live.
@@ -156,6 +179,29 @@ pub trait CollectionStore: std::fmt::Debug + Send + Sync {
     fn marks(&self) -> crate::store::StoreFuture<'_, Vec<(ContentAddress, Timestamp)>>;
 }
 
+/// The upload-progress view's sweep, as an applied collection pass runs it.
+///
+/// A port of one method rather than the whole [`UploadSessionStore`], because one method is all
+/// the collector asks of it — and so a test can assert *that* the pass swept, and when, without
+/// standing up an upload-session store to infer it from.
+pub trait ProgressSweep: std::fmt::Debug + Send + Sync {
+    /// Walk the whole view as of `now`, dropping every member whose session is gone or no
+    /// longer evictable, and answer how many evictable sessions remain in it.
+    fn sweep_progress(&self, now: Timestamp) -> StoreFuture<'_, usize>;
+}
+
+/// Every upload-session store sweeps through its own pressure listing.
+///
+/// [`UploadSessionStore::least_recently_progressed`] heals each member it walks over, and it
+/// walks until it has found `limit` live candidates — so an unbounded limit at a horizon of `now`
+/// visits every member that has progressed at all, which is the whole view. The candidates it
+/// answers are counted and dropped: this is housekeeping, not eviction.
+impl ProgressSweep for Arc<dyn UploadSessionStore> {
+    fn sweep_progress(&self, now: Timestamp) -> StoreFuture<'_, usize> {
+        Box::pin(async move { Ok(self.least_recently_progressed(now, usize::MAX).await?.len()) })
+    }
+}
+
 /// The collector's collaborators.
 #[derive(Debug, Clone)]
 pub struct CollectionContext {
@@ -163,8 +209,12 @@ pub struct CollectionContext {
     blobs: Arc<dyn BlobStore>,
     marks: Arc<dyn CollectionStore>,
     quotas: Arc<dyn crate::quota::QuotaStore>,
+    /// The share links, whose live serve sets hold blobs no asset row names (#653).
+    shares: Arc<dyn ShareStore>,
     clock: Arc<dyn crate::store::Clock>,
     grace_window: SignedDuration,
+    /// Set by [`Self::with_progress_sweep`]; `None` runs no sweep.
+    progress: Option<Arc<dyn ProgressSweep>>,
 }
 
 impl CollectionContext {
@@ -174,6 +224,7 @@ impl CollectionContext {
         blobs: Arc<dyn BlobStore>,
         marks: Arc<dyn CollectionStore>,
         quotas: Arc<dyn crate::quota::QuotaStore>,
+        shares: Arc<dyn ShareStore>,
         clock: Arc<dyn crate::store::Clock>,
         grace_window: SignedDuration,
     ) -> Self {
@@ -182,9 +233,21 @@ impl CollectionContext {
             blobs,
             marks,
             quotas,
+            shares,
             clock,
             grace_window,
+            progress: None,
         }
+    }
+
+    /// The same collector, ending every applied pass with `sweep` over the upload-progress view.
+    ///
+    /// A builder rather than a constructor argument, because the sweep is housekeeping the pass
+    /// carries for another store, not a collaborator the collection itself depends on.
+    #[must_use]
+    pub fn with_progress_sweep(mut self, sweep: Arc<dyn ProgressSweep>) -> Self {
+        self.progress = Some(sweep);
+        self
     }
 
     /// Where the collectable marks live.
@@ -199,7 +262,9 @@ impl CollectionContext {
 ///
 /// Propagates the first store failure. A pass that fails part-way has applied whatever it did
 /// before the failure, which is safe in both directions: a mark is reversible and a sweep only
-/// ever removed a blob that was confirmed unreferenced twice.
+/// ever removed a blob that was confirmed unreferenced twice. The upload-progress sweep runs
+/// after every blob is decided, so a session store that cannot answer fails the pass without
+/// having stopped the collection short.
 #[tracing::instrument(skip(context), fields(mode = ?mode))]
 pub async fn collect(
     context: &CollectionContext,
@@ -233,6 +298,8 @@ pub async fn collect(
         }
     }
 
+    sweep_progress(context, now, mode).await?;
+
     tracing::info!(
         marked = report.marked.len(),
         unmarked = report.unmarked.len(),
@@ -244,6 +311,24 @@ pub async fn collect(
     Ok(report)
 }
 
+/// Run the upload-progress sweep, if this collector carries one and the pass applies.
+async fn sweep_progress(
+    context: &CollectionContext,
+    now: Timestamp,
+    mode: Mode,
+) -> Result<(), StoreError> {
+    let Some(progress) = &context.progress else {
+        return Ok(());
+    };
+    if !mode.applies() {
+        tracing::debug!("a dry run leaves the upload-progress view unswept");
+        return Ok(());
+    }
+    let evictable = progress.sweep_progress(now).await?;
+    tracing::info!(evictable, "swept the upload-progress view");
+    Ok(())
+}
+
 /// Decide one blob.
 async fn visit(
     context: &CollectionContext,
@@ -253,12 +338,21 @@ async fn visit(
     report: &mut CollectionReport,
 ) -> Result<(), StoreError> {
     let references = context.index.reference_count(address).await?;
+    // A live share link is a reference too (#653): its sealed metadata record has no asset row,
+    // and a blob a link serves must outlive the link's ability to serve it. Asked only when no
+    // asset holds the blob, which is the rare case, so the ordinary blob costs one query.
+    let shared = references == 0 && context.shares.names_live(address, now).await?;
     let marked_since = context.marks.marked_since(address).await?;
 
-    if references > 0 {
+    if references > 0 || shared {
         // Live. If it was marked, a reference reappeared during the window and the mark goes.
         if marked_since.is_some() {
-            tracing::info!(%address, references, "a mark was cancelled: a reference reappeared");
+            tracing::info!(
+                %address,
+                references,
+                shared,
+                "a mark was cancelled: a reference reappeared"
+            );
             if mode.applies() {
                 context.marks.unmark(address).await?;
             }
@@ -385,6 +479,8 @@ pub async fn purge_expired(
             );
             if refusal == PurgeOutcome::Retained {
                 report.retained.push(row.asset_id);
+            } else {
+                report.skipped.push(row.asset_id);
             }
             continue;
         }
@@ -396,29 +492,41 @@ pub async fn purge_expired(
         // is a preservation obligation and must outlast a delete — is a legal question about
         // what a hold obliges an operator to do, not an engineering one, and guessing it in
         // either direction here would be worse than recording that it is open.
-        tracing::info!(
-            asset = %row.asset_id,
-            retention_until = ?row.retention_until,
-            blobs = row.blobs.len(),
-            "purging a tombstoned asset's blob references"
-        );
         if !mode.applies() {
+            tracing::info!(
+                asset = %row.asset_id,
+                retention_until = ?row.retention_until,
+                blobs = row.blobs.len(),
+                "a dry run would purge a tombstoned asset's blob references"
+            );
             report.purged.push(row.asset_id);
             continue;
         }
         // The listing is a snapshot; the index re-checks state and retention under the row
-        // lock, because a restore that committed since the listing must keep its bytes.
+        // lock, because a restore that committed since the listing must keep its bytes. So the
+        // purge is logged once the re-check has answered, not before: a line saying "purging"
+        // for an asset the re-check then kept would be a false record of a deletion.
         match context.index.purge(&row.asset_id, now).await? {
-            PurgeOutcome::Purged(_) => report.purged.push(row.asset_id),
+            PurgeOutcome::Purged(_) => {
+                tracing::info!(
+                    asset = %row.asset_id,
+                    retention_until = ?row.retention_until,
+                    blobs = row.blobs.len(),
+                    "purged a tombstoned asset's blob references"
+                );
+                report.purged.push(row.asset_id);
+            }
             PurgeOutcome::Retained => {
                 tracing::info!(asset = %row.asset_id, "a tombstone was re-deleted under a later retention floor since it was listed");
                 report.retained.push(row.asset_id);
             }
             PurgeOutcome::NotTombstoned => {
                 tracing::info!(asset = %row.asset_id, "an asset was restored after it was listed for purge; its bytes are kept");
+                report.skipped.push(row.asset_id);
             }
             PurgeOutcome::Unknown => {
                 tracing::warn!(asset = %row.asset_id, "a listed tombstone has no row by the time it is purged");
+                report.skipped.push(row.asset_id);
             }
         }
     }
@@ -426,6 +534,7 @@ pub async fn purge_expired(
     tracing::info!(
         purged = report.purged.len(),
         retained = report.retained.len(),
+        skipped = report.skipped.len(),
         "a retention purge pass finished"
     );
     Ok(report)

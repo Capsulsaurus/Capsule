@@ -51,6 +51,7 @@ A licence that imposes an obligation beyond attribution, where that obligation i
 | --- | --- | --- |
 | `tzf-rel` | `ODbL-1.0` | Share-alike on the *database*, not on code that queries it. Capsule embeds the timezone shapefile unmodified and creates no Derivative Database, so the obligation is attribution plus pointing at the unmodified upstream. |
 | `jpeg-encoder` | `(MIT OR Apache-2.0) AND IJG` | The IJG arm is conjunctive and cannot be elected away, but it requires only a fixed notice. |
+| `libfuzzer-sys` | `(MIT OR Apache-2.0) AND NCSA` | NCSA is attribution-only. The crate is reached only through rav1e's `cfg(fuzzing)` target dependency (capsule-core's `media-linked-codecs`), so no artefact compiles it. It is excepted because the gate inspects every target configuration. |
 
 An exception is a decision, not a waiver. Adding one means writing down what the obligation is and how Capsule discharges it.
 

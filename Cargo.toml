@@ -97,8 +97,8 @@ sea-orm-migration = { version = "1.1.20", features = [
 secrecy = { version = "0.10.3", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
-testcontainers = "0.26.3"
-testcontainers-modules = { version = "0.14.0", features = [
+testcontainers = "0.27.3"
+testcontainers-modules = { version = "0.15.0", features = [
     "postgres",
     "redis",
 ] }
@@ -141,6 +141,11 @@ opt-level = 3
 [profile.dev.package.png]
 opt-level = 3
 [profile.dev.package.fdeflate]
+opt-level = 3
+# The AV1 encoder behind capsule-core's `media-linked-codecs` AVIF variant (#437). Unoptimized,
+# rav1e takes about ten seconds per small frame, which every media test that generates
+# derivatives pays. It is a leaf codec, so optimizing it changes nothing else's build.
+[profile.dev.package.rav1e]
 opt-level = 3
 
 # The same settings for the test profile, spelled out rather than inherited.

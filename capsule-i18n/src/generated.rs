@@ -83,6 +83,21 @@ pub mod error_codes {
     /// `error.auth.oidc_at_capacity`
     pub const AUTH_OIDC_AT_CAPACITY: &str = "error.auth.oidc_at_capacity";
 
+    /// `error.auth.oidc_device_denied`
+    pub const AUTH_OIDC_DEVICE_DENIED: &str = "error.auth.oidc_device_denied";
+
+    /// `error.auth.oidc_device_expired`
+    pub const AUTH_OIDC_DEVICE_EXPIRED: &str = "error.auth.oidc_device_expired";
+
+    /// `error.auth.oidc_device_pending`
+    pub const AUTH_OIDC_DEVICE_PENDING: &str = "error.auth.oidc_device_pending";
+
+    /// `error.auth.oidc_device_slow_down`
+    pub const AUTH_OIDC_DEVICE_SLOW_DOWN: &str = "error.auth.oidc_device_slow_down";
+
+    /// `error.auth.oidc_device_unsupported`
+    pub const AUTH_OIDC_DEVICE_UNSUPPORTED: &str = "error.auth.oidc_device_unsupported";
+
     /// `error.auth.oidc_exchange_failed`
     pub const AUTH_OIDC_EXCHANGE_FAILED: &str = "error.auth.oidc_exchange_failed";
 
@@ -185,6 +200,9 @@ pub mod error_codes {
     /// `error.directory.unsupported_media_type`
     pub const DIRECTORY_UNSUPPORTED_MEDIA_TYPE: &str = "error.directory.unsupported_media_type";
 
+    /// `error.directory.untrusted_signature`
+    pub const DIRECTORY_UNTRUSTED_SIGNATURE: &str = "error.directory.untrusted_signature";
+
     /// `error.directory.version_conflict`
     pub const DIRECTORY_VERSION_CONFLICT: &str = "error.directory.version_conflict";
 
@@ -244,6 +262,9 @@ pub mod error_codes {
 
     /// `error.enrollment.relay_malformed`
     pub const ENROLLMENT_RELAY_MALFORMED: &str = "error.enrollment.relay_malformed";
+
+    /// `error.escrow.identity_not_stored`
+    pub const ESCROW_IDENTITY_NOT_STORED: &str = "error.escrow.identity_not_stored";
 
     /// `error.escrow.malformed`
     pub const ESCROW_MALFORMED: &str = "error.escrow.malformed";

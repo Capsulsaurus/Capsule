@@ -7,13 +7,14 @@
 //! on is a primary key, not a value somebody decodes: a link serves what its rows name and
 //! nothing else.
 //!
-//! # `issue` is one transaction, `resolve` one statement, and a re-issue replaces
+//! # `issue` is one transaction, `resolve` one statement, and a held id is refused
 //!
 //! The link row and its serve set are written together, and `resolve` reads them back in one
 //! joined `SELECT` that sees one snapshot, so no reader ever resolves a link whose serve set is
-//! half-written or belongs to another issue of the same id. Issuing an opaque id that is already held **replaces** the record,
-//! exactly as the in-memory adapter's map insert does — the conformance suite holds both
-//! adapters to one behaviour, and the port does not yet say otherwise.
+//! half-written. The row is written `ON CONFLICT (opaque_id) DO NOTHING`, and a row count of
+//! zero is [`IssueOutcome::Conflict`]: the transaction is dropped before the serve set is
+//! touched, so the held link keeps its owner and every address it enumerated (#553). The
+//! primary key is the check, so two concurrent issues of one id cannot both be recorded.
 //!
 //! # `revoke` is one statement
 //!
@@ -30,7 +31,7 @@ use sea_orm::{
 };
 use uuid::Uuid;
 
-use super::{ShareRecord, ShareStore};
+use super::{IssueOutcome, ShareRecord, ShareStore};
 use crate::blob::ContentAddress;
 use crate::postgres::error::Port;
 use crate::postgres::time::{from_micros, to_micros};
@@ -105,25 +106,18 @@ async fn begin(connection: &DatabaseConnection) -> Result<DatabaseTransaction, S
 }
 
 impl ShareStore for PostgresShares {
-    fn issue(&self, record: ShareRecord) -> StoreFuture<'_, ()> {
+    fn issue(&self, record: ShareRecord) -> StoreFuture<'_, IssueOutcome> {
         Box::pin(async move {
             let (scope_kind, scope_id) = scope_columns(&record.scope);
             let transaction = begin(&self.connection).await?;
-            transaction
+            let inserted = transaction
                 .execute(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "INSERT INTO shares \
                        (opaque_id, owner_id, scope_kind, scope_id, metadata, wrapped_secret, \
                         expires_at, revoked_at) \
                      VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
-                     ON CONFLICT (opaque_id) DO UPDATE SET \
-                       owner_id = EXCLUDED.owner_id, \
-                       scope_kind = EXCLUDED.scope_kind, \
-                       scope_id = EXCLUDED.scope_id, \
-                       metadata = EXCLUDED.metadata, \
-                       wrapped_secret = EXCLUDED.wrapped_secret, \
-                       expires_at = EXCLUDED.expires_at, \
-                       revoked_at = EXCLUDED.revoked_at",
+                     ON CONFLICT (opaque_id) DO NOTHING",
                     [
                         Value::from(record.opaque_id.clone()),
                         Value::from(record.owner_id.as_str().to_owned()),
@@ -137,15 +131,16 @@ impl ShareStore for PostgresShares {
                 ))
                 .await
                 .map_err(PORT.failing("recording a share link"))?;
-            // The serve set is replaced whole, inside the same transaction as the row.
-            transaction
-                .execute(Statement::from_sql_and_values(
-                    DbBackend::Postgres,
-                    "DELETE FROM share_serves WHERE opaque_id = $1",
-                    [Value::from(record.opaque_id.clone())],
-                ))
-                .await
-                .map_err(PORT.failing("clearing a share link's serve set"))?;
+            if inserted.rows_affected() == 0 {
+                // Dropping the transaction rolls it back; nothing was written.
+                drop(transaction);
+                tracing::info!(
+                    owner = %record.owner_id,
+                    "a share link was refused: its opaque id is already held"
+                );
+                return Ok(IssueOutcome::Conflict);
+            }
+            // The row is new, so the serve set is too: written inside the same transaction.
             let serves: Vec<String> = record
                 .serves
                 .iter()
@@ -169,14 +164,14 @@ impl ShareStore for PostgresShares {
                 serves = record.serves.len(),
                 "a share link was issued"
             );
-            Ok(())
+            Ok(IssueOutcome::Issued)
         })
     }
 
     fn resolve<'a>(&'a self, opaque_id: &'a str) -> StoreFuture<'a, Option<ShareRecord>> {
         Box::pin(async move {
             // One statement, so the row and its serve set come from one snapshot: a concurrent
-            // re-issue cannot hand back one record's row with another record's serve set. The
+            // issue cannot hand back a row whose serve set is not yet committed. The
             // join yields one row per served address, one row with a NULL address for a link
             // that serves nothing, and no row for an unknown id.
             let rows = self
@@ -253,6 +248,38 @@ impl ShareStore for PostgresShares {
                 tracing::info!(%owner, "a share link was revoked");
             }
             Ok(revoked)
+        })
+    }
+
+    fn names_live<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+        now: jiff::Timestamp,
+    ) -> StoreFuture<'a, bool> {
+        Box::pin(async move {
+            // The liveness rule is `ShareRecord::is_live_at`'s, spelled in SQL: not revoked, and
+            // either no expiry or one strictly after `now`.
+            let row = self
+                .connection
+                .query_one(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "SELECT EXISTS ( \
+                       SELECT 1 FROM share_serves v \
+                       JOIN shares s ON s.opaque_id = v.opaque_id \
+                       WHERE v.address = $1 \
+                         AND s.revoked_at IS NULL \
+                         AND (s.expires_at IS NULL OR s.expires_at > $2) \
+                     ) AS named",
+                    [
+                        Value::from(address.as_str().to_owned()),
+                        Value::from(to_micros(now)),
+                    ],
+                ))
+                .await
+                .map_err(PORT.failing("asking whether a live link names an address"))?
+                .ok_or_else(|| PORT.undecodable("an EXISTS query returned no row".to_owned()))?;
+            row.try_get("", "named")
+                .map_err(PORT.failing("asking whether a live link names an address"))
         })
     }
 }

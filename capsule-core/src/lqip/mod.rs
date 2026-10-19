@@ -5,7 +5,7 @@
 //! # Why this module exists at the crate root
 //!
 //! The placeholder is produced by the import pipeline, read by the native apps through the
-//! uniffi FFI, and read by the browser through `capsule-wasm`. A placeholder that differed by
+//! app FFI, and read by the browser through `capsule-wasm`. A placeholder that differed by
 //! which client imported the photo would be a visible defect, so there is exactly **one**
 //! implementation and it must be reachable from all three. That rules out
 //! `capsule_core::media`, the retired decode/encode stack that lives in `legacy-review/`

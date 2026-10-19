@@ -42,9 +42,32 @@ pub enum BlobRole {
     Provenance,
     /// A backup copy.
     Backup,
+    /// The signed `DerivativeManifest` of one derivative tier, stored verbatim — canonical
+    /// CBOR, server-visible like the asset's own manifest, and the material a receiver opens
+    /// that tier's derivative with (#556).
+    ///
+    /// Plural, like [`Self::Derivative`]: an asset carries one per derivative tier, and the
+    /// `original`-sentinel tier carries one with no derivative blob beside it.
+    DerivativeManifest,
 }
 
 impl BlobRole {
+    /// Every role, in declaration order — the one list every stored-token reader parses
+    /// against, so a role added here is a role every adapter reads back.
+    pub const ALL: [Self; 6] = [
+        Self::Original,
+        Self::Derivative,
+        Self::Metadata,
+        Self::Provenance,
+        Self::Backup,
+        Self::DerivativeManifest,
+    ];
+
+    /// The role a stored token names, or `None` for a token no role spells.
+    pub fn from_token(token: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|role| role.as_str() == token)
+    }
+
     /// The role's stable wire token.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -53,6 +76,7 @@ impl BlobRole {
             Self::Metadata => "metadata",
             Self::Provenance => "provenance",
             Self::Backup => "backup",
+            Self::DerivativeManifest => "derivative_manifest",
         }
     }
 }
@@ -322,4 +346,20 @@ pub trait UploadSessionStore: std::fmt::Debug + Send + Sync {
         not_progressed_since: Timestamp,
         limit: usize,
     ) -> StoreFuture<'_, Vec<UploadId>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BlobRole;
+
+    #[test]
+    fn every_role_reads_back_from_its_own_token() {
+        // The adapters store the token and parse it back through `from_token`, so a role missing
+        // from `ALL` is a role every stored record of it fails to decode.
+        for role in BlobRole::ALL {
+            assert_eq!(BlobRole::from_token(role.as_str()), Some(role));
+        }
+        assert_eq!(BlobRole::DerivativeManifest.as_str(), "derivative_manifest");
+        assert_eq!(BlobRole::from_token("derivativemanifest"), None);
+    }
 }

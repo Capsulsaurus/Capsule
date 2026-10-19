@@ -52,6 +52,7 @@ struct Harness {
     blobs: Arc<InMemoryBlobStore>,
     marks: Arc<InMemoryCollection>,
     quotas: Arc<crate::quota::InMemoryQuota>,
+    shares: Arc<crate::share::InMemoryShares>,
     clock: Arc<StepClock>,
 }
 
@@ -61,12 +62,14 @@ impl Harness {
         let blobs = Arc::new(InMemoryBlobStore::new());
         let marks = Arc::new(InMemoryCollection::new());
         let quotas = Arc::new(crate::quota::InMemoryQuota::new());
+        let shares = Arc::new(crate::share::InMemoryShares::new());
         let clock = StepClock::new();
         let context = CollectionContext::new(
             index.clone(),
             blobs.clone(),
             marks.clone(),
             quotas.clone(),
+            shares.clone(),
             clock.clone(),
             DEFAULT_GRACE_WINDOW,
         );
@@ -76,8 +79,36 @@ impl Harness {
             blobs,
             marks,
             quotas,
+            shares,
             clock,
         }
+    }
+
+    /// Issue a link that serves `serves`, the first of them its metadata record.
+    async fn share(
+        &self,
+        tag: u8,
+        serves: &[&ContentAddress],
+        expires_at: Option<Timestamp>,
+    ) -> String {
+        use crate::share::{IssueOutcome, ShareRecord, ShareStore as _};
+        let opaque_id = format!("{tag:032x}");
+        let outcome = self
+            .shares
+            .issue(ShareRecord {
+                opaque_id: opaque_id.clone(),
+                owner_id: crate::store::UserId::new("gc-owner"),
+                scope: capsule_core::sharing::ShareScope::Album(uuid::Uuid::nil()),
+                serves: serves.iter().map(|address| (*address).clone()).collect(),
+                metadata: serves[0].clone(),
+                wrapped_secret: None,
+                expires_at,
+                revoked_at: None,
+            })
+            .await
+            .expect("the share store issues");
+        assert_eq!(outcome, IssueOutcome::Issued);
+        opaque_id
     }
 
     /// Put `bytes` in the store and return their address.
@@ -267,6 +298,78 @@ async fn a_reference_reappearing_during_the_window_cancels_the_mark() {
     assert!(h.blobs.stat(&shared).await.expect("stat").is_some());
 }
 
+/// #653: a share link's sealed metadata record has no asset row, and a live link must keep it.
+#[tokio::test]
+async fn a_blob_a_live_share_serves_is_never_marked() {
+    let h = Harness::new();
+    let record = h.store(b"a sealed share-metadata/v1 record").await;
+    let prepared = h.store(b"a blob prepared for the boundary crossing").await;
+    h.share(1, &[&record, &prepared], None).await;
+
+    let report = collect(&h.context, Mode::Apply).await.expect("a pass");
+    assert!(report.marked.is_empty(), "{report:?}");
+    h.clock.advance(days(3));
+    let report = collect(&h.context, Mode::Apply).await.expect("a pass");
+    assert!(
+        report.marked.is_empty() && report.swept.is_empty(),
+        "{report:?}"
+    );
+    assert!(h.blobs.stat(&record).await.expect("stat").is_some());
+    assert!(h.blobs.stat(&prepared).await.expect("stat").is_some());
+}
+
+/// Once the last link naming a blob is revoked, the blob is an ordinary orphan.
+#[tokio::test]
+async fn a_revoked_shares_blob_is_marked_then_swept() {
+    use crate::share::ShareStore as _;
+    let h = Harness::new();
+    let record = h.store(b"a record whose link is revoked").await;
+    let id = h.share(2, &[&record], None).await;
+    assert!(
+        h.shares
+            .revoke(&crate::store::UserId::new("gc-owner"), &id, h.clock.now())
+            .await
+            .expect("revoke")
+    );
+
+    let report = collect(&h.context, Mode::Apply).await.expect("a pass");
+    assert_eq!(report.marked, vec![record.clone()]);
+    h.clock.advance(days(2));
+    let report = collect(&h.context, Mode::Apply).await.expect("a pass");
+    assert_eq!(report.swept, vec![record.clone()]);
+    assert!(h.blobs.stat(&record).await.expect("stat").is_none());
+}
+
+/// An expiring link holds its blob until the expiry and not after; a link issued mid-window over
+/// the same blob cancels the mark, exactly as an asset reference reappearing would.
+#[tokio::test]
+async fn an_expired_shares_blob_is_collectable_and_a_new_link_reprieves_it() {
+    let h = Harness::new();
+    let record = h.store(b"a record whose link expires").await;
+    h.share(3, &[&record], Some(h.clock.now() + days(1))).await;
+
+    let report = collect(&h.context, Mode::Apply).await.expect("a pass");
+    assert!(
+        report.marked.is_empty(),
+        "live until its expiry: {report:?}"
+    );
+
+    h.clock.advance(days(1));
+    let report = collect(&h.context, Mode::Apply).await.expect("a pass");
+    assert_eq!(
+        report.marked,
+        vec![record.clone()],
+        "not live at its expiry instant"
+    );
+
+    h.share(4, &[&record], None).await;
+    let report = collect(&h.context, Mode::Apply).await.expect("a pass");
+    assert_eq!(report.unmarked, vec![record.clone()]);
+    h.clock.advance(days(2));
+    let report = collect(&h.context, Mode::Apply).await.expect("a pass");
+    assert!(report.swept.is_empty(), "{report:?}");
+}
+
 #[tokio::test]
 async fn a_dry_run_changes_nothing() {
     let h = Harness::new();
@@ -371,6 +474,36 @@ async fn the_purge_honours_the_signed_retention_floor() {
 
     let report = collect(&h.context, Mode::Apply).await.expect("a pass");
     assert!(report.marked.contains(&held));
+}
+
+#[tokio::test]
+async fn a_purged_tombstone_is_not_reported_again_nor_holds_a_bounded_pass_back() {
+    let h = Harness::new();
+    h.publish("first", b"deleted first").await;
+    h.delete("first", Some(Timestamp::UNIX_EPOCH), 1).await;
+    h.clock.advance(days(1));
+    let report = purge_expired(&h.context, Mode::Apply, 1)
+        .await
+        .expect("a pass");
+    assert_eq!(report.purged, vec![AssetId::new("first")]);
+
+    // A later deletion, behind the purged one in the oldest-first listing.
+    h.publish("second", b"deleted later").await;
+    h.delete("second", Some(Timestamp::UNIX_EPOCH), 2).await;
+    h.clock.advance(days(1));
+    let report = purge_expired(&h.context, Mode::Apply, 1)
+        .await
+        .expect("a pass");
+    assert_eq!(
+        report.purged,
+        vec![AssetId::new("second")],
+        "a page of one goes to the tombstone still holding bytes, not the one already emptied"
+    );
+
+    let report = purge_expired(&h.context, Mode::Apply, 10)
+        .await
+        .expect("a pass");
+    assert_eq!(report, PurgeReport::default(), "nothing is left to purge");
 }
 
 #[tokio::test]
@@ -610,15 +743,17 @@ async fn a_dry_run_credits_nothing() {
     assert_eq!(h.used("uploader").await, 16);
 }
 
-/// An index that lands a restore after the purge worker has listed its tombstones and before
-/// it purges them — the interleaving a real `TrashRestore` can produce, made deterministic.
+/// An index that changes a listed row after the purge worker has listed its tombstones and
+/// before it purges them, made deterministic: it lands a `restore` (the interleaving a real
+/// `TrashRestore` can produce), or treats the `dropped` row as gone by the time it is purged.
 #[derive(Debug)]
-struct RestoresAfterListing {
+struct RacesTheListing {
     inner: Arc<InMemoryAssetIndex>,
     restore: std::sync::Mutex<Option<LifecycleOp>>,
+    dropped: Option<AssetId>,
 }
 
-impl AssetIndex for RestoresAfterListing {
+impl AssetIndex for RacesTheListing {
     fn reserve(&self, asset: PendingAsset) -> crate::index::IndexFuture<'_, Reservation> {
         self.inner.reserve(asset)
     }
@@ -713,6 +848,9 @@ impl AssetIndex for RestoresAfterListing {
         asset: &'a AssetId,
         now: Timestamp,
     ) -> crate::index::IndexFuture<'a, crate::index::PurgeOutcome> {
+        if self.dropped.as_ref() == Some(asset) {
+            return Box::pin(async { Ok(crate::index::PurgeOutcome::Unknown) });
+        }
         self.inner.purge(asset, now)
     }
 
@@ -771,15 +909,17 @@ async fn a_restore_between_listing_and_purge_keeps_its_bytes() {
         retention_until: None,
         at: h.clock.now(),
     };
-    let racing = Arc::new(RestoresAfterListing {
+    let racing = Arc::new(RacesTheListing {
         inner: h.index.clone(),
         restore: std::sync::Mutex::new(Some(restore)),
+        dropped: None,
     });
     let context = CollectionContext::new(
         racing,
         h.blobs.clone(),
         h.marks.clone(),
         h.quotas.clone(),
+        h.shares.clone(),
         h.clock.clone(),
         DEFAULT_GRACE_WINDOW,
     );
@@ -790,6 +930,11 @@ async fn a_restore_between_listing_and_purge_keeps_its_bytes() {
     assert!(
         report.purged.is_empty(),
         "the listing saw a tombstone, but the row was restored before the purge took its lock"
+    );
+    assert_eq!(
+        report.skipped,
+        vec![id.clone()],
+        "the report accounts for the listed row the re-check kept"
     );
 
     let row = h.index.read(&id).await.expect("read").expect("row");
@@ -809,4 +954,173 @@ async fn a_restore_between_listing_and_purge_keeps_its_bytes() {
         h.blobs.stat(&held).await.expect("stat").is_some(),
         "the restored asset's bytes are still on disk"
     );
+}
+
+#[tokio::test]
+async fn a_listed_tombstone_whose_row_is_gone_at_purge_time_is_skipped() {
+    let h = Harness::new();
+    h.publish("vanished", b"its row went before the purge")
+        .await;
+    h.delete("vanished", Some(Timestamp::UNIX_EPOCH), 1).await;
+    h.publish("expired", b"purged in the same pass").await;
+    h.delete("expired", Some(Timestamp::UNIX_EPOCH), 2).await;
+    h.clock.advance(days(1));
+
+    let id = AssetId::new("vanished");
+    let racing = Arc::new(RacesTheListing {
+        inner: h.index.clone(),
+        restore: std::sync::Mutex::new(None),
+        dropped: Some(id.clone()),
+    });
+    let context = CollectionContext::new(
+        racing,
+        h.blobs.clone(),
+        h.marks.clone(),
+        h.quotas.clone(),
+        h.shares.clone(),
+        h.clock.clone(),
+        DEFAULT_GRACE_WINDOW,
+    );
+
+    let report = purge_expired(&context, Mode::Apply, 10)
+        .await
+        .expect("a missing row is accounted for, not an error that fails the pass");
+    assert_eq!(
+        report.skipped,
+        vec![id],
+        "the listed row the purge found gone is reported as skipped"
+    );
+    assert_eq!(
+        report.purged,
+        vec![AssetId::new("expired")],
+        "the rest of the page is still purged"
+    );
+    assert!(report.retained.is_empty(), "{report:?}");
+}
+
+/// A [`ProgressSweep`] that records the instant of every sweep, or fails when told to.
+#[derive(Debug, Default)]
+struct RecordingSweep {
+    swept_at: std::sync::Mutex<Vec<Timestamp>>,
+    fails: bool,
+}
+
+impl ProgressSweep for RecordingSweep {
+    fn sweep_progress(&self, now: Timestamp) -> StoreFuture<'_, usize> {
+        Box::pin(async move {
+            if self.fails {
+                return Err(StoreError::Unavailable {
+                    store: "uploads",
+                    detail: "the session store is down".to_owned(),
+                });
+            }
+            self.swept_at
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(now);
+            Ok(2)
+        })
+    }
+}
+
+impl RecordingSweep {
+    fn sweeps(&self) -> Vec<Timestamp> {
+        self.swept_at
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
+#[tokio::test]
+async fn an_applied_pass_sweeps_the_upload_progress_view_at_its_own_instant() {
+    let h = Harness::new();
+    let sweep = Arc::new(RecordingSweep::default());
+    let context = h.context.clone().with_progress_sweep(sweep.clone());
+    h.clock.advance(days(3));
+
+    collect(&context, Mode::Apply).await.expect("a pass");
+
+    assert_eq!(
+        sweep.sweeps(),
+        vec![h.clock.now()],
+        "one sweep per applied pass, as of the pass's clock"
+    );
+}
+
+#[tokio::test]
+async fn a_dry_run_leaves_the_upload_progress_view_unswept() {
+    let h = Harness::new();
+    let sweep = Arc::new(RecordingSweep::default());
+    let context = h.context.clone().with_progress_sweep(sweep.clone());
+
+    collect(&context, Mode::DryRun).await.expect("a pass");
+
+    assert!(
+        sweep.sweeps().is_empty(),
+        "the sweep removes entries, and a dry run removes nothing"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_sweep_fails_the_pass_after_the_blobs_were_decided() {
+    let h = Harness::new();
+    let orphan = h.store(b"an orphan the pass still marks").await;
+    let sweep = Arc::new(RecordingSweep {
+        fails: true,
+        ..RecordingSweep::default()
+    });
+    let context = h.context.clone().with_progress_sweep(sweep);
+
+    let error = collect(&context, Mode::Apply)
+        .await
+        .expect_err("a session store that cannot answer fails the pass");
+
+    assert!(matches!(error, StoreError::Unavailable { .. }), "{error:?}");
+    assert!(
+        h.marks
+            .marked_since(&orphan)
+            .await
+            .expect("a lookup")
+            .is_some(),
+        "the collection ran to the end before the sweep was tried"
+    );
+}
+
+#[tokio::test]
+async fn the_upload_session_store_sweeps_through_its_pressure_listing() {
+    // The production implementation of the port: an unbounded limit at a horizon of `now` must
+    // reach every evictable session, which the in-memory double answers in full.
+    let clock = StepClock::new();
+    let uploads: Arc<dyn crate::store::UploadSessionStore> =
+        Arc::new(crate::store::memory::InMemoryUploadSessions::with_default_ttl(clock.clone()));
+    for n in 0..3 {
+        uploads
+            .open(crate::store::upload::UploadSessionRecord {
+                upload_id: crate::store::UploadId::new(format!("gc-sweep-{n}")),
+                asset_id: AssetId::new(format!("gc-sweep-asset-{n}")),
+                owner_id: OwnerId::new("gc-owner"),
+                upload_user_id: crate::store::UserId::new("gc-uploader"),
+                album_id: None,
+                content_type: None,
+                expected_hash: format!("{n:064x}"),
+                crypto_suite_id: 1,
+                protocol_version: "2026-08-29".to_owned(),
+                blob_role: BlobRole::Original,
+                intent_id: None,
+                manifest_envelope: "{}".to_owned(),
+                received_bytes: 0,
+                total_size: 1,
+                status: crate::store::upload::UploadSessionStatus::Pending,
+                created_at: clock.now(),
+                last_progress_at: clock.now(),
+            })
+            .await
+            .expect("the session opens");
+    }
+    clock.advance(SignedDuration::from_secs(1));
+
+    let evictable = uploads.sweep_progress(clock.now()).await.expect("a sweep");
+
+    assert_eq!(evictable, 3);
 }

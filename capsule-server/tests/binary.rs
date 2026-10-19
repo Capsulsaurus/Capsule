@@ -321,14 +321,15 @@ fn the_environment_cannot_select_the_memory_profile() {
 
 #[test]
 fn a_durable_backend_refuses_by_name_rather_than_falling_back() {
-    // The other half of the same property: the operator *did* set `VALKEY_URL`, so
-    // `Config::load` is satisfied, and falling back to the in-memory adapters is the one thing
-    // that must never happen.
+    // The other half of the same property: the operator *did* set `VALKEY_URL`, and falling
+    // back to the in-memory adapters is the one thing that must never happen.
     //
     // What the refusal *names* moved with #402. It used to be `#403`, because nothing read
-    // either backend URL; now the durable arm demands `DATABASE_URL` first — it is what the
+    // either backend URL; now the durable arm demands `DATABASE_URL` too — it is what the
     // Postgres half opens the pool from — so a deployment that set one variable and not the
-    // other is told which one is missing rather than being pointed at an issue number.
+    // other is told which one is missing rather than being pointed at an issue number. Since
+    // #520 that demand is `Config::load`'s, so it is a configuration refusal and exits 2, the
+    // same as a missing `VALKEY_URL`.
     //
     // The Valkey refusal is still there, one step further in, and #403 landed the adapter that
     // makes it a real connection failure rather than an unimplemented port. It is asserted where
@@ -346,8 +347,9 @@ fn a_durable_backend_refuses_by_name_rather_than_falling_back() {
     .env("JWT_ED25519_DER", EXAMPLE_DER)
     .env("ATTESTATION_KEY_SEED", EXAMPLE_SEED)
     .env("VALKEY_URL", "redis://127.0.0.1:1"));
-    assert_ne!(code, Some(0), "{stderr}");
+    assert_eq!(code, Some(2), "{stderr}");
     assert!(stderr.contains("DATABASE_URL"), "{stderr}");
+    assert!(!stderr.contains("VALKEY_URL"), "it was set: {stderr}");
     // A refusal names the variable, never the address, which carries the password.
     assert!(
         !stderr.contains("127.0.0.1:1"),
@@ -601,8 +603,9 @@ fn the_operator_commands_need_no_key_material() {
 #[test]
 fn an_operator_command_without_memory_is_told_about_the_database_first() {
     // Without `--memory` these commands run on the durable stores, and the first one they read
-    // is the index. An operator who set no backend variable at all is told about
-    // `DATABASE_URL` before `VALKEY_URL`, which is the order the workers open them in.
+    // is the index. An operator who set no backend variable at all is told about both in one
+    // configuration refusal (#520), `DATABASE_URL` before `VALKEY_URL`, which is the order the
+    // workers open them in.
     let root = tempfile::tempdir().expect("a scratch directory");
     for subcommand in ["gc", "purge", "scrub"] {
         let (code, _, stderr) = run(&mut server(&[
@@ -610,9 +613,13 @@ fn an_operator_command_without_memory_is_told_about_the_database_first() {
             "--blob-root",
             &root.path().display().to_string(),
         ]));
-        assert_ne!(code, Some(0), "{subcommand}: {stderr}");
-        assert!(stderr.contains("DATABASE_URL"), "{subcommand}: {stderr}");
-        assert!(!stderr.contains("VALKEY_URL"), "{subcommand}: {stderr}");
+        assert_eq!(code, Some(2), "{subcommand}: {stderr}");
+        let database = stderr.find("DATABASE_URL");
+        let valkey = stderr.find("VALKEY_URL");
+        assert!(
+            database.is_some() && valkey.is_some() && database < valkey,
+            "{subcommand}: {stderr}"
+        );
     }
 }
 

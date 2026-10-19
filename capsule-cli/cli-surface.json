@@ -9,6 +9,42 @@
       "name": "auth",
       "subcommands": [
         {
+          "about": "Set up recovery for a library: bind it to the signed-in account and store its recovery backup under a new recovery secret",
+          "args": [
+            {
+              "help": "Path to the Capsule library; it must not hold any assets yet",
+              "id": "library",
+              "long": "library",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            },
+            {
+              "help": "Read the library passphrase from stdin instead of prompting",
+              "id": "passphrase_stdin",
+              "long": "passphrase-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Replace the account's existing recovery backup; the previous recovery secret stops working",
+              "id": "replace",
+              "long": "replace",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "escrow"
+        },
+        {
           "about": "Login to Capsule",
           "args": [
             {
@@ -31,6 +67,33 @@
               "repeatable": false,
               "required": false,
               "takes_value": false
+            },
+            {
+              "help": "Sign in through the server's identity provider in a browser instead of with a password. The server must allow loopback redirects (OIDC_ALLOW_LOOPBACK_REDIRECT=true)",
+              "id": "oidc",
+              "long": "oidc",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "With --oidc, print the sign-in address without opening a browser",
+              "id": "no_browser",
+              "long": "no-browser",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "With --oidc, sign in from another device: print an address and a code instead of using a browser here",
+              "id": "device",
+              "long": "device",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
             }
           ],
           "name": "login"
@@ -38,6 +101,42 @@
         {
           "about": "Logout from Capsule",
           "name": "logout"
+        },
+        {
+          "about": "Recover the signed-in account onto this machine from its recovery backup",
+          "args": [
+            {
+              "help": "Directory for the recovered library; it must not hold a library yet",
+              "id": "library",
+              "long": "library",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            },
+            {
+              "help": "Read the recovery secret from the first line of stdin instead of prompting",
+              "id": "recovery_secret_stdin",
+              "long": "recovery-secret-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Read the new library passphrase from the next line of stdin instead of prompting",
+              "id": "passphrase_stdin",
+              "long": "passphrase-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "recover"
         },
         {
           "about": "Create a Capsule account and sign in",
@@ -601,6 +700,110 @@
         }
       ],
       "name": "reset"
+    },
+    {
+      "about": "Issue and revoke view-only share links on the server",
+      "name": "share",
+      "subcommands": [
+        {
+          "about": "Issue a view-only share link for an album or one asset, and print the URL to send",
+          "args": [
+            {
+              "help": "Path to the Capsule library",
+              "id": "library",
+              "long": "library",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            },
+            {
+              "help": "Share every asset of this album that is not in trash",
+              "id": "album",
+              "long": "album",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "ALBUM_ID"
+              ]
+            },
+            {
+              "help": "Share this one asset",
+              "id": "asset",
+              "long": "asset",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "ASSET_ID"
+              ]
+            },
+            {
+              "help": "When the link stops opening, as an RFC 3339 timestamp (e.g. 2026-12-31T23:59:59Z)",
+              "id": "expires_at",
+              "long": "expires-at",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "TIMESTAMP"
+              ]
+            },
+            {
+              "help": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+              "id": "passphrase_stdin",
+              "long": "passphrase-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Protect the link with a passphrase the recipient must enter as well as open the URL",
+              "id": "protect",
+              "long": "protect",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "With --protect, read the link passphrase from stdin instead of prompting (the line after the library passphrase when --passphrase-stdin is also given)",
+              "id": "link_passphrase_stdin",
+              "long": "link-passphrase-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "create"
+        },
+        {
+          "about": "Revoke a share link, so its URL stops opening",
+          "args": [
+            {
+              "help": "The link's opaque id: the 32 hex characters after /s/ in its URL",
+              "id": "opaque_id",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "OPAQUE_ID"
+              ]
+            }
+          ],
+          "name": "revoke"
+        }
+      ]
     },
     {
       "about": "Show what an imported asset's signed sidecar records: caption, rating, tags, GPS, timestamps",

@@ -96,7 +96,7 @@ their published upstream releases. Source for each is available from crates.io
 and from the upstream repository named in its own package metadata.
 
   base64urlsafedata, colored, hpke-rs, hpke-rs-crypto, hpke-rs-libcrux,
-  hpke-rs-rust-crypto, option-ext, rawshift-core, rawshift-image, uniffi,
+  hpke-rs-rust-crypto, mp4parse, option-ext, rawshift-core, rawshift-image, uniffi,
   uniffi_bindgen, uniffi_core, uniffi_internal_macros, uniffi_macros,
   uniffi_meta, uniffi_pipeline, uniffi_udl, webauthn-attestation-ca,
   webauthn-rs, webauthn-rs-core, webauthn-rs-proto
@@ -117,6 +117,12 @@ applies simultaneously and Capsule complies with all of them:
   encoding_rs   (Apache-2.0 OR MIT) AND BSD-3-Clause
   matchit       MIT AND BSD-3-Clause
   unicode-ident (MIT OR Apache-2.0) AND Unicode-3.0
+  libfuzzer-sys (MIT OR Apache-2.0) AND NCSA. Capsule elects MIT for the
+                disjunctive part; NCSA is attribution-only. Reached only
+                through rav1e's `cfg(fuzzing)` target dependency (capsule-core's
+                `media-linked-codecs` feature), so no Capsule artefact compiles
+                or links it. It is listed because the licence gate inspects
+                every target configuration.
 
 --------------------------------------------------------------------------------
 License elections

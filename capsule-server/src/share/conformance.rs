@@ -10,13 +10,16 @@
 //!   listing needs the revoked link.
 //! - **Revocation is the owner's, once.** Only the owner revokes; a second revocation, another
 //!   account's, or one of an unknown id changes nothing and answers `false`.
-//! - **A re-issue replaces.** Issuing under an id already held replaces the whole record, and
-//!   the earlier serve set with it, as the in-memory map insert does (the flaw this keeps is
-//!   #553).
+//! - **A held id is never re-issued.** Issuing under an id already held is
+//!   [`IssueOutcome::Conflict`] — from another account and from the owner alike, live or
+//!   revoked — and the held record, serve set included, reads back unchanged (#553).
 //! - **The opaque bytes are opaque.** A wrapped secret reads back byte for byte.
 //! - **Instants are not moved.** `expires_at` and `revoked_at` may lose sub-microsecond
 //!   precision and nothing more — an expiry that moved later is a link live past its owner's
 //!   choice.
+//! - **Only a live link holds a blob from the collector.** `names_live` answers for every
+//!   address a live link serves and for nothing else, and a revoked or expired link holds
+//!   nothing — so a link's blobs are kept exactly while it can serve them (#653).
 //!
 //! # Reusing a harness
 //!
@@ -28,7 +31,7 @@ use capsule_core::sharing::ShareScope;
 use jiff::{SignedDuration, Timestamp};
 use uuid::Uuid;
 
-use super::{ShareRecord, ShareStore};
+use super::{IssueOutcome, ShareRecord, ShareStore};
 use crate::blob::ContentAddress;
 use crate::store::{StoreError, UserId};
 
@@ -91,9 +94,22 @@ fn link(case: &str, n: u8, owner: &UserId) -> ShareRecord {
     }
 }
 
-/// Issue `record`, expecting it to work.
+/// Issue `record`, expecting it to be recorded.
 async fn issue(h: &dyn Harness, record: ShareRecord) {
-    ok(h.shares().issue(record).await, "issue a share link");
+    assert_eq!(
+        ok(h.shares().issue(record).await, "issue a share link"),
+        IssueOutcome::Issued,
+        "a link under a fresh opaque id must be issued"
+    );
+}
+
+/// Issue `record` under an id already held, expecting the refusal.
+async fn issue_refused(h: &dyn Harness, record: ShareRecord) {
+    assert_eq!(
+        ok(h.shares().issue(record).await, "issue a share link"),
+        IssueOutcome::Conflict,
+        "issuing under an opaque id already held must be refused"
+    );
 }
 
 /// What `opaque_id` resolves to.
@@ -200,16 +216,17 @@ pub async fn instants_read_back_at_microsecond_precision(h: &dyn Harness) {
     }
 }
 
-/// Issuing under an opaque id already held replaces the whole record, serve set included: no
-/// address the earlier issue enumerated survives, and no field of it leaks into the new one.
-pub async fn reissuing_a_held_id_replaces_the_record_and_its_serve_set(h: &dyn Harness) {
+/// Issuing under an opaque id another account holds is refused, and the held record — owner,
+/// serve set and every other field — reads back unchanged: no address the refused issue
+/// enumerated becomes servable.
+pub async fn issuing_a_held_id_is_refused_and_the_link_is_unchanged(h: &dyn Harness) {
     let case = "reissue";
     let alice = user(case, "alice");
-    let bob = user(case, "bob");
+    let mallory = user(case, "mallory");
     let first = link(case, 1, &alice);
     issue(h, first.clone()).await;
 
-    let mut second = link(&format!("{case}/again"), 2, &bob);
+    let mut second = link(&format!("{case}/again"), 2, &mallory);
     second.opaque_id = first.opaque_id.clone();
     second.wrapped_secret = None;
     second.expires_at = None;
@@ -218,16 +235,38 @@ pub async fn reissuing_a_held_id_replaces_the_record_and_its_serve_set(h: &dyn H
         first.serves.is_disjoint(&second.serves),
         "the case needs two disjoint serve sets"
     );
-    issue(h, second.clone()).await;
+    issue_refused(h, second.clone()).await;
 
     let held = resolve(h, &first.opaque_id).await.expect("issued");
-    for old in &first.serves {
+    for new in &second.serves {
         assert!(
-            !held.serves(old),
-            "a re-issued link must not keep serving an address the earlier issue enumerated"
+            !held.serves(new),
+            "a refused issue must not make any address it enumerated servable"
         );
     }
-    assert_eq!(held, second);
+    assert_eq!(held, first);
+}
+
+/// The owner cannot re-issue its own id either, and a revoked link stays revoked: a re-issue
+/// carrying `revoked_at: None` would otherwise un-revoke it.
+pub async fn the_owner_cannot_reissue_or_unrevoke_a_held_id(h: &dyn Harness) {
+    let case = "unrevoke";
+    let alice = user(case, "alice");
+    let first = link(case, 1, &alice);
+    issue(h, first.clone()).await;
+    issue_refused(h, first.clone()).await;
+    assert_eq!(resolve(h, &first.opaque_id).await, Some(first.clone()));
+
+    assert!(revoke(h, &alice, &first.opaque_id, at(10)).await);
+    issue_refused(h, first.clone()).await;
+    assert_eq!(
+        resolve(h, &first.opaque_id)
+            .await
+            .expect("issued")
+            .revoked_at,
+        Some(at(10)),
+        "a refused re-issue must not un-revoke the link"
+    );
 }
 
 // ===========================================================================================
@@ -300,6 +339,77 @@ pub async fn revocation_does_not_leak_between_links(h: &dyn Harness) {
 }
 
 // ===========================================================================================
+// What the collector asks (#653)
+// ===========================================================================================
+
+/// Whether a live link names `address` at `when`.
+async fn names_live(h: &dyn Harness, address: &ContentAddress, when: Timestamp) -> bool {
+    ok(
+        h.shares().names_live(address, when).await,
+        "ask whether a live link names an address",
+    )
+}
+
+/// A live link names every address in its serve set, and nothing outside it.
+pub async fn a_live_link_names_every_address_it_serves(h: &dyn Harness) {
+    let case = "names";
+    let record = link(case, 1, &user(case, "alice"));
+    issue(h, record.clone()).await;
+    for address in &record.serves {
+        assert!(
+            names_live(h, address, at(10)).await,
+            "a live link must hold every address it serves, the metadata record included"
+        );
+    }
+    assert!(
+        !names_live(h, &address(&format!("{case}/1/elsewhere")), at(10)).await,
+        "a link holds nothing it does not enumerate"
+    );
+}
+
+/// A revoked link names nothing, and neither does one past its expiry.
+pub async fn a_revoked_or_expired_link_names_nothing(h: &dyn Harness) {
+    let case = "unnamed";
+    let alice = user(case, "alice");
+    let revoked = link(case, 1, &alice);
+    issue(h, revoked.clone()).await;
+    assert!(revoke(h, &alice, &revoked.opaque_id, at(10)).await);
+    assert!(
+        !names_live(h, &revoked.metadata, at(11)).await,
+        "a revoked link holds nothing for the collector"
+    );
+
+    let expiring = link(case, 2, &alice);
+    issue(h, expiring.clone()).await;
+    assert!(names_live(h, &expiring.metadata, at(3_599)).await);
+    assert!(
+        !names_live(h, &expiring.metadata, at(3_600)).await,
+        "a link is not live at its own expiry instant, so it holds nothing from then on"
+    );
+}
+
+/// An address two links serve stays held while either is live.
+pub async fn a_shared_address_is_held_while_any_naming_link_is_live(h: &dyn Harness) {
+    let case = "overlap";
+    let alice = user(case, "alice");
+    let common = address(&format!("{case}/common"));
+    let mut first = link(case, 1, &alice);
+    first.serves.insert(common.clone());
+    let mut second = link(case, 2, &alice);
+    second.serves.insert(common.clone());
+    second.expires_at = None;
+    issue(h, first.clone()).await;
+    issue(h, second.clone()).await;
+    assert!(revoke(h, &alice, &first.opaque_id, at(10)).await);
+    assert!(
+        names_live(h, &common, at(11)).await,
+        "the second link is still live and still serves it"
+    );
+    assert!(revoke(h, &alice, &second.opaque_id, at(12)).await);
+    assert!(!names_live(h, &common, at(13)).await);
+}
+
+// ===========================================================================================
 // The whole suite
 // ===========================================================================================
 
@@ -311,12 +421,17 @@ pub async fn run_all(h: &dyn Harness) {
     a_link_serves_exactly_what_it_enumerates(h).await;
     the_wrapped_secret_is_returned_byte_for_byte(h).await;
     instants_read_back_at_microsecond_precision(h).await;
-    reissuing_a_held_id_replaces_the_record_and_its_serve_set(h).await;
+    issuing_a_held_id_is_refused_and_the_link_is_unchanged(h).await;
+    the_owner_cannot_reissue_or_unrevoke_a_held_id(h).await;
 
     the_owner_revokes_and_the_link_still_resolves_revoked(h).await;
     a_second_revocation_changes_nothing(h).await;
     only_the_owner_can_revoke(h).await;
     revocation_does_not_leak_between_links(h).await;
+
+    a_live_link_names_every_address_it_serves(h).await;
+    a_revoked_or_expired_link_names_nothing(h).await;
+    a_shared_address_is_held_while_any_naming_link_is_live(h).await;
 }
 
 #[cfg(test)]
@@ -355,11 +470,15 @@ mod tests {
         a_link_serves_exactly_what_it_enumerates,
         the_wrapped_secret_is_returned_byte_for_byte,
         instants_read_back_at_microsecond_precision,
-        reissuing_a_held_id_replaces_the_record_and_its_serve_set,
+        issuing_a_held_id_is_refused_and_the_link_is_unchanged,
+        the_owner_cannot_reissue_or_unrevoke_a_held_id,
         the_owner_revokes_and_the_link_still_resolves_revoked,
         a_second_revocation_changes_nothing,
         only_the_owner_can_revoke,
         revocation_does_not_leak_between_links,
+        a_live_link_names_every_address_it_serves,
+        a_revoked_or_expired_link_names_nothing,
+        a_shared_address_is_held_while_any_naming_link_is_live,
     }
 
     /// The whole suite, in one pass on one store — the entry point the container case uses.

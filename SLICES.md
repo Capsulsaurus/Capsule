@@ -93,7 +93,7 @@ tree). Everything the v1 campaign shipped is the floor wave 2 stands on:
   escrow, Shamir 2-of-3, restore, recovery cadence); lifecycle `Workspace` over
   `library.sqlite`; cache-eviction sweep; share-link + drop crypto (WASM sealing
   builds); culling engine; local-auth gate (NFR1 proven structurally).
-- **MLS lane** (`OpenMlsAuthority`, OpenMLS 0.8.1, X-Wing `0x004D` via libcrux): the
+- **MLS lane** (`OpenMlsAuthority`, OpenMLS 0.9.1, X-Wing `0x004D` via libcrux): the
   four membership ceremonies, minted-and-distributed write-tier keys, Welcome/history
   delivery, durable group persistence, tombstone-plus-fork upgrade ceremony, re-keying,
   `ReconcileOutcome` reconciliation.
@@ -245,7 +245,7 @@ lives.
 | S-A9 | Add-id counter reseed at `Workspace` open | core-crypto | — | S | ACTIVE | done | |
 | S-A10 | Durable album-key persistence + library open plumbing | core-crypto | — | L | ACTIVE | done | |
 | S-A11 | Publish the DEK in the device directory | core-crypto | — | M | ACTIVE | done | |
-| S-B1 | Thumbnail/LQIP generation | media/import | — | L | ACTIVE | done\* | lossy JXL/AVIF encode, preview tier, HEIC/RAW decode → #437; WebP → #444 |
+| S-B1 | Thumbnail/LQIP generation | media/import | — | L | ACTIVE | done\* | RAW decode → #589; WebP → #444; HEIC decode refused by decision (LGPL), AVIF decode opt-in (#588) |
 | S-B2 | Signed-path import-executor rewrite | media/import | S-B1 | L | MIXED | done\* | durable album keys → `S-A10` |
 | S-B3 | Streaming import (probe, `total_size`, drive mode) | media/import | S-D1, S-D4 | L | MIXED | done | |
 | S-B4 | Staged uploads (low-data tier ladder) | media/import | S-C1, S-C2, S-D1 | M | MIXED | done | |
@@ -384,8 +384,8 @@ lives.
 | S-I6 | Android ships raw ICU to users; the guard never fires | i18n | — | M | ACTIVE | done | `aapt2` unverified — owed-CI |
 | S-I7 | The Rust runtime formatter cannot do ICU plurals | i18n | — | M | ACTIVE | done | plurals evaluated; `select`/`offset:` still refused |
 | S-I8 | clap `--help` text is unreachable from the catalogs | i18n | — | S | ACTIVE | done | help is localized via `cli.help.*`; `ValueEnum` variant help stays English |
-| S-N1 | OIDC relying party (server) | auth | — | L | RETIRED | done\* | in-process mock IdP stands in for the testcontainer one; durable adapters owed (#460) |
-| S-N2 | SDK/CLI OIDC login flows | auth | S-N1 | M | MIXED | part | SDK half landed with `S-N1`; CLI loopback listener + device grant are #461 |
+| S-N1 | OIDC relying party (server) | auth | — | L | RETIRED | done\* | in-process mock IdP stands in for the testcontainer one; durable adapters landed (#460) |
+| S-N2 | SDK/CLI OIDC login flows | auth | S-N1 | M | MIXED | done | SDK half landed with `S-N1`; CLI loopback `--oidc` landed (#461); device grant `--oidc --device` landed (#635) |
 | S-N3 | `device_id` on session listing + ceremony cohorts | auth | — | S | RETIRED | done | the wire half lands with `S-C13`; the TOTP ceremony with `S-C55`; passkeys retire on `S-C56` |
 | S-P1 | `capsule_sdk` FFI workspace verbs | iOS path | S-A10 | L | MIXED | done | feed `manifest_cbor` shape → `S-C30` |
 | S-P2 | Swift auth service + Keychain + login screen | iOS path | S-P1 | L | MIXED | ready | |
@@ -398,7 +398,7 @@ lives.
 | S-Q1 | Mark/complete E2E cases 2, 3, 11 | e2e | — | S | MIXED | done\* | 2, 3 in `capsule-e2e`; 11 lands with #447 |
 | S-Q2 | E2E case 6: backup → fresh-device restore | e2e | — | M | MIXED | done\* | restore reads; verify → #550; account seam → #467 |
 | S-Q3 | E2E case 7: full lifecycle chain | e2e | — | M | MIXED | done | |
-| S-Q4 | E2E case 12: cross-device enrollment | e2e | — | M | MIXED | done\* | server leg; client ceremony → #471, #467, #405 |
+| S-Q4 | E2E case 12: cross-device enrollment | e2e | — | M | MIXED | done\* | server leg + client ceremony; MLS join → #405; master-key transfer owed |
 | S-Q5 | Live-browser smokes (gRPC-web, share, drop) | e2e | S-P7 | M | MIXED | ready | |
 | S-Q6 | E2E case 10: model regen after version bump | e2e | — | M | ACTIVE | done | the case was untestable, not untested |
 | S-U1 | Domain + ports + mock seam | apple-ui | — | L | ACTIVE | done | |
@@ -503,10 +503,10 @@ when" cannot fully pass until the gate lifts.
 | [`kynos`](https://github.com/getkono/kynos) 0.1.0 | adopted as the replacement server; **published, consumed from crates.io** | Published 2026-08-29, which fired the repin-on-publish exit this row used to carry — the git rev `6513109` is history, not a pin. Taken with the `openapi32` feature, but note that the feature alone does **not** yield a 3.2 document: Kynos emits the lowest version that expresses the API and deliberately refuses to key that on a flag Cargo can unify in from an unrelated crate, so `capsule-server` pins it explicitly via `openapi_as(SpecVersion::V3_2)` and a test asserts the emitted `openapi` field. Gates the whole `RETIRED` rebuild: lane C, `S-E5`, `S-N1`/`S-N3`, and the SDK wire half (`S-D1`, `S-D2`, `S-D7`–`S-D10`, `S-D17`). `S-C27` is its precondition. |
 | `spargen` 0.4.0 | adopted; both known gaps **closed**; consuming OpenAPI **3.2** | Bumped 0.1.0 → 0.4.0 on 2026-08-28. Both gaps this row used to record are gone: 0.2.2 added *decode textual and binary responses* and *serialize typed OpenAPI parameters*, so byte serving and object-typed query params lower correctly and the media asset-serve tree **returns to the generated client** — the hand-written byte path is no longer justified by a generator gap. 0.3.0 added *complete OpenAPI 3.1 and 3.2 conformance* plus runtime dependency contracts (which forced minimum bumps of `bytes`, `reqwest`, `serde`, `serde_json`). The API also changed: `Config` split into `Spec`/`Build`, and `Report::outcome` became a method. **0.4 validates the document strictly**, and four operations are still narrowed with `spargen::omit!` — for a different reason than they used to be; see the row below. |
 | Four `spargen::omit!` operations | **narrowed for a media type spargen cannot classify** | The four that used to sit here were structurally invalid Salvo output, and **Kynos makes both of those defects unrepresentable**: status is part of the return type, so `POST /v1/albums/{album_id}/ops` cannot declare no responses, and `#[kynos::get(..)]` checks at compile time that a path type's fields are exactly the template's variables, so the three device routes cannot take an undeclared path parameter. All four are generated now. **Four different operations take their place, for a reason outside the contract** (`S-D28`, `capsule-sdk/build.rs`): spargen's `classify_media` knows JSON, XML, multipart, form-urlencoded, octet-stream, event-stream, NDJSON, JSON sequences and `text/*`, and no `application/cbor`. Capsule serves four operations in that media type — `POST /v1/auth/devices/directory`, `GET /v1/auth/devices/directory/{user_id}`, `POST /v1/albums/{album_id}/upgrade`, `GET /v1/upload/{id}/receipt` — all of them **signed** documents served byte for byte, which is exactly why they are not JSON. Narrowing them is the instruction's own remedy (*narrow the surface, never mutilate the spec*); relabelling them `application/octet-stream` to satisfy a generator would tell every client that a document with a schema it knows is opaque bytes. `capsule_sdk::directory` hand-writes two of them; the other two have no client yet. |
-| `openmls` 0.8.x | adopted (X-Wing `0x004D`) | The X-Wing codepoint **exists** (`0x004D`) and OpenMLS ships it via libcrux, so `S-X1`–`S-X3` are not blocked and are done. Key serialization surfaces are `test-utils`-gated — persistence rides public fields + ungated codecs; fragile if upstream privatizes (upstream ask filed against openmls). Version pairing is load-bearing (0.8.x ↔ traits/storage 0.5.x ↔ libcrux-crypto 0.3.x). |
+| `openmls` 0.9.x | adopted (X-Wing `0x004D`) | The X-Wing codepoint **exists** (`0x004D`) and OpenMLS ships it via libcrux, so `S-X1`–`S-X3` are not blocked and are done. Key serialization surfaces are `test-utils`-gated — persistence rides public fields + ungated codecs; fragile if upstream privatizes (upstream ask filed against openmls). Version pairing is load-bearing (0.9.x ↔ traits/storage/basic-credential 0.6.x ↔ libcrux-crypto 0.4.x; X-Wing needs `draft-ietf-mls-pq-ciphersuites` on the leaf crates). |
 | `libcrux` provider | no wasm32 target | `mls` feature is host-only; a browser MLS surface would need another provider. |
 | BD-09 datum fold | **no crate adopted** | Decision 2026-08-21: `S-A8` implements the error-bounded refined BD-09→GCJ-02 inverse **in-house** (~40 LOC, deterministic, unit-testable) rather than taking a dependency for one function. `geocoordinates-rs` is **not** a gate on `S-A7`/`S-A8` and is not planned; the earlier "exact fold from `geocoordinates-rs`" wording is superseded. Display-side lossy conversions remain unscheduled and are not part of either slice. |
-| [`rawshift-image`](https://crates.io/crates/rawshift-image) 0.1.1 | adopted; **published, consumed from crates.io** | Consumed 2026-09-02 by `S-B1`/`S-B13` (#436) as a registry dependency behind `capsule-core`'s `media` feature — not the pinned submodule, which is what this row used to gate on. That closed the gate for the still half: `S-B1` and `S-B13` are `ACTIVE`/`done` and `S-B5` is `ACTIVE`/`ready`. **Three sub-gates remain, and each is a dependency decision rather than this crate stabilizing.** `rawshift-video` is unpublished, so the video half (`S-B5`, first-frame still and the H.264 preview) cannot start — #438. A *lossy* JXL master needs C libjxl, AVIF encode needs `nasm` on every x86_64 build host, and HEIC/AVIF decode need system libheif/libdav1d — #437; every enabled codec today is pure Rust, which is what keeps the mobile cross-builds linking. WebP is recognised but undecodable here: `rawshift-image`'s WebP module passes `*const i8` where `libwebp-sys` 0.14.4 declares `*const c_char`, an E0308 on every aarch64 target — #444. All three are visible as typed `MediaError::UnsupportedFormat` or as per-`(tier, format)` deferrals counted by `ImportExecutionSummary::deferred_format_count()`, never as silent absence. |
+| [`rawshift-image`](https://crates.io/crates/rawshift-image) 0.1.1 | adopted; **published, consumed from crates.io** | Consumed 2026-09-02 by `S-B1`/`S-B13` (#436) as a registry dependency behind `capsule-core`'s `media` feature — not the pinned submodule, which is what this row used to gate on. That closed the gate for the still half: `S-B1` and `S-B13` are `ACTIVE`/`done` and `S-B5` is `ACTIVE`/`ready`. **Three sub-gates remain, and each is a dependency decision rather than this crate stabilizing.** `rawshift-video` is unpublished, so the video half (`S-B5`, first-frame still and the H.264 preview) cannot start — #438. The *lossy* JXL master (C++ libjxl) and AVIF encode (`nasm` on x86_64) landed behind the opt-in `media-linked-codecs` (#437), and AVIF decode behind the opt-in `media-avif-decode` (system libdav1d) — #588, which also records HEIC decode as refused because libheif and libde265 are LGPL-3.0; `default` stays pure Rust, which is what keeps the mobile cross-builds linking. WebP is recognised but undecodable here: `rawshift-image`'s WebP module passes `*const i8` where `libwebp-sys` 0.14.4 declares `*const c_char`, an E0308 on every aarch64 target — #444. All three are visible as typed `MediaError::UnsupportedFormat` or as per-`(tier, format)` deferrals counted by `ImportExecutionSummary::deferred_format_count()`, never as silent absence. |
 | `ptpip-rs` (in-house PTP/IP) | repo not created | `S-B9` (post-v1). |
 | Self-hosted device runners | unprovisioned | The `strongbox-device`/`secure-enclave` CI lanes exist, manual-trigger, inert. Owed-CI items park here: `S-F2` Kotlin run, `S-F3` first Android/iOS CI runs + device lanes, `S-F4` Windows ffi build + clippy + real-TPM smoke, `S-F5` Kotlin ECDH adapter, `S-D9` Kotlin harness. |
 | swiftformat 0.55 (mise) | **resolved 2026-08-22** | The install was a corrupt app-bundle extraction whose `Info.plist` no longer matched its signature, so the hardened runtime SIGKILLed it (exit 137). `mise uninstall swiftformat@0.55 && mise install` yields a plain 0.55.6 binary that runs. Running it for the first time surfaced a real config conflict — swiftformat's `wrapMultilineStatementBraces` versus swiftlint's `opening_brace` — now resolved by disabling the swiftformat rule. |
@@ -770,10 +770,12 @@ workspace at all**, so every still import is a `DeferredNoCodec` until Rawshift 
     so a default-configured encode copies the source's EXIF — GPS included — into the thumbnail.
     A test demonstrates the leak with the crate's own default and then asserts Capsule's
     derivative carries no `EXIF`/`XMP`/`ICCP` chunk and none of the source's GPS rationals.
-- **Owed → #437 and #444.** A *lossy* JXL master, the AVIF delivery variant, the preview tier and
-  HEIC/RAW decode (#437); WebP in both directions (#444). None is blocked on a design question: a
-  lossy JXL needs C libjxl, AVIF encode needs `nasm` on every x86_64 build host, HEIC/AVIF decode
-  need system libheif/libdav1d, and WebP needs one upstream cast widened. All are visible today as
+- **Owed → #589 and #444.** The *lossy* JXL master, the AVIF delivery variant and the preview tier
+  landed behind `media-linked-codecs` (#437). AVIF decode landed behind its own opt-in
+  `media-avif-decode` (system libdav1d, BSD-2, linked dynamically; the CLI enables it off Windows),
+  and HEIC decode is **refused by decision** because libheif and libde265 are LGPL-3.0 — the
+  permissive paths are recorded in the Dependencies doc (#588). RAW decode is #589 and WebP in both
+  directions is #444, which needs one upstream cast widened. All remaining gaps are visible today as
   typed `MediaError::UnsupportedFormat` or as per-`(tier, format)` deferrals counted by
   `ImportExecutionSummary::deferred_format_count()`, never as silent absence.
 
@@ -2553,6 +2555,9 @@ working on a surface written after it.
 - **The remaining durable ports landed (#446)**, and the `Durable` arm now builds a whole server
   on Postgres and Valkey; it refuses only a durable boot that configures OIDC (#460). `gc`,
   `purge` and `scrub` run on the same durable stores without `--memory`.
+- **The OIDC stores landed (#460)**: the pending ceremonies on Valkey, the federated accounts on
+  the Postgres account table with a null credential. The durable arm no longer refuses
+  `OIDC_ISSUER`.
 - **Was owed:** the remaining durable ports (#446). Every port has an in-memory adapter and one
   shared conformance suite, so "the double behaves like the real one" is an assertion rather than
   an assumption. Counters were deliberately excluded and became `S-C32`.
@@ -5360,9 +5365,10 @@ lands on Kynos rather than on Salvo.
   `auth.oidc` or `null`. **Two deviations, recorded:** the testcontainer IdP is an
   in-process mock provider on loopback, because `test-rust` runs offline (dex in
   `capsule-server/compose.yaml`, `--profile oidc`, is the manual run); and the Valkey
-  ceremony-store and Postgres federated-account adapters are owed (#460), so
-  `OIDC_ISSUER` under the durable backends is refused by name and the development
-  profile's federated accounts hold their own rows. Hand-written over `jsonwebtoken`
+  ceremony-store and Postgres federated-account adapters were owed (#460), so
+  `OIDC_ISSUER` under the durable backends was refused by name and the development
+  profile's federated accounts held their own rows — the second deviation since closed
+  by #460, which landed both adapters and folded those rows into the account table. Hand-written over `jsonwebtoken`
   rather than `openidconnect` — see the OIDC row in
   [Dependencies](capsule-docs/src/content/docs/design/dependencies.md).
 
@@ -5383,9 +5389,27 @@ lands on Kynos rather than on Salvo.
   the client: `begin_oidc_login` mints a secret the `OidcAuthorization` keeps and sends
   its S256 hash as `binding_challenge`; `complete_oidc_login(pending, redirect_state,
   code)` refuses a redirect for another ceremony locally and presents the secret as
-  `binding_verifier`, which the server compares before redeeming. **Remainder (#461):** the CLI's
-  loopback listener and `--oidc` arm, the browser-open policy the docs do not carry, and
-  the device authorization grant (RFC 8628) with its own ceremony store.
+  `binding_verifier`, which the server compares before redeeming.
+- **Part landed (issue #461):** `capsule auth login --oidc` (`capsule-cli/src/oidc.rs`) — an
+  ephemeral `127.0.0.1` listener whose `/callback` is the redirect, the authorization URL
+  always printed and opened through the platform opener unless `--no-browser`, a five-minute
+  wait capped by the ceremony deadline, and the session settled through the password path's
+  own function, second factor included. Scripted-ceremony tests cover the listener and the
+  orchestration; `capsule-cli/tests/oidc_dex.rs` is the dex round trip, gated on
+  `CAPSULE_TEST_DEX=1`.
+- **Part landed (issue #635):** the device authorization grant (RFC 8628) —
+  `POST /v1/auth/oidc/device` and `POST /v1/auth/oidc/device/poll`, the server proxying the
+  provider's device endpoint and holding the device code behind a handle of its own, the
+  poll answering what the callback answers (second factor included) or one
+  `error.auth.oidc_device_*` code per RFC 8628 answer, the interval enforced server-side
+  and raised five seconds per `slow_down`, and the ID token verified with every callback
+  check but the nonce, which must be absent. `OidcDeviceStore` sits beside
+  `OidcAuthorizationStore` with in-memory and Valkey adapters under the shared
+  conformance suite; `capsule_sdk::auth::AuthClient::begin_oidc_device_login` /
+  `poll_oidc_device_login` are the SDK legs; `capsule auth login --oidc --device` prints the
+  address and code and polls. `capsule-server/tests/oidc.rs` covers each provider answer
+  against the mock provider's device endpoint; `capsule-cli/tests/oidc_dex.rs` carries the
+  gated dex round trip for it.
 
 ### S-N3 — `device_id` on session listing + ceremony cohorts
 
@@ -5629,8 +5653,14 @@ the SDK's directory publish sends the identity-key header (#466).
 - **Landed, server leg** (2026-09-05, #409): `capsule-e2e/tests/case_12_enrollment.rs` —
   fresh local auth, code issue, redeem, relay and drain in both directions (each payload
   delivered once, mailboxes never cross), initiator close, and the MITM abort at the wire.
-  **Owed:** the client ceremony — B's keys, the safety code, A's cross-sign → #471 and #467;
-  the MLS join → `S-C51` (#405).
+- **Landed, client ceremony** (#563): `e2e_case_12_the_client_ceremony_admits_the_new_device_over_the_relay`
+  — commitment, both reveals, equal safety codes, A's cross-sign, the published directory
+  fetched back verified, and B finding its own keys in the relayed directory; and
+  `e2e_case_12_a_relay_that_swaps_the_enrollee_keys_diverges_the_codes_and_a_aborts` — a
+  consistent swap opens its own commitment but not B's and the codes diverge (the abort
+  itself is test-scripted: no production code decides it).
+  **Owed:** B's MLS join and `libraries match` → `S-C51` (#405); the master-key transfer
+  under a channel key, which needs an ephemeral key agreement not yet defined.
 
 ### S-Q5 — Live-browser smokes
 

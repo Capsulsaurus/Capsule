@@ -19,6 +19,7 @@
 //! | The port the routes drive, and its one HTTP adapter | [`provider`] | the only external boundary the feature has, so the only thing doubled |
 //! | Which account a verified identity is | [`accounts`] | one atomic operation keyed on `(issuer, subject)` |
 //! | The pending ceremony between the two legs | [`crate::store::OidcAuthorizationStore`] | a single-use, short-window credential, which is what the ceremony stores are for |
+//! | A pending device authorization and its poll schedule | [`crate::store::OidcDeviceStore`] | polled rather than redeemed once, so it needs an atomic schedule the authorization store exists to not have |
 //!
 //! # Hand-written over `jsonwebtoken`, not `openidconnect`
 //!
@@ -37,17 +38,18 @@ pub mod provider;
 
 use std::sync::Arc;
 
-pub use self::accounts::{FederatedAccounts, FederatedLink, InMemoryFederatedAccounts};
+pub use self::accounts::{FederatedAccounts, FederatedLink, reserved_address};
 pub use self::claims::{
     ALLOWED_ALGORITHMS, CLOCK_SKEW_SECONDS, ClaimRejection, Expectations, MAX_QUOTED_BYTES,
     MAX_SUBJECT_LENGTH, VerifiedIdentity, bounded, verify_id_token,
 };
 pub use self::provider::{
-    AuthorizationRequest, ClientSecret, Disabled, HttpIdentityProvider, IdentityProvider,
-    OidcSettings, ProviderError, ProviderFuture, Redemption, RedirectPolicy, SCOPES,
-    code_challenge, fresh_nonce, fresh_state, fresh_verifier,
+    AuthorizationRequest, ClientSecret, DEVICE_CODE_GRANT, DeviceAuthorization, DevicePoll,
+    Disabled, HttpIdentityProvider, IdentityProvider, MAX_USER_CODE_LENGTH, OidcSettings,
+    ProviderError, ProviderFuture, Redemption, RedirectPolicy, SCOPES, code_challenge,
+    fresh_device_handle, fresh_nonce, fresh_state, fresh_verifier,
 };
-use crate::store::{Clock, OidcAuthorizationStore};
+use crate::store::{Clock, OidcAuthorizationStore, OidcDeviceStore};
 
 /// The collaborators an [`OidcContext`] is assembled from. Named rather than ordered, as
 /// [`AuthCollaborators`](crate::auth::AuthCollaborators) is.
@@ -57,6 +59,8 @@ pub struct OidcCollaborators {
     pub provider: Arc<dyn IdentityProvider>,
     /// The pending ceremonies between the two legs.
     pub authorizations: Arc<dyn OidcAuthorizationStore>,
+    /// The pending device authorizations (RFC 8628, issue #635).
+    pub devices: Arc<dyn OidcDeviceStore>,
     /// Which account a verified identity is.
     pub accounts: Arc<dyn FederatedAccounts>,
     /// The clock every ceremony and every deadline is stamped from.
@@ -68,6 +72,7 @@ pub struct OidcCollaborators {
 pub struct OidcContext {
     provider: Arc<dyn IdentityProvider>,
     authorizations: Arc<dyn OidcAuthorizationStore>,
+    devices: Arc<dyn OidcDeviceStore>,
     accounts: Arc<dyn FederatedAccounts>,
     clock: Arc<dyn Clock>,
 }
@@ -78,12 +83,14 @@ impl OidcContext {
         let OidcCollaborators {
             provider,
             authorizations,
+            devices,
             accounts,
             clock,
         } = collaborators;
         Self {
             provider,
             authorizations,
+            devices,
             accounts,
             clock,
         }
@@ -102,6 +109,9 @@ impl OidcContext {
                     &clock,
                 )),
             ),
+            devices: Arc::new(crate::store::memory::InMemoryOidcDevices::with_default_ttl(
+                Arc::clone(&clock),
+            )),
             accounts: Arc::new(Disabled),
             clock,
         })
@@ -115,6 +125,11 @@ impl OidcContext {
     /// The pending ceremonies.
     pub fn authorizations(&self) -> &dyn OidcAuthorizationStore {
         self.authorizations.as_ref()
+    }
+
+    /// The pending device authorizations.
+    pub fn devices(&self) -> &dyn OidcDeviceStore {
+        self.devices.as_ref()
     }
 
     /// Which account a verified identity is.

@@ -10,20 +10,32 @@
 //! the bun test is a true known-answer test — re-running the generator yields identical output, so
 //! `build-wasm`/`test-web` are deterministic and offline.
 //!
-//! The fixture is an **asset-scoped** grant: [`ScopeMaterial::Asset`] carries the per-file key
-//! directly, so a single served ciphertext blob round-trips end to end without an album AMK ledger
-//! (the album path shares the same `open_scope` + `file_key_for` code, unit-tested in
-//! `capsule-core`). The served ciphertext is produced with the real
+//! The top-level fixture is an **asset-scoped** grant: [`ScopeMaterial::Asset`] carries the
+//! per-file key directly, so a single served ciphertext blob round-trips end to end without an
+//! album AMK ledger. Its `album` member is an **album-scoped** grant over one `derived` asset and
+//! one adopted web-upload drop (`key_mode = wrapped`), so the browser proves it recovers both key
+//! modes (#598). Every served ciphertext is produced with the real
 //! [`encrypt_asset_vec_with_prefix`] STREAM construction the serve path returns verbatim.
+//!
+//! Each grant also has a `served` member (#614): the link published through [`publish_share`]
+//! and laid out as the server serves it, so the bun test drives the viewer's whole fetch
+//! sequence — the metadata record, the sealed blob, the wrapped secret — through the wasm.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use capsule_core::crypto::encryption::{NONCE_PREFIX_LEN, encrypt_asset_vec_with_prefix};
+use capsule_core::crypto::encryption::{
+    NONCE_PREFIX_LEN, encrypt_asset_vec_with_prefix, seal_file_key,
+};
+use capsule_core::crypto::hash::hash_bytes;
+use capsule_core::crypto::keys::Amk;
 use capsule_core::crypto::primitives::Argon2Params;
+use capsule_core::crypto::provenance::{KeyMode, WrappedFileKey};
 use capsule_core::sharing::{
-    LINK_SECRET_LEN, OPAQUE_ID_LEN, ScopeMaterial, WrappedScope, encapsulate_scope,
+    LINK_SECRET_LEN, OPAQUE_ID_LEN, ScopeMaterial, SharedAsset, WrappedScope, encapsulate_scope,
+    publish_share,
 };
 use eyre::{Context, Result};
 use serde_json::json;
@@ -38,6 +50,161 @@ fn wrapped_b64(scope: &WrappedScope) -> Result<String> {
     Ok(BASE64.encode(
         capsule_core::cbor::to_canonical_vec(scope).context("serialize WrappedScope to CBOR")?,
     ))
+}
+
+/// What the server serves for one published link (#614), in the server's own wire shapes: the
+/// `GET /s/{opaque-id}` body, the octets of every `/s/{opaque-id}/blob/{hash}` the link names, and
+/// the `/s/{opaque-id}/wrapped-secret` octets when there is a wrapped secret.
+///
+/// Built by [`publish_share`], the issuer function a client runs before `POST /v1/shares`, so the
+/// bun test drives the viewer's fetch sequence against bytes no different from a real link's.
+fn served_link(
+    wrapped: &WrappedScope,
+    fragment: &[u8; LINK_SECRET_LEN],
+    opaque_id: &[u8; OPAQUE_ID_LEN],
+    expires_at: Option<&str>,
+    assets: Vec<(SharedAsset, &[u8])>,
+) -> Result<serde_json::Value> {
+    let mut blobs = serde_json::Map::new();
+    let mut records = Vec::new();
+    for (asset, ciphertext) in assets {
+        blobs.insert(
+            asset.content_hash.to_hex(),
+            json!(BASE64.encode(ciphertext)),
+        );
+        records.push(asset);
+    }
+    let publication = publish_share(
+        wrapped,
+        fragment,
+        opaque_id,
+        expires_at.map(str::to_owned),
+        records,
+    )
+    .context("publish the share metadata record")?;
+    let metadata_hash = publication.metadata_hash.to_hex();
+    blobs.insert(
+        metadata_hash.clone(),
+        json!(BASE64.encode(&publication.metadata_blob)),
+    );
+    Ok(json!({
+        "metadata": {
+            "metadata_hash": metadata_hash,
+            "passphrase_protected": publication.wrapped_secret.is_some(),
+        },
+        "blobs": blobs,
+        "wrappedSecretB64": publication.wrapped_secret.map(|bytes| BASE64.encode(bytes)),
+    }))
+}
+
+/// A served asset record over `ciphertext`, as the issuer describes it.
+fn shared_asset(
+    asset_id: Uuid,
+    nonce_prefix: [u8; NONCE_PREFIX_LEN],
+    amk_version: u32,
+    plaintext: &[u8],
+    ciphertext: &[u8],
+    wrapped_file_key: Option<Vec<u8>>,
+) -> SharedAsset {
+    SharedAsset {
+        asset_id,
+        content_hash: hash_bytes(ciphertext),
+        content_type: "image/png".to_owned(),
+        size: plaintext.len() as u64,
+        amk_version,
+        nonce_prefix,
+        key_mode: if wrapped_file_key.is_some() {
+            KeyMode::Wrapped
+        } else {
+            KeyMode::Derived
+        },
+        wrapped_file_key: wrapped_file_key.map(WrappedFileKey),
+    }
+}
+
+/// The album-scoped half of the fixture (#598): one grant over an album holding a `derived`
+/// asset and an adopted web-upload drop (`key_mode = wrapped`), each served as ciphertext under
+/// its own key, plus a wrapped key sealed under a foreign AMK for the fail-closed case.
+///
+/// The drop's key `K` is one a guest chose, so no AMK derives it: the viewer has to unwrap it
+/// from `wrapped_file_key`, which is the path this half proves end to end through the wasm.
+fn album_fixture(
+    fragment: &[u8; LINK_SECRET_LEN],
+    opaque_id: &[u8; OPAQUE_ID_LEN],
+    argon: Argon2Params,
+    plaintext: &[u8],
+) -> Result<serde_json::Value> {
+    let album_id = Uuid::from_u128(0x00A1_B0A1_B0A1_B0A1_B0A1_B0A1_B0A1_B0A1);
+    let amk_version = 3u32;
+    let amk_bytes = [0x3Cu8; 32];
+    let amk = Amk::from_bytes(amk_bytes);
+
+    let derived_id = Uuid::from_u128(0x00D3_D3D3_D3D3_D3D3_D3D3_D3D3_D3D3_D3D3);
+    let derived_prefix = [0x0Du8; NONCE_PREFIX_LEN];
+    let derived_key = amk.derive_file_key(&derived_id, &derived_prefix);
+    let (_, derived_ct) = encrypt_asset_vec_with_prefix(&derived_key, derived_prefix, plaintext);
+
+    let wrapped_id = Uuid::from_u128(0x00F7_F7F7_F7F7_F7F7_F7F7_F7F7_F7F7_F7F7);
+    let wrapped_prefix = [0x0Fu8; NONCE_PREFIX_LEN];
+    let guest_key = [0x6Bu8; 32];
+    let wrapped_key = seal_file_key(&amk, &wrapped_id, &guest_key);
+    let foreign_wrapped = seal_file_key(&Amk::from_bytes([0x99u8; 32]), &wrapped_id, &guest_key);
+    let (_, wrapped_ct) = encrypt_asset_vec_with_prefix(&guest_key, wrapped_prefix, plaintext);
+
+    let material = ScopeMaterial::Album {
+        album_id,
+        amks: BTreeMap::from([(amk_version, amk_bytes)]),
+    };
+    let link_only = encapsulate_scope(&material, fragment, opaque_id, None, argon)
+        .context("seal album link-only scope")?;
+    let served = served_link(
+        &link_only,
+        fragment,
+        opaque_id,
+        None,
+        vec![
+            (
+                shared_asset(
+                    derived_id,
+                    derived_prefix,
+                    amk_version,
+                    plaintext,
+                    &derived_ct,
+                    None,
+                ),
+                &derived_ct,
+            ),
+            (
+                shared_asset(
+                    wrapped_id,
+                    wrapped_prefix,
+                    amk_version,
+                    plaintext,
+                    &wrapped_ct,
+                    Some(wrapped_key.clone()),
+                ),
+                &wrapped_ct,
+            ),
+        ],
+    )?;
+
+    Ok(json!({
+        "served": served,
+        "linkOnlyWrappedB64": wrapped_b64(&link_only)?,
+        "amkVersion": amk_version,
+        "derived": {
+            "fileId": derived_id.to_string(),
+            "noncePrefixHex": hex::encode(derived_prefix),
+            "ciphertextB64": BASE64.encode(&derived_ct),
+        },
+        "wrapped": {
+            "fileId": wrapped_id.to_string(),
+            "noncePrefixHex": hex::encode(wrapped_prefix),
+            "wrappedFileKeyHex": hex::encode(&wrapped_key),
+            "foreignWrappedFileKeyHex": hex::encode(&foreign_wrapped),
+            "ciphertextB64": BASE64.encode(&wrapped_ct),
+        },
+    }))
 }
 
 /// Generate the KAT fixture and write it to `out` (relative to the repo root).
@@ -75,6 +242,23 @@ pub(crate) fn run(root: &Path, out_rel: &str) -> Result<()> {
     let mut plaintext: Vec<u8> = PNG_SIGNATURE.to_vec();
     plaintext.extend((0..5000u32).map(|i| (i % 251) as u8));
     let (_, ciphertext) = encrypt_asset_vec_with_prefix(&file_key, nonce_prefix, &plaintext);
+    let album = album_fixture(&fragment, &opaque_id, argon, &plaintext)?;
+    let asset = || {
+        (
+            shared_asset(file_id, nonce_prefix, 0, &plaintext, &ciphertext, None),
+            ciphertext.as_slice(),
+        )
+    };
+    let served = json!({
+        "linkOnly": served_link(
+            &link_only,
+            &fragment,
+            &opaque_id,
+            Some("2030-01-01T00:00:00Z"),
+            vec![asset()],
+        )?,
+        "passphrase": served_link(&passphrase_wrapped, &fragment, &opaque_id, None, vec![asset()])?,
+    });
 
     let fixture = json!({
         "_generated_by": "cargo xtask share-kat — do not edit by hand",
@@ -93,6 +277,8 @@ pub(crate) fn run(root: &Path, out_rel: &str) -> Result<()> {
         "passphraseWrappedB64": wrapped_b64(&passphrase_wrapped)?,
         "plaintextB64": BASE64.encode(&plaintext),
         "ciphertextB64": BASE64.encode(&ciphertext),
+        "album": album,
+        "served": served,
     });
 
     let path = root.join(out_rel);

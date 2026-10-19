@@ -218,7 +218,81 @@ pub async fn concurrent_hits_admit_exactly_the_budget(counters: Arc<dyn CounterS
     assert_eq!(admitted, 3, "racing hits must admit exactly the budget");
 }
 
-/// Run every case above against one store, in order.
+/// The partition ceiling every case above leaves alone, with its own key space.
+pub const CEILING: usize = 3;
+
+/// A full partition refuses a **new** key in that partition only, and only while it is full.
+///
+/// `counters` must be built with every partition bounded at [`CEILING`] — the adapter's
+/// `with_ceiling` affordance — because the production ceilings are thousands of keys. The
+/// contract is the one [the module docs](super) state: past its ceiling a key with no window yet
+/// is refused with the error [`is_at_capacity`](super::is_at_capacity) recognises, a key already
+/// being counted keeps counting, another variant's partition is not affected, and the partition
+/// has room again once the windows filling it end.
+///
+/// Its instants sit far past every other case's, so the windows those cases left in the same
+/// partition have all ended by the time this one hits — which is also what lets it run against a
+/// server that still holds the previous run.
+pub async fn a_full_partition_refuses_only_a_new_key_in_that_partition(
+    counters: &dyn CounterStore,
+) {
+    let link = |n: usize| CounterKey::ShareLink(format!("counter-conformance-ceiling-{n}"));
+    let other = CounterKey::DropLink("counter-conformance-ceiling-other".to_owned());
+    for n in 0..=CEILING + 1 {
+        ok(counters.reset(&link(n)).await, "reset");
+    }
+    ok(counters.reset(&other).await, "reset");
+    let start = at(1_000_000);
+
+    for n in 0..CEILING {
+        assert!(
+            ok(counters.hit(&link(n), budget(), start).await, "hit").admits(),
+            "key {n} fits under the ceiling"
+        );
+    }
+
+    match counters.hit(&link(CEILING), budget(), start).await {
+        Err(error) => assert!(
+            super::is_at_capacity(&error),
+            "a full partition refuses as at-capacity, not as a broken store: {error}"
+        ),
+        Ok(verdict) => panic!("a new key past the ceiling must be refused, got {verdict:?}"),
+    }
+    assert_eq!(
+        ok(counters.hit(&link(0), budget(), start).await, "hit"),
+        Verdict::Admitted { remaining: 1 },
+        "a key already being counted keeps counting in a full partition"
+    );
+    assert!(
+        ok(counters.hit(&other, budget(), start).await, "hit").admits(),
+        "another variant's partition is not this one's to fill"
+    );
+
+    ok(counters.reset(&link(1)).await, "reset");
+    assert!(
+        ok(counters.hit(&link(CEILING), budget(), start).await, "hit").admits(),
+        "a reset gives its place in the partition back"
+    );
+
+    let later = deadline(start, budget().window);
+    assert!(
+        ok(
+            counters.hit(&link(CEILING + 1), budget(), later).await,
+            "hit"
+        )
+        .admits(),
+        "once the windows filling it end, the partition has room again"
+    );
+
+    for n in 0..=CEILING + 1 {
+        ok(counters.reset(&link(n)).await, "reset");
+    }
+    ok(counters.reset(&other).await, "reset");
+}
+
+/// Run every case above against one store, in order — all but
+/// [`a_full_partition_refuses_only_a_new_key_in_that_partition`], which needs a store built
+/// with the [`CEILING`] override and so is driven on one of its own.
 ///
 /// The entry point for a backend where standing up a store is expensive. A unit-tier adapter
 /// should prefer one test per case, so a failure names the property that broke.

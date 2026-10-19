@@ -55,7 +55,7 @@ pub use self::enrollment::{
 };
 pub use self::migrate_unsigned::{
     LEGACY_FOLD_KEY, MigrationSkip, UnmigratedShape, UnmigratedSidecar, UnsignedMigrationOptions,
-    UnsignedMigrationReport,
+    UnsignedMigrationReport, unmigrated_sidecars,
 };
 pub use self::open::HardwareDekBinding;
 pub use self::sync_apply::{QuarantineReason, RemoteAssetFacts, RemoteEntry, SyncApplyOutcome};
@@ -81,7 +81,6 @@ use crate::sidecar::sidecar_v1::{Gps, SidecarV1, StackMembership, StackRole};
 
 /// Errors from lifecycle operations.
 #[derive(Debug, Error)]
-#[cfg_attr(feature = "ffi", derive(uniffi::Error), uniffi(flat_error))]
 pub enum LifecycleError {
     /// Filesystem error.
     #[error("io: {0}")]
@@ -145,6 +144,11 @@ pub enum LifecycleError {
     /// version cannot advance. The directory is left unchanged.
     #[error("device directory: {0}")]
     Directory(#[from] DirectoryError),
+    /// [`extend_account_directory`](Workspace::extend_account_directory) was handed a directory
+    /// this workspace must not build on: its signature does not verify under this account's
+    /// user IK, or it names another account. Nothing is adopted.
+    #[error("untrusted account directory: {0}")]
+    UntrustedDirectory(String),
 }
 
 type Result<T> = std::result::Result<T, LifecycleError>;

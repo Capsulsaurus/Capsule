@@ -327,12 +327,17 @@ pub struct Config {
     pub server_domain: String,
     /// The absolute base URL clients reach the versioned API at.
     pub api_base_url: String,
-    /// Where federated peers reach this server, when it federates at all (`FEDERATION_URL`).
+    /// Where federated peers reach this server (`FEDERATION_URL`).
     ///
-    /// `None` is a deployment that does not federate: `server-info` publishes no
-    /// `federation_url`, and the capability lifecycle writes refuse with
-    /// `error.federation.not_configured`.
+    /// Read as given, and published only when [`Self::federation_enabled`] is also set: see
+    /// [`Self::federation_endpoint`], which is the one question the rest of the server asks.
     pub federation_url: Option<String>,
+    /// Whether this deployment federates at all (`FEDERATION_ENABLED`, #509). Off by default.
+    ///
+    /// Federation is deferred (#476), and its surface does work for unauthenticated callers, so
+    /// a deployment has to ask for it. Turning it on demands `FEDERATION_URL` on `serve`; a URL
+    /// without the switch is a deployment that does not federate, and says so at startup.
+    pub federation_enabled: bool,
     /// The filesystem tree ciphertext blobs are written to. There is no object store.
     pub blob_root: Option<PathBuf>,
     /// The Postgres URL, once an adapter reads it (#402).
@@ -390,6 +395,9 @@ fn redacted<T>(secret: Option<&T>) -> &'static str {
 /// a raw `/`, `?` or `#` would otherwise end the authority early and leak. An `@` in a path or
 /// query over-redacts the host instead, which costs a log reader far less than a credential.
 fn redacted_url(url: &str) -> String {
+    if is_conninfo(url) {
+        return redacted_conninfo(url);
+    }
     let (scheme, rest) = match url.split_once("://") {
         Some((scheme, rest)) => (Some(scheme), rest),
         None => (None, url.trim_start_matches('/')),
@@ -412,6 +420,88 @@ fn redacted_url(url: &str) -> String {
     }
 }
 
+/// The libpq keywords whose values [`redacted_conninfo`] keeps: where the service is, and which
+/// database. Every other keyword's value is redacted, so a credential-bearing keyword nobody
+/// listed (`password`, `sslpassword`, a future one) fails closed.
+const CONNINFO_KEPT_KEYWORDS: [&str; 4] = ["host", "hostaddr", "port", "dbname"];
+
+/// Whether `value` is a libpq keyword/value connection string (`host=db password=…`) rather
+/// than a URL: no `://`, and it opens with a keyword followed by `=`.
+fn is_conninfo(value: &str) -> bool {
+    if value.contains("://") {
+        return false;
+    }
+    let trimmed = value.trim_start();
+    let keyword_end = trimmed
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .unwrap_or(trimmed.len());
+    keyword_end > 0 && trimmed[keyword_end..].trim_start().starts_with('=')
+}
+
+/// `conninfo` with the value of every keyword outside [`CONNINFO_KEPT_KEYWORDS`] redacted.
+///
+/// Parsed with libpq's grammar: `keyword = value` pairs separated by whitespace, a value either
+/// single-quoted (with `\'` and `\\` escapes) or an unquoted run of non-whitespace. A string that
+/// does not parse is redacted whole, because a parse that went wrong is exactly the case where a
+/// password could be mistaken for something harmless.
+fn redacted_conninfo(conninfo: &str) -> String {
+    const WHOLLY_REDACTED: &str = "<redacted>";
+    let bytes = conninfo.as_bytes();
+    let mut index = 0;
+    let mut pairs = Vec::new();
+    let skip_whitespace = |index: &mut usize| {
+        while *index < bytes.len() && bytes[*index].is_ascii_whitespace() {
+            *index += 1;
+        }
+    };
+    loop {
+        skip_whitespace(&mut index);
+        if index == bytes.len() {
+            break;
+        }
+        let keyword_start = index;
+        while index < bytes.len() && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_')
+        {
+            index += 1;
+        }
+        let keyword = &conninfo[keyword_start..index];
+        skip_whitespace(&mut index);
+        if keyword.is_empty() || bytes.get(index) != Some(&b'=') {
+            return WHOLLY_REDACTED.to_owned();
+        }
+        index += 1;
+        skip_whitespace(&mut index);
+        let value_start = index;
+        if bytes.get(index) == Some(&b'\'') {
+            index += 1;
+            loop {
+                match bytes.get(index) {
+                    None => return WHOLLY_REDACTED.to_owned(),
+                    Some(b'\\') => index += 2,
+                    Some(b'\'') => {
+                        index += 1;
+                        break;
+                    }
+                    Some(_) => index += 1,
+                }
+            }
+        } else {
+            while index < bytes.len() && !bytes[index].is_ascii_whitespace() {
+                index += if bytes[index] == b'\\' { 2 } else { 1 };
+            }
+        }
+        let index_end = index.min(bytes.len());
+        index = index_end;
+        let value = if CONNINFO_KEPT_KEYWORDS.contains(&keyword) {
+            &conninfo[value_start..index_end]
+        } else {
+            "<redacted>"
+        };
+        pairs.push(format!("{keyword}={value}"));
+    }
+    pairs.join(" ")
+}
+
 impl fmt::Debug for Config {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Destructured, so a field added later is a compile error here until someone decides
@@ -421,6 +511,7 @@ impl fmt::Debug for Config {
             server_domain,
             api_base_url,
             federation_url,
+            federation_enabled,
             blob_root,
             database_url,
             valkey_url,
@@ -444,6 +535,7 @@ impl fmt::Debug for Config {
             .field("server_domain", server_domain)
             .field("api_base_url", api_base_url)
             .field("federation_url", federation_url)
+            .field("federation_enabled", federation_enabled)
             .field("blob_root", blob_root)
             .field("database_url", &database_url.as_deref().map(redacted_url))
             .field("valkey_url", &valkey_url.as_deref().map(redacted_url))
@@ -475,6 +567,17 @@ impl fmt::Debug for Config {
 }
 
 impl Config {
+    /// Where peers reach this server, when — and only when — it federates.
+    ///
+    /// `FEDERATION_ENABLED` **and** `FEDERATION_URL` (#509). `None` is a deployment that does
+    /// not federate: `server-info` publishes no `federation_url`, the federation operations
+    /// answer `404`, and no capability is honoured on the read primitives.
+    pub fn federation_endpoint(&self) -> Option<&str> {
+        self.federation_url
+            .as_deref()
+            .filter(|_| self.federation_enabled)
+    }
+
     /// Read the configuration for a subcommand that demands `demands`.
     ///
     /// # Errors
@@ -539,6 +642,13 @@ impl Config {
         // versioned API itself (design/federation.md, "no new data protocol"), so a deployment
         // that federates publishes its API base here.
         let federation_url = env.var("FEDERATION_URL");
+        // Off unless asked for (#509): federation is deferred (#476), and its surface answers
+        // unauthenticated callers, so a deployment that never decided must not carry it.
+        let federation_enabled = parse_flag(
+            env.var("FEDERATION_ENABLED").as_deref(),
+            "FEDERATION_ENABLED",
+            &mut faults,
+        );
 
         // ── Storage ─────────────────────────────────────────────────────────────────────
         // `UPLOAD_DIR` is the name the retired deployment used, accepted so an operator's
@@ -732,21 +842,38 @@ impl Config {
         //
         // Last, and after every parse, so one message carries both "this is malformed" and
         // "that is missing" rather than a restart between them.
+        //
+        // The durable backends are demanded here for every subcommand that opens a store, both
+        // URLs and in the order the stores are opened: `DATABASE_URL`, then `VALKEY_URL`. Left to
+        // the boot path, a missing database surfaced as a runtime error (exit 1) one restart
+        // after a missing Valkey surfaced as a configuration refusal (exit 2), and an operator
+        // missing both was told about one at a time.
+        let durable = backends == Backends::Durable;
+        let require_durable_backends = |faults: &mut Vec<ConfigFault>| {
+            if durable {
+                require(database_url.is_some(), "DATABASE_URL", faults);
+                // The refusal `store/mod.rs` has always documented: Valkey is required, and
+                // the in-memory adapters are a development profile an operator opts into
+                // rather than something to fall back on.
+                require(valkey_url.is_some(), "VALKEY_URL", faults);
+            }
+        };
         match demands {
             Demands::Nothing => {}
             Demands::Maintenance => {
                 require(blob_root.is_some(), "BLOB_ROOT", &mut faults);
+                require_durable_backends(&mut faults);
             }
             Demands::Serve => {
                 require(blob_root.is_some(), "BLOB_ROOT", &mut faults);
                 require(signing_key_der.is_some(), "JWT_ED25519_DER", &mut faults);
-                // The refusal `store/mod.rs` has always documented and nothing has ever
-                // enforced: Valkey is required, and the in-memory adapters are a development
-                // profile an operator opts into rather than something to fall back on.
-                if backends == Backends::Durable {
-                    if valkey_url.is_none() {
-                        faults.push(ConfigFault::Missing { key: "VALKEY_URL" });
-                    }
+                // An operator who turned federation on meant peers to reach it somewhere, and a
+                // federating server with no published endpoint is one no peer can find.
+                if federation_enabled {
+                    require(federation_url.is_some(), "FEDERATION_URL", &mut faults);
+                }
+                require_durable_backends(&mut faults);
+                if durable {
                     // Required rather than derived; see the key-material section above for what
                     // deriving it from the token-signing key would give away. Demanded only on
                     // the durable path because `--memory` derives it, so a development server
@@ -766,6 +893,7 @@ impl Config {
                 server_domain,
                 api_base_url,
                 federation_url,
+                federation_enabled,
                 blob_root,
                 database_url,
                 valkey_url,
@@ -879,7 +1007,35 @@ fn read_oidc(env: &dyn Environment, faults: &mut Vec<ConfigFault>) -> Option<Oid
         }
     }
 
-    let allow_loopback = match allow_loopback.as_deref().map(str::trim) {
+    let allow_loopback = parse_flag(
+        allow_loopback.as_deref(),
+        "OIDC_ALLOW_LOOPBACK_REDIRECT",
+        faults,
+    );
+
+    Some(OidcConfig {
+        issuer: issuer?,
+        client_id: client_id?,
+        client_secret: client_secret.map(ClientSecret::new),
+        redirects: RedirectPolicy::new(redirect_url, allow_loopback),
+        ca_bundle,
+    })
+}
+
+/// Record a missing required setting.
+fn require(present: bool, key: &'static str, faults: &mut Vec<ConfigFault>) {
+    if !present {
+        faults.push(ConfigFault::Missing { key });
+    }
+}
+
+/// Read an on/off setting, absent meaning off, recording a fault for anything else.
+///
+/// The spellings an operator reaches for either way are all accepted, case-insensitively,
+/// because a switch that silently read `True` or `yes` as off would be worse than one that
+/// refused it.
+fn parse_flag(raw: Option<&str>, key: &'static str, faults: &mut Vec<ConfigFault>) -> bool {
+    match raw.map(str::trim) {
         None => false,
         Some(raw)
             if ["true", "1", "yes", "on"]
@@ -897,26 +1053,11 @@ fn read_oidc(env: &dyn Environment, faults: &mut Vec<ConfigFault>) -> Option<Oid
         }
         Some(raw) => {
             faults.push(ConfigFault::Invalid {
-                key: "OIDC_ALLOW_LOOPBACK_REDIRECT",
+                key,
                 detail: format!("`{raw}` is neither `true` nor `false`"),
             });
             false
         }
-    };
-
-    Some(OidcConfig {
-        issuer: issuer?,
-        client_id: client_id?,
-        client_secret: client_secret.map(ClientSecret::new),
-        redirects: RedirectPolicy::new(redirect_url, allow_loopback),
-        ca_bundle,
-    })
-}
-
-/// Record a missing required setting.
-fn require(present: bool, key: &'static str, faults: &mut Vec<ConfigFault>) {
-    if !present {
-        faults.push(ConfigFault::Missing { key });
     }
 }
 
@@ -1045,7 +1186,9 @@ mod tests {
     use base64::Engine as _;
     use jiff::SignedDuration;
 
-    use super::{BASE64, Backends, Config, Demands, LogFormat, Overrides, redacted_url};
+    use super::{
+        BASE64, Backends, Config, ConfigFault, Demands, LogFormat, Overrides, redacted_url,
+    };
 
     /// A PKCS#8 v1 Ed25519 key, base64, from the retired deployment's own `.env.example`.
     ///
@@ -1194,9 +1337,10 @@ mod tests {
         // developer looking for a variable the development profile does not want.
         assert!(!error.names("ATTESTATION_KEY_SEED"), "{error}");
 
-        // The durable path names both of its own, alongside everything else.
+        // The durable path names its own, alongside everything else.
         let error = Config::load(&environment, &Overrides::default(), Demands::Serve)
             .expect_err("it refuses");
+        assert!(error.names("DATABASE_URL"), "{error}");
         assert!(error.names("VALKEY_URL"), "{error}");
         assert!(error.names("ATTESTATION_KEY_SEED"), "{error}");
     }
@@ -1207,6 +1351,48 @@ mod tests {
         let error = Config::load(&serveable(), &Overrides::default(), Demands::Serve)
             .expect_err("it refuses");
         assert!(error.names("VALKEY_URL"), "{error}");
+    }
+
+    #[test]
+    fn a_durable_store_is_demanded_whole_and_in_the_order_it_is_opened() {
+        // Every subcommand that opens the durable stores is refused here, by the aggregating
+        // front door and with its exit code, naming both URLs at once: the database first,
+        // because it is the first store opened.
+        let maintenance = env(&[("BLOB_ROOT", "/blobs")]);
+        for (environment, demands) in [
+            (serveable(), Demands::Serve),
+            (maintenance.clone(), Demands::Maintenance),
+        ] {
+            let error =
+                Config::load(&environment, &Overrides::default(), demands).expect_err("it refuses");
+            let missing: Vec<_> = error
+                .faults()
+                .iter()
+                .filter_map(|fault| match fault {
+                    ConfigFault::Missing { key } if key.ends_with("_URL") => Some(*key),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                missing,
+                ["DATABASE_URL", "VALKEY_URL"],
+                "{demands:?}: {error}"
+            );
+
+            let mut with_database = environment.clone();
+            with_database.insert(
+                "DATABASE_URL".to_owned(),
+                "postgres://db/capsule".to_owned(),
+            );
+            let error = Config::load(&with_database, &Overrides::default(), demands)
+                .expect_err("it refuses");
+            assert!(!error.names("DATABASE_URL"), "{demands:?}: {error}");
+            assert!(error.names("VALKEY_URL"), "{demands:?}: {error}");
+        }
+
+        // `--memory` reads neither.
+        Config::load(&maintenance, &memory(), Demands::Maintenance).expect("it loads");
+        Config::load(&serveable(), &memory(), Demands::Serve).expect("it loads");
     }
 
     #[test]
@@ -1229,7 +1415,11 @@ mod tests {
         // A maintenance host that had to hold the production token-signing key to sweep a
         // directory would be a reason to put the key on a maintenance host.
         let config = Config::load(
-            &env(&[("BLOB_ROOT", "/blobs")]),
+            &env(&[
+                ("BLOB_ROOT", "/blobs"),
+                ("DATABASE_URL", "postgres://127.0.0.1:5432/capsule"),
+                ("VALKEY_URL", "redis://127.0.0.1:6379"),
+            ]),
             &Overrides::default(),
             Demands::Maintenance,
         )
@@ -1238,7 +1428,7 @@ mod tests {
 
         let error = Config::load(
             &env(&[("JWT_ED25519_DER", EXAMPLE_DER)]),
-            &Overrides::default(),
+            &memory(),
             Demands::Maintenance,
         )
         .expect_err("it refuses");
@@ -1261,6 +1451,7 @@ mod tests {
         let environment = env(&[
             ("BLOB_ROOT", "/blobs"),
             ("JWT_ED25519_DER", EXAMPLE_DER),
+            ("DATABASE_URL", "postgres://127.0.0.1:5432/capsule"),
             ("VALKEY_URL", "redis://127.0.0.1:6379"),
         ]);
         let error = Config::load(&environment, &Overrides::default(), Demands::Serve)
@@ -1475,6 +1666,53 @@ mod tests {
     fn oidc_is_off_unless_an_issuer_is_named() {
         let config = Config::load(&serveable(), &memory(), Demands::Serve).expect("it loads");
         assert!(config.oidc.is_none());
+    }
+
+    #[test]
+    fn federation_is_off_unless_switched_on_and_a_url_alone_does_not_turn_it_on() {
+        // #509: the deferred surface is opt-in. A deployment carrying a `FEDERATION_URL` from
+        // before the switch existed is one that never decided, so it does not federate.
+        let config = Config::load(&serveable(), &memory(), Demands::Serve).expect("it loads");
+        assert!(!config.federation_enabled);
+        assert_eq!(config.federation_endpoint(), None);
+
+        let mut environment = serveable();
+        environment.insert(
+            "FEDERATION_URL".to_owned(),
+            "https://capsule.example/v1".to_owned(),
+        );
+        let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+        assert_eq!(config.federation_endpoint(), None);
+
+        for on in ["true", "1", "YES", " on "] {
+            environment.insert("FEDERATION_ENABLED".to_owned(), on.to_owned());
+            let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+            assert_eq!(
+                config.federation_endpoint(),
+                Some("https://capsule.example/v1"),
+                "FEDERATION_ENABLED={on}"
+            );
+        }
+        environment.insert("FEDERATION_ENABLED".to_owned(), "off".to_owned());
+        let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+        assert_eq!(config.federation_endpoint(), None);
+    }
+
+    #[test]
+    fn switching_federation_on_without_a_url_or_with_a_typo_is_refused_by_name() {
+        let mut environment = serveable();
+        environment.insert("FEDERATION_ENABLED".to_owned(), "true".to_owned());
+        let error = Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
+        assert!(error.names("FEDERATION_URL"), "{error}");
+        // Only `serve` federates, so maintenance is not sent looking for a URL it never reads.
+        environment.insert("BLOB_ROOT".to_owned(), "/blobs".to_owned());
+        Config::load(&environment, &memory(), Demands::Maintenance)
+            .expect("maintenance loads without one");
+
+        let mut environment = serveable();
+        environment.insert("FEDERATION_ENABLED".to_owned(), "enabled".to_owned());
+        let error = Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
+        assert!(error.names("FEDERATION_ENABLED"), "{error}");
     }
 
     #[test]
@@ -1710,6 +1948,32 @@ mod tests {
             ),
         ] {
             assert_eq!(redacted_url(url), expected, "{url}");
+        }
+    }
+
+    #[test]
+    fn a_keyword_value_connection_string_keeps_its_service_and_loses_every_credential() {
+        for (conninfo, expected) in [
+            (
+                "host=db.internal port=5432 dbname=capsule user=capsule password=pg-hunter2",
+                "host=db.internal port=5432 dbname=capsule user=<redacted> password=<redacted>",
+            ),
+            // Spaces around `=`, a quoted password holding spaces and an escaped quote.
+            (
+                "host = db  password = 'a b\\' c' sslmode=require",
+                "host=db password=<redacted> sslmode=<redacted>",
+            ),
+            // An unquoted value with an escaped space is still one value.
+            ("password=a\\ b host=db", "password=<redacted> host=db"),
+            (
+                "hostaddr=10.0.0.1 dbname='my db'",
+                "hostaddr=10.0.0.1 dbname='my db'",
+            ),
+            // What does not parse is redacted whole rather than guessed at.
+            ("host=db password='never closed", "<redacted>"),
+            ("host=db secret", "<redacted>"),
+        ] {
+            assert_eq!(redacted_url(conninfo), expected, "{conninfo}");
         }
     }
 }

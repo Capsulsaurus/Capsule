@@ -97,7 +97,9 @@ pub struct VerifyTransport {
 impl VerifyTransport {
     /// Build a transport that authorizes through an authenticated `S-D7` session — the
     /// sanctioned production path. `base_url` is the API root (`POST {base}/storage/verify`,
-    /// `GET {base}/upload/{id}/receipt`, `GET {base}/assets/{id}/receipts`).
+    /// `GET {base}/upload/{id}/receipt`, `GET {base}/assets/{id}/receipts`); the attestation-key
+    /// record is resolved against its origin instead (see
+    /// [`StorageVerifyClient::fetch_attestation_keys`]).
     pub fn with_session(session: crate::auth::Session, base_url: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into().trim_end_matches('/').to_string(),
@@ -345,16 +347,18 @@ impl StorageVerifyClient {
     }
 
     /// Fetch and pin the server's attestation-key history from
-    /// `GET {well_known_base}/.well-known/capsule/attestation-keys` (TOFU on first contact).
+    /// `GET {origin}/.well-known/capsule/attestation-keys` (TOFU on first contact).
     /// Every published key is returned so a receipt's `server_key_id` resolves against the whole
     /// history — a pre-rotation receipt still verifies.
+    ///
+    /// The record lives at the **origin** (RFC 8615), not under the API root the other methods
+    /// use: the transport's `base_url` path (`/v1`) is replaced, not extended. A base that does
+    /// not parse as a URL is a [`VerifyError::Transport`] raised before any request is sent.
     #[instrument(skip_all)]
     pub async fn fetch_attestation_keys(&self) -> Result<Vec<HybridVerifyingKey>, VerifyError> {
-        let url = format!(
-            "{}/.well-known/capsule/attestation-keys",
-            self.transport.base_url
-        );
-        let response = self.transport.send(|http| http.get(&url)).await?;
+        let url = well_known_url(&self.transport.base_url, ATTESTATION_KEYS_PATH)?;
+        debug!(%url, "fetching attestation keys");
+        let response = self.transport.send(|http| http.get(url.clone())).await?;
         let response = check_status(response).await?;
         let wire: WellKnownAttestationWire = response
             .json()
@@ -371,6 +375,18 @@ impl StorageVerifyClient {
             })
             .collect()
     }
+}
+
+/// The attestation-key record's path, served at the server's origin
+/// (`capsule-server/src/routes/well_known.rs`).
+const ATTESTATION_KEYS_PATH: &str = "/.well-known/capsule/attestation-keys";
+
+/// Resolve a `.well-known` `path` against the origin of the API root `base_url`: scheme, host
+/// and port are kept, the API path (`/v1`) and any query are dropped.
+fn well_known_url(base_url: &str, path: &str) -> Result<reqwest::Url, VerifyError> {
+    reqwest::Url::parse(base_url)
+        .and_then(|base| base.join(path))
+        .map_err(|e| VerifyError::Transport(format!("base url {base_url:?}: {e}")))
 }
 
 /// Decode a receipt carried as base64 inside a JSON document (the asset-receipts chain).

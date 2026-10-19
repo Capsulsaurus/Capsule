@@ -9,14 +9,14 @@ mod support;
 use std::sync::Arc;
 
 use capsule_server::auth::oidc::{
-    AuthorizationRequest, ClaimRejection, HttpIdentityProvider, IdentityProvider, OidcSettings,
-    ProviderError, Redemption, RedirectPolicy, code_challenge, fresh_nonce, fresh_state,
-    fresh_verifier,
+    AuthorizationRequest, ClaimRejection, DevicePoll, HttpIdentityProvider, IdentityProvider,
+    OidcSettings, ProviderError, Redemption, RedirectPolicy, code_challenge, fresh_nonce,
+    fresh_state, fresh_verifier,
 };
 use capsule_server::store::memory::ManualClock;
 use capsule_server::store::{AuthorizationCode, OidcNonce, PkceVerifier};
 use jiff::SignedDuration;
-use support::idp::{CLIENT_ID, Grant, MockIdp, Tamper};
+use support::idp::{CLIENT_ID, DeviceApproval, Grant, MockIdp, Tamper};
 
 const REDIRECT: &str = "http://127.0.0.1:4242/callback";
 
@@ -445,6 +445,191 @@ async fn a_nonce_from_another_ceremony_is_refused_even_when_the_provider_echoes_
         matches!(error, ProviderError::TokenRejected(ClaimRejection::Nonce)),
         "{error:?}"
     );
+}
+
+// ===========================================================================================
+// The device authorization grant (RFC 8628, issue #635), over the real wire
+// ===========================================================================================
+
+/// A conforming device approval for `subject-1`.
+fn approval(tamper: Tamper) -> DeviceApproval {
+    DeviceApproval {
+        subject: "subject-1".to_owned(),
+        email: Some("somebody@example.test".to_owned()),
+        tamper,
+    }
+}
+
+#[tokio::test]
+async fn a_device_code_is_requested_with_the_client_and_the_scopes() {
+    let idp = MockIdp::start().await;
+    let rp = relying_party(&idp, wall_clock());
+
+    let device = rp
+        .begin_device()
+        .await
+        .expect("the provider offers the grant");
+    assert!(device.device_code.as_str().starts_with("device-"));
+    assert!(device.user_code.starts_with("USER-"));
+    assert_eq!(device.verification_uri, format!("{}/device", idp.issuer()));
+    assert_eq!(
+        device.verification_uri_complete,
+        Some(format!(
+            "{}/device?user_code={}",
+            idp.issuer(),
+            device.user_code
+        ))
+    );
+    assert_eq!(device.expires_in, SignedDuration::from_secs(600));
+    assert_eq!(device.interval, SignedDuration::from_secs(5));
+    assert_eq!(idp.device_hits(), 1);
+
+    idp.set_device_interval(None);
+    assert_eq!(
+        rp.begin_device().await.expect("offered").interval,
+        capsule_server::store::DEVICE_POLL_FLOOR,
+        "no interval is RFC 8628 §3.2's five seconds"
+    );
+}
+
+#[tokio::test]
+async fn a_provider_without_the_grant_is_a_typed_refusal_that_costs_no_request() {
+    let idp = MockIdp::start().await;
+    idp.set_device_offered(false);
+    let rp = relying_party(&idp, wall_clock());
+    let error = rp.begin_device().await.expect_err("not offered");
+    assert!(
+        matches!(error, ProviderError::DeviceUnsupported { .. }),
+        "{error:?}"
+    );
+    assert_eq!(
+        idp.device_hits(),
+        0,
+        "nothing was asked of an absent endpoint"
+    );
+
+    // An endpoint that refuses this client is the same refusal: configuration, not an outage.
+    let idp = MockIdp::start().await;
+    let rp = relying_party(&idp, wall_clock());
+    for error_member in ["unauthorized_client", "unsupported_grant_type"] {
+        idp.set_device_refusal(Some((400, error_member)));
+        match rp.begin_device().await.expect_err("refused") {
+            ProviderError::DeviceUnsupported { detail } => {
+                assert!(detail.contains(error_member), "{detail}");
+            }
+            other => panic!("expected {error_member} to be unsupported, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn any_other_device_endpoint_refusal_is_an_outage_not_an_unsupported_grant() {
+    let idp = MockIdp::start().await;
+    let rp = relying_party(&idp, wall_clock());
+    // A throttle, a malformed request, a bad client credential, or a 4xx with no `error` member
+    // is the provider failing this one request: none says it never runs the grant for us.
+    for (status, error_member) in [
+        (429, ""),
+        (429, "slow_down"),
+        (400, "invalid_request"),
+        (401, "invalid_client"),
+        (400, "invalid_scope"),
+        (403, ""),
+    ] {
+        idp.set_device_refusal(Some((status, error_member)));
+        let error = rp.begin_device().await.expect_err("refused");
+        assert!(
+            matches!(error, ProviderError::Unavailable { .. }),
+            "{status} {error_member:?} should be an outage, got {error:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn every_device_poll_answer_maps_to_its_own_outcome() {
+    let idp = MockIdp::start().await;
+    let rp = relying_party(&idp, wall_clock());
+    let device = rp.begin_device().await.expect("offered");
+    let code = &device.device_code;
+
+    assert_eq!(rp.poll_device(code).await, Ok(DevicePoll::Pending));
+    idp.slow_down_device(code.as_str());
+    assert_eq!(rp.poll_device(code).await, Ok(DevicePoll::SlowDown));
+    assert_eq!(
+        rp.poll_device(code).await,
+        Ok(DevicePoll::Pending),
+        "a slow_down is answered once"
+    );
+    idp.approve_device(code.as_str(), approval(Tamper::None));
+    match rp.poll_device(code).await.expect("approved") {
+        DevicePoll::Verified(identity) => {
+            assert_eq!(identity.issuer, idp.issuer());
+            assert_eq!(identity.subject, "subject-1");
+            assert_eq!(identity.email.as_deref(), Some("somebody@example.test"));
+        }
+        other => panic!("expected an identity, got {other:?}"),
+    }
+    let spent = rp.poll_device(code).await.expect_err("spent");
+    assert!(
+        matches!(spent, ProviderError::ExchangeRefused { .. }),
+        "a collected device code is spent at the provider: {spent:?}"
+    );
+
+    let denied = rp.begin_device().await.expect("offered");
+    idp.deny_device(denied.device_code.as_str());
+    assert_eq!(
+        rp.poll_device(&denied.device_code).await,
+        Ok(DevicePoll::Denied)
+    );
+    let expired = rp.begin_device().await.expect("offered");
+    idp.expire_device(expired.device_code.as_str());
+    assert_eq!(
+        rp.poll_device(&expired.device_code).await,
+        Ok(DevicePoll::Expired)
+    );
+}
+
+#[tokio::test]
+async fn a_device_token_is_verified_by_every_check_but_carries_no_nonce() {
+    let idp = MockIdp::start().await;
+    let rp = relying_party(&idp, wall_clock());
+
+    // A token carrying a nonce was minted for an authorization request, not this grant.
+    let device = rp.begin_device().await.expect("offered");
+    idp.approve_device(
+        device.device_code.as_str(),
+        approval(Tamper::Nonce("a-nonce-from-somewhere".to_owned())),
+    );
+    assert_eq!(
+        rp.poll_device(&device.device_code).await,
+        Err(ProviderError::TokenRejected(ClaimRejection::Nonce))
+    );
+
+    for (tamper, expected) in [
+        (
+            Tamper::Audience("someone-else".to_owned()),
+            ClaimRejection::Audience,
+        ),
+        (
+            Tamper::Issuer("https://somebody-else.test".to_owned()),
+            ClaimRejection::Issuer {
+                found: "https://somebody-else.test".to_owned(),
+            },
+        ),
+    ] {
+        let device = rp.begin_device().await.expect("offered");
+        idp.approve_device(device.device_code.as_str(), approval(tamper));
+        assert_eq!(
+            rp.poll_device(&device.device_code).await,
+            Err(ProviderError::TokenRejected(expected))
+        );
+    }
+    let device = rp.begin_device().await.expect("offered");
+    idp.approve_device(device.device_code.as_str(), approval(Tamper::BadSignature));
+    assert!(matches!(
+        rp.poll_device(&device.device_code).await,
+        Err(ProviderError::TokenRejected(_))
+    ));
 }
 
 // ===========================================================================================
@@ -1241,5 +1426,524 @@ async fn the_whole_handshake_round_trips_over_the_wire() {
             "{tamper:?}"
         );
     }
+    fixture.client.assert_conformance();
+}
+
+// ===========================================================================================
+// The device routes (RFC 8628, issue #635), over the fixture
+// ===========================================================================================
+
+use capsule_server::store::OIDC_DEVICE_TTL;
+use support::DeviceAnswer;
+
+/// One interval: the double issues every device authorization at the five-second floor.
+const INTERVAL: SignedDuration = SignedDuration::from_secs(5);
+
+/// Begin a device sign-in through the route and return its body.
+async fn device_begin(fixture: &Fixture) -> Value {
+    fixture
+        .client
+        .post("/v1/auth/oidc/device")
+        .header("accept", "application/json")
+        .json(&support::oidc_device_body())
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json()
+}
+
+/// Poll `handle` with the suite client's binding, unless `body` names its own.
+async fn device_poll(fixture: &Fixture, mut body: Value) -> kynos::test::TestResponse {
+    if let Some(fields) = body.as_object_mut() {
+        fields
+            .entry("binding_verifier")
+            .or_insert_with(|| json!(support::OIDC_BINDING));
+    }
+    fixture
+        .client
+        .post("/v1/auth/oidc/device/poll")
+        .header("accept", "application/json")
+        .json(&body)
+        .send()
+        .await
+}
+
+/// Poll `handle` and return the problem code it answered with `status`.
+async fn device_poll_code(fixture: &Fixture, handle: &Value, status: StatusCode) -> String {
+    let body: Value = device_poll(fixture, json!({ "handle": handle }))
+        .await
+        .assert_status(status)
+        .json();
+    code_of(&body).to_owned()
+}
+
+#[tokio::test]
+async fn a_begun_device_sign_in_publishes_what_to_show_and_never_the_device_code() {
+    let fixture = Fixture::working();
+    let begun = device_begin(&fixture).await;
+    assert_eq!(begun["user_code"], support::DEVICE_USER_CODE);
+    assert_eq!(begun["verification_uri"], "https://idp.test/device");
+    assert_eq!(
+        begun["verification_uri_complete"],
+        format!(
+            "https://idp.test/device?user_code={}",
+            support::DEVICE_USER_CODE
+        )
+    );
+    assert_eq!(begun["interval"], 5);
+    // The provider's ten minutes are sooner than the server's fifteen.
+    assert_eq!(
+        begun["expires_by"],
+        u64::try_from((fixture.clock.now() + SignedDuration::from_mins(10)).as_second())
+            .expect("after the epoch")
+    );
+    let handle = begun["handle"].as_str().expect("a handle");
+    assert!(handle.len() >= 22, "128 bits, base64url: {handle}");
+    assert!(
+        !begun.to_string().contains("device-code-"),
+        "the provider's device code never leaves the server: {begun}"
+    );
+
+    // A provider that would honour its code longer than the server holds the ceremony is
+    // capped at the server's lifetime.
+    fixture
+        .idp
+        .set_device_expires_in(SignedDuration::from_mins(30));
+    let capped = device_begin(&fixture).await;
+    assert_eq!(
+        capped["expires_by"],
+        u64::try_from((fixture.clock.now() + OIDC_DEVICE_TTL).as_second())
+            .expect("after the epoch")
+    );
+    assert_ne!(
+        capped["handle"], begun["handle"],
+        "a fresh handle each time"
+    );
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn a_device_poll_waits_its_interval_and_too_soon_never_reaches_the_provider() {
+    let fixture = Fixture::working();
+    let begun = device_begin(&fixture).await;
+
+    // Before one interval has passed since the begin: slowed, and the provider is not asked.
+    assert_eq!(
+        device_poll_code(&fixture, &begun["handle"], StatusCode::TOO_MANY_REQUESTS).await,
+        "error.auth.oidc_device_slow_down"
+    );
+    assert!(fixture.idp.device_polls().is_empty());
+
+    // The slow-down raised the interval by five seconds: the old interval is too soon again.
+    fixture.clock.advance(INTERVAL);
+    assert_eq!(
+        device_poll_code(&fixture, &begun["handle"], StatusCode::TOO_MANY_REQUESTS).await,
+        "error.auth.oidc_device_slow_down"
+    );
+    assert!(fixture.idp.device_polls().is_empty());
+
+    // Honouring the raised interval (5 + 5 + 5) reaches the provider, with the device code
+    // the server holds.
+    fixture.clock.advance(INTERVAL * 3);
+    assert_eq!(
+        device_poll_code(&fixture, &begun["handle"], StatusCode::BAD_REQUEST).await,
+        "error.auth.oidc_device_pending"
+    );
+    assert_eq!(fixture.idp.device_polls(), vec!["device-code-0".to_owned()]);
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn a_provider_slow_down_raises_the_interval_the_server_enforces() {
+    let fixture = Fixture::working();
+    let begun = device_begin(&fixture).await;
+    fixture.idp.set_device_answer(DeviceAnswer::SlowDown);
+    fixture.clock.advance(INTERVAL);
+    assert_eq!(
+        device_poll_code(&fixture, &begun["handle"], StatusCode::TOO_MANY_REQUESTS).await,
+        "error.auth.oidc_device_slow_down"
+    );
+    assert_eq!(fixture.idp.device_polls().len(), 1);
+
+    // The provider's slow_down is the server's too: the old interval no longer reaches it.
+    fixture.idp.set_device_answer(DeviceAnswer::Pending);
+    fixture.clock.advance(INTERVAL);
+    device_poll_code(&fixture, &begun["handle"], StatusCode::TOO_MANY_REQUESTS).await;
+    assert_eq!(fixture.idp.device_polls().len(), 1);
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn an_approved_device_sign_in_opens_one_session_and_ends_the_ceremony() {
+    let fixture = Fixture::working();
+    let begun = device_begin(&fixture).await;
+    fixture.clock.advance(INTERVAL);
+    device_poll_code(&fixture, &begun["handle"], StatusCode::BAD_REQUEST).await;
+
+    fixture.idp.set_device_answer(DeviceAnswer::Approved);
+    fixture.clock.advance(INTERVAL);
+    let signed: TokenResponse = device_poll(
+        &fixture,
+        json!({ "handle": begun["handle"], "cohort_hash": "c".repeat(64) }),
+    )
+    .await
+    .assert_status(StatusCode::OK)
+    .json();
+    let user = fixture
+        .tokens
+        .verify(
+            &signed.access_token,
+            capsule_server::auth::TokenKind::Access,
+        )
+        .expect("the server's own signer reads it")
+        .user;
+    let sessions = fixture
+        .sessions
+        .sessions_for_user(&user)
+        .await
+        .expect("the store answers");
+    assert_eq!(sessions.len(), 1, "one federated session");
+    assert_eq!(
+        sessions[0].cohort_hash.as_deref(),
+        Some("c".repeat(64).as_str())
+    );
+
+    // The ceremony is over: polling it again finds nothing, and asks the provider nothing.
+    fixture.clock.advance(INTERVAL);
+    let polled = fixture.idp.device_polls().len();
+    assert_eq!(
+        device_poll_code(&fixture, &begun["handle"], StatusCode::UNAUTHORIZED).await,
+        "error.auth.oidc_device_expired"
+    );
+    assert_eq!(fixture.idp.device_polls().len(), polled);
+
+    // The same identity through the device door is the same account as through the callback.
+    let begun = authorize(&fixture, REDIRECT).await;
+    let again: TokenResponse = callback(
+        &fixture,
+        json!({ "state": begun["state"], "code": GOOD_CODE }),
+    )
+    .await
+    .assert_status(StatusCode::OK)
+    .json();
+    assert_eq!(
+        fixture
+            .tokens
+            .verify(&again.access_token, capsule_server::auth::TokenKind::Access)
+            .expect("reads")
+            .user,
+        user
+    );
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn every_terminal_device_answer_is_its_own_code_and_ends_the_ceremony() {
+    let fixture = Fixture::working();
+    for (answer, status, code) in [
+        (
+            DeviceAnswer::Denied,
+            StatusCode::UNAUTHORIZED,
+            "error.auth.oidc_device_denied",
+        ),
+        (
+            DeviceAnswer::Expired,
+            StatusCode::UNAUTHORIZED,
+            "error.auth.oidc_device_expired",
+        ),
+        (
+            DeviceAnswer::ExchangeRefused,
+            StatusCode::UNAUTHORIZED,
+            "error.auth.oidc_exchange_failed",
+        ),
+        (
+            DeviceAnswer::TokenRejected,
+            StatusCode::UNAUTHORIZED,
+            "error.auth.oidc_token_invalid",
+        ),
+    ] {
+        let begun = device_begin(&fixture).await;
+        fixture.idp.set_device_answer(answer);
+        fixture.clock.advance(INTERVAL);
+        assert_eq!(
+            device_poll_code(&fixture, &begun["handle"], status).await,
+            code,
+            "{answer:?}"
+        );
+        fixture.idp.set_device_answer(DeviceAnswer::Approved);
+        fixture.clock.advance(INTERVAL);
+        assert_eq!(
+            device_poll_code(&fixture, &begun["handle"], StatusCode::UNAUTHORIZED).await,
+            "error.auth.oidc_device_expired",
+            "{answer:?} ended the ceremony: a later approval cannot be collected"
+        );
+        fixture.idp.set_device_answer(DeviceAnswer::Pending);
+    }
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn a_device_poll_from_a_client_that_did_not_begin_it_is_refused_and_ends_it() {
+    let fixture = Fixture::working();
+    let begun = device_begin(&fixture).await;
+    fixture.idp.set_device_answer(DeviceAnswer::Approved);
+    fixture.clock.advance(INTERVAL);
+    let body: Value = device_poll(
+        &fixture,
+        json!({ "handle": begun["handle"], "binding_verifier": "another-clients-secret" }),
+    )
+    .await
+    .assert_status(StatusCode::UNAUTHORIZED)
+    .json();
+    assert_eq!(
+        code_of(&body),
+        "error.auth.oidc_device_expired",
+        "a mismatched binding is answered as an unknown handle is"
+    );
+    assert!(
+        fixture.idp.device_polls().is_empty(),
+        "the provider is asked nothing on another client's behalf"
+    );
+    fixture.clock.advance(INTERVAL);
+    assert_eq!(
+        device_poll_code(&fixture, &begun["handle"], StatusCode::UNAUTHORIZED).await,
+        "error.auth.oidc_device_expired",
+        "the ceremony is burned, so the approval is never collected"
+    );
+
+    assert_eq!(
+        device_poll_code(&fixture, &json!("never-issued"), StatusCode::UNAUTHORIZED).await,
+        "error.auth.oidc_device_expired"
+    );
+    // Past the server's own lifetime, even a provider still willing to issue cannot be asked.
+    let stale = device_begin(&fixture).await;
+    fixture.clock.advance(OIDC_DEVICE_TTL);
+    let polled = fixture.idp.device_polls().len();
+    assert_eq!(
+        device_poll_code(&fixture, &stale["handle"], StatusCode::UNAUTHORIZED).await,
+        "error.auth.oidc_device_expired",
+        "past the server's lifetime"
+    );
+    assert_eq!(fixture.idp.device_polls().len(), polled);
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn a_device_identity_asserting_a_held_address_is_refused_never_linked() {
+    let fixture = Fixture::working();
+    fixture.idp.set_identity(VerifiedIdentity {
+        issuer: "https://idp.test".to_owned(),
+        subject: "impersonator".to_owned(),
+        email: Some(support::EMAIL.to_owned()),
+        email_verified: true,
+    });
+    fixture.idp.set_device_answer(DeviceAnswer::Approved);
+    let begun = device_begin(&fixture).await;
+    fixture.clock.advance(INTERVAL);
+    assert_eq!(
+        device_poll_code(&fixture, &begun["handle"], StatusCode::CONFLICT).await,
+        "error.auth.oidc_address_taken"
+    );
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn beginning_a_device_sign_in_is_bounded_and_refuses_what_it_cannot_offer() {
+    let fixture = Fixture::working();
+
+    // The binding's shape first: nothing charged, nothing asked, nothing written.
+    let body: Value = fixture
+        .client
+        .post("/v1/auth/oidc/device")
+        .json(&json!({ "binding_challenge": "short" }))
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST)
+        .json();
+    assert_eq!(code_of(&body), "error.request.malformed");
+
+    // No provider, and a provider without the grant: two codes, one status.
+    fixture.idp.set_configured(false);
+    let body: Value = fixture
+        .client
+        .post("/v1/auth/oidc/device")
+        .json(&support::oidc_device_body())
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND)
+        .json();
+    assert_eq!(code_of(&body), "error.auth.oidc_not_configured");
+    fixture.idp.set_configured(true);
+    fixture.idp.set_device_offered(false);
+    let body: Value = fixture
+        .client
+        .post("/v1/auth/oidc/device")
+        .json(&support::oidc_device_body())
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND)
+        .json();
+    assert_eq!(code_of(&body), "error.auth.oidc_device_unsupported");
+    fixture.idp.set_device_offered(true);
+
+    // The provider down, and the store down: the code names which.
+    fixture.idp.set_unavailable(true);
+    let body: Value = fixture
+        .client
+        .post("/v1/auth/oidc/device")
+        .json(&support::oidc_device_body())
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR)
+        .json();
+    assert_eq!(code_of(&body), "error.auth.oidc_unavailable");
+    fixture.idp.set_unavailable(false);
+    fixture.oidc_devices.set_unavailable(true);
+    let body: Value = fixture
+        .client
+        .post("/v1/auth/oidc/device")
+        .json(&support::oidc_device_body())
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR)
+        .json();
+    assert_eq!(code_of(&body), "error.auth.unavailable");
+    fixture.oidc_devices.set_unavailable(false);
+
+    // The store's ceiling.
+    fixture.oidc_devices.set_full(true);
+    let body: Value = fixture
+        .client
+        .post("/v1/auth/oidc/device")
+        .json(&support::oidc_device_body())
+        .send()
+        .await
+        .assert_status(StatusCode::SERVICE_UNAVAILABLE)
+        .json();
+    assert_eq!(code_of(&body), "error.auth.oidc_at_capacity");
+    fixture.oidc_devices.set_full(false);
+
+    // The deployment-wide budget: sixty a minute, every begin charged whatever it answered.
+    let mut charged = 5; // the refusals above that reached the limiter: all but the malformed one
+    while charged < 60 {
+        device_begin(&fixture).await;
+        charged += 1;
+    }
+    let body: Value = fixture
+        .client
+        .post("/v1/auth/oidc/device")
+        .json(&support::oidc_device_body())
+        .send()
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS)
+        .json();
+    assert_eq!(code_of(&body), "error.auth.rate_limited");
+    fixture.clock.advance(SignedDuration::from_mins(1));
+    device_begin(&fixture).await;
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn an_unreachable_provider_leaves_the_device_ceremony_to_be_polled_again() {
+    let fixture = Fixture::working();
+    let begun = device_begin(&fixture).await;
+    fixture.idp.set_unavailable(true);
+    fixture.clock.advance(INTERVAL);
+    assert_eq!(
+        device_poll_code(
+            &fixture,
+            &begun["handle"],
+            StatusCode::INTERNAL_SERVER_ERROR
+        )
+        .await,
+        "error.auth.oidc_unavailable"
+    );
+    fixture.idp.set_unavailable(false);
+    fixture.idp.set_device_answer(DeviceAnswer::Approved);
+    fixture.clock.advance(INTERVAL);
+    device_poll(&fixture, json!({ "handle": begun["handle"] }))
+        .await
+        .assert_status(StatusCode::OK);
+
+    // A store that cannot answer the claim is a 500 with the store's code.
+    let begun = device_begin(&fixture).await;
+    fixture.oidc_devices.set_unavailable(true);
+    fixture.clock.advance(INTERVAL);
+    assert_eq!(
+        device_poll_code(
+            &fixture,
+            &begun["handle"],
+            StatusCode::INTERNAL_SERVER_ERROR
+        )
+        .await,
+        "error.auth.unavailable"
+    );
+    fixture.oidc_devices.set_unavailable(false);
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn the_device_grant_round_trips_over_the_wire() {
+    let idp = MockIdp::start().await;
+    let provider = Arc::new(relying_party(&idp, wall_clock()));
+    let fixture = Fixture::with_identity_provider(provider);
+
+    let begun = device_begin(&fixture).await;
+    assert!(
+        begun["user_code"]
+            .as_str()
+            .is_some_and(|code| code.starts_with("USER-")),
+        "{begun}"
+    );
+    fixture.clock.advance(INTERVAL);
+    assert_eq!(
+        device_poll_code(&fixture, &begun["handle"], StatusCode::BAD_REQUEST).await,
+        "error.auth.oidc_device_pending"
+    );
+    // The person approves on their other device; the provider learns the code from the page.
+    let device_code = format!(
+        "device-{}",
+        begun["user_code"]
+            .as_str()
+            .and_then(|code| code.strip_prefix("USER-"))
+            .expect("the mock numbers its codes")
+    );
+    idp.approve_device(
+        &device_code,
+        DeviceApproval {
+            subject: "device-wire-subject".to_owned(),
+            email: Some("device-wire@example.test".to_owned()),
+            tamper: Tamper::None,
+        },
+    );
+    fixture.clock.advance(INTERVAL);
+    let signed: TokenResponse = device_poll(&fixture, json!({ "handle": begun["handle"] }))
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    assert!(!signed.access_token.is_empty());
+
+    // A token carrying a nonce is refused through the route as the one wire code.
+    let begun = device_begin(&fixture).await;
+    let device_code = format!(
+        "device-{}",
+        begun["user_code"]
+            .as_str()
+            .and_then(|code| code.strip_prefix("USER-"))
+            .expect("numbered")
+    );
+    idp.approve_device(
+        &device_code,
+        DeviceApproval {
+            subject: "device-wire-subject".to_owned(),
+            email: None,
+            tamper: Tamper::Nonce("a-nonce".to_owned()),
+        },
+    );
+    fixture.clock.advance(INTERVAL);
+    assert_eq!(
+        device_poll_code(&fixture, &begun["handle"], StatusCode::UNAUTHORIZED).await,
+        "error.auth.oidc_token_invalid"
+    );
     fixture.client.assert_conformance();
 }

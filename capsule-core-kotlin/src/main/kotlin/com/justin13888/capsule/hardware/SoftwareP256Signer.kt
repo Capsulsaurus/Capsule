@@ -8,13 +8,13 @@ import org.bouncycastle.crypto.params.ECPrivateKeyParameters
 import org.bouncycastle.crypto.params.HKDFParameters
 import org.bouncycastle.crypto.signers.ECDSASigner
 import org.bouncycastle.crypto.signers.StandardDSAEncoding
-import uniffi.capsule_core.HardwareSigner
-import uniffi.capsule_core.HardwareSignerException
+import uniffi.capsule_sdk.FfiHardwareSigner
+import uniffi.capsule_sdk.FfiHardwareSignerException
 import java.math.BigInteger
 import java.security.MessageDigest
 
 /**
- * Software **P-256** [HardwareSigner] — the no-secure-element reference the real StrongBox
+ * Software **P-256** [FfiHardwareSigner] —the no-secure-element reference the real StrongBox
  * replaces, and the always-runnable path for the P-256 hybrid composition (a JVM/CI host has no
  * StrongBox). It mirrors [StrongBoxSigner]'s wire contract exactly — a 65-byte **uncompressed
  * SEC1** (`0x04‖x‖y`) public key and a **DER-encoded ECDSA** signature over `SHA-256(msg)` — so it
@@ -23,12 +23,12 @@ import java.security.MessageDigest
  *
  * The P-256 scalar is derived deterministically (HKDF-SHA256, per `keyAlias`, reduced mod n) from a
  * 32-byte seed the caller seals. It offers no hardware non-exportability, which [assertNonExportable]
- * reports truthfully by throwing [HardwareSignerException.Exportable]. BouncyCastle is used so the
+ * reports truthfully by throwing [FfiHardwareSignerException.Exportable]. BouncyCastle is used so the
  * derivation and DER encoding are identical on the JVM (unit tests) and on Android.
  */
 class SoftwareP256Signer(
     private val seed: ByteArray,
-) : HardwareSigner {
+) : FfiHardwareSigner {
     init {
         require(seed.size == 32) { "software signer seed must be 32 bytes" }
     }
@@ -67,7 +67,7 @@ class SoftwareP256Signer(
     override fun assertNonExportable(keyAlias: String) {
         // Honest by design: a software key is readable, so it can never meet the hardware
         // non-exportability contract a Secure Enclave / StrongBox / TPM does.
-        throw HardwareSignerException.Exportable("software P-256 key is exportable")
+        throw FfiHardwareSignerException.Exportable("software P-256 key is exportable")
     }
 
     private companion object {

@@ -29,6 +29,7 @@ fn entry(album_id: &[u8], sync_seq: u64, protocol: &str) -> FeedEntry {
         manifest_cbor: vec![0xa0],
         metadata_blob: Vec::new(),
         blobs: BlobManifest::default(),
+        derivative_manifests: Vec::new(),
         original_held: true,
         changed_at: "1970-01-01T00:00:00Z".to_string(),
     }
@@ -266,4 +267,60 @@ fn restore_rehydrates_cursor_and_high_water_and_still_refuses_rewind() {
         .unwrap();
     assert_eq!(restored.high_water(&a), Some(3));
     assert_eq!(restored.cursor().as_bytes(), &[0x92u8; 41]);
+}
+
+// ─── Wire decoding: derivative manifests (#556) ──────────────────────────────
+
+/// A wire entry as the server renders it, with `extra` merged in.
+fn wire_entry(extra: serde_json::Value) -> rest::types::SyncEntry {
+    let mut entry = serde_json::json!({
+        "asset_id": "asset",
+        "album_id": "album",
+        "protocol_version": "2026-05-31",
+        "sync_seq": 1,
+        "change": "created",
+        "manifest_cbor": BASE64.encode([0xa0]),
+        "metadata_blob": "metadata",
+        "blobs": [{ "role": "derivative", "hash": "thumb", "size": 8 }],
+        "original_held": false,
+        "changed_at": "1970-01-01T00:00:00Z",
+    });
+    for (key, value) in extra.as_object().unwrap() {
+        entry[key] = value.clone();
+    }
+    serde_json::from_value(entry).unwrap()
+}
+
+/// Each inlined manifest decodes to its exact bytes, in the order the server sent them.
+#[test]
+fn derivative_manifests_decode_to_their_exact_bytes() {
+    let thumbnail = b"signed thumbnail manifest".to_vec();
+    let preview = b"signed preview manifest".to_vec();
+    let decoded = decode_entry(wire_entry(serde_json::json!({
+        "derivative_manifests": [BASE64.encode(&thumbnail), BASE64.encode(&preview)],
+    })))
+    .unwrap();
+    assert_eq!(decoded.derivative_manifests, vec![thumbnail, preview]);
+    assert_eq!(
+        decoded.blobs.derivatives.len(),
+        1,
+        "the blob list is unchanged"
+    );
+}
+
+/// A server that predates the field sends no key, and that is an asset with no manifests yet,
+/// not a malformed entry — native clients stay lenient across versions.
+#[test]
+fn an_entry_without_derivative_manifests_decodes_to_none() {
+    let decoded = decode_entry(wire_entry(serde_json::json!({}))).unwrap();
+    assert!(decoded.derivative_manifests.is_empty());
+}
+
+/// A manifest that is not base64 is a server that cannot be talked to, as for `manifest_cbor`.
+#[test]
+fn a_derivative_manifest_that_is_not_base64_is_malformed() {
+    let refused = decode_entry(wire_entry(serde_json::json!({
+        "derivative_manifests": ["not base64!"],
+    })));
+    assert!(matches!(refused, Err(SyncError::MalformedManifest(_))));
 }

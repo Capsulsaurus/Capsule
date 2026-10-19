@@ -38,8 +38,9 @@ use capsule_server::album::{
 use capsule_server::app::Modules;
 use capsule_server::attestation::{AttestationContext, InMemoryReceipts, LocalAttestationKey};
 use capsule_server::auth::oidc::{
-    AuthorizationRequest, FederatedAccounts, FederatedLink, IdentityProvider, OidcCollaborators,
-    OidcContext, ProviderError, ProviderFuture, Redemption, VerifiedIdentity,
+    AuthorizationRequest, DeviceAuthorization, DevicePoll, FederatedAccounts, FederatedLink,
+    IdentityProvider, OidcCollaborators, OidcContext, ProviderError, ProviderFuture, Redemption,
+    VerifiedIdentity,
 };
 use capsule_server::auth::{
     AccountDirectory, AccountProfiles, ActivateOutcome, AuthCollaborators, AuthContext,
@@ -48,8 +49,8 @@ use capsule_server::auth::{
     TotpContext, TotpEnrollment, TotpSecret, TotpStore,
 };
 use capsule_server::blob::{
-    BlobFuture, BlobPage, BlobStat, BlobStore, ContentAddress, InMemoryBlobStore, Placement,
-    QuarantineReason, QuarantinedBlob,
+    BlobError, BlobFuture, BlobPage, BlobStat, BlobStore, ContentAddress, InMemoryBlobStore,
+    Placement, QuarantineReason, QuarantinedBlob,
 };
 use capsule_server::counter::{CounterContext, InMemoryCounters};
 use capsule_server::directory::{
@@ -61,14 +62,15 @@ use capsule_server::discovery::revocation::{
 };
 use capsule_server::discovery::{DiscoveryContext, ProtocolWindow, ServerInfo};
 use capsule_server::drop::{
-    Admission, DropContext, DropStore, InMemoryDrops, InboxEntry, PendingDeposit, UploadLinkRecord,
+    Admission, DropContext, DropStore, InMemoryDrops, InboxEntry, LinkProvisionOutcome,
+    PendingDeposit, UploadLinkRecord,
 };
 use capsule_server::enrollment::EnrollmentContext;
 use capsule_server::escrow::{EscrowContext, EscrowRecord, EscrowStore, InMemoryEscrow, Replaced};
 use capsule_server::federation::{
     CapabilityCodec, CapabilityFilter, CapabilityRecord, CapabilityStore, FederationCollaborators,
-    FederationContext, InMemoryCapabilities, InMemoryPeers, RefreshOutcome, ReportClaim,
-    RevokeOutcome,
+    FederationContext, FederationSetting, InMemoryCapabilities, InMemoryPeers, RefreshOutcome,
+    ReportClaim, RevokeOutcome,
 };
 use capsule_server::gc::memory::InMemoryCollection;
 use capsule_server::index::memory::InMemoryAssetIndex;
@@ -88,7 +90,7 @@ use capsule_server::quota::{
     ChargeOutcome, InMemoryQuota, QuotaContext, QuotaLimits, QuotaStore, StoredUsage,
 };
 use capsule_server::serve::ServeContext;
-use capsule_server::share::{InMemoryShares, ShareContext, ShareRecord, ShareStore};
+use capsule_server::share::{InMemoryShares, IssueOutcome, ShareContext, ShareRecord, ShareStore};
 use capsule_server::store::memory::{
     InMemoryAuthState, InMemoryChallenges, InMemoryChannels, InMemoryCohorts, InMemoryEnrollments,
     InMemoryOidcAuthorizations, InMemoryUploadSessions, ManualClock,
@@ -208,9 +210,6 @@ pub(crate) fn identity_header(ik: &HybridSigningKey) -> String {
 /// asserting about one fact rather than two matching literals.
 pub(crate) const SERVER_ORIGIN: &str = "capsule.test";
 
-/// Where peers pull from, in every fixture that federates. The API base, as the design has it.
-pub(crate) const FEDERATION_URL: &str = "https://capsule.test/v1";
-
 /// The account [`Fixture::working`] seeds.
 pub(crate) const EMAIL: &str = "somebody@example.test";
 
@@ -273,6 +272,48 @@ pub(crate) struct SwitchableIdentityProvider {
     requests: Mutex<Vec<RecordedAuthorization>>,
     /// How many codes the server asked this double to redeem, whatever it answered.
     redemptions: AtomicUsize,
+    /// Whether the provider offers the device grant (issue #635).
+    device_offered: AtomicBool,
+    /// What every device poll answers until the test says otherwise.
+    device_answer: Mutex<DeviceAnswer>,
+    /// The `expires_in` every device authorization is issued with.
+    device_expires_in: Mutex<jiff::SignedDuration>,
+    /// Every device authorization issued, numbered.
+    device_begins: AtomicUsize,
+    /// Every device code the server polled with, in order.
+    device_polls: Mutex<Vec<String>>,
+}
+
+/// What the double answers a device poll with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeviceAnswer {
+    /// `authorization_pending`.
+    Pending,
+    /// `slow_down`.
+    SlowDown,
+    /// `access_denied`.
+    Denied,
+    /// `expired_token`.
+    Expired,
+    /// Approved: the double's identity.
+    Approved,
+    /// A refusal RFC 8628 does not name.
+    ExchangeRefused,
+    /// A token the relying party refuses.
+    TokenRejected,
+}
+
+/// The user code every device authorization the double issues carries.
+pub(crate) const DEVICE_USER_CODE: &str = "WDJB-MJHT";
+
+/// A device-begin body, bound to the suite's client.
+pub(crate) fn oidc_device_body() -> serde_json::Value {
+    serde_json::json!({ "binding_challenge": oidc_binding_challenge() })
+}
+
+/// A device-poll body for `handle`, presenting the suite client's binding.
+pub(crate) fn oidc_device_poll_body(handle: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({ "handle": handle, "binding_verifier": OIDC_BINDING })
 }
 
 /// One authorization request as the double saw it.
@@ -298,7 +339,41 @@ impl SwitchableIdentityProvider {
             token_rejected: AtomicBool::new(false),
             requests: Mutex::new(Vec::new()),
             redemptions: AtomicUsize::new(0),
+            device_offered: AtomicBool::new(true),
+            device_answer: Mutex::new(DeviceAnswer::Pending),
+            device_expires_in: Mutex::new(jiff::SignedDuration::from_mins(10)),
+            device_begins: AtomicUsize::new(0),
+            device_polls: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Whether the provider offers the device grant.
+    pub(crate) fn set_device_offered(&self, offered: bool) {
+        self.device_offered.store(offered, Ordering::SeqCst);
+    }
+
+    /// What every device poll answers from now on.
+    pub(crate) fn set_device_answer(&self, answer: DeviceAnswer) {
+        *self
+            .device_answer
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = answer;
+    }
+
+    /// The `expires_in` every device authorization is issued with from now on.
+    pub(crate) fn set_device_expires_in(&self, expires_in: jiff::SignedDuration) {
+        *self
+            .device_expires_in
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = expires_in;
+    }
+
+    /// Every device code the server has polled with so far.
+    pub(crate) fn device_polls(&self) -> Vec<String> {
+        self.device_polls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// How many codes the server has asked to redeem so far.
@@ -421,6 +496,80 @@ impl IdentityProvider for SwitchableIdentityProvider {
                 .clone())
         })
     }
+
+    fn begin_device(&self) -> ProviderFuture<'_, DeviceAuthorization> {
+        Box::pin(async move {
+            if !self.configured.load(Ordering::SeqCst) {
+                return Err(ProviderError::NotConfigured);
+            }
+            if !self.device_offered.load(Ordering::SeqCst) {
+                return Err(ProviderError::DeviceUnsupported {
+                    detail: REFUSAL.to_owned(),
+                });
+            }
+            if self.unavailable.load(Ordering::SeqCst) {
+                return Err(ProviderError::Unavailable {
+                    detail: REFUSAL.to_owned(),
+                });
+            }
+            let n = self.device_begins.fetch_add(1, Ordering::SeqCst);
+            Ok(DeviceAuthorization {
+                device_code: capsule_server::store::DeviceCode::new(format!("device-code-{n}")),
+                user_code: DEVICE_USER_CODE.to_owned(),
+                verification_uri: "https://idp.test/device".to_owned(),
+                verification_uri_complete: Some(format!(
+                    "https://idp.test/device?user_code={DEVICE_USER_CODE}"
+                )),
+                expires_in: *self
+                    .device_expires_in
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner),
+                interval: capsule_server::store::DEVICE_POLL_FLOOR,
+            })
+        })
+    }
+
+    fn poll_device<'a>(
+        &'a self,
+        device_code: &'a capsule_server::store::DeviceCode,
+    ) -> ProviderFuture<'a, DevicePoll> {
+        Box::pin(async move {
+            self.device_polls
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(device_code.as_str().to_owned());
+            if !self.configured.load(Ordering::SeqCst) {
+                return Err(ProviderError::NotConfigured);
+            }
+            if self.unavailable.load(Ordering::SeqCst) {
+                return Err(ProviderError::Unavailable {
+                    detail: REFUSAL.to_owned(),
+                });
+            }
+            let answer = *self
+                .device_answer
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            match answer {
+                DeviceAnswer::Pending => Ok(DevicePoll::Pending),
+                DeviceAnswer::SlowDown => Ok(DevicePoll::SlowDown),
+                DeviceAnswer::Denied => Ok(DevicePoll::Denied),
+                DeviceAnswer::Expired => Ok(DevicePoll::Expired),
+                DeviceAnswer::Approved => Ok(DevicePoll::Verified(
+                    self.identity
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .clone(),
+                )),
+                DeviceAnswer::ExchangeRefused => Err(ProviderError::ExchangeRefused {
+                    detail: "invalid_grant".to_owned(),
+                }),
+                DeviceAnswer::TokenRejected => Err(ProviderError::TokenRejected(
+                    capsule_server::auth::oidc::ClaimRejection::Nonce,
+                )),
+            }
+        })
+    }
 }
 
 /// The OIDC ceremony store, with two switches: unreachable, and full.
@@ -489,6 +638,96 @@ impl OidcAuthorizationStore for SwitchableOidcAuthorizations {
         Box::pin(async move {
             self.refuse()?;
             self.inner.consume(state).await
+        })
+    }
+}
+
+/// The OIDC device store (issue #635), with the same two switches: unreachable, and full.
+#[derive(Debug)]
+pub(crate) struct SwitchableOidcDevices {
+    inner: capsule_server::store::memory::InMemoryOidcDevices,
+    unavailable: AtomicBool,
+    full: AtomicBool,
+}
+
+impl SwitchableOidcDevices {
+    pub(crate) fn new(clock: Arc<ManualClock>) -> Self {
+        Self {
+            inner: capsule_server::store::memory::InMemoryOidcDevices::with_default_ttl(clock),
+            unavailable: AtomicBool::new(false),
+            full: AtomicBool::new(false),
+        }
+    }
+
+    pub(crate) fn set_unavailable(&self, unavailable: bool) {
+        self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    /// Make every `begin` answer as a store at its ceiling, or stop.
+    pub(crate) fn set_full(&self, full: bool) {
+        self.full.store(full, Ordering::SeqCst);
+    }
+
+    fn refuse(&self) -> Result<(), StoreError> {
+        if self.unavailable.load(Ordering::SeqCst) {
+            return Err(StoreError::Unavailable {
+                store: "oidc devices",
+                detail: REFUSAL.to_owned(),
+            });
+        }
+        Ok(())
+    }
+}
+
+impl capsule_server::store::OidcDeviceStore for SwitchableOidcDevices {
+    fn ttl(&self) -> SignedDuration {
+        self.inner.ttl()
+    }
+
+    fn begin<'a>(
+        &'a self,
+        handle: &'a capsule_server::store::OidcDeviceHandle,
+        record: capsule_server::store::PendingDeviceAuthorization,
+    ) -> StoreFuture<'a, ()> {
+        Box::pin(async move {
+            self.refuse()?;
+            if self.full.load(Ordering::SeqCst) {
+                return Err(StoreError::Rejected {
+                    store: "oidc devices",
+                    detail: REFUSAL.to_owned(),
+                });
+            }
+            self.inner.begin(handle, record).await
+        })
+    }
+
+    fn claim<'a>(
+        &'a self,
+        handle: &'a capsule_server::store::OidcDeviceHandle,
+    ) -> StoreFuture<'a, capsule_server::store::DevicePollSlot> {
+        Box::pin(async move {
+            self.refuse()?;
+            self.inner.claim(handle).await
+        })
+    }
+
+    fn slow_down<'a>(
+        &'a self,
+        handle: &'a capsule_server::store::OidcDeviceHandle,
+    ) -> StoreFuture<'a, Option<SignedDuration>> {
+        Box::pin(async move {
+            self.refuse()?;
+            self.inner.slow_down(handle).await
+        })
+    }
+
+    fn finish<'a>(
+        &'a self,
+        handle: &'a capsule_server::store::OidcDeviceHandle,
+    ) -> StoreFuture<'a, Option<capsule_server::store::PendingDeviceAuthorization>> {
+        Box::pin(async move {
+            self.refuse()?;
+            self.inner.finish(handle).await
         })
     }
 }
@@ -592,14 +831,13 @@ impl InMemoryAccounts {
 }
 
 impl FederatedAccounts for InMemoryAccounts {
-    /// Shares the password directory's rows, as the Postgres adapter will: an asserted address a
-    /// password account holds is `AddressTaken`, and a created federated account is one nothing
-    /// can sign into with a password, because no password row exists for it.
+    /// Shares the password directory's rows, as both shipped adapters do since #460: an asserted
+    /// address a password account holds is `AddressTaken`, and a created federated account is one
+    /// nothing can sign into with a password, because no password row exists for it. Only a
+    /// **verified** address is compared, as the shipped adapters do.
     ///
-    /// This double encodes the contract #460 owes — one account table, the cross-directory
-    /// `409`, a null credential `authenticate` refuses — and not behaviour the server ships:
-    /// the development profile's `InMemoryFederatedAccounts` holds rows of its own. Only a
-    /// **verified** address is compared, as the shipped adapter does.
+    /// The shipped adapters prove the contract against the shared suite in
+    /// `capsule_server::auth::conformance`; this double only has to answer the routes alike.
     fn resolve_or_create<'a>(
         &'a self,
         identity: &'a VerifiedIdentity,
@@ -808,7 +1046,7 @@ impl PasswordChange for InMemoryAccounts {
 fn profile_of(email: &str, held: &Account) -> ProfileRecord {
     ProfileRecord {
         user_id: held.user_id.clone(),
-        email: email.to_owned(),
+        email: Some(email.to_owned()),
         display_name: held.display_name.clone(),
         created_at: held.created_at,
     }
@@ -1046,7 +1284,7 @@ impl SwitchableDrops {
 }
 
 impl DropStore for SwitchableDrops {
-    fn provision(&self, record: UploadLinkRecord) -> StoreFuture<'_, ()> {
+    fn provision(&self, record: UploadLinkRecord) -> StoreFuture<'_, LinkProvisionOutcome> {
         if self.is_down() {
             return Box::pin(async { Self::refuse() });
         }
@@ -1190,7 +1428,7 @@ impl SwitchableShares {
 }
 
 impl ShareStore for SwitchableShares {
-    fn issue(&self, record: ShareRecord) -> StoreFuture<'_, ()> {
+    fn issue(&self, record: ShareRecord) -> StoreFuture<'_, IssueOutcome> {
         if self.is_down() {
             return Box::pin(async { Self::refuse() });
         }
@@ -1214,6 +1452,48 @@ impl ShareStore for SwitchableShares {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.revoke(owner, opaque_id, at)
+    }
+
+    fn names_live<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+        now: Timestamp,
+    ) -> StoreFuture<'a, bool> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.names_live(address, now)
+    }
+}
+
+/// Whether the fixture's server federates (`FEDERATION_ENABLED`, #509), switchable per request.
+///
+/// A switch for the reason the stores carry one: `assert_declared_responses_covered` walks one
+/// client's recording, so the `404` every federation operation declares for a deployment that
+/// does not federate has to come from the same server that produces their `200`s. Production
+/// hands in a fixed `bool`.
+#[derive(Debug)]
+pub(crate) struct SwitchableFederation {
+    enabled: AtomicBool,
+}
+
+impl SwitchableFederation {
+    /// A switch starting in `enabled`.
+    pub(crate) fn new(enabled: bool) -> Self {
+        Self {
+            enabled: AtomicBool::new(enabled),
+        }
+    }
+
+    /// Turn federation on or off for every subsequent request.
+    pub(crate) fn set_enabled(&self, enabled: bool) {
+        self.enabled.store(enabled, Ordering::SeqCst);
+    }
+}
+
+impl FederationSetting for SwitchableFederation {
+    fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::SeqCst)
     }
 }
 
@@ -1532,6 +1812,20 @@ impl EscrowStore for SwitchableEscrow {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.fetch(user)
+    }
+
+    fn store_identity(&self, record: EscrowRecord) -> StoreFuture<'_, Replaced> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.store_identity(record)
+    }
+
+    fn fetch_identity<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, Option<EscrowRecord>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.fetch_identity(user)
     }
 }
 
@@ -1887,6 +2181,22 @@ impl UploadSessionStore for SwitchableUploads {
 pub(crate) struct SwallowingBlobs {
     inner: InMemoryBlobStore,
     swallow: AtomicBool,
+    /// Refuse every [`BlobStore::put`], as a full or read-only disk would.
+    puts_unavailable: AtomicBool,
+    /// Park every [`BlobStore::put`] until the test lets it go.
+    held_puts: Mutex<Option<PutHold>>,
+}
+
+/// A `put` parked by [`SwallowingBlobs::hold_puts`].
+///
+/// `entered` fires when a `put` reaches the store; it then waits on `release` before it either
+/// refuses or writes, so a test can act on the caller in between.
+#[derive(Debug, Clone)]
+pub(crate) struct PutHold {
+    /// Notified once per `put` that has reached the store.
+    pub(crate) entered: Arc<tokio::sync::Notify>,
+    /// One permit lets one parked `put` go on.
+    pub(crate) release: Arc<tokio::sync::Semaphore>,
 }
 
 impl SwallowingBlobs {
@@ -1895,12 +2205,32 @@ impl SwallowingBlobs {
         Self {
             inner: InMemoryBlobStore::new(),
             swallow: AtomicBool::new(false),
+            puts_unavailable: AtomicBool::new(false),
+            held_puts: Mutex::new(None),
         }
+    }
+
+    /// Park every subsequent `put` until the returned hold releases it.
+    pub(crate) fn hold_puts(&self) -> PutHold {
+        let hold = PutHold {
+            entered: Arc::new(tokio::sync::Notify::new()),
+            release: Arc::new(tokio::sync::Semaphore::new(0)),
+        };
+        *self
+            .held_puts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(hold.clone());
+        hold
     }
 
     /// Drop the next append on the floor while telling the caller it landed.
     pub(crate) fn swallow_next_append(&self) {
         self.swallow.store(true, Ordering::SeqCst);
+    }
+
+    /// Make every subsequent `put` fail, or stop.
+    pub(crate) fn set_puts_unavailable(&self, unavailable: bool) {
+        self.puts_unavailable.store(unavailable, Ordering::SeqCst);
     }
 
     /// The staged length for `id`, or `None` when nothing is staged.
@@ -2007,7 +2337,29 @@ impl BlobStore for SwallowingBlobs {
         address: &'a ContentAddress,
         bytes: &'a [u8],
     ) -> BlobFuture<'a, Placement> {
-        self.inner.put(address, bytes)
+        let hold = self
+            .held_puts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        Box::pin(async move {
+            if let Some(hold) = hold {
+                hold.entered.notify_one();
+                let _permit = hold
+                    .release
+                    .acquire()
+                    .await
+                    .expect("the hold is never closed");
+            }
+            // Read after the hold, so a test can decide how a parked `put` ends.
+            if self.puts_unavailable.load(Ordering::SeqCst) {
+                return Err(BlobError::Backend {
+                    operation: "put",
+                    detail: REFUSAL.to_owned(),
+                });
+            }
+            self.inner.put(address, bytes).await
+        })
     }
 
     fn stat<'a>(&'a self, address: &'a ContentAddress) -> BlobFuture<'a, Option<BlobStat>> {
@@ -2242,6 +2594,8 @@ pub(crate) struct SwitchableIndex {
 pub(crate) struct SwitchableQuota {
     inner: InMemoryQuota,
     unavailable: AtomicBool,
+    /// Fail [`QuotaStore::charge`] alone, so a caller that reads usage first gets past the read.
+    charges_unavailable: AtomicBool,
 }
 
 impl SwitchableQuota {
@@ -2253,6 +2607,12 @@ impl SwitchableQuota {
     /// Make every subsequent operation fail, or stop.
     pub(crate) fn set_unavailable(&self, unavailable: bool) {
         self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    /// Make every subsequent charge fail while reads keep answering, or stop.
+    pub(crate) fn set_charges_unavailable(&self, unavailable: bool) {
+        self.charges_unavailable
+            .store(unavailable, Ordering::SeqCst);
     }
 
     fn refuse<T>() -> Result<T, StoreError> {
@@ -2283,7 +2643,7 @@ impl QuotaStore for SwitchableQuota {
         at: Timestamp,
         limits: QuotaLimits,
     ) -> StoreFuture<'a, ChargeOutcome> {
-        if self.is_down() {
+        if self.is_down() || self.charges_unavailable.load(Ordering::SeqCst) {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.charge(user, address, size, at, limits)
@@ -2914,6 +3274,9 @@ pub(crate) struct Fixture {
     pub(crate) revocations: Arc<SwitchableRevocations>,
     /// The peers this server has pinned or blocked.
     pub(crate) peers: Arc<InMemoryPeers>,
+    /// Whether the server federates — the *same* switch it reads, so a case can turn the whole
+    /// federation surface off for the requests it is about.
+    pub(crate) federation: Arc<SwitchableFederation>,
     /// The capability codec the server mints with — the *same* one, over the *same* key as
     /// `tokens`, so a test can mint a capability the server will accept, or one it must not.
     pub(crate) codec: Arc<CapabilityCodec>,
@@ -2944,6 +3307,8 @@ pub(crate) struct Fixture {
     pub(crate) idp: Arc<SwitchableIdentityProvider>,
     /// The pending OIDC ceremonies.
     pub(crate) oidc_authorizations: Arc<SwitchableOidcAuthorizations>,
+    /// The pending OIDC device authorizations (issue #635).
+    pub(crate) oidc_devices: Arc<SwitchableOidcDevices>,
 }
 
 impl Fixture {
@@ -2957,18 +3322,13 @@ impl Fixture {
 
     /// The same server, with a deployment's quota thresholds.
     pub(crate) fn with_quota(quota_limits: QuotaLimits) -> Self {
-        Self::build(quota_limits, None, None, Some(FEDERATION_URL.to_owned()))
+        Self::build(quota_limits, None, None, true)
     }
 
     /// The working server over a **real** identity provider adapter, for the cases that drive
     /// the wire against the mock provider in [`idp`]. `fixture.idp` is present but unused.
     pub(crate) fn with_identity_provider(provider: Arc<dyn IdentityProvider>) -> Self {
-        Self::build(
-            QuotaLimits::unlimited(),
-            Some(provider),
-            None,
-            Some(FEDERATION_URL.to_owned()),
-        )
+        Self::build(QuotaLimits::unlimited(), Some(provider), None, true)
     }
 
     /// The working server whose rate-limit counters hold at most `ceiling` keys **per
@@ -2980,28 +3340,24 @@ impl Fixture {
     /// at-capacity code rather than a `500` that impersonates an outage — does not depend on how
     /// wide it is, so the tests that assert it shrink the partitions and spend two requests.
     pub(crate) fn with_counter_ceiling(ceiling: usize) -> Self {
-        Self::build(
-            QuotaLimits::unlimited(),
-            None,
-            Some(ceiling),
-            Some(FEDERATION_URL.to_owned()),
-        )
+        Self::build(QuotaLimits::unlimited(), None, Some(ceiling), true)
     }
 
-    /// The same server on a deployment that does **not** federate: `FEDERATION_URL` unset.
+    /// The same server on a deployment that does **not** federate: `FEDERATION_ENABLED` off,
+    /// which is the default (#509).
     ///
-    /// Its own constructor rather than a switch on the built fixture, because the setting is
-    /// read once at boot and a server that changed its mind at runtime would be testing a
-    /// deployment nobody runs.
+    /// Built off rather than switched off, so a case about the default deployment never
+    /// observes the server federating. [`Fixture::federation`] still turns it on, which is how
+    /// a case mints a grant "while federation was on" and then asks what off does to it.
     pub(crate) fn without_federation() -> Self {
-        Self::build(QuotaLimits::unlimited(), None, None, None)
+        Self::build(QuotaLimits::unlimited(), None, None, false)
     }
 
     fn build(
         quota_limits: QuotaLimits,
         provider: Option<Arc<dyn IdentityProvider>>,
         counter_ceiling: Option<usize>,
-        federation_url: Option<String>,
+        federating: bool,
     ) -> Self {
         let clock = Arc::new(ManualClock::default());
         let sessions = Arc::new(SwitchableSessions::new(clock.clone()));
@@ -3044,6 +3400,7 @@ impl Fixture {
         ));
         let revocations = Arc::new(SwitchableRevocations::new(clock.clone()));
         let peers = Arc::new(InMemoryPeers::new());
+        let federation = Arc::new(SwitchableFederation::new(federating));
         let challenges = Arc::new(SwitchableChallenges::new(clock.clone()));
         let escrows = Arc::new(SwitchableEscrow::new());
         let cohorts = Arc::new(SwitchableCohorts::new());
@@ -3060,6 +3417,7 @@ impl Fixture {
         let codes = Arc::new(TotpCodes::new("Capsule"));
         let idp = Arc::new(SwitchableIdentityProvider::new());
         let oidc_authorizations = Arc::new(SwitchableOidcAuthorizations::new(clock.clone()));
+        let oidc_devices = Arc::new(SwitchableOidcDevices::new(clock.clone()));
         let provider: Arc<dyn IdentityProvider> = provider.unwrap_or_else(|| idp.clone());
 
         // One index behind both modules, which is what makes "upload it, then read it back off
@@ -3118,13 +3476,13 @@ impl Fixture {
             ),
             discovery: DiscoveryContext::new(Arc::new(server_info(&tokens)), revocations.clone()),
             escrow: EscrowContext::new(escrows.clone(), clock.clone()),
-            // Configured unless the case asked otherwise ([`Fixture::without_federation`]).
+            // On unless the case asked otherwise ([`Fixture::without_federation`]).
             federation: FederationContext::new(FederationCollaborators {
                 codec: codec.clone(),
                 capabilities: revocations.clone(),
                 peers: peers.clone(),
                 clock: clock.clone(),
-                federation_url,
+                enabled: federation.clone(),
             }),
             enrollment: EnrollmentContext::new(
                 enrollments.clone(),
@@ -3144,6 +3502,7 @@ impl Fixture {
             oidc: OidcContext::new(OidcCollaborators {
                 provider,
                 authorizations: oidc_authorizations.clone(),
+                devices: oidc_devices.clone(),
                 accounts: accounts.clone(),
                 clock: clock.clone(),
             }),
@@ -3173,6 +3532,7 @@ impl Fixture {
             attestation_key,
             revocations,
             peers,
+            federation,
             codec,
             challenges,
             escrows,
@@ -3187,6 +3547,7 @@ impl Fixture {
             codes,
             idp,
             oidc_authorizations,
+            oidc_devices,
         }
     }
 
@@ -3291,7 +3652,7 @@ impl Fixture {
                 capabilities: issued,
                 peers: Arc::new(InMemoryPeers::new()),
                 clock: clock.clone(),
-                federation_url: Some(FEDERATION_URL.to_owned()),
+                enabled: Arc::new(true),
             }),
             enrollment: EnrollmentContext::new(
                 Arc::new(InMemoryEnrollments::new(clock.clone(), ENROLLMENT_CODE_TTL)),

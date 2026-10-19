@@ -31,6 +31,16 @@
 //! Argon2id-unwrap (client-side, iff passphrase-protected), then link-secret-unwrap with the
 //! fragment secret.
 //!
+//! ## The record a viewer starts from
+//!
+//! What the viewer needs besides the keys — each covered asset's content address and key-free
+//! crypto parameters — is a [`ShareMetadata`](crate::sharing::ShareMetadata) record, canonical
+//! CBOR sealed under `HKDF(link_secret, salt=opaque_id, info=share-metadata/v1)` and uploaded as
+//! the blob at the link's `metadata_hash`. [`publish_share`](crate::sharing::publish_share)
+//! builds it and [`open_share_metadata`](crate::sharing::open_share_metadata) opens it. A
+//! link-only scope travels inside the record; a passphrase scope is served only from
+//! `/s/{opaque-id}/wrapped-secret`, so the fragment alone never opens what the passphrase guards.
+//!
 //! [Share Links]: https://docs/design/share-links/
 //! [Cryptography — Keys § Non-registered accounts]: https://docs/design/cryptography/keys/#non-registered-accounts
 //! [pw]: https://docs/design/cryptography/primitives/#password-based-kdf
@@ -108,6 +118,11 @@ impl ScopeMaterial {
     /// scope it is derived from the requested epoch's AMK with `nonce_prefix` folded into the
     /// salt (the fold is what re-rolls the key per write). A file/epoch this material does not
     /// cover is [`SharingError::ScopeUnavailable`].
+    ///
+    /// The album arm assumes `key_mode = derived`: the triple carries no `wrapped_file_key`,
+    /// so it cannot recover an adopted web-upload drop's key. A caller holding the asset's
+    /// manifest uses [`file_key_for_manifest`](Self::file_key_for_manifest), which honours
+    /// `key_mode`.
     pub fn file_key_for(
         &self,
         file_id: &Uuid,
@@ -125,6 +140,80 @@ impl ScopeMaterial {
                 .get(&amk_version)
                 .map(|amk| Amk::from_bytes(*amk).derive_file_key(file_id, nonce_prefix))
                 .ok_or(SharingError::ScopeUnavailable),
+        }
+    }
+
+    /// Recover the per-file key of the original `core` describes, honouring its `key_mode`.
+    ///
+    /// For an [`Asset`](ScopeMaterial::Asset) scope the carried key is returned (the issuer
+    /// already resolved the key mode when it minted the grant) and `core.file_id` must match.
+    /// For an [`Album`](ScopeMaterial::Album) scope the AMK of `core.amk_version` recovers it
+    /// through [`recover_file_key`](crate::crypto::encryption::recover_file_key): a `derived`
+    /// original re-derives, a `wrapped` one (an adopted web-upload drop) unwraps
+    /// `wrapped_file_key`. A file, album, or epoch this material does not cover is
+    /// [`SharingError::ScopeUnavailable`]; a wrapped key that does not open, or is missing, is
+    /// [`SharingError::Crypto`].
+    pub fn file_key_for_manifest(
+        &self,
+        core: &crate::crypto::provenance::ManifestCore,
+    ) -> Result<[u8; 32], SharingError> {
+        match self {
+            ScopeMaterial::Asset { .. } => {
+                self.file_key_for(&core.file_id, core.amk_version.0, &core.nonce_prefix)
+            }
+            ScopeMaterial::Album { album_id, amks } => {
+                // Epoch numbers are per album, so another album's manifest at the same epoch
+                // would otherwise be handed a key this grant does not cover.
+                if core.album_id != *album_id {
+                    return Err(SharingError::ScopeUnavailable);
+                }
+                let amk = amks
+                    .get(&core.amk_version.0)
+                    .ok_or(SharingError::ScopeUnavailable)?;
+                crate::crypto::encryption::recover_file_key(&Amk::from_bytes(*amk), core)
+                    .map_err(|_| SharingError::Crypto("asset file key recovery failed"))
+            }
+        }
+    }
+
+    /// [`file_key_for_manifest`](Self::file_key_for_manifest) over the four manifest fields it
+    /// reads, for a recipient that is served those fields rather than the signed manifest: the
+    /// browser share viewer, through `capsule-wasm`.
+    ///
+    /// An [`Asset`](ScopeMaterial::Asset) scope carries its key directly, as in
+    /// [`file_key_for`](Self::file_key_for). For an [`Album`](ScopeMaterial::Album) scope the
+    /// AMK of `amk_version` recovers it through
+    /// [`recover_file_key_parts`](crate::crypto::encryption::recover_file_key_parts), which
+    /// follows `key_mode`. There is no album id to check: the caller names no album, and a
+    /// grant's material covers only its own. A wrapped key from another album does not open
+    /// under this grant's AMK, and fails closed here.
+    ///
+    /// Errors are those of `file_key_for_manifest`: an epoch the grant does not hold is
+    /// [`SharingError::ScopeUnavailable`], and a wrapped key that is missing or does not open is
+    /// [`SharingError::Crypto`].
+    pub fn file_key_for_key_mode(
+        &self,
+        file_id: &Uuid,
+        amk_version: u32,
+        nonce_prefix: &[u8],
+        key_mode: crate::crypto::provenance::KeyMode,
+        wrapped_file_key: Option<&crate::crypto::provenance::WrappedFileKey>,
+    ) -> Result<[u8; 32], SharingError> {
+        match self {
+            ScopeMaterial::Asset { .. } => self.file_key_for(file_id, amk_version, nonce_prefix),
+            ScopeMaterial::Album { amks, .. } => {
+                let amk = amks
+                    .get(&amk_version)
+                    .ok_or(SharingError::ScopeUnavailable)?;
+                crate::crypto::encryption::recover_file_key_parts(
+                    &Amk::from_bytes(*amk),
+                    file_id,
+                    nonce_prefix,
+                    key_mode,
+                    wrapped_file_key,
+                )
+                .map_err(|_| SharingError::Crypto("asset file key recovery failed"))
+            }
         }
     }
 }
@@ -255,6 +344,10 @@ pub enum SharingError {
     /// Key material could not be prepared or opened for the link secret.
     #[error("share crypto failure: {0}")]
     Crypto(&'static str),
+    /// Material opened but is not a structure this reader understands (an unknown share
+    /// metadata version, or a record that breaks one of its rules).
+    #[error("malformed share material: {0}")]
+    Malformed(&'static str),
 }
 
 /// Draw a fresh opaque URL-path id: a full 128 bits of CSPRNG entropy, **not** a
@@ -326,6 +419,212 @@ pub fn open_scope(
     let plaintext = open_blob(&link_wrap_key(fragment_secret, opaque_id), &blob)
         .map_err(|_| SharingError::Crypto("scope decapsulation failed"))?;
     cbor::from_slice(&plaintext).map_err(|_| SharingError::Crypto("scope deserialization failed"))
+}
+
+// ───────────────────────── The share metadata record (issue #614) ─────────────────────────
+
+/// Schema string of the share metadata record. A reader refuses any other value rather than
+/// guessing at a shape it does not know.
+pub const SHARE_METADATA_VERSION: &str = "share-metadata/v1";
+
+/// One covered asset as a share viewer is served it: every **key-free** parameter it needs to
+/// fetch the asset's ciphertext and decrypt it under the opened [`ScopeMaterial`].
+///
+/// The field names and wire rules mirror the signed manifest's
+/// ([`ManifestCore`](crate::crypto::provenance::ManifestCore)): `key_mode` is wire-absent when
+/// `derived`, and `wrapped_file_key` is present iff `key_mode = wrapped`. Nothing here is a key:
+/// the nonce prefix is public by construction and the wrapped key is AMK-sealed ciphertext.
+///
+/// The record carries no capture metadata (no EXIF, GPS, camera serial or device id), so the
+/// [Privacy on Export] strip has nothing to remove from it today. A field that adds any is a
+/// boundary-crossing field and must be added already stripped (#432).
+///
+/// [Privacy on Export]: https://docs/design/metadata/#privacy-on-export
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SharedAsset {
+    /// The asset's file id — the id its per-file key is derived or unwrapped for.
+    pub asset_id: Uuid,
+    /// The ciphertext's content address: the `{hash}` of `/s/{opaque-id}/blob/{hash}`.
+    pub content_hash: crate::crypto::hash::Hash32,
+    /// The plaintext media type, which the viewer wraps the decrypted bytes in.
+    pub content_type: String,
+    /// The plaintext byte length.
+    pub size: u64,
+    /// The AMK epoch the asset was written under; `0` for an asset-scoped grant, whose key the
+    /// scope material carries directly.
+    pub amk_version: u32,
+    /// The STREAM nonce prefix the ciphertext was written with.
+    pub nonce_prefix: [u8; crate::crypto::encryption::NONCE_PREFIX_LEN],
+    /// How the file key is obtained; wire-absent when `derived`.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::crypto::provenance::KeyMode::is_derived"
+    )]
+    pub key_mode: crate::crypto::provenance::KeyMode,
+    /// The AMK-sealed file key; present iff `key_mode = wrapped`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wrapped_file_key: Option<crate::crypto::provenance::WrappedFileKey>,
+}
+
+/// The record a share viewer starts from, sealed into the blob at the link's `metadata_hash`
+/// (`GET /s/{opaque-id}` names the hash; `/s/{opaque-id}/blob/{hash}` serves the bytes).
+///
+/// Sealed under `HKDF(link_secret, salt=opaque_id, info=share-metadata/v1)`, so the server, which
+/// never sees the fragment, cannot read it. Built by [`publish_share`] and read by
+/// [`open_share_metadata`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShareMetadata {
+    /// Always [`SHARE_METADATA_VERSION`].
+    pub version: String,
+    /// RFC 3339 expiry the issuer set, shown to the viewer. The server enforces expiry on its own
+    /// record and never discloses it; this copy is for display only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+    /// The link-only [`WrappedScope`], present **iff** the link has no passphrase.
+    ///
+    /// A link with no passphrase has no wrapped secret on the server, so its scope travels here.
+    /// A passphrase link's scope never does: placing it here would let the fragment alone open
+    /// what the passphrase is meant to guard, so it is served only from
+    /// `/s/{opaque-id}/wrapped-secret`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_scope: Option<WrappedScope>,
+    /// Every asset the link covers.
+    pub assets: Vec<SharedAsset>,
+}
+
+impl ShareMetadata {
+    /// Check the structural rules a reader relies on: the schema string, a link scope that is
+    /// the link-only form when present, and the manifest's `wrapped_file_key`-iff-`wrapped` rule.
+    fn validate(&self) -> Result<(), SharingError> {
+        if self.version != SHARE_METADATA_VERSION {
+            return Err(SharingError::Malformed("unknown share metadata version"));
+        }
+        if self
+            .link_scope
+            .as_ref()
+            .is_some_and(WrappedScope::is_passphrase_protected)
+        {
+            return Err(SharingError::Malformed(
+                "share metadata carries a passphrase-wrapped scope",
+            ));
+        }
+        let wrapped = crate::crypto::provenance::KeyMode::Wrapped;
+        if self
+            .assets
+            .iter()
+            .any(|asset| asset.wrapped_file_key.is_some() != (asset.key_mode == wrapped))
+        {
+            return Err(SharingError::Malformed(
+                "a shared asset's wrapped_file_key disagrees with its key_mode",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// What an issuing client hands the server for one link: the sealed metadata blob to upload, and
+/// the fields of `POST /v1/shares`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SharePublication {
+    /// The sealed [`ShareMetadata`] blob, uploaded at [`metadata_hash`](Self::metadata_hash).
+    pub metadata_blob: Vec<u8>,
+    /// The metadata blob's content address — the request's `metadata_hash`.
+    pub metadata_hash: crate::crypto::hash::Hash32,
+    /// Every address the link may serve: the metadata blob first, then each covered asset's
+    /// ciphertext, without repeats — the request's `serves`.
+    pub serves: Vec<crate::crypto::hash::Hash32>,
+    /// Canonical CBOR of the passphrase [`WrappedScope`], present iff the link is
+    /// passphrase-protected — the request's `wrapped_secret` (base64 on the wire), served back
+    /// byte for byte from `/s/{opaque-id}/wrapped-secret`.
+    pub wrapped_secret: Option<Vec<u8>>,
+}
+
+/// Derive the metadata-record key: `HKDF(ikm=link_secret, salt=opaque_id,
+/// info=share-metadata/v1)`.
+fn metadata_key(
+    fragment_secret: &[u8; LINK_SECRET_LEN],
+    opaque_id: &[u8; OPAQUE_ID_LEN],
+) -> [u8; 32] {
+    kdf::derive_key32(fragment_secret, opaque_id, info::SHARE_METADATA_V1)
+}
+
+/// Prepare everything the server needs to serve a link whose scope is already encapsulated
+/// (`wrapped`, from [`encapsulate_scope`] under the same `fragment_secret` and `opaque_id`).
+///
+/// Decides where the scope travels: a link-only scope goes inside the sealed record, a passphrase
+/// scope goes to [`SharePublication::wrapped_secret`] and nowhere else. The record is sealed under
+/// the fragment-derived metadata key, so it opens with the URL alone.
+///
+/// # Errors
+///
+/// [`SharingError::Malformed`] when `assets` breaks the `wrapped_file_key`-iff-`wrapped` rule,
+/// and [`SharingError::Crypto`] when a record cannot be serialized.
+pub fn publish_share(
+    wrapped: &WrappedScope,
+    fragment_secret: &[u8; LINK_SECRET_LEN],
+    opaque_id: &[u8; OPAQUE_ID_LEN],
+    expires_at: Option<String>,
+    assets: Vec<SharedAsset>,
+) -> Result<SharePublication, SharingError> {
+    let (link_scope, wrapped_secret) = match wrapped {
+        WrappedScope::LinkOnly { .. } => (Some(wrapped.clone()), None),
+        WrappedScope::Passphrase { .. } => {
+            let bytes = cbor::to_canonical_vec(wrapped)
+                .map_err(|_| SharingError::Crypto("wrapped scope serialization failed"))?;
+            (None, Some(bytes))
+        }
+    };
+    let record = ShareMetadata {
+        version: SHARE_METADATA_VERSION.to_owned(),
+        expires_at,
+        link_scope,
+        assets,
+    };
+    record.validate()?;
+    let plaintext = cbor::to_canonical_vec(&record)
+        .map_err(|_| SharingError::Crypto("share metadata serialization failed"))?;
+    let metadata_blob = seal_blob(&metadata_key(fragment_secret, opaque_id), &plaintext);
+    let metadata_hash = crate::crypto::hash::hash_bytes(&metadata_blob);
+
+    let mut serves = vec![metadata_hash];
+    for asset in &record.assets {
+        if !serves.contains(&asset.content_hash) {
+            serves.push(asset.content_hash);
+        }
+    }
+    tracing::debug!(
+        assets = record.assets.len(),
+        passphrase = wrapped_secret.is_some(),
+        blob_len = metadata_blob.len(),
+        "share metadata sealed"
+    );
+    Ok(SharePublication {
+        metadata_blob,
+        metadata_hash,
+        serves,
+        wrapped_secret,
+    })
+}
+
+/// Open the sealed metadata record a viewer fetched from the link's `metadata_hash` — the
+/// recipient half of [`publish_share`], run client-side with the URL's opaque id and fragment.
+///
+/// # Errors
+///
+/// [`SharingError::Crypto`] when the blob does not open under this URL's fragment (a wrong
+/// fragment, a wrong opaque id, or a tampered blob, which are indistinguishable), and
+/// [`SharingError::Malformed`] when it opens but is not a record this reader understands.
+pub fn open_share_metadata(
+    blob: &[u8],
+    opaque_id: &[u8; OPAQUE_ID_LEN],
+    fragment_secret: &[u8; LINK_SECRET_LEN],
+) -> Result<ShareMetadata, SharingError> {
+    let plaintext = open_blob(&metadata_key(fragment_secret, opaque_id), blob)
+        .map_err(|_| SharingError::Crypto("share metadata decapsulation failed"))?;
+    let record: ShareMetadata = cbor::from_slice(&plaintext)
+        .map_err(|_| SharingError::Malformed("share metadata is not a record"))?;
+    record.validate()?;
+    Ok(record)
 }
 
 /// Issues and revokes view-only share links on a trusted client — the seam
@@ -476,6 +775,190 @@ mod tests {
         // A different fragment secret does not open it.
         let other = rng::random_array::<LINK_SECRET_LEN>();
         assert!(open_scope(&wrapped, &opaque_id, &other, None).is_err());
+    }
+
+    fn shared_asset(tag: u8) -> SharedAsset {
+        SharedAsset {
+            asset_id: Uuid::from_u128(u128::from(tag)),
+            content_hash: crate::crypto::hash::Hash32([tag; 32]),
+            content_type: "image/png".to_owned(),
+            size: 5008,
+            amk_version: 0,
+            nonce_prefix: [tag; 7],
+            key_mode: crate::crypto::provenance::KeyMode::Derived,
+            wrapped_file_key: None,
+        }
+    }
+
+    /// #614: a link-only link carries its scope inside the sealed record, which opens with the
+    /// URL alone; nothing goes to the server's wrapped-secret slot.
+    #[test]
+    fn a_link_only_publication_seals_its_scope_into_the_record() {
+        let material = sample_material();
+        let fragment = rng::random_array::<LINK_SECRET_LEN>();
+        let opaque_id = generate_opaque_id();
+        let wrapped = encapsulate_scope(&material, &fragment, &opaque_id, None, fast()).unwrap();
+        let assets = vec![shared_asset(1), shared_asset(2)];
+
+        let publication = publish_share(
+            &wrapped,
+            &fragment,
+            &opaque_id,
+            Some("2030-01-01T00:00:00Z".to_owned()),
+            assets.clone(),
+        )
+        .unwrap();
+        assert_eq!(publication.wrapped_secret, None);
+        assert_eq!(
+            publication.metadata_hash,
+            crate::crypto::hash::hash_bytes(&publication.metadata_blob),
+            "the metadata hash is the blob's content address"
+        );
+        assert_eq!(
+            publication.serves,
+            vec![
+                publication.metadata_hash,
+                assets[0].content_hash,
+                assets[1].content_hash
+            ],
+        );
+
+        let record =
+            open_share_metadata(&publication.metadata_blob, &opaque_id, &fragment).unwrap();
+        assert_eq!(record.version, SHARE_METADATA_VERSION);
+        assert_eq!(record.assets, assets);
+        assert_eq!(record.expires_at.as_deref(), Some("2030-01-01T00:00:00Z"));
+        let scope = record
+            .link_scope
+            .expect("a link-only record carries its scope");
+        assert_eq!(
+            open_scope(&scope, &opaque_id, &fragment, None).unwrap(),
+            material
+        );
+    }
+
+    /// #614: a passphrase link's scope never enters the fragment-sealed record — it goes to the
+    /// server's wrapped-secret slot, as the CBOR the browser decodes.
+    #[test]
+    fn a_passphrase_publication_keeps_its_scope_out_of_the_record() {
+        let material = sample_material();
+        let fragment = rng::random_array::<LINK_SECRET_LEN>();
+        let opaque_id = generate_opaque_id();
+        let wrapped =
+            encapsulate_scope(&material, &fragment, &opaque_id, Some("pw"), fast()).unwrap();
+
+        let publication =
+            publish_share(&wrapped, &fragment, &opaque_id, None, vec![shared_asset(3)]).unwrap();
+        let record =
+            open_share_metadata(&publication.metadata_blob, &opaque_id, &fragment).unwrap();
+        assert_eq!(
+            record.link_scope, None,
+            "the fragment alone must not open it"
+        );
+
+        let secret = publication
+            .wrapped_secret
+            .expect("a passphrase link has a wrapped secret");
+        let served: WrappedScope = cbor::from_slice(&secret).unwrap();
+        assert_eq!(served, wrapped);
+        assert_eq!(
+            open_scope(&served, &opaque_id, &fragment, Some("pw")).unwrap(),
+            material
+        );
+    }
+
+    /// The record is bound to its URL: another fragment, another opaque id, or a flipped byte
+    /// does not open it, and all three are the same `Crypto` refusal.
+    #[test]
+    fn share_metadata_opens_only_under_its_own_url() {
+        let fragment = rng::random_array::<LINK_SECRET_LEN>();
+        let opaque_id = generate_opaque_id();
+        let wrapped =
+            encapsulate_scope(&sample_material(), &fragment, &opaque_id, None, fast()).unwrap();
+        let blob = publish_share(&wrapped, &fragment, &opaque_id, None, vec![])
+            .unwrap()
+            .metadata_blob;
+
+        let other_fragment = rng::random_array::<LINK_SECRET_LEN>();
+        let mut tampered = blob.clone();
+        *tampered.last_mut().unwrap() ^= 1;
+        for (blob, id, secret) in [
+            (&blob, &generate_opaque_id(), &fragment),
+            (&blob, &opaque_id, &other_fragment),
+            (&tampered, &opaque_id, &fragment),
+        ] {
+            assert!(matches!(
+                open_share_metadata(blob, id, secret),
+                Err(SharingError::Crypto(_))
+            ));
+        }
+    }
+
+    /// A record that opens but breaks a rule is `Malformed`, never silently accepted: an unknown
+    /// version, a passphrase scope inside the record, a key mode at odds with its wrapped key.
+    #[test]
+    fn a_record_that_breaks_a_rule_is_malformed() {
+        let fragment = rng::random_array::<LINK_SECRET_LEN>();
+        let opaque_id = generate_opaque_id();
+        let seal = |record: &ShareMetadata| {
+            seal_blob(
+                &metadata_key(&fragment, &opaque_id),
+                &cbor::to_canonical_vec(record).unwrap(),
+            )
+        };
+        let good = ShareMetadata {
+            version: SHARE_METADATA_VERSION.to_owned(),
+            expires_at: None,
+            link_scope: None,
+            assets: vec![shared_asset(4)],
+        };
+        assert!(open_share_metadata(&seal(&good), &opaque_id, &fragment).is_ok());
+
+        let mut unknown = good.clone();
+        unknown.version = "share-metadata/v2".to_owned();
+        let mut passphrase = good.clone();
+        passphrase.link_scope = Some(
+            encapsulate_scope(
+                &sample_material(),
+                &fragment,
+                &opaque_id,
+                Some("pw"),
+                fast(),
+            )
+            .unwrap(),
+        );
+        let mut mode = good.clone();
+        mode.assets[0].key_mode = crate::crypto::provenance::KeyMode::Wrapped;
+        for record in [unknown, passphrase, mode.clone()] {
+            assert!(matches!(
+                open_share_metadata(&seal(&record), &opaque_id, &fragment),
+                Err(SharingError::Malformed(_))
+            ));
+        }
+        let not_a_record = seal_blob(&metadata_key(&fragment, &opaque_id), b"\x01");
+        assert!(matches!(
+            open_share_metadata(&not_a_record, &opaque_id, &fragment),
+            Err(SharingError::Malformed(_))
+        ));
+
+        // The issuer refuses to seal the key-mode case in the first place.
+        let wrapped =
+            encapsulate_scope(&sample_material(), &fragment, &opaque_id, None, fast()).unwrap();
+        assert!(matches!(
+            publish_share(&wrapped, &fragment, &opaque_id, None, mode.assets),
+            Err(SharingError::Malformed(_))
+        ));
+    }
+
+    /// The metadata key and the scope-wrap key are separate HKDF labels over the same inputs.
+    #[test]
+    fn the_metadata_key_is_not_the_scope_wrap_key() {
+        let fragment = [7u8; LINK_SECRET_LEN];
+        let opaque_id = [9u8; OPAQUE_ID_LEN];
+        assert_ne!(
+            metadata_key(&fragment, &opaque_id),
+            link_wrap_key(&fragment, &opaque_id)
+        );
     }
 
     /// Album material derives per-epoch file keys; asset material returns its one key.

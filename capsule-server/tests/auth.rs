@@ -767,6 +767,108 @@ async fn logout_answers_500_when_the_session_store_cannot_answer() {
 }
 
 // ===========================================================================================
+// An out-of-window client can still keep and close its session (#527)
+// ===========================================================================================
+
+/// A protocol date older than any window this server will ever accept.
+const ANCIENT_PROTOCOL: &str = "2000-01-01";
+
+/// The window this server advertises, on `response`, so a client is still told to upgrade.
+fn assert_window(response: &kynos::test::TestResponse) {
+    use capsule_server::upload::policy::{DEFAULT_PROTOCOL_MAX, DEFAULT_PROTOCOL_MIN};
+    response.assert_header("x-capsule-protocol-min", DEFAULT_PROTOCOL_MIN);
+    response.assert_header("x-capsule-protocol-max", DEFAULT_PROTOCOL_MAX);
+}
+
+#[tokio::test]
+async fn an_out_of_window_client_can_still_refresh_its_session() {
+    // Reads are admitted at any protocol date, and the refresh is what keeps a read's access
+    // token alive. A `426` here would sign the client out of reads it is still allowed — and a
+    // web client that answers a failed refresh by sending its user to sign in again would loop.
+    let fixture = Fixture::working();
+    let pair = fixture.login().await;
+
+    let rotated = fixture
+        .client
+        .post("/v1/auth/refresh")
+        .header("x-capsule-protocol", ANCIENT_PROTOCOL)
+        .header("accept", "application/json")
+        .json(&json!({ "refresh_token": pair.refresh_token }))
+        .send()
+        .await;
+    rotated.assert_status(StatusCode::OK);
+    assert_window(&rotated);
+    let rotated: TokenResponse = rotated.json();
+    fixture
+        .tokens
+        .verify(&rotated.refresh_token, TokenKind::Refresh)
+        .expect("the rotated pair verifies");
+
+    // Exempt means the handshake is not read at all: a request carrying none is admitted too.
+    let unasserted = fixture
+        .client
+        .raw()
+        .post("/v1/auth/refresh")
+        .header("accept", "application/json")
+        .json(&json!({ "refresh_token": rotated.refresh_token }))
+        .send()
+        .await;
+    unasserted.assert_status(StatusCode::OK);
+    assert_window(&unasserted);
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn an_out_of_window_client_can_still_close_its_session() {
+    // A `426` here would leave open a session its holder asked to close.
+    let fixture = Fixture::working();
+    let pair = fixture.login().await;
+
+    let closed = fixture
+        .client
+        .post("/v1/auth/logout")
+        .header("x-capsule-protocol", ANCIENT_PROTOCOL)
+        .header("authorization", &format!("Bearer {}", pair.access_token))
+        .send()
+        .await;
+    closed.assert_status(StatusCode::NO_CONTENT);
+    assert_window(&closed);
+    assert!(
+        fixture
+            .sessions
+            .sessions_for_user(&user())
+            .await
+            .expect("store answers")
+            .is_empty(),
+        "the out-of-window logout closed the session"
+    );
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn an_out_of_window_client_is_still_refused_a_new_session() {
+    // The exemption is session upkeep only: opening a session stays behind the gate, so the
+    // out-of-window client is told to upgrade before it signs in again.
+    let fixture = Fixture::working();
+
+    let refused = fixture
+        .client
+        .post("/v1/auth/login")
+        .header("x-capsule-protocol", ANCIENT_PROTOCOL)
+        .json(&json!({ "email": EMAIL, "password": PASSWORD }))
+        .send()
+        .await;
+    refused.assert_status(StatusCode::UPGRADE_REQUIRED);
+    assert_window(&refused);
+    let body: serde_json::Value = refused.json();
+    assert_eq!(code_of(&body), "error.protocol.version_unsupported");
+
+    fixture.client.assert_conformance();
+}
+
+// ===========================================================================================
 // Body rejections, which the `Json` extractor declares on both operations that take one
 // ===========================================================================================
 

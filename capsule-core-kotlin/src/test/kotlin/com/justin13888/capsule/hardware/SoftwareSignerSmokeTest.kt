@@ -7,17 +7,17 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
-import uniffi.capsule_core.DeviceTier
-import uniffi.capsule_core.FfiClientBuild
-import uniffi.capsule_core.FfiWorkspace
-import uniffi.capsule_core.HardwareSignerException
+import uniffi.capsule_sdk.FfiClientBuild
+import uniffi.capsule_sdk.FfiDeviceTier
+import uniffi.capsule_sdk.FfiHardwareSignerException
+import uniffi.capsule_sdk.FfiWorkspace
 import java.nio.file.Files
 
 /**
- * Proves the compiled `capsule-core` works when consumed from Kotlin over uniffi — the Android
- * analogue of the Rust Linux software smoke. A JVM unit test (no device): JNA loads the host
- * `libcapsule_core` from `jna.library.path` (set in build.gradle.kts). Run `./stage-bindings.sh`
- * first. The StrongBox path is on-device only (see androidInstrumentedTest).
+ * Proves the compiled `capsule-core` works when consumed from Kotlin over the `capsule_sdk` uniffi
+ * namespace — the Android analogue of the Rust Linux software smoke. A JVM unit test (no device):
+ * JNA loads the host `libcapsule_sdk` from `jna.library.path` (set in build.gradle.kts). Run
+ * `./stage-bindings.sh` first. The StrongBox path is on-device only (see androidInstrumentedTest).
  */
 class SoftwareSignerSmokeTest {
     private val client = FfiClientBuild("capsule-core-kotlin", "0.0.0")
@@ -42,14 +42,14 @@ class SoftwareSignerSmokeTest {
         assertTrue(verifier.verifySignature(sig), "signature verifies against the published key")
 
         // Honest: a software key reports itself exportable, unlike a real secure element.
-        assertThrows(HardwareSignerException.Exportable::class.java) {
+        assertThrows(FfiHardwareSignerException.Exportable::class.java) {
             signer.assertNonExportable("device-dsk")
         }
     }
 
     @Test
     fun softwarePathCreatesWorkspace() {
-        val ws = FfiWorkspace.create(freshRoot(), "correct horse".toByteArray(), DeviceTier.NORMAL, client)
+        val ws = FfiWorkspace.create(freshRoot(), "correct horse".toByteArray(), FfiDeviceTier.NORMAL, client)
         assertFalse(ws.userId().isEmpty())
         assertFalse(ws.defaultAlbumId().isEmpty())
     }
@@ -63,7 +63,7 @@ class SoftwareSignerSmokeTest {
             FfiWorkspace.createWithHardwareSigner(
                 freshRoot(),
                 "correct horse".toByteArray(),
-                DeviceTier.NORMAL,
+                FfiDeviceTier.NORMAL,
                 signer,
                 "device-dsk",
                 ByteArray(32) { 9 },
