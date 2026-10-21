@@ -28,7 +28,24 @@ Closing every path by which an original could be lost.
 - [#674](https://github.com/Capsulsaurus/Capsule/issues/674) One protocol-version source; honour the window and minimum build everywhere
 - [#675](https://github.com/Capsulsaurus/Capsule/issues/675) SDK transfer event stream
 - [#676](https://github.com/Capsulsaurus/Capsule/issues/676) Backup and restore drill for a durable deployment
+- [#693](https://github.com/Capsulsaurus/Capsule/issues/693) Custody receipt written in the finalize transaction
+- [#694](https://github.com/Capsulsaurus/Capsule/issues/694) Upload error paths hardened against broken and hostile clients
+- [#695](https://github.com/Capsulsaurus/Capsule/issues/695) Every original stored and restored byte-exact, whatever the codecs support
+- [#696](https://github.com/Capsulsaurus/Capsule/issues/696) Per-owner ledger in the blob store
+- [#697](https://github.com/Capsulsaurus/Capsule/issues/697) `capsule-server rebuild`, sync epoch and client re-announce
 - Also: [#409](https://github.com/Capsulsaurus/Capsule/issues/409), [#440](https://github.com/Capsulsaurus/Capsule/issues/440), [#452](https://github.com/Capsulsaurus/Capsule/issues/452), [#621](https://github.com/Capsulsaurus/Capsule/issues/621), [#646](https://github.com/Capsulsaurus/Capsule/issues/646)
+
+## R. Restructure
+
+Before the TUI builds on it.
+
+- [#698](https://github.com/Capsulsaurus/Capsule/issues/698) Split a stateless `capsule-core` from a new `capsule-library` crate
+- [#699](https://github.com/Capsulsaurus/Capsule/issues/699) Unit tests in sibling `tests.rs` files, enforced
+
+## P. Peering
+
+- [#700](https://github.com/Capsulsaurus/Capsule/issues/700) Peering hardening: anti-rollback, revocation, version window, no resurrection
+- [#701](https://github.com/Capsulsaurus/Capsule/issues/701) Upload delegation between a user's own devices
 
 ## V. Validation
 
@@ -56,10 +73,16 @@ The CLI becomes a full-screen TUI on a terminal while every subcommand stays scr
 
 ## After the MVP
 
+Media follows Rawshift: [#702](https://github.com/Capsulsaurus/Capsule/issues/702) adopts
+everything it supports and deletes Capsule's duplicates once a Rawshift release covers video,
+resizing, metadata extraction and hardware acceleration. Until then every original is still kept
+([#695](https://github.com/Capsulsaurus/Capsule/issues/695)).
+
 iPhone and Android phone, then tablets, then macOS ([Clients](capsule-docs/src/content/docs/design/clients.md)),
 then federation. Deferred work carries the `track:deferred` label and is not drained
 automatically, for example porting the TUI's transfer visualization and label editor to the apps
-([#689](https://github.com/Capsulsaurus/Capsule/issues/689)).
+([#689](https://github.com/Capsulsaurus/Capsule/issues/689)) and the apps' responsiveness benchmark
+([#703](https://github.com/Capsulsaurus/Capsule/issues/703)).
 
 ## History
 
