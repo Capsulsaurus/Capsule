@@ -6,7 +6,7 @@
  * the links that cross the site boundary, and those are the ones a docs
  * restructure breaks:
  *
- *   - `SLICES.md` and `AGENTS.md` reference design docs by repo-relative path,
+ *   - `ROADMAP.md` and `AGENTS.md` reference design docs by repo-relative path,
  *     sometimes with an anchor. Renaming a design doc breaks them silently.
  *   - The root READMEs link the published site by absolute URL. Moving a page
  *     breaks them silently.
@@ -32,8 +32,7 @@ const SKIP_SOURCES = new Set(['CHANGELOG.md']);
  * `legacy-review/` is non-buildable reference material describing trees that
  * have been deleted (`capsule-api`, the Salvo `media` and `sync` modules). Its
  * links point at what *was* there, which is the record it exists to keep;
- * "fixing" them would corrupt it. Same reasoning `SLICES.md` gets for the
- * module paths it names historically.
+ * "fixing" them would corrupt it.
  */
 const SKIP_SOURCE_PREFIXES = ['legacy-review/'];
 
@@ -196,7 +195,7 @@ export function checkCrossLinks(root) {
                 continue;
             }
             // A relative link to a directory is legitimate — GitHub renders it
-            // as a tree view, which is what `SLICES.md` means when it links the
+            // as a tree view, which is what a document means when it links the
             // design-docs folder. There is no anchor to resolve inside one.
             if (statSync(abs).isDirectory()) continue;
             if (anchor && /\.mdx?$/.test(relPath)) {

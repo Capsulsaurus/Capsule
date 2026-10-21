@@ -1,99 +1,69 @@
 # Roadmap
 
-The **package-level** view of Capsule: one row for every package the repository declares, in
-every toolchain, with the state it is actually in today.
+The path to the first release the owner trusts with irreplaceable data: **the CLI/TUI imports,
+the server stores permanently, and every step is covered by automated tests.** Everything else
+waits behind it. Work is tracked as GitHub issues in the
+[MVP: dogfood](https://github.com/Capsulsaurus/Capsule/milestone/2) milestone; each issue names
+what blocks it.
 
-[`SLICES.md`](SLICES.md) stays the slice-level tracker and is the authority on any slice's
-status. This file never restates one. The `Open slices` column cites ids so a reader can get
-from a package to the work outstanding against it; the status of that work is read there, not
-here. A slice appears against the package whose tree its deliverable lands in, so a slice that
-spans a client and a server leg is listed against both halves only where both are genuinely
-owed.
+## A. Format freeze
 
-`mise run check-docs-truth` runs a `roadmap` check over this file. It resolves every row
-against the manifests themselves — `Cargo.toml`, `settings.gradle.kts`,
-`capsule-swift/Project.swift`, the `Package.swift`/`package.json`/`pyproject.toml` package
-roots, `locales/`, `.gitmodules`, and `legacy-review/*/` — so adding a package to the tree
-fails the gate until this file gains a row for it. Every `Gate` cell must name a real `mise`
-task and every cited slice id must have a detail block in `SLICES.md`.
+Last-chance changes to persisted and signed formats. They land first because nothing after the
+freeze may need a migration.
 
-## States
+- [#665](https://github.com/Capsulsaurus/Capsule/issues/665) Version the provenance envelope; preserve unknown manifest fields
+- [#666](https://github.com/Capsulsaurus/Capsule/issues/666) Bounded-memory (segmented) encryption for originals
+- [#667](https://github.com/Capsulsaurus/Capsule/issues/667) Labels on stacks, albums and image regions
+- [#668](https://github.com/Capsulsaurus/Capsule/issues/668) Keep original capture time and location beside corrections; location editing
+- [#669](https://github.com/Capsulsaurus/Capsule/issues/669) Decide the major dependency bumps
 
-A closed set. A row's state is a claim about the package, not about the programme.
+## B. Transfer hardening
 
-- `frozen` — ships, contract settled, no open slices. Only defect fixes land.
-- `stabilizing` — live and inside a `mise run check-*` gate, with the contract still moving.
-  Open slices refine it.
-- `rebuilding` — the shipped surface is quarantined under `legacy-review/` and is being
-  re-landed on a replacement.
-- `blocked` — cannot start. A named dependency outside this package gates it.
-- `deferred` — in scope and deliberately unscheduled. Post-v1.
-- `review-only` — non-buildable reference material. No gate, no build.
-- `excluded` — in the tree but outside the shipped build: a submodule, a conditionally
-  compiled target, or research material. Any gate such a row names is format and lint only,
-  and the `Notes` cell says so.
+Closing every path by which an original could be lost.
 
-## Packages
+- [#670](https://github.com/Capsulsaurus/Capsule/issues/670) `push` verifies custody, persists receipts, continues past failures
+- [#671](https://github.com/Capsulsaurus/Capsule/issues/671) `import --move` releases a source only on server custody
+- [#672](https://github.com/Capsulsaurus/Capsule/issues/672) Shared-blob references, so GC cannot collect a deduplicated original
+- [#673](https://github.com/Capsulsaurus/Capsule/issues/673) `capsule restore` with byte-for-byte verification
+- [#674](https://github.com/Capsulsaurus/Capsule/issues/674) One protocol-version source; honour the window and minimum build everywhere
+- [#675](https://github.com/Capsulsaurus/Capsule/issues/675) SDK transfer event stream
+- [#676](https://github.com/Capsulsaurus/Capsule/issues/676) Backup and restore drill for a durable deployment
+- Also: [#409](https://github.com/Capsulsaurus/Capsule/issues/409), [#440](https://github.com/Capsulsaurus/Capsule/issues/440), [#452](https://github.com/Capsulsaurus/Capsule/issues/452), [#621](https://github.com/Capsulsaurus/Capsule/issues/621), [#646](https://github.com/Capsulsaurus/Capsule/issues/646)
 
-| Package | Kind | Owns | State | Gate | Owner docs | Open slices | Next milestone | Notes |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `capsule-core` | cargo | The offline crypto data plane, catalog, signed sidecars, import pipeline, LQIP, media decode, and the OpenMLS authority | stabilizing | mise run test-rust | [Module Map](capsule-docs/src/content/docs/design/module-map.md) | `S-B1`, `S-B5` | Close the media slices `S-B1` and `S-B5` | 26 public modules; the 8 ungated ones (`cbor`, `crypto`, `drop`, `sharing`, `validation`, `lqip`, `client_build`, `derivative_format`) are the `--no-default-features` sealing surface and are gated by `build-check-wasm`. **Public paths frozen (#399, #480):** every item resolves at exactly one path. A submodule is either private behind its parent's `pub use` (the children of `backup`, `exif`, `metadata::crdt`, `ml`, `validation` and `crypto::{authority, encryption, provenance}`) or public with no parent re-export (the fourteen `crypto::*` modules, so `crypto::hash::Hash32`, never `crypto::Hash32`); `DerivativeFormat` lives only at `derivative_format`, not `media`. The state stays `stabilizing` because `S-B1`/`S-B5` are open, and whether `culling`, `federation`, `ml`, `media`, `utils` and `constants` narrow to `pub(crate)` is a module-map design call, not part of the freeze. `media` landed on `rawshift-image` 0.1.1, so stills decode and `lqip` has a producer The 814 unit cases run there; `mise run build-check-wasm` is what proves the ungated sealing surface still compiles for `wasm32-unknown-unknown`. |
-| `capsule-core-ffi` | cargo | The app umbrella staticlib and the `capsule_core_ffi` uniffi namespace | frozen | mise run build-ffi | [Module Map — Client Boundaries](capsule-docs/src/content/docs/design/module-map.md#client-boundaries) | — | Holds; defect fixes only | Flat surface, no public modules: `Catalog`, `GatedView`, `LocalAuthGate`, the four records, `LqipPlaceholder`/`render_lqip`, `init_logging`. Audited on the integration head — every public item is uniffi-annotated, so there is no dead surface and no duplicated path. Links `capsule-sdk`'s uniffi surface so one Rust library carries both namespaces an app consumes Also gated by `mise run lint-check-ffi` and `mise run gen-bindings`, which asserts every verb each binding must export. |
-| `capsule-sdk` | cargo | Session, upload, sync, recovery, federation-pull and protocol-version orchestration over the spargen-generated REST client | stabilizing | mise run test-rust | [API Surfaces](capsule-docs/src/content/docs/design/api-surfaces.md) | `S-D9`, `S-E3`, `S-N2` | Store the sealed identity beside the escrow so a recovered device bootstraps over the wire (#544) | Every operation now carries the protocol handshake as a typed header (`S-D2`/#404), and one shared `reqwest` client backs them all. The escrow route, the 401 refresh-and-replay, the OIDC login leg and the federated pull all land here. The push ladder runs against a registered account over TCP in `capsule-e2e`, whose fixture libraries adopt the server's account id (#467) The 208 cases run there; `mise run openapi-check-kynos` gates the contract this crate generates its client from. |
-| `capsule-server` | cargo | The Kynos REST/OpenAPI application, its binary, and the committed `capsule-server/openapi.json` contract | stabilizing | mise run test-rust | [Module Map — Server Modules](capsule-docs/src/content/docs/design/module-map.md#server-modules) | `S-C8`, `S-C47`, `S-C49`, `S-E2` | Close the open slices `S-C8`, `S-C47`, `S-C49` and `S-E2` | One binary with `serve`/`gen-openapi`/`gc`/`purge`/`scrub`, real configuration, and Postgres and Valkey adapters that pass the same conformance suites as the in-memory doubles. **A durable `serve` runs.** The `Durable` arm demands `DATABASE_URL`, opens the pool, checks the schema and proves Valkey answers `PING`, then builds every port on one of the two. With `OIDC_ISSUER` set it runs the pending ceremonies on Valkey and the federated accounts on the Postgres account table (#460). The 2382 cases run there and need no container; `mise run openapi-check-kynos` gates the committed contract. The adapter tiers are opt-in: `CAPSULE_TEST_POSTGRES=1` and `CAPSULE_TEST_VALKEY=1`, run over `--lib --test valkey` because the parity suites live in `#[cfg(test)]` modules inside `src/**` that a `--test` selection misses. |
-| `capsule-wasm` | cargo | The browser boundary — share-link client-side open, guest-drop sealing, and LQIP decode | frozen | mise run build-check-wasm | [Web Upload](capsule-docs/src/content/docs/design/web-upload.md) | — | Holds; defect fixes only | Flat surface, no public modules; every public item is `#[wasm_bindgen]`. Audited clean — no duplicated path. `decodeLqip`/`WasmLqipImage` landed with `S-B14` and are the one export `capsule-web` does not yet import, so the Rust half is done and the viewer half is not Also reached by `mise run check-web`, which builds the artifact `capsule-web` loads. |
-| `capsule-i18n` | cargo | The generated Rust catalog bundle, the runtime formatter, and the `error.*` code contract | frozen | mise run i18n-check | [i18n](capsule-docs/src/content/docs/design/i18n.md) | — | Holds; defect fixes only | One public module (`plural`) plus `Bundle`, `Value`, `negotiate`, `supported_locales`, `error_codes`. Audited clean for duplicated paths. `format_message`/`format_message_in` stay public as the template-in-hand entry points the i18n design doc names, each with a doctest that `mise run test-rust` runs (`cargo test --doc -p capsule-i18n`); every in-tree consumer goes through `Bundle::format` (#480). ICU plurals evaluate as of `S-I7`; `select`/`offset:` are still refused. Generated from `locales/` by `mise run i18n`; `i18n-check` fails on drift Also gated by `mise run i18n-guard`, which is what catches a raw ICU string reaching a user. |
-| `capsule-cli` | cargo | The `capsule` binary — local library commands plus auth, sync, push, import and cull | stabilizing | mise run cli-surface-check | [Clients](capsule-docs/src/content/docs/design/clients.md) | `S-Q1`, `S-Q2`, `S-Q3`, `S-Q4` | Wire recovery and enrollment to the core's server-account seams (`Workspace::create_from_master`, `Workspace::bind_account_id`) | Help text comes from the catalogs (`cli.help.*`) and the command tree is a committed artifact a gate diffs. There is a server to reach now — `mise run serve-memory` — so the networked commands are exercisable; the recovery ones are not yet wired to the seams #467 added to `capsule-core` That gate diffs the committed `capsule-cli/cli-surface.json`; the behaviour behind it runs in `mise run test-rust`. |
-| `capsule-cli/entity` | cargo | The CLI's five sea-orm entities — `album`, `asset`, `profile`, `sync_cursor`, `synced_asset` | stabilizing | `mise run check-rust` | [Clients](capsule-docs/src/content/docs/design/clients.md) | — | Follows `capsule-cli` (#413) | The one place `chrono` is permitted, as the sea-orm column type; convert at the entity boundary |
-| `capsule-cli/migration` | cargo | sea-orm migrations for that store | stabilizing | `mise run check-rust` | [migration/README](capsule-cli/migration/README.md) | — | Follows `capsule-cli` (#413) | Schema changes land here before the entity crate sees them |
-| `capsule-server/migration` | cargo | sea-orm migrations for the server's Postgres schema | stabilizing | `mise run check-rust` | [Filesystem — Server](capsule-docs/src/content/docs/design/filesystem/server.md) | — | Follows `capsule-server` | `000016` puts federated accounts on the account table (#460). Its own binary, `capsule-server-migration up`, run once per deployment before the replicas roll. **`capsule-server` dev-depends on it and never links it**: `sea-orm-migration` pulls sea-orm with `with-chrono`, which a normal dependency would push past the `cargo tree -i chrono -e no-dev` gate. That is why `serve` reads `seaql_migrations` and refuses a schema it was not built for instead of migrating |
-| `capsule-e2e` | cargo | The bounded end-to-end surface — the real SDK and library driven over TCP against the real server composition root | stabilizing | mise run test-rust | [Module Map — E2E Test Surface](capsule-docs/src/content/docs/design/module-map.md) | `S-Q1`, `S-Q2` | Carry the sealed identity over a server route so case 6's bootstrap runs entirely over the wire | Not a shipped artifact. Adds no external crate — every dependency is already in `Cargo.lock`. Dev-depends on `capsule-core`'s `test-support` feature so the caller-chosen Argon2 cost stays out of production builds. Each fixture library adopts its registered account's id (`Workspace::bind_account_id`, #467), so the real push path runs against the real server in every case. Thirteen cases, none ignored. |
-| `xtask` | cargo | Repository automation — `architecture-check` (including the workspace-dependency rules), `i18n`, `i18n-guard` and `translate-readme` | stabilizing | `mise run check-rust` | [Developer Docs](capsule-docs/src/content/docs/design/developer-docs.md) | — | Guard-detector repair (#394, #414) | Not a shipped artifact; it is what makes several gates in `mise.toml` real. Licence enforcement is not one of them: `mise run license-check` is `cargo deny` over `deny.toml` |
-| `capsule-android` | gradle | The Android application — Compose UI over the Kotlin core | stabilizing | `mise run check-kotlin` | [Clients](capsule-docs/src/content/docs/design/clients.md) | — | Make the build green (#389) | **It does not compile.** `CapsuleApp.kt` imports `di`, `initKoin`, `ListViewModel` and `DetailViewModel`, none of which exist anywhere in the Kotlin tree. Not `blocked`: what is missing is inside this package, not a dependency outside it. `check-kotlin` is ktlint and detekt only and passes, because it never compiles against the FFI — which is how this stayed red since 2026-08-22 (#389) |
-| `capsule-core-kotlin` | gradle | The standalone Kotlin harness over `capsule-core`'s uniffi bindings, plus the `HardwareSigner` references — software Ed25519, software P-256, StrongBox | stabilizing | `mise run check-kotlin` | [capsule-core-kotlin/README](capsule-core-kotlin/README.md) | — | StrongBox proven on a device runner | Smoke tests only, and the self-hosted device lane that would exercise StrongBox is unprovisioned |
-| `capsule-core-swift` | swiftpm | The standalone SwiftPM harness over `capsule-core`'s uniffi bindings, plus the `HardwareSigner` references — Secure Enclave signing and key agreement, and their software fallbacks | stabilizing | `mise run check-swift` | [capsule-core-swift/README](capsule-core-swift/README.md) | `S-P6` | Secure-Enclave wiring into the app (`S-P6`) | `check-swift` formats and lints this package; `mise run test-swift` drives the Tuist workspace only, so its own `swift test` suite is in no gate |
-| `CapsuleFoundation` | tuist | Value types, logging and utilities. No dependencies | stabilizing | `mise run check-swift` | [capsule-swift/README](capsule-swift/README.md) | — | Holds as the client's floor | The root of the Apple module graph; every other target depends on it |
-| `CapsuleDomain` | tuist | The display and domain value types, shaped as structural mirrors of the uniffi records they will be generated from. No I/O, no platform, no strings | stabilizing | `mise run check-swift` | [capsule-swift/README](capsule-swift/README.md) | — | Mirrors hold across the FFI swap (`S-U19`) | Deliberately FFI-free so the mocked graph builds with no Rust toolchain |
-| `CapsulePorts` | tuist | The async protocol seams, one per capability. Feature modules import only this for data, so swapping the mock adapters for the real uniffi ones is a change in the composition root and nowhere else | stabilizing | `mise run check-swift` | [capsule-swift/README](capsule-swift/README.md) | — | Move the six `FeatureAuth` ports here (#391) | Six ports are declared inside `FeatureAuth` today, which is what #391 corrects |
-| `CapsuleNavigation` | tuist | One `Route` vocabulary, a router with a stack per section, deep links, and the menu-command table. No SwiftUI views, which is what lets the three shells share it | stabilizing | `mise run check-swift` | [capsule-swift/README](capsule-swift/README.md) | — | Every live sidebar row reaches a real screen | `SidebarItem.memories` and `.duplicates` are live rows whose screens are still scaffolds |
-| `CapsuleMock` | tuist | The in-memory implementation of every port, and the app's only data source while the Rust core is rebuilt | stabilizing | `mise run check-swift` | [capsule-swift/README](capsule-swift/README.md) | — | Reachable scenario selection (#392) | `MockScenarioSelection` is write-only, so about thirty screens have no way in |
-| `CapsuleDiagnostics` | tuist | MetricKit crash and performance collection, consent, breadcrumbs, redacted bug-report bundles, and an opt-in self-hosted uploader | stabilizing | `mise run check-swift` | [capsule-swift/README](capsule-swift/README.md) | — | Holds as the client's floor | — |
-| `CapsuleCatalog` | tuist | The catalog contract, its Swift-native models, and the in-memory reference implementation. No Rust core, which is what makes the mock lane possible | stabilizing | `mise run check-swift` | [capsule-swift/README](capsule-swift/README.md) | `S-P5` | Sync-apply renders into the local catalog (`S-P5`) | Written so the generated-type half can be swapped in without any screen naming a generated type |
-| `CapsuleCatalogFFI` | tuist | The Rust-backed half — the generated uniffi glue for both namespaces, the record conversions, and the error mapping onto the FFI-free `CatalogError` | excluded | — | [capsule-swift/README](capsule-swift/README.md) | `S-P8` | A behavioural FFI harness that flips `S-D9` | Present only under `TUIST_FFI=1`, so the default graph builds from a clean checkout with no cross-compile; format and lint reach it only when it is generated |
-| `ManagedStore` | tuist | The Swift filesystem layer, hashing, and the import pipeline | stabilizing | `mise run check-swift` | [capsule-swift/README](capsule-swift/README.md) | — | Imports route through `ImportPort` (#390) | The picker importer writes this store directly, so picker imports never reach the timeline |
-| `AssetKit` | tuist | The asset-provider abstraction over PhotoKit and the managed store | stabilizing | `mise run check-swift` | [capsule-swift/README](capsule-swift/README.md) | — | Holds as the client's floor | — |
-| `CapsuleTestSupport` | tuist | Test-only mocks and fixtures, linked only by unit-test targets | stabilizing | `mise run check-swift` | [capsule-swift/README](capsule-swift/README.md) | — | Covers the suites still owed by lane U | Test-only; no product code depends on it |
-| `ImagePipeline` | tuist | Image decode, downsample, cache and prefetch | stabilizing | `mise run check-swift` | [capsule-swift/README](capsule-swift/README.md) | — | Holds as the client's floor | — |
-| `CapsuleUI` | tuist | The design system and shared components — virtualized timeline geometry, the shared photo grid, and the one UIKit/AppKit island every grid is built on. Depends on `CapsuleDomain` and deliberately not on `CapsulePorts`: it renders domain states and must never be able to fetch one | stabilizing | `mise run check-swift` | [capsule-swift/README](capsule-swift/README.md) | — | Accessibility inside the gate (#393) | The accessibility audit fails on most surfaces and is outside `check-swift` |
-| `FeatureTimeline` | tuist | The timeline root, its sectioning and view model, selection chrome and the picker-driven library importer | stabilizing | `mise run check-swift` | [capsule-swift/README](capsule-swift/README.md) | — | Culling review (`S-U7` remainder) | The uniform grid, pinch zoom and the zoom transition landed; culling review is outstanding |
-| `FeatureViewer` | tuist | The asset viewer, its page view and info panel, and the shareable-asset surface | stabilizing | `mise run check-swift` | [capsule-swift/README](capsule-swift/README.md) | — | Provenance and verdict detail (`S-U8` remainder) | The info panel, caption editing and the `.viewer` route landed |
-| `FeatureAlbums` | tuist | The albums root, album detail, and their view models | stabilizing | `mise run check-swift` | [capsule-swift/README](capsule-swift/README.md) | `S-U9` | The smart-album screen and predicate builder | Index and detail landed over the mock ports; members and policy editors are outstanding |
-| `FeatureSearch` | tuist | The search root, its filters and view model, and the clustered places map | stabilizing | `mise run check-swift` | [capsule-swift/README](capsule-swift/README.md) | `S-U10` | People index and cluster screens | Search and the clustered map landed; map granularity is still fixed |
-| `FeatureTransfer` | tuist | Transfers, quota, storage reclamation, sync status, and the per-asset custody receipt | stabilizing | `mise run check-swift` | [capsule-swift/README](capsule-swift/README.md) | `S-U12` | The documented ladders and triage detail | Every screen landed and is routed; not all of the documented behaviour is built |
-| `FeatureAuth` | tuist | Onboarding, sign-in, the first-device enrollment ceremony, recovery, and the device and session ledger | stabilizing | `mise run check-swift` | [capsule-swift/README](capsule-swift/README.md) | `S-P2`, `S-P3`, `S-U13`, `S-U23` | A real auth service over Keychain (`S-P2`) | Built over `Preview*` doubles; both onboarding steps are scaffolds |
-| `FeatureSharing` | tuist | Share links, the guest-drop inbox, LAN peering, federation and moderation | stabilizing | `mise run check-swift` | [capsule-swift/README](capsule-swift/README.md) | `S-U14`, `S-U22` | Inbound link redemption (`S-U22`) | Share detail is outstanding; the `https` deep-link parser lands `/s/` and `/u/` on a scaffold |
-| `FeatureSettings` | tuist | The eighteen-section settings tree — a grouped list on iOS, a tabbed Settings window on macOS | stabilizing | `mise run check-swift` | [capsule-swift/README](capsule-swift/README.md) | — | Federation, advanced and about sections | Fifteen of eighteen sections landed; the Advanced mock-scenario switcher does not exist |
-| `FeatureImport` | tuist | The photo-import pipeline: source picker, scan, plan confirmation, execution and history | stabilizing | `mise run check-swift` | [capsule-swift/README](capsule-swift/README.md) | `S-P4`, `S-U11` | The import→seal→upload bridge (`S-P4`) | Per-run detail is outstanding, and `S-P4` waits on `S-P2`/`S-P3` |
-| `FeatureCollections` | tuist | Collections home — albums, media types, places and utilities, including the SR1-gated hidden view | stabilizing | `mise run check-swift` | [capsule-swift/README](capsule-swift/README.md) | `S-U20`, `S-U21` | Memories and duplicate review | `HiddenView` sits behind the SR1 local-auth gate, whose seam is a port |
-| `Capsule` | tuist | The composition root — the thin app target shared by macOS, iOS and iPadOS | stabilizing | `mise run check-swift` | [capsule-swift/README](capsule-swift/README.md) | `S-U19` | Swap the mock adapter for the SDK one (`S-U19`) | `AppEnvironment.swift` is the single file where lane P and lane U meet |
-| `capsule-docs` | bun | The Starlight documentation site, the design docs it publishes, and the `docs-truth` checks | stabilizing | `mise run check-docs` | [Developer Docs](capsule-docs/src/content/docs/design/developer-docs.md) | `S-Z8`, `S-Z9`, `S-Z10` | Generate the reference section (#415) | `mise run check-docs-truth` is deliberately outside both `check-docs` and `check-rust`; it needs no toolchain |
-| `capsule-web` | bun | The read-only browser client — library viewing, the share viewer, and the guest drop it seals through `capsule-wasm` | stabilizing | `mise run check-web` | [Web Upload](capsule-docs/src/content/docs/design/web-upload.md) | `S-Q5` | Live-browser smokes (`S-Q5`, #409) | It cannot enroll a device, upload an asset or edit metadata — a browser holds neither the hardware-bound nor the write-tier key. Every screen renders its empty state; there is no server to reach until #401 |
-| `locales` | catalog | The canonical ICU MessageFormat catalogs — thirteen locales, the config and the schema | stabilizing | `mise run i18n-check` | [i18n](capsule-docs/src/content/docs/design/i18n.md) | — | Human review of the seeded entries | Roughly 350 machine-seeded entries across twelve locales are flagged in the `context` field and await review |
-| `rawshift` | submodule | RAW decode, metadata extraction and derivative generation, in-house and out-of-tree | excluded | — | [Dependencies](capsule-docs/src/content/docs/design/dependencies.md) | — | A workspace dependency `capsule-core::media` can consume | A pinned submodule, not a workspace dependency; CI does not check it out and no gate here descends into it |
-| `legacy-review/server-salvo` | review-bucket | The retired Salvo server, kept as the contract the Kynos rebuild must reproduce | review-only | — | [legacy-review/README](legacy-review/README.md) | — | Deleted once `capsule-server` reaches parity | Non-buildable reference material; nothing in the workspace links it |
-| `legacy-review/sdk-progenitor` | review-bucket | The retired Progenitor SDK | review-only | — | [legacy-review/README](legacy-review/README.md) | — | Deleted once the spargen client covers it | Non-buildable reference material |
-| `legacy-review/media-pipeline` | review-bucket | The retired `capsule_core::media` decode and derivative stack | review-only | — | [legacy-review/README](legacy-review/README.md) | — | Deleted once `capsule-core::media` lands on Rawshift (#410) | Non-buildable reference material; taking the decoder with it is why every still import is a `DeferredNoCodec` today |
+## V. Validation
 
-## Deferred register
+Automated and deterministic, per the [testing plan](capsule-docs/src/content/docs/development/testing.md).
 
-In scope, deliberately unscheduled. These are not packages, so they carry no row above; they
-are listed here so `deferred` means something a reader can check.
+- [#677](https://github.com/Capsulsaurus/Capsule/issues/677) Property, fuzz, mutation and snapshot harnesses
+- [#678](https://github.com/Capsulsaurus/Capsule/issues/678) Kill-anywhere end-to-end suite
+- [#679](https://github.com/Capsulsaurus/Capsule/issues/679) Golden wire fixtures per protocol version
 
-| Item | Owner docs | State | Notes |
-| --- | --- | --- | --- |
-| Tethered camera import over PTP/IP | [Import — Pipeline](capsule-docs/src/content/docs/design/import/pipeline.md) | deferred | `S-B9`; the `ptpip-rs` crate does not exist yet |
-| iCloud and Immich importers | [Import — Pipeline](capsule-docs/src/content/docs/design/import/pipeline.md) | deferred | `S-B7` and `S-B8`, both behind the Takeout adapter that landed |
-| Passkey authentication | [Authentication](capsule-docs/src/content/docs/design/authentication.md) | deferred | Six Salvo operations that were in no document and always answered `CredentialNotFound`; dropped from v1 in `S-C56` |
-| Live mDNS peering | [Peering](capsule-docs/src/content/docs/design/peering.md) | deferred | `S-E3` lands the in-process half; discovery on a real network is post-v1 |
-| Native RTL layout | [i18n](capsule-docs/src/content/docs/design/i18n.md) | deferred | The catalogs and the twelve locales landed in `S-I2`; per-platform RTL layout did not |
-| A browser MLS surface | [MLS Resilience](capsule-docs/src/content/docs/design/mls-resilience.md) | deferred | The `libcrux` provider has no `wasm32` target, so the `mls` feature is host-only |
+## C. The TUI
+
+The CLI becomes a full-screen TUI on a terminal while every subcommand stays scriptable.
+
+- [#680](https://github.com/Capsulsaurus/Capsule/issues/680) English-only CLI
+- [#681](https://github.com/Capsulsaurus/Capsule/issues/681) TUI foundation
+- [#682](https://github.com/Capsulsaurus/Capsule/issues/682) Library browser
+- [#683](https://github.com/Capsulsaurus/Capsule/issues/683) Import and push flows
+- [#684](https://github.com/Capsulsaurus/Capsule/issues/684) Real-time transfer visualization
+- [#685](https://github.com/Capsulsaurus/Capsule/issues/685) Label editor and metadata repair
+- [#686](https://github.com/Capsulsaurus/Capsule/issues/686) Sync, restore, share and auth screens
+
+## D. Dogfood gate
+
+- [#687](https://github.com/Capsulsaurus/Capsule/issues/687) The checklist that must pass before real data goes in
+
+## After the MVP
+
+iPhone and Android phone, then tablets, then macOS ([Clients](capsule-docs/src/content/docs/design/clients.md)),
+then federation. Deferred work carries the `track:deferred` label and is not drained
+automatically, for example porting the TUI's transfer visualization and label editor to the apps
+([#689](https://github.com/Capsulsaurus/Capsule/issues/689)).
+
+## History
+
+The slice ledger (`SLICES.md`) is retired. Slice ids such as `S-D1` that remain in code comments
+refer to its final version,
+[`a0bc92c2:SLICES.md`](https://github.com/Capsulsaurus/Capsule/blob/a0bc92c2/SLICES.md), until
+[#688](https://github.com/Capsulsaurus/Capsule/issues/688) replaces them.

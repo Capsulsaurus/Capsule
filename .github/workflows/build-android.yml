@@ -127,6 +127,6 @@ jobs:
 
       # connectedAndroidTest runs :core's instrumented tests against the attached device;
       # -Pcapsule.wireFfi stages the bindings + builds the per-ABI JNI libs the APK loads.
-      # The StrongBox instrumented driver itself is owed (see SLICES.md S-F2/S-F5).
+      # The StrongBox instrumented driver itself is owed.
       - name: Run :core instrumented tests on device
         run: ./gradlew :core:connectedAndroidTest -Pcapsule.wireFfi

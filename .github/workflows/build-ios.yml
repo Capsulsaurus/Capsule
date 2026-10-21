@@ -107,7 +107,7 @@ jobs:
   # provisioned device carrying the `secure-enclave` label to activate it. Until then it
   # is inert — matching the repo convention of gating hardware runs behind a label rather
   # than faking them on a hosted runner. (The Secure Enclave path itself already RAN on
-  # the author's host per SLICES.md S-F2; this lane is its reproducible CI home.)
+  # the author's host; this lane is its reproducible CI home.)
   device:
     name: Secure Enclave on device (self-hosted)
     if: github.event_name == 'workflow_dispatch'
