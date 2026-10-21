@@ -227,6 +227,28 @@ mise run test-rust-containers
 `mise run serve-deps` is the only task that starts a long-lived container, and it is never a
 dependency of another task.
 
+## Profiling a build
+
+The `profiling` Cargo profile is `release` plus line tables. It has the same LTO and codegen units,
+so the samples describe the code that ships, and the line tables let a profiler map them to
+`file:line`, including inlined frames:
+
+```bash
+cargo build --profile profiling -p capsule-server
+```
+
+The binary lands in `target/profiling/`. Any sampler that reads DWARF works on it; neither is a
+mise tool, so install one yourself. With [samply](https://github.com/mstange/samply), run it the
+way `serve-memory` does, with a fresh key and bound to loopback:
+
+```bash
+JWT_ED25519_DER="$(openssl genpkey -algorithm ed25519 -outform DER | base64 | tr -d '\n')" \
+BLOB_ROOT=./target/capsule-server-blobs \
+  samply record target/profiling/capsule-server serve --memory --listen 127.0.0.1:3000
+```
+
+`perf record --call-graph dwarf` works on the same binary.
+
 ## Git hooks
 
 `mise run hooks-install` installs [hk](https://hk.jdx.dev/) from `hk.pkl`. Every hook step delegates to a mise task, so the hook and the CI job run identical commands:
