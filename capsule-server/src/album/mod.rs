@@ -5,7 +5,7 @@
 //! Invariant 6 asks two things of every write: *the album exists*, and *the caller has write
 //! capability on it*. Until this module there was no way for either to become true. A container
 //! album's id is [derived from the account master
-//! key](capsule-docs/src/content/docs/design/organization.md), so the client already knows it —
+//! key](../../../capsule-docs/src/content/docs/design/organization.md), so the client already knows it —
 //! but the server had never heard of it, and nothing anywhere created an album. A real
 //! `capsule push` therefore had nowhere to land.
 //!

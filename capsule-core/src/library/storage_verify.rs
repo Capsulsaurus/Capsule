@@ -1,6 +1,6 @@
 //! The verify-before-destroy gate — client half of storage verification (slices `S-C3`
 //! server endpoint / `S-D4` client wiring in the repo-root `SLICES.md`; SSoT:
-//! [Import — Storage Verification](https://docs/design/import/storage-verification/)).
+//! [Transfer — Durability](https://docs/design/transfer/durability/)).
 //!
 //! Before any post-write local cleanup of irreplaceable bytes (releasing a device-owned
 //! original, deleting a Move-import source, a streaming-mode release), a client requires
@@ -19,7 +19,7 @@ use crate::crypto::hash::Hash32;
 ///
 /// Defined in [`crate::crypto::receipts`] and re-exported here, because a custody receipt's
 /// `blob_role` is written from the same enum and the issuer and the verifier must not each
-/// have their own (`S-C46`). This path is the one the storage-verification doc names, so it
+/// have their own (`S-C46`). This path is the one the transfer durability doc names, so it
 /// stays.
 pub use crate::crypto::receipts::BlobRole;
 use crate::db::DatabaseDriver;

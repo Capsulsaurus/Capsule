@@ -1,93 +1,75 @@
 ---
 title: Self Hosting
-description: Current self-hosting status and planned deployment dependencies
+description: Running capsule-server on PostgreSQL, Valkey and a filesystem blob store
 status: draft
 ---
 
-The previous server has been removed from the active workspace while its Kynos replacement is being
-designed. There is currently no supported Capsule server deployment. Sources under
-`legacy-review/` are not deployable.
+No release has been cut, so you build the server from source. The server stores only ciphertext and
+never decodes media; clients do all processing and encryption.
 
-## Planned Profile
+## What you need
 
-The supported server will expose one REST/OpenAPI API and require:
+- **PostgreSQL 18**: the durable index (accounts, assets, quota).
+- **Valkey**: upload sessions, auth sessions and counters. Required at every size; it is
+  correctness state, not a cache. Run it with `--maxmemory-policy noeviction` (an evicting policy
+  can make "revoke all sessions" revoke nothing) and persistence on.
+- **A blob directory** (`BLOB_ROOT`) on **one filesystem**. Finalization is an atomic rename, so
+  the tree cannot span volumes or Kubernetes PersistentVolumes.
+- **A TLS-terminating reverse proxy** in front of the server.
 
-- PostgreSQL for the authoritative key-free index.
-- A Capsule-owned filesystem blob store for opaque content-addressed ciphertext.
-- Valkey for volatile session state — upload sessions and auth sessions. It is required at every
-  size of deployment, not a scaling option; see [Valkey is required](#valkey-is-required) below.
-- A TLS-terminating ingress or Kynos-native TLS configuration appropriate to the deployment.
+`capsule-server/compose.yaml` runs Postgres and Valkey with the right settings for local use
+(`mise run serve-deps`). Its credentials are for development only.
 
-Clients perform media processing, metadata extraction, derivative generation, encryption, signing,
-and cryptographic verification. The server never decodes uploaded media.
+## Build
 
-Deployment instructions will be published only after the Kynos server, migrations, storage
-verification, backup/restore, readiness, graceful shutdown, and upgrade tests are complete.
+```sh
+cargo build --release -p capsule-server -p capsule-server-migration
+```
 
-## Planned deployment profile — inherited operator facts
+## Configure
 
-Nothing below is a supported deployment instruction. These are durable operator-facing constraints
-established by the quarantined server that the Kynos design is expected to inherit (or to
-deliberately overturn). They are recorded here because this guide is the only place they exist.
+Configuration is environment only; `capsule-server/.env.example` lists every variable. A durable
+server refuses to start (exit 2), naming every missing variable at once, without:
 
-### Blob tree must be one filesystem
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_URL` | PostgreSQL connection |
+| `VALKEY_URL` | Valkey connection |
+| `BLOB_ROOT` | Blob directory |
+| `JWT_ED25519_DER` | Base64 Ed25519 key that signs session tokens |
+| `ATTESTATION_KEY_SEED` | Base64 seed that signs custody receipts; must be independent of the token key |
 
-The whole blob tree must live on a **single** filesystem, so that finalization renames chunks staged
-under the upload directory into their [sharded content address](/design/filesystem/server/#blob-store-layout)
-under `blobs/` atomically. Any POSIX filesystem meeting that holds; no particular filesystem is
-certified. It rules out fanning the blob root across volumes —
-including across Kubernetes PersistentVolumes. See
-[Filesystem — Server](/design/filesystem/server/) and
-[Filesystem — Maintenance](/design/filesystem/maintenance/#atomic-writes-and-crash-recovery).
+`SYNC_CURSOR_MAC_KEY` is derived from `JWT_ED25519_DER` when unset, so rotating the token key also
+invalidates outstanding sync cursors unless you set it explicitly. Federation is off unless
+`FEDERATION_ENABLED=true` and `FEDERATION_URL` are set; leave it off.
 
-### Key derivation couples three identities to one signing key
+## Migrate, then start
 
-`SYNC_CURSOR_MAC_KEY` (the server-only HMAC key for the opaque sync cursor) and
-`ATTESTATION_KEY_SEED` (the hybrid Ed25519 ‖ ML-DSA-65 seed that signs custody receipts and storage
-attestations) are HKDF-derived from `JWT_ED25519_DER` when they are not set explicitly. That makes
-them stable across restarts with no operator action — but it also means **rotating the operational
-signing key silently rotates the sync-cursor MAC and the attestation identity**, invalidating
-outstanding cursors and breaking verification of pre-rotation receipts unless the retired public
-keys are retained (`ATTESTATION_KEY_HISTORY`). Operators who want independent rotation must set the
-derived secrets explicitly. The replacement server must either keep this derivation and document the
-coupling loudly, or decouple the three keys.
+`serve` never migrates and refuses a database schema older than the binary. Run migrations first, on every upgrade:
 
-### CORS defaults to nothing in release builds
+```sh
+DATABASE_URL=… capsule-server-migration up
+capsule-server serve
+```
 
-`ALLOWED_ORIGINS` (the comma-separated CORS allowlist) defaults to allowing **nothing** in release
-builds — debug builds default to `*`. A browser client therefore does not work against a release
-deployment until the operator sets it explicitly.
+`serve` logs to stderr and prints `listening on <url>` to stdout. Do not use `--memory` in
+production: it keeps everything except blobs in process memory.
 
-### Migrations are a known gap
+## Maintenance
 
-Migrations run automatically **only in debug builds**. A release deployment must apply them itself
-before or as part of rollout; the server does not create or upgrade its own schema in production.
-The migration crate is a library and **no migrator binary ships**, so applying them out of band has
-no first-party command. This is a named open gap the Kynos work must close.
+Schedule these one-shot commands (cron or a timer). They need `DATABASE_URL`, `VALKEY_URL` and
+`--blob-root`, and default to a dry run:
 
-### Two one-shot operator binaries
+- `capsule-server gc --apply`: reclaims unreferenced blobs after a grace window and sweeps
+  upload-progress state. Run it regularly even when storage is not tight.
+- `capsule-server purge --apply`: hard-purges soft-deleted assets whose retention has elapsed.
+- `capsule-server scrub [--deep]`: read-only integrity check of the index against the blob store;
+  **exits non-zero on any finding**, so alert on that. See
+  [Maintenance](/design/filesystem/maintenance/#server-side-integrity-scrub).
 
-Neither is a daemon; both are cronned by an operator and read the same database and blob root the
-server does.
+## Backups
 
-- **`gc`** — the retention purge (hard-purge of soft-deleted assets whose signed retention deadline
-  has elapsed) plus the two-phase refcount mark-and-sweep that reclaims unreferenced blob bytes past
-  the GC grace window. `--dry-run` reports what would be reclaimed without deleting anything.
-- **`scrub`** — the read-only integrity scrub: it verifies the index against the blob store
-  (row⇄blob presence, custody-chain agreement, mirrored-fact agreement, debris inventory) and
-  **exits non-zero when any finding is present**, which is the signal to alert on. `--deep` adds a
-  per-blob byte re-hash. It mutates nothing by design.
-
-See [Filesystem — Maintenance](/design/filesystem/maintenance/) for what each check means.
-
-### Valkey is required
-
-Settled, and the operator-facing consequence is blunt: a single-node deployment runs Valkey too.
-`VALKEY_URL` is a required startup variable — the server refuses to boot without it — and Valkey
-holds upload-session and auth-session records, not a cache whose absence merely costs speed. The
-in-memory adapter is a test double and is never a deployment mode. The alternative, a Postgres-backed
-session store so a small deployment could skip Valkey, was rejected: it means emulating TTL and
-expiry in SQL, for a second implementation of a contract the server already has exactly one of. The
-earlier profile text here claimed Valkey was needed only for a measured high-concurrency profile;
-that was the outlier, and the code never agreed with it. The full split is owned by
-[Filesystem — Server: Required Services](/design/filesystem/server/#required-services).
+Durable state is PostgreSQL plus `BLOB_ROOT`; back up both, together. Valkey holds only sessions and
+in-flight uploads, so losing it signs users out and restarts uploads but loses no library data.
+Keep the key variables above in your secret store as well: they are not in the database, and
+the server's signing and attestation identity depends on them.

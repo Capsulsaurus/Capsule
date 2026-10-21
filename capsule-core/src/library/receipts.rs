@@ -1,6 +1,6 @@
 //! Client-side custody receipts — the accountability half of the verify-before-destroy gate
 //! (slice `S-D4` in the repo-root `SLICES.md`; SSoT:
-//! [Storage Verification — Custody Receipts](https://docs/design/import/storage-verification/)).
+//! [Transfer — Durability: Custody Receipts](https://docs/design/transfer/durability/#custody-receipts)).
 //!
 //! A [`CustodyReceipt`] is the server-signed complement of the client-signed provenance chain:
 //! the envelope proves what a client *claimed and signed*; the receipt proves what the server

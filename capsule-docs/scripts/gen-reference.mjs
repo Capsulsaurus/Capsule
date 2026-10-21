@@ -223,7 +223,7 @@ const SITE_CONTENT = 'capsule-docs/src/content/docs';
  * annotation — and is republished here in another. Two link forms travel badly, and both are
  * live in the committed OpenAPI document:
  *
- *   1. **A repo-relative path to a design document.** `[chunk contract](../../../capsule-docs/…/upload-protocol.md)`
+ *   1. **A repo-relative path to a design document.** `[chunk contract](../../../capsule-docs/…/transfer/upload.md)`
  *      resolves from the crate source and from nowhere on the site. It has an exact
  *      equivalent — the Starlight route the same file serves — so it is rewritten, not
  *      dropped: the reader keeps the reference.

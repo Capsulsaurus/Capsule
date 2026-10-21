@@ -1,7 +1,7 @@
 //! The chunk rules — the part of the upload contract a deployment may not move.
 //!
-//! [Upload Protocol — Chunk Rules and
-//! Strictness](../../../capsule-docs/src/content/docs/design/import/upload-protocol.md) fixes
+//! [Transfer — Upload: Chunk Rules and
+//! Strictness](../../../capsule-docs/src/content/docs/design/transfer/upload.md) fixes
 //! these for a protocol version: the 4 KiB alignment, the 16 MiB ceiling, the required
 //! checksum's spelling, and what an offset means. They are constants and pure predicates here
 //! rather than fields on [`super::UploadPolicy`] precisely because moving one is a protocol

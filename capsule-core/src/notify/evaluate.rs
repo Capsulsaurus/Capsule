@@ -25,7 +25,7 @@ pub const DAY_SECS: i64 = 86_400;
 /// un-synced. From [Download & Sync — Notifications], which owns the predicate; this module owns
 /// only its evaluation.
 ///
-/// [Download & Sync — Notifications]: https://docs/design/import/download-sync/#notifications
+/// [Download & Sync — Notifications]: https://docs/design/sync/#notifications
 pub const SYNC_STALE_SECS: i64 = 14 * DAY_SECS;
 
 /// Every alert that is true at `now`, in [`AlertClass::ALL`] order.

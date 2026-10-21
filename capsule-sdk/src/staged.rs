@@ -34,7 +34,7 @@
 //! per import — enforced in `capsule_core::import` (planner confirmation + the
 //! streaming executor), so it can never reach this scheduler.
 //!
-//! [Download & Sync — Upload Tiering (Staged Uploads)]: https://docs/design/import/download-sync/#upload-tiering-staged-uploads
+//! [Download & Sync — Upload Tiering (Staged Uploads)]: https://docs/design/transfer/upload/#upload-tiering-staged-uploads
 
 use std::collections::HashSet;
 
@@ -133,7 +133,7 @@ pub fn held_from_feed(entry: &FeedEntry) -> HashSet<String> {
 /// Re-derive the outstanding staged work from server truth: keep only the blobs the
 /// server does **not** already hold, in ladder order.
 ///
-/// This is the whole resume story (download-sync doc: "Resume needs no new client
+/// This is the whole resume story (transfer upload doc: "Resume needs no new client
 /// state"). No durable local queue is trusted — `library.sqlite`'s work queue is a
 /// rebuildable cache. Kill the client mid-ladder, pull the feed, pass `held` from
 /// [`held_from_feed`], and this rebuilds exactly the missing tiers. A tier whose

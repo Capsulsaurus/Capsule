@@ -24,12 +24,12 @@ export default defineConfig({
                 {
                     icon: 'github',
                     label: 'GitHub',
-                    href: 'https://github.com/justin13888/Capsule',
+                    href: 'https://github.com/Capsulsaurus/Capsule',
                 },
             ],
             editLink: {
                 baseUrl:
-                    'https://github.com/justin13888/Capsule/tree/master/capsule-docs',
+                    'https://github.com/Capsulsaurus/Capsule/tree/master/capsule-docs',
             },
             components: {
                 // Renders the `status` frontmatter (draft/stable) as a title badge.
@@ -44,6 +44,7 @@ export default defineConfig({
                             label: 'Getting Started',
                             slug: 'guides/getting-started',
                         },
+                        { slug: 'guides/user-guide' },
                         { slug: 'guides/self-hosting' },
                         { slug: 'guides/google-photos-migration' },
                     ],
@@ -102,14 +103,16 @@ export default defineConfig({
                             ],
                         },
                         {
-                            label: 'Import & Sync',
+                            label: 'Import, Transfer & Sync',
                             items: [
                                 { slug: 'design/import' },
                                 { slug: 'design/import/pipeline' },
-                                { slug: 'design/import/upload-protocol' },
-                                { slug: 'design/import/download-sync' },
-                                { slug: 'design/import/storage-verification' },
                                 { slug: 'design/import/camera-import' },
+                                { slug: 'design/transfer' },
+                                { slug: 'design/transfer/upload' },
+                                { slug: 'design/transfer/download' },
+                                { slug: 'design/transfer/durability' },
+                                { slug: 'design/sync' },
                                 { slug: 'design/backup-recovery' },
                                 { slug: 'design/versioning' },
                             ],

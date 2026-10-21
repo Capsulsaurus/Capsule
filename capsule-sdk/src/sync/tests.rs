@@ -1,4 +1,4 @@
-//! Pure reconciliation tests for the client-side halves of the download-sync
+//! Pure reconciliation tests for the client-side halves of the sync doc's
 //! Validation bullets (slice `S-D2`): forward-version rejection, rewind
 //! rejection, and the client-side of cursor authenticity (a validly-MAC'd but
 //! *older* cursor is refused by the high-water mark). No network — the

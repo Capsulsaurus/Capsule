@@ -4,85 +4,50 @@ description: Storage quota accounting, thresholds, and enforcement points
 status: draft
 ---
 
-Storage quota in Capsule is accounted to `upload_user_id` (the authenticated uploader), which is distinct from `owner_id` (the asset's owner). This separation lets a user upload on behalf of a different owner (with verified permission) while keeping storage cost attributed correctly. The accounting model is enforced at the [server filesystem](/design/filesystem/server/#ownership-partitioning-and-quota) and at [upload session creation](/design/import/upload-protocol/#quota-and-permissions); this doc owns the threshold model and what happens when limits are hit.
-
-Implementation will live in the planned `capsule-server::quota` module. Accounting reads from the Postgres asset index (size sums per `upload_user_id`); enforcement runs at session creation, before any chunks are accepted.
+Quota is charged to `upload_user_id` (the authenticated uploader), not `owner_id`, so an on-behalf upload costs the account that spent the storage. This doc owns the accounting model, the thresholds, and the enforcement points; the code is [`capsule-server/src/quota/mod.rs`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-server/src/quota/mod.rs).
 
 ## Accounting Model
 
-```text
-quota_used(user) = SUM(ciphertext_size) for all blobs where upload_user_id = user
-                 + SUM(metadata_blob_size)
-                 + SUM(derivative_blob_size for derivatives the user generated)
-```
+`quota_used(user)` is the sum of the ciphertext sizes of every blob attributed to that user: originals, derivatives, metadata blobs, and provenance blobs.
 
-Notable:
-
-- **Content-addressed dedup is global.** A blob shared between two uploaders counts against *only the first uploader* — the second is a merge (see [Upload Protocol — Deduplication and Merge](/design/import/upload-protocol/#deduplication-and-merge)). This is what stops a malicious user from racking up another user's quota by re-uploading their public assets.
-- **Derivatives count.** Thumbnails and previews are real storage, attributed to whichever device generated them.
-- **Provenance blobs count.** Each per-asset `.provenance.cbor` (server-side encrypted blob) is small but accumulates.
-- **Federated-received blobs count against the receiver.** When a user's home server caches a blob pulled from a [federated](/design/federation/) peer on that user's behalf, the cached bytes count against the **receiving** user's quota, deduped by content hash so a blob the server already holds is never counted twice. A per-`(receiving_user, source_peer)` caching budget (deployment-configurable; default 25% of the receiver's hard quota per source peer) bounds how much one user can pull from any single peer, so a user receiving from many peers cannot push the home server's storage past their own quota. This is the storage-side counterpart of [Federation's per-peer compartmentalization](/design/federation/#per-peer-compartmentalization) and is the resolution of the federated-receive DoS.
-- **Trash-retained assets count fully.** An asset in trash still occupies storage until its [retention window](/design/organization/#retention-window) expires and it is hard-purged, so it counts against quota at full size. This is deliberate: it keeps accounting honest and gives users a concrete reason to empty trash rather than treating it as free overflow.
-- **Derivatives are reclaimed on hard-purge.** When an asset is hard-purged, its derivative and metadata blob references drop alongside the original's; any blob whose reference count reaches zero is [garbage-collected](/design/filesystem/server/#deletion-and-garbage-collection) and the freed bytes are credited back to whichever user they were attributed to. A purged asset never leaves orphaned derivatives silently inflating a quota. The credit belongs to the **sweep**, not to the purge: a purge drops one asset's references while the blob may still have others — two assets legitimately share a thumbnail — so refunding at purge time would give back bytes the server is still storing for the surviving holder. And because attribution is global by content address, the sweep asks the ledger who the bytes were charged to rather than assuming the deleting account: the blob may belong to somebody with no remaining connection to the asset whose purge exposed it.
+- **Attribution is global by content address.** A blob counts against only the first uploader; a later identical upload is a [merge](/design/transfer/upload/#deduplication-and-merge) and charges nothing.
+- **Trash counts at full size** until the [retention window](/design/organization/#retention-window) expires and the asset is hard-purged.
+- **Credit belongs to the GC sweep, not the purge.** A purge drops one asset's references; the bytes are credited back, to whoever the ledger says was charged, only when the [collector](/design/filesystem/server/#deletion-and-garbage-collection) releases a zero-reference blob. Refunding at purge time would refund bytes still stored for another holder.
+- **Federated-received blobs count against the receiver**, deduped by content hash, bounded by a per-`(receiving_user, source_peer)` caching budget (deployment-configurable, default 25% of the receiver's hard limit) — the storage side of [per-peer compartmentalization](/design/federation/#per-peer-compartmentalization). Not yet enforced; tracked with federation's receiving half, #476.
 
 ## Thresholds and States
 
-A user account exists in one of these quota states:
+| State             | Condition                                         | Refuses                                                                                                                       |
+| ----------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| **OK**            | `used < soft_limit`                               | nothing                                                                                                                       |
+| **Soft warning**  | `soft_limit ≤ used < hard_limit`                  | nothing; the client raises the `quota_soft` [alert](/design/notifications/#alert-classes)                                     |
+| **Hard exceeded** | `used ≥ hard_limit`                               | new upload sessions and new [share-link metadata records](/design/share-links/#quota); all other writes work                  |
+| **Grace expired** | hard-exceeded for longer than `grace_window`      | additionally every metadata-growth write (caption/tag edits, new share or upload links)                                       |
 
-| State             | Threshold                                                         | Behavior                                                                                                                                                             |
-| ----------------- | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **OK**            | quota_used < soft_limit                                           | All uploads succeed normally.                                                                                                                                        |
-| **Soft warning**  | soft_limit ≤ quota_used < hard_limit                              | Uploads succeed, but the client warns — the `quota_soft` [alert class](/design/notifications/#alert-classes). Quota state is server-held, so the warning is only as current as the last `GET /v1/quota`.                        |
-| **Hard exceeded** | quota_used ≥ hard_limit                                           | New uploads rejected at session creation with a structured error, and so is a share link's sealed metadata record whose new bytes would reach the limit ([Share Links — Quota](/design/share-links/#quota)). Metadata edits and every other write still work; existing assets remain accessible. |
-| **Grace expired** | quota_used ≥ hard_limit for > `grace_window` (default 14 days)    | Entering the grace window raises `quota_grace_expiring` ([alert class](/design/notifications/#alert-classes)). Adds to Hard-exceeded: **all other metadata-growth writes** (caption/tag edits, new share or upload links) are now refused too. Reads, deletes, and restore-from-trash still work — the provenance/metadata writes a `delete`, `trash-restore`, or trash-empty itself produces are **always admitted** (a user must be able to delete their way back under quota). Freeing space lifts it. |
-| **Suspended**     | (admin or billing action — see [Moderation](/design/moderation/)) | Server-defined; possibly upload refusal, possibly full lockout.                                                                                                      |
-
-Defaults for `soft_limit`, `hard_limit`, and `grace_window` are deployment-configurable. Self-hosted servers might run with no quota (`hard_limit = ∞`); hosted services set per-tier limits.
+- The writes a `delete`, `trash-restore`, or trash-empty produces MUST always be admitted: a user must be able to delete their way back under quota.
+- Entering the grace window raises `quota_grace_expiring`. Reads are never refused by quota.
+- Limits and grace window are deployment-configurable; the default is no quota (`hard_limit = u64::MAX`), which runs the same code path.
+- A **suspended** state (admin or billing action, see [Moderation](/design/moderation/)) is part of the contract. Not yet enforced; tracked by #705.
 
 ## Enforcement Points
 
-Where the quota check actually runs:
-
-- **At [`POST /v1/upload`](/design/import/upload-protocol/#endpoints) session creation.** The server computes `quota_used(upload_user_id) + declared_size` and rejects with `403 Quota Exceeded` (or similar structural code) if it crosses the hard limit. This is the *only* hard enforcement point — once a session is open, the declared size is the cap, and the session is allowed to complete.
-- **At session cancellation.** When a session is cancelled or expires, the reserved-but-uncommitted bytes are released; the next quota check sees the new (lower) usage.
-- **At [finalization](/design/import/upload-protocol/#finalization-and-integrity).** Cumulative size is bounded by the declared size at chunk acceptance; no separate quota check at finalization is needed because the declared size was already approved at session creation.
-- **[Staged uploads](/design/import/download-sync/#upload-tiering-staged-uploads) need no special case.** Each tier's session is charged at its own creation — the same single enforcement point, just later in time for the original's session.
-- **At metadata-update writes.** A metadata-update creates a new encrypted metadata blob; the size delta is checked against quota. Tiny but non-zero.
+- **Upload session creation is the only hard enforcement point.** [`POST /v1/upload`](/design/transfer/upload/#endpoints) refuses `403 error.quota.exceeded` if `used + declared_size` crosses the hard limit, before any pending row is written. Once open, the declared size is the cap and the session may complete; finalization does no quota check.
+- **Cancellation and expiry** release the reservation.
+- **Metadata-update writes** are checked as metadata growth.
+- **[Staged uploads](/design/transfer/upload/#upload-tiering-staged-uploads) and [streaming import](/design/import/pipeline/#import-upload-streaming-mode)** need no special case: each session is charged at its own creation. Exhaustion mid-stream refuses the next session; no local original is released for an asset that did not upload.
 
 ## Scope Decisions
 
-- **Sponsored-account attribution.** A sponsoree's uploads count against the **sponsor's** quota — the sponsoree's `upload_user_id` derives from the sponsor ([Keys — Delegated/Sponsored](/design/cryptography/keys/#delegatedsponsored-accounts)), so storage rolls up to the sponsoring (billing) account. There is no separate sponsoree quota.
-- **Web-upload drops.** A pending [web-upload drop](/design/web-upload/) counts against the **provisioning user's** quota — the link owner is the `upload_user_id`, charged at [drop-session creation](/design/web-upload/#drop-and-adoption-lifecycle) like any other session, so a leaked link cannot push storage past the owner's hard limit. [Adoption in place](/design/web-upload/#why-adopt-in-place) only reclassifies the already-stored blob from inbox to album asset, so the **bulk bytes** incur no new quota — the adoption's small metadata and provenance blobs are charged like any metadata write; a discarded or expired drop frees its bytes on the next GC. There is no separate inbox quota.
-- **Departed album members.** A writer member's upload to a shared album is filed under the album owner's namespace and charged to the member as its `upload_user_id` ([Authorization — Album Membership on the Server](/design/authorization/#album-membership-on-the-server)). Removing that member from a later roster **reclaims nothing, by design**: the asset stays in the owner's album, and its bytes stay on the member's quota until the owner or a current writer member deletes the asset and the [reference-count GC](/design/filesystem/server/#deletion-and-garbage-collection) releases the attribution, crediting the member. Removal is a key rotation, not a data event, so it re-attributes nothing. Both alternatives were rejected because each lets one account's quota pressure act on another account's photos: making the owner inherit the bytes lets a member's uploads push the owner over quota, and reclaiming them from the member deletes photos the owner still holds and reads. The cost lands on the member, who uploaded the bytes and who can no longer delete them, because a removed member may not write to that album. The remedy is social: the member asks the owner or a current writer member to delete them. Content-addressed dedup already follows this rule: bytes stay charged to the account that was charged first for as long as anything references them.
-- **Per-album quotas.** Out of scope for v1 — quota is per `upload_user_id` only. A deployment that later wants per-album caps adds them as a second, independent check at the same enforcement point; the accounting model above does not change.
-- **Streaming import.** A storage-constrained [streaming import](/design/import/pipeline/#import-upload-streaming-mode) creates one upload session per asset, so it is bounded by the same per-session check at creation — there is no new enforcement point. Quota exhaustion mid-stream refuses the next session; the pipeline pauses, and no local original is released for an asset that did not upload.
-- **Grace-window UX.** The structural rule is "upload session creation refused" in read-only mode; the client surfaces this as a discoverable, remediable state (what is full, what to delete) rather than an opaque mid-import error. Concrete copy is a client-UX detail.
-- **Billing integration.** Out of scope and deliberately decoupled: this doc owns *accounting and enforcement* (what `quota_used` is, where the check runs); a billing/tier system, where present, only *sets* `soft_limit` / `hard_limit` / `grace_window`. Self-hosted deployments run with no billing and `hard_limit = ∞`.
-
-## Contract Skeleton
-
-```rust
-// planned in capsule-server::quota
-struct QuotaStatus {
-    used: u64,
-    soft_limit: u64,
-    hard_limit: u64,
-    state: QuotaState,  // OK | SoftWarning | HardExceeded | GraceExpired | Suspended
-}
-
-fn check_quota(user: UserId, additional_bytes: u64) -> Result<(), QuotaError>;
-fn current_status(user: UserId) -> QuotaStatus;
-```
-
-Concrete error types, the `GET /v1/quota` response shape, and admin controls are an implementation detail; the accounting model and enforcement points above are the contract.
+- **Sponsored accounts** roll up to the sponsor's quota ([Keys — Delegated/Sponsored](/design/cryptography/keys/#delegatedsponsored-accounts)).
+- **Web-upload drops** are charged to the link owner at [drop-session creation](/design/web-upload/#drop-and-adoption-lifecycle), so a leaked link cannot exceed the owner's hard limit. [Adoption in place](/design/web-upload/#why-adopt-in-place) charges only its new metadata and provenance blobs; a discarded drop frees its bytes at the next GC.
+- **Departed album members keep their charge.** A member's upload to a shared album stays attributed to the member after removal, until a current writer deletes the asset and the collector releases it.
+- **Per-album quotas and billing** are out of scope; billing, where present, only sets the limits.
 
 ## Validation
 
-- **Hard-limit enforcement (unit).** A session creation that would cross the hard limit is rejected with the right code; no pending row is written.
-- **Dedup attribution (unit).** Two users upload the same content; assert only the first user's quota is debited.
-- **Trash-retention accounting (unit).** Soft-delete an asset; assert it still counts at full size until hard-purge; hard-purge it; assert the bytes are released.
-- **Federated-receive accounting (unit).** Cache a federated blob for a receiving user; assert it debits the receiver, deduped (a blob the server already holds is not double-counted); exhaust a `(receiving_user, source_peer)` caching budget; assert further pulls from that peer are refused.
-- **Derivative reclaim on purge (unit).** Hard-purge an asset; assert its derivative + metadata blob references drop and any zero-reference blob is GC'd, with bytes credited back — no orphaned derivative left counting.
-- **No reclaim for a departed member (conformance).** Charge an address to a member, then have the album owner charge and release the same address; assert the owner is charged nothing and frees nothing, the member stays charged, and only the collector's release by address credits the member back (`quota::conformance::a_contributors_attribution_survives_until_the_collector_releases_it`).
-- **Grace expiry (smoke).** Mock the grace window past; assert read-only mode behavior.
-- **Quota status reporting (unit).** `GET /v1/quota` returns accurate `used` + `state` for a fixture user.
+- Session creation crossing the hard limit is refused with `error.quota.exceeded` and writes no pending row.
+- Two users upload the same content; only the first is debited.
+- Trash counts until hard-purge; purge plus GC sweep credits the bytes back with no orphaned derivative still counting.
+- A departed member stays charged until the collector releases the address (`quota::conformance`).
+- Grace expiry refuses metadata growth but admits delete and restore.
+- `GET /v1/quota` reports accurate `used` and `state`.

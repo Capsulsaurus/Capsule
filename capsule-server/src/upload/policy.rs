@@ -2,7 +2,7 @@
 //!
 //! # What belongs here and what does not
 //!
-//! The [Upload Protocol](../../../capsule-docs/src/content/docs/design/import/upload-protocol.md)
+//! The [Upload Protocol](../../../capsule-docs/src/content/docs/design/transfer/upload.md)
 //! draws one line down the middle of this surface, and this module is that line made into a
 //! type:
 //!

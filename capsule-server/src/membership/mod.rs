@@ -19,7 +19,7 @@
 //! renderable at all: `serve/authority.rs` reserves the `403` for a caller the server can see
 //! once **had** access, and everyone else gets the unknown-address `404`. Delete the row and
 //! the former member is indistinguishable from a stranger, and the authorization-change signal
-//! design/import/download-sync.md requires is gone.
+//! design/transfer/download.md requires is gone.
 //!
 //! # Removing a member reclaims nothing, by design
 //!

@@ -1,6 +1,6 @@
 //! Staged-upload contract types — the **one canonical** `UploadPolicy`/`UploadTier`
 //! set (slice `S-B4` in the repo-root `SLICES.md`; SSoT:
-//! [Download & Sync — Upload Tiering (Staged Uploads)](https://docs/design/import/download-sync/#upload-tiering-staged-uploads)).
+//! [Transfer — Upload: Upload Tiering (Staged Uploads)](https://docs/design/transfer/upload/#upload-tiering-staged-uploads)).
 //!
 //! Uploads used to be all-or-nothing; **staged uploads** add the upload-direction
 //! ladder for low-data situations (a metered plan, weeks from Wi-Fi) where what
@@ -11,7 +11,7 @@
 //! half (`capsule_sdk::staged`); `capsule-core` stays network-free.
 //!
 //! The policy is **client-side session ordering only** — the server has zero mode
-//! branches (download-sync doc). Under [`UploadPolicy::Staged`] the scheduler opens
+//! branches (transfer upload doc). Under [`UploadPolicy::Staged`] the scheduler opens
 //! each asset's sessions in [`UploadTier`] order, gating each tier on the sync
 //! connection criteria; under [`UploadPolicy::Full`] all sessions open eagerly.
 
@@ -67,7 +67,7 @@ impl UploadTier {
 
 /// Raised when a staged upload policy is combined with a storage-constrained
 /// streaming import for the same run — the combination the planner rejects
-/// outright (download-sync doc: "Staged and streaming import are mutually
+/// outright (transfer upload doc: "Staged and streaming import are mutually
 /// exclusive per import").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error(

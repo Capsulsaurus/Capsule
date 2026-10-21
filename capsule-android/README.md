@@ -37,7 +37,7 @@ unverified rather than known-good.
 
 The client contract this app must satisfy is [Clients](../capsule-docs/src/content/docs/design/clients.md);
 the shared-core boundary is [Module Map](../capsule-docs/src/content/docs/design/module-map.md).
-Work items are tracked in the repo-root `SLICES.md` (lane F, platform/FFI).
+Work items are tracked as GitHub issues; see the repo-root `ROADMAP.md`.
 
 ## Build
 

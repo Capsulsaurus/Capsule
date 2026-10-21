@@ -40,7 +40,7 @@
 //!
 //! The price is one store round trip per authenticated request. That is real, and it is stated
 //! here rather than discovered in a flame graph: [Authentication — Explicit
-//! Revocation](../../capsule-docs/src/content/docs/design/authentication.md#explicit-revocation)
+//! Revocation](../../../capsule-docs/src/content/docs/design/authentication.md#explicit-revocation)
 //! promises revocation by invalidating a session token, and a promise nothing reads is not a
 //! promise. Valkey is a required service (`filesystem/server.md`, and the process refuses to
 //! boot without it), so this is a round trip to a store the request already depends on.

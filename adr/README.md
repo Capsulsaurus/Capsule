@@ -9,7 +9,7 @@ contract forbids something needs the argument that settled it. Mixing them makes
 contract longer without making it clearer, and it makes the argument harder to find,
 because it is scattered across whatever doc happened to be edited that day.
 
-Like the repo-root `SLICES.md`, this is a plain repository file set and **not part of the
+Like the repo-root `ROADMAP.md`, this is a plain repository file set and **not part of the
 documentation site**. The site is the specification a user and an implementer read. The
 project's memory sits beside it, not inside it.
 
@@ -51,7 +51,7 @@ rather than the order they were taken. Numbers are never reused.
 - **Supersedes:** —
 - **Superseded by:** —
 - **Contract:** [<the doc that now states this normatively>](../capsule-docs/src/content/docs/design/<doc>.md)
-- **Slices:** S-C16, S-C20
+- **Issues:** #123
 
 ## Context
 What was true before, with evidence.

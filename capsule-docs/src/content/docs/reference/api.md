@@ -6,8 +6,8 @@ status: draft
 
 Capsule's server surface is REST over HTTP, described by a single OpenAPI 3.2 document that
 `capsule-server` emits from its own route types. This page is the hand-written half of that
-reference: the things true of every endpoint, which a per-endpoint page would otherwise repeat
-fifty-nine times. The endpoints themselves are the generated pages listed in the sidebar.
+reference: the things true of every endpoint, which every per-endpoint page would otherwise
+repeat. The endpoints themselves are the generated pages listed in the sidebar.
 
 Read [API Surfaces](/design/api-surfaces/#surface--transport-map) first if you want the map from
 a surface to the module that owns it and the design document that explains it. This reference
@@ -43,7 +43,7 @@ A `401` carries a `WWW-Authenticate` challenge, per RFC 9110.
 
 The protocol-negotiation header contract — what a client sends, what a server answers with —
 is [API Surfaces](/design/api-surfaces/#negotiation-across-transports). It is a design
-commitment, and it is not yet implemented on every route; what the generated pages show,
+commitment, and it is not yet implemented on every route (#621); what the generated pages show,
 under each operation's parameters and response headers, is what the wire carries at this
 commit. Read those for the truth about an endpoint today, and the design document for where
 it is going.

@@ -4,135 +4,86 @@ description: AI feature architecture, the canonical model inventory, embedding p
 status: draft
 ---
 
-Capsule runs a hierarchy of ML models, all **client-side** (the server never holds plaintext). The stable contract is the *structure*: three functional categories, the AI/user namespace separation in [AI Output Containment](#ai-output-containment), the canonical model inventory in [Models and Algorithms](#models-and-algorithms), and the [embedding-provenance](#embedding-provenance) invariant. The specific feature list and per-model choices are current defaults that will evolve with field testing.
+All ML runs **client-side**; the server never holds plaintext. The stable contract is [AI Output Containment](#ai-output-containment), the [model inventory](#models-and-algorithms) and [Embedding Provenance](#embedding-provenance); feature lists and model picks are defaults that will move with field testing.
 
-The three categories:
-
-- **[Semantic Indexing](#semantic-indexing):** a *global* embedding per asset for natural-language and similarity search.
-- **[Dense Tagging](#dense-tagging):** *local* embeddings for objects, faces, and scene elements for granular search and auto-albums.
-- **[Quality Assessment](#quality-assessment):** per-asset quality scores for filtering and sorting.
-
-Inference orchestration lives in `capsule-core::ml`; per-platform model runners (CoreML, NNAPI, ONNX Runtime) live in `capsule-sdk`; the local vector index lives in `capsule-core::db` (SQLite + `sqlite-vec`).
+Three categories: [Semantic Indexing](#semantic-indexing) (one global embedding per asset), [Dense Tagging](#dense-tagging) (local embeddings for objects, faces, scenes) and [Quality Assessment](#quality-assessment) (per-asset scores). Orchestration is `capsule-core::ml`, platform runners (CoreML, NNAPI, ONNX Runtime) are in `capsule-sdk`, and the vector index is `capsule-core::db`.
 
 ## AI Output Containment
 
-AI inference can be wrong, biased, or hallucinatory. A core rule prevents it from corrupting user intent: **AI outputs land in a separate namespace from user-authored metadata, structurally, not by policy.** The shape of the separation — `tags_ai` vs `tags_user` OR-sets, plus distinct sidecar fields for AI-derived facets — is owned by [Metadata — Tag Provenance and Namespacing](/design/metadata/#tag-provenance-and-namespacing); the consequences for AI features:
+**AI outputs live in a separate namespace from user metadata — structurally, not by policy.** The shape (`tags_ai` vs `tags_user`, plus AI-only sidecar fields) is owned by [Metadata — Tag Provenance and Namespacing](/design/metadata/#tag-provenance-and-namespacing). Consequences:
 
-- An AI tag can never overwrite a user tag — they live in different fields, so the question does not arise.
-- As each AI facet ships, it lands in its own AI-namespaced sidecar field the user does not directly edit (illustratively `ai_face_labels`, `ai_scene`, `ai_quality_score`) — reserved alongside `tags_ai` in the [sidecar schema](/design/metadata/#sidecar-schema-v1) and added when the feature is committed, never overlapping a user field. User corrections write to *user* fields; AI re-runs leave them alone.
-- Every AI output carries `(model_id, model_version)` ([Embedding Provenance](#embedding-provenance)). When the canonical model for a slot changes, old outputs are flagged stale and excluded from queries until regenerated.
-- Promoting an AI tag to a user tag is an explicit, signed [lifecycle operation](/design/authorization/#the-closed-action-set) — never automatic.
+- An AI output can never overwrite a user field. Each AI facet ships in its own AI-namespaced [sidecar](/design/metadata/#sidecar-schema-v1) field; user corrections write user fields, and AI re-runs leave them alone.
+- Every AI output carries `(model_id, model_version)`; outputs of a superseded model are stale and excluded from queries until regenerated.
+- Promoting an AI tag to a user tag is an explicit, signed [lifecycle operation](/design/authorization/#the-closed-action-set), never automatic.
 
-A hallucinating model can pollute its own namespace, never user intent. This is the structural defense against the "AI mistake silently overwrites user data" damage class — see [Threat Model — Forbidden Client Behaviors](/design/threat-model/schema-rules/#forbidden-client-behaviors).
+This blocks the "AI silently overwrites user data" damage class ([Forbidden Client Behaviors](/design/threat-model/schema-rules/#forbidden-client-behaviors)).
 
-**AI grouping is a pure function.** Every automatic grouping output (clusters, similarity groups, scene groupings) is a deterministic function of `(input asset set, model_id, model_version)` — inputs are processed in sorted asset-id order and any stochastic step (cluster seeding, initialization) uses fixed seeds, because most clustering algorithms are otherwise order-sensitive. Re-running a grouping over the same inputs yields byte-identical output; growing the input set and re-running is the only way results change. This is what makes automatic grouping idempotent and order-independent under the [grouping-convergence requirement](/design/metadata/#grouping-convergence-requirement).
+**AI grouping is a pure function** of `(input asset set, model_id, model_version)`: inputs are processed in sorted asset-id order and stochastic steps use fixed seeds, so re-running yields byte-identical output. This satisfies the [grouping-convergence requirement](/design/metadata/#grouping-convergence-requirement).
 
 ## Semantic Indexing
 
-Semantic search converts an image and a text query into vectors and measures their distance. Because embeddings are generated client-side, every device must run the same canonical model along a deterministic path so vectors are comparable — the constraint and its platform-partition fallback are specified in [Embedding Provenance](#embedding-provenance).
-
-**Status note.** The real weight-loading runner is **post-v1** (decision 2026-07-12): model weights never live in git and download at runtime behind the default-off `inference` feature, so v1 ships the deterministic execution path, registry, index, and staleness rules against the seamed fixture runner; the [v1-committed slots](#v1-committed-slots) name what the real runner loads when it lands.
+Image and text query are embedded and compared by distance; cross-device comparability is governed by [Embedding Provenance](#embedding-provenance). The real weight-loading runner is post-v1 (weights download at runtime behind the default-off `inference` feature); v1 ships the execution path, registry, index and staleness rules against a fixture runner.
 
 ### Image Categorization & Tagging
 
-The semantic embeddings are reused for zero-shot classification to generate tags, enabling faceted search and auto-album generation without a separate classifier.
+Semantic embeddings are reused for zero-shot tagging; there is no separate classifier.
 
 ## Dense Tagging
 
-Face Detection & Matching (clustering) runs the **Face Detection** and **Face Recognition** rows of the [model inventory](#models-and-algorithms) — SOTA-small models that run near-instantly on mobile.
+Face detection and clustering use the **Face Detection** and **Face Recognition** [inventory](#models-and-algorithms) rows.
 
 ## Quality Assessment
 
-Deferred to post-v1. The category and its sidecar fields are reserved in the [containment model](#ai-output-containment) so it can land later without a schema change; the Quality candidate models in the [inventory](#models-and-algorithms) are not part of the v1 pipeline.
-
-**Sequencing contract (fixed now so the deferral can't drift):** group-scoped evaluations — best shot, best framing, best exposure within a stack, burst, or similarity group — run strictly **after** grouping, never interleaved with it. Each evaluation result is keyed by `(group_id, membership_hash, model_id, model_version)`, where `membership_hash` is the hash of the group's sorted member ids. Any membership change therefore invalidates the group's evaluations *by key construction* — no invalidation bookkeeping to forget — and the recompute is deterministic (same members, same model → same result; ties broken by asset id). Evaluation outputs are derived, AI-namespaced state: the durable, user-visible outcome remains the [`role = primary` pointer](/design/organization/#asset-stacking) a user or the client sets from them. Implementation is slice `S-H4` (after semantic/face features).
+Post-v1; its sidecar fields are reserved under [containment](#ai-output-containment). Fixed now: group-scoped evaluations (best shot within a stack, burst or similarity group) run strictly **after** grouping and are keyed by `(group_id, membership_hash, model_id, model_version)` (`membership_hash` = hash of sorted member ids), so a membership change invalidates them by construction. Ties break by asset id. The durable outcome is only the [`role = primary` pointer](/design/organization/#asset-stacking).
 
 ## Model Batching
 
-On-device inference is memory- and power-bound, so execution mode is chosen per device:
-
-- **Horizontal (model-by-model)** vs. **vertical (all models per asset)**: horizontal minimizes resident models at the cost of re-reading assets; vertical minimizes I/O but risks OOM on mobile. The mode is picked from available RAM at task start.
-- **Micro-batching** (1/4/8 images) keeps the NPU cache hot; **INT8/FP16 quantization** halves memory bandwidth; **thermal throttling** pauses the pipeline past a temperature threshold (e.g. 40 °C) so the OS does not kill the app.
+Execution mode is chosen per device from available RAM: **horizontal** (model-by-model; fewer resident models) or **vertical** (all models per asset; less I/O, OOM risk). Micro-batches of 1/4/8, INT8/FP16 quantization, and a thermal pause past a threshold (e.g. 40 °C).
 
 ## Database Indexing and View Generation
 
-Embeddings share a common vector space and are stored locally in **SQLite + `sqlite-vec`**. The vector index is **derived state, not a source of truth** ([recovery-first](/design/principles/)): if lost or corrupted it is rebuilt by re-running inference over the originals — the same path a model-version bump takes ([Embedding Provenance](#embedding-provenance)).
+Embeddings live in local **SQLite + `sqlite-vec`** and are **derived state**: a lost index is rebuilt by re-running inference over originals, the same path a model bump takes.
 
 ## Embedding Provenance
 
-Every embedding Capsule stores — in the local SQLite vector index, in an encrypted backup, or inside a [`DerivativeManifest`](/design/cryptography/provenance/#derivative-provenance) for an embedding-class derivative — carries the tuple `(model_id, model_version)` identifying which [inventory](#models-and-algorithms) row produced it. Vector spaces differ across pairs, so embeddings are not comparable across `(model_id, model_version)`. Every `model_id` is declared in exactly one inventory row ([SSoT](/design/principles/#single-source-of-truth)); a swap is a one-row edit that propagates by `model_id` to every consumer. The invariant:
+Every stored embedding (local index, backup, or embedding-class [`DerivativeManifest`](/design/cryptography/provenance/#derivative-provenance)) carries `(model_id, model_version)` naming its inventory row. Embeddings are never compared across tuples. Each `model_id` is declared in exactly one inventory row.
 
-- The vector index **refuses inserts** whose `(model_id, model_version)` is **unknown to the inventory** — a buggy or new client producing embeddings from an unrecognized model is rejected at the insert API, never silently mixed in. Entries from a *superseded-but-known* version are admitted as stale-flagged rows (they are the regeneration queue and are excluded from queries) — the refusal targets unknown models, not known-but-old ones.
-- A model swap increments `model_version` for that task. Old embeddings are **flagged stale** and excluded from queries until regenerated from the originals. Cross-version comparison is forbidden — see [Threat Model — Client-Side Validation Invariants](/design/threat-model/validation/#client-side-validation-invariants).
-- Regeneration is a background task that walks the library producing fresh embeddings at the new version; old entries are removed only after new ones persist (per-asset replace, not a global truncate-and-rebuild).
+- The index MUST **refuse inserts** from a `(model_id, model_version)` unknown to the inventory. Known-but-superseded versions are admitted stale-flagged (the regeneration queue) and excluded from queries.
+- A model swap bumps `model_version`; regeneration replaces entries per asset, deleting old ones only after new ones persist — never truncate-and-rebuild. See [Client-Side Validation Invariants](/design/threat-model/validation/#client-side-validation-invariants).
 
-**E2EE constraint and its fallback.** Comparable embeddings need byte-identical inference output across heterogeneous NPUs/CPUs, and floating-point inference is not inherently reproducible across execution providers. So every device pins a **deterministic execution path** for the canonical model (fixed operator set, nondeterministic kernels disabled, quantized weights) and passes a byte-identical known-answer check; the model size floor is the lowest-end device Capsule supports, not the desktop. If a device cannot reach bit-exactness in field testing, the **fallback is explicit, never silent**: its embeddings are tagged with a `platform` discriminator and are **not merged** into another platform's index — they are regenerated locally and compared only within their own partition via tolerance-based ANN. The worst case is duplicated per-platform regeneration, never wrong search results. This defeats the "silent invalidation of the vector index" damage class ([Scenario Map](/design/threat-model/scenarios/#damage-scenario--invariant-map) row #14).
+**E2EE constraint.** Comparable embeddings need byte-identical inference across devices, so each device pins a deterministic execution path (fixed operators, deterministic kernels, quantized weights) and passes a known-answer check; model size is bounded by the lowest-end supported device. A device that cannot reach bit-exactness tags its embeddings with a `platform` discriminator and they are **never merged** into another platform's index — worst case is duplicated regeneration, never wrong results ([Scenario Map](/design/threat-model/scenarios/#damage-scenario--invariant-map) row #14).
 
 ## Models and Algorithms
 
-One row per task. Where the size/accuracy trade allows, a single backbone is **reused across tasks** rather than loading one model per task — e.g. the canonical Semantic Search embedder also feeds zero-shot tagging and semantic-duplicate detection, and YOLOv10 serves both person and object detection. Reuse is the default whenever it does not measurably hurt quality; it is the main lever bounding peak VRAM on mobile.
+One row per task; a backbone is reused across tasks whenever quality allows (the Semantic Search embedder also feeds zero-shot tagging and semantic de-duplication; YOLOv10 serves object and person detection) to bound peak memory.
 
 ### v1-Committed Slots
 
-These four are the launch pipeline:
-
-| Task                 | Model(s)                                                          | Function                                                                                                                |
-| -------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| **Semantic Search**  | MobileCLIP-B (ONNX, INT8); quantized SigLIP-tiny fallback[^semantic-alt] | Global image embedding for natural-language + similarity search; sized for the lowest-end device (see the E2EE constraint above). |
-| **Object Detection** | YOLOv10[^objdet-alt]                                             | Object/background detection feeding dense tagging; the backbone is reused for person detection.                        |
-| **Face Detection**   | SCRFD                                                            | Efficient face bounding-box + landmark detection.                                                                      |
-| **Face Recognition** | InsightFace (AdaFace)                                            | Face embeddings; AdaFace handles low-quality/dark images well.                                                         |
+| Task | Model | Function |
+| --- | --- | --- |
+| **Semantic Search** | MobileCLIP-B (ONNX, INT8); quantized SigLIP-tiny fallback | Global embedding for text and similarity search |
+| **Object Detection** | YOLOv10 | Objects for dense tagging; reused for person detection |
+| **Face Detection** | SCRFD | Face boxes and landmarks |
+| **Face Recognition** | InsightFace (AdaFace) | Face embeddings, robust to low quality |
 
 ### Candidate Tasks (post-v1)
 
-Planned tasks whose model choice is still subject to 2026 field testing. Each commits to a full inventory row (with datasets and the embedding-provenance tuple) when it ships:
-
-- **Natural language & VLM** — Dense Tagging & OCR (Florence-2); Image Chat (Qwen2.5-VL or LLaVA-1.6); Captioning (BLIP-2).
-- **People** — Person Detection (YOLOv10); Person Re-ID (OSNet or TransReID); Expression Analysis (EmotioNet); Quality Scoring (LIQE / TOPIQ).
-- **Scene** — Scene Classification (ViT-L, ConvNeXt-L); Landmark Detection (DINOv2 + GeM); Bird/plant (BioCLIP); General animal (YOLOv8 fine-tuned); Screenshot detection (custom CNN).
-- **Text & audio** — OCR (TrOCR); Voice Transcription (Distil-Whisper-large[^asr-alt]).
-- **Quality** — Aesthetic (NIMA); Blur (Laplacian variance + CNN); Exposure (CNN regressor); Noise (CNN regressor).
-- **Similarity** — Near-duplicate / burst (pHash/dHash + CNN); Semantic near-duplicate (canonical Semantic Search embeddings + ANN); Best-shot selection (quality models combined).
-- **Video** — Shot/scene boundary (TransNet v2, PySceneDetect); Highlight extraction (temporal attention + quality score); Action recognition (VideoMAE, TimeSformer).
-- **Categorization** — NSFW (OpenCLIP or custom CNN); Violence / graphic content (ViT classifier), e.g. for shared-album flagging.
-
-[^semantic-alt]: Considered and rejected: SigLIP-so400m (~400M params, impractical on the lowest-end mobile we support — the E2EE constraint forces every device to run the same model), full CLIP ViT-L/14 (similar size class), OpenCLIP ViT-G (much larger). MobileCLIP-B is the size sweet spot; quantized SigLIP-tiny stays as a fallback if MobileCLIP semantic quality is insufficient in field tests.
-[^objdet-alt]: Considered and rejected for the *committed* slot: Grounding DINO (open-vocabulary; heavier; revisit if dense-tagging breadth becomes the bottleneck), RT-DETR (transformer-based; comparable accuracy, slower on mobile). YOLOv10 is the committed choice; alternatives may run as additional specialized passes later.
-[^asr-alt]: Considered and rejected: Whisper-large-v3 (best accuracy but too slow on mobile for opportunistic background transcription), Whisper-medium (similar speed to Distil-Whisper-large but worse accuracy), faster-whisper CT2 ports (a runtime optimization layer; can be applied on top of Distil-Whisper).
+Each gains a full inventory row when it ships: VLM tagging/OCR/captioning (Florence-2, Qwen2.5-VL, BLIP-2); person re-ID (OSNet); scene and landmark classification (ViT-L, DINOv2); ASR (Distil-Whisper-large); quality (NIMA, blur/exposure/noise); near-duplicates (pHash + embeddings); video shot boundaries (TransNet v2); NSFW classification.
 
 ### Key Algorithmic Implementations
 
-#### Video-as-Sparse-Photos
-
-Processing every frame through heavy models is prohibitive, so video is treated as a sparse collection of keyframes:
-
-1. **Cut Detection:** PySceneDetect (content-aware) chunks the video into visually distinct scenes.
-2. **Temporal Sampling:** extract frames at the 10%, 50%, and 90% timestamps of each scene.
-3. **Blur Rejection:** compute the variance of the Laplacian $V = \text{var}(\nabla^2 I)$; frames below a threshold are discarded as too blurry.
-4. **Audio Processing:** run the canonical ASR model (the **Voice Transcription** row) concurrently for a timestamped transcript.
-5. **Integration:** surviving keyframes enter the standard image queue; records map keyframe embeddings to the parent `video_id` and timestamp.
-
-#### Re-ID & Pseudo-Labeling
-
-Identifies individuals even when they turn away from the camera during an event:
-
-1. **Anchor Pass:** on a high-confidence frontal face, run InsightFace; if it matches a known profile (e.g. "Bride"), record the bounding box.
-2. **Body Pass:** run YOLOv10 to find "person" boxes; pass crops through OSNet for a 512-dim body embedding.
-3. **Linking:** if the face/body box IoU $> 0.7$, link the body embedding to the profile for this event.
-4. **Pseudo-Labeling:** for a person facing away, compare the body embedding against event-specific embeddings via cosine similarity $\text{sim}(\mathbf{u}, \mathbf{v}) = \frac{\mathbf{u} \cdot \mathbf{v}}{\|\mathbf{u}\| \|\mathbf{v}\|}$; above threshold, apply the label.
-
-#### High-Dimensional Vector Search
-
-Vectors live in `sqlite-vec` `vec0` virtual tables (the [engine declared above](#database-indexing-and-view-generation)) and are queried by **inner-product distance** over normalized embeddings — the cheapest of the metrics. `sqlite-vec`'s SIMD brute-force scan covers libraries into the hundreds of thousands of rows; at millions of rows the designated escalation is its ANN indexing as it matures, or a partitioned scan (by album/date bucket) until then. Server-side vector-database idioms (pgvector's HNSW indexes, the `<#>` operator) do not apply — the index is client-local SQLite by design.
+- **Video as sparse photos.** Scene-cut detection, sample frames at 10/50/90% of each scene, drop frames below a Laplacian-variance blur threshold, run ASR on the audio track; keyframes enter the image queue mapped to `(video_id, timestamp)`.
+- **Re-ID pseudo-labelling.** A high-confidence face match labels the person box it overlaps (IoU > 0.7); that body embedding (OSNet) then labels the same person facing away within the event by cosine similarity.
+- **Vector search.** `sqlite-vec` `vec0` tables, inner-product distance over normalised embeddings, brute-force SIMD scan; at millions of rows, escalate to its ANN index or a partitioned scan.
 
 ## Validation
 
-- **Registry lookup (unit).** Each canonical `model_id` matches exactly one inventory row; non-canonical IDs are rejected at the insert API.
-- **Stale-model rejection / version bump (unit).** Swap a `model_id`/bump `model_version`; assert pre-swap entries are flagged stale and excluded from queries, and background regen replaces them per-asset (not via global truncate).
-- **Embedding-provenance round-trip (unit).** Insert an embedding tagged `(model_id, model_version)`; query; assert the tuple is preserved.
-- **Namespace separation (unit).** Promote an AI tag to a user tag; assert the user-tag entry has a fresh user-scoped `add_id` and the AI entry remains separately editable.
-- **Inference parity across devices (smoke per platform).** Run the canonical Semantic Search model on two devices over the same fixture; assert vectors are byte-identical (quantization-permitting). On a platform that cannot reach bit-exactness, assert the platform-partition fallback engages rather than silently merging incomparable vectors.
-- **Algorithm correctness (smoke).** Video-as-sparse-photos selects keyframes at expected timestamps; the Re-ID loop produces expected per-event pseudo-labels.
-- **Thermal throttle / batching bound (smoke).** Past the temperature threshold the pipeline pauses and resumes after cooldown; on a low-memory testbed micro-batch sizes stay within the ceiling and OOM never occurs.
+- **Registry (unit).** Each `model_id` maps to one inventory row; unknown tuples are refused at insert.
+- **Version bump (unit).** Pre-bump entries go stale, are excluded from queries, and are replaced per asset.
+- **Provenance round-trip (unit).** The tuple survives insert and query.
+- **Namespace separation (unit).** Promotion creates a user-scoped entry with a fresh `add_id`; the AI entry stays separate.
+- **Inference parity (smoke, per platform).** Same fixture → byte-identical vectors, or the platform partition engages.
+- **Algorithms (smoke).** Expected keyframes and Re-ID labels.
+- **Thermal / batching (smoke).** Pause past threshold, resume after cooldown, no OOM on a low-memory testbed.
 
-Two bounded E2E cases live in [Module Map](/design/module-map/#e2e-test-surface): index an asset → query semantically → match, and model regen after a version bump rebuilding the index.
+End-to-end cases are in [Module Map](/design/module-map/#e2e-test-surface).

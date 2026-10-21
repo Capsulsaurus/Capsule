@@ -55,7 +55,8 @@ Until then this path works and is tested; it is not dead code.
 
 With no reachable server the app still builds, runs, and renders empty states, so
 pure UI work needs no backend. Authenticated writes are not a web surface: the
-browser client is read-only plus guest drops.
+browser client is read-only plus guest drops. It is not a progressive web app and never will be: no web app
+manifest, service worker or offline mode ([Clients — Web Client](../capsule-docs/src/content/docs/design/clients.md#web-client)).
 
 ### Commands
 

@@ -7,8 +7,7 @@ REST/OpenAPI document, then wrapped by small Capsule-owned workflow modules.
 ## Development
 
 - The typed REST client is generated from the server's OpenAPI **3.2** schema by
-  [`spargen`](https://crates.io/crates/spargen), our in-house generator (slice `S-D8` in the
-  repo-root `SLICES.md`), pinned at `0.4.0` as a build-dependency. The previous progenitor
+  [`spargen`](https://crates.io/crates/spargen), our in-house generator, pinned at `0.4.0` as a build-dependency. The previous progenitor
   pipeline required a lossy 3.1→3.0 schema down-conversion and is gone — we do not downgrade
   schemas.
 - **What is generated, and what is not.** Generated: every request and response body, every

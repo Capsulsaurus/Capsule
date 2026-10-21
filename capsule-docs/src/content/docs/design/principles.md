@@ -4,133 +4,96 @@ description: The core principles that guide the design and development of Capsul
 status: draft
 ---
 
-These principles apply universally to all components of Capsule, from clients to server. The owner-doc rules and structural guidance below apply to every doc in `design/`.
+These principles apply to every Capsule component, client and server, and the rules below apply to
+every doc in `design/`.
 
 ## Principles
 
 - **Determinism + idempotency.** Raw original data is the source of truth; every process is repeatable from its inputs.
-- **4 KiB alignment.** Data is processed and written 4 KiB-aligned where it touches disk or memory boundaries. Smaller or larger multiples are introduced only when a concrete edge case demands it.
-- **Forward and backward compatibility.** Old clients ignore new fields; new clients tolerate missing ones gracefully — subject to the [Postel's Law asymmetry](#postels-law-asymmetric) below.
-- **Data integrity.** Capsule never deletes data unexpectedly. Act under strict scenarios; otherwise crash early. Multiple layers of safeguards guard against current and future bugs. Server data is assumed durable (robust hardware); client data is assumed potentially lost.
-- **Ephemeral derived data.** Anything that isn't an original asset can be rebuilt and is treated as rebuildable.
-- **Encryption + compartmentalization.** Sensitive code and storage stay separated. Metadata is encrypted alongside data. Every boundary — per-album, per-peer, per-event, per-user, per-version — is a failure-containment boundary; a bug or compromise on one side cannot cross.
-- **Offline/online divide.** A feature works either solely online or solely offline, not differently by connectivity. This simplifies business logic and limits state-shift risk.
-- **Recovery-first.** The filesystem must be reconstructible from partial corruption. No database is required to interpret critical data — sidecar files are the canonical metadata store; the database is a rebuildable query cache.
-- **Self-describing.** Each media file is paired with a CBOR sidecar containing all user-editable and stable metadata. Files are independently interpretable without a running database.
-- **Atomic writes.** Use temp-file + rename throughout. Direct overwrites risk corruption on power loss.
+- **4 KiB alignment.** Data touching disk or memory boundaries is processed and written 4 KiB-aligned unless a concrete case demands otherwise.
+- **Forward and backward compatibility.** Old clients ignore new fields; new clients tolerate missing ones — subject to the [asymmetry](#postels-law-asymmetric) below.
+- **Data integrity.** Capsule never deletes data unexpectedly: act only in strict scenarios, otherwise crash early. Server data is assumed durable; client data is assumed losable.
+- **Ephemeral derived data.** Anything that is not an original asset is rebuildable and treated as such.
+- **Encryption + compartmentalization.** Metadata is encrypted alongside data. Every boundary (album, peer, event, user, version) is a failure-containment boundary.
+- **Offline/online divide.** A feature works either solely online or solely offline, never differently by connectivity.
+- **Recovery-first.** The filesystem is reconstructible from partial corruption. Sidecars are the canonical metadata store; the database is a rebuildable query cache.
+- **Self-describing.** Each media file is paired with a CBOR sidecar holding all user-editable and stable metadata, interpretable without a database.
+- **Atomic writes.** Temp-file + rename everywhere; never overwrite in place.
 
 ### Postel's Law (asymmetric)
 
-Liberal in what we accept *within a known schema version* — unknown sidecar fields are preserved verbatim and missing optional fields are tolerated. **Cross-version is closed**: a structure announcing a schema version (`sidecar_schema`, `crypto_suite_id`, `protocol_version`) above the receiver's max known is rejected, never best-effort-parsed. The asymmetry is what prevents a faulty or new client from silently corrupting state — see [Threat Model — Schema Rules](/design/threat-model/schema-rules/).
+Liberal *within a known schema version*: unknown sidecar fields are preserved verbatim and missing optional fields tolerated. **Cross-version is closed**: a structure announcing a schema version (`sidecar_schema`, `crypto_suite_id`, `protocol_version`) above the receiver's maximum is rejected, never best-effort-parsed. See [Threat Model — Schema Rules](/design/threat-model/schema-rules/).
 
 ## Single Source of Truth
 
-Every primitive, construction, format, or component identity Capsule depends on is **declared in exactly one design doc**. Other docs reference the declaration by anchor; they never restate the choice. The goal is that swapping a primitive (a hash, a model, a container format) is a single-doc edit, not a 10-doc cascade that silently leaves inconsistencies.
+Every primitive, construction, format, or component identity is **declared in exactly one owner doc**; other docs link the declaration and never restate the choice. Explaining a behaviour elsewhere ("STREAM tags catch chunk reordering") is fine; restating the choice ("we use SHA-256") is not. When in doubt, link.
 
-The owner docs are:
-
-| Domain                                                                | Owner doc                                                           |
-| --------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| All cryptographic primitives + constructions + versioning identifiers | [Cryptography — Primitives](/design/cryptography/primitives/)       |
-| Cryptographic key hierarchy + device coordination                     | [Cryptography — Keys](/design/cryptography/keys/)                   |
-| MLS group membership + ciphersuite binding                            | [Cryptography — MLS](/design/cryptography/mls/)                     |
-| Asset + metadata encryption                                           | [Cryptography — Encryption](/design/cryptography/encryption/)       |
-| Provenance chains + signed manifests + derivative provenance          | [Cryptography — Provenance](/design/cryptography/provenance/)       |
-| Recovery paths + failure-mode catalog + transport security            | [Cryptography — Failure Modes](/design/cryptography/failure-modes/) |
-| MLS resilience (state divergence, lost commits, re-keying)            | [MLS Resilience](/design/mls-resilience/)                           |
-| Device enrollment + cross-device add ceremony                         | [Device Enrollment](/design/device-enrollment/)                     |
-| ML model identities + embedding provenance                            | [AI/ML Integrations](/design/ai/)                                   |
-| LQIP scheme + thumbnail/preview formats                               | [Thumbnails and Previews](/design/thumbnails/)                      |
-| Server filesystem (blob store, Postgres index, required services)     | [Filesystem — Server](/design/filesystem/server/)                   |
-| Client filesystem (library layout, local index, space recovery)       | [Filesystem — Client](/design/filesystem/client/)                   |
-| Library self-maintenance + atomic-write granularity                   | [Filesystem — Maintenance](/design/filesystem/maintenance/)         |
-| Session/access tokens + identity binding + auth flow                  | [Authentication](/design/authentication/)                           |
-| Backup artifact container + escrow + recovery mechanisms              | [Backup and Recovery](/design/backup-recovery/)                     |
-| CRDT scheme, identifiers, geolocation, sidecar schema                 | [Metadata](/design/metadata/)                                       |
-| Import pipeline (scan, plan, execute)                                 | [Import — Pipeline](/design/import/pipeline/)                       |
-| Connection classes + retry policy classes + adverse-network posture   | [Network Resilience](/design/networking/)                           |
-| Offline-first requirement contract (local-gallery FRs/NFRs)           | [Local Gallery](/design/local-gallery/)                             |
-| Upload protocol (wire, sessions, finalization)                        | [Import — Upload Protocol](/design/import/upload-protocol/)         |
-| Download, sync feed, tiered fetch, auto-sync                          | [Import — Download & Sync](/design/import/download-sync/)           |
-| Federation trust model, capability tokens, soft-fail                  | [Federation](/design/federation/)                                   |
-| LAN discovery + peer channel + delta transfer                         | [Peering](/design/peering/)                                         |
-| Album protocol version pinning + upgrade ceremony                     | [Versioning](/design/versioning/)                                   |
-| Stacking taxonomy + trash retention semantics                         | [Asset Organization](/design/organization/)                         |
-| Lifecycle action set                                                  | [Authorization](/design/authorization/)                             |
-| Damage scenarios + client class taxonomy + containment shells         | [Threat Model](/design/threat-model/)                               |
-| Outbound licence + dependency-licence policy + linkage rules           | [Licensing](/design/licensing/)                                     |
-| Server- + client-side refuse-by-default validation invariants         | [Threat Model — Validation](/design/threat-model/validation/)       |
-| Schema evolution rules, forbidden behaviors, deprecation policy       | [Threat Model — Schema Rules](/design/threat-model/schema-rules/)   |
-| Share links + public-share serving                                    | [Share Links](/design/share-links/)                                 |
-| Web upload — upload links, guest drops, adoption                      | [Web Upload](/design/web-upload/)                                   |
-| Moderation policy + federated reporting + blocklists                  | [Moderation](/design/moderation/)                                   |
-| Quota accounting + enforcement points                                 | [Quota](/design/quota/)                                             |
-| Client validation duties + sandboxed decoder + client test/perf tooling | [Clients](/design/clients/)                                       |
-| Alert taxonomy + local-alert delivery + snooze/badge mechanics + the wake tier | [Notifications](/design/notifications/)         |
-| Translation catalog format + locale resolution + error-code scheme + supported language set + README translation | [Internationalization](/design/i18n/) |
-| Code module → design doc mapping + bounded E2E test surface           | [Module Map](/design/module-map/)                                   |
-| API surface ↔ transport map + cross-transport negotiation/rejection mapping | [API Surfaces](/design/api-surfaces/)                          |
-| Developer-reference generation contract + reference IA                | [Developer Documentation](/design/developer-docs/)                 |
-| Storage durability verdict + verify-before-destroy rule               | [Import — Storage Verification](/design/import/storage-verification/) |
-| Canonical dependency + tooling pins (non-crypto libraries per platform) | [Dependencies](/design/dependencies/)                             |
-| Tethered camera import (PTP/IP source adapter)                        | [Import — Camera Import](/design/import/camera-import/)             |
-
-**Permitted secondary mentions.** Mechanism-explanatory phrasing inside a non-owner doc is fine — for example, "STREAM tags catch chunk reordering" inside [Peering](/design/peering/) is explaining a *behavior*, not declaring a *choice*. What the rule forbids is restating the choice itself ("we use SHA-256") outside the owner doc. When in doubt, link.
+| Domain | Owner doc |
+| --- | --- |
+| Cryptographic primitives, constructions, version identifiers | [Cryptography — Primitives](/design/cryptography/primitives/) |
+| Key hierarchy, device coordination | [Cryptography — Keys](/design/cryptography/keys/) |
+| MLS membership, ciphersuite binding | [Cryptography — MLS](/design/cryptography/mls/) |
+| Asset + metadata encryption | [Cryptography — Encryption](/design/cryptography/encryption/) |
+| Provenance chains, signed manifests | [Cryptography — Provenance](/design/cryptography/provenance/) |
+| Recovery paths, failure modes, transport security | [Cryptography — Failure Modes](/design/cryptography/failure-modes/) |
+| MLS resilience | [MLS Resilience](/design/mls-resilience/) |
+| Device enrollment | [Device Enrollment](/design/device-enrollment/) |
+| ML model identities, embedding provenance | [AI/ML Integrations](/design/ai/) |
+| LQIP, thumbnail/preview formats | [Thumbnails and Previews](/design/thumbnails/) |
+| Server filesystem, required services | [Filesystem — Server](/design/filesystem/server/) |
+| Client filesystem, local index | [Filesystem — Client](/design/filesystem/client/) |
+| Library self-maintenance, atomic-write granularity | [Filesystem — Maintenance](/design/filesystem/maintenance/) |
+| Tokens, identity binding, auth flow | [Authentication](/design/authentication/) |
+| Backup container, escrow, recovery | [Backup and Recovery](/design/backup-recovery/) |
+| CRDTs, identifiers, geolocation, sidecar schema | [Metadata](/design/metadata/) |
+| Import pipeline | [Import — Pipeline](/design/import/pipeline/) |
+| Upload protocol | [Transfer — Upload](/design/transfer/upload/) |
+| Download, sync feed, auto-sync | [Transfer — Download](/design/transfer/download/) |
+| Storage durability, verify-before-destroy | [Transfer — Durability](/design/transfer/durability/) |
+| Tethered camera import | [Import — Camera Import](/design/import/camera-import/) |
+| Connection and retry classes | [Network Resilience](/design/networking/) |
+| Offline-first requirements | [Local Gallery](/design/local-gallery/) |
+| Federation trust, capability tokens | [Federation](/design/federation/) |
+| LAN discovery, peer channel | [Peering](/design/peering/) |
+| Album protocol version pinning | [Versioning](/design/versioning/) |
+| Stacking, trash retention | [Asset Organization](/design/organization/) |
+| Lifecycle action set | [Authorization](/design/authorization/) |
+| Damage scenarios, client classes | [Threat Model](/design/threat-model/) |
+| Refuse-by-default validation invariants | [Threat Model — Validation](/design/threat-model/validation/) |
+| Schema evolution, deprecation | [Threat Model — Schema Rules](/design/threat-model/schema-rules/) |
+| Outbound licence, dependency-licence policy | [Licensing](/design/licensing/) |
+| Dependency and tooling pins | [Dependencies](/design/dependencies/) |
+| Share links | [Share Links](/design/share-links/) |
+| Upload links, guest drops | [Web Upload](/design/web-upload/) |
+| Moderation, reporting, blocklists | [Moderation](/design/moderation/) |
+| Quota accounting + enforcement | [Quota](/design/quota/) |
+| Client validation duties, sandboxed decoder | [Clients](/design/clients/) |
+| Alerts, delivery, wake tier | [Notifications](/design/notifications/) |
+| Catalogs, locale resolution, error codes | [Internationalization](/design/i18n/) |
+| Crate graph, bounded E2E surface | [Module Map](/design/module-map/) |
+| API surface ↔ transport map | [API Surfaces](/design/api-surfaces/) |
+| Developer-reference generation | [Developer Documentation](/design/developer-docs/) |
 
 ## Doc Structure
 
-Design docs are **not templated**. Each doc's structure is chosen to fit its content — a wire-protocol doc is naturally state-machine-shaped, a primitives inventory is naturally a table, the threat-model scenario doc is naturally a matrix. What stays consistent is *what every doc must make legible*, not *how it must look*.
-
-Regardless of shape, every design doc must let a reader answer four questions:
-
-1. **Where does this live?** — Which crate(s) / module(s) implement this. Surface this however reads best: a header callout, an intro sentence, or per-section "implemented in…" notes. Don't bolt on a labeled "Module Boundary" section if it doesn't add clarity.
-2. **What is its public surface?** — The contract other modules depend on: schema, wire format, trait shape, manifest envelope, closed enum, error domain. For some docs the entire doc *is* the surface (a CBOR schema doc, a primitives inventory); for others the surface is one focused subsection. Promote it visually only if a reader couldn't otherwise locate it quickly.
-3. **What does it own vs. defer to?** — Owner-anchor links to the SSoT for upstream primitives. This is the [SSoT rule](#single-source-of-truth) applied per doc.
-4. **How is it validated?** — Brief tier notes (see [Validation Tiers](#validation-tiers) below) where the answer is non-obvious or where the cross-module test surface needs bounding. For docs whose validation collapses entirely to "the threat-model scenario map enforces this," a one-line pointer is enough.
-
-These are goals, not required headings. Some docs hit all four in a single intro paragraph; others (especially wire-protocol and schema docs) dedicate focused sections. The choice is per doc.
-
-The [Module Map](/design/module-map/) is the cross-cutting index: every code module → owning design doc → validation tier. It is the developer's first stop.
+Design docs are not templated, but each must let a reader answer: **where does this live** (crate or module), **what is its public surface** (schema, wire format, trait, error domain), **what does it defer to** (owner-doc links), and **how is it validated** (a [tier](#validation-tiers), where non-obvious). The code is the source of truth for module layout; docs state contracts, not restated code.
 
 ### Implementation Status
 
-Design intent and shipped code drift apart unless the docs say which is which. Every design doc that names an implementing module states, where that module is introduced, one of three statuses per surface:
-
-- **Implemented** — the named module exists and its validation tier runs in CI.
-- **Planned** — the contract is designed; no code exists yet. Marked `(planned)` in the [Module Map](/design/module-map/).
-- **Blocked** — planned, plus a named external blocker (e.g. an upstream dependency), stated where the surface is declared and marked `(blocked)` in the map.
-
-The repo-root `SLICES.md` (a plain repository file, not part of this site) is the executable index of every planned surface — its slice IDs are the unit of implementation work. A doc describing a planned surface writes the *contract* in normative present tense, but must not claim the code exists.
+A doc naming an implementing module states per surface whether it is **Implemented** (module exists, its tier runs in CI), **Planned** (contract designed, no code), or **Blocked** (planned, with a named external blocker). A planned contract is written in normative present tense but must not claim the code exists; a module a doc names that does not exist yet must be listed in `capsule-docs/planned-modules.txt`.
 
 ### Review Status
 
-Separately from per-surface implementation status, every page on this site carries a `status` frontmatter field tracking **human review**, required by the site schema and therefore by the docs build:
-
-- `draft` — the doc's current content has not passed a human re-review since the last substantive design change.
-- `stable` — a human reviewed the doc as written and signed off; substantive edits flip it back to `draft`.
-
-The field is review-queue metadata, not publication state (drafts still build and publish).
+Every page carries a required `status` frontmatter field tracking human review: `draft` (not re-reviewed since the last substantive change) or `stable` (signed off; substantive edits flip it back). Drafts still publish.
 
 ## Validation Tiers
 
-The three test tiers a design doc may reference:
+- **Unit** — in-module tests against the contract, peers and externals mocked. Deterministic and fast.
+- **Smoke** — one module's real implementation with real I/O and backing services (e.g. testcontainers Postgres or Valkey), peers mocked.
+- **E2E** — several modules wired against real infrastructure. The list is **bounded** in [Module Map — E2E Test Surface](/design/module-map/#e2e-test-surface); growth past it signals unwanted coupling.
 
-- **Unit** — In-module tests against the doc's contract surface, with peer modules and external dependencies mocked. Deterministic, fast, run on every change. Example: signing and verifying a manifest against fixed test vectors inside `capsule-core::crypto`.
-- **Smoke** — Single-module end-to-end with the module's real implementation but its peers mocked. Uses real I/O and real backing services (e.g. testcontainers for Postgres or Valkey). Example: the upload-server full session lifecycle (`POST /v1/upload` → `PATCH` → finalization) against a real Postgres, with no client process — the client side is mocked at the HTTP boundary.
-- **E2E** — Multiple modules wired together against real infrastructure. The list is **bounded** in [Module Map — E2E Test Surface](/design/module-map/#e2e-test-surface). Any addition requires updating that list — E2E surface growing past the bound is a signal the design has unwanted coupling worth examining.
-
-The split is enforced by **what is mocked, not by location in the source tree**. A test under `crate/tests/integration/` that mocks every peer is still a unit test for the purposes of this taxonomy.
+The tier is decided by **what is mocked**, not where the test lives.
 
 ## Damage Containment
 
-A faulty, malicious, or version-mismatched client must not be able to inflict irreparable damage on user data. The principles above (data integrity, atomic writes, recovery-first, self-describing, Postel's Law, encryption + compartmentalization) name the *posture*; the [Threat Model](/design/threat-model/) names the *defenses*.
-
-In particular, the threat model owns:
-
-- The **client class taxonomy** (honest, faulty, malicious, old, new, and the web-guest uploader) — how each is authenticated and what stops each from doing harm.
-- The **damage scenario → invariant map** — for every concrete attack or bug class, the single owner doc that defeats it.
-- **Server- and client-side validation invariants** — the refuse-by-default structural checks a key-less server and every client run on every write.
-- **Protocol and capability negotiation** — the universal fail-closed handshake that rejects version mismatches before any state is written.
-- **Idempotency, atomicity, and quarantine** rules that span owner docs.
-
-Each owner doc grows a short section pointing into the relevant threat-model section, but the cross-cutting statements live there. Principles continues to own the universal *posture*; threat model owns the universal *defenses*.
+A faulty, malicious, or version-mismatched client must not inflict irreparable damage on user data. These principles name the posture; the [Threat Model](/design/threat-model/) owns the defenses: the client-class taxonomy, the damage-scenario → invariant map, validation invariants, fail-closed protocol negotiation, and the cross-cutting idempotency, atomicity, and quarantine rules.

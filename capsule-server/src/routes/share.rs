@@ -630,7 +630,7 @@ async fn admit_metadata_growth(
 /// the end of the `put`, a dropped future would leave a charge with no stored blob behind it,
 /// which the collector never credits back because it credits only the blobs it sweeps. A
 /// spawned task is not dropped with the request. A process that stops inside that window still
-/// leaves the charge behind, a residue share-links.md ("The order") accepts.
+/// leaves the charge behind, a residue share-links.md (Quota) accepts.
 async fn store_metadata_record(
     share: ShareContext,
     quota: QuotaContext,

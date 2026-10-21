@@ -288,7 +288,7 @@ fn request() -> ReleaseRequest {
 
 // ─── Smokes ──────────────────────────────────────────────────────────────────
 
-/// The storage-verification doc's "Verify-before-destroy gate (smoke)": a non-`durable` verdict
+/// The transfer durability doc's "Verify Before Destroy" gate: a non-`durable` verdict
 /// refuses release and surfaces the unconfirmed state; flipped to `durable` (with a verified
 /// receipt), the release proceeds.
 #[tokio::test]
@@ -325,7 +325,7 @@ async fn verify_before_release_gate_smoke() {
     assert_eq!(coord.evaluate(&request()).await, ReleaseDecision::Release);
 }
 
-/// The storage-verification doc's "Receipt-gated release (smoke)": a device-owned-original
+/// The transfer durability doc's receipt-gated release: a device-owned-original
 /// release with the receipt fetch failing is refused **even on `durable = true`**; once the
 /// receipt endpoint is restored, the release proceeds.
 #[tokio::test]

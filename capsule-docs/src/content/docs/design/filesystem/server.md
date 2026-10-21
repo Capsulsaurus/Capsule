@@ -4,156 +4,174 @@ description: The server's blob store layout, Postgres index, and required servic
 status: draft
 ---
 
-The server's job is to hold ciphertext blobs and a key-free index that maps assets to blobs. It performs no decoding, no metadata extraction, and no thumbnail generation — it cannot, since it never holds a decryption key. The blob layout below **is** the contract: a server-side rebuild (re-deriving the Postgres index from blob bytes) depends on the file naming and the manifest envelope being exactly as specified here.
-
-Implementation is planned in `capsule-server::{blob,index}` behind a narrow Capsule-owned blob-store port with arbitrary backend support. Volatile session state will live in Valkey (see [Required Services](#required-services)); it is not a versioned API surface.
+The server holds ciphertext blobs and a key-free index mapping assets to blobs. It never decodes, extracts metadata, or generates thumbnails — it holds no key. The layout below is the contract: an index rebuild from blob bytes depends on it.
 
 ## Required Services
 
-The server's state is split across **three required systems** — one code path, no optional profiles:
+Three required systems, one code path:
 
-- **Blob store** (filesystem) — the encrypted bytes of every asset.
-- **PostgreSQL 18** — the authoritative durable index: ownership, album references, blob references, lifecycle state, and the pending-asset rows uploads create. The major is part of the contract rather than a deployment preference: `capsule-server/compose.yaml` and `.env.example` ship 18, and the adapter conformance suite runs against `postgres:18` on **glibc** so what is tested is what is deployed. The libc is named because one property depends on it — the index orders asset ids under `COLLATE "C"` so that "asset-id order" means the same thing to the durable adapter and the in-memory double, and a musl image collates `en_US.utf8` byte-for-byte and would pass that case whether the adapter pinned the collation or not.
-- **Valkey** — volatile session state: upload-session records (offsets, status) keyed `upload:session:{id}`, with the store's native 24-hour TTL as the lifetime **cap** (the ≥1-hour survival floor and pressure-discard semantics are owned by [Upload Protocol — Session Lifetime and Discard](/design/import/upload-protocol/#session-lifetime-and-discard)); [auth session records](/design/authentication/) ride the same store.
+- **Blob store** — the encrypted bytes. Adapters: filesystem and in-memory ([`capsule-server::blob`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-server/src/blob/mod.rs)).
+- **PostgreSQL 18** — the authoritative durable index: ownership, album and blob references, lifecycle state, pending-asset rows, the device-cohort map, the quota ledger. Tested against `postgres:18` on glibc, because asset-id order relies on `COLLATE "C"` behaving as deployed.
+- **Valkey** — volatile state only: upload-session records and [auth sessions](/design/authentication/), with native TTL. Session lifetime rules are owned by [Transfer — Upload](/design/transfer/upload/#session-lifetime-and-discard).
 
-The durable/volatile split is design, not a tuning knob: the hot upload path — offset increments and status transitions — never touches the durable Postgres asset row, which is written exactly twice per upload (pending row at session creation, `uploaded` flip at finalization). A Postgres-resident session table would be a second implementation of the same contract; Capsule ships exactly one.
+Rules:
 
-Required means required. The server refuses to start without `VALKEY_URL` — it is a startup variable the environment loader demands, not a scaling knob a small deployment can leave unset — and there is no profile, measured or otherwise, in which Valkey is optional. Each state port keeps an **in-memory adapter for tests only**: a deterministic test double, never a deployment mode. The alternative considered and rejected was a Postgres fallback that would let a single-node deployment skip Valkey; it fails on exactly the ground the split above rests on, since emulating TTL and expiry in SQL is the generic TTL abstraction the [server module map](/design/module-map/#server-modules) declines to introduce.
-
-Each state port therefore has **two adapters**, and which two is a property of the port: the volatile stores get Valkey and the in-memory double, and the device-cohort map — the one auth record with no expiry, kept beside the accounts — gets Postgres and the double. The adapter map is stated in `capsule-server::store`'s module docs, and the boot that binds it is `capsule-server::boot`.
+- The server MUST refuse to start without `DATABASE_URL` and `VALKEY_URL` unless started with `--memory`, which binds every port to its in-memory adapter and logs a `WARN` on every start. `--memory` is a development profile, never a deployment mode.
+- Each state port has exactly two adapters: volatile stores get Valkey (redis-rs) and in-memory; durable ports get PostgreSQL and in-memory. A Postgres-resident session table, or any generic TTL abstraction, MUST NOT be introduced. The map is stated in [`capsule-server::store`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-server/src/store/mod.rs).
+- The hot upload path (offsets, status) never touches the durable asset row.
 
 ### Schema migrations
 
-`serve` **never migrates**. On a durable boot it opens `DATABASE_URL`, reads `seaql_migrations`, and refuses a schema behind the one it was built for, naming `capsule-server-migration up`; an operator runs that command explicitly, before the rollout. A schema *ahead* of the binary is not fatal, because during a rolling deploy the migration runs first and the old replicas keep serving on it — so a migration that removes something an older binary reads has to be split in two. Migrating on start would instead race once per replica, and the server crate cannot link the migrator in any case (its `chrono` gate, [Dependencies](/design/dependencies/)). The check is `capsule-server::postgres::assert_schema_current`.
-
-Names alone do not prove the schema, because a migration edited after it ran keeps its name. Every migration therefore also records a **checksum** — lowercase-hex SHA-256 of its source file, `\r\n` normalised to `\n` — in the companion ledger `capsule_migration_checksums (version, checksum)`, written by the migrator in the same transaction as its `seaql_migrations` row and deleted by its `down`. The boot check compares that ledger against checksums compiled into the binary (the server hashes nothing at boot): an expected ordinal whose recorded checksum differs, or is absent, refuses with `PostgresError::SchemaDrift`, which deliberately does **not** name `capsule-server-migration up`, since nothing is pending and migrating cannot repair it. Ordinals unknown to the binary stay unchecked, by the same rolling-deploy asymmetry. A database migrated before the ledger existed is backfilled by `000017`, trust-on-first-record: it takes the current source of each applied migration as the text that ran.
-
-The rule this imposes: **an applied migration is never edited** — not its SQL, not its comments, not its formatting. Any byte change alters its checksum, the drift test in `capsule-server::postgres` fails in the same pull request, and a deployed database would refuse to boot. A schema change is always a new ordinal.
+- `serve` MUST NOT migrate. On boot it refuses a schema behind the binary (naming `capsule-server-migration up`); a schema ahead of it is tolerated for rolling deploys, so a destructive migration is split in two.
+- Every applied migration records a SHA-256 checksum of its source in `capsule_migration_checksums`; boot refuses a mismatch with `PostgresError::SchemaDrift`. **An applied migration is never edited** — a schema change is always a new ordinal. See [`capsule-server::postgres`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-server/src/postgres/mod.rs).
 
 ## Blob Store Layout
 
 ```text
 {blob_root}/
-├── incoming/
-│   └── {upload_id}.bin             # in-progress append-only upload, pre-verification
-├── blobs/
-│   └── {hash[0:2]}/{hash[2:4]}/
-│       └── {hash}.bin              # finalized blob, content-addressed, two-level hex shard
-└── .server/
-    ├── version                     # server filesystem schema version
-    └── config                      # server-wide configuration
+├── incoming/{upload_id}.bin                 # append-only upload, pre-verification
+├── blobs/{hash[0:2]}/{hash[2:4]}/{hash}.bin # finalized, content-addressed, immutable
+├── ledger/{owner_id}/{first_seq}.log         # owner ledger, append-only, signed
+├── quarantine/                              # rejected objects + .reason.json, for humans
+└── .server/{version,config}                 # operator metadata (plaintext, not user data)
 ```
 
-- **`{blob_root}`**: absolute path configured at server startup. The entire tree must be on a single filesystem so that finalization renames are atomic.
-- **`incoming/`**: live uploads. Each session owns a single append-only file `{upload_id}.bin`; accepted chunks are appended in order, and the 4 KiB chunk alignment keeps every write block-aligned. There is no per-chunk staging and no assembly step. See [Import — Upload Protocol: Append-Only Storage](/design/import/upload-protocol/#append-only-storage).
-- **`blobs/`**: the finalized store, **sharded two levels deep on the content hash's own hex prefix**: `blobs/{hash[0:2]}/{hash[2:4]}/{hash}.bin`, the filename being the [ciphertext content hash](/design/cryptography/primitives/) with a `.bin` suffix. This is the re-ratification the 2026-07-12 amendment demanded, and it overturns that amendment's flat namespace. The amendment argued the flat layout from the wrong sizing case: *no hot path enumerates the directory* is true and beside the point, because lookup is a `stat` at a known content address and costs the same flat or sharded. The cost lands on the **enumerations**, of which there are three, each a full `readdir` + `stat` of the store — the [integrity scrub](/design/filesystem/maintenance/#server-side-integrity-scrub)'s blob→row pass, the [refcount GC](#deletion-and-garbage-collection)'s orphan sweep, and the [index rebuild](#recovering-the-index-from-blobs-alone) — and a multi-million-entry flat directory is precisely where those hurt. All three are integrity or recovery paths, so they must stay affordable exactly when a deployment is already in trouble. Timing settles the rest: no deployment holds blobs to move, so the shard is free **now** and a version-bumped data move behind `.server/version` forever after. The store in the tree shards: `capsule-server::blob`'s filesystem backend writes `blobs/{hash[0:2]}/{hash[2:4]}/{hash}.bin`, creates each shard directory on demand at finalization and fsyncs it, and performs no migration — there are no deployments holding blobs to move. Shard directories are created on demand at finalization and the rename stays inside `{blob_root}`, so finalization remains atomic. A finalized blob is immutable.
-- **`.server/`**: the server operator's own configuration and schema version. This is plaintext server metadata, not user data — it is the one thing under `{blob_root}` that is not an encrypted blob.
+- The whole tree MUST be on one filesystem so finalization renames are atomic.
+- `incoming/`: one append-only file per session; no per-chunk staging, no assembly ([Transfer — Upload](/design/transfer/upload/#append-only-storage)).
+- `blobs/` is sharded on the hash's own hex prefix so the three enumerations — [integrity scrub](/design/filesystem/maintenance/#server-side-integrity-scrub), [GC](#deletion-and-garbage-collection), [index rebuild](#recovering-the-index-from-blobs-alone) — stay affordable at scale. Lookup is a `stat` at a known address either way.
+- `incoming/` and `quarantine/` are not sharded: neither is content-addressed, and quarantine is read by an operator.
 
-### What the shard does not decide
+Commit discipline ([`capsule-server::blob::fs`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-server/src/blob/fs.rs)):
 
-Sharding `blobs/` leaves four questions open, and each has a correctness consequence rather than a
-stylistic one. Settled with slice `S-C35`:
-
-- **Temp files live inside the target shard**, as `blobs/{aa}/{bb}/.{hash}.{uuid}.tmp`. Same
-  directory is a stronger guarantee than same filesystem and needs no configuration to stay true.
-  The alternative — `blobs/{hash}.tmp` beside a now-sharded tree — would be the one file outside
-  every shard, a permanent exception every enumeration has to carry. A crashed temp is then debris
-  *inside* a shard the scrub already walks. Note the upload path has no temp file at all:
-  `incoming/{upload_id}.bin` **is** the staging file and finalization renames it straight to the
-  content address.
-- **Directory creation is fsynced before the row is committed**, in order: the staged data, then
-  each shard directory this write actually created, then the rename, then the shard it landed in.
-  The asymmetry forces this rather than making it tunable — a lost directory entry underneath a
-  committed index row is a **dangling reference**, a loud integrity error that is never
-  auto-deleted, whereas the reverse is an orphan the refcount GC already reclaims. Directory fsync
-  is a Unix operation; other hosts are not supported deployments.
-- **Nothing else shards.** `incoming/` is bounded by concurrent sessions under the 24-hour cap, and
-  its enumeration is over that live set. `quarantine/` is bounded by failures, is empty in a healthy
-  store, and exists to be **read by a human** — sharding would hide the one inventory an operator
-  wants to list. Neither is content-addressed, so neither has a prefix to shard on without inventing
-  one.
-- **The layout is coupled to the digest**, deliberately and mechanically. The two-level split is
-  derived from the 64-character lowercase-hex address and nowhere else; a content address is
-  constructed only by parsing, so no loose string reaches a path. Changing the digest is therefore a
-  layout change — a `.server/version` bump and a data move — and fails a compile-time assertion
-  rather than silently misfiling blobs under shards that no longer derive from them.
+- Non-upload temp files live inside the target shard (`.{hash}.{uuid}.tmp`). Uploads need none: the `incoming/` file is renamed straight to its address.
+- Order: staged bytes fsynced → each newly created shard directory fsynced in its parent → rename → destination directory fsynced → only then the index row. A lost directory entry under a committed row would be a dangling reference; the reverse is an orphan GC reclaims.
+- The shard derivation is tied to the 64-hex-char digest; changing the digest is a layout change (`.server/version` bump and data move), guarded at compile time.
 
 ## Uniform, Opaque Blobs
 
-A single asset produces a **bundle** of blobs (see [Import — Upload Protocol: What Gets Uploaded](/design/import/upload-protocol/#what-gets-uploaded)): the encrypted original, encrypted derivatives (thumbnails, previews), and the encrypted CBOR metadata blob (which carries the LQIP) — every one of them fully opaque, content-addressed ciphertext the store does not distinguish. Beside them, each write persists its signed **manifest envelope object** (see [Provenance — Physical placement](/design/cryptography/provenance/#asset-manifest)): a small, deliberately server-visible signed CBOR object, stored content-addressed like any blob, whose append-only sequence is the asset's provenance chain. The hot-path mapping from an asset to its blobs and their roles lives in PostgreSQL, with the envelope objects as its durable, key-free fallback.
+An asset is a **bundle** of blobs ([Transfer — Upload](/design/transfer/upload/#what-gets-uploaded)): encrypted original, derivatives, metadata blob, and the signed manifest stored as the provenance blob. The store does not distinguish them; roles live in PostgreSQL, with the manifest envelopes and the [owner ledger](#the-owner-ledger) as the key-free durable fallback.
 
 ## Recovering the Index from Blobs Alone
 
-The PostgreSQL index is authoritative but **not the only copy** of what the server knows. Every write persists its signed [manifest envelope object](/design/cryptography/provenance/#asset-manifest) in the blob store beside the opaque ciphertext blobs it names, and those envelopes carry everything needed to rebuild the index rows. This is the server-side counterpart of the recovery-first principle that lets a client rebuild its index from CBOR sidecars.
+PostgreSQL's asset index is a **projection** of the blob store, never the only copy. Losing
+the database, or finding it corrupt, costs a rebuild, not a library. Accounts, credentials and
+everything else that is not an asset fact still come from the PostgreSQL backup
+([what is not rebuilt](#what-a-rebuild-cannot-recover)).
 
-The server-visible envelope includes:
+### The Owner Ledger
 
-- `crypto_suite_id`, `protocol_version`, `amk_version` — what bundle of primitives encrypted this asset and which album epoch
-- the ciphertext hash and declared size — content address and storage attribution
-- `created_by_user`, `created_by_device`, `album_id`, `file_id`, `prior_provenance_hash`, `action` — owner, provenance chain link, and lifecycle action
-- `client_version` — the [exact client build](/design/cryptography/provenance/#client-build-identification) that produced the write, down to the commit hash — what scopes a defective-build incident to the assets it touched
-- the device's hybrid signature — provenance attribution; verifiable against the public device directory even without any key the server holds
+Every signed [manifest envelope](/design/cryptography/provenance/#asset-manifest) is stored in
+`blobs/` and names everything an index row needs except who owns it and in what order the server
+accepted it. The **owner ledger** carries those facts:
 
-A rebuild walks the **envelope objects** under `blobs/`, verifies each device signature against the cached device directory, and writes index rows for the blobs each envelope names (original and derivatives by `ciphertext_hash` + role, the metadata blob by `metadata_blob_hash`). A ciphertext blob referenced by no envelope surfaces as an orphan for [GC](#deletion-and-garbage-collection); an envelope naming a missing blob surfaces as a dangling reference — **except** a missing *original* on an asset whose feed state is [`awaiting-original`](/design/import/download-sync/#upload-tiering-staged-uploads), which is expected staged-upload state, not corruption. The rebuild is idempotent: re-running it against an existing index produces no changes. The full envelope check list a server runs at recovery is the same list it runs at write time — see [Threat Model — Server-Side Validation Invariants](/design/threat-model/validation/#server-side-validation-invariants).
+```text
+{blob_root}/ledger/{owner_id}/{first_seq}.log   # append-only segments
+```
 
-An envelope object that fails structural validation during rebuild is **quarantined**, not silently dropped — moved to `{blob_root}/quarantine/` with a sibling `.reason.json` recording the rejection code. This guarantees that an unrecoverable byte sequence is preserved for forensic inspection rather than vanishing on rebuild.
+- One entry per accepted manifest, per device-directory version and per lifecycle action:
+  `sync_seq`, the manifest's content hash, `upload_user_id`, uploader device, `received_at` and
+  the custody receipt. Each entry carries the hash of the previous one and is signed by the
+  attestation key, so a truncated or edited ledger is detectable.
+- An entry is appended and fsynced **after** the blobs it names are committed and **before** the
+  index row commits. A crash between the two leaves an entry without a row, which the next
+  rebuild or scrub replays; never a row without an entry.
+- The ledger is never rewritten. Purge appends a purge entry; the purged blobs go through
+  [GC](#deletion-and-garbage-collection) as before.
+- Device-directory versions are in the ledger, so a rebuild verifies signatures against the
+  directory as it stood when each manifest was accepted.
 
-Operationally the rebuild is invoked when a PostgreSQL restore is incomplete or a logical-corruption event is detected; it is **never** the hot path. The hot path runs through the authoritative PG index. The recovery path's job is to make the index reconstructible if PG is lost, not to substitute for it. Recovery is also not *verification*: the proactive, read-only check that a frozen Postgres + blob-store pair is mutually consistent — the path that detects the drift before anyone needs a rebuild — is the [server-side integrity scrub](/design/filesystem/maintenance/#server-side-integrity-scrub).
+### Rebuild
+
+`capsule-server rebuild` reconstructs the asset index from `ledger/` plus `blobs/`, into an empty
+schema or alongside a restored backup:
+
+1. Verify each owner's ledger chain. A break stops that owner's replay at the last good entry
+   and is reported; other owners continue.
+2. Replay entries in `sync_seq` order: decode the named manifest, check its signature against
+   the directory version the ledger recorded, and write the rows it implies. Replay is
+   idempotent; a row the backup already holds is compared, never overwritten.
+3. Recompute quota usage and blob references from the rebuilt rows.
+4. Report blobs no entry names (orphans, left to GC), entries naming a missing blob (dangling,
+   except an [`awaiting-original`](/design/transfer/upload/#upload-tiering-staged-uploads)
+   asset) and envelopes failing structural validation (moved to `quarantine/` with a
+   `.reason.json`, never dropped).
+
+Decoding manifests is confined to **one module**, the server's only signed-CBOR parser, shared
+by rebuild and the [integrity scrub](/design/filesystem/maintenance/#server-side-integrity-scrub)
+and fuzzed. The write path never decodes manifests.
+
+### Sync Epoch and Client Re-Announce
+
+Rebuilt rows keep their ledger `sync_seq`, so clients' sync cursors stay valid. When a rebuild
+cannot prove the sequence complete (a ledger chain break or lost tail), the server increments
+the owner's **sync epoch**. A cursor from an older epoch is refused with a typed error; the
+client drops its high-water mark, resyncs from zero and discards nothing (invariant 5 in
+[Versioning](/design/versioning/#system-invariants)).
+
+After an epoch change, each client **re-announces** the signed manifests it holds whose blobs
+the server reports missing from the index: manifests only, no bytes. The server verifies each
+like an upload's manifest and restores the row if every named blob is present; otherwise the
+client re-uploads through the normal [transfer protocol](/design/transfer/upload/). A
+re-announced manifest can only restore what its owner's devices signed.
+
+### What a Rebuild Cannot Recover
+
+Restored from the PostgreSQL backup, never derived from blobs: accounts, credentials and TOTP,
+escrow and sealed identities, share links and guest drops, moderation standing, federation
+capabilities and peers, revoked tokens, device cohorts, and in-flight album upgrades. This is
+why the [self-hosting guide](/guides/self-hosting/#backups) requires backing up PostgreSQL and
+`BLOB_ROOT` together; the ledger makes a stale or partial database backup recoverable, not
+optional.
 
 ## Manifest Envelope Validation
 
-Every write — `POST /v1/upload`, `PATCH /v1/upload/{id}`, finalization, any lifecycle manifest, any federation pull — passes through structural validation of the manifest envelope **before** any state is persisted. The server holds no decryption key, so it cannot verify the cryptographic signatures; but it does enforce that every envelope field is present, structurally well-formed, within bounds, and consistent with the album the manifest claims to address.
-
-The complete refuse-by-default checklist is owned by [Threat Model — Server-Side Validation Invariants](/design/threat-model/validation/#server-side-validation-invariants). A rejection at any check returns the rejection code listed there and writes no state. This is what defeats the version-mismatched-client damage class without requiring the server to hold a key.
+Every write — upload creation, chunk, finalization, lifecycle manifest, federation pull — passes structural envelope validation **before** any state is persisted. The checklist and rejection codes are owned by [Threat Model — Server-Side Validation Invariants](/design/threat-model/validation/#server-side-validation-invariants).
 
 ## Content-Addressing and Deduplication
 
-Naming blobs by their [ciphertext content hash](/design/cryptography/primitives/) makes deduplication free: a blob already present is never stored twice. At upload-session creation the server checks for a blob with the same content hash already owned by the uploader — an exact local-and-remote duplicate is rejected up front, and an asset that exists remotely under a *different* ciphertext resolves to a **merge** that links the existing blob rather than storing a second copy (see [Import — Upload Protocol: Deduplication and Merge](/design/import/upload-protocol/#deduplication-and-merge)). Reference counting in PostgreSQL determines when a blob is genuinely unreferenced.
+A blob already present is never stored twice. Duplicate and merge semantics at session creation are owned by [Transfer — Upload](/design/transfer/upload/#deduplication-and-merge). Whether a blob is referenced is decided by a query over committed rows, never a stored counter.
 
 ## PostgreSQL: What the Server Knows
 
-The server index records only what can be known without a key:
+Only key-free facts:
 
 - `asset_id`, `owner_id`, `album_id`, `upload_user_id`
-- references to the asset's blobs (their [content hashes](/design/cryptography/primitives/)) and each blob's role
-- `amk_version` — which album-key epoch encrypted the asset
-- declared ciphertext size and `content_type`
-- the `uploaded` flag and server-visible lifecycle state
-- the server's own trusted `received_at` per write — the authoritative clock for time-based policy (retention, rate limits) — alongside the client's self-asserted, audit-only `timestamp`
-- `client_version` — the [exact producing client build](/design/cryptography/provenance/#client-build-identification), audit-only, kept queryable so one defective build's writes can be enumerated
-- provenance records (see [Cryptography — Provenance](/design/cryptography/provenance/#provenance-of-library-modifications))
+- blob content hashes and each blob's role
+- `amk_version`, declared ciphertext size, `content_type`
+- `uploaded` flag and server-visible lifecycle state
+- the server's trusted `received_at` (authoritative for time-based policy) beside the client's audit-only `timestamp`
+- `client_version` (audit-only, queryable to scope a defective build)
+- [provenance records](/design/cryptography/provenance/#provenance-of-library-modifications)
 
-No plaintext capture date, dimensions, EXIF, tags, or filename ever reaches the server. Those live inside the encrypted metadata blob (see [Metadata Encryption](/design/cryptography/encryption/#metadata-encryption)) and are readable only by authorized clients.
-
-Session creation writes a *pending* asset row (`uploaded = false`) that reserves the asset ID the bundle's blobs reference; finalization flips it. See the [session state machine](/design/import/upload-protocol/#session-state-machine).
+No plaintext capture date, dimensions, EXIF, tags, or filename ever reaches the server; those live in the encrypted [metadata blob](/design/cryptography/encryption/#metadata-encryption). Session creation writes a pending row (`uploaded = false`) that finalization flips ([state machine](/design/transfer/upload/#session-state-machine)).
 
 ## Ownership, Partitioning, and Quota
 
-`owner_id` is the billing and namespace entity; the `owner_id` → user-set mapping lives in PostgreSQL and is mirrored as an MLS group (the [Owner Group Key](/design/cryptography/keys/#owner-group-keys-ogks)). Storage quota is accounted to `upload_user_id`, which is distinct from `owner_id` — the full quota model is owned by [Quota](/design/quota/). The blob store itself is not partitioned by owner — content-addressing is global — but every blob *reference* is owner-scoped in PostgreSQL, and deduplication checks are scoped to the owner.
+`owner_id` is the billing and namespace entity, mirrored as an MLS group ([Owner Group Key](/design/cryptography/keys/#owner-group-keys-ogks)). Quota is charged to `upload_user_id` ([Quota](/design/quota/)). The blob store is global; every *reference* is owner-scoped, and dedup is owner-scoped.
 
-The owner record also carries a non-secret **`default_album_id`** pointer (and an optional `(scope → album_id)` override map) naming the owner's [default album](/design/organization/#the-default-album) — the import destination when the user picks none. It is a plain UUID the server stores and serves but never acts on for authorization: a write is still gated on real album write capability ([invariant 6](/design/threat-model/validation/#server-side-validation-invariants)), so the pointer is discovery convenience, not a security control. Album *contents* stay E2E-encrypted; the server learns only which album UUID is currently the default.
+The owner record carries a non-secret `default_album_id` (plus optional scope overrides) naming the [default album](/design/organization/#the-default-album). It is discovery only: writes are still gated on album write capability ([invariant 6](/design/threat-model/validation/#server-side-validation-invariants)).
 
 ## Deletion and Garbage Collection
 
-The server cannot read an asset's `is_deleted` flag — it lives inside the encrypted metadata blob. Lifecycle transitions are signalled by the client and recorded as server-visible state on the asset row; soft delete is a state change, not a file operation. Permanent deletion drops the asset's blob references. A blob is removed **only** when it is provably unreferenced, and the mechanism is deliberately built so that a bug biases toward *keeping* bytes, never deleting live ones.
+The server cannot read `is_deleted`; lifecycle state is client-signalled and recorded on the asset row. Soft delete is a state change. A blob is removed only when provably unreferenced, and every failure mode biases toward keeping bytes.
 
-- **Reference counting is the single source of truth.** A blob's reference count is a query over committed asset / derivative / metadata / provenance rows — never a separately-maintained counter that could drift out of sync. A blob is GC-eligible only when that query returns zero.
-- **Two-phase mark-and-sweep with a grace window.** Reaching zero references *marks* a blob (records `collectable_since`); it is swept only after a configurable grace window (default 24–72 h) **and** only after the zero-reference count is re-confirmed inside the deleting transaction (`SELECT … FOR UPDATE` over the reference set). A reference reappearing during the window — an in-flight finalization retry, a concurrent merge — cancels the mark. This reclaims the finalization-crash orphan (a blob renamed into `blobs/` whose Postgres commit never landed; see [Maintenance — Atomic Writes](/design/filesystem/maintenance/#atomic-writes-and-crash-recovery)) without ever racing a legitimate late reference.
-- **A Postgres↔filesystem mismatch is never resolved by deletion.** The two directions are asymmetric because only one risks data loss. A blob in `blobs/` with no referencing row is an orphan, reclaimed by the zero-reference sweep above. A committed row referencing a blob **missing** from `blobs/` is a *loud* integrity error — surfaced, logged, and quarantined for an operator — **never** auto-deleted: erasing the dangling row would destroy the only record that the asset should exist, exactly the data-loss class the [data-integrity principle](/design/principles/) forbids.
-- **Auditable, reversible by default.** Every GC decision is logged with the blob hash, the observed reference count, and the mark/sweep timestamps (per the [traceability principle](/design/principles/)); a dry-run mode reports what *would* be collected without removing anything, so a suspect sweep can be inspected before it runs.
+- **Reference count is a query** over committed asset, derivative, metadata and provenance rows (plus live [share-link](/design/share-links/#storing-the-record) records) — never a maintained counter.
+- **Mark, then sweep.** Zero references marks a blob (`collectable_since`); it is swept only after a 24 h grace window ([`DEFAULT_GRACE_WINDOW`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-server/src/gc/mod.rs)) and only if zero references is re-confirmed at sweep time. A reappearing reference cancels the mark. This reclaims the crash-after-rename orphan without racing a late reference.
+- **A Postgres↔filesystem mismatch is never resolved by deletion.** An unreferenced blob is an orphan (GC). A committed row referencing a missing blob is a loud integrity error — logged, surfaced, never auto-deleted.
+- Every GC decision is logged with hash, observed count, and mark/sweep times; a dry-run mode reports without removing.
 
 ## Storage Verification
 
-Clients need to confirm an asset is *safely stored* before they discard their only local copy — not just that a hash matches, but that the server physically holds the bytes, has them indexed, and would serve them. The server answers this without any key, composing the three facts it already tracks: the blob is present in `blobs/` (a `stat`), it is referenced by a committed `uploaded = true` row, and it is retrievable — reference count > 0 and **not** `collectable_since` (mid-[GC](#deletion-and-garbage-collection)), quarantined, or a [dangling-reference integrity error](#deletion-and-garbage-collection). A blob that is marked collectable, quarantined, or missing from `blobs/` is reported non-retrievable so a client never releases a local copy the server is about to or has already lost. The wire contract, the per-blob verdict shape, and the client-side **verify-before-destroy** rule that consumes it are owned by [Import — Storage Verification](/design/import/storage-verification/); the route is `capsule-server::verify`.
+The server attests key-free whether a blob is stored (`stat` in `blobs/`), indexed (committed `uploaded = true` row), and retrievable (referenced, not `collectable_since`, not quarantined). Anything marked collectable, quarantined, or missing is non-retrievable, so a client never releases a copy the server is about to lose. The wire contract and verify-before-destroy rule are owned by [Transfer — Durability](/design/transfer/durability/); the route is [`capsule-server::verify`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-server/src/verify/mod.rs).
 
 ## Validation
 
-- **Layout round-trip (unit).** Upload, finalize, rename, and assert the blob lives at exactly its sharded content address `blobs/{hash[0:2]}/{hash[2:4]}/{hash}.bin` on disk — never at a flat `blobs/{hash}.bin`. Recompute the hash from disk; assert match.
-- **Enumeration over the shard tree (unit).** Populate blobs across multiple shard directories; assert the scrub, GC, and rebuild walks each recover exactly the same blob set a flat walk would, and that a partially-populated shard tree (missing intermediate directories) enumerates without error.
-- **Index rebuild idempotency (smoke).** Take a real testcontainer Postgres + a populated `blobs/` tree, drop the index tables, run the rebuild routine, assert every row matches a hand-derived expected set. Re-run; assert zero changes.
-- **Quarantine on malformed envelope (unit).** Inject a blob with a corrupted manifest envelope into `blobs/`; run rebuild; assert the blob moves to `quarantine/` with a `.reason.json` that names the structural check that failed.
-- **Reference-count GC safety (unit).** Decrement a blob's last reference; assert eligibility for GC; assert GC only proceeds after a configurable grace period; concurrent re-reference during the grace period cancels GC.
-- **Dangling-reference safety (unit).** Point a committed row at a blob hash absent from `blobs/`; run the integrity check; assert the row is surfaced/quarantined and **never** auto-deleted, and that the missing blob is not treated as collectable.
-- **Storage-verification verdict (unit).** Compose the no-key verdict for a finalized asset (stored + indexed + retrievable → `durable`); then mark a referenced blob `collectable_since` and assert it reports non-retrievable, and remove a blob from `blobs/` and assert non-stored. Owner: [Import — Storage Verification](/design/import/storage-verification/).
-
-Cross-module cases (upload → finalize → rebuild from blobs) are bounded E2E surface listed in [Module Map](/design/module-map/#e2e-test-surface).
+- **Layout round-trip (unit).** A finalized blob lives at exactly its sharded address and re-hashes to its name.
+- **Shard enumeration (unit).** Scrub, GC and rebuild walks recover the same blob set across a partially populated shard tree.
+- **Rebuild idempotency (smoke).** Drop the index, rebuild, compare to the expected set; re-run yields no changes.
+- **Ledger crash window (unit).** A crash after the ledger append and before the row commit is replayed by rebuild; a tampered or truncated segment is reported and stops only that owner.
+- **Epoch (integration).** A rebuild with a lost ledger tail bumps the epoch; an old cursor is refused, the client resyncs and re-announces, and the index matches the pre-loss one.
+- **Quarantine on malformed envelope (unit).** The object moves to `quarantine/` with a `.reason.json` naming the failed check.
+- **GC safety (unit).** Swept only after the grace window; a re-reference during it cancels.
+- **Dangling reference (unit).** Surfaced, never auto-deleted, never treated as collectable.
+- **Verdict composition (unit).** Owner: [Transfer — Durability](/design/transfer/durability/).

@@ -4,8 +4,7 @@ description: The Kynos REST/OpenAPI server and generated client architecture
 status: draft
 ---
 
-Capsule exposes one REST/OpenAPI contract. GraphQL and gRPC were removed because they duplicated
-schemas and conflicted with the encrypted, offline-first client model.
+Capsule exposes one REST/OpenAPI contract ([API Surfaces](/design/api-surfaces/)).
 
 ## Data Flow
 
@@ -13,7 +12,7 @@ schemas and conflicted with the encrypted, offline-first client model.
 Native client
   ├─ capsule-core: plaintext, keys, media policy, sidecars, provenance
   ├─ Rawshift: media processing
-  ├─ Chromahash 0.7.1: encrypted LQIP input
+  ├─ Chromahash: encrypted LQIP input
   └─ Spargen SDK: ciphertext REST transport
                       ↓
 Kynos server
@@ -24,32 +23,26 @@ Kynos server
   └─ Capsule-owned opaque blob store
 ```
 
-Rich timeline, search, tag, face, and memory queries run against the client's local SQLite catalog.
-The server stores and synchronizes opaque ciphertext plus the minimum key-free index required for
-authorization, ordering, quota, lifecycle, and retrieval.
+Timeline, search, tag, face, and memory queries run against the client's local SQLite catalog. The
+server stores opaque ciphertext plus the minimum key-free index needed for authorization, ordering,
+quota, lifecycle, and retrieval.
 
 ## Clients
 
-Native clients are preferred wherever the platform supports one:
+- [Android](https://github.com/Capsulsaurus/Capsule/tree/master/capsule-android) — Jetpack Compose over `capsule-core-kotlin`
+- [iOS/iPadOS/macOS](https://github.com/Capsulsaurus/Capsule/tree/master/capsule-swift) — SwiftUI over `capsule-core-swift`
+- [Web](https://github.com/Capsulsaurus/Capsule/tree/master/capsule-web) — read-only: authenticated viewing, share links, guest upload
+- [CLI](https://github.com/Capsulsaurus/Capsule/tree/master/capsule-cli) — development and advanced users
 
-- [Android](https://github.com/Capsulsaurus/Capsule/tree/master/capsule-android) — Jetpack Compose app over the `capsule-core-kotlin` shared library
-- [iOS/macOS](https://github.com/Capsulsaurus/Capsule/tree/master/capsule-swift) — SwiftUI app over the `capsule-core-swift` shared library
-- [Web](https://github.com/Capsulsaurus/Capsule/tree/master/capsule-web) — React client (guest drops and the share-link viewer; the authenticated read path is a key-free projection of the sync feed)
-- [CLI](https://github.com/Capsulsaurus/Capsule/tree/master/capsule-cli) — for development and advanced users primarily
-
-The native apps and the CLI share their client logic through `capsule-core` and `capsule-sdk`,
-exposed to Swift and Kotlin as uniffi bindings. **There is no desktop application**: `capsule-desktop`
-does not exist, and Windows and Linux users are served by the CLI and the web client. See
-[Clients](/design/clients/) for the per-platform contract.
+Native apps and the CLI share client logic through `capsule-core` and `capsule-sdk`, exposed to Swift
+and Kotlin via uniffi. Per-platform contract: [Clients](/design/clients/).
 
 ## Dependency Boundaries
 
-- Kynos replaces the previous HTTP framework and owns Tokio/runtime policy.
-- Spargen replaces the previous client generator.
-- Rawshift replaces in-repository codecs and metadata extraction.
-- Capsule calls Chromahash **0.7.1** directly.
-- Blob storage, resumable upload, provenance, crypto, CRDTs, asset lifecycle, and application state
-  ports stay in Capsule.
+Kynos owns HTTP and the Tokio runtime; Spargen generates the client; Rawshift owns codecs and metadata
+extraction; Chromahash is called directly. Blob storage, resumable upload, provenance, crypto, CRDTs,
+asset lifecycle, and application-state ports stay in Capsule. Pins live in
+[Dependencies](/design/dependencies/).
 
-No new reusable infrastructure library is created until a stable product-neutral contract and at
-least two real consumers demonstrate that extraction removes net complexity.
+No reusable infrastructure library is extracted until a stable product-neutral contract has at least
+two real consumers.

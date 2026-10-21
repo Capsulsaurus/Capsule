@@ -611,14 +611,14 @@ describe('link rewriting in artifact prose', () => {
     it('rewrites a repo-relative design-doc path to its site route', () => {
         const document = structuredClone(MINIMAL_OPENAPI);
         document.paths['/v1/auth/login'].post.description =
-            'Every rule the [chunk contract](../../../capsule-docs/src/content/docs/design/import/upload-protocol.md) fixes.';
+            'Every rule the [chunk contract](../../../capsule-docs/src/content/docs/design/transfer/upload.md) fixes.';
         const rendered = renderApiPage(
             API_GROUPS.find((entry) => entry.slug === 'auth'),
             bucketOperations(document).get('auth'),
             document,
         );
         expect(rendered).toContain(
-            '[chunk contract](/design/import/upload-protocol/)',
+            '[chunk contract](/design/transfer/upload/)',
         );
     });
 
@@ -643,14 +643,14 @@ describe('link rewriting in artifact prose', () => {
     it('rewrites links in a schema-level description too', () => {
         const document = structuredClone(MINIMAL_OPENAPI);
         document.components.schemas.LoginRequest.description =
-            'Shaped by the [chunk contract](../../../capsule-docs/src/content/docs/design/import/upload-protocol.md) and signed with [`revoke_all_signing_bytes`](capsule_core::crypto::revoke::revoke_all_signing_bytes).';
+            'Shaped by the [chunk contract](../../../capsule-docs/src/content/docs/design/transfer/upload.md) and signed with [`revoke_all_signing_bytes`](capsule_core::crypto::revoke::revoke_all_signing_bytes).';
         const rendered = renderApiPage(
             API_GROUPS.find((entry) => entry.slug === 'auth'),
             bucketOperations(document).get('auth'),
             document,
         );
         expect(rendered).toContain(
-            '[chunk contract](/design/import/upload-protocol/)',
+            '[chunk contract](/design/transfer/upload/)',
         );
         expect(rendered).toContain('signed with `revoke_all_signing_bytes`.');
         expect(rendered).not.toContain('capsule_core::crypto::revoke');

@@ -5,10 +5,8 @@
  * names `capsule-server::federation` and no such module exists, the doc has
  * stopped being a map and started being a story.
  *
- * **Scope is `capsule-docs/` and `AGENTS.md` only, deliberately not
- * `SLICES.md`.** The slice tracker is a historical ledger: it records that
- * `capsule_core::media` *was* retired and that `capsule-api` *used to* hold the
- * upload module. Forcing it to name only live modules would corrupt the record.
+ * **Scope is `capsule-docs/` and `AGENTS.md` only.** History (ADRs, the
+ * retired slice ledger) may name modules that no longer exist.
  *
  * Resolution is strict on the way down and lenient at the leaf, which is what
  * takes the false-positive rate to zero on the real corpus:

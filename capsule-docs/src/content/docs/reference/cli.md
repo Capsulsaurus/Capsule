@@ -17,10 +17,8 @@ the binary parses with.
 
 ## Install
 
-Release builds are published as an archive per target on the
-[releases page](https://github.com/justin13888/Capsule/releases), each carrying a single
-`capsule` executable. From a checkout, `cargo run -p capsule-cli --` runs the same binary
-against the working tree.
+No release has been published yet. From a checkout, `cargo run -p capsule-cli --` runs the
+binary against the working tree; `cargo install --path capsule-cli` installs it.
 
 ## The two things it holds
 
@@ -43,14 +41,14 @@ offer no flag for one.
 ## Where the contract lives
 
 - The behaviour of the import pipeline is [Import Pipeline](/design/import/pipeline/); what
-  `capsule push` speaks is the [Upload Protocol](/design/import/upload-protocol/), and what
-  `capsule sync` drains is [Download & Sync](/design/import/download-sync/).
+  `capsule push` speaks is the [Transfer — Upload](/design/transfer/upload/), and what
+  `capsule sync` drains is [Sync](/design/sync/).
 - The server endpoints behind the networked commands are the
   [REST API](/reference/api/) reference.
-- Terminal output is localized through the catalogs described in
-  [Internationalization](/design/i18n/). Help text is not yet: the command tree this reference
-  is generated from is English, deliberately and by pinning, so the artifact cannot vary with
-  the machine that emits it.
+- The CLI and TUI are English-only. The shared `error.*` codes render through the English
+  catalog described in [Internationalization](/design/i18n/); dropping the remaining locale
+  negotiation is #680. The command tree this reference is generated from is English, so the
+  artifact cannot vary with the machine that emits it.
 
 ## How the generated page stays true
 

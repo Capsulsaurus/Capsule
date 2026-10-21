@@ -10,7 +10,7 @@
  * and locations live in the encrypted metadata and are NOT available here (see the S-D6
  * report); the gateway maps these records to key-free display shells.
  *
- * Validation mirrors the S-D2 client rules (download-sync design doc, Validation):
+ * Validation mirrors the S-D2 client rules (sync design doc, Cursor Authenticity and Anti-Rewind):
  *   - Forward-version rejection: an entry whose `protocol_version` is above the client's
  *     max known is refused WITHOUT partial application.
  *   - Anti-rewind: a page whose `sync_seq` regresses against the per-album high-water mark

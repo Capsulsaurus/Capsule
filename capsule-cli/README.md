@@ -1,28 +1,34 @@
 # Capsule CLI
 
-CLI tool for Capsule API. Primarily used for server owners, advanced users, and development.
+`capsule` is Capsule's reference client: a scriptable CLI and, on a terminal, a full-screen TUI.
+It imports a library, pushes it to a server, verifies custody, syncs and restores. It is the
+first client to support each feature and remains the most robust client for the life of the
+project, because it is also the simplest: every other client is held to what the CLI proves.
 
-It is a thin CLI wrapper. It uses `capsule-core-rust` for core capabilities such as uploading, downloading, among others. This CLI tool is entirely stateless for simplicity.
+**English only.** The CLI and TUI are not localized and will stay English-only. The shared
+`error.*` codes the server returns are rendered through the English catalog; the native and web
+apps own localization ([Internationalization](../capsule-docs/src/content/docs/design/i18n.md)).
 
-## Installation
+## Shape
 
-Binaries are compiled to:
-
-- Windows 7+ (via MinGW)
-- MacOS (Arm64 + X64)
-- Linux (x86_64 + aarch64)
-
-For now, CLI has not been packaged with package managers but could be compiled from source.
-
-<!-- TODO: Distribute via GitHub packages and package managers -->
+- `capsule` with no arguments on a TTY opens the TUI.
+- Every subcommand stays non-interactive and supports `--json`, so scripts and the automated
+  test suites drive exactly the code paths the TUI uses.
+- Local state: the library catalog (SQLite, owned by `capsule-core`) plus the CLI's own SQLite
+  store for the sync feed and session state. Login tokens live in a `0600` file.
+- Every network call goes through `capsule-sdk`; the CLI never hand-rolls a request.
 
 ## Usage
 
-Refer to `capsule --help` for usage.
+`capsule --help` lists the command tree; the [CLI reference](../capsule-docs/src/content/docs/reference/cli.md)
+is generated from it. Day-to-day use is covered by the
+[user guide](../capsule-docs/src/content/docs/guides/user-guide.md).
 
 ## Development
 
-- `cargo run -- <args>` to run the CLI with arguments.
-- `cargo test` to run tests.
-- `cargo build --release` to build the release binary.
-- `cargo install --path .` to build and install CLI.
+- `cargo run -p capsule-cli -- <args>` runs the CLI.
+- `cargo nextest run -p capsule-cli` runs its tests, which spawn the real binary.
+- Building needs cmake, a C++17 compiler, libclang and, on x86_64, nasm, for the linked image
+  codecs (`media-linked-codecs`).
+- `mise run cli-surface` regenerates `cli-surface.json` after a command-tree change;
+  `mise run cli-surface-check` gates drift.

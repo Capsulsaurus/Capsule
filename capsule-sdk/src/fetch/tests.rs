@@ -1,4 +1,4 @@
-//! Mocked tests for the download-sync doc's client fetch Validation bullets
+//! Mocked tests for the transfer download doc's client fetch Validation bullets
 //! (slice `S-D2`): tiered fetch correctness, cross-asset dedup, resume-after-
 //! interrupt (zero duplicate bytes), above-tier permanent unavailability with the
 //! degrade ladder and automatic re-fetch, the `403` authorization-change path, the

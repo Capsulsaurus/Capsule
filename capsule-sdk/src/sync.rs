@@ -12,7 +12,7 @@
 //!
 //! [`SyncState`] is the **client-side anti-rewind + forward-version layer**, split
 //! out as a pure, network-free state machine so every rejection rule is a
-//! deterministic unit test (download-sync doc, "Sync feed validation"):
+//! deterministic unit test (sync doc, "Cursor Authenticity and Anti-Rewind"):
 //!
 //! - **Forward-version rejection.** A feed entry whose `protocol_version` is above
 //!   the client's max known is rejected *without partial application* — the whole
@@ -27,8 +27,8 @@
 //!
 //! Blob bytes never ride this surface; on-demand ranged blob fetch is [`crate::fetch`].
 //!
-//! [Download & Sync]: https://docs/design/import/download-sync/
-//! [Download & Sync — cursor authenticity]: https://docs/design/import/download-sync/#discovering-what-changed
+//! [Download & Sync]: https://docs/design/sync/
+//! [Download & Sync — cursor authenticity]: https://docs/design/sync/#cursor-authenticity-and-anti-rewind
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -167,7 +167,7 @@ pub struct FeedEntry {
 }
 
 /// The derived per-asset **original availability** — the badge a client's timeline
-/// reads (staged uploads, slice `S-B4`; download-sync doc, "The `awaiting-original`
+/// reads (staged uploads, slice `S-B4`; transfer download doc, "The `awaiting-original`
 /// state"). It is **always derived** from the feed's `original_held` fact, never
 /// stored as a second source of truth: an asset whose original has not yet landed
 /// on the server shows in the timeline immediately (LQIP, then T1 tiers as they

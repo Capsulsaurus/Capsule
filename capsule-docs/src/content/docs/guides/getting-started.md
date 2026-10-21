@@ -4,12 +4,18 @@ description: How to start using Capsule
 status: draft
 ---
 
-Welcome to Capsule! Capsule is a powerful asset management service for all your photos, videos and media files. It is built for professionals and enthusiasts who expect high-performance, modern features, and reliability.
+Capsule is an end-to-end encrypted photo and media library. No release has been published yet, so
+today you build from source ([Local Development](/development/local-development/)) and use the
+`capsule` command line.
 
-To get started, you need a client application and a server (either on a public instance or [self-hosted](/guides/self-hosting/)).
+What works today, with the CLI:
 
-> Note: We currently officially support self-hosting servers but for those interested in using through some public instance, please react to <https://github.com/Capsulsaurus/Capsule/discussions/81>
+- Create a local encrypted library and import files into it, including a
+  [Google Photos export](/guides/google-photos-migration/).
+- Register and sign in to a server, push your library to it, and sync it back down.
+- Create and revoke share links.
 
-*Client download instructions are not yet documented (2026-08-21).* No client binaries are published yet — the project has not cut its first GitHub release. Until it does, build a client from source; see [Local Development](/development/local-development/).
+You can run your own server ([Self Hosting](/guides/self-hosting/)). For a public instance, react to
+[discussion #81](https://github.com/Capsulsaurus/Capsule/discussions/81).
 
-<!-- TODO: Read [about how-to guides](https://diataxis.fr/how-to-guides/) in the Diátaxis framework -->
+Every command and option is in the [CLI reference](/reference/cli/).

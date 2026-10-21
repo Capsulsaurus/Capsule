@@ -40,7 +40,7 @@ use crate::lifecycle::{StreamedImport, Workspace};
 // ── The injected network seam ─────────────────────────────────────────────────
 
 /// The network seam the streaming window drives to hand one just-imported asset's bundle
-/// (original + derivatives + metadata) to the [upload protocol](https://docs/design/import/upload-protocol/).
+/// (original + derivatives + metadata) to the [upload protocol](https://docs/design/transfer/upload/).
 /// Implemented by `capsule-sdk`/CLI over the real upload client; tests supply a deterministic
 /// mock. Kept in `capsule-core` as a trait so the streaming loop — and its release gating — is
 /// exercised without any network. Synchronous by construction: the offline data plane calls it;
@@ -1020,7 +1020,7 @@ mod tests {
     /// [`UploadPolicy::Staged`](crate::import::UploadPolicy) policy can never
     /// enter the streaming window: `execute_streaming` refuses it *before* any file
     /// is imported, mirroring the planner's confirmation-time rejection. (SSoT:
-    /// download-sync doc — staged uploads are mutually exclusive with streaming.)
+    /// transfer upload doc — staged uploads are mutually exclusive with streaming.)
     #[test]
     fn staged_policy_cannot_enter_the_streaming_window() {
         use crate::import::upload::{StagedStreamingConflict, UploadPolicy};

@@ -29,7 +29,7 @@ use super::{AlbumId, AssetId, OwnerId, StoreFuture, UploadId, UserId};
 
 /// A blob's role within its asset bundle, declared at session creation.
 ///
-/// Closed: the visibility gate and staged uploads reason over it (upload-protocol design doc).
+/// Closed: the visibility gate and staged uploads reason over it (transfer upload design doc).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BlobRole {
     /// The encrypted original.
@@ -115,8 +115,8 @@ impl UploadSessionStatus {
     /// Narrower than [`Self::is_active`], and the one predicate every adapter's
     /// [`UploadSessionStore::least_recently_progressed`] applies: a `WaitingForProcessing`
     /// session is in flight for every other purpose, but the finalize claim that moved it there
-    /// is the promise that it will not be evicted out from under the finalizer (upload-protocol
-    /// design doc, the finalization claim).
+    /// is the promise that it will not be evicted out from under the finalizer (transfer
+    /// upload design doc, the finalization claim).
     pub fn is_evictable(self) -> bool {
         matches!(self, Self::Pending | Self::Uploading)
     }
@@ -137,7 +137,7 @@ impl UploadSessionStatus {
 ///
 /// Carries everything finalization needs — sizes, hash, crypto and protocol pins, blob role,
 /// the manifest envelope and the parties — so a session is finalizable from its own record
-/// with no further client input (upload-protocol design doc, §Endpoints).
+/// with no further client input (transfer upload design doc, §Endpoints).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UploadSessionRecord {
     /// The session's own identifier, and the name of its `incoming/{id}.bin` file.

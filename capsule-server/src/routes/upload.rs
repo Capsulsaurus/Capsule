@@ -37,7 +37,7 @@
 //! | delete `204` | kept |
 //! | delete `409` | kept — finalization is not interruptible, and a terminal session has nothing left to cancel |
 //! | delete `400` / `401` / `403` / `404` / `426` / `500` | kept |
-//! | list sessions (`GET /upload/sessions`) | **not ported in this pass.** `HEAD` is the resumption primitive the protocol names and it is here; the listing is for cross-restart discovery and nothing in the tree consumes it yet |
+//! | list sessions (`GET /upload/sessions`) | served by [`super::sessions`] |
 //! | receipt (`GET /upload/{id}/receipt`) | out of scope: `S-C15` owns custody receipts |
 //!
 //! Every status above is produced by a test in `tests/upload.rs`, because
@@ -1041,7 +1041,7 @@ pub async fn create_upload(
 /// Append a chunk, and finalize when it completes the declared size.
 ///
 /// Every rule the [chunk
-/// contract](../../../capsule-docs/src/content/docs/design/import/upload-protocol.md) fixes is
+/// contract](../../../capsule-docs/src/content/docs/design/transfer/upload.md) fixes is
 /// checked before a byte is written, and the checksum is verified against the received bytes
 /// *first*, so a chunk corrupted in transit persists nothing.
 #[kynos::patch("/v1/upload/{id}", operation_id = "append_chunk", tag = UploadTag)]

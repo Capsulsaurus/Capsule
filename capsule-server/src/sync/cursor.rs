@@ -2,8 +2,8 @@
 //!
 //! # What it is for
 //!
-//! [Download & Sync — Discovering What
-//! Changed](../../../capsule-docs/src/content/docs/design/import/download-sync.md) makes the
+//! [Sync — Cursor Authenticity and
+//! Anti-Rewind](../../../capsule-docs/src/content/docs/design/sync.md) makes the
 //! cursor opaque to clients and authenticated by the server on every call, "so a client cannot
 //! forge or mutate a cursor **and a cursor lifted from another context is rejected at the
 //! boundary**". The MAC is the *authenticity* layer only; the anti-rewind layer is the client's
@@ -165,7 +165,7 @@ impl CursorCodec {
     ///
     /// The key is `SYNC_CURSOR_MAC_KEY`, or HKDF-derived from `JWT_ED25519_DER` when that is
     /// unset — which is why rotating the signing key silently rotates this one, and every live
-    /// cursor with it (design/guides/self-hosting.md). A client whose cursor stops
+    /// cursor with it (guides/self-hosting.md). A client whose cursor stops
     /// authenticating re-syncs from the beginning; nothing is lost, but a rotation is a
     /// full-resync event and the operator should know that before performing one.
     pub fn new(key: &[u8; CURSOR_KEY_LEN]) -> Self {

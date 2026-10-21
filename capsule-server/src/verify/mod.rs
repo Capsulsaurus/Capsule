@@ -24,7 +24,7 @@
 //! bytes**, because the store is asked only about hashes the asset already references. Content
 //! addressing means one blob serves many assets, so answering "yes, those bytes exist" for an
 //! arbitrary hash would turn a durability query into a cross-account existence oracle. The
-//! storage-verification contract fixes this shape — *"a hash the server does not associate with
+//! transfer durability contract fixes this shape — *"a hash the server does not associate with
 //! the asset comes back `stored = false, indexed = false`, never silently omitted"* — and this
 //! is the reason it does.
 //!

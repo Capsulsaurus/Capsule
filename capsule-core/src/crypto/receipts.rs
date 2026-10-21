@@ -1,6 +1,6 @@
 //! Custody receipts — the server-signed complement of the client-signed provenance chain
 //! (`S-C46`; SSoT:
-//! [Storage Verification — Custody Receipts](https://docs/design/import/storage-verification/)).
+//! [Transfer — Durability: Custody Receipts](https://docs/design/transfer/durability/#custody-receipts)).
 //!
 //! The envelope proves what a client *claimed and signed*; a receipt proves what the server
 //! *accepted*, over a ciphertext hash the server recomputed itself. Before dropping
@@ -35,7 +35,7 @@ use crate::crypto::hash::Hash32;
 use crate::crypto::keys::{HybridSignature, HybridVerifyingKey};
 
 /// A blob's role within an asset (closed enum; the value set is owned by the
-/// storage-verification doc).
+/// transfer durability doc).
 ///
 /// Lives beside the receipt because the receipt's `blob_role` is written from it and the two
 /// have to agree on the spelling of every arm — see [`role_str`]. `library::storage_verify`

@@ -390,7 +390,7 @@ async fn rows_resolve_to_blobs(
 ///
 /// *May the scrub decode signed CBOR?* Yes, and the question turns out to be easier than it
 /// looked: the provenance blob is **deliberately server-visible** signed CBOR that carries no
-/// plaintext secrets by construction (upload-protocol, *What Gets Uploaded*). Reading it is not a
+/// plaintext secrets by construction (transfer upload doc, *What Gets Uploaded*). Reading it is not a
 /// privacy question at all. What is a real constraint is *how*: it decodes through
 /// `capsule_core`'s own `AssetManifest`, never through a shape defined here, because a second
 /// implementation of manifest parsing is exactly what sharing `capsule_core::validation` exists

@@ -28,7 +28,7 @@ export interface Asset {
     height: number;
     /**
      * Awaiting-original: the server has the manifest + metadata but not yet the original
-     * blob (staged uploads; download-sync design doc). Derived key-free from the feed's
+     * blob (staged uploads; transfer download design doc). Derived key-free from the feed's
      * `original_held` fact. `undefined`/`false` means the original is held.
      */
     pending?: boolean;

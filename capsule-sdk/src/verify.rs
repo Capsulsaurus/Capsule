@@ -25,7 +25,7 @@
 //! "not yet confirmed on server". Streaming import (`S-B3`) drives this per asset in its
 //! import→upload→verify→release window.
 //!
-//! [Storage Verification — Verify Before Destroy]: https://docs/design/import/storage-verification/
+//! [Storage Verification — Verify Before Destroy]: https://docs/design/transfer/durability/#verify-before-destroy
 
 use std::sync::Mutex;
 
