@@ -4,37 +4,28 @@ description: How Capsule structures files on disk — server vs client, and what
 status: draft
 ---
 
-Capsule's end-to-end encryption splits the filesystem into two fundamentally different roles. The **server** stores only opaque, content-addressed ciphertext — it never holds a decryption key and cannot interpret a single byte it stores. **Clients** hold the keys, so a client filesystem is a working library of plaintext media, sidecar metadata, and rebuildable caches. The two layouts share a small set of principles but otherwise have little in common.
+The **server** stores only opaque, content-addressed ciphertext and never holds a key. **Clients** hold keys, so a client stores plaintext media, signed sidecars, and rebuildable caches. The on-disk layouts are part of the contract.
 
-The on-disk layout is itself part of the contract — the filenames, directory structure, and atomic-write conventions are how recovery-first becomes operational, so they appear here verbatim rather than as suggestion.
+| Sub-doc | Concern |
+| --- | --- |
+| [Server Filesystem](/design/filesystem/server/) | Blob store layout, Postgres index, required services, deletion |
+| [Client Filesystem](/design/filesystem/client/) | Library layout, local SQLite index, space recovery |
+| [Maintenance](/design/filesystem/maintenance/) | Validation, scrubbing, repair, intra-library dedup, atomic writes |
 
-## Sub-docs
-
-| Sub-doc                                         | Concern                                                                           | Primary crate(s)                                                     |
-| ----------------------------------------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| [Server Filesystem](/design/filesystem/server/) | Blob store layout, Postgres index, required services, ownership, deletion         | `capsule-server` + storage glue                                         |
-| [Client Filesystem](/design/filesystem/client/) | Desktop / mobile library layout, local SQLite index, space recovery               | `capsule-core::{library,db}` + per-platform glue                     |
-| [Maintenance](/design/filesystem/maintenance/)  | Self-validation, scrubbing, repair, intra-library dedup, atomic-write granularity | `capsule-core::library` (client) + `capsule-server` (server-side scrub) |
-
-This index covers the principles both sides share. The import pipeline, the upload protocol, and synchronization are covered in [Import and Synchronization](/design/import/); metadata extraction in [Metadata](/design/metadata/); derivative generation in [Thumbnails and Previews](/design/thumbnails/); grouping and trash semantics in [Asset Organization](/design/organization/); backup and recovery in [Backup and Recovery](/design/backup-recovery/).
+Byte transfer is the [transfer protocol](/design/transfer/); metadata sync is [Sync](/design/sync/).
 
 ## Shared Principles
 
-These follow directly from [Core Principles](/design/principles/):
+- **Recovery-first.** No database is needed to interpret canonical data. Client sidecars are the source of truth; the server's PostgreSQL index holds only [key-free facts](/design/filesystem/server/#postgresql-what-the-server-knows) and is rebuildable from stored manifests.
+- **Atomic writes.** Temp file + atomic rename on the same filesystem; never overwrite in place ([rules](/design/filesystem/maintenance/#atomic-writes-and-crash-recovery)).
+- **Ephemeral derived data.** Only originals and their canonical metadata are irreplaceable.
+- **4 KiB alignment.** Upload chunks are 4 KiB-aligned so the [append path](/design/transfer/upload/#append-only-storage) stays block-aligned.
+- **Content-addressing.** Server blobs are named by their [ciphertext hash](/design/cryptography/primitives/).
 
-- **Recovery-first.** No database is required to interpret canonical data. On the client, sidecar files are the source of truth and the index is a rebuildable cache. On the server, PostgreSQL is the authoritative index, holding only the [key-free facts enumerated in Server Filesystem](/design/filesystem/server/#postgresql-what-the-server-knows).
-- **Atomic writes.** Every write that must not tear uses temp-file + atomic rename on the same filesystem. Direct overwrites risk corruption on power loss. The full per-granularity rules live in [Maintenance — Atomic Writes](/design/filesystem/maintenance/#atomic-writes-and-crash-recovery).
-- **Ephemeral derived data.** Only originals and their canonical metadata are irreplaceable. Thumbnails, transcodes, parsed-metadata caches, and the query index can all be regenerated and are treated as such.
-- **4 KiB alignment.** Data is processed and written block-aligned to 4 KiB, which matches memory and disks and keeps the [append-only upload path](/design/transfer/upload/#append-only-storage) page-aligned.
-- **Content-addressing.** Stored blobs are named by their ciphertext content hash — the same hash everywhere a content address is needed (see [Cryptography — Primitives](/design/cryptography/primitives/)).
-
-## Server vs Client at a Glance
-
-| Concern      | Server                                     | Client                                        |
-| ------------ | ------------------------------------------ | --------------------------------------------- |
-| Holds keys   | No                                         | Yes                                           |
-| Stored form  | Opaque ciphertext blobs                    | Plaintext media + CBOR sidecars               |
-| Naming       | Content-addressed by ciphertext hash       | UUIDv7 stems, date-bucketed                   |
-| Index        | PostgreSQL ([key-free facts only](/design/filesystem/server/#postgresql-what-the-server-knows)) | SQLite (rebuildable, full plaintext metadata) |
-| Derived data | Stored as client-generated encrypted blobs | Generated locally, cached, rebuildable        |
-| Originals    | Always retained while referenced           | Present only if synced locally                |
+| Concern | Server | Client |
+| --- | --- | --- |
+| Stored form | Opaque ciphertext blobs | Plaintext media + CBOR sidecars |
+| Naming | Ciphertext hash | UUIDv7, date-bucketed |
+| Index | PostgreSQL, authoritative, key-free | SQLite, rebuildable |
+| Derived data | Client-generated encrypted blobs | Generated locally, evictable |
+| Originals | Retained while referenced | Present only if synced locally |
