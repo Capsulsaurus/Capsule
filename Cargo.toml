@@ -114,9 +114,20 @@ hex = "0.4"
 # design/dependencies.md.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
+# `panic` stays at its default, `unwind`, in every profile: `capsule-core::media::decode::guarded`
+# catches a panicking third-party codec with `catch_unwind` so the original still imports. Under
+# `abort` that panic would take down the whole server or app instead.
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# An optimized build a sampling profiler can symbolize (`cargo build --profile profiling`).
+# It keeps release's LTO and codegen units, because loosening them changes inlining and so
+# measures code we do not ship. Line tables carry the file:line and inlined-frame information
+# that a profiler reads; full DWARF would only add variable info, which a sampler never uses.
+[profile.profiling]
+inherits = "release"
+debug = "line-tables-only"
 
 # Debug info dominates `target/debug` (12 GB with full DWARF on this workspace), which caps
 # how many concurrent worktrees fit on a dev machine. Line tables keep `file:line` in every
