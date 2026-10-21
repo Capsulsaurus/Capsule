@@ -36,8 +36,11 @@ An operator-invoked (schedulable) command that verifies a Postgres + blob-store 
 2. **Blob → row.** Every blob is referenced by a committed row or a live [share link](/design/share-links/#storing-the-record); otherwise an orphan, reported for GC.
 3. **Byte integrity (deep mode).** Blobs re-hash to their names; rolling and throttled. Same semantics as [durability `deep`](/design/transfer/durability/).
 4. **Chain ⇄ index.** Each asset's chain walks back to a `create` through retained manifests; the walk stops at the first break. The head must name a held provenance blob. Signatures are not verified — that is the client's [`verify_asset`](/design/cryptography/keys/#write-authorization).
-5. **Mirrored facts.** Facts Postgres mirrors from the signed manifest match the manifest's own copies. The scrub decodes the provenance blob (server-visible signed CBOR, no secrets) through the shared `capsule_core` manifest type; the write path never does.
-6. **Debris and quarantine inventory.** Unattached `incoming/` files and everything in `quarantine/` are listed.
+5. **Mirrored facts.** Facts Postgres mirrors from the signed manifest match the manifest's own copies.
+6. **Ledger ⇄ index.** Every [owner ledger](/design/filesystem/server/#the-owner-ledger) chain verifies, and every entry has its row.
+7. **Debris and quarantine inventory.** Unattached `incoming/` files and everything in `quarantine/` are listed.
+
+Checks 4, 5 and 6 decode manifests through the server's single manifest parser, shared with [rebuild](/design/filesystem/server/#rebuild); the write path never decodes them. They are not yet implemented: the current scrub checks only that a chain head names a held provenance blob.
 
 The server retains an asset's whole manifest chain until purge, which is what makes check 4 and the [proof-of-loss rebuttal](/design/transfer/durability/#proof-of-loss) possible.
 

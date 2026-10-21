@@ -31,6 +31,7 @@ Rules:
 {blob_root}/
 ├── incoming/{upload_id}.bin                 # append-only upload, pre-verification
 ├── blobs/{hash[0:2]}/{hash[2:4]}/{hash}.bin # finalized, content-addressed, immutable
+├── ledger/{owner_id}/{first_seq}.log         # owner ledger, append-only, signed
 ├── quarantine/                              # rejected objects + .reason.json, for humans
 └── .server/{version,config}                 # operator metadata (plaintext, not user data)
 ```
@@ -48,16 +49,79 @@ Commit discipline ([`capsule-server::blob::fs`](https://github.com/Capsulsaurus/
 
 ## Uniform, Opaque Blobs
 
-An asset is a **bundle** of blobs ([Transfer — Upload](/design/transfer/upload/#what-gets-uploaded)): encrypted original, derivatives, metadata blob, and the signed manifest stored as the provenance blob. The store does not distinguish them; roles live in PostgreSQL, with the manifest envelopes as the key-free durable fallback.
+An asset is a **bundle** of blobs ([Transfer — Upload](/design/transfer/upload/#what-gets-uploaded)): encrypted original, derivatives, metadata blob, and the signed manifest stored as the provenance blob. The store does not distinguish them; roles live in PostgreSQL, with the manifest envelopes and the [owner ledger](#the-owner-ledger) as the key-free durable fallback.
 
 ## Recovering the Index from Blobs Alone
 
-PostgreSQL is authoritative but not the only copy. Every signed [manifest envelope](/design/cryptography/provenance/#asset-manifest) is stored in `blobs/` and carries what index rows need: suite and protocol version, `amk_version`, ciphertext hash and size, creator user/device, `album_id`, `file_id`, `prior_provenance_hash`, action, [`client_version`](/design/cryptography/provenance/#client-build-identification), and the device signature.
+PostgreSQL's asset index is a **projection** of the blob store, never the only copy. Losing
+the database, or finding it corrupt, costs a rebuild, not a library. Accounts, credentials and
+everything else that is not an asset fact still come from the PostgreSQL backup
+([what is not rebuilt](#what-a-rebuild-cannot-recover)).
 
-- A rebuild walks the envelopes, checks each signature against the cached device directory, and writes rows for the blobs each names. It MUST be idempotent.
-- A blob no envelope names is an orphan for [GC](#deletion-and-garbage-collection). An envelope naming a missing blob is a dangling reference — except a missing original on an [`awaiting-original`](/design/transfer/upload/#upload-tiering-staged-uploads) asset.
-- An envelope failing structural validation MUST be moved to `quarantine/` with a `.reason.json`, never dropped.
-- Rebuild is a recovery path, never the hot path. Proactive consistency checking is the [integrity scrub](/design/filesystem/maintenance/#server-side-integrity-scrub).
+### The Owner Ledger
+
+Every signed [manifest envelope](/design/cryptography/provenance/#asset-manifest) is stored in
+`blobs/` and names everything an index row needs except who owns it and in what order the server
+accepted it. The **owner ledger** carries those facts:
+
+```text
+{blob_root}/ledger/{owner_id}/{first_seq}.log   # append-only segments
+```
+
+- One entry per accepted manifest, per device-directory version and per lifecycle action:
+  `sync_seq`, the manifest's content hash, `upload_user_id`, uploader device, `received_at` and
+  the custody receipt. Each entry carries the hash of the previous one and is signed by the
+  attestation key, so a truncated or edited ledger is detectable.
+- An entry is appended and fsynced **after** the blobs it names are committed and **before** the
+  index row commits. A crash between the two leaves an entry without a row, which the next
+  rebuild or scrub replays; never a row without an entry.
+- The ledger is never rewritten. Purge appends a purge entry; the purged blobs go through
+  [GC](#deletion-and-garbage-collection) as before.
+- Device-directory versions are in the ledger, so a rebuild verifies signatures against the
+  directory as it stood when each manifest was accepted.
+
+### Rebuild
+
+`capsule-server rebuild` reconstructs the asset index from `ledger/` plus `blobs/`, into an empty
+schema or alongside a restored backup:
+
+1. Verify each owner's ledger chain. A break stops that owner's replay at the last good entry
+   and is reported; other owners continue.
+2. Replay entries in `sync_seq` order: decode the named manifest, check its signature against
+   the directory version the ledger recorded, and write the rows it implies. Replay is
+   idempotent; a row the backup already holds is compared, never overwritten.
+3. Recompute quota usage and blob references from the rebuilt rows.
+4. Report blobs no entry names (orphans, left to GC), entries naming a missing blob (dangling,
+   except an [`awaiting-original`](/design/transfer/upload/#upload-tiering-staged-uploads)
+   asset) and envelopes failing structural validation (moved to `quarantine/` with a
+   `.reason.json`, never dropped).
+
+Decoding manifests is confined to **one module**, the server's only signed-CBOR parser, shared
+by rebuild and the [integrity scrub](/design/filesystem/maintenance/#server-side-integrity-scrub)
+and fuzzed. The write path never decodes manifests.
+
+### Sync Epoch and Client Re-Announce
+
+Rebuilt rows keep their ledger `sync_seq`, so clients' sync cursors stay valid. When a rebuild
+cannot prove the sequence complete (a ledger chain break or lost tail), the server increments
+the owner's **sync epoch**. A cursor from an older epoch is refused with a typed error; the
+client drops its high-water mark, resyncs from zero and discards nothing (invariant 5 in
+[Versioning](/design/versioning/#system-invariants)).
+
+After an epoch change, each client **re-announces** the signed manifests it holds whose blobs
+the server reports missing from the index: manifests only, no bytes. The server verifies each
+like an upload's manifest and restores the row if every named blob is present; otherwise the
+client re-uploads through the normal [transfer protocol](/design/transfer/upload/). A
+re-announced manifest can only restore what its owner's devices signed.
+
+### What a Rebuild Cannot Recover
+
+Restored from the PostgreSQL backup, never derived from blobs: accounts, credentials and TOTP,
+escrow and sealed identities, share links and guest drops, moderation standing, federation
+capabilities and peers, revoked tokens, device cohorts, and in-flight album upgrades. This is
+why the [self-hosting guide](/guides/self-hosting/#backups) requires backing up PostgreSQL and
+`BLOB_ROOT` together; the ledger makes a stale or partial database backup recoverable, not
+optional.
 
 ## Manifest Envelope Validation
 
@@ -105,6 +169,8 @@ The server attests key-free whether a blob is stored (`stat` in `blobs/`), index
 - **Layout round-trip (unit).** A finalized blob lives at exactly its sharded address and re-hashes to its name.
 - **Shard enumeration (unit).** Scrub, GC and rebuild walks recover the same blob set across a partially populated shard tree.
 - **Rebuild idempotency (smoke).** Drop the index, rebuild, compare to the expected set; re-run yields no changes.
+- **Ledger crash window (unit).** A crash after the ledger append and before the row commit is replayed by rebuild; a tampered or truncated segment is reported and stops only that owner.
+- **Epoch (integration).** A rebuild with a lost ledger tail bumps the epoch; an old cursor is refused, the client resyncs and re-announces, and the index matches the pre-loss one.
 - **Quarantine on malformed envelope (unit).** The object moves to `quarantine/` with a `.reason.json` naming the failed check.
 - **GC safety (unit).** Swept only after the grace window; a re-reference during it cancels.
 - **Dangling reference (unit).** Surfaced, never auto-deleted, never treated as collectable.
