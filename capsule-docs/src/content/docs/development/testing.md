@@ -21,6 +21,8 @@ reducer exist partly so that the test suites drive exactly what a user drives.
   as a property across generated inputs.
 - **One adapter contract, many adapters.** Every port has a conformance suite that every
   adapter, including the in-memory test double, must pass.
+- **Adjacent, not inline.** A module's unit tests live in its sibling `tests.rs`
+  (`foo.rs` → `foo/tests.rs`); `<crate>/tests/` exercises only the public API.
 - **Tests guard the data, not the coverage number.** Mutation testing on the critical modules
   shows whether a test actually constrains behaviour.
 

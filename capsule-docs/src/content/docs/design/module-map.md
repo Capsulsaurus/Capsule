@@ -12,18 +12,20 @@ boundaries between crates, and the bounded E2E case list.
 ```text
 capsule-core            (no internal deps)
 capsule-i18n            (no internal deps)
-capsule-sdk          -> core, i18n
+capsule-library      -> core
+capsule-sdk          -> core, library, i18n
 capsule-wasm         -> core
-capsule-core-ffi     -> core, sdk
+capsule-core-ffi     -> core, library, sdk
 capsule-server       -> core, i18n   (dev: sdk, wasm, server-migration; never linked)
-capsule-cli          -> core, sdk, i18n, cli-entity, cli-migration
-capsule-e2e          -> server, sdk, cli, core, wasm   (tests only)
+capsule-cli          -> core, library, sdk, i18n, cli-entity, cli-migration
+capsule-e2e          -> server, sdk, cli, library, core, wasm   (tests only)
 xtask                -> core, i18n
 ```
 
 | Crate | Responsibility |
 | --- | --- |
-| `capsule-core` | Cryptography and MLS authority, canonical CBOR, sidecars, validation, library and SQLite index, import, media, LQIP, sharing and drop crypto, backup, ML orchestration |
+| `capsule-core` | **Stateless**: cryptography and MLS authority, canonical CBOR, sidecar and CRDT logic, validation, import planning, media, LQIP, sharing and drop crypto, ML orchestration |
+| `capsule-library` | **All local state**: the SQLite index, the on-disk library and its lock, the `Workspace`, import scanning and execution, sidecar I/O, backup, hardware signers |
 | `capsule-i18n` | Canonical ICU catalogs and runtime localization ([Internationalization](/design/i18n/)) |
 | `capsule-sdk` | Spargen-generated REST client plus Capsule's orchestration: auth refresh, resumable upload, sync, recovery, version negotiation, LAN peering |
 | `capsule-wasm` | Browser sealing surface (share-link open, guest-drop seal) over `capsule-core` with default features off |
@@ -34,6 +36,22 @@ xtask                -> core, i18n
 | `xtask` | Codegen, i18n generation, architecture checks |
 | `capsule-core-swift`, `capsule-core-kotlin` | Platform harnesses and `HardwareSigner` implementations (Secure Enclave, StrongBox) |
 | `capsule-web`, `capsule-swift`, `capsule-android` | The clients ([Clients](/design/clients/)) |
+
+### Stateless Core
+
+`capsule-core` is a library of pure functions over values. It holds no connection, file handle,
+cache, global or background task; it reads no environment, clock or filesystem. Time, randomness
+and storage reach it through `Clock`, `Rng` and `Store` traits that the caller implements, so
+every core behaviour is testable with fixed inputs. Exceptions, each confined to one module:
+
+| Exception | Why |
+| --- | --- |
+| OS CSPRNG behind `crypto::rng` | Key material must never come from an injectable, and therefore replaceable, source |
+| `catch_unwind` in `media::decode` | A decoder panic on hostile input must become a typed error, not abort the caller |
+
+Anything else that needs state belongs in `capsule-library` (local) or `capsule-sdk` (network).
+The split from the earlier all-in-one `capsule-core` is tracked in the roadmap; until it lands,
+the library modules still live in `capsule-core` and are the only stateful code there.
 
 GraphQL and gRPC are retired
 ([ADR-0001](https://github.com/Capsulsaurus/Capsule/blob/master/adr/0001-the-public-server-surface-is-kynos-rest-only.md));

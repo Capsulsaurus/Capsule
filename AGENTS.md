@@ -46,6 +46,8 @@
 - Blob storage and the [transfer protocol](capsule-docs/src/content/docs/design/transfer/index.md) are Capsule-owned behind narrow ports. Do not add `object_store` or generic CAS or transfer crates.
 - Authentication state and upload-session state are separate ports whose adapters are `redis-rs` (Valkey) and in-memory, never PostgreSQL. PostgreSQL backs the durable ports (asset index, accounts, cohorts, quota). Do not introduce a generic TTL or CAS abstraction.
 - Every change must preserve the [system invariants](capsule-docs/src/content/docs/design/versioning.md#system-invariants): a version mismatch may refuse a write, never lose or corrupt data.
+- `capsule-core` is stateless: pure functions over values, with time, randomness and storage injected through traits. Local state (SQLite, files, the `Workspace`, hardware signers) lives in `capsule-library`; network state in `capsule-sdk`. A new exception needs a row with a one-line reason in [Module Map — Stateless Core](capsule-docs/src/content/docs/design/module-map.md#stateless-core).
+- Unit tests sit next to their code but in their own file: `foo.rs` ends with `#[cfg(test)] mod tests;` and the tests live in `foo/tests.rs` (`use super::*` keeps private access). No inline `mod tests { … }` blocks. `<crate>/tests/` holds public-API integration tests only.
 - `legacy-review/` is non-buildable reference material. Restore code only after defining its contract and automated tests against the decisions above.
 
 ## Workflow
