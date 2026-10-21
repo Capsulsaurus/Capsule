@@ -1,10 +1,10 @@
 # ADR-0008 — The sync manifest payload is an unversioned provenance record
 
-- **Status:** accepted
+- **Status:** superseded
 - **Date:** 2026-10-17
 - **Supersedes:** —
-- **Superseded by:** —
-- **Contract:** [Download & Sync — Resumption and Verification](../capsule-docs/src/content/docs/design/transfer/download.md#resumption-and-verification)
+- **Superseded by:** [ADR-0009](0009-every-signed-record-leads-with-its-version.md)
+- **Contract:** [Transfer — Download: Resumption and Verification](../capsule-docs/src/content/docs/design/transfer/download.md#resumption-and-verification)
 - **Slices:** S-P5
 
 ## Context

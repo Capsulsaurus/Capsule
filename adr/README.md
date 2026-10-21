@@ -51,7 +51,7 @@ rather than the order they were taken. Numbers are never reused.
 - **Supersedes:** —
 - **Superseded by:** —
 - **Contract:** [<the doc that now states this normatively>](../capsule-docs/src/content/docs/design/<doc>.md)
-- **Slices:** S-C16, S-C20
+- **Issues:** #123
 
 ## Context
 What was true before, with evidence.
