@@ -48,7 +48,7 @@ The reclaimable set is held within a user-configurable budget ([`capsule-core::l
 - At equal recency, evict original → preview → thumbnail. The metadata tier (sidecar + LQIP) is never reclaimed, so an asset always stays listable.
 - Pinned representations and device-owned originals are exempt from automatic eviction.
 
-Driving the budget from [connection class](/design/networking/#connection-classes) is not yet enforced — tracked in the MVP roadmap.
+Driving the budget from [connection class](/design/networking/#connection-classes) is not yet enforced; tracked by #707.
 
 **Releasing a device-owned original** (via the user-driven path or [streaming import](/design/import/pipeline/#import-upload-streaming-mode)) MUST pass the [verify-before-destroy](/design/transfer/durability/#verify-before-destroy) gate. Once released it is an ordinary server-only, re-fetchable asset.
 

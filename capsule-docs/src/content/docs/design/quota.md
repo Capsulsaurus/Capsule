@@ -13,7 +13,7 @@ Quota is charged to `upload_user_id` (the authenticated uploader), not `owner_id
 - **Attribution is global by content address.** A blob counts against only the first uploader; a later identical upload is a [merge](/design/transfer/upload/#deduplication-and-merge) and charges nothing.
 - **Trash counts at full size** until the [retention window](/design/organization/#retention-window) expires and the asset is hard-purged.
 - **Credit belongs to the GC sweep, not the purge.** A purge drops one asset's references; the bytes are credited back, to whoever the ledger says was charged, only when the [collector](/design/filesystem/server/#deletion-and-garbage-collection) releases a zero-reference blob. Refunding at purge time would refund bytes still stored for another holder.
-- **Federated-received blobs count against the receiver**, deduped by content hash, bounded by a per-`(receiving_user, source_peer)` caching budget (deployment-configurable, default 25% of the receiver's hard limit) — the storage side of [per-peer compartmentalization](/design/federation/#per-peer-compartmentalization). Not yet enforced — tracked in the MVP roadmap.
+- **Federated-received blobs count against the receiver**, deduped by content hash, bounded by a per-`(receiving_user, source_peer)` caching budget (deployment-configurable, default 25% of the receiver's hard limit) — the storage side of [per-peer compartmentalization](/design/federation/#per-peer-compartmentalization). Not yet enforced; tracked with federation's receiving half, #476.
 
 ## Thresholds and States
 
@@ -27,7 +27,7 @@ Quota is charged to `upload_user_id` (the authenticated uploader), not `owner_id
 - The writes a `delete`, `trash-restore`, or trash-empty produces MUST always be admitted: a user must be able to delete their way back under quota.
 - Entering the grace window raises `quota_grace_expiring`. Reads are never refused by quota.
 - Limits and grace window are deployment-configurable; the default is no quota (`hard_limit = u64::MAX`), which runs the same code path.
-- A **suspended** state (admin or billing action, see [Moderation](/design/moderation/)) is part of the contract. Not yet enforced — tracked in the MVP roadmap.
+- A **suspended** state (admin or billing action, see [Moderation](/design/moderation/)) is part of the contract. Not yet enforced; tracked by #705.
 
 ## Enforcement Points
 

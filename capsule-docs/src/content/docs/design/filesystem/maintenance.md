@@ -40,7 +40,7 @@ An operator-invoked (schedulable) command that verifies a Postgres + blob-store 
 6. **Ledger ⇄ index.** Every [owner ledger](/design/filesystem/server/#the-owner-ledger) chain verifies, and every entry has its row.
 7. **Debris and quarantine inventory.** Unattached `incoming/` files and everything in `quarantine/` are listed.
 
-Checks 4, 5 and 6 decode manifests through the server's single manifest parser, shared with [rebuild](/design/filesystem/server/#rebuild); the write path never decodes them. They are not yet implemented: the current scrub checks only that a chain head names a held provenance blob.
+Checks 4, 5 and 6 decode manifests through the server's single manifest parser, shared with [rebuild](/design/filesystem/server/#rebuild); the write path never decodes them. They are not yet implemented (#697): the current scrub checks only that a chain head names a held provenance blob.
 
 The server retains an asset's whole manifest chain until purge, which is what makes check 4 and the [proof-of-loss rebuttal](/design/transfer/durability/#proof-of-loss) possible.
 

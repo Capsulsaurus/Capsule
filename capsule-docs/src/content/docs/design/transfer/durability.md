@@ -38,7 +38,7 @@ A verdict says the bytes are serveable *now*. A **custody receipt** proves the s
 
 ## Signed Storage Attestation
 
-The verdict MAY be requested in a signed form carrying a client nonce and signed under the attestation key, so an honest server's self-reported loss and periodic audits are retainable evidence. Signing is rate-limited like `deep`. Not yet enforced — tracked in the MVP roadmap.
+The verdict MAY be requested in a signed form carrying a client nonce and signed under the attestation key, so an honest server's self-reported loss and periodic audits are retainable evidence. Signing is rate-limited like `deep`. Not yet enforced; tracked by #706.
 
 ## Proof of Loss
 
@@ -57,7 +57,7 @@ A transport failure on any check retains the bytes. A non-durable verdict never 
 The gate applies to:
 
 - releasing or evicting a **device-owned original** ([Space Recovery](/design/filesystem/client/#space-recovery));
-- **Move-mode** source deletion after import. Not yet enforced — tracked in the MVP roadmap: `import --move` outside streaming mode does not wait on the gate;
+- **Move-mode** source deletion after import. Not yet enforced; tracked by #671: `import --move` outside streaming mode does not wait on the gate;
 - **streaming import** release ([Pipeline](/design/import/pipeline/#import-upload-streaming-mode));
 - discarding local working state tied to a write (staged temporaries, the pre-edit copy across a `replace`).
 - releasing an original handed to a [delegate](/design/peering/#delegation): the receipt is fetched from the server by the origin and checked against the hash the origin computed, never relayed by the delegate.

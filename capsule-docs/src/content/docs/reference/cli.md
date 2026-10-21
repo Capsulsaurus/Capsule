@@ -45,10 +45,10 @@ offer no flag for one.
   `capsule sync` drains is [Sync](/design/sync/).
 - The server endpoints behind the networked commands are the
   [REST API](/reference/api/) reference.
-- Terminal output is localized through the catalogs described in
-  [Internationalization](/design/i18n/). Help text is not yet: the command tree this reference
-  is generated from is English, deliberately and by pinning, so the artifact cannot vary with
-  the machine that emits it.
+- The CLI and TUI are English-only. The shared `error.*` codes render through the English
+  catalog described in [Internationalization](/design/i18n/); dropping the remaining locale
+  negotiation is #680. The command tree this reference is generated from is English, so the
+  artifact cannot vary with the machine that emits it.
 
 ## How the generated page stays true
 
