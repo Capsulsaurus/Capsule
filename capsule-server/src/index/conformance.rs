@@ -28,15 +28,17 @@
 //! [`run_all`] does.
 
 use capsule_core::crypto::hash::Hash32;
+use capsule_core::crypto::receipts::CustodyReceipt;
 use jiff::Timestamp;
 
 use super::{
-    AssetIndex, AssetState, BlobOutcome, BlobRecord, ChangeKind, HoldOutcome, LifecycleOp,
-    OpAction, OpOutcome, PendingAsset, PurgeOutcome, Reservation, ServingHold,
+    AssetIndex, AssetState, BlobOutcome, BlobRecord, ChangeKind, Custody, HoldOutcome, LifecycleOp,
+    OpAction, OpOutcome, PendingAsset, PurgeOutcome, Receipted, Reservation, ServingHold,
 };
+use crate::attestation::{ReceiptDraft, ReceiptLog, ReceiptSigner};
 use crate::blob::ContentAddress;
 use crate::blob::address::CONTENT_ADDRESS_LEN;
-use crate::store::{AlbumId, AssetId, BlobRole, OwnerId};
+use crate::store::{AlbumId, AssetId, BlobRole, OwnerId, UploadId};
 
 /// Unwrap an index result, failing with the operation that was expected to work.
 #[track_caller]
@@ -63,7 +65,7 @@ fn address(seed: &str) -> ContentAddress {
 }
 
 /// A pending row for `case`'s asset `n`, under `case`'s own owner and album.
-fn pending(case: &str, n: u32) -> PendingAsset {
+pub(crate) fn pending(case: &str, n: u32) -> PendingAsset {
     PendingAsset {
         asset_id: AssetId::new(format!("{case}-asset-{n}")),
         owner_id: OwnerId::new(format!("{case}-owner")),
@@ -80,7 +82,7 @@ fn pending(case: &str, n: u32) -> PendingAsset {
 /// computes over the bytes it committed and it is what the chain head is set from (`S-C31`).
 /// Taken from the address here only because the double's addresses *are* SHA-256 digests; the
 /// port is what refuses to make that assumption.
-fn blob(role: BlobRole, seed: &str) -> BlobRecord {
+pub(crate) fn blob(role: BlobRole, seed: &str) -> BlobRecord {
     let address = address(seed);
     BlobRecord {
         manifest_sha256: (role == BlobRole::Provenance)
@@ -2170,6 +2172,274 @@ pub async fn an_album_page_is_the_owners_sequence_filtered_to_one_album(index: &
     );
 }
 
+// ---------------------------------------------------------------------------------------
+// Custody: the rows and the receipt are one write (#693)
+// ---------------------------------------------------------------------------------------
+
+/// The draft a finalization of `upload` against `case`'s asset `n` hands the index.
+pub(crate) fn draft(case: &str, n: u32, upload: &str, record: &BlobRecord) -> ReceiptDraft {
+    ReceiptDraft {
+        crypto_suite_id: 1,
+        protocol_version: "2026-01-01".to_owned(),
+        upload_id: UploadId::new(format!("{case}-{upload}")),
+        asset_id: AssetId::new(format!("{case}-asset-{n}")),
+        blob_role: record.role.as_str().to_owned(),
+        ciphertext_hash: Hash32::from_hex(record.address.as_str()).expect("an address is a digest"),
+        size: record.size,
+        envelope_hash: record.manifest_sha256,
+        uploaded_by_user: format!("{case}-user"),
+        uploaded_by_device: None,
+        received_at: "1970-01-01T00:00:00Z".to_owned(),
+    }
+}
+
+/// What the log holds for `upload` — the read a client's receipt request makes.
+async fn logged(receipts: &dyn ReceiptLog, upload: &UploadId) -> Option<CustodyReceipt> {
+    match receipts.for_upload(upload).await {
+        Ok(found) => found,
+        Err(error) => panic!("the receipt log could not answer for {upload}: {error}"),
+    }
+}
+
+/// A recorded blob and its receipt are one commit, and the receipt attests to what was recorded.
+pub async fn recording_with_a_receipt_commits_both(
+    index: &dyn AssetIndex,
+    receipts: &dyn ReceiptLog,
+    signer: &dyn ReceiptSigner,
+) {
+    let row = pending("custody", 1);
+    let asset = row.asset_id.clone();
+    ok(index.reserve(row).await, "reserve");
+    let original = blob(BlobRole::Original, "custody-o1");
+    let draft = draft("custody", 1, "u1", &original);
+
+    let Receipted { outcome, receipt } = ok(
+        index
+            .record_blob_with_receipt(
+                &asset,
+                original.clone(),
+                Custody {
+                    draft: &draft,
+                    signer,
+                },
+            )
+            .await,
+        "record a blob with its receipt",
+    );
+    assert!(
+        matches!(outcome, BlobOutcome::Recorded { .. }),
+        "a first custody write records the blob, and answered {outcome:?}"
+    );
+    let Some(receipt) = receipt else {
+        panic!("a recorded blob came back without the receipt that commits with it")
+    };
+    assert_eq!(receipt.core.upload_id, draft.upload_id.as_str());
+    assert_eq!(receipt.core.asset_id, asset.as_str());
+    assert_eq!(receipt.core.ciphertext_hash, draft.ciphertext_hash);
+    assert_eq!(receipt.core.server_key_id, signer.key_id());
+    assert_eq!(
+        logged(receipts, &draft.upload_id).await,
+        Some(receipt),
+        "the receipt the index wrote is the one the log serves"
+    );
+    let held = ok(index.read(&asset).await, "read").expect("the row exists");
+    assert_eq!(
+        held.address_for(BlobRole::Original),
+        Some(&original.address)
+    );
+}
+
+/// A retried custody write is free: the blob is already held and the receipt is the one the
+/// first attempt committed, not a second signed statement about the same custody event.
+pub async fn a_retried_custody_write_returns_the_same_receipt(
+    index: &dyn AssetIndex,
+    receipts: &dyn ReceiptLog,
+    signer: &dyn ReceiptSigner,
+) {
+    let row = pending("custody-retry", 1);
+    let asset = row.asset_id.clone();
+    ok(index.reserve(row).await, "reserve");
+    let original = blob(BlobRole::Original, "custody-retry-o1");
+    let draft = draft("custody-retry", 1, "u1", &original);
+    let custody = Custody {
+        draft: &draft,
+        signer,
+    };
+
+    let first = ok(
+        index
+            .record_blob_with_receipt(&asset, original.clone(), custody)
+            .await,
+        "record a blob with its receipt",
+    );
+    let again = ok(
+        index
+            .record_blob_with_receipt(&asset, original, custody)
+            .await,
+        "retry the same custody write",
+    );
+    assert!(
+        matches!(again.outcome, BlobOutcome::AlreadyHeld(_)),
+        "a retry of a committed custody write is a retry, and answered {:?}",
+        again.outcome
+    );
+    assert!(first.receipt.is_some());
+    assert_eq!(
+        again.receipt, first.receipt,
+        "a retry must get the receipt it already has"
+    );
+    assert_eq!(
+        ok(
+            receipts.for_asset(&asset).await,
+            "list the asset's receipts"
+        )
+        .len(),
+        1,
+        "one custody event, one receipt"
+    );
+}
+
+/// A refused custody write commits nothing — not the row, and not a receipt.
+pub async fn a_refused_custody_write_writes_no_receipt(
+    index: &dyn AssetIndex,
+    receipts: &dyn ReceiptLog,
+    signer: &dyn ReceiptSigner,
+) {
+    let row = pending("custody-refused", 1);
+    let asset = row.asset_id.clone();
+    ok(index.reserve(row).await, "reserve");
+    record(
+        index,
+        &asset,
+        blob(BlobRole::Original, "custody-refused-o1"),
+    )
+    .await;
+
+    // A second original under a role the asset already holds is a conflict.
+    let other = blob(BlobRole::Original, "custody-refused-o2");
+    let draft_conflict = draft("custody-refused", 1, "u2", &other);
+    let refused = ok(
+        index
+            .record_blob_with_receipt(
+                &asset,
+                other,
+                Custody {
+                    draft: &draft_conflict,
+                    signer,
+                },
+            )
+            .await,
+        "record a conflicting blob",
+    );
+    assert_eq!(refused.outcome, BlobOutcome::Conflict);
+    assert_eq!(refused.receipt, None, "a refusal must not be receipted");
+    assert_eq!(logged(receipts, &draft_conflict.upload_id).await, None);
+
+    // An asset nobody reserved.
+    let stray = blob(BlobRole::Original, "custody-refused-o3");
+    let draft_stray = draft("custody-refused", 9, "u3", &stray);
+    let missing = ok(
+        index
+            .record_blob_with_receipt(
+                &AssetId::new("custody-refused-asset-9"),
+                stray,
+                Custody {
+                    draft: &draft_stray,
+                    signer,
+                },
+            )
+            .await,
+        "record against an unreserved asset",
+    );
+    assert_eq!(missing.outcome, BlobOutcome::NotFound);
+    assert_eq!(missing.receipt, None);
+    assert_eq!(logged(receipts, &draft_stray.upload_id).await, None);
+}
+
+/// A `replace` applied with its receipt commits both; its replay returns the same receipt; and
+/// an op the index refuses writes none.
+pub async fn applying_with_a_receipt_commits_both(
+    index: &dyn AssetIndex,
+    receipts: &dyn ReceiptLog,
+    signer: &dyn ReceiptSigner,
+) {
+    let (asset, _) = publish(index, "custody-op", 1).await;
+    let created = head_of(index, &asset).await;
+    let provenance = blob(BlobRole::Provenance, "custody-op-p2");
+    let draft = draft("custody-op", 1, "u1", &provenance);
+    let custody = Custody {
+        draft: &draft,
+        signer,
+    };
+    let replace = op("custody-op", 1, OpAction::Replace, created, manifest(201));
+
+    let applied = ok(
+        index.apply_op_with_receipt(replace.clone(), custody).await,
+        "apply a replace with its receipt",
+    );
+    assert!(
+        matches!(applied.outcome, OpOutcome::Applied { .. }),
+        "a chained replace applies, and answered {:?}",
+        applied.outcome
+    );
+    let Some(receipt) = applied.receipt.clone() else {
+        panic!("an applied op came back without the receipt that commits with it")
+    };
+    assert_eq!(logged(receipts, &draft.upload_id).await, Some(receipt));
+
+    let replayed = ok(
+        index.apply_op_with_receipt(replace, custody).await,
+        "replay the replace",
+    );
+    assert!(matches!(replayed.outcome, OpOutcome::Replayed { .. }));
+    assert_eq!(
+        replayed.receipt, applied.receipt,
+        "a replay must get the receipt it already has"
+    );
+
+    // Stale: names the create's head after the replace moved it.
+    let stale_draft = self::draft("custody-op", 1, "u2", &provenance);
+    let stale = ok(
+        index
+            .apply_op_with_receipt(
+                op("custody-op", 1, OpAction::Replace, created, manifest(202)),
+                Custody {
+                    draft: &stale_draft,
+                    signer,
+                },
+            )
+            .await,
+        "apply a stale replace",
+    );
+    assert!(matches!(stale.outcome, OpOutcome::StaleChain { .. }));
+    assert_eq!(stale.receipt, None, "a refused op must not be receipted");
+    assert_eq!(logged(receipts, &stale_draft.upload_id).await, None);
+}
+
+/// The custody cases, against an index and the receipt log it writes to.
+///
+/// Separate from [`run_all`] because it needs the log: an adapter's custody receipts are only
+/// observable through the [`ReceiptLog`] that serves them, which for each adapter is the one
+/// sharing its store — the same table in Postgres, the same `Arc` in memory.
+pub async fn run_custody(
+    index: &dyn AssetIndex,
+    receipts: &dyn ReceiptLog,
+    signer: &dyn ReceiptSigner,
+) {
+    recording_with_a_receipt_commits_both(index, receipts, signer).await;
+    a_retried_custody_write_returns_the_same_receipt(index, receipts, signer).await;
+    a_refused_custody_write_writes_no_receipt(index, receipts, signer).await;
+    applying_with_a_receipt_commits_both(index, receipts, signer).await;
+}
+
+/// A signer for the custody cases.
+pub fn suite_signer() -> crate::attestation::LocalAttestationKey {
+    crate::attestation::LocalAttestationKey::new(
+        "https://custody.suite.test",
+        capsule_core::crypto::keys::HybridSigningKey::generate(),
+    )
+}
+
 pub async fn run_all(index: &dyn AssetIndex) {
     reserving_twice_joins_the_same_row(index).await;
     a_disagreeing_reservation_is_refused_without_disclosure(index).await;
@@ -2223,5 +2493,12 @@ mod tests {
     #[tokio::test]
     async fn the_in_memory_index_conforms() {
         run_all(&InMemoryAssetIndex::new()).await;
+    }
+
+    /// The double's custody receipts land in the log it was built over.
+    #[tokio::test]
+    async fn the_in_memory_index_writes_custody_receipts_with_its_rows() {
+        let index = InMemoryAssetIndex::new();
+        run_custody(&index, index.receipts().as_ref(), &suite_signer()).await;
     }
 }

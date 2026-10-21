@@ -1475,6 +1475,98 @@ mod tests {
             };
             let index = PostgresAssetIndex::new(database.connection().clone());
             conformance::run_all(&index).await;
+            // The receipts the index writes land in the table the durable log serves.
+            let receipts = crate::attestation::PostgresReceipts::new(database.connection().clone());
+            conformance::run_custody(&index, &receipts, &conformance::suite_signer()).await;
+        }
+
+        /// A receipt that cannot be written takes the index rows down with it (#693).
+        ///
+        /// The failure is planted below the port, where only the database can put it: a chain
+        /// head that does not decode, so the receipt append inside the finalization transaction
+        /// fails after the rows were written in it. Both must be gone — the blob unrecorded, no
+        /// sequence number minted, and no receipt for the upload.
+        #[tokio::test]
+        async fn a_receipt_that_fails_rolls_the_index_rows_back() {
+            use sea_orm::{ConnectionTrait, DbBackend, Statement, Value};
+
+            use crate::attestation::{PostgresReceipts, ReceiptLog};
+            use crate::index::{AssetIndex, Custody};
+            use crate::store::{BlobRole, OwnerId};
+
+            let Some(database) = testing::start("the Postgres custody rollback").await else {
+                return;
+            };
+            let index = PostgresAssetIndex::new(database.connection().clone());
+            let receipts = PostgresReceipts::new(database.connection().clone());
+            let signer = conformance::suite_signer();
+            let case = "custody-rollback";
+
+            // The index tier minus its metadata blob, so the custody write below is the one that
+            // would publish the asset and mint a number.
+            let row = conformance::pending(case, 1);
+            let asset = row.asset_id.clone();
+            conformance::ok(index.reserve(row).await, "reserve");
+            conformance::ok(
+                index
+                    .record_blob(
+                        &asset,
+                        conformance::blob(BlobRole::Provenance, "rollback-p"),
+                    )
+                    .await,
+                "record the manifest",
+            );
+            let owner = OwnerId::new(format!("{case}-owner"));
+            let before = conformance::ok(index.head_seq(&owner).await, "read the head");
+
+            database
+                .connection()
+                .execute(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "INSERT INTO custody_receipts (receipt_seq, upload_id, asset_id, receipt) \
+                     VALUES (1, 'planted', 'planted', $1)",
+                    [Value::from(b"not a receipt".to_vec())],
+                ))
+                .await
+                .expect("plant an undecodable chain head");
+
+            let metadata = conformance::blob(BlobRole::Metadata, "rollback-m");
+            let draft = conformance::draft(case, 1, "u1", &metadata);
+            let failed = index
+                .record_blob_with_receipt(
+                    &asset,
+                    metadata,
+                    Custody {
+                        draft: &draft,
+                        signer: &signer,
+                    },
+                )
+                .await;
+            assert!(
+                failed.is_err(),
+                "a receipt append over a corrupt chain must fail, and answered {failed:?}"
+            );
+
+            let row = conformance::ok(index.read(&asset).await, "read")
+                .expect("the reserved row survives");
+            assert_eq!(
+                row.address_for(BlobRole::Metadata),
+                None,
+                "the blob row committed without its receipt"
+            );
+            assert_eq!(
+                row.sync_seq, None,
+                "the publication committed without its receipt"
+            );
+            assert_eq!(
+                conformance::ok(index.head_seq(&owner).await, "read the head"),
+                before,
+                "the number minted for it is rolled back with it"
+            );
+            assert_eq!(
+                conformance::ok(receipts.for_upload(&draft.upload_id).await, "read the log"),
+                None,
+            );
         }
 
         /// A manifest hash recorded concurrently through a *sibling* asset is a replay, not a
