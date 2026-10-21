@@ -11,4 +11,3 @@
 # belong — that is what the slice tracker is for, and an entry added to quiet a
 # real drift turns this file into a place where drift hides.
 
-capsule-docs/src/content/docs/design/api-surfaces.md	/v1/library	The removed async-graphql schema, named by the section recording its removal (ADR-0001).

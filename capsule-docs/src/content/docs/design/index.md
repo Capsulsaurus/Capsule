@@ -10,7 +10,7 @@ Capsule is an end-to-end-encrypted personal photo and media store with optional 
 
 The design stacks in layers, each building on the one below — the sidebar groups follow this order:
 
-- **Foundations** — the [core principles](/design/principles/) every component obeys, the [module map](/design/module-map/) from code module to owning doc, the [API surfaces](/design/api-surfaces/) map from server surface to transport, and how those surfaces become [published reference](/design/developer-docs/).
+- **Foundations** — the [core principles](/design/principles/) every component obeys, the [module map](/design/module-map/) of crates, the [API surfaces](/design/api-surfaces/) map from server surface to transport, and how those surfaces become [published reference](/design/developer-docs/).
 - **Cryptography** — the [primitives](/design/cryptography/primitives/) inventory, the [key hierarchy](/design/cryptography/keys/), [MLS](/design/cryptography/mls/) group membership with its [resilience contracts](/design/mls-resilience/), asset/metadata [encryption](/design/cryptography/encryption/), and signed [provenance](/design/cryptography/provenance/). The server holds only opaque ciphertext — never a key.
 - **Identity & access** — [authentication](/design/authentication/), [authorization](/design/authorization/), and [device enrollment](/design/device-enrollment/).
 - **Storage** — the [server](/design/filesystem/server/) and [client](/design/filesystem/client/) filesystems, the [metadata](/design/metadata/) sidecar schema, [thumbnails](/design/thumbnails/), and [quota](/design/quota/).
@@ -22,5 +22,5 @@ The design stacks in layers, each building on the one below — the sidebar grou
 ## Where to start
 
 - **New to the project?** Read [Core Principles](/design/principles/), then the [Cryptography overview](/design/cryptography/).
-- **Implementing a feature?** Find your code module in the [Module Map](/design/module-map/) — it names the owning design doc and the validation tier.
+- **Implementing a feature?** Find your crate in the [Module Map](/design/module-map/), then the owner doc in the [Single Source of Truth table](/design/principles/#single-source-of-truth).
 - **Reviewing security?** Start at the [Threat Model](/design/threat-model/) and follow each damage scenario to the owner doc that defeats it.

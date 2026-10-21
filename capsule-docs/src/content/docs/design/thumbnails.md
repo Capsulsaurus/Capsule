@@ -4,149 +4,72 @@ description: Format inventory, LQIP scheme, and derivative provenance for photo 
 status: draft
 ---
 
-We generate thumbnails and previews for all photos and videos. This doc is the **single source of truth** for the LQIP scheme and the thumbnail/preview formats — per the [SSoT rule](/design/principles/#single-source-of-truth), other docs reference these by link rather than restating the choice. The format table is itself the contract: every receiver (and every federated peer) compares the `DerivativeManifest.format` value against this list, and an unknown value is a structural rejection.
+This doc is the single source of truth for the LQIP scheme and the derivative formats; other docs link here rather than restating them. The format table is a contract: a receiver (including a federated peer) MUST reject a `DerivativeManifest.format` value not listed here.
 
-Rawshift owns client-side media decoding, metadata extraction, and derivative generation. Capsule core maps those outputs into signed manifests, and the planned `capsule-server::blob` module serves only opaque ciphertext. The [LQIP](#lqip) is the one derivative Rawshift does **not** own: Capsule imports Chromahash directly and computes it in `capsule-core::lqip`.
+Rawshift owns decoding, metadata extraction and derivative generation (consumed through `capsule-core::media`); the server stores only opaque ciphertext. The [LQIP](#lqip) is the exception: Capsule computes it with Chromahash directly in `capsule-core::lqip`.
 
 ## Thumbnail and Preview Formats
 
-**JPEG XL (JXL) is the committed primary** still-image codec — the highest-quality-per-byte master derivative. Because JXL decoder coverage is still uneven in 2026, every still tier is *also* generated in **AVIF** (with **WebP** as the last-resort fallback): a client that can decode JXL fetches it, and any other client is served the AVIF→WebP delivery variant and still renders. Because this doc is the SSoT, the codec choice is a one-row edit here that propagates nowhere else (see [SSoT](/design/principles/#single-source-of-truth)).
+**JXL is the primary** still codec (the master derivative). Every still tier is also delivered as **AVIF**, with **WebP** as last resort, so a client without a JXL decoder still renders. There is no JPEG fallback.
 
 :::note[JXL-primary is provisional]
-The JXL-primary commitment is pending external validation of decoder availability and quality-per-byte across target devices — tracked in the [image-delivery-format demo](https://github.com/justin13888/image-delivery-format-demo). If that validation shows JXL coverage is insufficient, the primary reverts to AVIF — a one-row edit here that propagates nowhere else.
+Pending validation of decoder coverage and quality-per-byte in the [image-delivery-format demo](https://github.com/justin13888/image-delivery-format-demo). If it fails, the primary reverts to AVIF — a one-row edit here.
 :::
-<!-- TODO: resolve the JXL-primary commitment after external validation — https://github.com/justin13888/image-delivery-format-demo -->
 
-Two derivative tiers per photo asset and one preview tier for video assets:
-
-| Tier                                       | Photo format                               | Video format                                                        | Notes                                              |
-| ------------------------------------------ | ------------------------------------------ | ------------------------------------------------------------------- | -------------------------------------------------- |
-| **Thumbnail** (grid display)               | **JXL** master; **AVIF**→**WebP** delivery | First-frame JXL/AVIF still                                          | q=50, 4:2:0 chroma, ~256 px long edge.             |
-| **Preview** (lightbox / single-asset view) | **JXL** master; **AVIF**→**WebP** delivery | **H.264 baseline** transcode at original resolution capped to 1080p | Stills q=70; H.264 CRF 23, 30 fps cap, AAC audio.  |
-
-- **JXL** is the committed primary: best quality-per-byte and an excellent archival master. Its only gap is decoder ubiquity, which the AVIF/WebP delivery variants cover until JXL coverage is universal.
-- **AVIF** is the universal delivery format — in 2026 it ships in every major browser and OS (iOS 16+, Android 12+, current Chrome/Firefox/Safari) with widespread hardware decode — served to any client that cannot yet decode JXL.
-- **WebP** is the last-resort fallback for the rare client lacking AVIF. We deliberately do not fall back to JPEG — WebP covers everything JPEG would.
-- **H.264 baseline** for video previews — universally decodable, cheap to decode on every platform. AV1 was considered but mobile encode cost is still high in 2026.
-
-:::note[Implementation status — what ships today]
-The table above is the **contract**, not an inventory of what is built. `capsule-core::media`
-(on `rawshift-image` 0.1.1, behind the `media` feature that `native` implies) generates stills in
-two build shapes. The native-code encoders sit behind the opt-in `media-linked-codecs` feature
-(`#437`). The CLI enables it. The mobile FFI and every `rust-cross` target do not, so those
-builds stay pure Rust:
-
-| Build | Tier | Photo formats generated | Missing, and why |
+| Tier | Photo format | Video format | Notes |
 | --- | --- | --- | --- |
-| `media-linked-codecs` (CLI) | Thumbnail | **JXL** (libjxl, **lossy** q=50) and **AVIF** (ravif, q=50), 256 px long edge; or the `original` sentinel when the source is already inside the cap | **WebP** does not compile: `rawshift-image`'s codec passes `*const i8` where `libwebp-sys` declares `*const c_char`, which is `u8` on aarch64, the architecture of every mobile target. |
-| `media-linked-codecs` (CLI) | Preview | **JXL** and **AVIF** at source resolution, q=70 | WebP, as above. |
-| `media` alone (mobile FFI, cross targets) | Thumbnail | **JXL**, 256 px long edge, **lossless**; or the `original` sentinel | AVIF and lossy JXL link native code (rav1e needs `nasm` on x86_64; libjxl is C++ built by cmake). WebP, as above. |
-| `media` alone | Preview | none | Not generated: a source-resolution *lossless* still would rival the original in size. |
-| Either | Video (either tier) | none | `rawshift-video` is unpublished; slice `S-B5`. |
+| **Thumbnail** (grid) | JXL master; AVIF→WebP delivery | First-frame JXL/AVIF still | q=50, 4:2:0, ~256 px long edge |
+| **Preview** (single-asset view) | JXL master; AVIF→WebP delivery | H.264 baseline, capped to 1080p | Stills q=70; H.264 CRF 23, 30 fps cap, AAC |
 
-Without `media-linked-codecs` the thumbnail's declared **q=50 is advisory**: the pure-Rust
-backend is `zune-jpegxl`'s `JxlSimpleEncoder`, which is lossless, so a thumbnail costs more bytes
-than the table intends. Tests assert this per build. In one build the thumbnail round-trips
-exactly. In the other it is lossy and smaller than the lossless encode.
+H.264 baseline is chosen for universal cheap decode; AV1 mobile encode is still too costly.
 
-Decode is JPEG, PNG, JXL, TIFF, GIF and the **ARW and DNG** RAW families in every build, plus
-**AVIF** under the separate opt-in `media-avif-decode` feature, which links a system libdav1d
-(BSD-2) and which the CLI enables on every target but Windows
-([#588](https://github.com/Capsulsaurus/Capsule/issues/588)). ARW and DNG go through
-`rawshift-image`'s RAW pipeline, which applies the file's default crop and EXIF orientation
-itself, and an ARW or DNG variant it has no decoder for defers like a missing codec
-([#589](https://github.com/Capsulsaurus/Capsule/issues/589)). Because that reader allocates
-each TIFF entry's value at the count the entry claims while it parses, Capsule first walks the
-IFD chain itself (IFD0 and its successors, SubIFDs, the EXIF and GPS IFDs, and the Sony SR2 IFD)
-without allocating, and refuses as a decode failure any entry whose value needs more bytes than
-the file holds ([#644](https://github.com/Capsulsaurus/Capsule/issues/644)). The same walk
-refuses a file whose IFDs nest more than 16 levels deep through SubIFD, EXIF, GPS and SR2
-pointers, because the reader recurses into each nested IFD with no depth limit and a stack
-overflow aborts the process; real ARW and DNG files nest two or three levels, and a pointer loop
-among those IFDs counts as unbounded nesting
-([#647](https://github.com/Capsulsaurus/Capsule/issues/647)). **HEIC, WebP and the other RAW
-families (CR2, CR3, CRW, NEF, RAF) are recognised and refused**, and so is AVIF in a build
-without that feature. HEIC is refused by decision, not by toolchain: libheif and libde265 are both LGPL-3.0
-and excluded by the licensing policy, and the permissive paths are recorded in the
-[Dependencies](/design/dependencies/) still-decode row. WebP shares the aarch64 defect above
-in both directions, because the crate compiles that module for decode *or* encode.
+:::note[What the build generates today]
+The table is the contract, not an inventory. Native encoders sit behind the opt-in `media-linked-codecs` feature (CLI only); the mobile FFI and cross targets stay pure Rust.
 
-Every generated derivative uploads. The server's upload policy admits both `image/jxl` and
-`image/avif` ([#470](https://github.com/Capsulsaurus/Capsule/issues/470)), so each JXL and AVIF
-derivative opens its own T1 session and finalizes; only the byte-free `original` sentinel opens
-none.
+| Build | Thumbnail | Preview | Missing |
+| --- | --- | --- | --- |
+| `media-linked-codecs` (CLI) | JXL (lossy q=50) + AVIF | JXL + AVIF, q=70 | WebP (`rawshift-image` fails to compile it on aarch64) |
+| `media` only (FFI, cross) | JXL **lossless** (q=50 is advisory) | none | AVIF, lossy JXL (native code), WebP |
+| Either | — | — | All video derivatives (`rawshift-video` unpublished) |
 
-None of this is silent. A format with no codec is a typed
-`media::MediaError::UnsupportedFormat { format, op }`, and a `(tier, format)` pair with no encoder
-— or whose encoder refused this particular frame, such as a preview AVIF of a panorama wider than
-rav1e's 65535 px edge limit — is recorded on `media::StillDerivatives::deferred` while the
-asset's other derivatives still ship, and counted by
-`ImportExecutionSummary::deferred_format_count()` — so the distance between this table and the
-build is a number the import run reports. The remainder is tracked as the `S-B1` follow-up.
+Decode covers JPEG, PNG, JXL, TIFF, GIF, ARW and DNG in every build, plus AVIF under `media-avif-decode` (system libdav1d; not on Windows). Capsule pre-walks RAW IFD chains to bound value sizes and nesting depth (≤16) before handing them to the RAW reader. **HEIC is refused by decision** (libheif/libde265 are LGPL-3.0; see [Dependencies](/design/dependencies/)); WebP, other RAW families, and AVIF without the feature are recognised and refused.
+
+Nothing is silent: an absent codec is `media::MediaError::UnsupportedFormat`, and an unencodable `(tier, format)` pair is recorded as deferred and counted in the import summary while the asset's other derivatives still ship.
 :::
 
 ### Video Previews
 
-The table above stays the SSoT for the video formats; this section only names the implementation seam. Video derivative generation — the first-frame still and the H.264 baseline preview transcode — is its own implementation slice (`S-B5` in the repo-root `SLICES.md`), split from still-image generation (`S-B1`) because transcode brings a distinct toolchain (demux, video decode, H.264/AAC encode) the still path never touches. Both slices sign their outputs identically through the [`DerivativeManifest`](#derivative-provenance) path.
+Video derivatives (first-frame still, H.264 preview) are the planned `capsule-core::media::video` half of the media module, separate because transcode needs its own toolchain. They are signed through the same [`DerivativeManifest`](#derivative-provenance) path as stills.
 
-If an original asset is lower-resolution than the highest thumbnail tier, that tier references the original instead of generating a redundant derivative. This is **distinct** from a missing derivative (an unintentional generation failure): the tier's [`DerivativeManifest`](/design/cryptography/provenance/#derivative-provenance) carries the recognized sentinel `format = "original"` — an explicit, signed marker the receiver trusts — whereas a simply-absent derivative is treated as rebuildable from the original (recovery-first).
+If an original is no larger than a tier's long edge, that tier references the original: its local manifest carries the sentinel `format = "original"`, which is distinct from a missing derivative (rebuildable from the original).
 
 ## LQIP
 
-Capsule imports [Chromahash](https://github.com/visualcommons/chromahash) **0.7.1** directly; Rawshift does not wrap or expose it. The earlier gate — "after Chromahash reaches v1" — is **amended to 0.7.1**, the release the project accepts as ready, and the architecture check stopped forbidding the crate accordingly (`2f8beeb`). The crate pin lives in [Dependencies](/design/dependencies/#rust); this section owns the contract that pin has to satisfy.
+Capsule imports [Chromahash](https://github.com/visualcommons/chromahash) **0.7.1** directly, never through Rawshift; the pin lives in [Dependencies](/design/dependencies/#rust). ThumbHash is retired; see ADR-0003.
 
-The chromahash, its format version, and a `dominant_color` fallback are the [`lqip` field of the sidecar](/design/metadata/#sidecar-schema-v1) — inside the [encrypted metadata blob](/design/cryptography/encryption/#metadata-encryption), so the placeholder is available the instant metadata syncs, before any thumbnail fetch, and never leaks to the server. A decoder that does not recognize the chromahash format version falls back to the solid `dominant_color` fill rather than misrendering, so a future chromahash revision is a versioned change, never a silent break.
+The chromahash, its format version and a `dominant_color` fallback form the [`lqip` sidecar field](/design/metadata/#sidecar-schema-v1), inside the [encrypted metadata blob](/design/cryptography/encryption/#metadata-encryption): the placeholder arrives with metadata sync, before any thumbnail, and never reaches the server. A decoder that does not recognise the format version, or bytes `from_bytes` rejects, MUST fall back to the solid `dominant_color` fill. Changing the encoding requires a new format version — `lqip` is signed, and byte length alone cannot discriminate encodings.
 
 ### Encoding Tier
 
-**`DEFAULT_TIER` — exactly 32 bytes**, which is what `ChromaHash::encode` produces. Chromahash's ladder runs tier 0–4 from `COMPACT_TIER` (21 bytes, lowest fidelity) upward; the default is the committed choice and Capsule does not vary it per asset. The sidecar is the one representation a client is guaranteed to hold — it is tiny, canonical, and effectively never evicted, unlike every heavier tier — so the eleven bytes bought over `COMPACT_TIER` are spent exactly where fidelity always survives, and a fixed width keeps the signed sidecar's encoded size predictable.
-
-Four calls carry the whole contract, and the module uses no more than these:
-
-| Call | Role |
-| --- | --- |
-| `encode(width, height, &rgba, gamut)` | Generation at `DEFAULT_TIER`. `encode_with_quality(.., tier)` exists; Capsule does not reach for it. |
-| `decode_capped(max_w, max_h)` | The band-limited render — decode no larger than the box actually being painted, so a grid cell never scales down a full-size decode. |
-| `average_color()` | The DC-only path: the `dominant_color` fill without a full decode. |
-| `from_bytes` / `as_bytes` | The sidecar round trip. `from_bytes` is fallible, so bytes that are not a valid chromahash become the fallback fill rather than a render. |
+Always Chromahash's `DEFAULT_TIER` — **exactly 32 bytes** — never varied per asset, so the signed sidecar's size is predictable. Rendering uses `decode_capped` at the painted box size; the fill uses `average_color()`.
 
 ### Where LQIP Lives
 
-`capsule-core::lqip` — a dedicated module, slice `S-B14` in the repo-root `SLICES.md`. It is deliberately **not** in `capsule-core::media`, and the reason outlived the teardown that first prompted it: `media` is `native`-only wherever it exists — it links image codecs and a decode budget sized for a workstation, neither of which a browser has any use for, so a placeholder scheme every client depends on cannot live inside it and still reach the browser. It is equally not in Rawshift — `AGENTS.md` is explicit that Rawshift owns media decoding but must not wrap Chromahash, which Capsule imports directly. `media` is the module that *produces* the pixels this one hashes; it never owns the hash.
-
-A small Capsule-owned module outside the retiring stack satisfies both constraints at once, and is reachable from all three places a placeholder is produced or consumed: the import pipeline, the native apps through the uniffi FFI, and the browser through `capsule-wasm`. That is the point of a single home — one implementation for every surface, so a photo's placeholder does not depend on which client happened to import it.
-
-### Migrating off ThumbHash
-
-ThumbHash was the interim implementation while Chromahash was unreleased, and it retires with this decision — both the `thumbhash` Rust crate behind `capsule-core`'s `media` feature and the npm `thumbhash` package `capsule-web` still decodes in `lazy-image.tsx` (fed from `asset-grid.tsx`).
-
-`lqip` is a **signed** sidecar field. The signature covers it, so changing its encoding is signature-visible rather than a private implementation detail, and the migration is only free if nothing already committed depends on the old bytes. Two facts make it free here:
-
-- **Nothing pins a ThumbHash payload.** No fixture, golden, or known-answer vector carries one: the committed KATs are drop and share vectors that never touch a sidecar, and the only `lqip` literal in the tree is a synthetic eight-byte filler in a round-trip unit test.
-- **The schema always named chromahash.** The field is `Lqip.chromahash` and format version 1 is declared as the *chromahash* format version. ThumbHash bytes were standing in for an unreleased dependency; they were never the declared encoding.
-
-So the format version stays `1` and `sidecar_schema` does not move. What makes that legitimate is that the migration is **total** — no persisted sidecar carries a ThumbHash payload under version 1 — and it must stay total, because ThumbHash payloads are shorter than 32 bytes and overlap the lower chromahash tiers in length, so byte length alone would not discriminate a stale one. Were such a sidecar ever to exist, the fix is a *new* format version, never a redefinition of this one: the versioned fallback above is precisely the mechanism that makes a re-encoding a legal, non-breaking change instead of a silent misrender.
-
-Considered and rejected: ThumbHash on its merits (smaller wire size, worse color fidelity for the wide-gamut and HDR sources Capsule expects), BlurHash (older, blurrier, less color-accurate). The single-LQIP choice avoids exactly the kind of "chromahash/ThumbHash" hedge that previously caused doc drift.
+`capsule-core::lqip`, not `capsule-core::media`: `media` is native-only, while the LQIP must reach the import pipeline, the uniffi FFI and the browser via `capsule-wasm` from one implementation.
 
 ## Derivative Provenance
 
-Thumbnails and previews are *ephemeral by recovery posture* (they can always be regenerated from the original) but not *unowned*. A buggy or hostile client could otherwise quietly replace a good thumbnail with a corrupted one, and the receiving side would have no way to tell. To prevent this, every thumbnail and preview is uploaded as a derivative whose addition or replacement is an authorized, signed lifecycle action.
+Derivatives are regenerable but not unowned: adding or replacing one is a signed lifecycle action, so a buggy or hostile client cannot silently swap a thumbnail. The manifest structure and the `derivative-add` / `derivative-replace` actions are owned by [Cryptography — Derivative Provenance](/design/cryptography/provenance/#derivative-provenance) and [Authorization — The Closed Action Set](/design/authorization/#the-closed-action-set); this doc owns only the `format` values, checked under the [closed-enum rule](/design/threat-model/schema-rules/#schema-evolution-and-field-grammar).
 
-The full derivative manifest structure and the `derivative-add` / `derivative-replace` action set are owned by [Cryptography — Derivative Provenance](/design/cryptography/provenance/#derivative-provenance) and [Authorization — The Closed Action Set](/design/authorization/#the-closed-action-set); this doc owns only the *format* of the derivative bytes. The two interact at exactly one point: the `DerivativeManifest.format` field names the codec/format from the table above, and the verifying side rejects a manifest whose `format` is not currently recognized (the closed-enum rule from [Threat Model — Schema Rules](/design/threat-model/schema-rules/#schema-evolution-and-field-grammar)).
-
-A receiver never needs a manifest for a tier that was satisfied by the original itself. The signed sidecar carries the asset's pixel `dimensions`, so a receiver can see for itself that an original at or below the thumbnail tier's long edge needs no thumbnail, and must not schedule a regeneration for one; the `format = "original"` sentinel is a **local** record that keeps "this original is small" apart from "this thumbnail is missing" for the client's own rebuild path, and it is not shipped.
-
-A thumbnail whose `DerivativeManifest` fails verification is **regenerated locally from the original** rather than trusted — the [recovery-first principle](/design/principles/) means a derivative is always rebuildable, so refusal-and-regenerate is the safe default. The corrupt copy is discarded (not quarantined — it carries no irreplaceable bytes), and the corresponding regeneration appends a new `derivative-replace` provenance record.
+- A receiver MUST NOT schedule regeneration for a tier the sidecar's `dimensions` show the original already satisfies; the `original` sentinel is local and never shipped.
+- A derivative whose manifest fails verification is discarded (not quarantined) and regenerated from the original, appending a new `derivative-replace` record.
 
 ## Validation
 
-- **Format detection (unit).** Encode a derivative under each row of the format table; assert the format is correctly identified by the consumer (browser tier, native client tier). Negative: provide a malformed AVIF; assert structural rejection.
-- **Closed-format enum (unit).** Submit a `DerivativeManifest` with `format = "image/future-codec"`; assert rejection at the envelope check.
-- **JXL-to-AVIF delivery fallback (unit).** Simulate a consumer without a JXL decoder; assert it selects the AVIF variant (and a consumer without AVIF selects WebP), never failing to render a tier that exists.
-- **LQIP round-trip (unit).** Generate chromahash for a fixture image; assert the payload is exactly 32 bytes (`DEFAULT_TIER`), that `decode_capped` matches the expected pixel buffer within quality tolerance at the requested bound, and that an unrecognized chromahash format version falls back to `dominant_color`.
-- **No ThumbHash residue (unit).** Assert no sidecar fixture or vector carries a non-chromahash `lqip` payload, and that `from_bytes` rejecting a payload yields the `dominant_color` fill rather than a render.
-- **Derivative-manifest verification (smoke).** Upload a derivative; corrupt the bytes; refetch; assert the receiver discards and regenerates from the original; assert a new `derivative-replace` provenance record is appended.
-- **Original-fallback (unit).** Provide an original smaller than the highest thumbnail tier; assert that tier's manifest carries `format = "original"` rather than generating a redundant derivative.
+- **Format detection / closed enum (unit).** Each table row is identified correctly; malformed AVIF and `format = "image/future-codec"` are rejected.
+- **Delivery fallback (unit).** No JXL decoder → AVIF; no AVIF → WebP.
+- **LQIP (unit).** Payload is 32 bytes; `decode_capped` honours the bound; unknown version or invalid bytes → `dominant_color`.
+- **Manifest verification (smoke).** Corrupted derivative is discarded, regenerated, and a `derivative-replace` record appended.
+- **Original fallback (unit).** A small original yields `format = "original"`, not a redundant derivative.
 
-The cross-module case — derivative generation → upload → fetch → display — is covered by the upload+sync E2E case in [Module Map](/design/module-map/#e2e-test-surface).
+The end-to-end case is in [Module Map](/design/module-map/#e2e-test-surface).
