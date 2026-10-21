@@ -153,9 +153,9 @@ number of devices converge deterministically, and every change is a signed `meta
   CRDT fields only. `AlbumDocV1` also carries the album's name (LWW), so a restored or newly
   joined device sees it. Every member of a stack belongs to the same container album; moving
   one member out removes it from the stack.
-- **Privacy.** Region labels can name people, so regions are stripped on export and from
-  [share links](/design/share-links/) by the [Privacy on Export](/design/metadata/#privacy-on-export)
-  rule; asset, stack and album labels follow the same rule as captions.
+- **Privacy.** Region labels can name people, so regions are stripped by default on export and
+  from [share links](/design/share-links/), and kept only when the user opts in for that export
+  ([Privacy on Export](/design/metadata/#privacy-on-export)); asset, stack and album labels follow the same rule as captions.
 - **Search.** Smart-album `contains` predicates over `tags_user` match a label at any level
   attached to the asset: its own, its regions', its stack's and its album's.
 
