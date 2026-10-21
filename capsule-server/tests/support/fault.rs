@@ -16,24 +16,33 @@
 //! fires once, and disarms itself, which lets the same case drive the retry that recovers.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
 use capsule_server::blob::ContentAddress;
 use capsule_server::index::{
-    AssetIndex, AssetRow, BlobOutcome, BlobRecord, BlobReference, FeedEntry, HoldOutcome,
-    IndexFuture, LifecycleOp, OpOutcome, PendingAsset, PurgeOutcome, Reservation, ServingHold,
+    AssetIndex, AssetRow, BlobOutcome, BlobRecord, BlobReference, Custody, FeedEntry, HoldOutcome,
+    IndexFuture, LifecycleOp, OpOutcome, PendingAsset, PurgeOutcome, Receipted, Reservation,
+    ServingHold,
 };
 use capsule_server::store::{AlbumId, AssetId, OwnerId, StoreError};
 use jiff::Timestamp;
 
-/// An [`AssetIndex`] that loses one `record_blob` transaction, then behaves.
+/// Disarmed.
+const DISARMED: u8 = 0;
+/// The next finalization write never commits.
+const BEFORE_COMMIT: u8 = 1;
+/// The next finalization write commits, and its answer is lost.
+const AFTER_COMMIT: u8 = 2;
+
+/// An [`AssetIndex`] that loses one finalization write, then behaves.
 ///
-/// Every other operation delegates unconditionally: the crash this models is a process that died
-/// with one transaction open, not a database that stopped answering.
+/// The finalization writes are `record_blob` and the two custody writes that carry a receipt
+/// (#693). Every other operation delegates unconditionally: the crash this models is a process
+/// that died around one transaction, not a database that stopped answering.
 #[derive(Debug)]
 pub(crate) struct CrashBeforeCommit {
     inner: Arc<dyn AssetIndex>,
-    armed: AtomicBool,
+    armed: AtomicU8,
     fired: AtomicUsize,
 }
 
@@ -42,14 +51,20 @@ impl CrashBeforeCommit {
     pub(crate) fn new(inner: Arc<dyn AssetIndex>) -> Self {
         Self {
             inner,
-            armed: AtomicBool::new(false),
+            armed: AtomicU8::new(DISARMED),
             fired: AtomicUsize::new(0),
         }
     }
 
-    /// Lose the next `record_blob`.
+    /// Lose the next finalization write before it commits.
     pub(crate) fn arm(&self) {
-        self.armed.store(true, Ordering::SeqCst);
+        self.armed.store(BEFORE_COMMIT, Ordering::SeqCst);
+    }
+
+    /// Let the next finalization write commit, then lose its answer — the process died between
+    /// the database's commit and the caller hearing of it.
+    pub(crate) fn arm_after_commit(&self) {
+        self.armed.store(AFTER_COMMIT, Ordering::SeqCst);
     }
 
     /// How many times the fault has fired.
@@ -60,13 +75,42 @@ impl CrashBeforeCommit {
         self.fired.load(Ordering::SeqCst)
     }
 
-    /// Whether this call is the one that is lost.
-    fn takes_the_fault(&self) -> bool {
-        if self.armed.swap(false, Ordering::SeqCst) {
+    /// Which fault this call takes, if any, disarming it.
+    fn take_the_fault(&self) -> u8 {
+        let fault = self.armed.swap(DISARMED, Ordering::SeqCst);
+        if fault != DISARMED {
             self.fired.fetch_add(1, Ordering::SeqCst);
-            return true;
         }
-        false
+        fault
+    }
+
+    /// Run `write` under whatever fault is armed.
+    fn faulted<'a, T: Send + 'a>(&'a self, write: IndexFuture<'a, T>) -> IndexFuture<'a, T> {
+        match self.take_the_fault() {
+            // The transaction never commits. `Unavailable` is the honest shape: the index did
+            // not answer, so the caller cannot know whether the row was written — which is
+            // exactly the state a crashed process leaves behind. The write is dropped unpolled.
+            BEFORE_COMMIT => Box::pin(async {
+                Err(lost(
+                    "the server died before the index transaction committed",
+                ))
+            }),
+            AFTER_COMMIT => Box::pin(async move {
+                write.await?;
+                Err(lost(
+                    "the server died after the index transaction committed",
+                ))
+            }),
+            _ => write,
+        }
+    }
+}
+
+/// The error a lost transaction surfaces as.
+fn lost(detail: &str) -> StoreError {
+    StoreError::Unavailable {
+        store: "asset-index",
+        detail: detail.to_owned(),
     }
 }
 
@@ -76,18 +120,24 @@ impl AssetIndex for CrashBeforeCommit {
         asset: &'a AssetId,
         blob: BlobRecord,
     ) -> IndexFuture<'a, BlobOutcome> {
-        if self.takes_the_fault() {
-            // The transaction never commits. `Unavailable` is the honest shape: the index did
-            // not answer, so the caller cannot know whether the row was written — which is
-            // exactly the state a crashed process leaves behind.
-            return Box::pin(async {
-                Err(StoreError::Unavailable {
-                    store: "asset-index",
-                    detail: "the server died before the index transaction committed".to_owned(),
-                })
-            });
-        }
-        self.inner.record_blob(asset, blob)
+        self.faulted(self.inner.record_blob(asset, blob))
+    }
+
+    fn record_blob_with_receipt<'a>(
+        &'a self,
+        asset: &'a AssetId,
+        blob: BlobRecord,
+        custody: Custody<'a>,
+    ) -> IndexFuture<'a, Receipted<BlobOutcome>> {
+        self.faulted(self.inner.record_blob_with_receipt(asset, blob, custody))
+    }
+
+    fn apply_op_with_receipt<'a>(
+        &'a self,
+        op: LifecycleOp,
+        custody: Custody<'a>,
+    ) -> IndexFuture<'a, Receipted<OpOutcome>> {
+        self.faulted(self.inner.apply_op_with_receipt(op, custody))
     }
 
     fn reserve(&self, asset: PendingAsset) -> IndexFuture<'_, Reservation> {

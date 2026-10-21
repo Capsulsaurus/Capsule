@@ -4,7 +4,7 @@
 //!
 //! [Transfer — Upload: Finalization and
 //! Integrity](../../../capsule-docs/src/content/docs/design/transfer/upload.md) fixes
-//! five steps, and this module is those five steps in that order:
+//! the order, and this module is those steps in that order:
 //!
 //! 1. **Claim.** [`claim_finalize`](crate::store::UploadSessionStore::claim_finalize) is a
 //!    compare-and-set into
@@ -13,20 +13,22 @@
 //! 3. **Re-run the envelope battery**, against the clock and the authority *now* — a device
 //!    revoked or an album closed since creation does not slip through.
 //! 4. **Commit** the stage onto its content address, atomically.
-//! 5. **Record the blob against its asset**, which is where the asset's next sequence number is
-//!    minted when the change is one a client can observe (`S-C37`).
-//! 6. **Issue the custody receipt** — the server's signed admission of what it accepted
-//!    (`S-C15`).
-//! 7. **Complete**, or fail the session and drop the staged bytes.
+//! 5. **Record and receipt**, in one transaction: the blob is recorded against its asset — where
+//!    the asset's next sequence number is minted when the change is one a client can observe
+//!    (`S-C37`) — and the custody receipt, the server's signed admission of what it accepted
+//!    (`S-C15`), is signed and logged with it.
+//! 6. **Complete**, or fail the session and drop the staged bytes.
 //!
-//! # Why the receipt comes after custody and not with it
+//! # Why the receipt is written by the index
 //!
-//! The contract asks that the two commit together; across two ports all that is available is an
-//! order, and this one guarantees the direction that matters — **no receipt without custody**.
-//! A crash between them leaves a finalized blob with no receipt, which is visible, reissuable,
-//! and merely inconvenient. The reverse is not: a receipt is evidence a client keeps, and one
-//! attesting to bytes the server does not hold cannot be withdrawn from whoever already has it.
-//! See [`crate::attestation`].
+//! The contract (invariant 33) is that the index rows and the receipt commit together: never an
+//! indexed blob without a receipt, never a receipt without custody. Two calls to two ports can
+//! only be ordered, and either order leaves a crash window with one of those states in it. So
+//! finalization hands the receipt draft and the attestation key to
+//! [`AssetIndex::record_blob_with_receipt`](crate::index::AssetIndex::record_blob_with_receipt)
+//! (or [`apply_op_with_receipt`](crate::index::AssetIndex::apply_op_with_receipt) for a
+//! `replace`), and the index appends the receipt inside the critical section that writes its
+//! rows. A failure anywhere in step 5 leaves neither. See [`crate::attestation`].
 //!
 //! # Why an index failure fails the whole finalization
 //!
@@ -58,11 +60,13 @@
 //! that travelled this same path and is held verbatim at its content address.
 
 use capsule_core::crypto::hash::{Hash32, Sha256Hasher};
+use capsule_core::crypto::receipts::CustodyReceipt;
 
 use super::envelope::{GateContext, GateReject, ManifestEnvelope, check_finalize};
 use super::{AlbumWriteAccess, UploadContext};
+use crate::attestation::{ReceiptDraft, ReceiptLog};
 use crate::blob::{BlobError, ContentAddress, Placement};
-use crate::index::{BlobOutcome, BlobRecord};
+use crate::index::{BlobOutcome, BlobRecord, Custody, Receipted};
 use crate::store::{FinalizeClaim, StoreError, UploadId, UploadSessionRecord, UploadSessionStatus};
 
 /// How many bytes of the stage are read and hashed at a time.
@@ -206,7 +210,7 @@ pub async fn finalize(
     }
 }
 
-/// Steps 2–4, for a session this caller has claimed.
+/// Steps 2–5, for a session this caller has claimed.
 async fn run_claimed(
     context: &UploadContext,
     attestation: &crate::attestation::AttestationContext,
@@ -261,65 +265,103 @@ async fn run_claimed(
     let manifest_sha256 =
         (record.blob_role == crate::store::BlobRole::Provenance).then_some(digest.sha256);
 
-    // 5. The durable half. Nothing before this point is observable to another device.
-    let minted = record_against_asset(context, record, &address, manifest_sha256).await?;
-
-    // 6. The signed half. After custody, deliberately — see the module docs.
-    issue_receipt(context, attestation, record, &address, manifest_sha256).await?;
+    // 5. Record and receipt: the durable half and the signed half, in one transaction. Nothing
+    //    before this point is observable to another device.
+    let draft = receipt_draft(context, record, &address, manifest_sha256)?;
+    let minted = record_against_asset(
+        context,
+        attestation,
+        &draft,
+        record,
+        &address,
+        manifest_sha256,
+    )
+    .await?;
 
     Ok((placement, minted))
 }
 
-/// Step 6: the server signs what it just took custody of.
+/// The receipt the server signs for what it is taking custody of.
 ///
 /// The facts come from what the server *established*, never from the request: the address is the
 /// one finalization recomputed over the stored bytes, and the size is the stage's own length.
 /// A receipt echoing a client's declaration would attest to the claim rather than to the custody.
-async fn issue_receipt(
+fn receipt_draft(
     context: &UploadContext,
-    attestation: &crate::attestation::AttestationContext,
     record: &UploadSessionRecord,
     address: &ContentAddress,
     manifest_sha256: Option<Hash32>,
-) -> Result<(), FinalizeFailure> {
+) -> Result<ReceiptDraft, FinalizeFailure> {
     let ciphertext_hash = Hash32::from_hex(address.as_str()).map_err(|_| {
-        // Unreachable: the address was just built from a digest this function computed.
+        // Unreachable: the address was just built from a digest this module computed.
         FinalizeFailure::Unavailable("a computed address is not a digest".to_owned())
     })?;
-
-    attestation
-        .receipts()
-        .issue(
-            crate::attestation::ReceiptDraft {
-                crypto_suite_id: record.crypto_suite_id,
-                protocol_version: record.protocol_version.clone(),
-                upload_id: record.upload_id.clone(),
-                asset_id: record.asset_id.clone(),
-                blob_role: record.blob_role.as_str().to_owned(),
-                ciphertext_hash,
-                size: record.total_size,
-                envelope_hash: manifest_sha256,
-                uploaded_by_user: record.upload_user_id.as_str().to_owned(),
-                uploaded_by_device: None,
-                received_at: context.clock().now().to_string(),
-            },
-            attestation.signer(),
-        )
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, upload = %record.upload_id, "a custody receipt could not be issued");
-            FinalizeFailure::Unavailable("the custody receipt could not be issued".to_owned())
-        })?;
-    Ok(())
+    Ok(ReceiptDraft {
+        crypto_suite_id: record.crypto_suite_id,
+        protocol_version: record.protocol_version.clone(),
+        upload_id: record.upload_id.clone(),
+        asset_id: record.asset_id.clone(),
+        blob_role: record.blob_role.as_str().to_owned(),
+        ciphertext_hash,
+        size: record.total_size,
+        envelope_hash: manifest_sha256,
+        uploaded_by_user: record.upload_user_id.as_str().to_owned(),
+        uploaded_by_device: None,
+        received_at: context.clock().now().to_string(),
+    })
 }
 
-/// Step 5: tell the index the blob landed, and hand back the sequence number it minted.
+/// A custody write that could not complete, named by what was being attempted.
+///
+/// One answer whether the index or the receipt failed, because they are one transaction: the
+/// caller cannot have half of it, so there is no half to name.
+fn custody_unavailable<'a>(
+    record: &'a UploadSessionRecord,
+    doing: &'static str,
+) -> impl Fn(StoreError) -> FinalizeFailure + 'a {
+    move |error| {
+        tracing::error!(
+            %error,
+            asset = %record.asset_id,
+            upload = %record.upload_id,
+            operation = doing,
+            "the asset index could not record custody; neither the rows nor the receipt committed"
+        );
+        FinalizeFailure::Unavailable(format!("could not {doing}"))
+    }
+}
+
+/// Say what custody receipt a finalization's write committed with.
+fn log_receipt(record: &UploadSessionRecord, receipt: Option<&CustodyReceipt>) {
+    match receipt {
+        Some(receipt) => tracing::info!(
+            upload = %record.upload_id,
+            asset = %record.asset_id,
+            receipt_seq = receipt.core.receipt_seq,
+            "custody receipt committed with the write"
+        ),
+        None => tracing::debug!(
+            upload = %record.upload_id,
+            asset = %record.asset_id,
+            "the index refused the write, so no custody receipt was written"
+        ),
+    }
+}
+
+/// Step 5: tell the index the blob landed, with its receipt, and hand back the sequence number it
+/// minted.
 async fn record_against_asset(
     context: &UploadContext,
+    attestation: &crate::attestation::AttestationContext,
+    draft: &ReceiptDraft,
     record: &UploadSessionRecord,
     address: &ContentAddress,
     manifest_sha256: Option<Hash32>,
 ) -> Result<Option<u64>, FinalizeFailure> {
+    let custody = Custody {
+        draft,
+        signer: attestation.signer(),
+    };
     // `S-C43`: a replace is applied by the member that can carry the whole change, and the rest
     // of its bundle deliberately touches the index not at all.
     let envelope: super::envelope::ManifestEnvelope =
@@ -328,12 +370,21 @@ async fn record_against_asset(
             FinalizeFailure::Unavailable("the stored envelope does not decode".to_owned())
         })?;
     if envelope.action == "replace" {
-        return apply_replace(context, record, address, manifest_sha256, &envelope).await;
+        return apply_replace(
+            context,
+            custody,
+            attestation.receipts(),
+            record,
+            address,
+            manifest_sha256,
+            &envelope,
+        )
+        .await;
     }
 
-    let outcome = context
+    let Receipted { outcome, receipt } = context
         .index()
-        .record_blob(
+        .record_blob_with_receipt(
             &record.asset_id,
             BlobRecord {
                 role: record.blob_role,
@@ -342,12 +393,14 @@ async fn record_against_asset(
                 manifest_sha256,
                 finalized_at: context.clock().now(),
             },
+            custody,
         )
         .await
-        .map_err(|error| {
-            tracing::error!(%error, asset = %record.asset_id, "the asset index could not record a blob");
-            FinalizeFailure::Unavailable("could not record the blob against its asset".to_owned())
-        })?;
+        .map_err(custody_unavailable(
+            record,
+            "record the blob and its receipt against its asset",
+        ))?;
+    log_receipt(record, receipt.as_ref());
 
     match outcome {
         BlobOutcome::Recorded { minted, .. } => Ok(minted),
@@ -412,6 +465,8 @@ async fn record_against_asset(
 /// the dangling reference the integrity scrub exists to report, created on purpose.
 async fn apply_replace(
     context: &UploadContext,
+    custody: Custody<'_>,
+    receipts: &dyn ReceiptLog,
     record: &UploadSessionRecord,
     address: &ContentAddress,
     manifest_sha256: Option<Hash32>,
@@ -421,6 +476,14 @@ async fn apply_replace(
         // Bytes committed, index untouched. If the manifest never lands the blob is unreferenced
         // and the collector reclaims it on its ordinary schedule, crediting the quota back
         // (`S-C44`) — an abandoned replace costs its uploader nothing permanent.
+        //
+        // The receipt is this finalization's only durable write, so it is atomic on its own:
+        // there is no index row for it to be committed apart from.
+        let receipt = receipts
+            .issue(custody.draft.clone(), custody.signer)
+            .await
+            .map_err(custody_unavailable(record, "issue the custody receipt"))?;
+        log_receipt(record, Some(&receipt));
         tracing::debug!(
             asset = %record.asset_id,
             role = record.blob_role.as_str(),
@@ -455,27 +518,31 @@ async fn apply_replace(
         ));
     };
 
-    let outcome = context
+    let Receipted { outcome, receipt } = context
         .index()
-        .apply_op(crate::index::LifecycleOp {
-            asset_id: record.asset_id.clone(),
-            owner_id: record.owner_id.clone(),
-            album_id,
-            action: crate::index::OpAction::Replace,
-            manifest_hash,
-            prior_provenance_hash: prior,
-            amk_version: u64::from(envelope.amk_version),
-            provenance: address.clone(),
-            metadata: Some(metadata),
-            original: Some(original),
-            retention_until: None,
-            at: context.clock().now(),
-        })
+        .apply_op_with_receipt(
+            crate::index::LifecycleOp {
+                asset_id: record.asset_id.clone(),
+                owner_id: record.owner_id.clone(),
+                album_id,
+                action: crate::index::OpAction::Replace,
+                manifest_hash,
+                prior_provenance_hash: prior,
+                amk_version: u64::from(envelope.amk_version),
+                provenance: address.clone(),
+                metadata: Some(metadata),
+                original: Some(original),
+                retention_until: None,
+                at: context.clock().now(),
+            },
+            custody,
+        )
         .await
-        .map_err(|error| {
-            tracing::error!(%error, asset = %record.asset_id, "the index could not apply a replace");
-            FinalizeFailure::Unavailable("could not apply the replace".to_owned())
-        })?;
+        .map_err(custody_unavailable(
+            record,
+            "apply the replace and its receipt",
+        ))?;
+    log_receipt(record, receipt.as_ref());
 
     match outcome {
         crate::index::OpOutcome::Applied { sync_seq, .. } => {
@@ -663,7 +730,7 @@ async fn revalidate(
     .map_err(FinalizeFailure::EnvelopeRejected)
 }
 
-/// Step 5, the winning half.
+/// Step 6, the winning half.
 async fn complete(context: &UploadContext, upload: &UploadId) -> Result<(), FinalizeFailure> {
     context
         .sessions()
@@ -673,7 +740,7 @@ async fn complete(context: &UploadContext, upload: &UploadId) -> Result<(), Fina
     Ok(())
 }
 
-/// Step 5, the losing half: the bytes go and the session is terminal.
+/// Step 6, the losing half: the bytes go and the session is terminal.
 ///
 /// Best-effort by construction — it runs *because* something already failed, and a second
 /// failure here must not replace the diagnosis the caller is about to return. Both halves are
