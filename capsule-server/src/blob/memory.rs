@@ -115,6 +115,23 @@ impl BlobStore for InMemoryBlobStore {
         })
     }
 
+    fn truncate_staged<'a>(
+        &'a self,
+        upload: &'a UploadId,
+        len: u64,
+    ) -> BlobFuture<'a, Option<u64>> {
+        Box::pin(async move {
+            check_upload_id(upload)?;
+            let mut state = lock(&self.state);
+            let Some(staged) = state.staged.get_mut(upload) else {
+                return Ok(None);
+            };
+            // Shrinks only; `truncate` on a shorter vector is already a no-op.
+            staged.truncate(usize::try_from(len).unwrap_or(usize::MAX));
+            Ok(Some(staged.len() as u64))
+        })
+    }
+
     fn staged_len<'a>(&'a self, upload: &'a UploadId) -> BlobFuture<'a, Option<u64>> {
         Box::pin(async move {
             check_upload_id(upload)?;
@@ -347,6 +364,7 @@ mod tests {
     conformance_cases! {
         staging_appends_only_at_the_end_and_tracks_its_length,
         an_append_at_the_wrong_offset_is_refused_and_names_the_resume_point,
+        truncating_a_stage_cuts_it_back_and_never_grows_it,
         appending_to_an_upload_that_was_never_begun_is_not_staged,
         abandoning_removes_the_staged_bytes_and_says_whether_there_were_any,
         the_staged_listing_is_ordered_and_holds_only_open_uploads,

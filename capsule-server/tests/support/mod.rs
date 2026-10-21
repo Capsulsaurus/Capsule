@@ -2181,6 +2181,9 @@ impl UploadSessionStore for SwitchableUploads {
 pub(crate) struct SwallowingBlobs {
     inner: InMemoryBlobStore,
     swallow: AtomicBool,
+    /// Answer the next append as a full disk would, writing nothing — an adapter that honours
+    /// the port's "a failed append leaves the stage at its offset" rule.
+    full_next_append: AtomicBool,
     /// Refuse every [`BlobStore::put`], as a full or read-only disk would.
     puts_unavailable: AtomicBool,
     /// Park every [`BlobStore::put`] until the test lets it go.
@@ -2205,6 +2208,7 @@ impl SwallowingBlobs {
         Self {
             inner: InMemoryBlobStore::new(),
             swallow: AtomicBool::new(false),
+            full_next_append: AtomicBool::new(false),
             puts_unavailable: AtomicBool::new(false),
             held_puts: Mutex::new(None),
         }
@@ -2226,6 +2230,11 @@ impl SwallowingBlobs {
     /// Drop the next append on the floor while telling the caller it landed.
     pub(crate) fn swallow_next_append(&self) {
         self.swallow.store(true, Ordering::SeqCst);
+    }
+
+    /// Fail the next append with `ENOSPC`, as a disk that filled mid-write would.
+    pub(crate) fn fill_disk_on_next_append(&self) {
+        self.full_next_append.store(true, Ordering::SeqCst);
     }
 
     /// Make every subsequent `put` fail, or stop.
@@ -2300,7 +2309,22 @@ impl BlobStore for SwallowingBlobs {
         if self.swallow.swap(false, Ordering::SeqCst) {
             return Box::pin(async move { Ok(offset + bytes.len() as u64) });
         }
+        if self.full_next_append.swap(false, Ordering::SeqCst) {
+            return Box::pin(async move {
+                Err(BlobError::StorageFull {
+                    operation: "append to a staging file",
+                })
+            });
+        }
         self.inner.append(upload, offset, bytes)
+    }
+
+    fn truncate_staged<'a>(
+        &'a self,
+        upload: &'a UploadId,
+        len: u64,
+    ) -> BlobFuture<'a, Option<u64>> {
+        self.inner.truncate_staged(upload, len)
     }
 
     fn staged_len<'a>(&'a self, upload: &'a UploadId) -> BlobFuture<'a, Option<u64>> {
