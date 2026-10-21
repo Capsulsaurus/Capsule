@@ -141,7 +141,7 @@ When an asset crosses a trust boundary — a [share link](/design/share-links/) 
 
 Stripping applies to the exported copy only; the library sidecar is untouched. Syncing the same user's own devices is not a boundary crossing. Stripping is the **issuing client's** obligation (the server holds no key); the server's half is containment — a share serves only the content addresses its record enumerates.
 
-Not implemented: the client-side strip does not exist yet; the external-backup crossing waits on a post-v1 client export command.
+Not implemented: only the region row exists, as a per-export strip over the sidecar (`sidecar_for_export`) that no boundary crossing calls yet — a share record carries no sidecar. The rest of the client-side strip is tracked by #432; the external-backup crossing waits on a post-v1 client export command.
 
 ## Collaborative Metadata
 
@@ -189,7 +189,7 @@ This doc owns the envelope, keying, versioning and merge; section value schemas 
 | Structure | Mechanism | Why it converges |
 | --- | --- | --- |
 | Tags (`tags_user` / `tags_ai`) | OR-set | Add/remove keyed by `add_id`; commutative, associative, idempotent |
-| Regions (`regions`) | Map of LWW registers, each holding an OR-set of labels | Region create/delete by LWW; labels as tags |
+| Regions (`regions`) | Map of LWW registers, each holding an OR-set of labels | Merged as a semilattice: a delete is final, live writes keep the later shape and the union of labels |
 | Caption / rating / `stack_membership` / `cull` / `hidden` | LWW register | Total order on `(ts, device_id)`; replay is a no-op |
 | Smart albums, people clusters, [aggregated federated albums](/design/federation/) | Computed views | Nothing stored; membership is a deterministic function of inputs ([views](/design/organization/#system--smart-albums-views), [AI](/design/ai/#ai-output-containment)) |
 | Container-album membership | Single home + ordered lifecycle ops | One container per asset; a replayed move no-ops ([Organization](/design/organization/#container-albums)); concurrency ordered by MLS commits |
