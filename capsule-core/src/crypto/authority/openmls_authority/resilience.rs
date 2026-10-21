@@ -145,8 +145,8 @@ impl Default for LostCommitTracker {
 }
 
 impl LostCommitTracker {
-    /// A tracker with the doc defaults: detection timeout 30 s, backoff 30 s → 2 min → 10 min,
-    /// 3 attempts.
+    /// A tracker with the defaults (owned here, not in the doc): detection timeout 30 s,
+    /// backoff 30 s → 2 min → 10 min, 3 attempts.
     pub fn new() -> Self {
         Self {
             attempts: 0,

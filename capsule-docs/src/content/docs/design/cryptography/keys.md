@@ -4,239 +4,181 @@ description: Capsule's key hierarchy, device coordination, and write authorizati
 status: draft
 ---
 
-Capsule's keys form a single hierarchy with one backed-up root. The hierarchy is implemented in `capsule-core::crypto::keys`. Every signing site consumes the device signing key through the `Signer` seam there, and hardware-backed keys implement core's `HardwareSigner` trait, which the apps reach through the `capsule_sdk` namespace's `FfiHardwareSigner` foreign trait (exported under `capsule-sdk`'s `ffi` feature), so software and hardware keys are interchangeable. Reference adapters ship for software (`crypto::keys::software`, CI-smoked) and TPM 2.0 (`crypto::keys::tpm`, behind the off-by-default `tpm` feature — [reference-only](#the-tpm-feature-is-reference-only), never built by CI); Secure Enclave and StrongBox adapters live in the `capsule-core-swift` / `capsule-core-kotlin` harness packages. End-to-end hardware composition awaits the planned **P-256 hybrid-DSK variant** — secure elements expose ECDSA-P256, not Ed25519 (see [Device Enrollment](/design/device-enrollment/)).
+One hierarchy, one backed-up root; implemented in `capsule-core/src/crypto/keys/`. Every signer sits behind one seam, so software and hardware keys are interchangeable.
 
-- The **account master key** is the only key that is escrowed/backed up. It does not encrypt assets directly. Its job is to (1) wrap the per-device identity private keys and (2) anchor the encrypted backup that escrows album keys.
-- **Device keys** are hardware-bound, non-exportable, and therefore disposable — a device is re-bootstrapped from the master key rather than recovered.
-- **Album keys** (AMKs) are random per-epoch keys ledgered in MLS, escrowed both in the master-key backup and in the [Owner Group Keys](#owner-group-keys-ogks).
+- The **account master key** is the only escrowed key. It never encrypts assets; it wraps device private keys and anchors the encrypted backup that escrows AMKs.
+- **Device keys** are hardware-bound and disposable: a lost device is removed and a new one bootstrapped from the master key.
+- **AMKs** are random per-epoch album keys, ledgered in MLS and escrowed in the master-key backup and the [OGK](#owner-group-keys-ogks).
 
-The guiding rule is **the backup path is independent of the MLS ratchet**, so losing every device but holding the recovery passphrase still restores every photo. We deliberately avoid the Matrix failure mode where undecryptable content is routine. See [Failure Modes](/design/cryptography/failure-modes/).
+**Invariant:** the backup path is independent of the MLS ratchet — losing every device but holding the recovery passphrase restores every photo ([Failure Modes](/design/cryptography/failure-modes/)).
 
 ## Key Chain
 
-The account master key does **not** derive album keys — albums are MLS groups with random AMKs. The master key's role is to wrap device identity keys and to anchor the encrypted backup that escrows AMKs:
-
 ```plaintext
-account_master_key (backed up — see Failure Modes)
-  ├─ wraps device identity private keys (IK / DSK / DEK private halves)
-  └─ anchors the encrypted backup that escrows:
-        AMK_v{n}  (random 32 bytes, per album, minted per MLS epoch)
-          └─ per-file key, derived fresh per encryption (formula owned by
-             Encryption — Asset Key Derivation)
+account_master_key (escrowed)
+  ├─ wraps device private keys (IK / DSK / DEK)
+  ├─ derives default album_id (an identifier, not a key)
+  └─ anchors the encrypted backup escrowing:
+        AMK_v{n}  (random 32 B, per album, per MLS epoch)
+          └─ per-encryption file key (Encryption — Asset Key Derivation)
                 └─ AES-256-GCM-STREAM
 ```
 
-Construction rules (consistent with the [KDF choice](/design/cryptography/primitives/#key-derivation)):
+Rules (with the [KDF choice](/design/cryptography/primitives/#key-derivation)):
 
-- Always include a version string in `info` so the KDF can be rotated later.
-- Salt with something unique per scope (`album_id`, `file_id`) — never reuse salts across scopes.
-- The 512-bit KDF output is truncated to 32 bytes for the AES-256 file key.
-- Each **encryption** gets a fresh derived key: the per-encryption `nonce_prefix` is folded into the `salt` (`file_id || nonce_prefix`; see [Encryption — Asset Key Derivation](/design/cryptography/encryption/#asset-key-derivation)), so even a same-`file_id` [`replace`](/design/authorization/#the-closed-action-set) under the same epoch re-rolls the key, never merely the nonce. The STREAM nonce can therefore safely start at zero per encryption, and no `(file_key, nonce_prefix)` pair is ever reused.
-
-**Two file-key modes.** The derivation above is the **derived** mode — the default, where no per-file key is stored because the file key is recomputed from the AMK on demand. The **wrapped** mode is the one stored-key exception in the hierarchy, for assets whose bytes a client did not author (an adopted [web-upload drop](/design/web-upload/)): the asset key travels wrapped under the AMK instead of being derived from it. The wrap derivation, its nonce discipline, and the create/replace lifecycle are owned by [Encryption — Asset Key Derivation](/design/cryptography/encryption/#asset-key-derivation); the signed [`key_mode`](/design/cryptography/provenance/#asset-manifest) field records the mode. Either way the mode changes only how the decryption key is obtained — never who is authorized to write ([`verify_asset`](#write-authorization) is mode-blind).
-
-The master key also derives one **identifier** — the [default album](/design/organization/#the-default-album)'s `album_id`, via HKDF with a dedicated `info` label — so any device can recompute which album is the de facto default from the master key alone, even after recovery. This derives an *ID*, not a key: the default album is an ordinary album with a random per-epoch AMK like any other.
-
-Per-album AMKs are escrowed in the server-side encrypted backup (see [Backup and Recovery](/design/backup-recovery/)) and the [OGK](#owner-group-keys-ogks) — not derived from MLS ratchet state — so losing all devices but holding the recovery passphrase still restores photos. Ratchet keys are expected to be ephemeral.
+- `info` MUST carry a version string; salts MUST be unique per scope (`album_id`, `file_id`) and never reused across scopes.
+- Every **encryption** derives a fresh key (`nonce_prefix` is folded into the salt), so even a same-`file_id` [`replace`](/design/authorization/#the-closed-action-set) re-rolls the key. No `(file_key, nonce_prefix)` pair is ever reused. Formula: [Encryption — Asset Key Derivation](/design/cryptography/encryption/#asset-key-derivation).
+- **File-key modes:** *derived* (default, nothing stored) and *wrapped* (asset key wrapped under the AMK, only for bytes the client did not author, i.e. an adopted [web-upload drop](/design/web-upload/)). The signed [`key_mode`](/design/cryptography/provenance/#asset-manifest) records which. The mode never affects authorization; [`verify_asset`](#write-authorization) ignores it.
+- The master key derives the [default album](/design/organization/#the-default-album)'s `album_id` (HKDF, dedicated label) so any device, including a recovered one, can find it.
+- AMKs are never derived from MLS ratchet state, which is ephemeral.
 
 ## Key Generation
 
-All key generation happens client-side, drawn from the [OS CSPRNG](/design/cryptography/primitives/#randomness). The scheme is PQ-safe ("post-quantum"): classical + PQ primitives combined so that breaking either alone does not break security.
+All keys are generated client-side from the [OS CSPRNG](/design/cryptography/primitives/#randomness). Every asymmetric key is hybrid classical + PQ; both halves must verify.
 
 ### User Identity Keys (User IKs)
 
-A User IK is generated once per user ever, and lives forever (or until account compromise). This is the root of trust and signs everything below it. It is always verified out-of-band or via safety numbers.
-
-A User IK is a hybrid **Ed25519 + ML-DSA-65** signing keypair generated entirely on the client at account creation. The private halves are wrapped under the [account master key](#registered-accounts) and never leave the client in the clear; the public halves are published in the signed [device directory](#device-directory).
-
-Revocation is a global account reset — irreversible, non-recoverable, nuclear. It is published as a separate revocation certificate, hybrid-signed by the IK itself, to a well-known location so clients can check for it.
+- Hybrid **Ed25519 + ML-DSA-65** signing keypair, drawn at account creation, once per account. Root of trust; signs the [device directory](#device-directory).
+- Random, **not** derived from the master key (master rotation MUST NOT rotate identity). Private halves are sealed under the master key ([Registered accounts](#registered-accounts)).
+- Verified out-of-band / by safety numbers.
+- Revocation = global account reset: an IK-signed revocation certificate at a well-known location. Irreversible.
 
 ### Device Keys
 
-Each device's keys are cross-signed into the [device directory](#device-directory) by the user's IK:
+| Key | Algorithm | Purpose |
+| --- | --- | --- |
+| DSK | Ed25519 + ML-DSA-65 | Signs manifests and commits as this device |
+| DEK | X25519 + ML-KEM-768 | Receives encapsulated keys |
 
-1. **DSK** (Device Signing Key): hybrid **Ed25519 + ML-DSA-65**.
-2. **DEK** (Device Encryption Key): hybrid **X25519 + ML-KEM-768**.
-
-Both public halves ride the IK's hybrid signature over the [device directory](#device-directory) core — that cross-signature is what lets a peer trust a device key it has never seen, for encryption as much as for verification. **The DEK half is not published yet.** A published `DeviceEntry` carries `device_id`, `dsk_public`, `added_at` and `revoked_at` and no encryption key at all, so a peer wanting to encapsulate to one of a user's devices has no IK-attested public half to wrap to and must fall back on out-of-band material. Slice `S-A11` adds `dek_public` to the entry and publishes it from the directory-publish path, which is what makes the "both" above true of the shipped code and not only of the design. Because the entry is a *signed* structure, how that field encodes is load-bearing rather than a serializer detail — see [Device Directory](#device-directory) below. The **classical half** of each device key is **generated inside and never leaves hardware** — Secure Enclave (iOS), StrongBox/Keystore (Android), TPM (desktop) — and is non-exportable; the **PQ half** (ML-DSA-65 / ML-KEM-768) is software-sealed under hardware-protected material, because no shipping secure element implements the PQ algorithms. Shipping elements also expose **P-256**, not Ed25519/X25519, so the hardware-backed composition is the planned **P-256 hybrid variant**; the software composition (both halves in software) is what integrates end-to-end today. Because hardware halves cannot be backed up, devices are treated as disposable either way: a lost device is removed and a new one re-bootstrapped from the master key.
-
-**Verified hardware floor (2026-07).** P-256 is not a convenience choice — it is the *only* signing curve in the intersection of the secure elements Capsule targets:
-
-- **Apple Secure Enclave** (present since the iPhone 5s, so every supported iPhone): NIST P-256 EC keys **only** — no Ed25519, no RSA, no P-384.
-- **Android StrongBox** (2018+ devices that ship it): the mandatory algorithm set is RSA-2048 + ECDSA/ECDH **P-256**. Curve25519 support (KeyMint v2, Android 13+) applies only to the TEE-backed Keystore — StrongBox implementations are explicitly not expected to provide it. The TEE-backed Keystore, the fallback on devices without StrongBox, also guarantees P-256.
-- **TPM 2.0** (PC Client platform profile): RSA-2048 and ECC **P-256** are mandatory-to-implement; P-384 is optional.
-- **TPM 1.2 / no TPM** (desktops at the old end of the support window, ≈ pre-2016): no ECC at all and a SHA-1-only signing path — **excluded from hardware binding by design**. These devices run the software keystore, which the disposable-device model already covers. The strict lowest common denominator *including* TPM 1.2 would be RSA-2048, and it is deliberately rejected: it would inherit TPM 1.2's broken SHA-1 signing and add an entire algorithm lineage for a shrinking device tail.
-
-#### The `tpm` feature is reference-only
-
-Two desktop TPM adapters exist and only one of them is a shipping path; the asymmetry is deliberate and worth stating rather than discovering.
-
-- **`crypto::keys::tpm` (Linux, `tss-esapi`) is reference-only.** It sits behind an off-by-default `tpm` Cargo feature that **no CI lane builds**, and it cannot be built on the primary development host at all — `tss-esapi-sys`'s build script accepts only ARM/aarch64/x86-64 Linux and x86-64 Darwin, and *panics* on the `aarch64-apple-darwin` tuple — on top of linking the system `libtss2`. Exercising it needs a real TPM or `swtpm` (`capsule-core/README-tpm.md`). It documents the TPM key lifecycle and the `fixedTPM | fixedParent | sensitiveDataOrigin` non-exportability check in executable form; it is not a path any user's key travels.
-- **`crypto::keys::tbs` (Windows) is what slice `S-F4` ships.** It drives the raw TPM 2.0 command channel through `tbs.dll` (see [Dependencies](/design/dependencies/#rust)), so it needs no external crate and no bindgen build. The module is compiled unconditionally — its wire codec runs its mock tests on any host — with the transport and signer `#[cfg(windows)]`-gated. Its Windows CI lane and real-TPM smoke are still owed.
-
-Wherever this doc says "TPM (desktop)", the implementation that is actually exercised is the TBS one; `tss-esapi` is the reference it was mirrored from, not the thing under test.
-
-A device key can be revoked without affecting the user's identity or other devices. Revocation is done by signing a revocation statement with the IK and publishing it to a well-known location. The server then refuses to deliver new key wraps to that device, and remaining devices rotate any group keys the revoked device had access to. The revoked device's directory entry is **retained** — marked with `revoked_at` (RFC 3339), never deleted — so the manifests it signed *before* revocation stay verifiable forever (provenance is append-only; see [Provenance](/design/cryptography/provenance/#what-an-attacker-with-all-current-keys-still-cannot-do)).
+- Both public halves are cross-signed by the IK via the [device directory](#device-directory).
+- The **classical half** is generated in and never leaves hardware (Secure Enclave, StrongBox/Keystore, TPM via Windows TBS); the **PQ half** is software-sealed under hardware-protected material, since no shipping secure element implements PQ.
+- Secure elements expose only **P-256** (Secure Enclave: P-256 only; StrongBox: P-256 mandatory, no Curve25519; TPM 2.0: P-256 mandatory), so the hardware composition is the **P-256 hybrid variant** ([Device Enrollment](/design/device-enrollment/)). Devices without a usable element (TPM 1.2, none) use the software keystore; RSA is rejected.
+- **Revocation:** IK-signed revocation statement + MLS `Remove` of the device's leaves; the server stops delivering wraps to it and remaining devices rotate the group keys it held. The directory entry is **retained** with `revoked_at`, never deleted, so its pre-revocation signatures stay verifiable ([Provenance](/design/cryptography/provenance/#what-an-attacker-with-all-current-keys-still-cannot-do)).
 
 ### Owner Group Keys (OGKs)
 
-**Status: designed, implementation deferred post-v1** (decision 2026-07-12). Nothing implements the owner MLS group yet. Deferring it also defers what it gates: the [library-settings document](/design/metadata/#the-library-settings-document)'s keying, the OGK-escrow recovery path, and the Drop-Key multi-device re-wrap ([Web Upload](/design/web-upload/)). Master-key escrow remains the v1 recovery path.
+**Deferred post-v1.** Nothing implements the owner MLS group; master-key escrow is the v1 recovery path. Also deferred: [library-settings](/design/metadata/#the-library-settings-document) keying, OGK-escrow recovery, Drop-Key multi-device re-wrap.
 
-Assets' `owner_id` maps to a set of users; treat each owner as an MLS group.
-
-- **Type:** Symmetric AES-256 root key of an MLS group whose members are the owner's user set.
-- **Purpose:** A recovery/escrow layer. The OGK does **not** wrap individual file keys. Instead, it escrows every album's [AMK versions](#album-master-keys-amks), so any current owner member can recover every album key — and therefore every asset — independent of album membership. This avoids double-wrapping each file while still guaranteeing the owner never loses access.
-- **Epoch:** Bumps on any owner-set change. Every member's client commits to MLS, producing a new OGK; the server stores the welcome/commit messages.
-- **Revocation:** Remove a user from the owner set → MLS Remove proposal → new epoch → the removed user's device can no longer derive future OGKs and is dropped from future AMK escrow.
+- One MLS group per `owner_id` (its user set); AES-256 group root key.
+- Escrows every album's [AMK versions](#album-master-keys-amks) — never individual file keys — so any owner member can recover every asset independent of album membership.
+- Epoch bumps on any owner-set change; removal → MLS Remove → removed user gets no future OGK or AMK escrow.
 
 ### Album Master Keys (AMKs)
 
-Each album is its own MLS group. Members = users with any permission on the album.
+One MLS group per album; members are users with any permission. Secrecy (encryption) is separated from authorization (signatures):
 
-- **Type:** Random 32-byte symmetric key, minted per epoch. AMKs are *not* derived from MLS epoch state (which is complicated at edge cases) — they are random keys distributed *over* MLS application messages and ledgered.
+| Material | Holders | Use |
+| --- | --- | --- |
+| **AMK** — random 32 B per epoch, distributed over MLS application messages | All members | Decrypt (read) |
+| **Write-tier keypair** — hybrid Ed25519 + ML-DSA-65 ([signature scheme](/design/cryptography/primitives/#signature-scheme)), per epoch | Writers only | Sign [asset manifests](/design/cryptography/provenance/#asset-manifest) |
+| **Admin-tier keypair** — hybrid Ed25519 + ML-DSA-65 | Admins only | Sign MLS membership commits |
 
-Capsule separates **secrecy** (enforced by encryption) from **authorization** (enforced by signatures). One content key plus two signing capabilities, to minimize the surface that can leak:
-
-- **`AMK` — the content key.** Read access. MLS delivers it to *all* album members. Holding it lets you decrypt; not holding it means you cannot.
-- **Write capability — a per-epoch write-tier signing keypair.** A **hybrid Ed25519 + ML-DSA-65** keypair (see the [signature scheme](/design/cryptography/primitives/#signature-scheme); both halves must verify). Distributed via MLS to writers only, used to sign [asset manifests](/design/cryptography/provenance/#asset-manifest). It rotates with the AMK epoch, so a removed writer cannot sign for future epochs. This is authorization, not secrecy — see [Write Authorization](#write-authorization).
-- **Admin capability — an admin-tier signing keypair.** Also **hybrid Ed25519 + ML-DSA-65**. Distributed to admins only; used to sign MLS membership commits.
-
-Epoch bump triggers: member add/remove, permission change, scheduled rotation (e.g., every 30 days for long-lived albums).
+Epoch bumps on member add/remove, permission change, and scheduled rotation (e.g. 30 days).
 
 ## Write Authorization
 
-A device signature on an [asset manifest](/design/cryptography/provenance/#asset-manifest) proves *which device* produced an asset — but not that the device was *authorized to write* to that album at that time. The server is **not trusted for authorization**: it could replay, reorder, or surface an asset signed by a reader-only device, a removed writer, or a device acting outside its write window. A bug could also produce such an asset. Both must be rejected robustly, with the verification logic kept small enough to be hard to get wrong.
+A DSK signature proves *which device* produced an asset, not that it was *authorized to write* at that epoch. The server is not trusted for authorization (it may replay, reorder or surface reader-signed / removed-writer assets), and bugs must fail closed.
 
-This is **the** contract every consumer of `capsule-core::crypto` depends on. It is invoked from import, sync, federation, peering, and backup-restore — anywhere an asset enters the local trusted set.
+`verify_asset(manifest, ciphertext_hash, authority)` in `capsule-core/src/crypto/verify_asset.rs` is the **single chokepoint** by which a client acknowledges an asset — on import, sync, federation, peering and restore. Rules:
 
-- **Epoch-bound write proof.** Every asset manifest carries, in addition to the device DSK signature, a signature under the album's **per-epoch write-tier signing key**. Only writers at that epoch hold that key. The manifest's `amk_version` identifies the epoch.
-- **Authorization authority is admin-signed history, not the server.** The client verifies the write-tier signature against the write-tier public key it learned for that epoch from the album's **write authority** — an admin-signed attestation chain, consumed through the [`AlbumAuthority` interface](#write-authority-interface) below. The design-target authority is the album's MLS commit chain; a server-asserted authorization is never sufficient.
-- **Epoch ceiling is MLS-attested, not server-asserted.** The monotonic `amk_version` ceiling a client enforces is derived from the album's admin-signed [MLS commit chain](/design/cryptography/mls/#membership-operations) — the same authority that admits writers — never from the server's stored counter. A brand-new client learns the current epoch from the MLS group state delivered in its [Welcome](/design/cryptography/mls/#history-delivery-for-new-joiners), then rejects any manifest whose `amk_version` exceeds that MLS-attested epoch, so a server can neither fabricate a future epoch nor rewind to an old one and have a client honor it. The server's own no-key monotonicity check (invariant 18 in [Server-Side Validation Invariants](/design/threat-model/validation/#server-side-validation-invariants)) is a structural backstop, not the authority — it stops a *client* from skipping epochs, while MLS stops the *server* from fabricating them.
-- **What this accepts vs. rejects.** An asset signed by a writer who was *later* removed is still acknowledged — it was valid when written, and nothing after removal un-seeds it. An asset signed at an epoch where the signer lacked write capability is **rejected**: an attacker (or a buggy/colluding server) cannot produce a valid write-tier signature for an epoch they were not a writer in.
-- **Backdating buys nothing.** Ordering and authorization ride the provenance hash-chain and the `amk_version` epoch, never the self-asserted `timestamp` (see the timestamp note below). The "pre-sign backdated assets, then upload them after removal" attack therefore fails on the *epoch*, not the clock: a manifest must carry a `write_sig` for the epoch it claims, and a removed writer holds no write-tier key for any epoch past their removal. Anything they upload afterward either names an old epoch the chain has already advanced beyond (rejected by the monotonic `amk_version` + chain-head checks) or a new epoch they cannot sign for.
-- **Single verification chokepoint.** All of this lives in one `verify_asset(manifest, ciphertext_hash, authority)` function in `capsule-core::crypto`, where `authority` is the album's [`AlbumAuthority`](#write-authority-interface). It takes the **ciphertext hash**, never the bytes: hash confirmation is computed incrementally by the streaming path ([Provenance](/design/cryptography/provenance/#asset-manifest)), so verification never buffers a file. It is the only path by which a client acknowledges an asset, and per [contract-driven development](/design/principles/) it ships with exhaustive negative test cases: reader-signed, removed-writer, wrong-epoch, forged certificate chain, replayed manifest.
-- **Crypto validity, not durability.** `verify_asset` proves an asset is cryptographically valid and authorized; it says nothing about whether the *server* still durably holds the bytes. Confirming durable, indexed, retrievable server storage — the precondition for any destructive local cleanup — is a separate, key-free query, the [storage-verification endpoint](/design/transfer/durability/). A safe local release requires **both** to pass.
-- **Defensive failure handling.** A verification failure is *never* silently dropped and *never* silently accepted. The asset is quarantined and surfaced in the [provenance/audit trail](/design/cryptography/provenance/#provenance-of-library-modifications) so an operator can distinguish a bug from an attack after the fact. This bounds the blast radius of an implementation bug.
-- **Transient vs. terminal outcomes.** `verify_asset` returns one of three outcomes, not two: **accept**, **terminal-reject** (reader-signed, removed-writer, wrong-epoch, forged chain, suite-downgrade → quarantined as above), and **pending**. *Pending* is the narrow, recoverable case where the manifest's `amk_version` is within the MLS-attested epoch range but the corresponding AMK content key has not yet arrived over the in-band [AlbumKeyDistribution](/design/cryptography/mls/#history-delivery-for-new-joiners) message (an epoch bump whose key broadcast is still in flight). A pending asset is **held and retried** as MLS state catches up — never quarantined as forged and never accepted unverified — until the key arrives or a configurable timeout elapses, after which it escalates to a surfaced quarantine. This distinction stops an in-flight epoch bump from flagging honest concurrent uploads as attacks; see [Failure Modes](/design/cryptography/failure-modes/#failure-mode-catalog).
-- **Downgrade-resistant.** Both signatures cover `crypto_suite_id`, `protocol_version`, and `prior_provenance_hash`. A manifest cannot be silently re-signed under a weaker suite or back-dated onto a different chain position without breaking either signature; an attempt is rejected at the same `verify_asset` chokepoint.
-- **Key delivery is authorization-neutral.** An adopted [web-upload drop](/design/web-upload/#why-adopt-in-place) carries its file key *wrapped* under the AMK ([`key_mode = wrapped`](/design/cryptography/provenance/#asset-manifest)) instead of deriving it, but it is authorized **identically** to any other write — `verify_asset` checks the adopter's `device_sig` and epoch `write_sig`, and the guest who supplied the bytes is never a signer. `key_mode` and `wrapped_file_key` are ordinary signed manifest fields covered by both signatures, so a tampered wrapped key, or a `key_mode` inconsistent with the manifest, is a terminal-reject like any other forged field.
-- **Timestamp is audit-only.** A manifest's `timestamp` is the client's self-asserted capture/write time and is **never** load-bearing for authorization or ordering — those ride the epoch and the chain above. The server stamps its own trusted `received_at` in the [server-visible envelope](/design/filesystem/server/#postgresql-what-the-server-knows) as the authoritative wall-clock for any time-based policy (retention, rate limits); the client `timestamp` is preserved verbatim for display and audit. A server-side *sanity* bound on `timestamp` is a gross-drift guard for honest clients, **not** an authorization control — it surfaces a wildly-wrong clock rather than silently distorting the audit trail. Grammar owned by [Threat Model — Schema Rules](/design/threat-model/schema-rules/) and mirrored in [Server-Side Validation Invariants](/design/threat-model/validation/#server-side-validation-invariants).
+- **Epoch-bound write proof.** Every manifest carries a DSK signature **and** a write-tier signature for its `amk_version` epoch, verified against the write-tier public key the [authority](#write-authority-interface) attests for that epoch. A server assertion is never sufficient.
+- **Epoch ceiling is MLS-attested.** The client's monotonic `amk_version` ceiling comes from the admin-signed [MLS commit chain](/design/cryptography/mls/#membership-operations) (a new client learns it from its [Welcome](/design/cryptography/mls/#history-delivery-for-new-joiners)), never from the server's counter. The server's own monotonicity check ([Server-Side Validation Invariants](/design/threat-model/validation/#server-side-validation-invariants)) is only a backstop against clients skipping epochs.
+- **Accepts / rejects.** Written by a writer later removed → accepted (valid when written). Signed at an epoch where the signer was not a writer → rejected.
+- **Backdating buys nothing.** Authorization and ordering ride the epoch and provenance chain; a removed writer holds no write-tier key for any later epoch, and old epochs fail the monotonic `amk_version` + chain-head checks.
+- **Downgrade-resistant.** Both signatures cover `crypto_suite_id`, `protocol_version` and `prior_provenance_hash`.
+- **Hash, not bytes.** Takes the ciphertext hash computed by the streaming path; never buffers a file.
+- **Three outcomes:**
+  - *accept*;
+  - *terminal-reject* (reader-signed, removed-writer, wrong-epoch, forged chain, suite-downgrade, tampered field) → quarantined and surfaced in the [audit trail](/design/cryptography/provenance/#provenance-of-library-modifications), never silently dropped;
+  - *pending* — `amk_version` within the attested range but the AMK has not yet arrived over [AlbumKeyDistribution](/design/cryptography/mls/#history-delivery-for-new-joiners). Held and retried; escalates to quarantine after a timeout ([Failure Modes](/design/cryptography/failure-modes/#failure-mode-catalog)).
+- **Key delivery is authorization-neutral.** A `key_mode = wrapped` asset is authorized identically (adopter's `device_sig` + `write_sig`; the guest never signs). `key_mode` and `wrapped_file_key` are signed fields; tampering is terminal-reject.
+- **Timestamp is audit-only.** The manifest `timestamp` is never used for authorization or ordering; time-based policy uses the server's `received_at` ([server envelope](/design/filesystem/server/#postgresql-what-the-server-knows)). The server's drift bound on `timestamp` is a sanity check, not a control. Grammar: [Schema Rules](/design/threat-model/schema-rules/).
+- **Validity ≠ durability.** Local destructive cleanup requires `verify_asset` **and** the key-free [Transfer — Durability endpoint](/design/transfer/durability/).
 
 ### Write Authority Interface
 
-"Who could write at which epoch" is consumed through one interface, implemented in `capsule-core::crypto::authority`. `verify_asset` takes the authority as a parameter (`&dyn AlbumAuthority`) and asks it exactly four things:
+`verify_asset` takes `&dyn AlbumAuthority` (`capsule-core/src/crypto/authority/`) and asks only: the album id, the attested **epoch ceiling**, the **write-tier public key** per attested epoch, whether the AMK for an epoch is **locally held** (pending vs. reject), and whether the admin attestation chain verifies.
 
-- the album's identity (`album_id`);
-- the **epoch ceiling** — the highest `amk_version` the admin-signed attestation chain covers;
-- the **per-epoch write-tier public key** for any attested epoch;
-- whether the local device **holds the AMK** for an epoch (the input separating *pending* from *terminal-reject* above) — plus whether the admin attestation chain itself verifies.
+- `ReferenceAuthority` — admin-signed epoch ledger, no MLS dependency; offline/test authority on every build.
+- `OpenMlsAuthority` — the design target, over live OpenMLS group state ([MLS](/design/cryptography/mls/)); host-only.
 
-Two implementations exist or are planned:
-
-- **`ReferenceAuthority` (implemented).** An admin-signed epoch ledger: each epoch entry (AMK version + write-tier public key) is attested by the album admin key, and the ledger serializes to a `SignedEpochLedger` whose admin chain is re-verified on load. This is the shipped offline authority — it powers multi-epoch rotation (`Workspace::rotate_epoch`) and the exhaustive `verify_asset` negative-case suite today, with no MLS dependency.
-- **`OpenMlsAuthority` (planned — buildable).** The design-target authority backed by live MLS group state — the admin-signed commit chain described throughout this doc. The chosen ciphersuite ships in OpenMLS today (see the [status note in Cryptography — MLS](/design/cryptography/mls/)), so this is scheduled implementation work, not an upstream wait; it drops in behind the same interface without touching `verify_asset`.
-
-Everywhere this doc says an epoch or write-tier key is "MLS-attested", the code-level statement is "attested by the album's `AlbumAuthority`"; MLS is how that attestation is *produced and distributed* once live.
+"MLS-attested" in these docs means "attested by the album's `AlbumAuthority`".
 
 ## Device Directory
 
-Each user publishes a signed device directory. Other users (and federated peers) read it to learn which devices belong to whom and which public keys to trust.
+Each user publishes an IK-signed directory; peers read it to learn which device keys to trust. Shape (`capsule-core/src/crypto/keys/directory.rs`):
 
 ```rust
 DeviceDirectory {
   user_id,
-  directory_version: u64,        // monotonic; +1 on every change (add, revoke, rotate)
-  updated_at:        RFC3339,
-  devices: [
-    // dek_public is an absent-key optional, never present-null (see below)
-    { device_id, ed25519_pk, mldsa_pk, dek_public, key_package_ref, added_at, revoked_at, signed_by_master },
-    ...
-  ],
-  signature: Hybrid(master_ed25519, master_mldsa)   // covers directory_version + updated_at
+  directory_version: u64,   // strictly monotonic, +1 on every change
+  updated_at: RFC3339,
+  devices: [{ device_id, dsk_public, dek_public?, added_at, revoked_at? }],
+  signature: Hybrid(IK)     // over the canonical-CBOR core
 }
 ```
 
-When Alice's device A1 adds Bob to an album, it fetches Bob's directory, verifies the hybrid signature against Bob's published master identity, and adds all Bob's listed devices. Alice's other devices (A2, A3) see the MLS commit and update local state — MLS handles idempotent application of commits, so this just works.
-
-Concurrent edits (A1 and A2 trying to add different people simultaneously) are handled by MLS's proposal/commit ordering — one wins, the other re-proposes on top. OpenMLS exposes this.
-
-**Monotonic version (anti-rollback).** The directory is the trust anchor every peer reads to learn which device keys are current, so a server that could silently serve a *stale* directory — one that still lists a revoked device, or omits a freshly-added one — would undo a revocation or hide a device. `directory_version` closes this: it is master-signed and **strictly monotonic**, and every reader (local client, [federated](/design/federation/) peer, [peering](/design/peering/) handshake) caches the highest version it has seen per user and **refuses a directory whose `directory_version` is below that high-water mark**, surfacing the regression rather than applying it. A reader with no cached version trusts-on-first-use and pins from there. First contact is the one unprotected moment — a malicious server could serve an already-rolled-back directory to a brand-new reader — and it is corroborated out-of-band: a device enrolling into the *own* account receives the current directory over the verified [enrollment channel](/design/device-enrollment/), not from server TOFU, and cross-user first contact is backed by safety-number verification where the UI surfaces it. TOFU-then-pin therefore bounds the exposure to a first contact that skipped corroboration. This makes a revocation durable: once a peer has seen the post-revocation directory, the server cannot walk it back. The check is the directory-layer counterpart of the [stale-revival defense](/design/sync/#stale-revival-detection) for manifests, and is enforced as a [client-](/design/threat-model/validation/#client-side-validation-invariants) and [server-side](/design/threat-model/validation/#server-side-validation-invariants) invariant.
-
-**The server's identity anchor (slice `S-C42`).** The document carries the IK's *signature* over its core but not the IK itself — a `DeviceEntry` lists a *device* key — so a server holding only the bytes has nothing to verify against. The publish path therefore carries the account's identity public key beside the document, in the required `X-Capsule-Identity-Key` header: **beside** rather than inside, because the document is stored and served back byte-for-byte, and anything the server needs that the signed core does not carry has to travel where the bytes are not. The **first** publish establishes the anchor; every later one must present the same key and must verify under it. A publish presenting a different key is refused `403`, and the refusal deliberately says nothing about the stored anchor.
-
-This is trust-on-first-publish, the server-side counterpart of the reader-side TOFU above, and it is chosen over recording an IK at registration for a reason worth stating: registration does not yet exist to record one in, and the anchor's meaning — *the key this account's directories verify under* — does not change if a future registration path pre-seeds it. Choosing it now forecloses nothing; leaving the clause unenforced forecloses [global sign-out](/design/authentication/#explicit-revocation), which anchors on the account's stored directory and would be permanently disabled for any account whose stored document verifies under no key at all.
-
-**`dek_public` is an absent-key optional (slice `S-A11`).** The entry sits inside the canonically-CBOR-encoded core the IK signature covers, so field *presence* is signature-visible here exactly as it is for manifests — the [wire-presence rules](/design/cryptography/provenance/#asset-manifest) are the same rules, applied to a different signed structure. `dek_public` therefore encodes as an **absent map key** when a device has published none, never as a present `null`: a present `null` changes the core's signing bytes and silently breaks re-verification of every directory signed before the field existed, including the cross-platform fixtures. A wire-absence regression test mirroring the one in `manifest.rs` is mandatory, not a nicety — it is the only thing that catches the regression, since a directory signed *after* the change verifies fine either way.
-
-The directory entry's `added_at` field is what blocks the damage scenario where a new device claims its key is older than the account itself: a server rejects an upload from a device whose `added_at` postdates the manifest's `timestamp`. See [Threat Model — Server-Side Validation Invariants](/design/threat-model/validation/#server-side-validation-invariants).
+- **Anti-rollback.** Every reader (client, [federated](/design/federation/) peer, [peering](/design/peering/) handshake) caches the highest `directory_version` per user and **refuses and surfaces** a lower one. No cached version → TOFU, then pin. Own-account first contact is corroborated over the [enrollment channel](/design/device-enrollment/); cross-user first contact by safety numbers. Enforced as [client-](/design/threat-model/validation/#client-side-validation-invariants) and [server-side](/design/threat-model/validation/#server-side-validation-invariants) invariants; the manifest-level counterpart is [stale-revival detection](/design/sync/#stale-revival-detection).
+- **Server identity anchor.** The document carries the IK's signature but not the IK, so publish sends the IK public key beside it in `X-Capsule-Identity-Key`. The first publish pins it (trust-on-first-publish); every later publish MUST present the same key and verify under it, else `403` with no detail about the stored anchor. [Global sign-out](/design/authentication/#explicit-revocation) depends on this anchor.
+- **Field presence is signature-visible.** Optional fields (e.g. `dek_public`) encode as an **absent key**, never present-`null`, so directories signed before a field existed still verify — the same [wire-presence rules](/design/cryptography/provenance/#asset-manifest) as manifests.
+- **`added_at` bound.** The server rejects an upload whose manifest `timestamp` predates the signing device's `added_at`.
+- Adding a user to an album adds all their non-revoked listed devices; concurrent commits are ordered by MLS (loser re-proposes).
 
 ## Identity-Based Key Derivation
 
-Since all assets are encrypted via keys ultimately recoverable from an account's master key, identity keys are encapsulated differently depending on the [account type](/design/authentication/#account-types).
+How the master key and identity are held depends on the [account type](/design/authentication/#account-types).
 
 ### Registered accounts
 
-Most users have their own unique master key. It is **generated client-side** at account creation from the OS CSPRNG. The server never holds the naked master key. Each device stores its own copy wrapped under that device's DEK; a new device obtains the master key either via [cross-device recovery](/design/backup-recovery/#recovery-mechanisms) or by unwrapping the [encrypted server-side backup](/design/backup-recovery/#master-key-escrow) with the recovery passphrase.
-
-The master key alone does not make a new device the same account. The **user identity key** is drawn at random at account creation, not derived from the master key (rotating the master key must not rotate the identity), and the server pins its public half on the first device-directory publish, so a recovered device cannot mint its own. A device that holds it therefore stores the IK **sealed under the master key** (domain-separated, so no other master-key seal is accepted as one) beside the escrow, at `PUT /v1/auth/escrow/identity`. It is owner-scoped ciphertext under the same rules as the escrow — one per account, replaced in one operation, never versioned — and stored independently of it: a recovery-secret rotation re-wraps the escrow and leaves the sealed identity alone. It adds no second root. It opens only under the master key, so whoever can open it could already open the escrow. Recovery is then: fetch the escrow and unwrap the master key with the recovery secret; fetch the sealed identity (`GET /v1/auth/escrow/identity`) and open it under that master key; create the new device's library from both (`Workspace::create_from_master`). An account whose escrow exists but whose sealed identity was never stored cannot be recovered as itself. The server answers that state with its own code, `error.escrow.identity_not_stored`, because the remedy is to finish the backup from a device that still holds the identity.
+- Master key generated client-side; the server never holds it in the clear. Each device stores it wrapped under its DEK.
+- A new device obtains it by [cross-device recovery](/design/backup-recovery/#recovery-mechanisms) or by unwrapping the [server-side escrow](/design/backup-recovery/#master-key-escrow) with the recovery passphrase.
+- The IK is stored **sealed under the master key** (domain-separated) beside the escrow, at `/v1/auth/escrow/identity`: one per account, replaced atomically, independent of the escrow (recovery-secret rotation leaves it untouched). It adds no second root.
+- Recovery = unwrap escrow → open sealed identity → create the device library from both. Escrow without a sealed identity cannot recover as itself: `error.escrow.identity_not_stored` (remedy: finish backup from a device holding the IK).
 
 ### Delegated/Sponsored accounts
 
-A sponsored account is anchored under the sponsor's master key but holds its own encryption keys. The mechanism — and the only sound way to revoke — is:
+1. **Per-sponsoree KEK** — random 32 B (never derived: a derivation would let the sponsor reproduce it after revocation), wrapped under the sponsor's master key.
+2. The sponsoree's own IK/device/album keys are generated normally; private halves are wrapped under the KEK.
+3. Shared-album access is ordinary MLS membership; the KEK is not a content key.
+4. **Revocation** (all IK-signed by the sponsor): rotate the KEK (re-wrap survivors), publish a revocation certificate (checked by clients and federated peers), MLS-Remove the sponsoree's devices everywhere (AMK epoch bumps). The sponsor's master key is untouched.
 
-1. **Per-sponsoree KEK.** When a sponsor creates a sponsored account, the sponsor draws a fresh 32-byte **sponsoree KEK** from the CSPRNG (it is *not* derived from the master key — a deterministic derivation would be reproducible by the sponsor at any future point, defeating revocation). The KEK is wrapped under the sponsor's master key and stored in the sponsor's escrowed hierarchy.
-2. **Sponsoree key material.** The sponsoree's own identity, device, and album keys are generated normally. Their private halves are wrapped under the sponsoree KEK rather than directly under the sponsor's master key, so the sponsor can re-wrap or destroy a single sponsoree's keys without touching its own or the other sponsorees'.
-3. **Shared-asset access.** Sponsorees gain access to a sponsor's shared albums via ordinary MLS membership (the sponsoree's devices are added as MLS leaves in the sponsor's album groups). The KEK is *not* a content key — it only wraps the sponsoree's private keys.
-4. **Revocation.** Revocation is a three-step operation, all signed by the sponsor's IK:
-   - **Rotate** the sponsoree KEK: draw a new KEK, re-wrap surviving sponsorees if any, drop the old KEK.
-   - **Publish** an IK-signed revocation certificate naming the revoked sponsoree's identity and the timestamp.
-   - **Remove** the revoked sponsoree's devices from every MLS group they were a member of (album groups, owner group) via the standard MLS Remove flow, bumping AMK epochs.
-
-The sponsor's *own* master key is untouched by any sponsoree revocation. The published revocation certificate is what clients and [federated](/design/federation/) peers check to refuse traffic from a revoked sponsoree.
-
-**Sponsoree recovery matrix.** A sponsoree's keys are recoverable **only through its sponsor**: the sponsor unwraps the sponsoree KEK, which unwraps the sponsoree's private keys. A sponsoree has no recovery passphrase, no master-key escrow of its own, and none of the [seven recovery paths](/design/cryptography/failure-modes/#redundant-recovery-paths) independently — every path it has routes through the sponsor's master key, so **a sponsor who irrecoverably loses their master key loses every sponsoree's data with their own**. This is the same explicit, directional trust as the damage bound below, stated for recovery: a user who needs recovery that survives the sponsor must hold a registered account.
+**Recovery** is only through the sponsor: no passphrase or escrow of its own, so a sponsor who loses their master key loses every sponsoree's data.
 
 #### Damage bound under sponsor compromise
 
-A compromised sponsor holds every sponsoree's KEK, which wraps that sponsoree's private identity and device keys. It can therefore impersonate a sponsoree's device — forge its `device_sig`, append to or rewrite the sponsoree's [provenance history](/design/cryptography/provenance/#provenance-of-library-modifications), and write under the sponsoree's albums. Unlike a registered account — whose past records are protected even against a full current-key compromise because retired device keys are hardware-bound and non-recoverable — a sponsoree's history is **not** independent of its sponsor. This is inherent to delegation and is **bounded, not eliminated**:
+A compromised sponsor holds every sponsoree KEK and can impersonate the sponsoree's devices, rewrite its [provenance history](/design/cryptography/provenance/#provenance-of-library-modifications) and write to its albums. Bounded, not eliminated:
 
-- **The trust is explicit and directional.** A sponsoree's integrity is, by construction, only ever as strong as its sponsor; its keys derive from the sponsor's hierarchy and it is never promised independence. A sponsoree is the right model only when that trust already holds (a family member, a managed device).
-- **The blast radius stops at the sponsor's own sponsorees.** Per-sponsoree KEKs (step 1) mean a compromise cannot cross to a *different* sponsor's sponsorees, and registered users an album is shared with verify the sponsoree's published [device directory](#device-directory) and provenance like any peer — they are unaffected.
-- **Revocation is clean.** The IK-signed revocation certificate (step 4) cuts off a sponsoree, and federated peers refuse a revoked sponsoree's traffic.
-- **Escape hatch.** A user who needs provenance integrity that survives sponsor compromise must hold a **registered account** with hardware-bound device keys that are not derivable from any sponsor KEK. Sponsored accounts deliberately trade that independence for managed simplicity; the choice is the user's to make at account creation.
+- The trust is explicit and directional — use sponsorship only where it already holds.
+- Blast radius stops at that sponsor's sponsorees (per-sponsoree KEKs); other users verify the sponsoree's [directory](#device-directory) and provenance like any peer.
+- Users needing integrity independent of a sponsor must hold a registered account.
 
 ### Non-registered accounts
 
-**Reading.** Since key management operates at the user level, userless [share links](/design/share-links/) are handled distinctly. We encapsulate the decryption keys around the secret stored in the link. The owner can optionally attach a password, in which case the [password-based KDF](/design/cryptography/primitives/#password-based-kdf) adds a second encapsulation layer on top of the link secret.
-
-**Writing into an album** is **not supported** for non-registered accounts. Every asset written *into an album* must be encrypted under that album's key and signed with a write-tier key; a non-registered user has neither a place in the album's MLS group nor a write-tier key, so it cannot produce a valid [asset manifest](/design/cryptography/provenance/#asset-manifest) and cannot write to the library directly.
-
-**Contributing a drop** is supported — the ephemeral, link-scoped key hierarchy that [Web Upload](/design/web-upload/) builds on. When a registered user provisions an [upload link](/design/web-upload/), their client mints a **Drop Key**: a hybrid X25519 + ML-KEM-768 KEM keypair (the same KEM as a [device DEK](#device-keys)) scoped to that one link. The public half is published in the link's URL fragment; the private half is wrapped under the provisioning user's [account master key](#registered-accounts) and re-wrapped to their [OGK](#owner-group-keys-ogks), so any of that user's enrolled devices — and a holder of the recovery passphrase — can decapsulate pending drops (recovery-first). A guest seals each asset under a fresh random key and encapsulates that key to the Drop Key public half; the sealed bytes land in the provisioning user's staging inbox and become a library asset only when one of the user's trusted clients [adopts them](/design/web-upload/#drop-and-adoption-lifecycle), wrapping the guest's key under the album AMK ([wrapped file-key mode](#key-chain)). The Drop Key is revoked by deleting the link record. The guest still cannot produce an asset manifest or write into an album — the contribute-only boundary is preserved.
+- **Reading** ([share links](/design/share-links/)): decryption keys are encapsulated under the link secret, optionally plus a [password-based KDF](/design/cryptography/primitives/#password-based-kdf) layer.
+- **Writing into an album: not supported** — no MLS membership, no write-tier key, so no valid manifest.
+- **Contributing a drop** ([Web Upload](/design/web-upload/)): the provisioning client mints a per-link **Drop Key** (hybrid X25519 + ML-KEM-768, as a [DEK](#device-keys)); public half in the URL fragment, private half wrapped under the provisioner's master key (and OGK once it exists). Guests encapsulate a random per-asset key to it; a trusted client [adopts](/design/web-upload/#drop-and-adoption-lifecycle) the drop, re-wrapping that key under the AMK ([wrapped mode](#key-chain)). Deleting the link revokes the Drop Key.
 
 ## Key Rotation and Revocation
 
-- **Master key rotation.** The master key can be replaced at will. Rotation re-wraps the key hierarchy (device-key wraps, the AMK escrow blob, and the [sealed identity](#registered-accounts) stored beside the master-key escrow) under the new master key; the old master key is retained only long enough to complete the re-wrap, then discarded. Existing signed-in sessions hold device and derived keys directly and are **unaffected** — they keep working through the rotation.
-- **Device revocation.** Handled via the [device key](#device-keys) revocation certificate plus an MLS `Remove` for that device's leaves (see [MLS — Membership Operations](/design/cryptography/mls/#membership-operations)).
-- **Album-member revocation.** Handled by an MLS `Remove` and an AMK epoch bump (see [MLS — Membership Operations](/design/cryptography/mls/#membership-operations)).
+- **Master key:** rotation re-wraps device wraps, the AMK escrow and the [sealed identity](#registered-accounts), then discards the old key. Signed-in sessions are unaffected.
+- **Device:** [revocation certificate](#device-keys) + MLS `Remove` ([MLS — Membership Operations](/design/cryptography/mls/#membership-operations)).
+- **Album member:** MLS `Remove` + AMK epoch bump.
 
 ### Master-Key Compromise
 
-The hierarchy deliberately wraps *downward* — the master key wraps device identity keys and anchors the AMK escrow; it never wraps individual file keys. AMKs are not derived from it, and compartmentalization is per album (one AMK lineage per album). This is what makes recovery sound: it is **not** inverted to wrap AMKs under the hardware-bound device keys, because device keys are non-exportable and disposable — wrapping AMKs under them would forfeit the [recovery-first guarantee](/design/cryptography/failure-modes/) that holding the recovery passphrase restores every photo after every device is lost.
+The hierarchy wraps downward and is never inverted (wrapping AMKs under disposable device keys would forfeit recovery). Response:
 
-A suspected master-key compromise is therefore recovered in two moves, not a hierarchy redesign:
+1. Rotate the master key.
+2. Re-key affected albums — epoch bump mints fresh AMKs and write-tier keys ([MLS Resilience](/design/mls-resilience/#group-re-keying-ceremony)).
 
-1. **Rotate the master key** (above), re-wrapping the hierarchy so the attacker's copy no longer unwraps current device or escrow material.
-2. **Re-key the affected albums** — an MLS epoch bump per album mints fresh AMKs and write-tier keys (see [MLS Resilience — Group re-keying](/design/mls-resilience/#group-re-keying-ceremony)), so every future write uses keys the attacker never held.
-
-Ciphertext the attacker already exfiltrated under the old AMKs stays readable to them — inherent to any E2EE system once keys leak — but the blast radius is bounded to the albums whose AMKs were exposed, and all forward writes are clean.
+Already-exfiltrated ciphertext under old AMKs stays readable to the attacker; forward writes are clean.
 
 ## Validation
 
-- **Derivation determinism** — unit tests assert that HKDF over the same `(AMK, salt, info)` produces byte-identical output, across platforms (no endianness drift, no truncation differences). Cross-checked against RFC 5869 test vectors.
-- **Hardware-bound storage round-trip** — per-platform smoke harness: generate a DSK inside the Secure Enclave / StrongBox / TPM, sign a fixed payload, verify the signature against the published public key. Non-exportability is asserted by attempting to read the private bytes and confirming failure. The desktop leg runs against Windows TBS; the `tss-esapi` [reference adapter](#the-tpm-feature-is-reference-only) is exercised by hand against `swtpm`, never by CI.
-- **Directory `dek_public` wire-absence (unit).** Sign a directory with no `dek_public` on any entry; assert the canonical core bytes are byte-identical to a pre-`dek_public` fixture and that the fixture still verifies, mirroring `manifest.rs`'s `default_new_fields_are_wire_absent`. Populate `dek_public`; assert the key is present, the signature covers it, and a tampered value fails verification.
-- **Rotation ceremony** — smoke test the full master-key rotation against a real wrapped escrow blob: rotate, re-unwrap with the new passphrase, confirm every device wrap and AMK escrow entry is recoverable.
-- **`verify_asset` negative cases** — exhaustive unit-test surface owned by [Provenance](/design/cryptography/provenance/). Covers reader-signed, removed-writer, wrong-epoch, forged certificate chain, replayed manifest, suite-downgrade. Reuses the AMK + write-tier key fixtures defined here.
-- **`verify_asset` pending outcome (unit).** Present a manifest whose `amk_version` is within the MLS-attested epoch range but whose AMK key is not yet locally held; assert the outcome is *pending* (held + retried), not a quarantine. Deliver the key; re-run; assert acceptance. Push the `amk_version` past the MLS-attested epoch; assert terminal-reject.
-- **Directory monotonicity (unit).** Cache a `DeviceDirectory` at `directory_version = N`; present one at `N-1` (e.g. still listing a revoked device); assert it is refused and surfaced, not applied. Present `N+1`; assert acceptance and high-water-mark advance.
-- **Write-tier signature is hybrid (unit).** Verify a `write_sig` with only the Ed25519 half valid and the ML-DSA half corrupted; assert rejection (both halves required), mirroring the `device_sig` hybrid check.
+- **Derivation determinism** — HKDF output byte-identical across platforms; RFC 5869 vectors.
+- **Hardware round-trip** — per platform: generate DSK in hardware, sign, verify; reading private bytes MUST fail. Desktop leg is Windows TBS.
+- **Directory field wire-absence** — unset optional fields leave the signed core byte-identical to a pre-field fixture; set fields are signature-covered and tamper fails.
+- **Rotation ceremony** — rotate against a real escrow; every device wrap and AMK escrow entry still recoverable.
+- **`verify_asset` negatives** — reader-signed, removed-writer, wrong-epoch, forged chain, replay, suite-downgrade, half-valid hybrid `write_sig` ([Provenance](/design/cryptography/provenance/)).
+- **`verify_asset` pending** — unheld AMK in range → pending; deliver → accept; beyond ceiling → terminal-reject.
+- **Directory monotonicity** — `N-1` refused and surfaced; `N+1` accepted and pinned.
