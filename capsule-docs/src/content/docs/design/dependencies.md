@@ -45,6 +45,7 @@ Every Rust version is pinned once in the root `[workspace.dependencies]`; member
 | Embedded SQLite | `rusqlite` (`bundled`) | `library.sqlite`. |
 | Vector index | `sqlite-vec` (`vec0`) | Client-local, `native`-only; not on wasm32. |
 | Still decode / encode | `rawshift-image` **0.1.1** from crates.io (`default-features = false`; JPEG, PNG, JXL, TIFF, GIF, ARW, DNG decode) | Pure Rust by default. Opt-in `media-linked-codecs` (vendored libjxl, ravif) and `media-avif-decode` (system libdav1d, dynamically linked; not Windows), never in `default`. Refused: **HEIC** (libheif/libde265 are LGPL-3.0), WebP (fails to compile on aarch64), SVG, other RAW families. Absent from wasm32. |
+| Media metadata (EXIF, XMP, ICC) | `rawshift-image` | `kamadak-exif` is transitional: removed once Rawshift's extraction covers capture time, GPS and orientation ([Thumbnails — Media Is Rawshift's](/design/thumbnails/#media-is-rawshifts)). |
 | LQIP placeholder codec | `chromahash` **0.7.1** | Imported directly, never through Rawshift. **ThumbHash is retired**; see ADR-0003. |
 | Free-space probe | `rustix` (Unix) + `windows-sys` (Windows) | `native` only. |
 | Windows TPM (TBS) | `windows-sys` (`Win32_System_TpmBaseServices`) | Not tss-esapi on Windows. |

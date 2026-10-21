@@ -8,6 +8,28 @@ This doc is the single source of truth for the LQIP scheme and the derivative fo
 
 Rawshift owns decoding, metadata extraction and derivative generation (consumed through `capsule-core::media`); the server stores only opaque ciphertext. The [LQIP](#lqip) is the exception: Capsule computes it with Chromahash directly in `capsule-core::lqip`.
 
+## Media Is Rawshift's
+
+Capsule embraces every format and capability its pinned [Rawshift](https://github.com/visualcommons/rawshift)
+release supports, and implements none of them itself. Decoding, RAW development, video, resizing,
+colour management, EXIF/XMP/ICC extraction and hardware-accelerated encode and decode are
+Rawshift's; a gap is fixed upstream, not worked around in Capsule.
+
+`capsule-core::media` is a thin adapter that owns only what is Capsule's: the pixel budget and
+decoder sandbox (`catch_unwind`), the [tier table](#thumbnail-and-preview-formats), metadata
+stripping before encryption, and [derivative signing](#derivative-provenance). Its tests are
+lean integration tests over a fixture corpus (one file per supported format and per known-hostile
+shape), not re-tests of Rawshift.
+
+Code that duplicates Rawshift today and is deleted once the Rawshift release it waits for is
+pinned: Capsule's own format sniffing, the TIFF/RAW IFD pre-walk, EXIF parsing through
+`kamadak-exif`, the AV1 container pre-check, and the integer resize.
+
+**Every file is kept, whatever Rawshift supports.** An original in a format no codec in the build
+handles, video included, is still imported, encrypted, uploaded, verified and restorable byte for
+byte; only its derivatives are absent, recorded as deferred and generated when a later build can.
+Support for a format governs previews, never whether Capsule will hold the file.
+
 ## Thumbnail and Preview Formats
 
 **JXL is the primary** still codec (the master derivative). Every still tier is also delivered as **AVIF**, with **WebP** as last resort, so a client without a JXL decoder still renders. There is no JPEG fallback.
