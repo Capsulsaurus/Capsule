@@ -24,6 +24,7 @@
 
 pub mod albums;
 pub mod auth;
+pub mod cache_budget;
 pub mod client;
 pub mod cohort;
 pub mod directory;
