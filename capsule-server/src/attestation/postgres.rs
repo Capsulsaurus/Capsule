@@ -11,7 +11,7 @@
 //! # Allocate, sign and append under one table lock
 //!
 //! [`ReceiptLog::issue`] is one operation because the position and the predecessor are inside
-//! the signed core (see the module docs one level up). Here that is [`issue_in`] inside one
+//! the signed core (see the module docs one level up). Here that is `issue_in` inside one
 //! transaction — its own for `issue`, or the asset index's for a finalization, so the receipt
 //! commits with the index rows it attests to. It takes
 //! `LOCK TABLE custody_receipts IN SHARE ROW EXCLUSIVE MODE`: the mode conflicts with itself, so

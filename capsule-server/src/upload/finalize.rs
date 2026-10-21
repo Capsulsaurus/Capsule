@@ -333,18 +333,19 @@ fn custody_unavailable<'a>(
 
 /// Say what custody receipt a finalization's write committed with.
 fn log_receipt(record: &UploadSessionRecord, receipt: Option<&CustodyReceipt>) {
-    match receipt {
-        Some(receipt) => tracing::info!(
+    if let Some(receipt) = receipt {
+        tracing::info!(
             upload = %record.upload_id,
             asset = %record.asset_id,
             receipt_seq = receipt.core.receipt_seq,
             "custody receipt committed with the write"
-        ),
-        None => tracing::debug!(
+        );
+    } else {
+        tracing::debug!(
             upload = %record.upload_id,
             asset = %record.asset_id,
             "the index refused the write, so no custody receipt was written"
-        ),
+        );
     }
 }
 

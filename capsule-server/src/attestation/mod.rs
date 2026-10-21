@@ -39,8 +39,8 @@
 //! the signer to the index itself — [`crate::index::AssetIndex::record_blob_with_receipt`] and
 //! [`crate::index::AssetIndex::apply_op_with_receipt`] — and each index adapter appends the
 //! receipt inside the critical section that writes its rows: the Postgres index in the same
-//! transaction, through [`postgres::issue_in`], over the same `custody_receipts` table this log
-//! reads; the in-memory index under its own lock, through [`InMemoryReceipts::append`], into the
+//! transaction, through `postgres::issue_in`, over the same `custody_receipts` table this log
+//! reads; the in-memory index under its own lock, through `InMemoryReceipts::append`, into the
 //! log it shares with the [`AttestationContext`].
 //!
 //! [`ReceiptLog::issue`] remains for the one finalization that writes no index row: a member of
