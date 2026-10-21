@@ -6737,11 +6737,12 @@ dependencies = [
 
 [[package]]
 name = "spargen"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5baebe002620b367fea87f77f911a9de77031f7d9072d8da238624df2a7b413"
+checksum = "1a556a87dced0db1cbfed1c1b788dfd20c40371a5debfe3e94598e8baa358e90"
 dependencies = [
  "camino",
+ "cfg-expr",
  "indexmap 2.14.0",
  "jsonschema",
  "prettyplease",
