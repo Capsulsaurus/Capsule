@@ -126,6 +126,35 @@ pub const OIDC_DEVICE: Budget = Budget::new(60, SignedDuration::from_mins(1));
 /// attacker one small JSON body.
 pub const DEEP_VERIFY: Budget = Budget::new(4, SignedDuration::from_hours(1));
 
+/// Upload sessions one account may open (transfer/upload.md, Hostile Clients).
+///
+/// Three hundred a minute. A session is one blob, and an asset is a handful of blobs (original,
+/// derivatives, metadata, manifest), so this is an import of sixty-odd photos a minute before the
+/// limiter is felt — and a client that is felt waits out the `Retry-After` and carries on, rather
+/// than failing the import. A script opening sessions to fill the session store meets it inside a
+/// second. The fixed window's doubled burst at a boundary is six hundred, which the live-session
+/// cap below the limiter bounds anyway.
+pub const UPLOAD_SESSIONS: Budget = Budget::new(300, SignedDuration::from_mins(1));
+
+/// Chunks one account may append, across all of its sessions (transfer/upload.md, Hostile
+/// Clients).
+///
+/// Three thousand a minute, fifty a second. The SDK's smallest chunk is 256 KiB, so this is
+/// above 100 Mbit/s at the floor and far above it at the sizes a fast link adapts to; a client
+/// sending one-byte chunks at the head is the one this throttles.
+pub const UPLOAD_CHUNKS: Budget = Budget::new(3_000, SignedDuration::from_mins(1));
+
+/// Live upload sessions one account may hold at once (transfer/upload.md, Hostile Clients).
+///
+/// A cap rather than a rate: the session store holds every live session for up to its 24-hour
+/// lifetime, so the rate limit above bounds how fast an account fills it and this bounds how far.
+/// A thousand is several hundred assets in flight — far past what a client's own transfer
+/// concurrency opens — while a client that leaks sessions, by crashing between creating them and
+/// sending a byte, is stopped well short of crowding out every other account. A session leaves
+/// the count when it finalizes, is cancelled, or expires; resuming one already held never counts
+/// again, because the create that finds it answers with it before this is consulted.
+pub const UPLOAD_LIVE_SESSIONS: usize = 1_000;
+
 /// Requests from one federated peer, across the sync and blob reads (invariant 21).
 ///
 /// Ten thousand an hour — the retired server's established-tier default. A peer pulling a

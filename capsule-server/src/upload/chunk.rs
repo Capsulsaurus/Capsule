@@ -222,6 +222,52 @@ mod tests {
             assert!(within_chunk_ceiling(suggested));
         }
     }
+
+    #[tokio::test]
+    async fn one_session_appends_one_chunk_at_a_time_and_the_lock_map_forgets_it() {
+        use std::time::Duration;
+
+        use crate::store::UploadId;
+
+        let locks = SessionLocks::default();
+        let first_session = UploadId::new("first");
+        let second_session = UploadId::new("second");
+
+        let held = locks.acquire(&first_session).await;
+        let other = tokio::time::timeout(Duration::from_secs(5), locks.acquire(&second_session))
+            .await
+            .expect("another session's appends are not held up");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), locks.acquire(&first_session))
+                .await
+                .is_err(),
+            "a second append to the same session waits for the first"
+        );
+
+        drop(held);
+        let next = tokio::time::timeout(Duration::from_secs(5), locks.acquire(&first_session))
+            .await
+            .expect("and takes its turn once the first is done");
+        assert_eq!(locks.tracked(), 2);
+
+        drop(next);
+        drop(other);
+        let _sweep = locks.acquire(&UploadId::new("third")).await;
+        assert_eq!(
+            locks.tracked(),
+            1,
+            "a session with nothing in flight holds no entry"
+        );
+        assert_eq!(
+            locks
+                .held
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len(),
+            1,
+            "and its dead entry is swept on the next acquisition"
+        );
+    }
 }
 
 // ===========================================================================================
@@ -262,11 +308,88 @@ pub enum Accepted {
     /// The session is abandoned by the caller on this: a declared size that the bytes exceed is
     /// a client that has lost track of its own upload, and resuming it would keep failing.
     SizeExceeded,
-    /// The stage's length is not the session's counter. The server's inconsistency.
+    /// The stage is **shorter** than the session's counter: bytes the server acknowledged are
+    /// not on disk. The server's inconsistency, and the one divergence it cannot repair — a
+    /// stage that ran *ahead* of the counter is cut back instead (see [`append`]).
     StorageInconsistent,
+    /// The blob store is out of space. Nothing was kept, so the same chunk at the same offset
+    /// lands once space is freed.
+    StorageFull,
+    /// The session stopped accepting chunks while this one waited its turn: a concurrent chunk
+    /// completed it and finalization has claimed it, or it reached a terminal state.
+    NotActive,
     /// The session vanished between the read and the write — expired, discarded, cancelled.
     SessionGone,
 }
+
+/// Serialises the appends to one upload session inside this process.
+///
+/// # Why a lock, when the stage is append-only
+///
+/// The offset rule is decided from the session as it was *read*, and the read and the write are
+/// separate awaits. Two chunks for the same offset arriving together — a client that retried
+/// before its first attempt was answered — could both read offset `n`, both pass the rule, and
+/// both reach the blob store; the second then met a stage that no longer ended at `n` and the
+/// session reported an inconsistency that was really a race. Holding one lock per session across
+/// read, write and record makes the second chunk see the first one's outcome: a replay with the
+/// same bytes, a conflict with different ones.
+///
+/// # Why in-process
+///
+/// A stage is a file on this server's own disk (design/filesystem/server.md), so only this
+/// process ever appends to it. A lock in the session store would serialise across processes that
+/// cannot share a stage, at the price of a network round trip per chunk.
+///
+/// # Bounded
+///
+/// Entries are weak and swept on every acquisition, so the map holds the sessions with a chunk
+/// in flight or waiting, never every session that ever took one.
+#[derive(Debug, Default)]
+pub struct SessionLocks {
+    held: std::sync::Mutex<
+        std::collections::BTreeMap<crate::store::UploadId, std::sync::Weak<tokio::sync::Mutex<()>>>,
+    >,
+}
+
+impl SessionLocks {
+    /// Wait for, then hold, `upload`'s append lock. Dropping the guard releases it.
+    pub async fn acquire(
+        &self,
+        upload: &crate::store::UploadId,
+    ) -> tokio::sync::OwnedMutexGuard<()> {
+        let lock = {
+            let mut held = self
+                .held
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            held.retain(|_, lock| lock.strong_count() > 0);
+            if let Some(lock) = held.get(upload).and_then(std::sync::Weak::upgrade) {
+                lock
+            } else {
+                let lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+                held.insert(upload.clone(), std::sync::Arc::downgrade(&lock));
+                lock
+            }
+        };
+        lock.lock_owned().await
+    }
+
+    /// How many sessions currently have a lock entry, for a test of the bound.
+    #[cfg(test)]
+    fn tracked(&self) -> usize {
+        self.held
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+            .filter(|lock| lock.strong_count() > 0)
+            .count()
+    }
+}
+
+/// The process's one set of append locks, shared by the album path and the drop path — both
+/// append to the same kind of session through [`append`], so one map is what serialises them.
+static APPEND_LOCKS: std::sync::LazyLock<SessionLocks> =
+    std::sync::LazyLock::new(SessionLocks::default);
 
 /// Stage one chunk and record it, applying invariants 9–12.
 ///
@@ -277,6 +400,20 @@ pub enum Accepted {
 ///
 /// The checksum is verified **before any write**, so a mismatch persists nothing and leaves the
 /// offset where it was.
+///
+/// # Serialised, and decided on a fresh read
+///
+/// The whole decision runs under the session's [`SessionLocks`] entry, and starts by reading the
+/// session again: `record` is what the caller authorized, but the offset it carries may be a
+/// concurrent chunk's out-of-date view. Only the identifier is taken from it.
+///
+/// # A stage that ran ahead is cut back
+///
+/// A stage longer than the session's counter holds bytes nobody acknowledged — an append that
+/// landed and then lost the session write recording it, or one a crash interrupted. The client
+/// will send them again at the counter, so the stage is cut back to it and the append retried
+/// once, rather than answering `storage_inconsistent` until the session expires. A stage
+/// *shorter* than the counter lost acknowledged bytes and stays an inconsistency.
 ///
 /// # Errors
 ///
@@ -292,6 +429,12 @@ pub async fn append(
     received_hash: &str,
 ) -> Result<Accepted, crate::store::StoreError> {
     let id = &record.upload_id;
+    let _turn = APPEND_LOCKS.acquire(id).await;
+
+    let Some(record) = sessions.read(id).await? else {
+        return Ok(Accepted::SessionGone);
+    };
+    let record = &record;
 
     // Replay, conflict, or a stale offset — all three answered from the accepted-chunk record
     // rather than from the bytes on disk.
@@ -319,6 +462,15 @@ pub async fn append(
         OffsetPosition::AtHead => {}
     }
 
+    // After the replay check, so a duplicate of the chunk that completed the session is still
+    // answered as the replay it is; before any write, so nothing lands on a stage finalization
+    // has claimed.
+    if !record.status.is_active()
+        || record.status == crate::store::UploadSessionStatus::WaitingForProcessing
+    {
+        return Ok(Accepted::NotActive);
+    }
+
     let length = bytes.len() as u64;
     if !alignment_ok(offset, length, record.total_size) {
         return Ok(Accepted::NotAligned);
@@ -337,7 +489,25 @@ pub async fn append(
     // Durable before the acknowledgement. The port's own offset cross-check is the append
     // path's storage-consistency guard: a stage whose length is not the session's counter is
     // the server's inconsistency, never the client's fault.
-    match blobs.append(id, offset, bytes).await {
+    let mut staged = blobs.append(id, offset, bytes).await;
+    if let Err(crate::blob::BlobError::OffsetMismatch { actual, .. }) = staged
+        && actual > offset
+    {
+        // Unacknowledged bytes past the counter. Cut them away and land this chunk where the
+        // session says it belongs — once: a stage that is still wrong after a cut is not a stage
+        // this call understands.
+        tracing::warn!(
+            upload_id = %id,
+            counter = offset,
+            on_disk = actual,
+            "the stage ran ahead of the session; cutting it back to the session offset"
+        );
+        match blobs.truncate_staged(id, offset).await {
+            Ok(_) => staged = blobs.append(id, offset, bytes).await,
+            Err(error) => staged = Err(error),
+        }
+    }
+    match staged {
         Ok(_) => {}
         Err(crate::blob::BlobError::OffsetMismatch { actual, .. }) => {
             tracing::error!(
@@ -347,6 +517,15 @@ pub async fn append(
                 "the stage and the session's counter diverged"
             );
             return Ok(Accepted::StorageInconsistent);
+        }
+        Err(crate::blob::BlobError::StorageFull { operation }) => {
+            tracing::warn!(
+                upload_id = %id,
+                offset,
+                operation,
+                "a chunk was refused: the blob store is out of space"
+            );
+            return Ok(Accepted::StorageFull);
         }
         Err(other) => {
             tracing::error!(%other, upload_id = %id, "the chunk could not be staged");

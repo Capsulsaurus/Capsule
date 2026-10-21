@@ -270,7 +270,72 @@ const EXTRAS: &[Extra] = &[
         status: 429,
         members: RETRY_AFTER,
     },
+    // The upload surface's three waits (transfer/upload.md, Hostile Clients): a spent budget or
+    // the live-session cap, an outage, and a full disk. Each says when, and `Retry-After` says it
+    // again on the header.
+    Extra {
+        component: "UploadCreateRateLimitedProblem",
+        operation: "create_upload",
+        status: 429,
+        members: UPLOAD_RETRY_AFTER,
+    },
+    Extra {
+        component: "UploadCreateUnavailableProblem",
+        operation: "create_upload",
+        status: 503,
+        members: UPLOAD_RETRY_AFTER,
+    },
+    Extra {
+        component: "UploadCreateStorageFullProblem",
+        operation: "create_upload",
+        status: 507,
+        members: UPLOAD_RETRY_AFTER,
+    },
+    Extra {
+        component: "UploadChunkRateLimitedProblem",
+        operation: "append_chunk",
+        status: 429,
+        members: UPLOAD_RETRY_AFTER,
+    },
+    Extra {
+        component: "UploadChunkUnavailableProblem",
+        operation: "append_chunk",
+        status: 503,
+        members: UPLOAD_RETRY_AFTER,
+    },
+    Extra {
+        component: "UploadChunkStorageFullProblem",
+        operation: "append_chunk",
+        status: 507,
+        members: UPLOAD_RETRY_AFTER,
+    },
+    Extra {
+        component: "UploadHeadUnavailableProblem",
+        operation: "head_upload",
+        status: 503,
+        members: UPLOAD_RETRY_AFTER,
+    },
+    Extra {
+        component: "UploadCancelUnavailableProblem",
+        operation: "cancel_upload",
+        status: 503,
+        members: UPLOAD_RETRY_AFTER,
+    },
 ];
+
+/// The retry hint the upload surface's waits carry (transfer/upload.md, Hostile Clients).
+///
+/// The same member, type and bound as [`RETRY_AFTER`], with a meaning wide enough for the three
+/// causes that set it: a limiter, an outage, a full disk.
+const UPLOAD_RETRY_AFTER: &[Member] = &[Member {
+    name: "retry_after",
+    json_type: "integer",
+    format: Some("uint64"),
+    description: "When the caller may retry, as Unix seconds; the `Retry-After` header carries \
+                  the same instant as a delay. The client waits, then resumes from `HEAD` at the \
+                  authoritative offset.",
+    nullable: false,
+}];
 
 /// The retry hint every throttled response carries (`S-C32`).
 ///
@@ -446,6 +511,64 @@ pub(crate) fn describe_negotiation_headers(document: &mut Document) {
                             kynos::openapi::RefOr::Item(header.clone()),
                         );
                     }
+                }
+            }
+        }
+    }
+}
+
+/// Files `Retry-After` under exactly the responses that carry it.
+///
+/// [`crate::problem::RetryAfter`] attaches the header to a problem that names a retry instant,
+/// and to nothing else. Kynos describes an interceptor's `Adds` on success responses only, which
+/// for this header is precisely backwards: it would promise `Retry-After` on every `200` and say
+/// nothing on the `429` a client is waiting out. So the walk removes it from every response whose
+/// problem carries no `retry_after` member — which is every success — and declares it on every
+/// response [`EXTRAS`] says does carry one.
+pub(crate) fn describe_retry_after_header(document: &mut Document) {
+    let header: kynos::openapi::Header = serde_json::from_value(serde_json::json!({
+        "description": "Seconds to wait before retrying (RFC 9110 delta-seconds): the problem's \
+                        `retry_after` instant, measured from the server's clock.",
+        "schema": { "type": "integer", "format": "uint64", "minimum": 0 },
+    }))
+    .expect("a literal header object is a header");
+
+    for item in document.paths.items.values_mut() {
+        let slots: Vec<&mut Option<Box<kynos::openapi::Operation>>> = vec![
+            &mut item.get,
+            &mut item.put,
+            &mut item.post,
+            &mut item.delete,
+            &mut item.options,
+            &mut item.head,
+            &mut item.patch,
+            &mut item.trace,
+            &mut item.query,
+        ];
+        for operation in slots.into_iter().filter_map(|slot| slot.as_deref_mut()) {
+            let operation_id = operation.operation_id.clone().unwrap_or_default();
+            for (key, response) in &mut operation.responses.responses {
+                let kynos::openapi::RefOr::Item(response) = response else {
+                    continue;
+                };
+                let carries = key.parse::<u16>().ok().is_some_and(|status| {
+                    EXTRAS.iter().any(|extra| {
+                        extra.operation == operation_id
+                            && extra.status == status
+                            && extra
+                                .members
+                                .iter()
+                                .any(|member| member.name == crate::problem::RETRY_AFTER_MEMBER)
+                    })
+                });
+                response.headers.retain(|name, _| {
+                    !name.eq_ignore_ascii_case(crate::problem::RETRY_AFTER_HEADER)
+                });
+                if carries {
+                    response.headers.insert(
+                        crate::problem::RETRY_AFTER_HEADER.to_owned(),
+                        kynos::openapi::RefOr::Item(header.clone()),
+                    );
                 }
             }
         }
