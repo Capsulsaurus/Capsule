@@ -24,12 +24,12 @@ export default defineConfig({
                 {
                     icon: 'github',
                     label: 'GitHub',
-                    href: 'https://github.com/justin13888/Capsule',
+                    href: 'https://github.com/Capsulsaurus/Capsule',
                 },
             ],
             editLink: {
                 baseUrl:
-                    'https://github.com/justin13888/Capsule/tree/master/capsule-docs',
+                    'https://github.com/Capsulsaurus/Capsule/tree/master/capsule-docs',
             },
             components: {
                 // Renders the `status` frontmatter (draft/stable) as a title badge.

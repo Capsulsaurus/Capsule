@@ -8,6 +8,6 @@ We will always ensure the latest major.minor version receives updates. Minor ver
 
 ## Reporting a Vulnerability
 
-[Open a GitHub security advisory](https://github.com/Capsulsaur/Capsule/security/advisories/new) to report a vulnerability.
+[Open a GitHub security advisory](https://github.com/Capsulsaurus/Capsule/security/advisories/new) to report a vulnerability.
 
 See [GitHub's guidance on privately reporting a security vulnerability](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability) for more info.

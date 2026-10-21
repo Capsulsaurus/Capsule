@@ -93,7 +93,7 @@ If an original asset is lower-resolution than the highest thumbnail tier, that t
 
 ## LQIP
 
-Capsule imports [Chromahash](https://github.com/justin13888/chromahash) **0.7.1** directly; Rawshift does not wrap or expose it. The earlier gate — "after Chromahash reaches v1" — is **amended to 0.7.1**, the release the project accepts as ready, and the architecture check stopped forbidding the crate accordingly (`2f8beeb`). The crate pin lives in [Dependencies](/design/dependencies/#rust); this section owns the contract that pin has to satisfy.
+Capsule imports [Chromahash](https://github.com/visualcommons/chromahash) **0.7.1** directly; Rawshift does not wrap or expose it. The earlier gate — "after Chromahash reaches v1" — is **amended to 0.7.1**, the release the project accepts as ready, and the architecture check stopped forbidding the crate accordingly (`2f8beeb`). The crate pin lives in [Dependencies](/design/dependencies/#rust); this section owns the contract that pin has to satisfy.
 
 The chromahash, its format version, and a `dominant_color` fallback are the [`lqip` field of the sidecar](/design/metadata/#sidecar-schema-v1) — inside the [encrypted metadata blob](/design/cryptography/encryption/#metadata-encryption), so the placeholder is available the instant metadata syncs, before any thumbnail fetch, and never leaks to the server. A decoder that does not recognize the chromahash format version falls back to the solid `dominant_color` fill rather than misrendering, so a future chromahash revision is a versioned change, never a silent break.
 

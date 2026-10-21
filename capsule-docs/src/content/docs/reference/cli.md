@@ -18,7 +18,7 @@ the binary parses with.
 ## Install
 
 Release builds are published as an archive per target on the
-[releases page](https://github.com/justin13888/Capsule/releases), each carrying a single
+[releases page](https://github.com/Capsulsaurus/Capsule/releases), each carrying a single
 `capsule` executable. From a checkout, `cargo run -p capsule-cli --` runs the same binary
 against the working tree.
 
