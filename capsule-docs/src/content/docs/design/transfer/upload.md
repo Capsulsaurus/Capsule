@@ -185,7 +185,8 @@ Blobs are content-addressed, so identical bytes are stored once. A finalized has
 
 - An upload is charged to `upload_user_id` (the uploader), distinct from `owner_id`. Uploading for another owner requires a verified relationship. Quota is enforced at session creation, after the duplicate check ([Quota](/design/quota/)).
 - Adding to an album requires write-tier access. Asset uploads always carry a concrete `album_id` (the user's choice or the [default album](/design/organization/#the-default-album)), because the bytes are encrypted under that album's key.
-- Only the uploader may `PATCH`. The uploader or owner may `HEAD` or `DELETE`; anyone else gets `403`.
+- Only the uploader may `PATCH`. The uploader or owner may `HEAD` or `DELETE`; to anyone else the session does not exist (`404`).
+- The uploading device need not be the manifest's signing device: any device of the same account may upload a bundle another device sealed and signed ([delegation](/design/peering/#delegation)). The signature is verified against the signer, never the uploader.
 
 ## Upload Tiering (Staged Uploads)
 

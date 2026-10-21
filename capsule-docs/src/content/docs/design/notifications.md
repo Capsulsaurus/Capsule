@@ -12,7 +12,7 @@ This doc owns alert delivery and the vocabulary. The server holds only ciphertex
 | --- | --- | --- | --- |
 | **Alert** | device → its own user | Localized text composed **on-device** | This doc |
 | **Wake** | server → client | Nothing: "something changed for you" | This doc |
-| **Hint** | server ↔ server, peer ↔ peer | "A new event exists in album A"; advisory, no authority | [Federation](/design/federation/#pull-only-federation), [Peering](/design/peering/#transfer-protocol) |
+| **Hint** | server ↔ server, peer ↔ peer | "A new event exists in album A"; advisory, no authority | [Federation](/design/federation/#pull-only-federation), [Peering](/design/peering/#sync) |
 
 Alert classes and trigger predicates live in `capsule-core::notify`, one decision function for every platform; delivery is native per client. Open: the per-platform delivery, the `notification.*` catalog keys and the permission request are not built, so no alert reaches a user yet.
 

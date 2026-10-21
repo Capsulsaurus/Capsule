@@ -37,6 +37,7 @@ the worst outcome of any version mismatch a refused write, never lost or corrupt
    No merge depends on wall-clock agreement between devices or on which side is newer.
 7. **Local originals are released only on server custody**: a durable verdict, a signed custody
    receipt and a matching read-back hash ([Durability](/design/transfer/durability/#verify-before-destroy)).
+   A copy on another device, including a [delegate](/design/peering/#delegation), is never custody.
 8. **One protocol version per binary.** A client sends the same `protocol_version` on every
    request it makes.
 9. **Evolution is additive.** New fields are optional and absent from the wire until set; new

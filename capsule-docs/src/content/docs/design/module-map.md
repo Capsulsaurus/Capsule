@@ -111,3 +111,6 @@ the case it covers (`rg "E2E case N"`).
     it, and a second device `verify_asset`-accepts it.
 14. **Share link over TCP.** A link issued by the CLI opens from the URL alone through the
     `capsule-wasm` entry points, and revocation turns it into the public path's `404`.
+15. **Upload delegation.** A hands a sealed bundle to B, B uploads it, A releases the original
+    only after verifying the receipt against its own hash; B's death mid-upload makes A
+    re-queue it.

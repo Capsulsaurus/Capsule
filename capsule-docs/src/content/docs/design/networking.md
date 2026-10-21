@@ -39,4 +39,4 @@ Hostile paths (captive portals, congested carriers, the Great Firewall) MUST deg
 - Bulk transfers cut on stall (no bytes for T seconds), not total duration, then resume.
 - Under `adverse`, fetches use bounded `Range` windows and uploads the minimum chunk tier.
 - Racing happens only at dial (Happy Eyeballs v2).
-- Persistent bad WAN: [LAN peering](/design/peering/) moves originals; the remedy is in-region self-hosting, not circumvention.
+- Persistent bad WAN: [delegation](/design/peering/#delegation) hands originals to a better-connected device of the same user; the remedy is in-region self-hosting, not circumvention.

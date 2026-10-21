@@ -60,6 +60,7 @@ The gate applies to:
 - **Move-mode** source deletion after import. Not yet enforced — tracked in the MVP roadmap: `import --move` outside streaming mode does not wait on the gate;
 - **streaming import** release ([Pipeline](/design/import/pipeline/#import-upload-streaming-mode));
 - discarding local working state tied to a write (staged temporaries, the pre-edit copy across a `replace`).
+- releasing an original handed to a [delegate](/design/peering/#delegation): the receipt is fetched from the server by the origin and checked against the hash the origin computed, never relayed by the delegate.
 
 It does not apply to intentional deletes (governed by the retention window), to rebuildable derivative cache, or to re-fetchable server-origin blobs. The SQLite catalog is **not** rebuildable cache: it [migrates in place](/design/versioning/#client-catalog-migration) and evicting it is a repair action.
 
