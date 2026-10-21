@@ -55,6 +55,8 @@ Every Rust version is pinned once in the root `[workspace.dependencies]`; member
 | CLI | `clap` (derive) | — |
 | Tooling image processing | `image` (`jpeg`, `png`) | xtask screenshot tooling only; no product crate may depend on it. |
 | Test runner | `cargo-nextest`; `testcontainers` for backing services | Binary smokes use `CARGO_BIN_EXE_<name>`; no `assert_cmd`. |
+| Property tests | `proptest` (dev-dependency, `std` only) | CRDT merge laws and generated inputs, per the [testing plan](/development/testing/). |
+| Unicode normalization | `unicode-normalization` | NFC for user labels ([Organization — Labels](/design/organization/#labels)); already transitive. |
 | FFI bindings | `uniffi` | One workspace version. |
 | Browser FFI (WASM) | `wasm-bindgen` + `wasm-bindgen-cli` at the same version | `capsule-wasm`; not wasm-pack (breaks the offline gate). |
 

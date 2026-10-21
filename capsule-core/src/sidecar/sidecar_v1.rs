@@ -14,6 +14,7 @@ use ciborium::value::Value;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::region::Regions;
 use crate::cbor;
 use crate::crypto::hash::Hash32;
 use crate::crypto::keys::{HybridSignature, HybridSigningKey, HybridVerifyingKey};
@@ -172,6 +173,14 @@ pub struct SidecarV1 {
     /// construction, not convention. Wire-absent default = the never-written
     /// register (distinct from an explicit removal, which is a stamped `None`).
     pub stack_membership: Lww<Option<StackMembership>>,
+    /// Labelled image regions: region id (UUIDv7) to its register, a stamped `None` being a
+    /// deleted region (owner: [Organization — Labels]). Merged by
+    /// [`merge_regions`](super::merge_regions), not as plain LWW. Wire-absent when empty, so
+    /// every sidecar without regions encodes byte-identically to before the field existed; an
+    /// older reader keeps it verbatim as an unknown key.
+    ///
+    /// [Organization — Labels]: https://docs/design/organization/#labels
+    pub regions: Regions,
     /// Culling flag: LWW register over the trinary [`CullFlag`]. Wire-absent
     /// default = never flagged (`Neutral`).
     pub cull: Lww<CullFlag>,
@@ -254,6 +263,9 @@ impl SidecarV1 {
         if self.stack_membership != Lww::default() {
             put!("stack_membership", self.stack_membership);
         }
+        if !self.regions.is_empty() {
+            put!("regions", self.regions);
+        }
         if self.cull != Lww::default() {
             put!("cull", self.cull);
         }
@@ -298,6 +310,28 @@ impl SidecarV1 {
             Some(sig) => ik_public.verify(&self.signing_bytes(), sig),
             None => false,
         }
+    }
+
+    /// The highest `add_id.counter` `device` has written into any `AddId`-bearing OR-set of this
+    /// sidecar — user tags, AI tags, and every region's labels, live or deleted — or `None` if it
+    /// wrote none. The floor a restarting device reseeds its counter from.
+    pub fn max_add_counter_for(&self, device: &Uuid) -> Option<u64> {
+        let regions = self.regions.values().flat_map(|register| {
+            register
+                .current
+                .iter()
+                .chain(register.superseded.iter())
+                .filter_map(|stamped| stamped.value.as_ref())
+                .filter_map(|region| region.labels.max_add_counter_for(device))
+        });
+        [
+            self.tags_user.max_add_counter_for(device),
+            self.tags_ai.max_add_counter_for(device),
+        ]
+        .into_iter()
+        .flatten()
+        .chain(regions)
+        .max()
     }
 
     /// Decode a sidecar from canonical CBOR bytes, refusing a schema newer than `max_known`
@@ -361,6 +395,10 @@ impl SidecarV1 {
             None | Some(Value::Null) => Lww::new(),
             Some(v) => from_value::<Lww<Option<StackMembership>>>(v)?,
         };
+        let regions = match text.remove("regions") {
+            None | Some(Value::Null) => Regions::new(),
+            Some(v) => from_value::<Regions>(v)?,
+        };
         let cull = match text.remove("cull") {
             None | Some(Value::Null) => Lww::new(),
             Some(v) => from_value::<Lww<CullFlag>>(v)?,
@@ -391,6 +429,7 @@ impl SidecarV1 {
             caption,
             rating,
             stack_membership,
+            regions,
             cull,
             hidden,
             camera_id,
@@ -428,6 +467,7 @@ mod tests {
             caption: Lww::new(),
             rating: Lww::new(),
             stack_membership: Lww::new(),
+            regions: Regions::new(),
             cull: Lww::new(),
             hidden: Lww::new(),
             camera_id: Some(CameraId {
@@ -642,6 +682,107 @@ mod tests {
         let mut replay = ab.clone();
         replay.merge(&a);
         assert_eq!(replay.get(), ab.get());
+    }
+
+    fn with_region() -> (SidecarV1, Uuid) {
+        use crate::metadata::crdt::AddId;
+        use crate::sidecar::region::{Region, RegionShape, write_region};
+
+        let mut s = minimal();
+        let region_id = Uuid::from_u128(0x7E61);
+        let mut region = Region::new(RegionShape::Circle {
+            cx: 0.5,
+            cy: 0.25,
+            r: 0.125,
+        });
+        region.labels.add(
+            "Alice".into(),
+            AddId {
+                device: Uuid::from_u128(0xD1),
+                counter: 41,
+            },
+        );
+        let mut register = Lww::new();
+        write_region(
+            &mut register,
+            Some(region),
+            "2026-05-31T12:00:00Z".into(),
+            Uuid::from_u128(0xD1),
+        );
+        s.regions.insert(region_id, register);
+        (s, region_id)
+    }
+
+    #[test]
+    fn absent_regions_are_wire_absent_and_byte_stable() {
+        let bytes = minimal().to_canonical_vec();
+        let needle = b"regions";
+        assert!(!bytes.windows(needle.len()).any(|w| w == needle));
+        let back = SidecarV1::from_canonical_slice(&bytes, SIDECAR_SCHEMA_V1).unwrap();
+        assert!(back.regions.is_empty());
+    }
+
+    #[test]
+    fn regions_round_trip_and_survive_signing() {
+        let ik = HybridSigningKey::from_seed_bytes(&[1; 32], &[2; 32]);
+        let (mut s, region_id) = with_region();
+        s.sign(&ik);
+        let back =
+            SidecarV1::from_canonical_slice(&s.to_canonical_vec(), SIDECAR_SCHEMA_V1).unwrap();
+        assert_eq!(back, s);
+        assert!(back.verify(&ik.verifying_key()));
+        assert!(back.regions.contains_key(&region_id));
+        // Dropping the regions after signing invalidates the signature (they were covered).
+        let mut stripped = back;
+        stripped.regions.clear();
+        assert!(!stripped.verify(&ik.verifying_key()));
+    }
+
+    /// A client that predates `regions` decodes it into `_unknown`, re-signs after an edit of
+    /// its own, and hands back a sidecar a current client reads the regions from intact.
+    #[test]
+    fn an_old_client_preserves_regions_as_an_unknown_key_through_a_re_sign() {
+        let ik = HybridSigningKey::from_seed_bytes(&[1; 32], &[2; 32]);
+        let (mut current, _) = with_region();
+        current.sign(&ik);
+        let bytes = current.to_canonical_vec();
+
+        // What a pre-`regions` decoder holds: the same record with `regions` as an unknown key.
+        let mut old = SidecarV1::from_canonical_slice(&bytes, SIDECAR_SCHEMA_V1).unwrap();
+        let raw = to_value(&old.regions);
+        old.regions.clear();
+        old.unknown.insert("regions".into(), raw);
+        assert_eq!(
+            old.to_canonical_vec(),
+            bytes,
+            "an unknown-key regions entry encodes byte-identically"
+        );
+        assert!(old.verify(&ik.verifying_key()));
+
+        // The old client edits a field it knows and re-signs.
+        old.caption.set(
+            "seen by an old client".into(),
+            "2026-06-01T00:00:00Z",
+            Uuid::from_u128(0xD2),
+        );
+        old.sign(&ik);
+
+        let back =
+            SidecarV1::from_canonical_slice(&old.to_canonical_vec(), SIDECAR_SCHEMA_V1).unwrap();
+        assert!(back.verify(&ik.verifying_key()));
+        assert_eq!(back.regions, current.regions);
+        assert!(back.unknown.is_empty());
+        assert_eq!(
+            back.caption.get().map(String::as_str),
+            Some("seen by an old client")
+        );
+    }
+
+    #[test]
+    fn max_add_counter_spans_region_labels() {
+        let (s, _) = with_region();
+        assert_eq!(s.max_add_counter_for(&Uuid::from_u128(0xD1)), Some(41));
+        assert_eq!(s.max_add_counter_for(&Uuid::from_u128(0xD9)), None);
     }
 
     #[test]

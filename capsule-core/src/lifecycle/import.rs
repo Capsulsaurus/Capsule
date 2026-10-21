@@ -696,6 +696,7 @@ impl Workspace {
                 opts.stack.clone(),
                 self.account.device.device_id,
             ),
+            regions: Default::default(),
             cull: Lww::new(),
             hidden: Lww::new(),
             camera_id: None,
