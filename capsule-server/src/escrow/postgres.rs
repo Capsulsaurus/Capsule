@@ -77,7 +77,7 @@ impl PostgresEscrow {
         let doing = slot.storing;
         let row = self
             .connection
-            .query_one(Statement::from_sql_and_values(
+            .query_one_raw(Statement::from_sql_and_values(
                 DbBackend::Postgres,
                 format!(
                     "INSERT INTO {} (user_id, blob, stored_at) VALUES ($1, $2, $3) \
@@ -115,7 +115,7 @@ impl PostgresEscrow {
         let doing = slot.reading;
         let Some(row) = self
             .connection
-            .query_one(Statement::from_sql_and_values(
+            .query_one_raw(Statement::from_sql_and_values(
                 DbBackend::Postgres,
                 format!(
                     "SELECT blob, stored_at FROM {} WHERE user_id = $1",

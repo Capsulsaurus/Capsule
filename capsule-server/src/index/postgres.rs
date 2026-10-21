@@ -223,7 +223,7 @@ async fn load_collections<C: ConnectionTrait>(
     let key = Value::from(row.asset_id.as_str().to_owned());
 
     let blobs = connection
-        .query_all(Statement::from_sql_and_values(
+        .query_all_raw(Statement::from_sql_and_values(
             DbBackend::Postgres,
             "SELECT role, address, size FROM asset_blobs WHERE asset_id = $1",
             [key.clone()],
@@ -251,7 +251,7 @@ async fn load_collections<C: ConnectionTrait>(
     row.blobs.sort();
 
     let superseded = connection
-        .query_all(Statement::from_sql_and_values(
+        .query_all_raw(Statement::from_sql_and_values(
             DbBackend::Postgres,
             "SELECT address FROM asset_superseded WHERE asset_id = $1 ORDER BY position",
             [key],
@@ -274,7 +274,7 @@ async fn hydrate<C: ConnectionTrait>(
     asset: &AssetId,
 ) -> Result<Option<AssetRow>, StoreError> {
     let found = connection
-        .query_one(Statement::from_sql_and_values(
+        .query_one_raw(Statement::from_sql_and_values(
             DbBackend::Postgres,
             format!("SELECT {ASSET_COLUMNS} FROM assets WHERE asset_id = $1"),
             [Value::from(asset.as_str().to_owned())],
@@ -297,7 +297,7 @@ async fn hydrate_locked(
     asset: &AssetId,
 ) -> Result<Option<AssetRow>, StoreError> {
     let found = transaction
-        .query_one(Statement::from_sql_and_values(
+        .query_one_raw(Statement::from_sql_and_values(
             DbBackend::Postgres,
             format!("SELECT {ASSET_COLUMNS} FROM assets WHERE asset_id = $1 FOR UPDATE"),
             [Value::from(asset.as_str().to_owned())],
@@ -333,7 +333,7 @@ async fn load_all_collections<C: ConnectionTrait>(
 /// client's cursor and "I have seen nothing" are the same value.
 async fn mint(transaction: &DatabaseTransaction, owner: &OwnerId) -> Result<u64, StoreError> {
     let minted = transaction
-        .query_one(Statement::from_sql_and_values(
+        .query_one_raw(Statement::from_sql_and_values(
             DbBackend::Postgres,
             "INSERT INTO owner_sequences (owner_id, next_seq) VALUES ($1, 1) \
              ON CONFLICT (owner_id) DO UPDATE SET next_seq = owner_sequences.next_seq + 1 \
@@ -360,7 +360,7 @@ async fn mint(transaction: &DatabaseTransaction, owner: &OwnerId) -> Result<u64,
 async fn persist(transaction: &DatabaseTransaction, row: &AssetRow) -> Result<(), StoreError> {
     let asset = Value::from(row.asset_id.as_str().to_owned());
     transaction
-        .execute(Statement::from_sql_and_values(
+        .execute_raw(Statement::from_sql_and_values(
             DbBackend::Postgres,
             "UPDATE assets SET state = $2, hold = $3, sync_seq = $4, first_seq = $5, \
              chain_head = $6, amk_version = $7, retention_until = $8, updated_at = $9 \
@@ -381,7 +381,7 @@ async fn persist(transaction: &DatabaseTransaction, row: &AssetRow) -> Result<()
         .map_err(PORT.failing("updating an asset row"))?;
 
     transaction
-        .execute(Statement::from_sql_and_values(
+        .execute_raw(Statement::from_sql_and_values(
             DbBackend::Postgres,
             "DELETE FROM asset_blobs WHERE asset_id = $1",
             [asset.clone()],
@@ -390,7 +390,7 @@ async fn persist(transaction: &DatabaseTransaction, row: &AssetRow) -> Result<()
         .map_err(PORT.failing("clearing an asset's blobs"))?;
     for blob in &row.blobs {
         transaction
-            .execute(Statement::from_sql_and_values(
+            .execute_raw(Statement::from_sql_and_values(
                 DbBackend::Postgres,
                 "INSERT INTO asset_blobs (asset_id, role, address, size) VALUES ($1, $2, $3, $4)",
                 [
@@ -405,7 +405,7 @@ async fn persist(transaction: &DatabaseTransaction, row: &AssetRow) -> Result<()
     }
 
     transaction
-        .execute(Statement::from_sql_and_values(
+        .execute_raw(Statement::from_sql_and_values(
             DbBackend::Postgres,
             "DELETE FROM asset_superseded WHERE asset_id = $1",
             [asset.clone()],
@@ -414,7 +414,7 @@ async fn persist(transaction: &DatabaseTransaction, row: &AssetRow) -> Result<()
         .map_err(PORT.failing("clearing an asset's superseded manifests"))?;
     for (position, address) in row.superseded.iter().enumerate() {
         transaction
-            .execute(Statement::from_sql_and_values(
+            .execute_raw(Statement::from_sql_and_values(
                 DbBackend::Postgres,
                 "INSERT INTO asset_superseded (asset_id, position, address) VALUES ($1, $2, $3)",
                 [
@@ -441,7 +441,7 @@ async fn applied_sequence(
     op: &LifecycleOp,
 ) -> Result<Option<u64>, StoreError> {
     let found = transaction
-        .query_one(Statement::from_sql_and_values(
+        .query_one_raw(Statement::from_sql_and_values(
             DbBackend::Postgres,
             "SELECT sync_seq FROM applied_manifests WHERE manifest_hash = $1",
             [Value::from(op.manifest_hash.as_bytes().to_vec())],
@@ -520,7 +520,7 @@ impl AssetIndex for PostgresAssetIndex {
             // properties of the moment of creation rather than of the present.
             let transaction = begin(&self.connection).await?;
             let created = transaction
-                .query_one(Statement::from_sql_and_values(
+                .query_one_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     format!(
                         "INSERT INTO assets (asset_id, owner_id, album_id, protocol_version, \
@@ -710,7 +710,7 @@ impl AssetIndex for PostgresAssetIndex {
             // depend on physical row order.
             let found = self
                 .connection
-                .query_one(Statement::from_sql_and_values(
+                .query_one_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "SELECT a.asset_id FROM assets a \
                      JOIN asset_blobs b ON b.asset_id = a.asset_id \
@@ -757,7 +757,7 @@ impl AssetIndex for PostgresAssetIndex {
             // same address in two roles.
             let found = self
                 .connection
-                .query_all(Statement::from_sql_and_values(
+                .query_all_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "SELECT a.asset_id, a.owner_id, a.album_id, a.state, a.hold, \
                        (SELECT b.role FROM asset_blobs b \
@@ -882,7 +882,7 @@ impl AssetIndex for PostgresAssetIndex {
             // `membership/postgres.rs` sets out. Each transaction takes exactly one such lock,
             // always after its one asset-row lock, so two ops cannot wait on each other.
             transaction
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "SELECT pg_advisory_xact_lock(hashtext('asset_index_album:' || $1))",
                     [Value::from(op.album_id.as_str().to_owned())],
@@ -890,7 +890,7 @@ impl AssetIndex for PostgresAssetIndex {
                 .await
                 .map_err(PORT.failing("locking an album's epoch"))?;
             let epoch = transaction
-                .query_one(Statement::from_sql_and_values(
+                .query_one_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "SELECT COALESCE(MAX(amk_version), 0) AS stored FROM assets WHERE album_id = $1",
                     [Value::from(op.album_id.as_str().to_owned())],
@@ -960,7 +960,7 @@ impl AssetIndex for PostgresAssetIndex {
             // exactly as it would have had it arrived a moment later — `Replayed` with the
             // winner's number. Dropping the transaction rolls back the number it minted.
             let recorded = transaction
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "INSERT INTO applied_manifests (manifest_hash, sync_seq) VALUES ($1, $2) \
                      ON CONFLICT (manifest_hash) DO NOTHING",
@@ -1010,7 +1010,7 @@ impl AssetIndex for PostgresAssetIndex {
             // provenance record claiming the asset was taken down twice.
             let applied = self
                 .connection
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "UPDATE assets SET hold = $2 WHERE asset_id = $1 AND hold IS DISTINCT FROM $2",
                     [
@@ -1035,7 +1035,7 @@ impl AssetIndex for PostgresAssetIndex {
 
             let exists = self
                 .connection
-                .query_one(Statement::from_sql_and_values(
+                .query_one_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "SELECT 1 AS present FROM assets WHERE asset_id = $1",
                     [Value::from(asset.as_str().to_owned())],
@@ -1057,7 +1057,7 @@ impl AssetIndex for PostgresAssetIndex {
             // rebuttal evidence.
             let counted = self
                 .connection
-                .query_one(Statement::from_sql_and_values(
+                .query_one_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "SELECT COUNT(*) AS held FROM assets a WHERE \
                        EXISTS (SELECT 1 FROM asset_blobs b \
@@ -1121,7 +1121,7 @@ impl AssetIndex for PostgresAssetIndex {
             // later moment than its state.
             let snapshot = begin_read_snapshot(&self.connection).await?;
             let found = snapshot
-                .query_all(statement)
+                .query_all_raw(statement)
                 .await
                 .map_err(PORT.failing("walking the asset rows"))?;
             let mut rows = found
@@ -1142,7 +1142,7 @@ impl AssetIndex for PostgresAssetIndex {
             // holds no reference and is not listed (see the port's docs).
             let snapshot = begin_read_snapshot(&self.connection).await?;
             let found = snapshot
-                .query_all(Statement::from_sql_and_values(
+                .query_all_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     format!(
                         "SELECT {ASSET_COLUMNS} FROM assets a WHERE a.state = 'tombstoned' \
@@ -1201,7 +1201,7 @@ impl AssetIndex for PostgresAssetIndex {
             // would hand a client a manifest address and a metadata address that never coexisted.
             let snapshot = begin_read_snapshot(&self.connection).await?;
             let found = snapshot
-                .query_all(Statement::from_sql_and_values(
+                .query_all_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     format!(
                         "SELECT {ASSET_COLUMNS} FROM assets \
@@ -1239,7 +1239,7 @@ impl AssetIndex for PostgresAssetIndex {
             // page that would come back empty.
             let found = self
                 .connection
-                .query_one(Statement::from_sql_and_values(
+                .query_one_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "SELECT next_seq FROM owner_sequences WHERE owner_id = $1",
                     [Value::from(owner.as_str().to_owned())],
@@ -1266,7 +1266,7 @@ impl AssetIndex for PostgresAssetIndex {
             // the album so the `(owner_id, album_id)` index serves it.
             let snapshot = begin_read_snapshot(&self.connection).await?;
             let found = snapshot
-                .query_all(Statement::from_sql_and_values(
+                .query_all_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     format!(
                         "SELECT {ASSET_COLUMNS} FROM assets \
@@ -1303,7 +1303,7 @@ impl AssetIndex for PostgresAssetIndex {
         Box::pin(async move {
             let found = self
                 .connection
-                .query_one(Statement::from_sql_and_values(
+                .query_one_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "SELECT COALESCE(MAX(sync_seq), 0)::bigint AS head FROM assets \
                      WHERE owner_id = $1 AND album_id = $2",
@@ -1382,7 +1382,7 @@ mod tests {
                 .await
                 .expect("open the winner's transaction");
             winner
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "INSERT INTO applied_manifests (manifest_hash, sync_seq) VALUES ($1, 999)",
                     [Value::from(hash.as_bytes().to_vec())],
@@ -1395,7 +1395,7 @@ mod tests {
                 for _ in 0..500 {
                     let waiting = database
                         .connection()
-                        .query_one(Statement::from_string(
+                        .query_one_raw(Statement::from_string(
                             DbBackend::Postgres,
                             "SELECT count(*) AS waiting FROM pg_stat_activity \
                              WHERE wait_event_type = 'Lock' \
