@@ -4,7 +4,7 @@
 - **Date:** 2026-10-17
 - **Supersedes:** —
 - **Superseded by:** —
-- **Contract:** [Federation — Status note (2026-09-09)](../capsule-docs/src/content/docs/design/federation.md#status-note-2026-09-09)
+- **Contract:** [Federation — Token Lifecycle](../capsule-docs/src/content/docs/design/federation.md#token-lifecycle-and-chain-of-trust)
 - **Slices:** S-E2
 
 ## Context

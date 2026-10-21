@@ -6,8 +6,8 @@ status: draft
 
 Capsule's server surface is REST over HTTP, described by a single OpenAPI 3.2 document that
 `capsule-server` emits from its own route types. This page is the hand-written half of that
-reference: the things true of every endpoint, which a per-endpoint page would otherwise repeat
-fifty-nine times. The endpoints themselves are the generated pages listed in the sidebar.
+reference: the things true of every endpoint, which every per-endpoint page would otherwise
+repeat. The endpoints themselves are the generated pages listed in the sidebar.
 
 Read [API Surfaces](/design/api-surfaces/#surface--transport-map) first if you want the map from
 a surface to the module that owns it and the design document that explains it. This reference

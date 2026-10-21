@@ -17,10 +17,8 @@ the binary parses with.
 
 ## Install
 
-Release builds are published as an archive per target on the
-[releases page](https://github.com/Capsulsaurus/Capsule/releases), each carrying a single
-`capsule` executable. From a checkout, `cargo run -p capsule-cli --` runs the same binary
-against the working tree.
+No release has been published yet. From a checkout, `cargo run -p capsule-cli --` runs the
+binary against the working tree; `cargo install --path capsule-cli` installs it.
 
 ## The two things it holds
 
@@ -43,8 +41,8 @@ offer no flag for one.
 ## Where the contract lives
 
 - The behaviour of the import pipeline is [Import Pipeline](/design/import/pipeline/); what
-  `capsule push` speaks is the [Upload Protocol](/design/transfer/upload/), and what
-  `capsule sync` drains is [Download & Sync](/design/transfer/download/).
+  `capsule push` speaks is the [Transfer — Upload](/design/transfer/upload/), and what
+  `capsule sync` drains is [Sync](/design/sync/).
 - The server endpoints behind the networked commands are the
   [REST API](/reference/api/) reference.
 - Terminal output is localized through the catalogs described in

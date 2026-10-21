@@ -1084,8 +1084,8 @@ impl ReportRejection {
 /// It is mounted anyway, deliberately: a peer implementing against the published contract needs
 /// the operation to exist and to answer honestly, and what is missing is the command, not the
 /// surface. What is *not* acceptable is a route that reads as protection it cannot provide —
-/// hence this paragraph, and the matching status notes in design/moderation.md and
-/// design/federation.md.
+/// hence this paragraph, and the matching "Open: #476" notes in design/moderation.md and
+/// design/federation.md (Status).
 ///
 /// # No bearer, and why that is not "unauthenticated"
 ///

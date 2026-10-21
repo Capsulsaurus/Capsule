@@ -4,110 +4,73 @@ description: Direct LAN device-to-device sync within a single user's own devices
 status: draft
 ---
 
-Peering is **device-to-device** sync within a single user's own devices. It is distinct from [Federation](/design/federation/), which is server-to-server sharing across *different* users.
-
-Peering exists as an **accelerator, never a replacement** for normal [server synchronization](/design/import/). It earns its place in three situations:
-
-- **LAN-speed transfer.** Two of a user's devices on the same network can move a freshly imported asset directly, instead of round-tripping every byte through the server and the internet.
-- **Offline operation.** When the server is unreachable, devices on a shared LAN still converge. This satisfies the [offline/online divide](/design/principles/) — peering works fully offline.
-- **Best-effort opportunism.** If no peer is found, peering simply does nothing and the device falls back to server sync. Nothing depends on it succeeding.
-
-Peering is the one module here that lives entirely on the client. It will live in `capsule-sdk::peering` (planned: discovery, channel, transfer) over `capsule-core::backup` (implemented — the artifact format it ingests). The three contract surfaces — mDNS descriptor, TLS handshake parameters, delta-fetch protocol — are the only new primitives peering introduces; everything else is borrowed.
+Peering is **device-to-device** sync within one user's own devices; server-to-server sharing is [Federation](/design/federation/). It is an **accelerator, never a replacement** for [server sync](/design/import/): it moves assets at LAN speed, lets devices converge while the server is unreachable, and does nothing if no peer is found. Implementation: `capsule-sdk::peering`.
 
 ## Peering Reuses, Not Reinvents
 
-Peering deliberately introduces **no new payload format and no new sync engine** — the same discipline [Federation](/design/federation/#federation-reuses-existing-primitives) applies. The unit of transfer is a delta-scoped [backup artifact](/design/backup-recovery/#backup-artifact): a self-describing, versioned, encrypted, content-addressed blob that already exists for [Backup and Recovery](/design/backup-recovery/).
-
-The receiving device ingests that artifact through the **same restore path** it would use for any backup. Peering therefore owns only two things of its own — a LAN **discovery** mechanism and a **transport**. Everything else (what an asset is, how it is encrypted, how it is verified, what "changed" means) is borrowed from designs that already exist and are already audited. Fewer moving parts means a smaller blast radius and far less code unique to peering.
+Peering adds **no new payload format and no new sync engine**. The unit of transfer is a delta-scoped [backup artifact](/design/backup-recovery/#backup-artifact), ingested through the **same restore path** as any backup. Peering owns only **discovery** and a **transport**.
 
 ## Trust Model
 
-Federation assumes [a remote server is hostile](/design/federation/#threat-model). Peering does not: both endpoints are the *same user's* devices, each holding a hardware-bound DSK cross-signed into that user's [device directory](/design/cryptography/keys/#device-directory). A peer is accepted only after a mutual hybrid-signature check confirms both devices chain to the same User IK.
-
-Identity-trusted is **not** content-trusted, however. A device can still be buggy, or compromised at the application layer above its hardware keys. So peering keeps Federation's posture toward *data*: every received asset is re-verified — its [ciphertext content hash](/design/cryptography/primitives/) recomputed, its [STREAM tags](/design/cryptography/encryption/#stream-construction) checked, its [asset manifest](/design/cryptography/provenance/#asset-manifest) run through the single [`verify_asset`](/design/cryptography/keys/#write-authorization) chokepoint. The channel authenticates *who* you are talking to; it never exempts *what* they send from validation.
+Unlike federation, both ends are the *same user's* devices, each with a DSK cross-signed into the [device directory](/design/cryptography/keys/#device-directory). Identity-trusted is **not** content-trusted: every received asset is re-verified (content hash, [STREAM tags](/design/cryptography/encryption/#stream-construction), [`verify_asset`](/design/cryptography/keys/#write-authorization)).
 
 ### Peer-Class Containment
 
-Even two of the same user's devices are separate failure-containment boundaries ([Threat Model — Damage Containment Layers](/design/threat-model/#damage-containment-layers)). A buggy older-version device cannot overwrite a newer device's state via a stale-but-valid backup artifact, and a newer device's writes are not retroactively applied to an older device's view of an older-pinned album. Specifically:
+Each device is its own [containment boundary](/design/threat-model/#damage-containment-layers):
 
-- Every received manifest is checked against the receiver's local `latest_provenance_hash` for that asset (see [Applying Received Data](#applying-received-data)) — a stale manifest is quarantined, not silently applied.
-- Every received structure that announces a `sidecar_schema`, `crypto_suite_id`, or `protocol_version` above the receiver's max known is rejected at decode — the receiver refuses to interpret bytes it cannot validate. This is the client-side counterpart of the [server-side schema lockdown](/design/threat-model/schema-rules/#schema-evolution-and-field-grammar).
-- Device-directory revocations are honored immediately: a device that has been removed from the user's directory cannot complete the TLS handshake (its certificate no longer chains to a current IK signature), and any prior cached state from that device is treated as suspect.
+- A received manifest behind the local `latest_provenance_hash` is quarantined ([Applying Received Data](#applying-received-data)).
+- Any `sidecar_schema`, `crypto_suite_id` or `protocol_version` above the receiver's maximum is rejected at decode.
+- A device removed from the directory cannot complete the handshake, and its previously cached state is treated as suspect.
 
 ## Discovery
 
-Discovery is the one genuinely new mechanism. Devices advertise a peering service over **mDNS** on the local network and accept connections over **TCP**.
+Devices advertise over **mDNS** and accept **TCP**, **LAN-only** (no relay). The advertisement MUST NOT leak identity: an **opaque instance name**, rotated at least per boot and at most every 24 h, never a handle or device name. Same-user is established inside the channel. No answer means silent fallback to server sync.
 
-Discovery is **LAN-only** — there is no relay, no internet-wide rendezvous. mDNS broadcasts are visible to every host on the segment, so the advertisement must not leak identity: a device advertises an **opaque service instance** — rotated at least per boot and at most every 24 hours (deployment-tunable within that band) — never `user@server.tld` or a device name. Whether two advertisements belong to the same user is established *inside* the encrypted channel (below), never from the broadcast itself.
-
-If no peer answers, discovery fails silently and the device proceeds with ordinary server sync.
-
-**Status note.** The live mDNS responder (`mdns-sd`) is post-v1 — it is non-deterministic under CI; v1 ships the pure rotating-advertisement logic behind the `Discovery` seam with the in-process E2E (case 5). Peering is an accelerator: its absence never blocks sync.
+The live mDNS responder is post-v1; v1 ships the rotating-advertisement logic behind the `Discovery` seam, tested in-process.
 
 ## Establishing the Channel
 
-A peer connection is HTTP over a **mutually authenticated TLS 1.3** channel. The certificates presented are the **device keys themselves** — there is no CA. Concretely: the TLS handshake authenticates with the device key's **classical half** (as a raw public key or self-signed certificate — TLS 1.3 has no ML-DSA certificate path), and the **hybrid** check — that the presented key carries a valid hybrid signature chaining to the shared User IK, covering both halves per the [signature scheme](/design/cryptography/primitives/#signature-scheme), exactly as published in the [device directory](/design/cryptography/keys/#device-directory) — runs at the application layer over the established channel, before any payload byte. The directory *is* the trust anchor; a device not in it cannot complete the handshake.
+HTTP over **mutually authenticated TLS 1.3** with no CA. TLS authenticates the device key's **classical half**; the **hybrid** check that the key chains to the shared User IK (per the [signature scheme](/design/cryptography/primitives/#signature-scheme) and the device directory) runs above the channel, bound to the session, before any payload byte.
 
-This doc covers sync between devices that are **already provisioned** — both already hold the account master key. Bootstrapping a brand-new device (handing it the master key for the first time) is **cross-device add** — or, when every device was lost, **cross-device recovery** — owned by [Device Enrollment](/design/device-enrollment/) and [Backup and Recovery](/design/backup-recovery/#default-mechanisms) respectively; peering re-documents neither.
+Peering assumes both devices are already provisioned. Adding or recovering a device is [Device Enrollment](/design/device-enrollment/) and [Backup and Recovery](/design/backup-recovery/#default-mechanisms).
 
 ## Determining the Delta
 
-Before building an artifact, the two devices must agree on what is missing. Peering reuses the [sync cursor](/design/sync/#discovering-what-changed) model rather than inventing a diff: each side offers its set of held [ciphertext content addresses](/design/cryptography/primitives/) and its cursor, and the delta is the complement. "What changed" is already defined by the sync feed — peering borrows that definition wholesale.
+Each side offers its held content addresses and [sync cursor](/design/sync/#discovering-what-changed); the delta is the complement.
 
 ## What Moves Over the Wire
 
-The transfer payload is a [backup artifact](/design/backup-recovery/#backup-artifact) scoped to the delta — backup artifacts are explicitly *"constructed from a list of assets, albums, and so on,"* so a delta-scoped one needs no special construction path.
-
-Its contents honor the receiver's existing per-library [Synchronization Scope](/design/sync/#synchronization-scope) setting — there is no peering-specific knob:
-
-- **Always included:** the encrypted metadata blobs and the AMK versions needed to decrypt the transferred assets. Without these the receiver cannot interpret anything.
-- **Per scope:** original and derivative blobs are included only up to the receiver's configured tier (*metadata only* / *+ thumbnails* / *+ original*). Tiers above the setting are fetched lazily later, just as with server download.
-
-Because every blob is content-addressed, dedup is free: the receiver skips any blob whose [content hash](/design/cryptography/primitives/) it already holds — the same lookup the `/blob/{hash}` download path performs against its local cache.
+A delta-scoped backup artifact honoring the receiver's [Synchronization Scope](/design/sync/#synchronization-scope): metadata blobs and needed AMK versions always; originals and derivatives only up to the configured tier. Blobs the receiver already holds are skipped.
 
 ## Transfer Protocol
 
-Peering is **pull-only**, mirroring [Federation](/design/federation/#pull-only-federation): the device that is behind initiates the pull and applies the result only after it verifies. A peer that has new content may send a lightweight **hint** — "new content exists" — over a separate low-trust channel to prompt a pull sooner; that hint never feeds the validation pipeline directly and carries no authority. It is the same [advisory-hint shape](/design/notifications/#vocabulary) federation uses, and is never surfaced to the user as an alert.
-
-The artifact is fetched with HTTP `GET` and `Range` requests, which makes a transfer **resumable** across the flaky-by-nature LAN and **idempotent** — content-addressing turns a re-fetch of an already-held blob into a no-op. This is the same resumability the [upload](/design/transfer/upload/) and [download](/design/transfer/download/#resumption-and-verification) paths rely on.
+**Pull-only**, like [federation](/design/federation/#pull-only-federation): the device that is behind pulls and applies only what verifies. A peer may send an advisory [hint](/design/notifications/#vocabulary), which carries no authority and is never shown as an alert. Fetches use `GET` with `Range`, so transfers are resumable and idempotent.
 
 ## Applying Received Data
 
-A received artifact is ingested through the **backup restore path** — peering adds no separate deserialization. Restore already re-verifies every blob's [ciphertext content hash](/design/cryptography/primitives/), checks [STREAM tags](/design/cryptography/encryption/#stream-construction) on decrypt, and runs each asset manifest through [`verify_asset`](/design/cryptography/keys/#write-authorization).
-
-Additionally, every received manifest's `prior_provenance_hash` is checked against the receiver's local `latest_provenance_hash` for that asset (see [Import — Stale-Revival Detection](/design/sync/#stale-revival-detection)). A peering pull cannot resurrect an asset the local device has tombstoned at a later provenance step — even if the artifact was honestly produced from an older state of the sending device. The stale entry is **quarantined and surfaced** as "peer sent stale state."
-
-Failures follow Federation's [soft-fail semantics](/design/federation/#soft-fail-semantics): an asset that fails verification is **quarantined and surfaced** in the [provenance/audit trail](/design/cryptography/provenance/#provenance-of-library-modifications), never silently dropped and never silently accepted — so a bug can be told apart from an attack after the fact.
+Ingest is the backup restore path. A manifest whose `prior_provenance_hash` is behind the local chain head ([stale-revival detection](/design/sync/#stale-revival-detection)) is **quarantined and surfaced** as "peer sent stale state"; a peer can never resurrect a locally tombstoned asset. Verification failures follow [soft-fail semantics](/design/federation/#soft-fail-semantics) and are recorded in the [audit trail](/design/cryptography/provenance/#provenance-of-library-modifications).
 
 ## Reconciliation with the Server
 
-Peering does not fork a device's state away from the server. A peering-received asset arrives with its signed manifest intact, so when the server later sees the same asset — uploaded by whichever device the [upload policy](/design/sync/#synchronization-scope) assigns — it resolves through the existing [deduplication and merge](/design/transfer/upload/#deduplication-and-merge) path on the [content hash](/design/cryptography/primitives/). A device never re-uploads a blob the server already holds, and the two devices remain convergent with the server's view.
+Peered assets carry their signed manifests, so the server later resolves them through normal [dedup and merge](/design/transfer/upload/#deduplication-and-merge); nothing is re-uploaded.
 
 ## Versioning
 
-Peering has two independently versioned surfaces, both checked **once, up front**, crashing early on mismatch per [Principles](/design/principles/) and the universal [protocol handshake](/design/threat-model/validation/#protocol-and-capability-negotiation):
+Two independent surfaces, both checked up front ([handshake](/design/threat-model/validation/#protocol-and-capability-negotiation)):
 
-- The peering **transport protocol** — date-based (`YYYY-MM-DD`), exchanged via `X-Capsule-Protocol` at channel establishment. It shares the header name and date format with the client-server wire protocol but is its **own version space**: peering-protocol values compare only against peering-protocol values, and the peering transport revs independently of the server protocol. Mismatch terminates the TLS connection **before any payload byte is sent** — `426 Upgrade Required` in the channel's framing layer. There is no degraded-mode fallback; peering simply fails and the device proceeds to ordinary server sync.
-- The **artifact format** — versioned by [Backup and Recovery](/design/backup-recovery/#backup-artifact), so a newer device can still ingest an artifact built by an older one. The artifact's `crypto_suite_id` and album `protocol_version` are validated against the receiver's max known on ingest; a forward-jumping value is rejected (refuse-by-default), never best-effort-parsed.
-
-These two surfaces are independent: a device with up-to-date transport protocol may still receive an artifact format it does not implement (and vice versa). Both checks must pass before any bytes are applied to local state.
+- **Transport protocol:** date-based `X-Capsule-Protocol`, its own version space separate from the server protocol. Mismatch ends the connection before any payload (`426`); no degraded mode.
+- **Artifact format:** versioned by [Backup and Recovery](/design/backup-recovery/#backup-artifact); forward-jumping `crypto_suite_id` or `protocol_version` is rejected.
 
 ## Robustness
 
-Peering's failure posture falls out of the designs it reuses:
-
-- **Interruption.** `Range`-based transfers resume; nothing is re-sent unnecessarily.
-- **Peer disappears.** A vanished peer is indistinguishable from "no peer found" — the device falls back to server sync. Peering is best-effort.
-- **Offline.** With no server reachable, devices on a shared LAN still converge; the feature works solely offline.
-- **No order trust.** Content-addressed, immutable blobs and signed manifests mean a peer cannot influence state by reordering a transfer — the same guarantee Federation states in [Reconstructing State Without Trusting Peers](/design/federation/#reconstructing-state-without-trusting-peers).
+Range transfers resume; a vanished peer equals no peer; offline LAN convergence works; reordering a transfer cannot change state ([no order trust](/design/federation/#reconstructing-state-without-trusting-peers)).
 
 ## Validation
 
-- **mDNS opaque identifier (unit).** Generate an advertisement; assert it carries no user handle, no device name. Re-generate after the rotation interval; assert a new opaque identifier.
-- **TLS mutual-auth handshake (unit).** Two device certificates chaining to the same IK — assert handshake succeeds. Replace one cert with a revoked-device cert — assert handshake fails. Replace one cert with a foreign-user IK cert — assert handshake fails.
-- **Delta calculation (unit).** Two devices with overlapping but distinct content-address sets; assert the delta is the symmetric difference.
-- **Artifact ingest (smoke).** Build a delta-scoped backup artifact on device A; feed to device B; assert restore path applies every asset; assert byte-equal `library.sqlite` rebuild on both sides.
-- **Stale-revival quarantine on peer pull (smoke).** Device A holds an old manifest; device B holds a newer chain head; A pulls from B successfully; B pulls from A — assert quarantine, not silent overwrite.
-- **Resume across LAN drop (smoke).** Start a large artifact transfer; sever the LAN; reconnect; assert Range-resumed transfer with no re-fetched bytes.
-
-The cross-module case — full A→B LAN sync with both devices then reconciling with the server — is one bounded E2E case in [Module Map](/design/module-map/#e2e-test-surface).
+- **Advertisement (unit):** no handle or device name; rotates.
+- **Handshake (unit):** same-IK succeeds; revoked device and foreign IK fail.
+- **Delta (unit):** complement of two address sets.
+- **Ingest (smoke):** A's artifact restores fully on B.
+- **Stale revival (smoke):** pulling an older chain head quarantines.
+- **Resume (smoke):** a severed transfer resumes without re-fetching.
+- **LAN sync then server reconcile (E2E):** one case in [Module Map](/design/module-map/#e2e-test-surface).

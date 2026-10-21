@@ -4,78 +4,71 @@ description: Server moderation policy — reports, suspensions, takedowns, block
 status: draft
 ---
 
-Capsule is end-to-end encrypted, so a server **cannot** scan content it holds — server-side content or CSAM scanning is impossible by design, and no server-side content scanner will be built. (Client-side, opt-in ML over a user's *own* library — [AI/ML](/design/ai/) — is a different thing entirely: it runs where the keys are, under the user's control; its candidate shared-album-flagging classifiers are client-side and user-initiated, never a server scanner.) Moderation operates entirely on what *is* available: user reports, account-level signals, and federated peer reputation.
-
-Implementation will live in `capsule-server::moderation` (a new sub-crate or service inside `capsule-server`). The boundary surfaces — report submission, federated report exchange, blocklist publication — are the eventual contract; this doc captures what they will need to do.
+Capsule is end-to-end encrypted, so the server **cannot** scan content, and no server-side content or CSAM scanner will be built. (Opt-in [AI/ML](/design/ai/) runs on the client, over the user's own library.) Moderation works on user reports, account signals and peer reputation. Code: `capsule-server::moderation`.
 
 ## What Moderation Cannot Do (Structural)
 
-Naming this up front is load-bearing:
+- **No content inspection.** The server holds only ciphertext.
+- **No retroactive takedown.** Ciphertext a peer already fetched cannot be recalled; takedown governs future serving.
+- **No silent operations.** Every action affecting user data MUST produce a [provenance record](/design/cryptography/provenance/#provenance-of-library-modifications) visible in the user's audit log.
 
-- **No content inspection.** The server holds opaque ciphertext. There is no algorithm that can act on the content of an asset without a key.
-- **No retroactive content takedown.** Once a peer has fetched ciphertext, the home server cannot un-fetch it. Takedown is about *future* serving, not deletion-from-everywhere.
-- **No silent operations.** Every moderation action that affects user data must produce a [provenance record](/design/cryptography/provenance/#provenance-of-library-modifications) the user can see in their audit log.
+Moderation *actions* have **no wire surface**: there is no admin authentication model yet, so actions run through an operator-driven port. The user reads their own record at `GET /v1/moderation/record`.
 
 ## What Moderation Can Do (Operational Hooks)
 
-The actual policy surfaces that need design:
-
 ### Federated Reporting
 
-A report against `alice@other.tld`'s asset is routed to her home server's administrators, since they are the only party that can act on her account. Three mechanics are fixed:
+A report against `alice@other.tld` goes to her home server, the only party that can act on her account. Intake: `POST /v1/federation/reports` (gated with the rest of [federation](/design/federation/#status)).
 
-- **Authentication.** A federated report MUST be signed by the reporting server's [signing key](/design/federation/#server-identity-and-key-rotation) and is verified before it reaches the admin queue; an unsigned or invalid-signature report is dropped, never surfaced. This makes every report attributable — a server that submits false reports is itself identifiable and blockable.
-- **Rate-limiting.** Reports are bounded per `(reporting_server, reported_user)`; exceeding the limit applies backpressure rather than amplifying. A receiving server also bounds a peer's reports **across all accounts** — `reported_user` is a string the peer chooses, so a per-account limit alone is one a peer refreshes by naming a different account — and bounds attempts per *claimed* origin before it looks the peer up at all, which is the only place a bound can sit on an unauthenticated route.
-- **Unknown accounts are accepted and dropped.** A report naming an account the receiving server does not host is answered exactly as an accepted one is, and filed nowhere: an unresolvable report is a permanent orphan in an operator's queue, and a *distinct* refusal would turn intake into an account-enumeration surface for any peer holding a pinned key — which is not the same as being trusted with enumeration, since a peer key can be compromised and a peer may be adversarial toward its own users while remaining a legitimate partner. The receiving server logs it for its operator; the rate limits above still apply, so sweeping identifiers costs the peer its allowance. Together with signing, this defeats the false-flag / mass-report abuse vector (a flood of forged or spoofed reports against one user).
-- **Wire form and what is signed.** The report is JSON with seven members — `reporting_server`, `reported_user`, `asset_hash`, `album_id`, `reason` (optional), `reported_at` (RFC 3339), and `signature` — and the signature is Ed25519 over the **canonical CBOR of the other six**. One normalization rule, and only one: each of the six has surrounding whitespace trimmed and is otherwise signed exactly as sent. In particular `reporting_server` is signed as the peer wrote it — the receiving server folds case and strips a trailing dot to *look the peer up*, and that canonical form is not what the signature covers — and `reported_at` is signed as its RFC 3339 text, not as a re-rendered instant. A receiving server keeps the signed bytes verbatim beside the row so the signature can be re-verified later; rebuilding them from stored, normalized fields would produce different bytes and an unattributable report.
-- **Content.** A report carries the alleged asset's **content hash and album pointer — never plaintext or decryption material**. This is the privacy-preserving, operable middle: the home-server admin can locate the asset and, *if* they already hold album access, fetch and view it to act; an admin without album access sees only opaque identifiers, exactly as the E2EE model requires. A report never widens who can read content.
+- **Authentication.** A report MUST be signed by the reporting server's [operational key](/design/federation/#server-identity-and-key-rotation) and verified **before** any budget is charged; unsigned or invalid reports are dropped. Peer keys are operator-pinned; the server never fetches a key on first report (TOFU at intake is rejected).
+- **Rate limits.** Per `(reporting_server, reported_user)`, per peer across all accounts (the peer chooses `reported_user`), and per claimed origin before lookup.
+- **Unknown accounts** get the same answer as accepted reports and are filed nowhere, so intake is not an account-enumeration oracle; the operator log records them.
+- **Wire form.** JSON: `reporting_server`, `reported_user`, `asset_hash`, `album_id`, `reason` (optional), `reported_at` (RFC 3339), `signature`. The signature is Ed25519 over the **canonical CBOR of the other six**, each whitespace-trimmed and otherwise exactly as sent (no case folding, no re-rendered timestamps). The receiver stores the signed bytes verbatim so the signature can be re-verified.
+- **Content.** A report carries a content hash and album pointer, **never plaintext or key material**. An admin without album access sees only identifiers; a report never widens who can read content.
+- Accepting a report never changes the reported account's standing.
+
+Open: [#476](https://github.com/Capsulsaurus/Capsule/issues/476) — no operator command can pin a peer yet, so intake answers `403 error.federation.peer_unknown`; the admin report queue waits on admin authentication.
 
 ### Blocklists
 
-Server-level blocklists, plus per-user blocks that federate:
-
-- **Server-level blocklist.** A server admin publishes a list of peer servers that this server refuses to accept federated requests from. Operates at the [federation capability](/design/federation/#federation-capabilities) layer. **Status: enforced, not yet writable.** `blocked_at` is a column on the peer row and every federation boundary consults it — mint, capability presentation, refresh, report intake — but nothing in production can set it: the peer store is durable on Postgres, and no operator command writes to it yet. The command is owed with [#476](https://github.com/Capsulsaurus/Capsule/issues/476). Until then this list is empty in every real deployment, and this document's own rule cuts both ways: a blocklist nothing consults reads as protection, and so does one nothing can write.
-- **Per-user block.** A user can block another user; the block is enforced by the blocker's home server — the blocked user is removed from albums shared with the blocker and cannot share new albums with them. Removal is an ordinary MLS `Remove` + AMK epoch bump applied at the blocked user's next sync; the prior epochs' keys they already hold are not retroactively clawed back (consistent with [removal semantics](/design/cryptography/mls/#remove-user-charlie)). A per-user block is **scoped to that user**: it does **not** propagate as a server-wide federation block, so one user (or a coordinated group) cannot weaponize blocks to sever an entire peer server from the federation. Each home server enforces only its own users' blocks. (The MLS `Remove` this rides has landed — `OpenMlsAuthority::block_user`, slice `S-X4`; see the [MLS status note](/design/cryptography/mls/). It removes every device the blocked user holds in one commit, so the epoch bumps once.)
-- **Blocklist exchange (v2).** A peer-level mechanism for sharing *server-level* blocklists across federated servers (so a malicious server isn't pure whack-a-mole) is **deferred to v2**, but its shape is fixed now: signed, versioned blocklist documents an admin **opts into** consuming from peers they already trust — never auto-applied, and deliberately distinct from per-user blocks (which never propagate). v1 ships only the manual server-level blocklist above.
+- **Server-level blocklist.** Peers this server refuses, enforced at the [capability](/design/federation/#federation-capabilities) layer: mint, presentation, refresh and report intake all consult it, and blocking cuts and publishes every live grant the peer holds. Open: [#476](https://github.com/Capsulsaurus/Capsule/issues/476) — no operator command writes it yet, so it is empty in real deployments.
+- **Per-user block.** Enforced by the blocker's home server: the blocked user is removed from albums shared with the blocker (one MLS `Remove` of all their devices, one epoch bump) and cannot share new albums with them. Epochs already held are not clawed back ([removal semantics](/design/cryptography/mls/#remove-user-charlie)). A per-user block MUST NOT propagate as a server-level block, so users cannot weaponize blocks against a whole peer.
+- **Blocklist exchange (v2).** Signed, versioned server-level lists an admin **opts into** from trusted peers; never auto-applied, never including per-user blocks.
 
 ### Untrusted-Server Whitelist
 
-[Federation — Security Against Malicious Files](/design/federation/#security-against-malicious-files) names this as the front-line abuse control for content from servers Capsule does not trust. Moderation policy decides what "trusted" means and how trust is established/revoked.
+The [untrusted-server gate](/design/federation/#security-against-malicious-files) is the front-line control for content from unknown servers; moderation policy defines how trust is granted and revoked.
 
 ### Account Suspension
 
-A server admin can suspend a user account on their home server. Suspended accounts:
+A suspended account:
 
-- Cannot upload — `POST /v1/upload` session creation is refused with a structured `403 AccountSuspended` code (distinct from quota and permission rejections, so the client surfaces the right remediation).
-- Cannot share new albums or create new share/upload links (existing share links keep serving until they expire or are revoked — [share links](/design/share-links/) have optional expiry plus revocation, no implicit TTL).
-- **Can still secure the account**: `revoke_all_sessions` remains available to a suspended user — it is gated by [master-key proof](/design/authentication/#explicit-revocation), not by account standing, so it cannot be abused by a session-token thief, and a suspended user whose account may be compromised needs it most. Suspension removes upload and sharing capability, never the ability to evict sessions.
+- cannot create upload sessions (`403 error.moderation.account_suspended`, distinct from quota and permission refusals);
+- cannot share albums or create share or upload links (existing [share links](/design/share-links/) keep serving until expiry or revocation);
+- **can still revoke all sessions**, which is gated by [master-key proof](/design/authentication/#explicit-revocation), not standing.
 
-The user's *data* is untouched — suspension is an access-level action, not a data-level one. Reversibility (a suspension can be lifted) is the default; permanent termination is a separate policy.
+Data is untouched. Suspension is reversible; termination is a separate policy.
 
 ### Takedown
 
-When a moderation action requires the *home server* to stop serving a specific asset (e.g. legal request, CSAM report verified by admin viewing in their album):
-
-- The asset is marked unservable on the home server — a **serving hold** on the asset row, carried on every blob reference the serving path reads, so a hold reaches every blob of the asset without ever being attached to a content address. That distinction is load-bearing: content addressing means two assets legitimately share a thumbnail, and holding an address would take down somebody else's photo.
-- Federated peers fetching the asset receive `410 Gone`. (This deliberately diverges from the [share-link and drop serve paths](/design/share-links/#security-contract), which return an indistinguishable `404` — those must not confirm a capability URL ever existed, while a takedown *intends* to signal removal of content whose existence the peer already knows. The per-surface rule: capability-URL serving → `404`; takedown of known content → `410`.)
-- The asset's underlying blob is **not** deleted — the user owns the data, and a takedown is a serving constraint, not a destruction; the user can still restore from their own backup. A takedown is therefore **reversible by default** (an admin can lift it). A **legal-hold** variant marks the asset indefinitely unservable where law requires it — lifted only when the legal obligation ends, not at admin discretion — but even then never destroys the user's bytes: the constraint is on the *home server's serving*, not on the data the user holds.
-- **Storage verification tells the truth about a held asset**: every blob reports `stored` and **not** `retrievable`. That surface exists to answer one question — may a client release its only local copy? — and a server that called held bytes durable would be answering it wrong in the one direction that loses a photo. The honest pair is *we have your bytes, and we will not serve them*.
-- **Status note.** Suspension enforcement and the user's own moderation record are **served today** by the Kynos surface, with slice `S-C8`: a suspended account's upload session creation is refused with a structured code, and `GET /v1/moderation/record` is where the user reads what was done and why. Moderation *actions* deliberately have **no wire surface** — this doc names an admin throughout and specifies no way for one to authenticate, so the actions sit behind an operator-driven port, the same shape the garbage collector and the integrity scrub already use. **Federated report intake and the server-level blocklist are built as of `S-C49`** (2026-09-09), on the federation-capability layer `S-E2` landed — and **neither is reachable in a real deployment yet**, for one shared reason: peer keys are operator-pinned, and no operator command can pin one until the durable backend assembles ([#403](https://github.com/Capsulsaurus/Capsule/issues/403), then [#476](https://github.com/Capsulsaurus/Capsule/issues/476)). Intake therefore answers `403 error.federation.peer_unknown` to every peer today, and the blocklist is empty. The route stays mounted and its contract published, because a peer implementing against this document needs it and the operator command is what is missing rather than the surface. What is built: `POST /v1/federation/reports` verifies the reporting server's Ed25519 signature against the key an operator pinned for it *before* charging the `(reporting_server, reported_user)` budget — so a third party spoofing `reporting_server` cannot spend a real peer's allowance — drops anything unsigned or unattributable, and files an accepted report for an operator to read without touching the reported account's standing. The blocklist is a column on the peer row, consulted at mint, at every capability presentation, at refresh and at intake; blocking also cuts and publishes every live grant the peer holds. Two things stay owed beyond the operator command (issue #476): nothing *fetches* a peer key — TOFU at intake is rejected on its own merits, because the first report from an unknown server is the wrong moment to decide whether to trust it — and the **admin** surface that would read the report queue still waits on the admin authentication model this doc leaves open.
-- The takedown emits a **server-visible moderation provenance record** the user sees in their audit log — what was taken down, when, and (where policy permits) why — honoring the "[No silent operations](#what-moderation-cannot-do-structural)" rule. A user whose asset stops serving is never left to guess why, and the moderation action is itself auditable after the fact.
+- A takedown is a **serving hold on the asset**, never on a content address: two assets may share a blob, and holding an address would take down someone else's photo.
+- Peers fetching a held asset get `410 Gone`. Capability URLs ([share links](/design/share-links/#security-contract), drops) answer `404` because they must not confirm existence; a takedown signals removal of content the peer already knows.
+- Bytes are **never deleted**. Takedowns are reversible by an admin; a **legal hold** lifts only when the legal obligation ends.
+- [Storage verification](/design/transfer/durability/) reports a held blob as `stored` but **not** `retrievable`, so a client never releases its only local copy on the strength of bytes the server will not serve.
+- Every takedown emits a moderation provenance record (what, when, and why where policy permits).
 
 ## Federation Boundary
 
-Moderation crosses the federation boundary cleanly because [federation](/design/federation/) is pull-only and capability-gated. A blocked peer cannot pull; a takedown asset returns `410` to every pull. The moderation policy decisions don't require new federation primitives — they reuse the capability and revocation surfaces already there.
+Federation is pull-only and capability-gated, so a blocked peer cannot pull and a held asset answers `410` to every pull. Moderation needs no new federation primitives.
 
 ## Appeals
 
-A suspended or taken-down user can appeal. The appeal is authenticated by **master-key proof** (the same mechanism as [global session revoke](/design/authentication/#explicit-revocation)) rather than a session token — the session may be the thing under dispute — and lands in the home-server admin queue. The admin's decision is itself a [moderation provenance record](/design/cryptography/provenance/#provenance-of-library-modifications) the user can see. Because suspension and takedown are reversible by default, a granted appeal simply lifts the constraint.
+An appeal is authenticated by **master-key proof**, not a session token (the session may be what is disputed), and lands in the admin queue. The decision is a provenance record; a granted appeal lifts the constraint.
 
 ## Validation
 
-- Federated report transport (smoke): send report from server A to server B; assert it reaches the admin queue with structured metadata.
-- Blocklist enforcement (smoke): blacklist a peer; assert federation pulls from that peer are refused.
-- Suspension enforcement (unit): a suspended account's upload session creation is rejected with the right structural code.
-- Takedown serving (smoke): take down an asset; assert subsequent fetches return `410`; assert the underlying blob is preserved; assert a moderation provenance record is appended and visible in the user's audit log.
-- Federated-report authentication (unit): submit a report signed by a valid peer key; assert it reaches the admin queue. Submit an unsigned / invalid-signature report; assert it is dropped. Exceed the per-`(reporting_server, reported_user)` rate limit; assert backpressure.
-- Block scoping (unit): a per-user block removes the blocked user from the blocker's shared albums; assert it does **not** appear as a server-level federation block against the blocked user's home server.
+- **Report intake (unit):** valid signature filed; unsigned or invalid dropped; rate limit applies backpressure; unknown account answered like acceptance.
+- **Blocklist (smoke):** a blocked peer's pulls and refreshes are refused.
+- **Suspension (unit):** upload session creation refused with the suspension code; session revocation still works.
+- **Takedown (smoke):** fetch gives `410`; blob preserved; storage verification reports not retrievable; provenance record visible.
+- **Block scoping (unit):** a per-user block removes the user from the blocker's albums and creates no server-level block.
