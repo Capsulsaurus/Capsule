@@ -86,6 +86,9 @@ Status is coarse; clients MUST switch on the `error.*` code in the `ApiError` bo
 | Unsupported chunk media type | `415` |
 | Protocol outside `[Min, Max]` | `426` |
 | Rate limited | `429` |
+| Server fault the server can explain (store outage) | `503` with `Retry-After` |
+| Storage full | `507` |
+| Unexplained internal state | `500`, logged at `ERROR` |
 
 ## Validation
 

@@ -23,7 +23,7 @@ Every implementation, on either side, MUST uphold:
 3. **A chunk is acknowledged only after it is durably appended.** The server fsyncs the staged file before answering `204`; an acknowledged byte is a byte on disk.
 4. **Finalize re-hashes before commit.** The server recomputes the content hash over the staged bytes and re-runs the envelope checks before the blob is committed to its address. A mismatch is corruption, never retried server-side.
 5. **An index row never points at a missing blob.** The blob is committed (atomic rename plus directory fsync) before any index row references it. The failure direction is an unreferenced blob, which GC collects, never a dangling reference.
-6. **No custody receipt without custody.** A receipt is issued only after the blob is committed and indexed.
+6. **Custody and receipt are one fact.** A receipt is written in the same transaction that indexes the committed blob; neither exists without the other.
 7. **A client releases a local original only on server custody**: a `durable` storage verdict, a verified signed custody receipt whose server-recomputed hash matches the bytes the client sent (the read-back hash), and [`verify_asset`](/design/cryptography/keys/#write-authorization) acceptance. See [Verify Before Destroy](/design/transfer/durability/#verify-before-destroy).
 8. **Resume is driven by server truth, not client state.** The upload offset comes from `HEAD`, in-flight sessions from `GET /v1/upload/sessions`, held tiers from the sync feed. Client-side queues are rebuildable caches.
 9. **Every transfer step is idempotent.** Re-creating a session, re-sending a chunk, re-finalizing, re-fetching a range and re-verifying all converge on the same state.

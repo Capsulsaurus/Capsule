@@ -43,7 +43,7 @@ All endpoints require a bearer token and the [protocol handshake](/design/threat
 | `HEAD /v1/upload/{id}` | Authoritative offset, declared length and status. The resumption primitive. |
 | `PATCH /v1/upload/{id}` | Append one chunk at `X-Capsule-Offset`; `204` with the new offset. |
 | `DELETE /v1/upload/{id}` | Cancel; removes the staged file, session and pending reservation. `409` while finalizing. |
-| `GET /v1/upload/sessions` | The **uploader's** live sessions, for resume. An unknown `?status=` is `400 error.upload.invalid_status_filter`, never ignored. |
+| `GET /v1/upload/sessions` | The **uploader's** live sessions, for resume. An unknown `?status=` is `400 error.upload.invalid_status_filter`, never ignored. Not yet served. |
 | `GET /v1/upload/{id}/receipt` | The session's [custody receipt](/design/transfer/durability/#custody-receipts) once `Completed`. |
 
 ## Chunk Rules and Strictness
@@ -57,6 +57,31 @@ Strictness covers the transport — JSON bodies (unknown fields rejected) and he
 - The server keys accepted chunks by `(upload_id, offset, chunk_hash)`: the same tuple replays the original response; the same offset with a different hash is `409 error.upload.chunk_conflict`. The full idempotency contract is [Threat Model — Idempotency Invariants](/design/threat-model/validation/#idempotency-invariants).
 - Cumulative bytes are checked on **every** chunk against the declared `size` and the server's maximum file size; overrun fails the session.
 - The session finalizes automatically when received bytes equal the declared size.
+
+## Hostile Clients
+
+The server is friendly to a correct client and assumes any client may be broken, outdated or
+malicious. No request, sequence of requests or connection behaviour may corrupt stored data,
+wedge another request's session, exhaust shared resources, or reveal whether a session it does
+not own exists.
+
+- **A session never wedges.** Appends to one session are serialised. A failed or partial append
+  (I/O error, full disk, dropped connection mid-body) is truncated back to the session offset
+  before the error is returned, so the client's retry at the same offset succeeds.
+- **Disk full is the client's to wait out, not a server fault.** `ENOSPC` is
+  `507 error.upload.storage_full`; a blob store or index outage is `503 error.upload.unavailable`
+  with `Retry-After`. `500 error.upload.storage_inconsistent` is reserved for a state the server
+  cannot explain, and is logged at `ERROR`.
+- **Bounded per client.** Session creation and chunk appends are rate-limited per account and
+  per source address (`429` with `Retry-After`); live sessions per account are capped.
+- **Bounded per connection.** Header, body-read and idle timeouts close a connection that sends
+  too slowly; a request body is never buffered beyond the chunk maximum.
+- **Requests never panic.** Every reachable failure is a typed rejection. A panic in a handler
+  is a bug, caught at the router and answered `500` without leaking state.
+- **Foreign is unknown.** A session belonging to another account is the same `404` as one that
+  never existed; only the uploader may append to a session.
+- **Every rejection is logged** with the upload id, account, offset and code, so a misbehaving
+  client is diagnosable from the server alone.
 
 ### Protocol Versioning
 
@@ -90,7 +115,7 @@ Pending ─▶ Uploading ─▶ WaitingForProcessing ─▶ Completed
 
 ## Append-Only Storage
 
-Each session owns one staged file, appended in order; there is no per-chunk file and no assembly step. Before each append the server checks the file length against the session offset; divergence is `500 error.upload.storage_inconsistent`. Each append is fsynced before `204`. Hashing runs off the async reactor. Total in-flight bytes are bounded by the cache limit, with the discard window as the relief valve.
+Each session owns one staged file, appended in order; there is no per-chunk file and no assembly step. Before each append the server checks the file length against the session offset: bytes beyond the offset were never acknowledged and are truncated; a file shorter than the offset fails the session. Each append is fsynced before `204`. Hashing runs off the async reactor. Total in-flight bytes are bounded by the cache limit, with the discard window as the relief valve.
 
 ## Finalization and Integrity
 
@@ -100,8 +125,8 @@ Order is the contract (`capsule-server::upload::finalize`):
 2. **Re-hash** the staged file and compare to the declared hash. Mismatch → `FailedProcessing`, `error.upload.content_hash_mismatch`.
 3. **Envelope checks** re-run against the current clock and authority, so a device revoked or an album closed since creation does not slip through (`error.upload.envelope_rejected`).
 4. **Commit** — `BlobStore::commit`: atomic rename onto the content address, then directory fsync.
-5. **Record** the blob in the `AssetIndex`, minting the asset's next sequence number where observable. An index failure fails the session; the committed blob is unreferenced and collectable, and a retry is idempotent.
-6. **Custody receipt** — sign and log the [receipt](/design/transfer/durability/#custody-receipts). A crash between 5 and 6 leaves a committed blob without a receipt (`error.upload.receipt_not_available`), never a receipt without custody.
+5. **Ledger** — append and fsync the [owner ledger](/design/filesystem/server/#the-owner-ledger) entry.
+6. **Record and receipt** — in **one** PostgreSQL transaction, write the blob's index rows (minting the asset's next sequence number) and sign and log the [custody receipt](/design/transfer/durability/#custody-receipts). Either both commit or neither does: there is never an indexed blob without a receipt or a receipt without custody. A failure fails the session; the committed blob is unreferenced and collectable, and a retry is idempotent.
 7. `Completed`.
 
 The server can verify only ciphertext. The client verifies plaintext on download through STREAM's per-chunk tags. `Completed` is a one-time acknowledgement; standing durability is [`/storage/verify`](/design/transfer/durability/).
@@ -125,6 +150,7 @@ Client recovery matrix (`capsule-sdk::upload`):
 | `error.upload.stale_revival` | Re-read the asset and rebase |
 | `error.protocol.version_unsupported` (`426`) | Stop; prompt to update |
 | `error.quota.exceeded` | Pause; surface the remediable state |
+| `error.upload.rate_limited`, `unavailable`, `storage_full` | Back off per `Retry-After`, then resume from `HEAD` |
 | other `4xx` | Fail the blob; never retry unchanged |
 
 ## Adaptive Chunk Sizing
@@ -144,7 +170,10 @@ Clients branch on `error.*` codes ([i18n error-code contract](/design/i18n/#serv
 | `413` | `file_too_large`, `chunk_too_large` |
 | `415` | `unsupported_media_type` |
 | `426` | `error.protocol.version_unsupported` |
-| `500` | `storage_inconsistent`, `unavailable` |
+| `429` | `rate_limited` |
+| `500` | `storage_inconsistent` |
+| `503` | `unavailable` |
+| `507` | `storage_full` |
 
 Unprefixed codes are `error.upload.*`.
 
