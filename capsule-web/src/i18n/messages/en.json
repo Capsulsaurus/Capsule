@@ -1823,6 +1823,7 @@
   "cli.help.push.about": "Upload a local Capsule library to the server",
   "cli.help.push.arg.dry_run": "Report what would be uploaded without opening a single upload session",
   "cli.help.push.arg.force": "Re-drive every blob regardless of what the server already holds",
+  "cli.help.push.arg.json": "Print the run as one JSON document on stdout: the totals and each asset's outcome (verified, failed with its error, or planned on a dry run)",
   "cli.help.push.arg.library": "Path to the Capsule library to push",
   "cli.help.push.arg.passphrase_stdin": "Read the library passphrase from stdin instead of prompting, so pushes work in scripts and CI where there is no terminal",
   "cli.help.push.arg.staged": "Open the tier sessions in ladder order (index → preview → original), gating the above-index tiers on the connection class, instead of opening all eagerly",

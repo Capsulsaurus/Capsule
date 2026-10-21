@@ -601,6 +601,15 @@
           "repeatable": false,
           "required": false,
           "takes_value": false
+        },
+        {
+          "help": "Print the run as one JSON document on stdout: the totals and each asset's outcome (verified, failed with its error, or planned on a dry run)",
+          "id": "json",
+          "long": "json",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": false
         }
       ],
       "name": "push"

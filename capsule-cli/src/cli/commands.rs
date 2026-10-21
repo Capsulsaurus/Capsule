@@ -97,6 +97,10 @@ pub(crate) enum Commands {
         /// the above-index tiers on the connection class, instead of opening all eagerly
         #[arg(long)]
         staged: bool,
+        /// Print the run as one JSON document on stdout: the totals and each asset's outcome
+        /// (verified, failed with its error, or planned on a dry run)
+        #[arg(long)]
+        json: bool,
     },
     /// Review a local library: flag assets, filter by flag, sweep rejects to trash
     Cull {
