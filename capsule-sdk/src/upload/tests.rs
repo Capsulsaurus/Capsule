@@ -500,6 +500,105 @@ async fn recovery_offset_mismatch_realigns_via_head_when_header_absent() {
     assert_eq!(*patch_offsets.lock().unwrap(), vec![0, CHUNK_SIZE_256KB]);
 }
 
+/// `rate_limited`, `unavailable` and `storage_full` all mean "wait, then resume
+/// from HEAD" (transfer upload doc, §Hostile Clients): the refused chunk is sent
+/// again at the offset HEAD names, and nothing is re-created.
+#[tokio::test]
+async fn recovery_a_server_asked_wait_resumes_from_head() {
+    for code in [
+        error_codes::UPLOAD_RATE_LIMITED,
+        error_codes::UPLOAD_UNAVAILABLE,
+        error_codes::UPLOAD_STORAGE_FULL,
+    ] {
+        let head_calls = Arc::new(AtomicUsize::new(0));
+        let patch_offsets = Arc::new(Mutex::new(Vec::<u64>::new()));
+        let creates = Arc::new(AtomicUsize::new(0));
+        let hc = head_calls.clone();
+        let po = patch_offsets.clone();
+        let cr = creates.clone();
+        let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+            ("POST", "/") => {
+                cr.fetch_add(1, Ordering::SeqCst);
+                created("sess-wait", CHUNK_SIZE_256KB)
+            }
+            ("HEAD", "/sess-wait") => {
+                hc.fetch_add(1, Ordering::SeqCst);
+                MockResponse::new(200, "OK")
+                    .header("X-Capsule-Offset", "0")
+                    .header("X-Capsule-Content-Length", "4096")
+                    .header("X-Capsule-Upload-Status", "pending")
+            }
+            ("PATCH", "/sess-wait") => {
+                let offset: u64 = req.header("X-Capsule-Offset").unwrap().parse().unwrap();
+                let mut seen = po.lock().unwrap();
+                seen.push(offset);
+                if seen.len() == 1 {
+                    // Zero seconds, so the test does not sleep; the value is what
+                    // the client honours, whatever it is.
+                    MockResponse::api_error(503, "Service Unavailable", code, "wait")
+                        .header("Retry-After", "0")
+                } else {
+                    let new_offset = ack_offset(req);
+                    MockResponse::new(204, "No Content")
+                        .header("X-Capsule-Offset", new_offset.to_string())
+                }
+            }
+            other => panic!("unexpected {other:?}"),
+        })
+        .await;
+
+        let client = server.client(PROTOCOL);
+        let data = vec![9u8; 4096];
+        let outcome = client.upload(&request(4096), &data).await.unwrap();
+
+        assert!(matches!(outcome, UploadOutcome::Completed { .. }), "{code}");
+        assert_eq!(
+            head_calls.load(Ordering::SeqCst),
+            1,
+            "{code}: resumes from HEAD"
+        );
+        assert_eq!(
+            *patch_offsets.lock().unwrap(),
+            vec![0, 0],
+            "{code}: the same chunk again"
+        );
+        assert_eq!(
+            creates.load(Ordering::SeqCst),
+            1,
+            "{code}: the session is kept"
+        );
+    }
+}
+
+/// The wait a server names is read from `Retry-After`, and honoured only up to
+/// the client's own ceiling.
+#[test]
+fn a_server_named_wait_is_read_and_bounded() {
+    let mut headers = reqwest::header::HeaderMap::new();
+    assert_eq!(retry_after(&headers), None, "no header, no named wait");
+    headers.insert("Retry-After", "30".parse().unwrap());
+    assert_eq!(retry_after(&headers), Some(Duration::from_secs(30)));
+    headers.insert(
+        "Retry-After",
+        "Wed, 21 Oct 2015 07:28:00 GMT".parse().unwrap(),
+    );
+    assert_eq!(
+        retry_after(&headers),
+        None,
+        "an HTTP-date leaves the client's own backoff"
+    );
+
+    assert!(asks_to_wait(error_codes::UPLOAD_STORAGE_FULL));
+    assert!(asks_to_wait(error_codes::UPLOAD_RATE_LIMITED));
+    assert!(asks_to_wait(error_codes::UPLOAD_UNAVAILABLE));
+    assert!(!asks_to_wait(error_codes::UPLOAD_STORAGE_INCONSISTENT));
+    assert_eq!(
+        Duration::from_hours(1).min(MAX_SERVER_BACKOFF),
+        Duration::from_mins(5),
+        "an hour-long ask is waited in five-minute steps"
+    );
+}
+
 #[tokio::test]
 async fn recovery_session_not_found_recreates() {
     let creates = Arc::new(AtomicUsize::new(0));

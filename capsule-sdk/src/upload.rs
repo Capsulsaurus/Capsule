@@ -14,8 +14,10 @@
 //! - the code-driven recovery matrix ([`UploadClient::upload`]): `offset_mismatch`
 //!   → HEAD re-align; `session_not_found` → re-create; `duplicate_blob` → merge
 //!   (success carrying the existing asset ref); `426` → abort-with-upgrade;
-//!   `checksum_mismatch` → re-send the chunk. The client switches on the stable
-//!   `error.*` code (from `capsule_i18n::error_codes`), never on the bare status.
+//!   `checksum_mismatch` → re-send the chunk; `rate_limited`, `unavailable` and
+//!   `storage_full` → wait out `Retry-After`, then resume from HEAD. The client
+//!   switches on the stable `error.*` code (from `capsule_i18n::error_codes`),
+//!   never on the bare status.
 //!
 //! Tokens stay SDK-owned: an upload composes with the `S-D7` session — build the
 //! transport with [`UploadTransport::with_session`] and every request runs through
@@ -63,6 +65,15 @@ const MAX_RECENT_CHUNKS: usize = 1000;
 /// rather than hot-looping (transfer upload doc, §Session Lifetime and Discard:
 /// "retrying with backoff and halting after a bounded number of attempts").
 const MAX_RECOVERIES: u32 = 64;
+
+/// The longest single wait a server's `Retry-After` is honoured for.
+///
+/// A server names its own wait (transfer upload doc, §Hostile Clients), and a
+/// client that waited however long it was told would hand a misconfigured or
+/// hostile server the power to park a transfer indefinitely. Five minutes is the
+/// server's own disk-full hint; anything longer is waited in five-minute steps,
+/// each one a HEAD that re-learns the offset and charges the recovery budget.
+const MAX_SERVER_BACKOFF: Duration = Duration::from_mins(5);
 
 /// Chunk size strategy for adaptive upload.
 ///
@@ -629,6 +640,25 @@ enum ChunkAck {
     Recreate,
     /// `checksum_mismatch` — nothing was persisted; re-send the same chunk.
     Resend,
+    /// `rate_limited`, `unavailable` or `storage_full` — the server asked the
+    /// client to wait (for the `Retry-After` it sent, when it sent one) and then
+    /// resume from HEAD. Nothing of the refused chunk was kept.
+    Backoff(Option<Duration>),
+}
+
+/// Whether `code` is one of the three answers that mean "wait, then resume".
+fn asks_to_wait(code: &str) -> bool {
+    code == error_codes::UPLOAD_RATE_LIMITED
+        || code == error_codes::UPLOAD_UNAVAILABLE
+        || code == error_codes::UPLOAD_STORAGE_FULL
+}
+
+/// The wait a `Retry-After` header names, in its delta-seconds form.
+///
+/// The server sends delta-seconds; the HTTP-date form is not parsed, and a value
+/// that is neither leaves the client on its own backoff rather than guessing.
+fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    header_u64(headers, "Retry-After").map(Duration::from_secs)
 }
 
 /// The hand-written chunked, resumable, adaptive upload client.
@@ -835,6 +865,7 @@ impl UploadClient {
         // The 409 offset_mismatch carries the authoritative offset in the header;
         // capture it before consuming the body.
         let authoritative = header_u64(resp.headers(), "X-Capsule-Offset");
+        let wait = retry_after(resp.headers());
         let (code, message, min, max) = read_error(resp).await?;
 
         // Recovery matrix — switch on the stable error.* code, never the status.
@@ -850,6 +881,10 @@ impl UploadClient {
             Some(c) if c == error_codes::UPLOAD_CHECKSUM_MISMATCH => {
                 tracing::debug!("checksum_mismatch — re-sending chunk");
                 Ok(ChunkAck::Resend)
+            }
+            Some(c) if asks_to_wait(c) => {
+                tracing::debug!(code = c, ?wait, "the server asked for a wait — backing off");
+                Ok(ChunkAck::Backoff(wait))
             }
             _ if is_upgrade_required(status, code.as_deref()) => {
                 Err(UploadError::UpgradeRequired { min, max, message })
@@ -1014,6 +1049,37 @@ impl UploadClient {
                     recoveries += 1;
                     guard_budget(recoveries, "chunk re-send")?;
                     // Offset unchanged; the loop re-sends the same chunk.
+                }
+                ChunkAck::Backoff(asked) => {
+                    recoveries += 1;
+                    guard_budget(recoveries, "server-requested wait")?;
+                    let wait = match asked {
+                        Some(asked) => asked.min(MAX_SERVER_BACKOFF),
+                        // No hint: the shared engine's own schedule.
+                        None => match engine.next_backoff(None) {
+                            RetryDecision::Retry { after } => after,
+                            RetryDecision::GiveUp => {
+                                return Err(UploadError::RetriesExhausted(
+                                    "the server kept asking for a wait without naming one".into(),
+                                ));
+                            }
+                        },
+                    };
+                    tracing::debug!(
+                        offset,
+                        ?wait,
+                        "waiting as the server asked, then resuming from HEAD"
+                    );
+                    self.sleeper.sleep(wait).await;
+                    // The refused chunk left nothing behind, but anything may have moved
+                    // while we waited: the authoritative offset is HEAD's.
+                    offset = if let Some(info) = self.head(&session_id).await? {
+                        info.offset
+                    } else {
+                        session_id = self.recreate(request).await?;
+                        *strategy = AdaptiveChunkSizeStrategy::for_file_size(size);
+                        0
+                    };
                 }
             }
         }
