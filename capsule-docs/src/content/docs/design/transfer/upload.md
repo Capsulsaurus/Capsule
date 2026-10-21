@@ -164,7 +164,7 @@ Clients branch on `error.*` codes ([i18n error-code contract](/design/i18n/#serv
 | Status | Codes |
 | --- | --- |
 | `400` | `malformed_request`, `unknown_crypto_suite`, `invalid_hash`, `invalid_size`, `unsupported_content_type`, `unknown_derivative_format`, `envelope_mismatch`, `timestamp_out_of_range`, `invalid_action`, `empty_chunk`, `chunk_not_aligned`, `missing_offset`, `missing_checksum`, `checksum_mismatch`, `size_exceeded`, `content_hash_mismatch`, `envelope_rejected`, `invalid_status_filter` |
-| `403` | `album_access_denied`, `device_not_authorized`, `owner_not_permitted`, `forbidden`, `error.quota.exceeded` |
+| `403` | `album_access_denied`, `device_not_authorized`, `owner_not_permitted`, `error.quota.exceeded` |
 | `404` | `session_not_found` |
 | `409` | `duplicate_blob`, `offset_mismatch`, `chunk_conflict`, `session_not_active`, `receipt_not_available`, `replace_incomplete`, `stale_revival` |
 | `413` | `file_too_large`, `chunk_too_large` |
