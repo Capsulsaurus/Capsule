@@ -33,6 +33,7 @@ SidecarV1 {
 
   // organization (semantics owned by Asset Organization); LWW, wire-absent when never written
   stack_membership:      Lww<Option<StackMembership>>,  // leave = a stamped None
+  regions:               Map<UUIDv7, Lww<Option<Region>>>,  // labelled image regions; delete = a stamped None
   cull:                  Lww<CullFlag>,                 // pick | neutral | reject
   hidden:                Lww<bool>,
 
@@ -51,7 +52,17 @@ SidecarV1 {
   _unknown:              Map,             // unknown CBOR keys preserved verbatim, never executed
   signature:             Hybrid(Ed25519, ML-DSA-65),  // covers every byte above, including _unknown
 }
+
+Region {
+  shape:  Circle { cx: f32, cy: f32, r: f32 } | Rect { x: f32, y: f32, w: f32, h: f32 },  // [0, 1], display orientation
+  labels: OR_set<(label: String, add_id)>,
+}
 ```
+
+`tags_user` holds the asset's user **labels**; `regions` holds labelled image regions. Both,
+and the stack and album label records, are specified in [Organization — Labels](/design/organization/#labels).
+`regions` is added without a `sidecar_schema` bump: older readers keep it verbatim as an
+unknown key.
 
 ### Schema Versioning Rules
 
@@ -126,6 +137,7 @@ When an asset crosses a trust boundary — a [share link](/design/share-links/) 
 | Session ID | Stripped | Full value |
 | GPS coordinates | Rounded to 2 decimal places (≈1 km) | Full precision |
 | Personal contact tags (faces matched to a known person) | Stripped | Retained |
+| Image regions and their labels (`regions`) | Stripped | Retained |
 
 Stripping applies to the exported copy only; the library sidecar is untouched. Syncing the same user's own devices is not a boundary crossing. Stripping is the **issuing client's** obligation (the server holds no key); the server's half is containment — a share serves only the content addresses its record enumerates.
 
@@ -177,6 +189,7 @@ This doc owns the envelope, keying, versioning and merge; section value schemas 
 | Structure | Mechanism | Why it converges |
 | --- | --- | --- |
 | Tags (`tags_user` / `tags_ai`) | OR-set | Add/remove keyed by `add_id`; commutative, associative, idempotent |
+| Regions (`regions`) | Map of LWW registers, each holding an OR-set of labels | Region create/delete by LWW; labels as tags |
 | Caption / rating / `stack_membership` / `cull` / `hidden` | LWW register | Total order on `(ts, device_id)`; replay is a no-op |
 | Smart albums, people clusters, [aggregated federated albums](/design/federation/) | Computed views | Nothing stored; membership is a deterministic function of inputs ([views](/design/organization/#system--smart-albums-views), [AI](/design/ai/#ai-output-containment)) |
 | Container-album membership | Single home + ordered lifecycle ops | One container per asset; a replayed move no-ops ([Organization](/design/organization/#container-albums)); concurrency ordered by MLS commits |

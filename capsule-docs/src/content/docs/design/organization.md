@@ -126,6 +126,41 @@ A new stack type requires a later-dated `protocol_version`; the Rust enum is nor
 - **Technical & creative:** exposure bracketing (HDR); focus stack; pixel shift; panorama.
 - **Video & audio:** proxy/optimized (master + proxy); chaptered video (e.g. `GOPR001.mp4`, `GOPR002.mp4`); dual-system audio (video + external WAV/AIFF).
 
+## Labels
+
+Users attach free-form **labels** at four levels. Every level stores labels as an OR-set with
+[`add_id` binding](/design/metadata/#add-id-binding), so concurrent adds and removes from any
+number of devices converge deterministically, and every change is a signed `metadata-update`.
+
+| Level | Where the labels live | Readable by |
+| --- | --- | --- |
+| **Asset** | `tags_user` in the asset's [sidecar](/design/metadata/#sidecar-schema-v1) | the asset's album members |
+| **Region** of an image | `regions` in the asset's sidecar, one OR-set per region | the asset's album members |
+| **Stack** | the stack's `StackDocV1` | the stack's album members |
+| **Album** | the album's `AlbumDocV1` | the album's members |
+
+- **A label** is a Unicode string, NFC-normalized and trimmed, 1–256 bytes, case-preserving. It
+  carries no hierarchy and no type; meaning is the user's.
+- **User and AI labels never mix.** AI suggestions live only in `tags_ai` and reach a user
+  label only by an explicit promote ([Tag Provenance](/design/metadata/#tag-provenance-and-namespacing)).
+- **A region** is a circle `{cx, cy, r}` or rectangle `{x, y, w, h}` in coordinates normalized
+  to `[0, 1]` over the original's **display orientation** (after EXIF orientation), so a region
+  survives every derivative size. Each region has a UUIDv7 and its own labels OR-set; deleting
+  a region is a stamped `None` in its LWW register.
+- **Stack and album records.** `StackDocV1` (keyed by `stack_id`) and `AlbumDocV1` (keyed by
+  `album_id`) are signed, versioned documents sealed under the album's current AMK, following
+  the same rules as the sidecar: version first, unknown keys preserved under the signature,
+  CRDT fields only. `AlbumDocV1` also carries the album's name (LWW), so a restored or newly
+  joined device sees it. Every member of a stack belongs to the same container album; moving
+  one member out removes it from the stack.
+- **Privacy.** Region labels can name people, so regions are stripped on export and from
+  [share links](/design/share-links/) by the [Privacy on Export](/design/metadata/#privacy-on-export)
+  rule; asset, stack and album labels follow the same rule as captions.
+- **Search.** Smart-album `contains` predicates over `tags_user` match a label at any level
+  attached to the asset: its own, its regions', its stack's and its album's.
+
+Not yet implemented beyond asset labels; tracked by #667.
+
 ## Culling
 
 A **trinary flag per asset** — `pick | neutral | reject` — in the sidecar's `cull` LWW register ([schema](/design/metadata/#sidecar-schema-v1)); `neutral` is the wire-absent default. It is independent of the star `rating`.
