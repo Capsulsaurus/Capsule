@@ -17,10 +17,10 @@
 //! # The signing key is the one that signs
 //!
 //! `server-info` publishes the server's operational Ed25519 key: classical only, per the
-//! [operational-signature carve-out](design/cryptography/primitives.md), and the key a
+//! [operational-signature carve-out](../../../capsule-docs/src/content/docs/design/cryptography/primitives.md), and the key a
 //! federation capability token is verified against offline by the peer holding it. Today the
 //! same key signs this server's own session tokens, which is not a coincidence — the operator
-//! supplies one `JWT_ED25519_DER` and design/guides/self-hosting.md derives the rest from it.
+//! supplies one `JWT_ED25519_DER` and guides/self-hosting.md derives the rest from it.
 //!
 //! So the published key is read **out of the token signer** rather than configured beside it
 //! ([`SessionTokens::public_key`](crate::auth::SessionTokens::public_key)). The alternative —

@@ -39,6 +39,7 @@ import { crossLinksCheck } from './check-cross-links.mjs';
 import { endpointCensusCheck } from './check-endpoint-census.mjs';
 import { modulePathsCheck } from './check-module-paths.mjs';
 import { roadmapCheck } from './check-roadmap.mjs';
+import { sourceLinksCheck } from './check-source-links.mjs';
 
 /** Registered checks, run in order. Adding one is a single entry here. */
 const CHECKS = [
@@ -46,6 +47,7 @@ const CHECKS = [
     endpointCensusCheck,
     modulePathsCheck,
     roadmapCheck,
+    sourceLinksCheck,
 ];
 
 function main() {

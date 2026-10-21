@@ -165,7 +165,7 @@ impl CursorCodec {
     ///
     /// The key is `SYNC_CURSOR_MAC_KEY`, or HKDF-derived from `JWT_ED25519_DER` when that is
     /// unset — which is why rotating the signing key silently rotates this one, and every live
-    /// cursor with it (design/guides/self-hosting.md). A client whose cursor stops
+    /// cursor with it (guides/self-hosting.md). A client whose cursor stops
     /// authenticating re-syncs from the beginning; nothing is lost, but a rotation is a
     /// full-resync event and the operator should know that before performing one.
     pub fn new(key: &[u8; CURSOR_KEY_LEN]) -> Self {
