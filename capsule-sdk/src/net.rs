@@ -128,7 +128,7 @@ impl ConnectionClass {
 
     /// Whether a staged-upload tier may open on this connection.
     ///
-    /// Mirrors the download/upload tier ladder (download-sync doc, "Upload
+    /// Mirrors the download/upload tier ladder (transfer upload doc, "Upload
     /// Tiering"): T0 index escapes on any usable connection (a few KB per asset);
     /// T1 preview and T2 original need a non-metered link — or an explicit
     /// user-consented `force_sync`, which overrides the metered/Wi-Fi criteria but

@@ -148,7 +148,7 @@ export class ServerGateway implements CapsuleGateway {
                 return;
             }
             // Validation failures (rewind / forward-version / structural) are surfaced: they
-            // indicate a malicious or buggy server, per the download-sync client rules.
+            // indicate a malicious or buggy server, per the sync doc's client rules.
             console.error('sync feed rejected a page', err);
         }
     }

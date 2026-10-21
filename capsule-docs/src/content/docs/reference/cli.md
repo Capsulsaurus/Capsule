@@ -43,8 +43,8 @@ offer no flag for one.
 ## Where the contract lives
 
 - The behaviour of the import pipeline is [Import Pipeline](/design/import/pipeline/); what
-  `capsule push` speaks is the [Upload Protocol](/design/import/upload-protocol/), and what
-  `capsule sync` drains is [Download & Sync](/design/import/download-sync/).
+  `capsule push` speaks is the [Upload Protocol](/design/transfer/upload/), and what
+  `capsule sync` drains is [Download & Sync](/design/transfer/download/).
 - The server endpoints behind the networked commands are the
   [REST API](/reference/api/) reference.
 - Terminal output is localized through the catalogs described in

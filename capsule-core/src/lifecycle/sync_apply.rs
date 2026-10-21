@@ -72,7 +72,7 @@
 //! introduce the version rather than assume one; the sealed sidecar inside already carries its
 //! own (`sidecar_schema`, refused forward below).
 //!
-//! [download & sync]: https://docs/design/import/download-sync/
+//! [download & sync]: https://docs/design/sync/
 //! [provenance.md § Asset Manifest]: https://docs/design/cryptography/provenance/#asset-manifest
 //! [provenance.md § Chained, Append-Only Structure]: https://docs/design/cryptography/provenance/#chained-append-only-structure
 //! [provenance.md § Physical Storage]: https://docs/design/cryptography/provenance/#physical-storage

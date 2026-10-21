@@ -86,7 +86,7 @@
 //! `410` is reached, so the authority-first ordering `S-C39` established keeps every policy
 //! refusal illegible to anyone who is not currently entitled to the bytes.
 //!
-//! [Download & Sync]: ../../../capsule-docs/src/content/docs/design/import/download-sync.md
+//! [Download & Sync]: ../../../capsule-docs/src/content/docs/design/transfer/download.md
 
 use std::fmt;
 use std::future::Future;

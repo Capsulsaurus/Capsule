@@ -14,7 +14,7 @@ A connected camera is an import **source adapter** on the same contract as the f
 
 - **Lives in:** `capsule-core::import::camera` (planned, post-v1) over the gated `ptpip-rs` crate.
 - **Public surface:** the shared source-adapter trait; a discovery/pairing surface for clients (list cameras, connect, session state).
-- **Defers to:** [Import — Pipeline](/design/import/pipeline/) (planner/executor), [Metadata](/design/metadata/) (extraction schema), [Import — Upload Protocol](/design/import/upload-protocol/) (upload), and the pipeline's dedup rules (below).
+- **Defers to:** [Import — Pipeline](/design/import/pipeline/) (planner/executor), [Metadata](/design/metadata/) (extraction schema), [Import — Upload Protocol](/design/transfer/upload/) (upload), and the pipeline's dedup rules (below).
 
 ## Contract
 
@@ -22,7 +22,7 @@ A connected camera is an import **source adapter** on the same contract as the f
 - **Dedupe on re-import is by content, not by source.** The planner's existing content-hash dedup is what prevents a re-connected card or camera from re-importing prior assets; the adapter does not track "seen" state of its own. Pulling the same card out of the camera and importing it over the filesystem scanner dedups identically.
 - **Integrity end-to-end.** PTP/IP carries no checksums of its own; TCP integrity is treated as transport-grade only. Every transferred object is hashed on receipt, and that hash *is* the content hash the [manifest](/design/cryptography/provenance/#asset-manifest) commits to — a corrupted transfer surfaces as a hash mismatch at import, before anything is signed.
 - **Resumable per object.** A dropped connection resumes at the object boundary (partial-object ranged transfer where the camera supports `GetPartialObject`); completed objects are never re-pulled (dedup covers the crash window).
-- **Read-only by default.** The adapter never deletes or mutates camera storage. A delete-after-verified-import option (Sony's extension surface) is a client feature that may come later; it must gate on the same [verify-before-destroy](/design/import/storage-verification/#verify-before-destroy) rule as every destructive path.
+- **Read-only by default.** The adapter never deletes or mutates camera storage. A delete-after-verified-import option (Sony's extension surface) is a client feature that may come later; it must gate on the same [verify-before-destroy](/design/transfer/durability/#verify-before-destroy) rule as every destructive path.
 - **Discovery and pairing.** mDNS (`_ptp._tcp`) where the camera advertises, manual IP entry otherwise; the PTP/IP pairing handshake (GUID + friendly name) is remembered per camera. Pairing state is client-local config, not library metadata.
 
 ## Validation

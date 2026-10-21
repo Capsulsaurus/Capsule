@@ -4,7 +4,7 @@ description: How Capsule scans, plans, and executes a local import on a single d
 status: draft
 ---
 
-The import pipeline is the workflow a client runs to bring assets from an external source (a camera, a filesystem directory) into Capsule's management. It is implemented in `capsule-core::import` and runs entirely client-side — no server is contacted until the [upload protocol](/design/import/upload-protocol/) is invoked at the tail of the pipeline.
+The import pipeline is the workflow a client runs to bring assets from an external source (a camera, a filesystem directory) into Capsule's management. It is implemented in `capsule-core::import` and runs entirely client-side — no server is contacted until the [upload protocol](/design/transfer/upload/) is invoked at the tail of the pipeline.
 
 Every import is **deterministic** and **idempotent**. Imports can be partially completed; each is identified by an *import ID* and resumable. The planner is pure (given the same inputs it produces the same plan), which makes the bulk of the pipeline unit-testable without any I/O.
 
@@ -34,7 +34,7 @@ The planner is **pure**: given the scanned files and their extracted metadata, i
 **Free-space probe (planned).** Alongside `total_size`, the client probes the library volume's available space (`capsule-core::library::available_bytes()`, planned) and sets `streaming_recommended: bool` on the plan when `total_size` is near or over free space (a configurable headroom margin). The probe is I/O, so it runs *outside* the pure planner and is attached at confirmation — the planner stays deterministic — exactly as the destination-pointer snapshot is a planner input rather than a discovered-later value. `streaming_recommended` is what surfaces [import-upload streaming mode](#import-upload-streaming-mode) to the user before execution begins.
 
 - If an asset is already uploaded *locally* in the library, import refuses it — no merge needed.
-- If an asset already exists *remotely* under a different ciphertext (e.g. re-encrypted under a newer album key), import still admits it; the [upload protocol](/design/import/upload-protocol/#deduplication-and-merge) then resolves it as a merge (the existing blob is linked rather than re-uploaded).
+- If an asset already exists *remotely* under a different ciphertext (e.g. re-encrypted under a newer album key), import still admits it; the [upload protocol](/design/transfer/upload/#deduplication-and-merge) then resolves it as a merge (the existing blob is linked rather than re-uploaded).
 
 **Destination resolution.** Each added asset is assigned a destination [container album](/design/organization/#container-albums). If the user picks one explicitly the planner uses it; otherwise it calls `resolve_default_album(context)` — the active scope's override, else the owner [default-album](/design/organization/#the-default-album) pointer, else the derived de facto album. To keep the planner pure, the active context and a snapshot of the pointer/overrides are planner *inputs*, so the resolved `album_id` is deterministic and recorded in the `ImportPlan` rather than discovered later at upload time. The snapshot is last-writer-wins by design: a concurrent re-point of the default album after the user confirms does **not** retarget the confirmed plan — the recorded `album_id` stands, exactly as if the user had picked that album explicitly.
 
@@ -47,7 +47,7 @@ For each file in the plan, in [upload prioritization](#upload-prioritization) or
 1. **Move into the detected space.** The planner determined which library directory each asset belongs in; execution moves files into place.
 2. **Compute cryptographic metadata.** Encrypt under the resolved destination album's AMK (see [Asset Encryption](/design/cryptography/encryption/#authenticated-asset-encryption)), produce the [signed manifest](/design/cryptography/provenance/#asset-manifest).
 3. **Generate thumbnails and previews.** Per [Thumbnails](/design/thumbnails/).
-4. **Hand off to the upload protocol.** Each blob (original + derivatives + metadata) becomes its own upload session — see [Upload Protocol](/design/import/upload-protocol/).
+4. **Hand off to the upload protocol.** Each blob (original + derivatives + metadata) becomes its own upload session — see [Upload Protocol](/design/transfer/upload/).
 
 Step 1–3 can be parallelized across files. The executor is cancellation-aware: a partially-executed plan can be aborted cleanly and resumed (re-running the import re-derives the plan and skips already-completed work via the deterministic planner).
 
@@ -59,19 +59,19 @@ Step 1–3 can be parallelized across files. The executor is cancellation-aware:
 
 The default pipeline imports every file into the local library *before* upload, so the device temporarily holds the whole import on disk. That is impossible on a storage-constrained device — a laptop with a near-full SSD importing a library larger than its free space. **Streaming mode** removes the requirement that the full import ever land locally at once.
 
-It is **auto-detected**: when the [free-space probe](#plan--confirm) reports `total_size` is near or over available space, the plan is marked `streaming_recommended` and the user confirms a streaming import. Streaming is **mutually exclusive with a [staged upload policy](/design/import/download-sync/#upload-tiering-staged-uploads)** for the same import — streaming exists to release local bytes quickly, staged defers exactly the upload that release depends on — and the planner rejects the combination at confirmation. Instead of executing all files and then uploading, the executor runs a bounded **sliding window**:
+It is **auto-detected**: when the [free-space probe](#plan--confirm) reports `total_size` is near or over available space, the plan is marked `streaming_recommended` and the user confirms a streaming import. Streaming is **mutually exclusive with a [staged upload policy](/design/transfer/upload/#upload-tiering-staged-uploads)** for the same import — streaming exists to release local bytes quickly, staged defers exactly the upload that release depends on — and the planner rejects the combination at confirmation. Instead of executing all files and then uploading, the executor runs a bounded **sliding window**:
 
 1. Import the next file (or a small window of files) into the library — encrypt, sign the [manifest](/design/cryptography/provenance/#asset-manifest), generate derivatives — exactly as the normal [Execute](#execute) step.
-2. Upload its bundle via the [upload protocol](/design/import/upload-protocol/).
-3. Confirm the asset is durably stored with [`POST /v1/storage/verify`](/design/import/storage-verification/#verify-before-destroy).
+2. Upload its bundle via the [upload protocol](/design/transfer/upload/).
+3. Confirm the asset is durably stored with [`POST /v1/storage/verify`](/design/transfer/durability/#verify-before-destroy).
 4. **Release** the local original (and delete the [Move-mode](#execute) source, if any) only after the `durable` verdict; the asset becomes an ordinary server-only, re-fetchable representation (see [Space Recovery](/design/filesystem/client/#space-recovery)).
 5. Advance the window to the next file.
 
-Peak local disk is therefore bounded to the in-flight window, not the whole import, so an import far larger than free space can complete. The verify-before-release step *is* the [verify-before-destroy](/design/import/storage-verification/#verify-before-destroy) rule applied per asset — the device never drops the only copy of bytes the server has not confirmed it holds.
+Peak local disk is therefore bounded to the in-flight window, not the whole import, so an import far larger than free space can complete. The verify-before-release step *is* the [verify-before-destroy](/design/transfer/durability/#verify-before-destroy) rule applied per asset — the device never drops the only copy of bytes the server has not confirmed it holds.
 
 **Minimum headroom.** The window must fully materialize at least one asset locally (original + derivatives + metadata) before that asset's upload and release complete, so streaming mode requires headroom for the **largest single asset in the plan**. If even one asset exceeds free space, the plan surfaces a hard "cannot import *X* without freeing *Y*" error at confirmation rather than stalling mid-stream — streaming bounds peak usage to the window; it cannot make a single file smaller than the disk.
 
-**Halt on lost connectivity.** Streaming mode depends on the server: releasing local copies is safe only because the server is confirmed to hold them. If the connection to the server drops, the pipeline **pauses** — it stops admitting new source files into the library (continuing would refill the very disk the mode exists to spare) and waits, rather than importing ahead into space it does not have. In-flight uploads resume via the protocol's [`HEAD` resumption](/design/import/upload-protocol/#session-state-machine) once connectivity returns; if the source media itself is removed mid-import, the deterministic planner re-derives the remaining work on resume. Bulk streaming import is a *large reconciliation* and obeys the same metered/Wi-Fi [connection rules](/design/import/download-sync/#synchronization-criteria) as auto-sync.
+**Halt on lost connectivity.** Streaming mode depends on the server: releasing local copies is safe only because the server is confirmed to hold them. If the connection to the server drops, the pipeline **pauses** — it stops admitting new source files into the library (continuing would refill the very disk the mode exists to spare) and waits, rather than importing ahead into space it does not have. In-flight uploads resume via the protocol's [`HEAD` resumption](/design/transfer/upload/#session-state-machine) once connectivity returns; if the source media itself is removed mid-import, the deterministic planner re-derives the remaining work on resume. Bulk streaming import is a *large reconciliation* and obeys the same metered/Wi-Fi [connection rules](/design/sync/#synchronization-criteria) as auto-sync.
 
 **Quota.** Streaming creates one upload session per asset, so server [quota](/design/quota/#enforcement-points) is enforced exactly as for any upload — at session creation, no new enforcement point. If quota is exhausted mid-stream the next session creation is refused; the pipeline pauses and surfaces the remediable state rather than failing the whole import, and no local original is released for an asset that did not upload.
 
@@ -114,11 +114,11 @@ When many files are processed simultaneously, the order they are *started* is de
 
 - **Last Modified Times.** Newer or recently modified files are likely more relevant to the user. Filesystem mtime is the cross-platform signal, with fallbacks where a platform reports it unreliably.
 - **Directory Depth.** Files closer to the root of the specified paths are processed first.
-- **File Size.** A useful secondary heuristic, but ordering of in-flight uploads is left to the OS / TCP stack and the [adaptive chunk sizing](/design/import/upload-protocol/#adaptive-chunk-sizing) the upload protocol exposes; we do not micro-manage it here.
+- **File Size.** A useful secondary heuristic, but ordering of in-flight uploads is left to the OS / TCP stack and the [adaptive chunk sizing](/design/transfer/upload/#adaptive-chunk-sizing) the upload protocol exposes; we do not micro-manage it here.
 
 File **type/extension** is deliberately *not* a prioritization criterion — prioritizing purely by type may produce anomalies. Instead we have exceptions for sidecar files (e.g. `.xmp` associated with an image, `.wav` associated with a video) that travel with their parent asset.
 
-The pipeline decides which assets to *start*; the [upload protocol](/design/import/upload-protocol/#adaptive-chunk-sizing) decides how they stream.
+The pipeline decides which assets to *start*; the [upload protocol](/design/transfer/upload/#adaptive-chunk-sizing) decides how they stream.
 
 ## Contracts the Pipeline Exposes
 

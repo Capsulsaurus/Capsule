@@ -12480,7 +12480,7 @@
       },
       "patch": {
         "summary": "Append a chunk, and finalize when it completes the declared size.",
-        "description": "Every rule the [chunk\ncontract](../../../capsule-docs/src/content/docs/design/import/upload-protocol.md) fixes is\nchecked before a byte is written, and the checksum is verified against the received bytes\n*first*, so a chunk corrupted in transit persists nothing.",
+        "description": "Every rule the [chunk\ncontract](../../../capsule-docs/src/content/docs/design/transfer/upload.md) fixes is\nchecked before a byte is written, and the checksum is verified against the received bytes\n*first*, so a chunk corrupted in transit persists nothing.",
         "operationId": "append_chunk",
         "parameters": [
           {

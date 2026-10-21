@@ -2,7 +2,7 @@
 //!
 //! Where [`crate::sync`] discovers *what* changed, this module fetches *the
 //! smallest representation that satisfies the user's current intent, and nothing
-//! more*. It owns four things the download-sync doc specifies:
+//! more*. It owns four things the transfer download doc specifies:
 //!
 //! - **Tiered fetch + cross-asset dedup.** [`plan_eager_fetches`] returns only the
 //!   content addresses the configured [`FetchScope`] wants that are not already in
@@ -37,7 +37,7 @@
 //! are driven by deterministic mocks; [`HttpBlobSource`] is the production
 //! `reqwest`-over-`Range` implementation against the media server's `GET /blob/{hash}`.
 //!
-//! [Download & Sync]: https://docs/design/import/download-sync/
+//! [Download & Sync]: https://docs/design/transfer/download/
 //! [Encryption]: https://docs/design/cryptography/encryption/
 
 use std::collections::{BTreeMap, BTreeSet};

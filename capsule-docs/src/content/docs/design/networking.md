@@ -4,7 +4,7 @@ description: The connection-class taxonomy, retry policy classes, and the advers
 status: draft
 ---
 
-Capsule clients run on phones with metered plans, hotel Wi-Fi, and networks that silently drop long-lived connections. This doc owns the three cross-cutting primitives every transfer surface consumes: the **connection-class taxonomy** (the input to sync criteria and cache budgets), the **retry policy classes** (so per-doc retry ladders are instances of a shared shape, not reinventions), and the **adverse-network posture** (the design assumptions that keep Capsule usable on hostile networks). Protocol mechanics stay owned by their protocol docs — [upload](/design/import/upload-protocol/), [download & sync](/design/import/download-sync/), [peering](/design/peering/), [federation](/design/federation/); this doc owns only the shared taxonomy and posture.
+Capsule clients run on phones with metered plans, hotel Wi-Fi, and networks that silently drop long-lived connections. This doc owns the three cross-cutting primitives every transfer surface consumes: the **connection-class taxonomy** (the input to sync criteria and cache budgets), the **retry policy classes** (so per-doc retry ladders are instances of a shared shape, not reinventions), and the **adverse-network posture** (the design assumptions that keep Capsule usable on hostile networks). Protocol mechanics stay owned by their protocol docs — [upload](/design/transfer/upload/), [download & sync](/design/transfer/download/), [peering](/design/peering/), [federation](/design/federation/); this doc owns only the shared taxonomy and posture.
 
 ## Connection Classes
 
@@ -18,7 +18,7 @@ A closed enum, evaluated continuously on-device:
 | `adverse` | Connectivity is present but unreliable | **Behavioral promotion**: ≥ N mid-transfer resets, stalls, or black-holes within a sliding window (thresholds are client-tunable, not protocol surface); demoted after a clean period |
 | `offline` | No usable path | OS path state |
 
-Consumers: the [sync criteria](/design/import/download-sync/#synchronization-criteria) (small vs. large reconciliation), the [staged-upload tier gates](/design/import/download-sync/#upload-tiering-staged-uploads), the [cache-eviction byte budget](/design/filesystem/client/#automatic-cache-management), [prefetch](/design/import/download-sync/#prefetch-and-frugality), and [adaptive chunk sizing](/design/import/upload-protocol/#adaptive-chunk-sizing) (under `adverse`, the conservative choice is the tier minimum). `adverse` is deliberately behavioral — no OS reports it, and the networks that need it most (see below) look "connected" to every OS API.
+Consumers: the [sync criteria](/design/sync/#synchronization-criteria) (small vs. large reconciliation), the [staged-upload tier gates](/design/transfer/upload/#upload-tiering-staged-uploads), the [cache-eviction byte budget](/design/filesystem/client/#automatic-cache-management), [prefetch](/design/transfer/download/#prefetch-and-frugality), and [adaptive chunk sizing](/design/transfer/upload/#adaptive-chunk-sizing) (under `adverse`, the conservative choice is the tier minimum). `adverse` is deliberately behavioral — no OS reports it, and the networks that need it most (see below) look "connected" to every OS API.
 
 ## Retry Policy Classes
 
@@ -27,7 +27,7 @@ Three named classes; every retrying surface declares which one it instantiates. 
 | Class | Shape | Instances (owned where they are) |
 | --- | --- | --- |
 | `interactive` | short timeout, ≤ 2 retries, then a visible failure state | auth flows, on-demand tier fetches |
-| `bulk-transfer` | resume-first (HEAD offset / `Range`), patient within the session's lifetime, backoff between attempts | [upload resume](/design/import/upload-protocol/#idempotency-and-resumption), [download resume](/design/import/download-sync/#resumption-and-verification), [transient fetch retry](/design/import/download-sync/#tiered-on-demand-fetch) |
+| `bulk-transfer` | resume-first (HEAD offset / `Range`), patient within the session's lifetime, backoff between attempts | [upload resume](/design/transfer/upload/#idempotency-and-resumption), [download resume](/design/transfer/download/#resumption-and-verification), [transient fetch retry](/design/transfer/download/#tiered-on-demand-fetch) |
 | `control/ceremony` | slow ladder, long horizon, never abandons silently | [MLS recovery ladder](/design/mls-resilience/) (30 s → 2 min → 10 min), [federation circuit breaker](/design/federation/) (5/30/60 min) |
 
 ## Adverse-Network Posture

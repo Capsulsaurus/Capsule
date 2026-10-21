@@ -135,7 +135,7 @@ impl ImportActionPlan {
     /// **Confirmation-time upload-policy gate** (staged uploads, slice `S-B4`).
     ///
     /// A [`UploadPolicy::Staged`] run and a streaming import are mutually exclusive
-    /// per import (download-sync doc): streaming exists to release local bytes
+    /// per import (transfer upload doc): streaming exists to release local bytes
     /// quickly, staged defers exactly the T2 upload release depends on. This is the
     /// planner's single rejection point — call it at confirmation with the run's
     /// `policy` and whether a streaming import was chosen (`use_streaming`); a
@@ -394,7 +394,7 @@ mod tests {
 
     /// **Planner staged × streaming exclusion (unit).** A plan confirmed with both a
     /// staged upload policy and a streaming import is rejected at confirmation; every
-    /// other combination is accepted. (SSoT: download-sync doc — Validation.)
+    /// other combination is accepted. (SSoT: transfer upload doc — Upload Tiering.)
     #[test]
     fn staged_and_streaming_is_rejected_at_confirmation() {
         let tmp = TempDir::new().unwrap();

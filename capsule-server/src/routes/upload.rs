@@ -1041,7 +1041,7 @@ pub async fn create_upload(
 /// Append a chunk, and finalize when it completes the declared size.
 ///
 /// Every rule the [chunk
-/// contract](../../../capsule-docs/src/content/docs/design/import/upload-protocol.md) fixes is
+/// contract](../../../capsule-docs/src/content/docs/design/transfer/upload.md) fixes is
 /// checked before a byte is written, and the checksum is verified against the received bytes
 /// *first*, so a chunk corrupted in transit persists nothing.
 #[kynos::patch("/v1/upload/{id}", operation_id = "append_chunk", tag = UploadTag)]

@@ -30,7 +30,7 @@
 //! 32 MiB, and it is a **backstop**, not the protocol's own rule.
 //!
 //! The largest body the wire contract will ever legitimately carry is one upload chunk, which
-//! [Upload Protocol — Bounds](../../capsule-docs/src/content/docs/design/import/upload-protocol.md)
+//! [Transfer — Upload: Chunk Rules](../../capsule-docs/src/content/docs/design/transfer/upload.md#chunk-rules-and-strictness)
 //! caps at **16 MiB**. That bound is protocol surface and the protocol answers a breach of it
 //! itself, with `413 error.upload.chunk_too_large` — a coded, localizable rejection that tells a
 //! client its chunking is wrong. Setting this cap *at* 16 MiB would make that rejection
@@ -149,7 +149,7 @@ mod tests {
     /// The upload protocol's own maximum chunk size.
     ///
     /// Restated here only as the subject of the assertion below; the bound itself is owned by
-    /// the upload-protocol design doc and enforced by `S-C1`'s route.
+    /// the transfer upload design doc and enforced by `S-C1`'s route.
     const PROTOCOL_MAX_CHUNK_BYTES: u64 = 16 * 1024 * 1024;
 
     /// The cap is a backstop, not the protocol's rule.

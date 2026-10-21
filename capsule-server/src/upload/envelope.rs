@@ -167,7 +167,7 @@ pub struct GateContext<'a> {
 /// Why the gate refused.
 ///
 /// One variant per row of the [upload protocol's error
-/// taxonomy](../../../capsule-docs/src/content/docs/design/import/upload-protocol.md) that
+/// taxonomy](../../../capsule-docs/src/content/docs/design/transfer/upload.md) that
 /// this battery can decide. The HTTP status and the `error.*` code are attached where the
 /// rejection becomes a response — this enum stays framework-free so it can be unit-tested
 /// without a server.

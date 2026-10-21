@@ -23,8 +23,8 @@
 //! replay), so callers never juggle raw access tokens. [`StaticToken`] +
 //! [`UploadTransport::with_static_token`] plug in a fixed bearer for tests and
 //! callers that already hold a live token. No filename or plaintext metadata ever
-//! rides the wire — it travels inside the encrypted metadata blob (upload-protocol
-//! doc, §Chunk Rules).
+//! rides the wire — it travels inside the encrypted metadata blob (transfer
+//! upload doc, §Chunk Rules).
 
 use std::collections::VecDeque;
 use std::time::Duration;
@@ -43,7 +43,7 @@ const CHUNK_SIZE_16MB: u64 = 16 * 1024 * KB;
 
 /// All chunks MUST be multiples of 4KB (4096 bytes)
 const ALIGNMENT: u64 = 4096;
-/// Protocol-surface chunk bounds (upload-protocol doc, §Chunk Rules and
+/// Protocol-surface chunk bounds (transfer upload doc, §Chunk Rules and
 /// Strictness). Every adaptive tier range sits inside these; the server rejects
 /// outside them (400 / 413).
 pub const PROTOCOL_MIN_CHUNK: u64 = 4096;
@@ -60,13 +60,13 @@ const MAX_RECENT_CHUNKS: usize = 1000;
 /// Upper bound on recovery actions (re-align / re-create / re-send) for a single
 /// blob transfer. A live server drives progress well inside this; hitting it
 /// means a stuck peer, so the transfer fails loudly ([`UploadError::RetriesExhausted`])
-/// rather than hot-looping (upload-protocol doc, §Session Lifetime and Discard:
+/// rather than hot-looping (transfer upload doc, §Session Lifetime and Discard:
 /// "retrying with backoff and halting after a bounded number of attempts").
 const MAX_RECOVERIES: u32 = 64;
 
 /// Chunk size strategy for adaptive upload.
 ///
-/// Normative for `capsule-sdk` (upload-protocol doc, §Adaptive Chunk Sizing):
+/// Normative for `capsule-sdk` (transfer upload doc, §Adaptive Chunk Sizing):
 /// warm-up before adjusting, double above 5 MB/s, halve below 1 MB/s, clamp to
 /// the file-size tier's range — and every tier range sits inside the protocol
 /// bounds `[256 KiB, 16 MiB]` for non-final chunks.
@@ -145,7 +145,7 @@ impl AdaptiveChunkSizeStrategy {
 
     /// Seed the starting chunk size from the server's `X-Capsule-Suggested-Chunk-Size`.
     ///
-    /// The suggestion is a *starting point only* (upload-protocol doc, §Adaptive
+    /// The suggestion is a *starting point only* (transfer upload doc, §Adaptive
     /// Chunk Sizing): 4 KiB-aligned down and clamped into this tier's range, so
     /// the invariant "current size is aligned and within the tier" (hence within
     /// the protocol bounds) still holds by construction.
@@ -518,7 +518,7 @@ pub enum CreateOutcome {
         resume_offset: u64,
     },
     /// The server already holds this exact ciphertext (`duplicate_blob`): resolve
-    /// as a [merge](https://docs/design/import/upload-protocol/#deduplication-and-merge),
+    /// as a [merge](https://docs/design/transfer/upload/#deduplication-and-merge),
     /// not a transfer. Carries the existing asset reference.
     AlreadyStored {
         /// The server-named existing asset the new reference should merge onto.
@@ -893,7 +893,7 @@ impl UploadClient {
 
     /// Resume an existing session: HEAD for the authoritative offset, then
     /// continue from there — no bytes the server already holds are re-sent
-    /// (upload-protocol doc, §Idempotency and Resumption). If the session is gone
+    /// (transfer upload doc, §Idempotency and Resumption). If the session is gone
     /// (`404`), it is re-created and driven from zero.
     #[tracing::instrument(level = "debug", skip(self, data), fields(size = request.size))]
     pub async fn upload_resuming(

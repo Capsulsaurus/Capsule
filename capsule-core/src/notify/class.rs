@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum AlertClass {
     /// Two weeks without a completed sync while changes remain un-synced. Trigger owner:
-    /// [Download & Sync — Notifications](https://docs/design/import/download-sync/#notifications).
+    /// [Sync — Notifications](https://docs/design/sync/#notifications).
     SyncStale,
     /// A recovery-secret verification check is due. Trigger owner:
     /// [Backup — Schedule and Triggers](https://docs/design/backup-recovery/#schedule-and-triggers).

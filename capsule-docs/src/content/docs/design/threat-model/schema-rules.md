@@ -67,7 +67,7 @@ One design question remains open — and it is **deliberately deferred to v2**, 
 The following questions have since been **resolved** and now live in their owner docs, not here:
 
 - *Restore-vs-stale-revival* → [Backup & Recovery — Backup Verification](/design/backup-recovery/#backup-verification) (restore is a chain-reconciliation; newer local state always wins).
-- *Sync cursor authenticity* → [Download & Sync](/design/import/download-sync/#discovering-what-changed) (server-MAC'd cursor + client monotonic check) and [Validation invariant 22](/design/threat-model/validation/#on-the-sync-feed-directory-publish-and-federated-reports).
+- *Sync cursor authenticity* → [Download & Sync](/design/sync/#discovering-what-changed) (server-MAC'd cursor + client monotonic check) and [Validation invariant 22](/design/threat-model/validation/#on-the-sync-feed-directory-publish-and-federated-reports).
 - *Sponsored-account write damage* → [Cryptography — Keys: Damage bound under sponsor compromise](/design/cryptography/keys/#damage-bound-under-sponsor-compromise).
 - *AMK epoch monotonicity bootstrap* → [Cryptography — Write Authorization](/design/cryptography/keys/#write-authorization) (ceiling anchored to the MLS commit chain).
 - *Cross-language deterministic CBOR* → [Metadata — Canonical CBOR Encoding](/design/metadata/#canonical-cbor-encoding) (normative ruleset + blocking conformance gate).

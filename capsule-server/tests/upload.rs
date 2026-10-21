@@ -6,7 +6,7 @@
 //! album/device authority. Nothing in this file reaches past a port.
 //!
 //! The rejection cases are organised the way the [upload
-//! protocol](../../capsule-docs/src/content/docs/design/import/upload-protocol.md) organises
+//! protocol](../../capsule-docs/src/content/docs/design/transfer/upload.md) organises
 //! them — one case per invariant, and one per row of the strictness table — and each asserts
 //! the exact status **and** the `error.*` code, because a client switches on the code and a
 //! test that only checked the status would let a code change silently.

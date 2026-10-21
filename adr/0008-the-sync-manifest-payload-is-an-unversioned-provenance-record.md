@@ -4,7 +4,7 @@
 - **Date:** 2026-10-17
 - **Supersedes:** —
 - **Superseded by:** —
-- **Contract:** [Download & Sync — Resumption and Verification](../capsule-docs/src/content/docs/design/import/download-sync.md#resumption-and-verification)
+- **Contract:** [Download & Sync — Resumption and Verification](../capsule-docs/src/content/docs/design/transfer/download.md#resumption-and-verification)
 - **Slices:** S-P5
 
 ## Context

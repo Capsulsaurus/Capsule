@@ -69,7 +69,7 @@ Encrypting an asset for upload:
 3. Split the plaintext into 65,520-byte chunks and encrypt sequentially with `EncryptorBE32<Aes256Gcm>`, producing 64 KiB ciphertext chunks (16-byte tag each); the final chunk is flagged as last.
 4. Compute the `ciphertext_hash` incrementally over the produced ciphertext (algorithm fixed by `crypto_suite_id`).
 5. Build and sign the [manifest](/design/cryptography/provenance/#asset-manifest) (device signature + write-tier signature).
-6. Upload the blob (see [Upload Protocol](/design/import/upload-protocol/)).
+6. Upload the blob (see [Upload Protocol](/design/transfer/upload/)).
 
 Streaming download / ranged reads:
 
@@ -86,7 +86,7 @@ Capsule strictly requires streaming.
 
 The chosen method is AES-256-GCM with the STREAM construction (Hoang-Reyhanitabar-Rogaway-Vizár, 2015). STREAM splits the file into chunks, encrypts each with AES-GCM using a structured nonce (`prefix || counter || last-chunk-flag`), and guarantees you detect truncation, reordering, and chunk deletion.
 
-In Rust: the RustCrypto `aead` crate exposes `stream::EncryptorBE32<Aes256Gcm>` and `stream::DecryptorBE32<Aes256Gcm>` — drop-in. We use a 65,520-byte plaintext chunk → 64 KiB ciphertext chunk. (Note the upload transport's 4 KiB chunk alignment, described in [Upload Protocol](/design/import/upload-protocol/), is a separate concern from this crypto chunk size.)
+In Rust: the RustCrypto `aead` crate exposes `stream::EncryptorBE32<Aes256Gcm>` and `stream::DecryptorBE32<Aes256Gcm>` — drop-in. We use a 65,520-byte plaintext chunk → 64 KiB ciphertext chunk. (Note the upload transport's 4 KiB chunk alignment, described in [Upload Protocol](/design/transfer/upload/), is a separate concern from this crypto chunk size.)
 
 ## Metadata Encryption
 
@@ -130,4 +130,4 @@ The metadata blob's content hash is computed over the full byte string above —
 - **Rewrite re-roll** — unit test that encrypts an asset, then `replace`s it under the *same* `file_id` and AMK epoch, and asserts the derived `file_key` and `nonce_prefix` both differ from the first encryption, so no `(key, nonce)` pair repeats. The companion case re-seals a metadata blob under the constant `blob_id` and asserts the key and nonce both change.
 - **Metadata round-trip equivalence** — unit test that seals a `SidecarV1` into a metadata blob, decrypts it, and asserts the result is byte-identical canonical CBOR to the signed sidecar and that the blob's content hash equals the manifest's `metadata_blob_hash`. A one-byte mutation of the local sidecar makes the round-trip check fail (surfaced, never persisted), per [Metadata](/design/metadata/#local-and-server-metadata-equivalence).
 
-Wire-format compatibility with the upload protocol is exercised by [Upload Protocol](/design/import/upload-protocol/) smoke tests; this doc's responsibility is the byte-level correctness of the AEAD itself.
+Wire-format compatibility with the upload protocol is exercised by [Upload Protocol](/design/transfer/upload/) smoke tests; this doc's responsibility is the byte-level correctness of the AEAD itself.

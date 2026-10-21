@@ -2,8 +2,8 @@
 //!
 //! # What it is for
 //!
-//! [Download & Sync — Discovering What
-//! Changed](../../../capsule-docs/src/content/docs/design/import/download-sync.md) makes the
+//! [Sync — Cursor Authenticity and
+//! Anti-Rewind](../../../capsule-docs/src/content/docs/design/sync.md) makes the
 //! cursor opaque to clients and authenticated by the server on every call, "so a client cannot
 //! forge or mutate a cursor **and a cursor lifted from another context is rejected at the
 //! boundary**". The MAC is the *authenticity* layer only; the anti-rewind layer is the client's

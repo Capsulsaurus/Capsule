@@ -52,13 +52,13 @@ This doc covers sync between devices that are **already provisioned** — both a
 
 ## Determining the Delta
 
-Before building an artifact, the two devices must agree on what is missing. Peering reuses the [sync cursor](/design/import/download-sync/#discovering-what-changed) model rather than inventing a diff: each side offers its set of held [ciphertext content addresses](/design/cryptography/primitives/) and its cursor, and the delta is the complement. "What changed" is already defined by the sync feed — peering borrows that definition wholesale.
+Before building an artifact, the two devices must agree on what is missing. Peering reuses the [sync cursor](/design/sync/#discovering-what-changed) model rather than inventing a diff: each side offers its set of held [ciphertext content addresses](/design/cryptography/primitives/) and its cursor, and the delta is the complement. "What changed" is already defined by the sync feed — peering borrows that definition wholesale.
 
 ## What Moves Over the Wire
 
 The transfer payload is a [backup artifact](/design/backup-recovery/#backup-artifact) scoped to the delta — backup artifacts are explicitly *"constructed from a list of assets, albums, and so on,"* so a delta-scoped one needs no special construction path.
 
-Its contents honor the receiver's existing per-library [Synchronization Scope](/design/import/download-sync/#synchronization-scope) setting — there is no peering-specific knob:
+Its contents honor the receiver's existing per-library [Synchronization Scope](/design/sync/#synchronization-scope) setting — there is no peering-specific knob:
 
 - **Always included:** the encrypted metadata blobs and the AMK versions needed to decrypt the transferred assets. Without these the receiver cannot interpret anything.
 - **Per scope:** original and derivative blobs are included only up to the receiver's configured tier (*metadata only* / *+ thumbnails* / *+ original*). Tiers above the setting are fetched lazily later, just as with server download.
@@ -69,19 +69,19 @@ Because every blob is content-addressed, dedup is free: the receiver skips any b
 
 Peering is **pull-only**, mirroring [Federation](/design/federation/#pull-only-federation): the device that is behind initiates the pull and applies the result only after it verifies. A peer that has new content may send a lightweight **hint** — "new content exists" — over a separate low-trust channel to prompt a pull sooner; that hint never feeds the validation pipeline directly and carries no authority. It is the same [advisory-hint shape](/design/notifications/#vocabulary) federation uses, and is never surfaced to the user as an alert.
 
-The artifact is fetched with HTTP `GET` and `Range` requests, which makes a transfer **resumable** across the flaky-by-nature LAN and **idempotent** — content-addressing turns a re-fetch of an already-held blob into a no-op. This is the same resumability the [upload](/design/import/upload-protocol/) and [download](/design/import/download-sync/#resumption-and-verification) paths rely on.
+The artifact is fetched with HTTP `GET` and `Range` requests, which makes a transfer **resumable** across the flaky-by-nature LAN and **idempotent** — content-addressing turns a re-fetch of an already-held blob into a no-op. This is the same resumability the [upload](/design/transfer/upload/) and [download](/design/transfer/download/#resumption-and-verification) paths rely on.
 
 ## Applying Received Data
 
 A received artifact is ingested through the **backup restore path** — peering adds no separate deserialization. Restore already re-verifies every blob's [ciphertext content hash](/design/cryptography/primitives/), checks [STREAM tags](/design/cryptography/encryption/#stream-construction) on decrypt, and runs each asset manifest through [`verify_asset`](/design/cryptography/keys/#write-authorization).
 
-Additionally, every received manifest's `prior_provenance_hash` is checked against the receiver's local `latest_provenance_hash` for that asset (see [Import — Stale-Revival Detection](/design/import/download-sync/#stale-revival-detection)). A peering pull cannot resurrect an asset the local device has tombstoned at a later provenance step — even if the artifact was honestly produced from an older state of the sending device. The stale entry is **quarantined and surfaced** as "peer sent stale state."
+Additionally, every received manifest's `prior_provenance_hash` is checked against the receiver's local `latest_provenance_hash` for that asset (see [Import — Stale-Revival Detection](/design/sync/#stale-revival-detection)). A peering pull cannot resurrect an asset the local device has tombstoned at a later provenance step — even if the artifact was honestly produced from an older state of the sending device. The stale entry is **quarantined and surfaced** as "peer sent stale state."
 
 Failures follow Federation's [soft-fail semantics](/design/federation/#soft-fail-semantics): an asset that fails verification is **quarantined and surfaced** in the [provenance/audit trail](/design/cryptography/provenance/#provenance-of-library-modifications), never silently dropped and never silently accepted — so a bug can be told apart from an attack after the fact.
 
 ## Reconciliation with the Server
 
-Peering does not fork a device's state away from the server. A peering-received asset arrives with its signed manifest intact, so when the server later sees the same asset — uploaded by whichever device the [upload policy](/design/import/download-sync/#synchronization-scope) assigns — it resolves through the existing [deduplication and merge](/design/import/upload-protocol/#deduplication-and-merge) path on the [content hash](/design/cryptography/primitives/). A device never re-uploads a blob the server already holds, and the two devices remain convergent with the server's view.
+Peering does not fork a device's state away from the server. A peering-received asset arrives with its signed manifest intact, so when the server later sees the same asset — uploaded by whichever device the [upload policy](/design/sync/#synchronization-scope) assigns — it resolves through the existing [deduplication and merge](/design/transfer/upload/#deduplication-and-merge) path on the [content hash](/design/cryptography/primitives/). A device never re-uploads a blob the server already holds, and the two devices remain convergent with the server's view.
 
 ## Versioning
 

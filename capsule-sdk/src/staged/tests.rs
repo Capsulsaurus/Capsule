@@ -1,5 +1,5 @@
 //! Staged upload scheduler tests (slice `S-B4`). Each staged Validation bullet in
-//! the download-sync doc gets a deterministic test: ladder order (by observed
+//! the transfer upload doc gets a deterministic test: ladder order (by observed
 //! session sequence), the `awaiting-original` derivation, the release gate (the
 //! core [`ReleaseGate`] refuses while T2 is not durable), resume-from-server-truth
 //! (re-derive the queue from the feed after a "kill"), and the staged × streaming

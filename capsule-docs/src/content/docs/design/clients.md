@@ -67,7 +67,7 @@ This section owns the web client's **scope** — read-only, server-owned, versio
 
 ## Platform Limitations
 
-Given the quantity of distinct native clients (each with its own platform-specific portion), certain features are limited to certain platforms — notably [auto sync](/design/import/download-sync/#auto-syncing) on platforms where the necessary APIs are not available.
+Given the quantity of distinct native clients (each with its own platform-specific portion), certain features are limited to certain platforms — notably [auto sync](/design/sync/#auto-syncing) on platforms where the necessary APIs are not available.
 
 **Status note.** Background upload and OS-scheduled auto-sync (the iOS `BGTaskScheduler` family, and the equivalent elsewhere) are post-v1 (decision 2026-07-12); v1 sync and upload are foreground-initiated. Server-driven wake is a separate question with its own answer — see [Notifications — Tier 1](/design/notifications/#tier-1--wake), which is also post-v1 and rules out APNs and FCM permanently.
 
@@ -80,7 +80,7 @@ Clients are not trusted to enforce their own correctness — but they **are** re
 - **Run [`verify_asset`](/design/cryptography/keys/#write-authorization)** on every received asset manifest. Quarantine on failure; never silent-drop, never silent-accept. This is *the* chokepoint every client must route through — it is implemented once in `capsule-core::crypto` and called by every receiving path (sync, federation, peering, backup-restore).
 - **Refuse forward-version writes.** Reject any incoming `sidecar_schema`, `crypto_suite_id`, or `protocol_version` above the client's max known. Reading is allowed only in read-only mode if explicitly opted into.
 - **Enforce the protocol handshake.** Send `X-Capsule-Protocol` on every request; honor `426 Upgrade Required` by stopping the request, never by silently downgrading.
-- **Check the provenance chain.** Maintain a local `latest_provenance_hash` per asset; refuse to apply a manifest whose `prior_provenance_hash` is behind it. See [Import — Stale-Revival Detection](/design/import/download-sync/#stale-revival-detection).
+- **Check the provenance chain.** Maintain a local `latest_provenance_hash` per asset; refuse to apply a manifest whose `prior_provenance_hash` is behind it. See [Import — Stale-Revival Detection](/design/sync/#stale-revival-detection).
 - **Reject unknown closed-enum values.** *Every* closed enum rejects unknown values as structural errors, never "future to ignore" — the blanket per-`protocol_version` rule is owned by [Threat Model — Schema Rules](/design/threat-model/schema-rules/#schema-evolution-and-field-grammar), and each value set by its owner doc (among them `action`, `content_type`, `gps.source`, `key_mode`, `DerivativeManifest.role`/`format`, `StackMembership.stack_type`/`role`). This list is illustrative; the rule is total.
 - **Preserve unknown CBOR keys within a known schema** (Postel's Law) but never act on them.
 - **Decode remote-origin asset bytes only in the [Sandboxed Decoder](#sandboxed-decoder).**

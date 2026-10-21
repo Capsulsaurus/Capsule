@@ -50,8 +50,8 @@ The owner docs are:
 | Import pipeline (scan, plan, execute)                                 | [Import — Pipeline](/design/import/pipeline/)                       |
 | Connection classes + retry policy classes + adverse-network posture   | [Network Resilience](/design/networking/)                           |
 | Offline-first requirement contract (local-gallery FRs/NFRs)           | [Local Gallery](/design/local-gallery/)                             |
-| Upload protocol (wire, sessions, finalization)                        | [Import — Upload Protocol](/design/import/upload-protocol/)         |
-| Download, sync feed, tiered fetch, auto-sync                          | [Import — Download & Sync](/design/import/download-sync/)           |
+| Upload protocol (wire, sessions, finalization)                        | [Import — Upload Protocol](/design/transfer/upload/)         |
+| Download, sync feed, tiered fetch, auto-sync                          | [Import — Download & Sync](/design/transfer/download/)           |
 | Federation trust model, capability tokens, soft-fail                  | [Federation](/design/federation/)                                   |
 | LAN discovery + peer channel + delta transfer                         | [Peering](/design/peering/)                                         |
 | Album protocol version pinning + upgrade ceremony                     | [Versioning](/design/versioning/)                                   |
@@ -71,7 +71,7 @@ The owner docs are:
 | Code module → design doc mapping + bounded E2E test surface           | [Module Map](/design/module-map/)                                   |
 | API surface ↔ transport map + cross-transport negotiation/rejection mapping | [API Surfaces](/design/api-surfaces/)                          |
 | Developer-reference generation contract + reference IA                | [Developer Documentation](/design/developer-docs/)                 |
-| Storage durability verdict + verify-before-destroy rule               | [Import — Storage Verification](/design/import/storage-verification/) |
+| Storage durability verdict + verify-before-destroy rule               | [Import — Storage Verification](/design/transfer/durability/) |
 | Canonical dependency + tooling pins (non-crypto libraries per platform) | [Dependencies](/design/dependencies/)                             |
 | Tethered camera import (PTP/IP source adapter)                        | [Import — Camera Import](/design/import/camera-import/)             |
 

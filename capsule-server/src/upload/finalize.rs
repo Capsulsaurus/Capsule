@@ -2,8 +2,8 @@
 //!
 //! # The order is the contract
 //!
-//! [Upload Protocol — Finalization and
-//! Integrity](../../../capsule-docs/src/content/docs/design/import/upload-protocol.md) fixes
+//! [Transfer — Upload: Finalization and
+//! Integrity](../../../capsule-docs/src/content/docs/design/transfer/upload.md) fixes
 //! five steps, and this module is those five steps in that order:
 //!
 //! 1. **Claim.** [`claim_finalize`](crate::store::UploadSessionStore::claim_finalize) is a

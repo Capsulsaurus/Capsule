@@ -587,7 +587,7 @@ fn uuid_from_bytes(field: &str, bytes: &[u8]) -> Result<Uuid, FfiError> {
 }
 
 /// The ladder tier's stable lowercase name (`index` / `preview` / `original`) — the same three
-/// rungs the download-sync tier ladder names, so an app's progress UI can key on one vocabulary
+/// rungs the transfer download tier ladder names, so an app's progress UI can key on one vocabulary
 /// in both directions.
 fn tier_name(tier: capsule_core::import::UploadTier) -> String {
     use capsule_core::import::UploadTier;

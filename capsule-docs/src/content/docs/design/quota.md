@@ -4,7 +4,7 @@ description: Storage quota accounting, thresholds, and enforcement points
 status: draft
 ---
 
-Storage quota in Capsule is accounted to `upload_user_id` (the authenticated uploader), which is distinct from `owner_id` (the asset's owner). This separation lets a user upload on behalf of a different owner (with verified permission) while keeping storage cost attributed correctly. The accounting model is enforced at the [server filesystem](/design/filesystem/server/#ownership-partitioning-and-quota) and at [upload session creation](/design/import/upload-protocol/#quota-and-permissions); this doc owns the threshold model and what happens when limits are hit.
+Storage quota in Capsule is accounted to `upload_user_id` (the authenticated uploader), which is distinct from `owner_id` (the asset's owner). This separation lets a user upload on behalf of a different owner (with verified permission) while keeping storage cost attributed correctly. The accounting model is enforced at the [server filesystem](/design/filesystem/server/#ownership-partitioning-and-quota) and at [upload session creation](/design/transfer/upload/#quota-and-permissions); this doc owns the threshold model and what happens when limits are hit.
 
 Implementation will live in the planned `capsule-server::quota` module. Accounting reads from the Postgres asset index (size sums per `upload_user_id`); enforcement runs at session creation, before any chunks are accepted.
 
@@ -18,7 +18,7 @@ quota_used(user) = SUM(ciphertext_size) for all blobs where upload_user_id = use
 
 Notable:
 
-- **Content-addressed dedup is global.** A blob shared between two uploaders counts against *only the first uploader* — the second is a merge (see [Upload Protocol — Deduplication and Merge](/design/import/upload-protocol/#deduplication-and-merge)). This is what stops a malicious user from racking up another user's quota by re-uploading their public assets.
+- **Content-addressed dedup is global.** A blob shared between two uploaders counts against *only the first uploader* — the second is a merge (see [Upload Protocol — Deduplication and Merge](/design/transfer/upload/#deduplication-and-merge)). This is what stops a malicious user from racking up another user's quota by re-uploading their public assets.
 - **Derivatives count.** Thumbnails and previews are real storage, attributed to whichever device generated them.
 - **Provenance blobs count.** Each per-asset `.provenance.cbor` (server-side encrypted blob) is small but accumulates.
 - **Federated-received blobs count against the receiver.** When a user's home server caches a blob pulled from a [federated](/design/federation/) peer on that user's behalf, the cached bytes count against the **receiving** user's quota, deduped by content hash so a blob the server already holds is never counted twice. A per-`(receiving_user, source_peer)` caching budget (deployment-configurable; default 25% of the receiver's hard quota per source peer) bounds how much one user can pull from any single peer, so a user receiving from many peers cannot push the home server's storage past their own quota. This is the storage-side counterpart of [Federation's per-peer compartmentalization](/design/federation/#per-peer-compartmentalization) and is the resolution of the federated-receive DoS.
@@ -43,10 +43,10 @@ Defaults for `soft_limit`, `hard_limit`, and `grace_window` are deployment-confi
 
 Where the quota check actually runs:
 
-- **At [`POST /v1/upload`](/design/import/upload-protocol/#endpoints) session creation.** The server computes `quota_used(upload_user_id) + declared_size` and rejects with `403 Quota Exceeded` (or similar structural code) if it crosses the hard limit. This is the *only* hard enforcement point — once a session is open, the declared size is the cap, and the session is allowed to complete.
+- **At [`POST /v1/upload`](/design/transfer/upload/#endpoints) session creation.** The server computes `quota_used(upload_user_id) + declared_size` and rejects with `403 Quota Exceeded` (or similar structural code) if it crosses the hard limit. This is the *only* hard enforcement point — once a session is open, the declared size is the cap, and the session is allowed to complete.
 - **At session cancellation.** When a session is cancelled or expires, the reserved-but-uncommitted bytes are released; the next quota check sees the new (lower) usage.
-- **At [finalization](/design/import/upload-protocol/#finalization-and-integrity).** Cumulative size is bounded by the declared size at chunk acceptance; no separate quota check at finalization is needed because the declared size was already approved at session creation.
-- **[Staged uploads](/design/import/download-sync/#upload-tiering-staged-uploads) need no special case.** Each tier's session is charged at its own creation — the same single enforcement point, just later in time for the original's session.
+- **At [finalization](/design/transfer/upload/#finalization-and-integrity).** Cumulative size is bounded by the declared size at chunk acceptance; no separate quota check at finalization is needed because the declared size was already approved at session creation.
+- **[Staged uploads](/design/transfer/upload/#upload-tiering-staged-uploads) need no special case.** Each tier's session is charged at its own creation — the same single enforcement point, just later in time for the original's session.
 - **At metadata-update writes.** A metadata-update creates a new encrypted metadata blob; the size delta is checked against quota. Tiny but non-zero.
 
 ## Scope Decisions

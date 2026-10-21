@@ -5,7 +5,7 @@ status: draft
 ---
 
 Capsule has always had notifications; it has never had a delivery contract. The
-[two-week staleness prompt](/design/import/download-sync/#notifications) says "the user is notified"
+[two-week staleness prompt](/design/sync/#notifications) says "the user is notified"
 and stops there — no API, no permission model, no answer to *how*. Meanwhile "notification" already
 names two unrelated things in these docs: the user-visible warning above, and the low-trust wire
 signal a [federated peer](/design/federation/#pull-only-federation) or a
@@ -69,7 +69,7 @@ string, never text. They are listed with the class below and settled by the trig
 
 | Class | Trigger owner | Parameters | Pre-armable |
 | --- | --- | --- | --- |
-| `sync_stale` | [Download & Sync — Notifications](/design/import/download-sync/#notifications) | `count`, `days_behind` | **Yes** |
+| `sync_stale` | [Download & Sync — Notifications](/design/sync/#notifications) | `count`, `days_behind` | **Yes** |
 | `recovery_check_due` | [Backup — Schedule and Triggers](/design/backup-recovery/#schedule-and-triggers) | `snooze_budget` (`available` / `spent`), `recovery` (`check` / `rewrap`) | **Yes** |
 | `quota_soft` / `quota_grace_expiring` | [Quota — Thresholds and States](/design/quota/#thresholds-and-states) | `grace` (`counting` / `expired`), on the second only | No |
 | `quarantine_pending` | [Threat Model — Quarantine Surfaces](/design/threat-model/scenarios/#quarantine-surfaces) | `count` | No |
@@ -81,7 +81,7 @@ Unknown classes are rejected as structural errors, like every other closed enum
 ### The Pre-Arm Rule
 
 The staleness alert as originally written could not fire. It is the compensating control for
-[background execution](/design/import/download-sync/#background-execution) granting nothing — but if
+[background execution](/design/sync/#background-execution) granting nothing — but if
 it is evaluated *during* a background window, then the very condition it exists to report (the OS
 scheduled nothing for weeks) is the condition that prevents it firing. The alert and its trigger were
 the same starved process.

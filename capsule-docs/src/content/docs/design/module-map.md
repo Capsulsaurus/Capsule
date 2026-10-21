@@ -41,7 +41,7 @@ status until rewritten against their owning contracts.
 | `backup` | [Backup and Recovery](/design/backup-recovery/) | Unit and smoke |
 | `lifecycle` | [Organization](/design/organization/) and [Provenance](/design/cryptography/provenance/) | Unit and smoke; signed write path |
 | `library::{init,open,rebuild,scrub,cache,lock,paths,receipts,auth_gate}` | [Client Filesystem](/design/filesystem/client/) and [Maintenance](/design/filesystem/maintenance/) | Unit and smoke |
-| `library::{space,storage_verify}` | [Import Pipeline](/design/import/pipeline/) and [Storage Verification](/design/import/storage-verification/) | Unit boundary and release-gate tests |
+| `library::{space,storage_verify}` | [Import Pipeline](/design/import/pipeline/) and [Storage Verification](/design/transfer/durability/) | Unit boundary and release-gate tests |
 | `import::{scan,scanner,planner,group,special,scope,default_album,importers,streaming,upload,executor,progress}` | [Import Pipeline](/design/import/pipeline/) | Unit; the executor's media half waits on `capsule-core::media` |
 | `drop`, `sharing` | [Web Upload](/design/web-upload/) and [Share Links](/design/share-links/) | Unit and KAT; sealing round trips cross-language against `capsule-wasm` |
 | `culling` | [Organization — Culling](/design/organization/) | Unit; filtered views and reject sweep |
@@ -65,11 +65,11 @@ the modules below carry the behavior behind it.
 | Module | Contract owner | Required validation |
 | --- | --- | --- |
 | `auth`, `enrollment`, `directory` | [Authentication](/design/authentication/) and [Device Enrollment](/design/device-enrollment/) | Unit plus Postgres/Valkey adapter parity |
-| `upload` | [Upload Protocol](/design/import/upload-protocol/) | State-machine property tests, adapter parity, smoke and E2E |
+| `upload` | [Upload Protocol](/design/transfer/upload/) | State-machine property tests, adapter parity, smoke and E2E |
 | `blob`, `serve` | [Server Filesystem](/design/filesystem/server/) | [Sharded-layout](/design/filesystem/server/#blob-store-layout) round-trip and full-store enumeration, range, corruption, crash, quarantine tests |
-| `verify`, `attestation` | [Storage Verification](/design/import/storage-verification/) | Receipt chain continuity, nonce echo, verdict-over-the-same-read tests |
+| `verify`, `attestation` | [Storage Verification](/design/transfer/durability/) | Receipt chain continuity, nonce echo, verdict-over-the-same-read tests |
 | `gc`, `scrub` | [Filesystem — Maintenance](/design/filesystem/maintenance/) | Refcount mark-and-sweep, retention purge, read-only integrity scrub |
-| `sync` | [Download and Sync](/design/import/download-sync/) | Cursor, monotonicity, pagination and range-resume tests |
+| `sync` | [Download and Sync](/design/transfer/download/) | Cursor, monotonicity, pagination and range-resume tests |
 | `album` | [Authorization](/design/authorization/) and [Versioning](/design/versioning/) | Lifecycle-write authorization, chain advance, upgrade ceremony |
 | `share` | [Share Links](/design/share-links/) | Capability and expiry tests |
 | `drop`, `escrow` | [Web Upload](/design/web-upload/) and [Backup and Recovery](/design/backup-recovery/) | Drop-session validation, adoption, escrow store/replace |
