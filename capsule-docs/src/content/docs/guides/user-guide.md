@@ -29,11 +29,14 @@ you import.
   metadata, and generates thumbnails. `--provider takeout` imports a Google Takeout archive
   with its sidecar metadata ([migration guide](/guides/google-photos-migration/)).
 - `capsule push` uploads the library. Uploads resume where they stopped; re-running `push` is
-  always safe.
+  always safe. After each asset, `push` asks the server to confirm it durably holds every blob
+  and keeps the server's signed custody receipts in the library. An asset that fails is
+  reported and the run carries on; the command exits non-zero if any asset failed, and
+  `--json` lists each asset's outcome.
 - `capsule import --push` does both in one step.
 - **Keep your originals until custody is verified.** An asset is safely stored only once the
-  server reports it durable and has issued a signed custody receipt. Do not use
-  `import --move` or delete source files before then. *(planned: `push` will verify custody and
+  server reports it durable and has issued a signed custody receipt — what `push` reports as
+  verified. Do not use `import --move` or delete source files before then. *(planned:
   `import --move` will only release a source after it.)*
 - `capsule restore` *(planned)* downloads originals and checks them byte for byte against what
   was signed at import.
