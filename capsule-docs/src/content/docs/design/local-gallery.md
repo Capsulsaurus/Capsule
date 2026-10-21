@@ -25,6 +25,7 @@ Every native app is a **complete local gallery first** and a synced client secon
 - **NFR1** — Gallery read paths attempt zero network I/O; tested with a socket-refusing harness.
 - **NFR2** — An airplane-mode, never-enrolled import → browse → search → organize → export run is part of the [E2E surface](/design/module-map/#e2e-test-surface).
 - **NFR3** — Offline cold start takes the online code path; no blocking connectivity probe.
+- **NFR4** — Every input responds within one frame and local edits apply within 100 ms, per [Clients — Responsiveness](/design/clients/#responsiveness).
 
 ## Validation
 

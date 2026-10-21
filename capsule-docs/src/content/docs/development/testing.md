@@ -35,7 +35,7 @@ reducer exist partly so that the test suites drive exactly what a user drives.
 | `capsule-server` | Every adapter passes its port's conformance suite; finalize never leaves an index row without a blob; GC never collects a referenced blob; a killed server loses nothing acknowledged; migrations apply forward | conformance suites, fault injection, testcontainers (PostgreSQL, Valkey), `SIGKILL` binary tests |
 | Compatibility | Older records and wire messages stay readable and are never rewritten by a component that does not understand them ([Versioning](/design/versioning/)) | golden fixtures per protocol version; after the first release, the previous release's CLI against the new server and the reverse |
 | `capsule-cli` | Every subcommand's `--json` output and exit code are a stable contract | `assert_cmd` and `insta` snapshots, spawning the real binary |
-| TUI | Each action produces the right state; each state renders the right frame | reducer unit tests, ratatui `TestBackend` frames snapshotted with `insta`, a scripted key-event driver |
+| TUI | Each action produces the right state; each state renders the right frame; no input waits more than one frame (16 ms) for a response | reducer unit tests, ratatui `TestBackend` frames snapshotted with `insta`, a scripted key-event driver |
 | `capsule-e2e` | The real CLI and the real server converge after any interruption: every asset durable exactly once, restored byte-equal | real binaries over a fixture corpus, `SIGKILL` at seeded points during import, push and restore; a nightly soak over many seeds |
 
 ## The dogfood gate

@@ -35,11 +35,38 @@ A difference between two clients MUST be justified by a difference in the platfo
 
 Shared skeleton (which screens exist and how they nest), per-platform material: HIG, stock controls and SF Symbols on Apple; Material on Android. Neither emulates the other, and there is no third house style. Bespoke components only for concepts without a platform analogue (seal state, verification verdicts, quarantine, the degrade ladder, the smart-album predicate builder, ceremony progress), drawn in each platform's idiom. Strings are keyed by surface, not client; see [i18n](/design/i18n/).
 
+### Responsiveness
+
+Capsule MUST feel at least as fast as the platform's own photo app (Photos on Apple, the
+Gallery or Google Photos app on Android) on the same device, at every library size.
+
+- **Instant on press.** Every input produces a visible response in the next frame (≤16 ms at
+  60 Hz): a pressed state, the destination screen, or an in-place change. Nothing waits for a
+  spinner first.
+- **Local first.** Navigation and edits (labels, albums, favourites, time and location fixes)
+  apply optimistically from local state within 100 ms; the network write follows and never
+  blocks the screen. A rejected write rolls back visibly with the reason.
+- **No press waits on the network.** Work that needs the server (restore, share, sync) starts
+  immediately with visible progress and can be left; the UI never blocks on a request.
+- **Main thread is for drawing.** Decoding, hashing, crypto and database queries run off the UI
+  thread; a frame never waits on them.
+- **Measured, not asserted.** A parity benchmark runs each tier-1 client and the platform photo
+  app on a 100,000-asset library on the same device: cold start to first thumbnail, scroll frame
+  rate and dropped frames, full-resolution open time. A regression past the recorded baseline
+  fails CI.
+
+The TUI follows the same frame bound for input response
+([Testing](/development/testing/)).
+
 ### Web Client
 
 **Permanently read-only**: authenticated viewing, public [share links](/design/share-links/), and guest [upload links](/design/web-upload/). It never writes library state or enrolls a device — a browser holds neither hardware-bound device keys nor write-tier keys ([key hierarchy](/design/cryptography/keys/)). Guest drops are keyless and sealed to the recipient, so need no write authority; that path is owned by [Web Upload](/design/web-upload/).
 
 It is **server-owned** (shipped and updated with the server) and **version-locked** to it — the one client allowed to assume its peer's exact version. Native clients MUST stay lenient across server versions, which is why [protocol evolution is additive](/design/versioning/).
+
+A **progressive web app is out of scope, permanently**: no web app manifest, service worker,
+offline mode or install prompt. Offline and installed use is what the native clients are for;
+a cached web client would also outlive its server's version, which breaks the version lock.
 
 ## Platform Limitations
 
