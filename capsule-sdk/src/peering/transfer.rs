@@ -83,6 +83,8 @@ pub fn build_delta_artifact(
         // A peer pull moves assets between devices that already hold the album and its
         // authority; `ingest` folds in no keys, so the delta carries no authority ledger.
         authorities: BTreeMap::new(),
+        // Label records travel the sealed-document path between members, not the asset delta.
+        docs: Vec::new(),
         exporter_device: export_input.exporter_device,
         source_library_version: export_input.source_library_version.clone(),
         export_timestamp: export_input.export_timestamp.clone(),

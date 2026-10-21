@@ -1,21 +1,23 @@
 //! The portable backup artifact round-trip — the only `lifecycle` file that reaches
 //! [`crate::backup`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
 use jiff::Timestamp;
 use uuid::Uuid;
 
+use super::album::{read_doc_file, stack_doc_path};
 use super::{AssetState, LifecycleError, Result, Workspace, now_rfc3339};
 use crate::backup::{
-    self, BackupArtifact, BackupAsset, BackupInput, RestoreMode, VerifyOutcome as RecoveryVerdict,
+    self, BackupArtifact, BackupAsset, BackupDoc, BackupDocKind, BackupInput, RestoreMode,
+    VerifyOutcome as RecoveryVerdict,
 };
 use crate::crypto::authority::Authority;
 use crate::crypto::hash::{self, Hash32};
-use crate::crypto::keys::HybridVerifyingKey;
 use crate::crypto::keys::albumstore::{AlbumStore, AmkRow, PersistedAuthority};
+use crate::crypto::keys::{Amk, HybridVerifyingKey};
 #[cfg(any(test, feature = "test-support"))]
 use crate::crypto::primitives::Argon2Params;
 use crate::crypto::primitives::{CRYPTO_SUITE_ID, DeviceTier};
@@ -23,9 +25,11 @@ use crate::crypto::provenance::{AssetManifest, ProvenanceChain};
 use crate::crypto::pwkdf::WrappedSecret;
 use crate::metadata::crdt::Lww;
 use crate::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1};
+use crate::sidecar::{ALBUM_DOC_SCHEMA_V1, AlbumDocV1, STACK_DOC_SCHEMA_V1, StackDocV1};
 
-/// Display name given to an album that arrives only as escrowed keys in a backup artifact — the
-/// artifact carries AMKs, not album metadata, so there is no original name to restore.
+/// Display name given to an album that arrives only as escrowed keys in a backup artifact. An
+/// artifact that carries the album's label record replaces it with the album's own name once
+/// that record is merged; only an artifact exported before the records existed leaves it.
 const RECOVERED_ALBUM_NAME: &str = "Recovered album";
 
 impl Workspace {
@@ -179,14 +183,113 @@ impl Workspace {
             }
         }
 
+        let docs = self.backup_docs(&mut amks)?;
+
         Ok(BackupInput {
             assets,
             amks,
             authorities,
+            docs,
             exporter_device: self.account.device.device_id,
             source_library_version: "1".into(),
             export_timestamp: now_rfc3339(),
         })
+    }
+
+    /// The label records that ride the artifact: every exported album's record (so a restore
+    /// recovers the album's name and labels) and the record of every stack an exported asset
+    /// belongs to that has one. Each is sealed under its album's current-epoch AMK, which is
+    /// added to `amks` so the ledger escrows it.
+    fn backup_docs(&self, amks: &mut BTreeMap<(Uuid, u32), [u8; 32]>) -> Result<Vec<BackupDoc>> {
+        let mut docs = Vec::new();
+        let current_amk = |album_id: Uuid, amks: &mut BTreeMap<(Uuid, u32), [u8; 32]>| {
+            let album = self.album(&album_id)?;
+            let amk = album.amks[&album.current_epoch];
+            amks.insert((album_id, album.current_epoch), amk);
+            Ok::<_, LifecycleError>((album.current_epoch, Amk::from_bytes(amk)))
+        };
+
+        let albums: BTreeSet<Uuid> = amks.keys().map(|(album, _)| *album).collect();
+        for album_id in albums {
+            let (epoch, amk) = current_amk(album_id, amks)?;
+            docs.push(BackupDoc {
+                kind: BackupDocKind::Album,
+                doc_id: album_id,
+                album_id,
+                amk_version: epoch,
+                sealed: self.album_doc(&album_id)?.seal(&amk)?,
+            });
+        }
+
+        let stacks: BTreeSet<Uuid> = self
+            .assets
+            .values()
+            .filter_map(|a| a.sidecar.stack_membership.get().cloned().flatten())
+            .map(|m| m.stack_id)
+            .collect();
+        for stack_id in stacks {
+            if read_doc_file(&stack_doc_path(&self.root, &stack_id))?.is_none() {
+                continue;
+            }
+            let doc = self.stack_doc(stack_id)?;
+            let (epoch, amk) = current_amk(doc.album_id, amks)?;
+            docs.push(BackupDoc {
+                kind: BackupDocKind::Stack,
+                doc_id: stack_id,
+                album_id: doc.album_id,
+                amk_version: epoch,
+                sealed: doc.seal(&amk)?,
+            });
+        }
+        tracing::debug!(docs = docs.len(), "backup: label records sealed for export");
+        Ok(docs)
+    }
+
+    /// Open every label record a verified artifact carries with the AMK its ledger escrows, and
+    /// merge it into this library: an album's record brings back its name (and labels), so an
+    /// album new to this library is named as it was rather than `Recovered album`.
+    ///
+    /// The records are trusted on the artifact's own authentication — the manifest HMAC and the
+    /// exporter's signature cover each entry — and are re-signed here under this account's
+    /// identity key as they are merged. A record that does not open is skipped with a warning:
+    /// the assets and keys it travelled with are already restored, and its absence costs a
+    /// name, never data.
+    #[tracing::instrument(skip_all)]
+    fn absorb_recovered_docs(&mut self, artifact: &BackupArtifact) -> Result<()> {
+        let mut merged = 0usize;
+        for doc in artifact.docs() {
+            let Some(amk) = artifact.amk(&doc.album_id, doc.amk_version) else {
+                continue;
+            };
+            let amk = Amk::from_bytes(amk);
+            let outcome = match doc.kind {
+                BackupDocKind::Album => {
+                    AlbumDocV1::open_sealed(&doc.sealed, &amk, &doc.doc_id, ALBUM_DOC_SCHEMA_V1)
+                        .map_err(LifecycleError::from)
+                        .and_then(|remote| self.merge_album_doc(&remote))
+                }
+                BackupDocKind::Stack => {
+                    StackDocV1::open_sealed(&doc.sealed, &amk, &doc.doc_id, STACK_DOC_SCHEMA_V1)
+                        .map_err(LifecycleError::from)
+                        .and_then(|remote| self.merge_stack_doc(&remote))
+                }
+            };
+            match outcome {
+                Ok(()) => merged += 1,
+                Err(e) => tracing::warn!(
+                    kind = ?doc.kind,
+                    doc_id = %doc.doc_id,
+                    error = %e,
+                    "backup: label record not restored"
+                ),
+            }
+        }
+        tracing::info!(
+            merged,
+            carried = artifact.docs().len(),
+            "backup: label records restored"
+        );
+        Ok(())
     }
 
     /// Write an assembled artifact to `out`.
@@ -223,6 +326,9 @@ impl Workspace {
         // an unknown album lands read-only with the public authority the artifact carried, since
         // a backup escrows content keys and the admin-signed ledger but no signing capability.
         self.absorb_recovered_amks(&artifact)?;
+        // Then the albums' and stacks' label records, which need those keys to open: this is
+        // what names a recovered album.
+        self.absorb_recovered_docs(&artifact)?;
 
         let mut added = 0;
         for restored in &report.applied {
@@ -464,6 +570,73 @@ mod tests {
         let mut b = Workspace::open(lib_b.path(), b"device b", FAST_PARAMS).unwrap();
         b.directory = a.directory.clone();
         assert_eq!(b.verify(&asset).unwrap(), VerifyOutcome::Accept);
+    }
+
+    /// #667: a restored device recovers the album's name, labels and its stacks' labels from
+    /// the label records the artifact carries — not `Recovered album` — and keeps them across a
+    /// reopen.
+    #[test]
+    fn a_restored_device_recovers_album_names_and_labels() {
+        use crate::domain::StackType;
+        use crate::sidecar::sidecar_v1::{StackMembership, StackRole};
+
+        let (lib_a, lib_b, src) = (
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+        );
+        let mut a = fast_workspace(lib_a.path());
+        let album = a.create_album("Trip").unwrap();
+        a.rename_album(album, "Lisbon 2026").unwrap();
+        a.add_album_label(album, "family").unwrap();
+        let photo = src.path().join("photo.jpg");
+        fs::write(&photo, b"\xFF\xD8\xFF a named album's photo").unwrap();
+        let asset = a.import_asset(album, &photo).unwrap();
+        let stack = Uuid::now_v7();
+        a.set_stack_membership(
+            &asset,
+            Some(StackMembership {
+                stack_id: stack,
+                stack_type: StackType::Burst,
+                role: StackRole::Primary,
+                member_index: Some(0),
+            }),
+        )
+        .unwrap();
+        a.add_stack_label(stack, "keeper").unwrap();
+        let archive = src.path().join("backup.tar");
+        a.export_backup_with_params(&archive, b"pw", FAST_PARAMS)
+            .unwrap();
+
+        let mut b = Workspace::create_from_master(
+            lib_b.path(),
+            b"device b",
+            FAST_PARAMS,
+            MasterKey::from_bytes(*a.account.master.as_bytes()),
+            a.user_id(),
+            &a.sealed_identity(),
+        )
+        .unwrap();
+        b.import_backup(&archive, b"pw", &a.exporter_verifying_key())
+            .unwrap();
+
+        assert_eq!(b.albums(), vec![(album, "Lisbon 2026".to_string())]);
+        assert_eq!(
+            b.album_labels(&album).unwrap(),
+            BTreeSet::from(["family".to_string()])
+        );
+        assert_eq!(
+            b.stack_labels(stack).unwrap(),
+            BTreeSet::from(["keeper".to_string()])
+        );
+
+        drop(b);
+        let b = Workspace::open(lib_b.path(), b"device b", FAST_PARAMS).unwrap();
+        assert_eq!(b.albums(), vec![(album, "Lisbon 2026".to_string())]);
+        assert_eq!(
+            b.album_doc(&album).unwrap().current_name(),
+            Some("Lisbon 2026")
+        );
     }
 
     /// #551: an adopted web-upload drop (`key_mode = wrapped`) survives a backup round trip —

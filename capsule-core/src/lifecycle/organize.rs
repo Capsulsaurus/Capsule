@@ -1,14 +1,22 @@
 //! Organization: trash (soft-delete / restore), the culling workflow (flag → filter → sweep),
 //! and stack membership + derived group cull state.
 
+use std::collections::BTreeSet;
+
 use jiff::Timestamp;
 use uuid::Uuid;
 
-use super::{AssetState, Result, Workspace, asset_is_deleted, now_rfc3339};
+use super::album::{read_doc_file, remove_label, stack_doc_path, write_doc_file};
+use super::{AssetState, LifecycleError, Result, Workspace, asset_is_deleted, now_rfc3339};
+use crate::crypto::keys::Amk;
 use crate::crypto::provenance::Action;
 use crate::culling::GroupCullState;
 use crate::metadata::crdt::Lww;
 use crate::sidecar::sidecar_v1::{CullFlag, StackMembership};
+use crate::sidecar::{
+    Region, RegionShape, Regions, STACK_DOC_SCHEMA_V1, StackDocV1, live_region, merge_regions,
+    normalize_label, write_region,
+};
 
 impl Workspace {
     /// Soft-delete: emit a `delete` record carrying a signed retention window.
@@ -146,11 +154,47 @@ impl Workspace {
         asset_id: &Uuid,
         membership: Option<StackMembership>,
     ) -> Result<()> {
+        if let Some(m) = &membership {
+            self.check_stack_album(asset_id, m.stack_id)?;
+        }
         let device = self.account.device.device_id;
         let ts = now_rfc3339();
         self.append_lifecycle(asset_id, Action::MetadataUpdate, None, move |s, _| {
             s.stack_membership.set(membership, ts, device);
         })
+    }
+
+    /// Refuse a join that would split `stack_id` across container albums: every member of a
+    /// stack belongs to one album (owner: [Organization — Labels]), the one whose AMK seals
+    /// the stack's label record.
+    ///
+    /// [Organization — Labels]: https://docs/design/organization/#labels
+    fn check_stack_album(&self, asset_id: &Uuid, stack_id: Uuid) -> Result<()> {
+        let asset_album = self
+            .assets
+            .get(asset_id)
+            .ok_or_else(|| LifecycleError::NotFound(format!("asset {asset_id}")))?
+            .album_id;
+        let stack_album = match self.stack_album(stack_id) {
+            Ok(album) => album,
+            Err(LifecycleError::NotFound(_)) => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        if stack_album == asset_album {
+            Ok(())
+        } else {
+            tracing::warn!(
+                stack_id = %stack_id,
+                stack_album = %stack_album,
+                asset_album = %asset_album,
+                "stack join refused: it would split the stack across albums"
+            );
+            Err(LifecycleError::StackAlbumMismatch {
+                stack_id,
+                stack_album,
+                asset_album,
+            })
+        }
     }
 
     /// The non-trashed members of `stack_id` (assets whose current sidecar stack membership
@@ -213,6 +257,263 @@ impl Workspace {
         }
         tracing::info!(swept = targets.len(), "cull: reject sweep complete");
         Ok(targets)
+    }
+
+    // ── Image regions (owner: Organization — Labels) ────────────────────────────────────
+    //
+    // Regions live in the asset's signed sidecar, so every edit is a `metadata-update` like a
+    // tag or a caption. Deleting a region is final: the region map merges as a semilattice in
+    // which a tombstone absorbs every live write (`sidecar::region`).
+
+    /// The live region `region_id` of `asset_id`, or [`LifecycleError::NotFound`].
+    fn live_region_of(&self, asset_id: &Uuid, region_id: &Uuid) -> Result<Region> {
+        self.assets
+            .get(asset_id)
+            .and_then(|a| a.sidecar.regions.get(region_id))
+            .and_then(live_region)
+            .cloned()
+            .ok_or_else(|| LifecycleError::NotFound(format!("region {region_id} of {asset_id}")))
+    }
+
+    /// Mark a region of `asset_id` and return its new id (UUIDv7). The shape is in coordinates
+    /// normalized to `[0, 1]` over the original's display orientation.
+    #[tracing::instrument(skip(self), fields(asset_id = %asset_id))]
+    pub fn add_region(&mut self, asset_id: &Uuid, shape: RegionShape) -> Result<Uuid> {
+        shape.validate()?;
+        let region_id = Uuid::now_v7();
+        let device = self.account.device.device_id;
+        let ts = now_rfc3339();
+        self.append_lifecycle(asset_id, Action::MetadataUpdate, None, move |s, _| {
+            let register = s.regions.entry(region_id).or_default();
+            write_region(register, Some(Region::new(shape)), ts, device);
+        })?;
+        tracing::info!(region_id = %region_id, "region added");
+        Ok(region_id)
+    }
+
+    /// Delete a region. Final: a concurrent or later edit of it on another device does not
+    /// bring it back once the two merge.
+    #[tracing::instrument(skip(self), fields(asset_id = %asset_id, region_id = %region_id))]
+    pub fn delete_region(&mut self, asset_id: &Uuid, region_id: &Uuid) -> Result<()> {
+        self.live_region_of(asset_id, region_id)?;
+        let region_id = *region_id;
+        let device = self.account.device.device_id;
+        let ts = now_rfc3339();
+        self.append_lifecycle(asset_id, Action::MetadataUpdate, None, move |s, _| {
+            let register = s.regions.entry(region_id).or_default();
+            write_region(register, None, ts, device);
+        })
+    }
+
+    /// Add a label to a region.
+    #[tracing::instrument(skip(self, label), fields(asset_id = %asset_id, region_id = %region_id))]
+    pub fn add_region_label(
+        &mut self,
+        asset_id: &Uuid,
+        region_id: &Uuid,
+        label: &str,
+    ) -> Result<()> {
+        let label = normalize_label(label)?;
+        let mut region = self.live_region_of(asset_id, region_id)?;
+        let region_id = *region_id;
+        let device = self.account.device.device_id;
+        let ts = now_rfc3339();
+        self.append_lifecycle(asset_id, Action::MetadataUpdate, None, move |s, add_id| {
+            region.labels.add(label, add_id);
+            let register = s.regions.entry(region_id).or_default();
+            write_region(register, Some(region), ts, device);
+        })
+    }
+
+    /// Remove a label from a region: every add of it this device has observed. Returns how
+    /// many adds were removed; 0 writes nothing.
+    #[tracing::instrument(skip(self, label), fields(asset_id = %asset_id, region_id = %region_id))]
+    pub fn remove_region_label(
+        &mut self,
+        asset_id: &Uuid,
+        region_id: &Uuid,
+        label: &str,
+    ) -> Result<usize> {
+        let label = normalize_label(label)?;
+        let mut region = self.live_region_of(asset_id, region_id)?;
+        let removed = remove_label(&mut region.labels, &label);
+        if removed == 0 {
+            return Ok(0);
+        }
+        let region_id = *region_id;
+        let device = self.account.device.device_id;
+        let ts = now_rfc3339();
+        self.append_lifecycle(asset_id, Action::MetadataUpdate, None, move |s, _| {
+            let register = s.regions.entry(region_id).or_default();
+            write_region(register, Some(region), ts, device);
+        })?;
+        Ok(removed)
+    }
+
+    /// The asset's live regions, by id. Empty for an unknown asset.
+    pub fn regions(&self, asset_id: &Uuid) -> Vec<(Uuid, Region)> {
+        self.assets
+            .get(asset_id)
+            .map(|a| {
+                a.sidecar
+                    .regions
+                    .iter()
+                    .filter_map(|(id, reg)| live_region(reg).map(|r| (*id, r.clone())))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Merge a peer device's region map into the asset's (the CRDT sync-apply path) and emit a
+    /// `metadata-update`.
+    pub fn apply_remote_regions(&mut self, asset_id: &Uuid, remote: &Regions) -> Result<()> {
+        let remote = remote.clone();
+        self.append_lifecycle(asset_id, Action::MetadataUpdate, None, move |s, _| {
+            merge_regions(&mut s.regions, &remote);
+        })
+    }
+
+    // ── Stack labels: the stack's `StackDocV1` (owner: Organization — Labels) ─────────────
+
+    /// The container album of `stack_id`: the album its members share, else the one its label
+    /// record names.
+    fn stack_album(&self, stack_id: Uuid) -> Result<Uuid> {
+        if let Some(album) = self
+            .stack_members(stack_id)
+            .first()
+            .and_then(|id| self.assets.get(id))
+            .map(|a| a.album_id)
+        {
+            return Ok(album);
+        }
+        match read_doc_file(&stack_doc_path(&self.root, &stack_id))? {
+            Some(bytes) => {
+                Ok(StackDocV1::from_canonical_slice(&bytes, STACK_DOC_SCHEMA_V1)?.album_id)
+            }
+            None => Err(LifecycleError::NotFound(format!("stack {stack_id}"))),
+        }
+    }
+
+    /// `stack_id`'s label record: the persisted one, or an empty one in its container album.
+    ///
+    /// # Errors
+    ///
+    /// [`LifecycleError::NotFound`] for a stack with no members and no record;
+    /// [`LifecycleError::UnverifiedDocument`] when the persisted record does not verify.
+    pub fn stack_doc(&self, stack_id: Uuid) -> Result<StackDocV1> {
+        if let Some(bytes) = read_doc_file(&stack_doc_path(&self.root, &stack_id))? {
+            let doc = StackDocV1::from_canonical_slice(&bytes, STACK_DOC_SCHEMA_V1)?;
+            if doc.stack_id != stack_id || !doc.verify(&self.account.user_ik.verifying_key()) {
+                return Err(LifecycleError::UnverifiedDocument(stack_id));
+            }
+            return Ok(doc);
+        }
+        Ok(StackDocV1::new(stack_id, self.stack_album(stack_id)?))
+    }
+
+    fn store_stack_doc(&self, mut doc: StackDocV1) -> Result<()> {
+        if !doc.verify(&self.account.user_ik.verifying_key()) {
+            doc.sign(&self.account.user_ik);
+        }
+        write_doc_file(
+            &stack_doc_path(&self.root, &doc.stack_id),
+            &doc.to_canonical_vec(),
+        )?;
+        tracing::debug!(
+            stack_id = %doc.stack_id,
+            labels = doc.labels.value().len(),
+            "stack label record persisted"
+        );
+        Ok(())
+    }
+
+    /// Add a label to a stack.
+    #[tracing::instrument(skip(self, label), fields(stack_id = %stack_id))]
+    pub fn add_stack_label(&mut self, stack_id: Uuid, label: &str) -> Result<()> {
+        let label = normalize_label(label)?;
+        let mut doc = self.stack_doc(stack_id)?;
+        let add_id = self.issue_add_id_for(&doc.labels);
+        doc.labels.add(label, add_id);
+        doc.signature = None;
+        self.store_stack_doc(doc)
+    }
+
+    /// Remove a label from a stack: every add of it this device has observed. Returns how many
+    /// adds were removed; 0 writes nothing.
+    #[tracing::instrument(skip(self, label), fields(stack_id = %stack_id))]
+    pub fn remove_stack_label(&mut self, stack_id: Uuid, label: &str) -> Result<usize> {
+        let label = normalize_label(label)?;
+        let mut doc = self.stack_doc(stack_id)?;
+        let removed = remove_label(&mut doc.labels, &label);
+        if removed > 0 {
+            doc.signature = None;
+            self.store_stack_doc(doc)?;
+        }
+        Ok(removed)
+    }
+
+    /// The stack's current labels.
+    pub fn stack_labels(&self, stack_id: Uuid) -> Result<BTreeSet<String>> {
+        Ok(self.stack_doc(stack_id)?.labels.value())
+    }
+
+    /// Seal the stack's record under its container album's current-epoch AMK.
+    pub fn seal_stack_doc(&self, stack_id: Uuid) -> Result<Vec<u8>> {
+        let doc = self.stack_doc(stack_id)?;
+        let album = self.album(&doc.album_id)?;
+        let amk = Amk::from_bytes(album.amks[&album.current_epoch]);
+        Ok(doc.seal(&amk)?)
+    }
+
+    /// Open a sealed stack record another device of this account sent, verify it under this
+    /// account's identity key, and merge it into the local one. Every epoch of `album_id` this
+    /// workspace holds is tried, newest first.
+    ///
+    /// # Errors
+    ///
+    /// [`LifecycleError::Document`] when no held AMK opens it, it does not decode, or it places
+    /// the stack in another album than the local record; [`LifecycleError::UnverifiedDocument`]
+    /// when it does not verify. Nothing is merged.
+    #[tracing::instrument(skip(self, wire), fields(stack_id = %stack_id, album_id = %album_id))]
+    pub fn apply_remote_stack_doc(
+        &mut self,
+        stack_id: Uuid,
+        album_id: Uuid,
+        wire: &[u8],
+    ) -> Result<()> {
+        let album = self.album(&album_id)?;
+        let mut result = Err(LifecycleError::NotFound(format!("album {album_id} keys")));
+        for amk in album.amks.values().rev() {
+            result = StackDocV1::open_sealed(
+                wire,
+                &Amk::from_bytes(*amk),
+                &stack_id,
+                STACK_DOC_SCHEMA_V1,
+            )
+            .map_err(LifecycleError::from);
+            if result.is_ok() {
+                break;
+            }
+        }
+        let remote = result?;
+        if remote.album_id != album_id || !remote.verify(&self.account.user_ik.verifying_key()) {
+            tracing::warn!("remote stack label record does not verify; refused");
+            return Err(LifecycleError::UnverifiedDocument(stack_id));
+        }
+        self.merge_stack_doc(&remote)
+    }
+
+    /// Merge an already-trusted stack record into the local one and persist the result.
+    pub(super) fn merge_stack_doc(&mut self, remote: &StackDocV1) -> Result<()> {
+        let mut doc = match self.stack_doc(remote.stack_id) {
+            Ok(doc) => doc,
+            Err(LifecycleError::NotFound(_)) => StackDocV1::new(remote.stack_id, remote.album_id),
+            Err(e) => return Err(e),
+        };
+        doc.merge(remote)?;
+        self.store_stack_doc(doc)?;
+        tracing::info!(stack_id = %remote.stack_id, "stack label record merged");
+        Ok(())
     }
 }
 
@@ -603,5 +904,205 @@ mod tests {
         // A single pick surfaces the whole group as a keeper → AnyPick.
         ws.set_cull(&a, CullFlag::Pick).unwrap();
         assert_eq!(ws.group_cull_state(stack_id), Some(GroupCullState::AnyPick));
+    }
+
+    // ── Labels on regions and stacks (#667) ─────────────────────────────────────────────
+
+    fn face() -> RegionShape {
+        RegionShape::Rect {
+            x: 0.2,
+            y: 0.1,
+            w: 0.3,
+            h: 0.4,
+        }
+    }
+
+    fn burst(stack_id: Uuid) -> Option<StackMembership> {
+        use crate::domain::StackType;
+        use crate::sidecar::sidecar_v1::StackRole;
+        Some(StackMembership {
+            stack_id,
+            stack_type: StackType::Burst,
+            role: StackRole::Member,
+            member_index: None,
+        })
+    }
+
+    /// Regions are signed `metadata-update`s: add, label, unlabel and delete each land in the
+    /// sidecar, the asset still verifies, and the regions survive a reopen.
+    #[test]
+    fn region_labels_round_trip_through_signed_metadata_updates() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Faces").unwrap();
+        let [asset, _, _] = import_trio(&mut ws, album, src.path());
+
+        let region = ws.add_region(&asset, face()).unwrap();
+        ws.add_region_label(&asset, &region, "Alice").unwrap();
+        ws.add_region_label(&asset, &region, "Bob").unwrap();
+        assert_eq!(ws.remove_region_label(&asset, &region, "Bob").unwrap(), 1);
+        assert_eq!(ws.verify(&asset).unwrap(), VerifyOutcome::Accept);
+
+        let other = ws.add_region(&asset, face()).unwrap();
+        ws.delete_region(&asset, &other).unwrap();
+        assert!(matches!(
+            ws.add_region_label(&asset, &other, "late"),
+            Err(LifecycleError::NotFound(_))
+        ));
+        assert!(matches!(
+            ws.add_region(
+                &asset,
+                RegionShape::Circle {
+                    cx: 2.0,
+                    cy: 0.5,
+                    r: 0.1
+                }
+            ),
+            Err(LifecycleError::InvalidRegion(_))
+        ));
+
+        drop(ws);
+        let ws = Workspace::open(lib.path(), b"passphrase", super::super::FAST_PARAMS).unwrap();
+        let regions = ws.regions(&asset);
+        assert_eq!(regions.len(), 1, "the deleted region is not live");
+        assert_eq!(regions[0].0, region);
+        assert_eq!(
+            regions[0].1.labels.value().into_iter().collect::<Vec<_>>(),
+            vec!["Alice".to_string()]
+        );
+        assert_eq!(ws.verify(&asset).unwrap(), VerifyOutcome::Accept);
+    }
+
+    /// The open-time counter reseed counts region labels, so a reopened device never re-issues
+    /// an `add_id` a region already holds.
+    #[test]
+    fn counter_reseed_counts_region_labels() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Faces").unwrap();
+        let [asset, _, _] = import_trio(&mut ws, album, src.path());
+        let region = ws.add_region(&asset, face()).unwrap();
+        ws.add_region_label(&asset, &region, "Alice").unwrap();
+        let issued = ws
+            .asset(&asset)
+            .unwrap()
+            .sidecar
+            .max_add_counter_for(&ws.device_id());
+
+        drop(ws);
+        let ws = Workspace::open(lib.path(), b"passphrase", super::super::FAST_PARAMS).unwrap();
+        assert!(ws.counter.peek() > issued.unwrap());
+    }
+
+    /// Two replicas of one asset's regions converge whichever merges first: concurrent labels
+    /// on one region both survive, and a delete on one side wins over a label on the other.
+    #[test]
+    fn remote_regions_converge_in_either_order() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Faces").unwrap();
+        let [asset, _, _] = import_trio(&mut ws, album, src.path());
+        let kept = ws.add_region(&asset, face()).unwrap();
+        let doomed = ws.add_region(&asset, face()).unwrap();
+        let base = ws.asset(&asset).unwrap().sidecar.regions.clone();
+
+        // Replica A: label both regions. Replica B (built from the same base): label `kept`
+        // differently and delete `doomed`.
+        ws.add_region_label(&asset, &kept, "Alice").unwrap();
+        ws.add_region_label(&asset, &doomed, "Carol").unwrap();
+        let replica_a = ws.asset(&asset).unwrap().sidecar.regions.clone();
+
+        let mut replica_b = base;
+        let device_b = Uuid::from_u128(0xB);
+        let mut kept_b = live_region(&replica_b[&kept]).unwrap().clone();
+        kept_b.labels.add(
+            "Bob".into(),
+            crate::metadata::crdt::AddId {
+                device: device_b,
+                counter: 0,
+            },
+        );
+        write_region(
+            replica_b.get_mut(&kept).unwrap(),
+            Some(kept_b),
+            now_rfc3339(),
+            device_b,
+        );
+        write_region(
+            replica_b.get_mut(&doomed).unwrap(),
+            None,
+            "2000-01-01T00:00:00Z".into(),
+            device_b,
+        );
+
+        let mut ab = replica_a.clone();
+        merge_regions(&mut ab, &replica_b);
+        let mut ba = replica_b.clone();
+        merge_regions(&mut ba, &replica_a);
+        assert_eq!(ab, ba);
+
+        ws.apply_remote_regions(&asset, &replica_b).unwrap();
+        let live = ws.regions(&asset);
+        assert_eq!(
+            live.len(),
+            1,
+            "the delete wins even though it is stamped earlier"
+        );
+        assert_eq!(
+            live[0].1.labels.value(),
+            std::collections::BTreeSet::from(["Alice".to_string(), "Bob".to_string()])
+        );
+        assert_eq!(ws.verify(&asset).unwrap(), VerifyOutcome::Accept);
+    }
+
+    /// A stack's labels live in its signed record, sealed under its album's AMK; every member
+    /// shares that album, so a join from another album is refused.
+    #[test]
+    fn stack_labels_live_in_the_record_and_members_share_one_album() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Burst").unwrap();
+        let elsewhere = ws.create_album("Elsewhere").unwrap();
+        let [a, b, _] = import_trio(&mut ws, album, src.path());
+        let p = src.path().join("outsider.jpg");
+        fs::write(&p, b"\xFF\xD8\xFF an asset in another album").unwrap();
+        let outsider = ws.import_asset(elsewhere, &p).unwrap();
+
+        let stack = Uuid::now_v7();
+        assert!(matches!(
+            ws.add_stack_label(stack, "empty"),
+            Err(LifecycleError::NotFound(_))
+        ));
+        ws.set_stack_membership(&a, burst(stack)).unwrap();
+        ws.set_stack_membership(&b, burst(stack)).unwrap();
+        assert!(matches!(
+            ws.set_stack_membership(&outsider, burst(stack)),
+            Err(LifecycleError::StackAlbumMismatch { stack_album, asset_album, .. })
+                if stack_album == album && asset_album == elsewhere
+        ));
+
+        ws.add_stack_label(stack, "hdr").unwrap();
+        ws.add_stack_label(stack, "best").unwrap();
+        assert_eq!(ws.remove_stack_label(stack, "best").unwrap(), 1);
+        assert_eq!(
+            ws.stack_labels(stack).unwrap(),
+            std::collections::BTreeSet::from(["hdr".to_string()])
+        );
+        let doc = ws.stack_doc(stack).unwrap();
+        assert_eq!(doc.album_id, album);
+        assert!(doc.verify(&ws.user_ik_public()));
+
+        // The sealed record opens under the album's key and merges idempotently.
+        let wire = ws.seal_stack_doc(stack).unwrap();
+        ws.apply_remote_stack_doc(stack, album, &wire).unwrap();
+        assert_eq!(
+            ws.stack_labels(stack).unwrap(),
+            std::collections::BTreeSet::from(["hdr".to_string()])
+        );
+        assert!(ws.apply_remote_stack_doc(stack, elsewhere, &wire).is_err());
     }
 }
