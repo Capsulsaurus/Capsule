@@ -969,6 +969,46 @@ async fn ffi_fetch_blob_to_path_keeps_a_refused_refresh_an_auth_error() {
     assert!(!path.exists());
 }
 
+/// A refresh that fails for a temporary reason (here a `503`) is a transient
+/// `FfiError::Fetch`, not a sign-in prompt, and leaves no file behind.
+#[tokio::test]
+async fn ffi_fetch_blob_to_path_keeps_a_failing_refresh_transient() {
+    let server =
+        MockServer::start(
+            |req: &MockRequest| match (req.method.as_str(), req.path.as_str()) {
+                ("POST", "/auth/login") => MockResponse::new(200, "OK").json_body(token_json()),
+                ("POST", "/auth/refresh") => MockResponse::api_error(
+                    503,
+                    "Service Unavailable",
+                    "error.server.unavailable",
+                    "maintenance",
+                ),
+                ("GET", path) if path.starts_with("/v1/blob/") => {
+                    MockResponse::new(401, "Unauthorized")
+                }
+                _ => MockResponse::new(404, "Not Found").json_body(r#"{"error":"no route"}"#),
+            },
+        )
+        .await;
+    let session = login(&server).await;
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("original.bin");
+
+    match session
+        .fetch_blob_to_path(
+            format!("{}/v1", server.base_url()),
+            capsule_core::crypto::hash::hash_bytes(b"blob").to_hex(),
+            4,
+            path.to_string_lossy().into_owned(),
+        )
+        .await
+    {
+        Err(FfiError::Fetch { message, .. }) => assert!(message.contains("transient")),
+        other => panic!("expected a transient fetch error, got {other:?}"),
+    }
+    assert!(!path.exists());
+}
+
 /// Escrow put/get and device-directory publish, through the session handle. The
 /// workspace mints both documents (the master key and the identity key never cross the
 /// boundary); the session only ever carries opaque bytes.

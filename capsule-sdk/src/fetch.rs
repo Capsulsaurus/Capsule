@@ -1173,22 +1173,7 @@ impl BlobSource for HttpBlobSource {
             .await
         {
             Ok(response) => response,
-            Err(crate::auth::AuthError::Transport(error)) => {
-                tracing::debug!(%error, "blob range request transport error");
-                return RangeOutcome::Status {
-                    status: 0,
-                    code: None,
-                };
-            }
-            // Anything else is the session failing to authorize the request (a refused
-            // refresh, no tokens): it keeps its auth identity rather than reading as a drop.
-            Err(error) => {
-                tracing::debug!(%error, "blob range request could not be authorized");
-                return RangeOutcome::Unauthenticated {
-                    code: error.error_code().map(str::to_string),
-                    message: error.to_string(),
-                };
-            }
+            Err(error) => return session_failure(&error),
         };
 
         let status = response.status().as_u16();
@@ -1210,6 +1195,42 @@ impl BlobSource for HttpBlobSource {
                 .and_then(|value| value.to_str().ok())
                 .map(str::to_string);
             RangeOutcome::Status { status, code }
+        }
+    }
+}
+
+/// How a session that could not send a range request reads to the fetch loop.
+///
+/// Only a session that is over — refresh refused or revoked, no tokens, or a `401`-class
+/// answer from the refresh — is [`RangeOutcome::Unauthenticated`], which tells the app to sign
+/// in again. Everything else (a transport drop, an unreachable or rate-limited refresh, a
+/// refresh `5xx`, a malformed refresh body) is temporary: it reads as a transient status, so a
+/// blip never costs the user their session.
+fn session_failure(error: &crate::auth::AuthError) -> RangeOutcome {
+    use crate::auth::AuthError;
+    match error {
+        AuthError::SessionExpired
+        | AuthError::NotAuthenticated
+        | AuthError::Unexpected { status: 401, .. } => {
+            tracing::debug!(%error, "blob range request could not be authorized");
+            RangeOutcome::Unauthenticated {
+                code: error.error_code().map(str::to_string),
+                message: error.to_string(),
+            }
+        }
+        AuthError::Unexpected { status, code, .. } if (500..600).contains(status) => {
+            tracing::debug!(%error, "blob range request: the session's refresh failed server-side");
+            RangeOutcome::Status {
+                status: *status,
+                code: code.clone(),
+            }
+        }
+        _ => {
+            tracing::debug!(%error, "blob range request: transient session or transport failure");
+            RangeOutcome::Status {
+                status: 0,
+                code: None,
+            }
         }
     }
 }
