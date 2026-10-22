@@ -42,11 +42,9 @@ A `401` carries a `WWW-Authenticate` challenge, per RFC 9110.
 ## Negotiation
 
 The protocol-negotiation header contract — what a client sends, what a server answers with —
-is [API Surfaces](/design/api-surfaces/#negotiation-across-transports). It is a design
-commitment, and it is not yet implemented on every route (#621); what the generated pages show,
-under each operation's parameters and response headers, is what the wire carries at this
-commit. Read those for the truth about an endpoint today, and the design document for where
-it is going.
+is [API Surfaces](/design/api-surfaces/#negotiation-across-transports). The generated pages
+show, under each operation's parameters and response headers, what each endpoint declares; the
+response window also rides a request no operation answers.
 
 `GET /v1/version` is the unauthenticated reachability probe a client performs before the
 handshake. It has no failure variant by construction. What a server publishes about itself —

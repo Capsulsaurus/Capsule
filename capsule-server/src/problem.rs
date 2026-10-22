@@ -18,6 +18,7 @@
 //! | `413` | the body-size interceptor (`S-C33`) |
 //! | `400` | a `Path` or `Headers` extractor that could not decode |
 //! | `415`, `422` | the `Json` extractor |
+//! | `404`, `405`, `501` | the router's own fallbacks, for a request no operation answers |
 //!
 //! Between them those are a large share of what a client actually sees, and each one reached a
 //! user as untranslatable English.
@@ -103,11 +104,15 @@ pub fn code_for(status: u16) -> &'static str {
         400 => error_codes::REQUEST_MALFORMED,
         401 => error_codes::REQUEST_UNAUTHENTICATED,
         403 => error_codes::REQUEST_FORBIDDEN,
+        // The router's own fallbacks, which this interceptor sees because it is the root
+        // router's: Kynos runs those around an unrouted request too.
+        404 => error_codes::REQUEST_NOT_FOUND,
         405 => error_codes::REQUEST_METHOD_NOT_ALLOWED,
         406 => error_codes::REQUEST_NOT_ACCEPTABLE,
         413 => error_codes::REQUEST_TOO_LARGE,
         415 => error_codes::REQUEST_UNSUPPORTED_MEDIA_TYPE,
         422 => error_codes::REQUEST_UNPROCESSABLE,
+        501 => error_codes::REQUEST_NOT_IMPLEMENTED,
         _ => UNMAPPED,
     }
 }
@@ -334,7 +339,7 @@ mod tests {
     /// mapping that quietly falls through to `UNMAPPED` for a status the surface renders is not.
     #[test]
     fn every_status_the_surface_renders_has_its_own_code() {
-        for status in [400_u16, 401, 403, 405, 406, 413, 415, 422] {
+        for status in [400_u16, 401, 403, 404, 405, 406, 413, 415, 422, 501] {
             assert_ne!(
                 code_for(status),
                 UNMAPPED,

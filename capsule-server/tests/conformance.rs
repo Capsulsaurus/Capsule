@@ -1267,6 +1267,22 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::NOT_MODIFIED);
+    // 412 and 416 come from the same `Delivery`: a precondition naming another representation,
+    // and a range that starts past the last byte.
+    client
+        .get(&format!("/v1/blob/{address}"))
+        .header("authorization", &bearer)
+        .header("if-match", "\"some-other-representation\"")
+        .send()
+        .await
+        .assert_status(StatusCode::PRECONDITION_FAILED);
+    client
+        .get(&format!("/v1/blob/{address}"))
+        .header("authorization", &bearer)
+        .header("range", "bytes=1000000000-")
+        .send()
+        .await
+        .assert_status(StatusCode::RANGE_NOT_SATISFIABLE);
 
     // 500: the index could not answer, which must never look like a missing blob.
     fixture.index.set_unavailable(true);
@@ -2929,6 +2945,19 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::NOT_MODIFIED);
+    // 412 from a precondition naming another representation, 416 from a range past the end.
+    client
+        .get(&format!("/s/{share_id}/blob/{share_address}"))
+        .header("if-match", "\"some-other-representation\"")
+        .send()
+        .await
+        .assert_status(StatusCode::PRECONDITION_FAILED);
+    client
+        .get(&format!("/s/{share_id}/blob/{share_address}"))
+        .header("range", "bytes=1000000000-")
+        .send()
+        .await
+        .assert_status(StatusCode::RANGE_NOT_SATISFIABLE);
 
     for path in [
         "/s/%FF".to_owned(),
@@ -3671,6 +3700,53 @@ async fn the_protocol_window_rides_every_response_on_the_wire() {
         walked += 1;
     }
     assert_eq!(walked, operations(&json).len());
+}
+
+/// A request no operation answers carries the window too (issue #621).
+///
+/// The census above walks the operations the document describes, so it never reaches the
+/// router's own fallbacks: an unrouted `404`, and the `405` for a path that exists under another
+/// method. `Negotiation` is the root router's interceptor, which Kynos runs around those as well,
+/// and `CodedProblems` beside it gives each its catalog code rather than the unmapped fallback.
+#[tokio::test]
+async fn an_unrouted_404_and_405_carry_the_protocol_window() {
+    use capsule_server::upload::policy::{
+        DEFAULT_MIN_CLIENT_BUILD, DEFAULT_PROTOCOL_MAX, DEFAULT_PROTOCOL_MIN,
+    };
+
+    let fixture = Fixture::working();
+    for (method, path, status, code) in [
+        (
+            kynos::http::Method::GET,
+            "/v1/no-such-route",
+            StatusCode::NOT_FOUND,
+            "error.request.not_found",
+        ),
+        (
+            // `/v1/version` is mounted for `GET` only, and `DELETE` is a method other
+            // operations answer, so this is a `405` rather than a `501`.
+            kynos::http::Method::DELETE,
+            "/v1/version",
+            StatusCode::METHOD_NOT_ALLOWED,
+            "error.request.method_not_allowed",
+        ),
+    ] {
+        let response = fixture.client.method(method.clone(), path).send().await;
+        response.assert_status(status);
+        for (name, expected) in [
+            ("x-capsule-protocol-min", DEFAULT_PROTOCOL_MIN),
+            ("x-capsule-protocol-max", DEFAULT_PROTOCOL_MAX),
+            ("x-capsule-min-client-build", DEFAULT_MIN_CLIENT_BUILD),
+        ] {
+            assert_eq!(
+                response.header(name),
+                Some(expected),
+                "{method} {path} answered {status} without {name}"
+            );
+        }
+        let body: serde_json::Value = response.json();
+        assert_eq!(body["code"], code, "{method} {path}: {body}");
+    }
 }
 
 /// One gated route per module, held to the handshake before anything else is read (issue #404).
