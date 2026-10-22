@@ -24,9 +24,10 @@
 //! one is written, and the old chain and metadata blob are replaced in the same atomic renames
 //! every signed write uses.
 //!
-//! What a re-seal cannot do is reach an epoch this device does not hold: when another device
-//! rotated the album and this one has not been handed the new key, the refusal is
-//! [`ResealRefusal::NoNewerEpoch`] and the asset stays local until the key arrives.
+//! What a re-seal cannot do is reach an epoch this device does not hold: when this device's
+//! current epoch is no newer than the asset's, the refusal is [`ResealRefusal::NoNewerEpoch`]
+//! and the asset stays local. That covers a refusal that had nothing to do with the epoch, and
+//! one where another device rotated the album and this one has not been handed the new key.
 
 use std::collections::HashMap;
 use std::fs;
@@ -77,11 +78,12 @@ pub enum ResealRefusal {
     #[error("its original's file key is wrapped, not derived from the album key")]
     WrappedFileKey,
     /// The album's current epoch on this device is not newer than the one the asset is sealed
-    /// under. Either nothing moved, or another device rotated the album and this one does not
-    /// hold the new key yet: there is no epoch to re-seal at until it does.
+    /// under, so there is no epoch to re-seal at. This does not say why the server refused the
+    /// create: the album's epoch may not have moved at all (a revoked device, withdrawn write
+    /// access), or another device rotated it and this one does not hold the new key yet.
     #[error(
         "it is sealed at album epoch {sealed} and this device's current epoch is {current}: \
-         this device holds no newer album key to re-seal it under"
+         there is no newer epoch to re-seal it at"
     )]
     NoNewerEpoch {
         /// The epoch the asset's create manifest names.

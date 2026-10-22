@@ -701,8 +701,9 @@ impl FfiWorkspace {
     ///
     /// A re-seal that cannot happen is reported as the push failure it is: an
     /// [`FfiError::Upload`] carrying the server's code, with a detail naming why the asset
-    /// cannot be re-sealed — most often that this device holds no newer album key than the one
-    /// the asset is sealed under, which only the key reaching this device can fix.
+    /// cannot be re-sealed. When this device holds no newer epoch than the asset's, the detail
+    /// says only that there is no newer epoch to re-seal at, because the server refuses a revoked
+    /// device or withdrawn write access the same way and no key need be missing.
     pub(super) fn reseal(&self, asset_id: &Uuid, refused: &UploadError) -> Result<(), FfiError> {
         self.with(|ws| match ws.reseal_create(asset_id) {
             Ok(outcome) => {

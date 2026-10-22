@@ -929,9 +929,11 @@ impl FfiSession {
     /// album's epoch moved past the one the asset was sealed under, the server refuses its
     /// create for good; if this device holds a newer epoch, the asset is re-sealed at it
     /// (`Workspace::reseal_create`) and pushed again, once. A second refusal fails the push.
-    /// When this device holds no newer epoch — another device rotated the album and its key has
-    /// not reached this one — the push fails with [`FfiError::Upload`] carrying the server's
-    /// code and a detail saying so; the asset stays local and pushes once the key arrives.
+    /// When this device holds no newer epoch the push fails with [`FfiError::Upload`] carrying
+    /// the server's code and a detail saying there is no newer epoch to re-seal at, and the
+    /// asset stays local. That detail names no missing key: the refusal may have had nothing to
+    /// do with the epoch (a revoked device, withdrawn write access), or another device rotated
+    /// the album and its key has not reached this one yet.
     pub async fn push_asset(
         &self,
         workspace: Arc<FfiWorkspace>,

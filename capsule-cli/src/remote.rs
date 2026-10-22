@@ -1084,8 +1084,8 @@ pub enum AssetPushStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AssetPushFailure {
     /// A stable name for where the asset stopped: `bundle`, `album`, `upload`, `create_refused`,
-    /// `epoch_key_missing`, `reseal`, `unknown_blob`, `verify_unavailable`, `not_durable`,
-    /// `receipt_missing`, `receipt_rejected`, `receipt_store` or `album_keys_not_escrowed`.
+    /// `reseal`, `unknown_blob`, `verify_unavailable`, `not_durable`, `receipt_missing`,
+    /// `receipt_rejected`, `receipt_store` or `album_keys_not_escrowed`.
     pub kind: &'static str,
     /// The server's stable `error.*` code, when it supplied one.
     pub code: Option<String>,
@@ -1150,8 +1150,10 @@ enum AssetError {
     #[error("the custody receipt could not be stored in the library: {0}")]
     ReceiptStore(#[from] capsule_core::library::ReceiptStoreError),
     /// The server refused the asset's create and the library could not re-seal it at the
-    /// album's current epoch — most often because this device holds no newer album key than
-    /// the one the asset is sealed under (issue #822).
+    /// album's current epoch (issue #822). When this device holds no newer epoch than the one
+    /// the asset is sealed under, nothing says the epoch was why the server refused it (a
+    /// revoked device or withdrawn write access is refused the same way), so that case keeps
+    /// the `upload` kind any other refusal has.
     #[error("the server refused this create ({refused}); {error}")]
     Reseal {
         /// The server's refusal.
@@ -1179,7 +1181,7 @@ impl AssetError {
                     LifecycleError::ResealRefused {
                         reason: ResealRefusal::NoNewerEpoch { .. },
                         ..
-                    } => "epoch_key_missing",
+                    } => "upload",
                     _ => "reseal",
                 };
                 let code = match refused {
@@ -2466,11 +2468,13 @@ mod tests {
         }
     }
 
-    /// **The device without the new key.** A refused create this device cannot re-seal because
-    /// it holds no newer album epoch is its own `kind`, carries the server's code, and says
-    /// what is missing — distinct from a re-seal that failed for any other reason.
+    /// **No newer epoch to re-seal at.** A refused create this device cannot re-seal because it
+    /// holds no newer album epoch keeps the `upload` kind any refusal has and the server's code.
+    /// Its detail must not claim a key is missing: the same refusal answers a revoked device,
+    /// withdrawn write access or a role conflict, where no key is missing at all. A re-seal that
+    /// failed for any other reason is `reseal`.
     #[test]
-    fn a_create_this_device_cannot_reseal_names_the_missing_key() {
+    fn a_create_with_no_newer_epoch_stays_an_upload_refusal() {
         let asset_id = Uuid::from_u128(7);
         let failure = AssetError::Reseal {
             refused: refused_create(),
@@ -2483,14 +2487,19 @@ mod tests {
             },
         }
         .failure();
-        assert_eq!(failure.kind, "epoch_key_missing");
+        assert_eq!(failure.kind, "upload");
         assert_eq!(
             failure.code.as_deref(),
             Some("error.upload.envelope_rejected")
         );
         assert!(
-            failure.message.contains("holds no newer album key"),
+            failure.message.contains("no newer epoch to re-seal it at"),
             "{}",
+            failure.message
+        );
+        assert!(
+            !failure.message.contains("key"),
+            "the detail must not claim a key is missing: {}",
             failure.message
         );
 

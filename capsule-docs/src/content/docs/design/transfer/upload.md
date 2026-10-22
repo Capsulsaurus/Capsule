@@ -43,7 +43,7 @@ The client recovers by **re-sealing** the create at the album's current epoch an
 - An epoch rotation is a confidentiality boundary, so everything sealed under the old epoch is sealed again under the new one: the original under a fresh `nonce_prefix`, the unchanged signed sidecar under a fresh metadata-blob nonce, and its derivatives regenerated as fresh chains. No prefix or nonce the asset has spent is drawn again, and no blob sealed under the old epoch stays reachable from the library.
 - The new genesis keeps the `file_id`, self-verifies before anything is written, and replaces the refused one. A second refusal fails the push.
 
-**Known gap: a device without the new key.** A device learns of a newer epoch only from its own album keystore. When another device rotated the album and the new album key has not reached this one, there is no epoch to re-seal at. The push fails with the server's code and a detail naming the missing key, and the asset stays local, its original untouched, until the key arrives.
+**Known gap: a device without the new key.** A device learns of a newer epoch only from its own album keystore. When another device rotated the album and the new album key has not reached this one, there is no epoch to re-seal at. The push fails as the upload refusal it is, with the server's code and a detail saying there is no newer epoch to re-seal at, and the asset stays local, its original untouched. The detail names no missing key: the server refuses a revoked device, withdrawn write access and a role conflict the same way, and a device holding no newer epoch cannot tell those apart from a rotation it has not been handed.
 
 ## Endpoints
 
