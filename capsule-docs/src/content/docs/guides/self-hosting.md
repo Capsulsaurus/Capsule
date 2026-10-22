@@ -48,18 +48,14 @@ invalidates outstanding sync cursors unless you set it explicitly. Federation is
 Name your reverse proxy so the per-source rate limits see the client rather than the proxy:
 `TRUSTED_PROXIES` takes a comma-separated list of addresses and CIDR networks (`10.0.0.0/8`), and
 `TRUSTED_PROXY_HOPS` trusts that many forwarding hops nearest the server, whatever their address.
-Unset, no `Forwarded` or `X-Forwarded-For` header is believed. That is safe, but every client
-behind the proxy then shares the proxy's budget.
+A network of `/0` is refused, because it would believe every sender. Unset, no forwarding header
+is believed. That is safe, but every client behind the proxy then shares the proxy's budget.
 
-Once you name a proxy, it must strip or overwrite any `Forwarded` header the client sent. The
-server reads `Forwarded` in preference to `X-Forwarded-For`, and it believes an element that a
-named proxy passed on. A client-sent `Forwarded` that reaches the server unchanged therefore lets
-the client choose its own rate-limit key, and fill the per-source table with keys it invents. nginx
-passes the header through by default. Drop it there, and send the address the proxy saw in
-`X-Forwarded-For`:
+The server reads `X-Forwarded-For` and nothing else. A `Forwarded` header is ignored whoever sends
+it, so a client cannot choose its own rate-limit key by sending one that your proxy passes on.
+Have your proxy append the address it saw to `X-Forwarded-For`, as nginx does with:
 
 ```nginx
-proxy_set_header Forwarded "";
 proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 ```
 

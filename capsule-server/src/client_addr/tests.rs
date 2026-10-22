@@ -1,7 +1,6 @@
 use std::net::SocketAddr;
 
-use kynos::http::body::Body;
-use kynos::http::{HeaderMap, HeaderValue, Request};
+use kynos::http::{HeaderMap, HeaderValue};
 
 use super::*;
 
@@ -24,11 +23,9 @@ fn forwarded_for(value: &str) -> HeaderMap {
 
 /// What the router would resolve for these headers, peer and policy, as a [`ClientAddr`].
 fn resolve(headers: &HeaderMap, peer: Option<SocketAddr>, trust: &ProxyTrust) -> ClientAddr {
+    // What dispatch resolves before any argument is built.
     let forwarded = Forwarded::resolve(headers, peer, &trust.policy());
-    let (mut parts, _body) = Request::new(Body::empty()).into_parts();
-    // What dispatch inserts before any argument is built.
-    let _ = parts.extensions.insert(forwarded);
-    ClientAddr::of(&parts)
+    ClientAddr::of(Some(&forwarded))
 }
 
 #[test]
@@ -89,8 +86,43 @@ fn no_socket_and_no_trusted_hop_is_the_unknown_source() {
 
 #[test]
 fn a_request_with_no_resolution_recorded_is_the_unknown_source() {
-    let (parts, _) = Request::new(Body::empty()).into_parts();
-    assert_eq!(ClientAddr::of(&parts), ClientAddr::new(None));
+    assert_eq!(ClientAddr::of(None), ClientAddr::new(None));
+}
+
+#[test]
+fn a_client_sent_forwarded_header_is_ignored_even_through_a_trusted_hop() {
+    // A proxy appends to `X-Forwarded-For` and passes `Forwarded` through from the client, so
+    // the latter is never read: believing it would let the client pick its own key.
+    let trust = ProxyTrust {
+        hops: 1,
+        networks: Vec::new(),
+    };
+    let mut headers = forwarded_for("198.51.100.7");
+    headers.insert("forwarded", HeaderValue::from_static("for=192.0.2.66"));
+    let client = resolve(&headers, peer("10.1.2.3"), &trust);
+    assert_eq!(client.address(), Some(ip("198.51.100.7")));
+
+    let mut only_forwarded = HeaderMap::new();
+    only_forwarded.insert("forwarded", HeaderValue::from_static("for=192.0.2.66"));
+    let client = resolve(&only_forwarded, peer("10.1.2.3"), &trust);
+    assert_eq!(client.address(), Some(ip("10.1.2.3")));
+}
+
+#[test]
+fn a_network_that_trusts_every_sender_is_refused() {
+    for entry in ["0.0.0.0/0", "::/0", "::ffff:0.0.0.0/96"] {
+        let error = ProxyTrust::parse_networks(entry).expect_err(entry);
+        assert!(error.contains(entry), "{entry}: {error}");
+    }
+}
+
+#[test]
+fn a_network_kynos_refuses_is_left_out_of_the_policy_rather_than_widened() {
+    let trust = ProxyTrust {
+        hops: 0,
+        networks: vec![(ip("0.0.0.0"), 0)],
+    };
+    assert!(trust.policy().trusts_nobody());
 }
 
 #[test]

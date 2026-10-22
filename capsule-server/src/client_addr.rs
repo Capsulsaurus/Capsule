@@ -192,14 +192,9 @@ impl ClientAddr {
         }
     }
 
-    /// Read the router's resolution back out of a request head.
-    fn of(parts: &Parts) -> Self {
-        Self(
-            parts
-                .extensions
-                .get::<Forwarded>()
-                .and_then(Forwarded::client),
-        )
+    /// The client the router's resolution names, or none where there was no resolution.
+    fn of(forwarded: Option<&Forwarded>) -> Self {
+        Self(forwarded.and_then(Forwarded::client))
     }
 }
 
@@ -216,8 +211,11 @@ fn canonical(address: IpAddr) -> IpAddr {
 impl<C: Sync> FromRequestParts<C> for ClientAddr {
     type Rejection = Infallible;
 
-    async fn from_request_parts(parts: &mut Parts, _context: &C) -> Result<Self, Self::Rejection> {
-        let client = Self::of(parts);
+    async fn from_request_parts(parts: &mut Parts, context: &C) -> Result<Self, Self::Rejection> {
+        // Kynos's own argument for the one resolution dispatch made before any interceptor ran;
+        // it keeps that resolution in a request extension of its own rather than a `Forwarded`.
+        let Ok(forwarded) = Forwarded::from_request_parts(parts, context).await;
+        let client = Self::of(Some(&forwarded));
         tracing::trace!(client = ?client.0, "resolved the client address");
         Ok(client)
     }
