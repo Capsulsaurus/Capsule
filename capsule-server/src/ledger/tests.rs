@@ -137,6 +137,7 @@ conformance_cases! {
     a_dropped_head_is_detected,
     a_torn_tail_is_reported_and_cut_by_the_next_append,
     a_zero_filled_tail_is_cut_by_the_next_append,
+    an_entry_from_a_newer_server_is_refused_not_cut,
     a_tail_cut_at_a_boundary_is_caught_by_an_anchor,
     an_unpublished_key_is_detected,
     a_damaged_ledger_refuses_appends,
@@ -299,6 +300,121 @@ fn an_oversized_or_non_canonical_frame_is_not_an_entry() {
             damage: None
         }
     );
+}
+
+/// The core a newer server would sign for an event kind this server has never heard of.
+#[derive(serde::Serialize)]
+struct CoreWithUnknownKind<'a> {
+    version: &'a str,
+    server_id: &'a str,
+    server_key_id: Hash32,
+    owner_id: &'a str,
+    seq: u64,
+    recorded_at: &'a str,
+    event: UnknownKind,
+}
+
+#[derive(serde::Serialize)]
+struct UnknownKind {
+    kind: &'static str,
+    peer: &'static str,
+}
+
+/// A frame holding a newer server's entry with an event kind this server cannot decode.
+fn unknown_kind_frame(owner: &OwnerId, signer: &LocalAttestationKey) -> Vec<u8> {
+    conformance::newer_frame(
+        &CoreWithUnknownKind {
+            version: LEDGER_VERSION,
+            server_id: signer.server_id(),
+            server_key_id: signer.key_id(),
+            owner_id: owner.as_str(),
+            seq: 1,
+            recorded_at: "1970-01-01T00:00:00Z",
+            event: UnknownKind {
+                kind: "replicated",
+                peer: "peer-1",
+            },
+        },
+        signer,
+    )
+}
+
+#[test]
+fn an_intact_frame_this_server_cannot_read_is_unrecognised_not_torn() {
+    let signer = key();
+    let owner = OwnerId::new("frame");
+    let valid = encode_frame(&sign_entry(
+        &owner,
+        None,
+        event(1),
+        Timestamp::UNIX_EPOCH,
+        &signer,
+    ));
+    let newer = unknown_kind_frame(&owner, &signer);
+
+    let decoded = decode_frames(&[valid.as_slice(), &newer].concat());
+    assert_eq!(
+        decoded.damage,
+        Some(ChainFault::Unrecognised { entries: 1 }),
+        "an unknown kind at the tail is a newer server's entry, not a torn write"
+    );
+    assert_eq!(decoded.entries.len(), 1);
+    assert_eq!(decoded.whole_len, valid.len());
+
+    assert_eq!(
+        decode_frames(&[valid.as_slice(), &newer, &[0; 64]].concat()).damage,
+        Some(ChainFault::Unrecognised { entries: 1 }),
+        "a torn write after a newer server's entry does not make it cuttable"
+    );
+    assert_eq!(
+        decode_frames(&[valid.as_slice(), &[0, 0, 0, 9, 1, 2], &newer].concat()).damage,
+        Some(ChainFault::Undecodable { entries: 1 }),
+        "garbage a newer server's entry follows is a hole, not a tail"
+    );
+
+    // The same frame cut short, or with a byte of its body destroyed, was never acknowledged.
+    let short = &newer[..newer.len() - 1];
+    assert_eq!(
+        decode_frames(&[valid.as_slice(), short].concat()).damage,
+        Some(ChainFault::TornTail { entries: 1 })
+    );
+    let mut trailing = newer.clone();
+    let len = u32::from_be_bytes([trailing[0], trailing[1], trailing[2], trailing[3]]) + 1;
+    trailing[..4].copy_from_slice(&len.to_be_bytes());
+    trailing.push(0);
+    assert_eq!(
+        decode_frames(&[valid.as_slice(), &trailing].concat()).damage,
+        Some(ChainFault::TornTail { entries: 1 }),
+        "a body with bytes after its one CBOR item is not an intact frame"
+    );
+}
+
+#[tokio::test]
+async fn an_unrecognised_frame_in_an_earlier_segment_keeps_its_fault() {
+    let disk = Disk::with_segment_bytes(1).await;
+    let signer = key();
+    let owner = OwnerId::new("newer-segment");
+    for tag in 1..=2 {
+        disk.ledger
+            .append(&owner, event(tag), Timestamp::UNIX_EPOCH, &signer)
+            .await
+            .expect("append");
+    }
+    let first = disk.ledger.owner_dir(&owner).join("1.log");
+    std::fs::write(&first, unknown_kind_frame(&owner, &signer)).expect("write");
+    disk.ledger.forget(&owner).await;
+
+    let scan = disk.ledger.scan(&owner).await.expect("scan");
+    assert_eq!(scan.damage, Some(ChainFault::Unrecognised { entries: 0 }));
+    assert!(matches!(
+        disk.ledger
+            .append(&owner, event(3), Timestamp::UNIX_EPOCH, &signer)
+            .await,
+        Err(LedgerError::Damaged {
+            fault: ChainFault::Unrecognised { entries: 0 },
+            ..
+        })
+    ));
 }
 
 #[test]

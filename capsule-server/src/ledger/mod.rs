@@ -74,12 +74,24 @@
 //! followed by a complete entry is a hole in an acknowledged chain: that ledger refuses further
 //! appends ([`LedgerError::Damaged`]) and is left for an operator.
 //!
+//! An **intact frame this server cannot read** is never a torn tail, wherever it sits. A frame
+//! is intact when its length prefix is plausible and its body is one canonical CBOR item shaped
+//! like an entry (a map holding a `core` map and a `server_sig`): an entry written by a newer
+//! server, with a kind or a field this one does not know, looks exactly like that, and zeroes,
+//! a short frame or stale blocks practically never do. Such a frame was acknowledged by the
+//! server that wrote it, so cutting it would lose an entry; the read reports
+//! [`ChainFault::Unrecognised`] and the ledger refuses appends, as the
+//! [versioning invariants] require of a component that meets a record it does not understand.
+//!
+//! [versioning invariants]: https://github.com/Capsulsaurus/Capsule/blob/master/capsule-docs/src/content/docs/design/versioning.md#system-invariants
+//!
 //! [Server Filesystem § The Owner Ledger]: https://github.com/Capsulsaurus/Capsule/blob/master/capsule-docs/src/content/docs/design/filesystem/server.md#the-owner-ledger
 
 pub mod conformance;
 pub mod fs;
 pub mod memory;
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -88,6 +100,7 @@ use capsule_core::crypto::hash::{Hash32, hash_bytes};
 use capsule_core::crypto::keys::{HybridSignature, HybridVerifyingKey};
 use capsule_core::crypto::receipts::CustodyReceipt;
 use jiff::Timestamp;
+use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 
 pub use self::fs::FilesystemLedger;
@@ -339,6 +352,18 @@ pub enum ChainFault {
         /// How many whole entries precede it.
         entries: usize,
     },
+    /// A whole frame shaped like an entry that this server cannot decode: most likely one a newer
+    /// server wrote, with a kind or a field this one does not know.
+    ///
+    /// Never a torn tail, even at the end of the ledger: the server that wrote it acknowledged
+    /// it, so it is refused rather than cut.
+    #[error(
+        "the frame after {entries} whole entries is an entry this server cannot read, perhaps one a newer server wrote"
+    )]
+    Unrecognised {
+        /// How many whole entries precede it.
+        entries: usize,
+    },
     /// An entry at the wrong position: one was removed, reordered or duplicated.
     #[error("expected entry {expected}, found entry {found}")]
     SequenceGap {
@@ -518,6 +543,9 @@ pub(crate) fn decode_frames(bytes: &[u8]) -> Decoded {
             return torn(entries, at);
         };
         let Some(entry) = entry_in(body) else {
+            if intact_frame(body) {
+                return unrecognised(entries, at);
+            }
             return damaged(entries, bytes, at);
         };
         entries.push(entry);
@@ -540,14 +568,54 @@ fn entry_in(body: &[u8]) -> Option<LedgerEntry> {
         .filter(|entry| entry.to_canonical_cbor() == body)
 }
 
-/// A read that met bytes at `at` that are not an entry.
+/// The shape every entry has: a `core` map and a signature over it.
 ///
-/// A **torn tail** when nothing from `at` to the end holds a complete entry: a crash mid-append
+/// Only the shape, so a frame a newer server wrote — an event kind or a field this server does
+/// not know, inside `core` or beside it — still matches; what the fields hold is not read.
+#[derive(Deserialize)]
+struct Envelope {
+    #[serde(rename = "core")]
+    #[expect(
+        clippy::zero_sized_map_values,
+        reason = "only that `core` is a map with text keys is checked; its values are never read"
+    )]
+    _core: BTreeMap<String, IgnoredAny>,
+    #[serde(rename = "server_sig")]
+    _server_sig: IgnoredAny,
+}
+
+/// Whether `body` is an intact frame: one canonical CBOR item shaped like an entry.
+///
+/// Every entry this server decodes is one, and so is an entry a newer server wrote. Zeroes are
+/// not CBOR at all, and stale bytes or a short frame are vanishingly unlikely to be a single
+/// canonical map holding both envelope fields with nothing after it.
+fn intact_frame(body: &[u8]) -> bool {
+    capsule_core::cbor::canonicalize(body).is_ok_and(|canonical| canonical == body)
+        && capsule_core::cbor::from_slice::<Envelope>(body).is_ok()
+}
+
+/// A read that met, at `at`, an intact frame this server cannot decode.
+fn unrecognised(entries: Vec<LedgerEntry>, at: usize) -> Decoded {
+    let count = entries.len();
+    tracing::warn!(
+        entries = count,
+        "an owner ledger holds an intact entry this server cannot read; refusing rather than cutting it"
+    );
+    Decoded {
+        entries,
+        whole_len: at,
+        damage: Some(ChainFault::Unrecognised { entries: count }),
+    }
+}
+
+/// A read that met bytes at `at` that are not an intact frame.
+///
+/// A **torn tail** when nothing from `at` to the end holds an intact frame: a crash mid-append
 /// can leave a frame's worth of zeroes or stale blocks rather than a short file, and those bytes
 /// were never acknowledged any more than a short frame was. Anything else is a hole in the
 /// middle of the chain — an acknowledged entry follows the damage, so cutting it would lose one.
 fn damaged(entries: Vec<LedgerEntry>, bytes: &[u8], at: usize) -> Decoded {
-    if holds_an_entry(&bytes[at..]) {
+    if holds_a_frame(&bytes[at..]) {
         let count = entries.len();
         return Decoded {
             entries,
@@ -558,12 +626,12 @@ fn damaged(entries: Vec<LedgerEntry>, bytes: &[u8], at: usize) -> Decoded {
     torn(entries, at)
 }
 
-/// Whether any offset of `region` begins a complete frame holding an entry.
+/// Whether any offset of `region` begins an intact frame: an entry, or one a newer server wrote.
 ///
 /// Every offset, not frame boundaries: the damage may have destroyed the length prefix the
 /// boundaries were derived from. Run only on a damaged ledger, and a length prefix that does
 /// not fit the region is rejected before anything is decoded, so zero-filled bytes cost a pass.
-fn holds_an_entry(region: &[u8]) -> bool {
+fn holds_a_frame(region: &[u8]) -> bool {
     (0..region.len()).any(|offset| {
         let Some(prefix) = region.get(offset..offset + 4) else {
             return false;
@@ -574,8 +642,7 @@ fn holds_an_entry(region: &[u8]) -> bool {
         }
         region
             .get(offset + 4..offset + 4 + len as usize)
-            .and_then(entry_in)
-            .is_some()
+            .is_some_and(intact_frame)
     })
 }
 
