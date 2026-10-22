@@ -313,6 +313,55 @@ jobs:
           NEXTEST_PROFILE: ci
         run: mise run test-rust-containers
 
+  # The kill-anywhere suite (#678): the real `capsule` and `capsule-server` binaries over a
+  # Postgres and a Valkey container, with either process SIGKILLed at seeded points during
+  # the phases whose kill points are armed, and every phase rerun to convergence (the suite's
+  # header says which are armed and why). It skips without
+  # CAPSULE_TEST_KILL_ANYWHERE, so the job sets it and fails on the skip line, as
+  # `rust-containers` does. A pull request runs the default two seeds; the nightly soak in
+  # scheduled-tests.yml runs many more. `--retries 0`: a convergence failure that only happens
+  # sometimes is exactly the bug this suite hunts, and a retry would file it under "flaky".
+  rust-kill-anywhere:
+    name: Rust (kill-anywhere)
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      # nasm and libdav1d: capsule-cli's codecs, as in the `rust` job.
+      - name: Install nasm and libdav1d
+        run: sudo apt-get update && sudo apt-get install -y nasm libdav1d-dev
+      - name: Install nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - name: Kill anywhere
+        env:
+          NEXTEST_PROFILE: ci
+          CAPSULE_TEST_KILL_ANYWHERE: "1"
+          CAPSULE_KILL_LOG_DIR: ${{ github.workspace }}/target/kill-anywhere-logs
+        run: |
+          set -euo pipefail
+          log=target/nextest/kill-anywhere.log
+          mkdir -p "$(dirname "$log")"
+          cargo nextest run -p capsule-e2e --test kill_anywhere --retries 0 \
+            --no-tests=fail --success-output final 2>&1 | tee "$log"
+          if grep -n 'skipping kill-anywhere' "$log" >&2; then
+            echo "kill-anywhere skipped instead of running; check the container runtime." >&2
+            exit 1
+          fi
+      - name: Upload the processes' logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kill-anywhere-logs
+          path: target/kill-anywhere-logs/
+
   # `capsule auth login --oidc` against a real identity provider (#640). The round trip in
   # capsule-cli/tests/oidc_dex.rs skips unless CAPSULE_TEST_DEX=1, so `rust-test` passes it
   # vacuously; this job is where it runs. It brings up compose.yaml's own dex service (v2.44.0,

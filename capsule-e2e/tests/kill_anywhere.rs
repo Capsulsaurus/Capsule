@@ -1,19 +1,27 @@
 //! **Kill-anywhere** (issue #678): the real `capsule` binary and the real `capsule-server`
-//! binary over a fixture corpus, with either process `SIGKILL`ed at a seeded point during each
-//! phase the suite runs ([`PHASES`]), and every phase rerun until it converges.
+//! binary over a fixture corpus, with a process `SIGKILL`ed at a seeded point during a phase
+//! and the phase rerun until it converges.
 //!
-//! This is **E2E case 11's process-restart variant** — a server killed outright mid-transfer
-//! loses nothing it committed and leaves nothing referencing bytes it never stored — and the
-//! crash half of **E2E case 2** (import + upload + finalize), whose in-process half lives in
-//! `case_02_import_upload_finalize.rs`. The restore phase, the crash half of **E2E case 6**, is
-//! built here but not yet in [`PHASES`]: `capsule restore` cannot restore from a real server
-//! until #791 lands, so an unkilled restore would not converge either (#794).
+//! The harness covers the whole pipeline — import, push and restore, the CLI or the server as
+//! the victim — and runs the part that converges on this server today:
+//!
+//! - [`PHASES`] — import and push — run for every seed and must converge. Restore joins once
+//!   `capsule restore` can restore from a real server at all (#791).
+//! - Each phase is cut at its seeded point first when that point is [`armed`]: today, import.
+//!   Push points — the CLI or the server — are armed once a finalization whose finalizer dies
+//!   no longer strands its upload session (#801), which this suite found: armed, seed 678
+//!   (the CLI) and seed 679 (the server) each leave an asset no rerun can make durable.
+//!
+//! Both are tracked by #794. Its target is **E2E case 11's process-restart variant** — a server
+//! killed outright mid-transfer loses nothing it committed and leaves nothing referencing bytes
+//! it never stored — and the crash halves of **E2E case 2** (import + upload + finalize, whose
+//! in-process half is `case_02_import_upload_finalize.rs`) and **E2E case 6** (restore).
 //!
 //! # What converges
 //!
-//! For each seed, a fresh account and library, then for each phase in order: the phase runs
-//! once with its kill point armed, then again unkilled, and the rerun must exit zero. After the
-//! last phase:
+//! For each seed, a fresh account and library, then for each phase in order: a killed phase
+//! runs once with its kill point armed, then every phase runs unkilled and must exit zero.
+//! After each phase:
 //!
 //! - **every asset durable exactly once** — the library holds one asset per corpus file, the
 //!   final `capsule push --json` reports every one verified (durable verdict plus a signed custody
@@ -66,10 +74,22 @@ use testcontainers_modules::postgres::Postgres;
 use testcontainers_modules::valkey::{VALKEY_PORT, Valkey};
 use uuid::Uuid;
 
-/// The phases the suite cuts, in pipeline order. [`Phase::Restore`] joins once `capsule
-/// restore` can restore from a real server (#791, tracked by #794); every seed's plan already
-/// draws its restore point, so adding it changes no other phase's schedule.
+/// The phases every run drives, in pipeline order, each asserted to converge. [`Phase::Restore`]
+/// joins once `capsule restore` can restore from a real server (#791, tracked by #794).
 const PHASES: [Phase; 2] = [Phase::Import, Phase::Push];
+
+/// Whether a seed's kill point for its phase is armed before the converging rerun; an unarmed
+/// phase runs unkilled.
+///
+/// Import points are armed. Push points are not, whichever process they kill: a finalization
+/// whose finalizer dies — the CLI's request dropped mid-flight, or the server killed between
+/// its claim and its index write — strands the upload session, and the asset never becomes
+/// durable whatever the rerun does (#801, found by this suite; tracked by #794). Restore points
+/// wait for restore itself (#791). Every seed's plan draws its points whether or not they are
+/// armed, so arming one later changes no other point of any seed's schedule.
+fn armed(point: KillPoint) -> bool {
+    matches!(point.phase, Phase::Import)
+}
 
 /// The variable that admits the suite.
 const GATE: &str = "CAPSULE_TEST_KILL_ANYWHERE";
@@ -200,16 +220,13 @@ impl World {
         let binaries = Binaries::build();
         let backends = Backends::start().await;
         let blob_root = tempfile::tempdir().expect("a temp blob root");
-        let (logs, logs_temp) = match std::env::var_os(LOG_DIR_VAR) {
-            Some(dir) => {
-                let dir = PathBuf::from(dir);
-                std::fs::create_dir_all(&dir).expect("the log directory");
-                (dir, None)
-            }
-            None => {
-                let temp = tempfile::tempdir().expect("a temp log directory");
-                (temp.path().to_owned(), Some(temp))
-            }
+        let (logs, logs_temp) = if let Some(dir) = std::env::var_os(LOG_DIR_VAR) {
+            let dir = PathBuf::from(dir);
+            std::fs::create_dir_all(&dir).expect("the log directory");
+            (dir, None)
+        } else {
+            let temp = tempfile::tempdir().expect("a temp log directory");
+            (temp.path().to_owned(), Some(temp))
         };
         let server = ServerProcess::spawn(
             &binaries.server,
@@ -563,7 +580,16 @@ async fn every_seeded_kill_converges_to_durable_once_and_indexed_once() {
         );
         let mut run = Run::provision(&world, &format!("seed-{seed}")).await;
         for phase in PHASES {
-            run.run_killed(&mut world, plan.point(phase), reference[&phase]);
+            let point = plan.point(phase);
+            if armed(point) {
+                run.run_killed(&mut world, point, reference[&phase]);
+            } else {
+                eprintln!(
+                    "  {}: {:?} kill point not armed (see `armed`)",
+                    phase.name(),
+                    point.victim
+                );
+            }
             let output = run.run(phase).success();
             assert_converged(&world, &run, phase, &output).await;
         }
