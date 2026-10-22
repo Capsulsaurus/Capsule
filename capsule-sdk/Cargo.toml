@@ -102,7 +102,12 @@ uniffi = { version = "0.31", features = ["tokio"], optional = true }
 spargen = { version = "0.5.0", default-features = false }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["full"] }
+# `test-util` gives `tests/upload_fault_schedules.rs` a paused clock, so the retry engine's real
+# backoff (500 ms doubling, full jitter) is skipped rather than waited out on every dropped request.
+tokio = { version = "1", features = ["full", "test-util"] }
+# Generated fault schedules for the upload state machine, per the testing plan's `capsule-sdk`
+# row. The pin lives in the root `[workspace.dependencies]`.
+proptest = { workspace = true }
 uuid = { version = "1.23.3", features = ["v7"] }
 serde_json = { workspace = true }
 # The S-D18 envelope mapping is asserted against a manifest a real `capsule_core::Workspace`

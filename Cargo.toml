@@ -28,6 +28,9 @@ default-members = [
     "capsule-server/migration",
 ]
 resolver = "3"
+# The cargo-fuzz harness is its own workspace: it links libFuzzer and is built only by
+# `cargo fuzz` (or `mise run fuzz-check`), never by a workspace build or test run.
+exclude = ["capsule-core/fuzz"]
 
 [workspace.package]
 version = "0.1.0"
@@ -98,6 +101,14 @@ secrecy = { version = "0.10.3", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 testcontainers = "0.27.3"
+# Property tests (dev-dependency only), per the testing plan: core codecs and CRDT laws in
+# capsule-core, upload fault schedules in capsule-sdk. `std` only: the `fork`/`timeout` runners
+# and the `bit-set` strategies are unused, and `bit-set` would drag a newer `borsh` through the
+# lock file.
+proptest = { version = "1.12.0", default-features = false, features = ["std"] }
+# Snapshot assertions (dev-dependency only) for the CLI's `--json` and exit-code contract. No
+# default features: `colors` only tints a local diff, and the snapshots are plain strings.
+insta = { version = "1.48.0", default-features = false }
 testcontainers-modules = { version = "0.15.0", features = [
     "postgres",
     "redis",

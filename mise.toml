@@ -30,6 +30,11 @@ hk = "1.48.0"
 # the RustSec advisories, bans and sources online, as `deny-check` (CI only: the
 # advisories check fetches the RustSec database, so it stays out of `check-rust`).
 "cargo:cargo-deny" = "0.19.8"
+# The testing plan's slow tiers: `mise run fuzz` drives cargo-fuzz over `capsule-core/fuzz`, and
+# `mise run mutants` drives cargo-mutants over the CRDT, transfer and provenance code. CI runs
+# both from `.github/workflows/scheduled-tests.yml`, installing these same versions.
+"cargo:cargo-fuzz" = "0.13.2"
+"cargo:cargo-mutants" = "27.1.0"
 
 [env]
 # Curated clippy lint set, applied `--workspace` so every crate gets identical rules
@@ -229,6 +234,50 @@ if grep -nE 'skipping [^:]+: |skipped: ' "$log" >&2; then
   exit 1
 fi
 '''
+
+# The cargo-fuzz harness (testing plan, `capsule-core` row): one target per decoder of untrusted
+# bytes, in its own workspace under `capsule-core/fuzz` so libFuzzer never enters a workspace
+# build. `fuzz-check` type-checks every target on stable tooling and runs in CI on every pull
+# request, so a target cannot rot between scheduled runs. `fuzz` runs each target for
+# `FUZZ_SECONDS` (default 60) with cargo-fuzz on the pinned nightly; the scheduled workflow
+# runs it, and a crash is left under `capsule-core/fuzz/artifacts/<target>/`.
+[tasks.fuzz-check]
+description = "Type-check every cargo-fuzz target"
+run = "cargo check --manifest-path capsule-core/fuzz/Cargo.toml --bins"
+
+[tasks.fuzz]
+description = "Run every cargo-fuzz target for FUZZ_SECONDS each (needs cargo-fuzz)"
+shell = "bash -c"
+run = '''
+set -euo pipefail
+cd capsule-core/fuzz
+# The toolchain's own host triple: a cargo-fuzz binary built for musl would otherwise target musl,
+# where the sanitizer cannot link.
+host=$(rustc -vV | sed -n 's/^host: //p')
+for target in $(cargo fuzz list); do
+  echo "fuzz: $target for ${FUZZ_SECONDS:-60}s"
+  cargo fuzz run --target "$host" "$target" -- -max_total_time="${FUZZ_SECONDS:-60}" -max_len=65536
+done
+'''
+
+# Mutation testing on the CRDT, transfer and provenance code (testing plan, `capsule-core` row):
+# a mutant no test kills is a behaviour no test constrains. Too slow for a pull request, so the
+# scheduled workflow runs it and publishes `mutants.out`; locally, narrow it with extra
+# arguments (`mise run mutants -- --file capsule-core/src/metadata/crdt/lww.rs`). cargo-mutants
+# exits 2 when a mutant survives and 3 when one times out, so the task fails on either.
+[tasks.mutants]
+description = "Mutation-test the CRDT, transfer and provenance code (needs cargo-mutants)"
+run = """
+cargo mutants --test-tool nextest --timeout-multiplier 3 \
+  --package capsule-core --package capsule-sdk \
+  --file 'capsule-core/src/metadata/crdt/**' \
+  --file 'capsule-core/src/crypto/provenance/**' \
+  --file capsule-core/src/lifecycle/provenance.rs \
+  --file capsule-core/src/library/storage_verify.rs \
+  --file capsule-core/src/library/receipts.rs \
+  --file capsule-sdk/src/upload.rs \
+  {{arg(name='extra', var=true, default='')}}
+"""
 
 [tasks.test-coverage-rust]
 run = "cargo llvm-cov nextest --workspace --fail-under-lines 0"
