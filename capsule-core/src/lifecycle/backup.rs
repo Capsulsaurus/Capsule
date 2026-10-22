@@ -200,8 +200,14 @@ impl Workspace {
     /// recovers the album's name and labels) and the record of every stack an exported asset
     /// belongs to that has one. Each is sealed under its album's current-epoch AMK, which is
     /// added to `amks` so the ledger escrows it.
+    ///
+    /// A record that cannot be read, verified or sealed is left out with a warning rather than
+    /// failing the export, mirroring [`absorb_recovered_docs`](Self::absorb_recovered_docs): the
+    /// assets and keys are what a backup must carry, and a missing record costs a name or a
+    /// label, never data. An album left out restores as `Recovered album`.
     fn backup_docs(&self, amks: &mut BTreeMap<(Uuid, u32), [u8; 32]>) -> Result<Vec<BackupDoc>> {
         let mut docs = Vec::new();
+        let mut skipped = 0usize;
         let current_amk = |album_id: Uuid, amks: &mut BTreeMap<(Uuid, u32), [u8; 32]>| {
             let album = self.album(&album_id)?;
             let amk = album.amks[&album.current_epoch];
@@ -211,14 +217,27 @@ impl Workspace {
 
         let albums: BTreeSet<Uuid> = amks.keys().map(|(album, _)| *album).collect();
         for album_id in albums {
-            let (epoch, amk) = current_amk(album_id, amks)?;
-            docs.push(BackupDoc {
-                kind: BackupDocKind::Album,
-                doc_id: album_id,
-                album_id,
-                amk_version: epoch,
-                sealed: self.album_doc(&album_id)?.seal(&amk)?,
+            let sealed = self.album_doc(&album_id).and_then(|doc| {
+                let (epoch, amk) = current_amk(album_id, amks)?;
+                Ok((epoch, doc.seal(&amk)?))
             });
+            match sealed {
+                Ok((epoch, sealed)) => docs.push(BackupDoc {
+                    kind: BackupDocKind::Album,
+                    doc_id: album_id,
+                    album_id,
+                    amk_version: epoch,
+                    sealed,
+                }),
+                Err(e) => {
+                    skipped += 1;
+                    tracing::warn!(
+                        album_id = %album_id,
+                        error = %e,
+                        "backup: album label record left out of the export"
+                    );
+                }
+            }
         }
 
         let stacks: BTreeSet<Uuid> = self
@@ -228,20 +247,38 @@ impl Workspace {
             .map(|m| m.stack_id)
             .collect();
         for stack_id in stacks {
-            if read_doc_file(&stack_doc_path(&self.root, &stack_id))?.is_none() {
-                continue;
-            }
-            let doc = self.stack_doc(stack_id)?;
-            let (epoch, amk) = current_amk(doc.album_id, amks)?;
-            docs.push(BackupDoc {
-                kind: BackupDocKind::Stack,
-                doc_id: stack_id,
-                album_id: doc.album_id,
-                amk_version: epoch,
-                sealed: doc.seal(&amk)?,
+            let sealed = read_doc_file(&stack_doc_path(&self.root, &stack_id)).and_then(|file| {
+                if file.is_none() {
+                    return Ok(None);
+                }
+                let doc = self.stack_doc(stack_id)?;
+                let (epoch, amk) = current_amk(doc.album_id, amks)?;
+                Ok(Some((doc.album_id, epoch, doc.seal(&amk)?)))
             });
+            match sealed {
+                Ok(None) => {}
+                Ok(Some((album_id, epoch, sealed))) => docs.push(BackupDoc {
+                    kind: BackupDocKind::Stack,
+                    doc_id: stack_id,
+                    album_id,
+                    amk_version: epoch,
+                    sealed,
+                }),
+                Err(e) => {
+                    skipped += 1;
+                    tracing::warn!(
+                        stack_id = %stack_id,
+                        error = %e,
+                        "backup: stack label record left out of the export"
+                    );
+                }
+            }
         }
-        tracing::debug!(docs = docs.len(), "backup: label records sealed for export");
+        tracing::debug!(
+            docs = docs.len(),
+            skipped,
+            "backup: label records sealed for export"
+        );
         Ok(docs)
     }
 
@@ -637,6 +674,116 @@ mod tests {
             b.album_doc(&album).unwrap().current_name(),
             Some("Lisbon 2026")
         );
+    }
+
+    /// A second device of `a`'s account in `dir`, holding none of its albums.
+    fn same_account_device(a: &Workspace, dir: &Path) -> Workspace {
+        Workspace::create_from_master(
+            dir,
+            b"device b",
+            FAST_PARAMS,
+            MasterKey::from_bytes(*a.account.master.as_bytes()),
+            a.user_id(),
+            &a.sealed_identity(),
+        )
+        .unwrap()
+    }
+
+    /// A persisted label record that does not decode is left out of the export with a warning
+    /// rather than failing it: the assets, keys and every other record still travel, and the
+    /// album it named restores as `Recovered album`.
+    #[test]
+    fn an_unreadable_label_record_is_left_out_of_the_export() {
+        use crate::domain::StackType;
+        use crate::sidecar::sidecar_v1::{StackMembership, StackRole};
+
+        let (lib_a, lib_b, src) = (
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+        );
+        let mut a = fast_workspace(lib_a.path());
+        let album = a.create_album("Trip").unwrap();
+        let photo = src.path().join("photo.jpg");
+        fs::write(&photo, b"\xFF\xD8\xFF a photo whose album record broke").unwrap();
+        let asset = a.import_asset(album, &photo).unwrap();
+        let stack = Uuid::now_v7();
+        a.set_stack_membership(
+            &asset,
+            Some(StackMembership {
+                stack_id: stack,
+                stack_type: StackType::Burst,
+                role: StackRole::Primary,
+                member_index: Some(0),
+            }),
+        )
+        .unwrap();
+        a.add_stack_label(stack, "keeper").unwrap();
+        fs::write(
+            super::super::album::album_doc_path(lib_a.path(), &album),
+            b"not a record",
+        )
+        .unwrap();
+        assert!(a.album_doc(&album).is_err());
+
+        let archive = src.path().join("backup.tar");
+        a.export_backup_with_params(&archive, b"pw", FAST_PARAMS)
+            .unwrap();
+
+        let mut b = same_account_device(&a, lib_b.path());
+        assert_eq!(
+            b.import_backup(&archive, b"pw", &a.exporter_verifying_key())
+                .unwrap(),
+            1
+        );
+        assert_eq!(b.albums(), vec![(album, RECOVERED_ALBUM_NAME.to_string())]);
+        assert_eq!(
+            b.stack_labels(stack).unwrap(),
+            BTreeSet::from(["keeper".to_string()])
+        );
+    }
+
+    /// A record the artifact carries that does not open under its escrowed AMK is skipped on
+    /// restore: the assets, keys and every other record are restored around it.
+    #[test]
+    fn a_label_record_that_will_not_open_is_skipped_on_restore() {
+        let (lib_a, lib_b, src) = (
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+        );
+        let mut a = fast_workspace(lib_a.path());
+        let album = a.create_album("Trip").unwrap();
+        let photo = src.path().join("photo.jpg");
+        fs::write(&photo, b"\xFF\xD8\xFF a photo beside a broken record").unwrap();
+        a.import_asset(album, &photo).unwrap();
+
+        let mut input = a.backup_input().unwrap();
+        let broken_stack = Uuid::now_v7();
+        input.docs.push(BackupDoc {
+            kind: BackupDocKind::Stack,
+            doc_id: broken_stack,
+            album_id: album,
+            amk_version: 1,
+            sealed: vec![0; 64],
+        });
+        let bytes =
+            backup::export_with_params(&input, b"pw", FAST_PARAMS, a.device_signer.as_ref())
+                .unwrap();
+        let archive = src.path().join("backup.tar");
+        fs::write(&archive, bytes).unwrap();
+
+        let mut b = same_account_device(&a, lib_b.path());
+        assert_eq!(
+            b.import_backup(&archive, b"pw", &a.exporter_verifying_key())
+                .unwrap(),
+            1
+        );
+        assert_eq!(b.albums(), vec![(album, "Trip".to_string())]);
+        assert!(matches!(
+            b.stack_labels(broken_stack),
+            Err(LifecycleError::NotFound(_))
+        ));
     }
 
     /// #551: an adopted web-upload drop (`key_mode = wrapped`) survives a backup round trip —
