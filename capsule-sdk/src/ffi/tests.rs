@@ -1920,3 +1920,39 @@ fn ffi_workspace_surfaces_errors_instead_of_panicking() {
         other => panic!("expected InvalidArgument, got {other:?}"),
     }
 }
+
+/// **No newer epoch to re-seal at** (issue #822). A refused create this device cannot re-seal
+/// because it holds no newer album epoch fails as the upload refusal it is, with the server's
+/// code. Its detail must not claim a key is missing: the server refuses a revoked device,
+/// withdrawn write access or a role conflict the same way, and none of those is a missing key.
+#[test]
+fn a_refused_create_with_no_newer_epoch_does_not_claim_a_missing_key() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let workspace = enroll(lib.path());
+    let album = workspace
+        .ensure_album(workspace.default_album_id().unwrap(), "Camera Roll".into())
+        .unwrap();
+    let asset = workspace
+        .seal_asset(album, "IMG_0042.JPG".into(), b"photo".to_vec())
+        .unwrap();
+    let refused = UploadError::Rejected {
+        status: 400,
+        code: Some("error.upload.envelope_rejected".into()),
+        message: "the manifest envelope did not survive re-validation at finalization".into(),
+    };
+
+    match workspace.reseal(&uuid::Uuid::parse_str(&asset).unwrap(), &refused) {
+        Err(FfiError::Upload { code, message }) => {
+            assert_eq!(code.as_deref(), Some("error.upload.envelope_rejected"));
+            assert!(
+                message.contains("no newer epoch to re-seal it at"),
+                "{message}"
+            );
+            assert!(
+                !message.contains("key"),
+                "the detail must not claim a key is missing: {message}"
+            );
+        }
+        other => panic!("expected an Upload refusal, got {other:?}"),
+    }
+}

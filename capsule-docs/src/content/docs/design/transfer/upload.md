@@ -33,6 +33,18 @@ Only `create` and `replace` move blob bytes; every other action is a [lifecycle 
 - Stale-chain and epoch checks (invariants 17 and 18) run inside the index's critical section that re-points roles and mints the sequence number. A stale chain is `409 error.upload.stale_revival`.
 - An abandoned replace's committed-but-unreferenced blobs are collected by GC and the quota credited back.
 
+### Stale-Epoch Create
+
+A `create` is sealed under the album epoch current on the device that wrote it. When the album's epoch has moved past it by the time its manifest lands (it was imported offline before a rotation, or a sibling sealed under the newer epoch landed first), invariant 18 refuses it at finalization with `error.upload.envelope_rejected`, and the refusal is final for that envelope. The check runs only on a row with no chain head and writes nothing, so a refused create was never published.
+
+The client recovers by **re-sealing** the create at the album's current epoch and pushing it again, once:
+
+- Only a lone, unpublished, key-derived `create` is re-sealed. The refusal must be of its provenance blob, because a refusal of a later member can follow a provenance blob that landed. Its chain must hold no later record, and the library must hold no custody receipt for it.
+- An epoch rotation is a confidentiality boundary, so everything sealed under the old epoch is sealed again under the new one: the original under a fresh `nonce_prefix`, the unchanged signed sidecar under a fresh metadata-blob nonce, and its derivatives regenerated as fresh chains. No prefix or nonce the asset has spent is drawn again, and no blob sealed under the old epoch stays reachable from the library.
+- The new genesis keeps the `file_id`, self-verifies before anything is written, and replaces the refused one. A second refusal fails the push.
+
+**Known gap: a device without the new key.** A device learns of a newer epoch only from its own album keystore. When another device rotated the album and the new album key has not reached this one, there is no epoch to re-seal at. The push fails as the upload refusal it is, with the server's code and a detail saying there is no newer epoch to re-seal at, and the asset stays local, its original untouched. The detail names no missing key: the server refuses a revoked device, withdrawn write access and a role conflict the same way, and a device holding no newer epoch cannot tell those apart from a rotation it has not been handed.
+
 ## Endpoints
 
 All endpoints require a bearer token and the [protocol handshake](/design/threat-model/validation/#protocol-and-capability-negotiation).

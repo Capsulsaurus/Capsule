@@ -178,9 +178,14 @@ async fn e2e_case_17_every_original_round_trips_whatever_the_codecs_support() {
         albums_endpoint: server.albums_base(),
         protocol_version: PROTOCOL_VERSION.to_owned(),
     };
-    let pushed = remote::push(&remote, &store, &device.workspace, PushOptions::default())
-        .await
-        .expect("the push runs");
+    let pushed = remote::push(
+        &remote,
+        &store,
+        &mut device.workspace,
+        PushOptions::default(),
+    )
+    .await
+    .expect("the push runs");
     assert_eq!(pushed.assets, corpus.len());
     assert_eq!(pushed.verified_assets, corpus.len(), "{pushed:#?}");
     assert!(

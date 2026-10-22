@@ -247,12 +247,12 @@ mod postgres_conformance {
     }
 
     /// `capsule push` over `session`, requiring every asset to reach verified custody.
-    async fn push(server: &Server, device: &Device, session: &Session) {
+    async fn push(server: &Server, device: &mut Device, session: &Session) {
         let (_home, store) = persisted(session).await;
         let summary = remote::push(
             &remote_config(server),
             &store,
-            &device.workspace,
+            &mut device.workspace,
             PushOptions::default(),
         )
         .await
@@ -356,7 +356,7 @@ mod postgres_conformance {
             originals.insert(id, bytes);
         }
         let session_a = device.login_again(&server_a).await;
-        push(&server_a, &device, &session_a).await;
+        push(&server_a, &mut device, &session_a).await;
         let before_dump: BTreeSet<String> = originals.keys().map(ToString::to_string).collect();
 
         // ── 2. A hot backup: the database first, then the blob directory ─────────────────
@@ -384,7 +384,7 @@ mod postgres_conformance {
         let late_bytes = synthetic_jpeg_sized(24, 16);
         let late = device.import_file("late.jpg", &late_bytes);
         originals.insert(late, late_bytes);
-        push(&server_a, &device, &session_a).await;
+        push(&server_a, &mut device, &session_a).await;
 
         let host_a_feed = device.feed(&server_a).await;
         let mut sequences: BTreeMap<Uuid, u64> = BTreeMap::new();

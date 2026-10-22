@@ -422,6 +422,28 @@ pub enum PushError {
     /// A blob's transfer failed non-recoverably.
     #[error(transparent)]
     Upload(#[from] UploadError),
+    /// The server refused a **create**'s provenance blob at finalization
+    /// (`error.upload.envelope_rejected`), so the asset was not published (issue #822).
+    ///
+    /// The provenance blob is the first rung of the ladder and the one that publishes the
+    /// manifest, so a refusal of it means nothing of the asset reached the row. The one cause a
+    /// client can act on is invariant 18: the album's epoch moved past the one the create is
+    /// sealed under. The wire answer is generic, so the caller decides — by checking whether it
+    /// holds a newer epoch — whether a re-seal at the album's current epoch
+    /// (`Workspace::reseal_create`) is the fix.
+    #[error(
+        "asset {asset_id}: the server refused its create, sealed at album epoch {amk_version}: \
+         {source}"
+    )]
+    CreateRefused {
+        /// The asset whose create was refused.
+        asset_id: String,
+        /// The album epoch the refused manifest names.
+        amk_version: u32,
+        /// The server's refusal, boxed to keep `PushError` small.
+        #[source]
+        source: Box<UploadError>,
+    },
     /// The scheduler planned a blob the bundle does not contain — an internal inconsistency
     /// between [`staged_asset`] and [`bundle_blobs`], surfaced rather than panicked on.
     #[error("asset {asset_id}: planned blob {hash} is not part of its upload bundle")]
@@ -471,6 +493,7 @@ impl PushError {
         match self {
             Self::Album(_) => "album",
             Self::Upload(_) => "upload",
+            Self::CreateRefused { .. } => "create_refused",
             Self::UnknownBlob { .. } => "unknown_blob",
             Self::Verify(_) => "verify_unavailable",
             Self::NotDurable { .. } => "not_durable",
@@ -484,6 +507,10 @@ impl PushError {
     pub fn error_code(&self) -> Option<&str> {
         match self {
             Self::Upload(UploadError::Rejected { code, .. }) => code.as_deref(),
+            Self::CreateRefused { source, .. } => match source.as_ref() {
+                UploadError::Rejected { code, .. } => code.as_deref(),
+                _ => None,
+            },
             Self::Upload(UploadError::UpgradeRequired { .. }) => {
                 Some(capsule_i18n::error_codes::PROTOCOL_VERSION_UNSUPPORTED)
             }
@@ -591,7 +618,11 @@ pub async fn push_bundle<H: std::hash::BuildHasher + Sync>(
             content_type = %blob.content_type,
             "push: opening upload session"
         );
-        let outcome = match client.upload(&request, &blob.bytes).await? {
+        let uploaded = client
+            .upload(&request, &blob.bytes)
+            .await
+            .map_err(|error| classify_refusal(bundle, blob, error))?;
+        let outcome = match uploaded {
             UploadOutcome::Completed { session_id } => {
                 tracing::info!(tier = ?tier_blob.tier, hash = %hash, %session_id, "push: blob transferred");
                 TierSessionOutcome::Uploaded { session_id }
@@ -615,6 +646,37 @@ pub async fn push_bundle<H: std::hash::BuildHasher + Sync>(
         "push: bundle complete"
     );
     Ok(report)
+}
+
+/// Name a transfer failure [`PushError::CreateRefused`] when it is the one a stale-epoch create
+/// meets: the server's finalization refused the **provenance** blob of a **create** bundle
+/// (`error.upload.envelope_rejected`). Every other failure stays [`PushError::Upload`].
+///
+/// Decided here, where the blob's role is known, because the wire answer is generic: the same
+/// code covers every re-validation a finalization runs, and it is the role that rules out the one
+/// unsafe reading. A refusal on any later rung could follow a provenance blob that did land, and
+/// re-sealing an asset the server already published would fork its chain.
+fn classify_refusal(bundle: &UploadBundle, blob: &BundleBlob<'_>, error: UploadError) -> PushError {
+    let refused_at_finalize = matches!(
+        &error,
+        UploadError::Rejected { code: Some(code), .. }
+            if code == capsule_i18n::error_codes::UPLOAD_ENVELOPE_REJECTED
+    );
+    let is_genesis = bundle.action == capsule_core::crypto::provenance::Action::Create
+        && bundle.prior_provenance_hash.is_none();
+    if refused_at_finalize && is_genesis && blob.role == BlobRole::Provenance {
+        tracing::warn!(
+            amk_version = bundle.amk_version,
+            "push: the server refused this create's manifest at finalization; \
+             nothing of it is published"
+        );
+        return PushError::CreateRefused {
+            asset_id: bundle.asset_id.to_string(),
+            amk_version: bundle.amk_version,
+            source: Box::new(error),
+        };
+    }
+    PushError::Upload(error)
 }
 
 // ─── Confirming custody ───────────────────────────────────────────────────────

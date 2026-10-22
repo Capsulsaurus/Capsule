@@ -1041,3 +1041,114 @@ fn an_upgrade_refusal_carries_the_protocol_code() {
         Some(error_codes::PROTOCOL_VERSION_UNSUPPORTED)
     );
 }
+
+// ─── A refused create (issue #822) ────────────────────────────────────────────
+
+/// Push `bundle` through a server whose finalization refuses the blob at `refused` with
+/// `error.upload.envelope_rejected` — the answer a stale-epoch create meets — and accepts every
+/// other blob.
+async fn push_refusing(
+    bundle: &UploadBundle,
+    refused: String,
+) -> Result<AssetPushReport, PushError> {
+    let sessions: Arc<Mutex<HashMap<String, (String, u64)>>> = Arc::default();
+    let server = MockServer::start(move |req: &MockRequest| {
+        if req.method == "POST" {
+            let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
+            let hash = body["hash"].as_str().unwrap().to_owned();
+            let size = body["size"].as_u64().unwrap();
+            let id = format!("sess-{}", &hash[..16]);
+            sessions.lock().unwrap().insert(id.clone(), (hash, size));
+            return MockResponse::new(201, "Created")
+                .header("X-Capsule-Offset", "0")
+                .json_body(format!(
+                    r#"{{"id":{id:?},"upload_url":"/upload/{id}","suggested_chunk_size":262144}}"#
+                ));
+        }
+        let id = req.path.rsplit('/').next().unwrap().to_owned();
+        let (hash, size) = sessions.lock().unwrap()[&id].clone();
+        let offset: u64 = req
+            .header("X-Capsule-Offset")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        let next = offset + req.body.len() as u64;
+        if next == size && hash == refused {
+            return MockResponse::api_error(
+                400,
+                "Bad Request",
+                error_codes::UPLOAD_ENVELOPE_REJECTED,
+                "the manifest envelope did not survive re-validation at finalization",
+            );
+        }
+        MockResponse::new(204, "No Content").header("X-Capsule-Offset", next.to_string())
+    })
+    .await;
+    let scheduler = StagedScheduler::new(
+        capsule_core::import::UploadPolicy::Full,
+        ConnectionClass::Unmetered,
+    );
+    push_bundle(
+        &server.client(&bundle.protocol_version),
+        &scheduler,
+        bundle,
+        &HashSet::new(),
+        false,
+    )
+    .await
+}
+
+/// **A refused create is named.** Finalization refusing a create's provenance blob is the
+/// stale-epoch signal: it comes back as [`PushError::CreateRefused`] carrying the epoch the
+/// manifest named, with the server's code, so the caller can decide whether to re-seal.
+#[tokio::test]
+async fn a_refused_create_provenance_is_a_create_refusal() {
+    let (_dir, bundle) = real_bundle();
+    let provenance = hash_bytes(&bundle.provenance_blob).to_hex();
+
+    let error = push_refusing(&bundle, provenance)
+        .await
+        .expect_err("a refused provenance blob fails the push");
+    assert!(
+        matches!(
+            &error,
+            PushError::CreateRefused { asset_id, amk_version, .. }
+                if *asset_id == bundle.asset_id.to_string() && *amk_version == bundle.amk_version
+        ),
+        "{error:?}"
+    );
+    assert_eq!(error.kind(), "create_refused");
+    assert_eq!(
+        error.error_code(),
+        Some(error_codes::UPLOAD_ENVELOPE_REJECTED)
+    );
+}
+
+/// **Only the provenance rung is a create refusal.** The same answer on a later rung can follow
+/// a provenance blob that landed — the asset may be published — so it stays a plain upload
+/// failure and nothing invites a re-seal.
+#[tokio::test]
+async fn a_refusal_after_the_provenance_rung_is_a_plain_upload_failure() {
+    let (_dir, bundle) = real_bundle();
+    let metadata = bundle.metadata_blob_hash.unwrap().to_hex();
+
+    let error = push_refusing(&bundle, metadata)
+        .await
+        .expect_err("a refused metadata blob fails the push");
+    assert!(matches!(error, PushError::Upload(_)), "{error:?}");
+    assert_eq!(error.kind(), "upload");
+}
+
+/// **Only a create is a create refusal.** A head with a predecessor was published before it,
+/// so a refusal of its provenance rung is never offered for a re-seal.
+#[tokio::test]
+async fn a_refused_non_create_is_a_plain_upload_failure() {
+    let (_dir, mut bundle) = real_bundle();
+    bundle.action = capsule_core::crypto::provenance::Action::Replace;
+    bundle.prior_provenance_hash = Some(Hash32([3; 32]));
+    let provenance = hash_bytes(&bundle.provenance_blob).to_hex();
+
+    let error = push_refusing(&bundle, provenance)
+        .await
+        .expect_err("the refusal fails the push");
+    assert!(matches!(error, PushError::Upload(_)), "{error:?}");
+}

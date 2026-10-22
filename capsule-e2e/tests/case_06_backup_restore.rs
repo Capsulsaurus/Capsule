@@ -836,7 +836,7 @@ async fn e2e_case_6_a_recovered_device_restores_every_album_byte_for_byte() {
     // Rotations after the setup: each push escrows the new epoch before its asset leaves. Each
     // epoch is pushed before the album rotates past it, because invariant 18 refuses a create
     // below the album's highest accepted epoch and no client path re-seals one yet (#822).
-    let pushed = remote::push(&remote, &store_a, &a.workspace, PushOptions::default())
+    let pushed = remote::push(&remote, &store_a, &mut a.workspace, PushOptions::default())
         .await
         .expect("the push runs");
     assert_eq!(
@@ -853,7 +853,7 @@ async fn e2e_case_6_a_recovered_device_restores_every_album_byte_for_byte() {
             &format!("trip-epoch-{epoch}.jpg"),
             seed,
         );
-        let pushed = remote::push(&remote, &store_a, &a.workspace, PushOptions::default())
+        let pushed = remote::push(&remote, &store_a, &mut a.workspace, PushOptions::default())
             .await
             .expect("the push runs");
         assert_eq!(
@@ -869,7 +869,7 @@ async fn e2e_case_6_a_recovered_device_restores_every_album_byte_for_byte() {
             "{pushed:#?}"
         );
     }
-    let again = remote::push(&remote, &store_a, &a.workspace, PushOptions::default())
+    let again = remote::push(&remote, &store_a, &mut a.workspace, PushOptions::default())
         .await
         .expect("a second push runs");
     assert_eq!(again.album_keys_escrowed, 0, "every escrow is current");
@@ -970,10 +970,10 @@ async fn e2e_case_6_a_recovered_device_restores_every_album_byte_for_byte() {
     // B falls behind: A rotates `Trip` once more and pushes. B's next push must not replace
     // A's escrow with its shorter one — that would cost a later recovery the newest epoch.
     a.workspace.rotate_epoch(trip).expect("the album rotates");
-    remote::push(&remote, &store_a, &a.workspace, PushOptions::default())
+    remote::push(&remote, &store_a, &mut a.workspace, PushOptions::default())
         .await
         .expect("A pushes the new epoch's escrow");
-    let behind = remote::push(&remote, &store_b, &b, PushOptions::default())
+    let behind = remote::push(&remote, &store_b, &mut b, PushOptions::default())
         .await
         .expect("B's push runs");
     assert_eq!(
@@ -987,7 +987,7 @@ async fn e2e_case_6_a_recovered_device_restores_every_album_byte_for_byte() {
     let staged = home_b.path().join("diverged.jpg");
     std::fs::write(&staged, synthetic_jpeg()).expect("the fixture writes");
     let held_back = b.import_asset(trip, &staged).expect("B imports");
-    let diverged = remote::push(&remote, &store_b, &b, PushOptions::default())
+    let diverged = remote::push(&remote, &store_b, &mut b, PushOptions::default())
         .await
         .expect("B's push runs");
     assert_eq!(diverged.album_keys_escrowed, 0);
