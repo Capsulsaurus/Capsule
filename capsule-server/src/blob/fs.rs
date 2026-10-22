@@ -46,12 +46,32 @@ use super::{
 };
 use crate::store::UploadId;
 
-/// Wrap an IO failure as the port's backend error.
+/// Wrap an IO failure as the port's error.
+///
+/// A full filesystem is [`BlobError::StorageFull`] wherever it is met, never a
+/// [`BlobError::Backend`] detail: it is the one storage failure a client is told to wait out
+/// (`507`) rather than reported as an outage (`503`), so the distinction has to survive every
+/// operation that can run out of room — a stage's creation as much as an append.
 fn backend(operation: &'static str, error: &std::io::Error) -> BlobError {
+    if error.kind() == ErrorKind::StorageFull {
+        return BlobError::StorageFull { operation };
+    }
     BlobError::Backend {
         operation,
         detail: error.to_string(),
     }
+}
+
+/// Write `bytes` at the end of `file` and make them durable.
+///
+/// One step for [`FilesystemBlobStore::append`]'s purposes: a failure anywhere in it leaves an
+/// unknown number of bytes behind, and the caller cuts the file back to where it started either
+/// way.
+async fn write_durably(file: &mut tokio::fs::File, bytes: &[u8]) -> std::io::Result<()> {
+    file.write_all(bytes).await?;
+    // Durable before the acknowledgement: the on-disk length is the truth the session's
+    // received-byte counter caches, and it may lag the file but must never lead it.
+    file.sync_all().await
 }
 
 /// Make a directory entry durable.
@@ -131,6 +151,11 @@ async fn read_dir_sorted(path: &Path) -> Result<Vec<Entry>, BlobError> {
 #[derive(Debug)]
 pub struct FilesystemBlobStore {
     root: PathBuf,
+    /// A short write armed by a unit test: the next append writes this many bytes of its chunk
+    /// and then fails as a full disk would. The only way to drive the truncation path against a
+    /// real file without filling a real filesystem.
+    #[cfg(test)]
+    short_write: std::sync::Mutex<Option<usize>>,
 }
 
 impl FilesystemBlobStore {
@@ -157,7 +182,35 @@ impl FilesystemBlobStore {
         sync_dir(&root).await?;
 
         tracing::info!(root = %root.display(), "opened the blob store");
-        Ok(Self { root })
+        Ok(Self {
+            root,
+            #[cfg(test)]
+            short_write: std::sync::Mutex::new(None),
+        })
+    }
+
+    /// Write `bytes` to an open stage, honouring a short write a unit test armed.
+    async fn write_chunk(&self, file: &mut tokio::fs::File, bytes: &[u8]) -> std::io::Result<()> {
+        #[cfg(test)]
+        {
+            let armed = self
+                .short_write
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            if let Some(written) = armed {
+                file.write_all(&bytes[..written.min(bytes.len())]).await?;
+                file.sync_all().await?;
+                return Err(std::io::Error::from(ErrorKind::StorageFull));
+            }
+        }
+        write_durably(file, bytes).await
+    }
+
+    /// Cut the stage behind `file` back to `len` bytes and make the cut durable.
+    async fn cut(file: &tokio::fs::File, len: u64) -> std::io::Result<()> {
+        file.set_len(len).await?;
+        file.sync_all().await
     }
 
     /// The tree this store owns.
@@ -339,18 +392,65 @@ impl BlobStore for FilesystemBlobStore {
                 .open(self.staged_path(upload))
                 .await
                 .map_err(|error| backend("open a staging file to append", &error))?;
-            file.write_all(bytes)
-                .await
-                .map_err(|error| backend("append to a staging file", &error))?;
-            // Durable before the acknowledgement: the on-disk length is the truth the session's
-            // received-byte counter caches, and it may lag the file but must never lead it.
-            file.sync_all()
-                .await
-                .map_err(|error| backend("sync an appended staging file", &error))?;
+            if let Err(error) = self.write_chunk(&mut file, bytes).await {
+                // Some prefix of the chunk may already be on disk. Cut it away before answering,
+                // so the stage ends at `offset` again and the client's retry there is an
+                // ordinary append rather than a mismatch that repeats until the session expires.
+                match Self::cut(&file, actual).await {
+                    Ok(()) => tracing::warn!(
+                        %upload,
+                        offset,
+                        %error,
+                        "an append failed and the stage was cut back to its offset"
+                    ),
+                    // Nothing more this call can do. The next append through the chunk path
+                    // meets the longer stage and cuts it back itself (`truncate_staged`).
+                    Err(cut) => tracing::error!(
+                        %upload,
+                        offset,
+                        %error,
+                        %cut,
+                        "an append failed and the stage could not be cut back to its offset"
+                    ),
+                }
+                return Err(backend("append to a staging file", &error));
+            }
 
             let length = actual + bytes.len() as u64;
             tracing::trace!(%upload, offset, appended = bytes.len(), length, "appended to a stage");
             Ok(length)
+        })
+    }
+
+    fn truncate_staged<'a>(
+        &'a self,
+        upload: &'a UploadId,
+        len: u64,
+    ) -> BlobFuture<'a, Option<u64>> {
+        Box::pin(async move {
+            check_upload_id(upload)?;
+            let file = match tokio::fs::OpenOptions::new()
+                .write(true)
+                .open(self.staged_path(upload))
+                .await
+            {
+                Ok(file) => file,
+                Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+                Err(error) => return Err(backend("open a staging file to truncate", &error)),
+            };
+            let before = file
+                .metadata()
+                .await
+                .map_err(|error| backend("stat a staging file to truncate", &error))?
+                .len();
+            if before <= len {
+                return Ok(Some(before));
+            }
+            Self::cut(&file, len)
+                .await
+                .map_err(|error| backend("truncate a staging file", &error))?;
+            tracing::info!(%upload, before, after = len, "cut a stage back to its session offset");
+            Ok(Some(len))
         })
     }
 
@@ -758,6 +858,7 @@ mod tests {
     conformance_cases! {
         staging_appends_only_at_the_end_and_tracks_its_length,
         an_append_at_the_wrong_offset_is_refused_and_names_the_resume_point,
+        truncating_a_stage_cuts_it_back_and_never_grows_it,
         appending_to_an_upload_that_was_never_begun_is_not_staged,
         abandoning_removes_the_staged_bytes_and_says_whether_there_were_any,
         the_staged_listing_is_ordered_and_holds_only_open_uploads,
@@ -790,6 +891,72 @@ mod tests {
         let mut hex = hex.to_owned();
         hex.push_str(&"0".repeat(64 - hex.len()));
         ContentAddress::parse(&hex).expect("a fixture address")
+    }
+
+    /// A disk that fills mid-append leaves the stage where it was, and the retry lands.
+    ///
+    /// The wedge #694 reports: the short write used to stay on disk, so the stage ended past the
+    /// session's offset and every later chunk met an offset mismatch until the session expired.
+    #[tokio::test]
+    async fn a_short_write_on_a_full_disk_is_cut_back_and_the_retry_lands() {
+        let temp = TempStore::open().await;
+        let upload = UploadId::new("short-write");
+        temp.store.begin(&upload).await.expect("begin");
+        temp.store
+            .append(&upload, 0, b"0123")
+            .await
+            .expect("the first append lands");
+
+        *temp
+            .store
+            .short_write
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(3);
+        match temp.store.append(&upload, 4, b"456789").await {
+            Err(BlobError::StorageFull { .. }) => {}
+            other => panic!("a full disk is StorageFull, not {other:?}"),
+        }
+        assert_eq!(
+            temp.store.staged_len(&upload).await.expect("staged_len"),
+            Some(4),
+            "the three bytes that did reach the disk were cut away again"
+        );
+
+        assert_eq!(
+            temp.store
+                .append(&upload, 4, b"456789")
+                .await
+                .expect("the retry at the same offset lands"),
+            10
+        );
+        assert_eq!(
+            temp.store
+                .read_staged_at(&upload, 0, 64)
+                .await
+                .expect("read_staged_at"),
+            Some(b"0123456789".to_vec())
+        );
+    }
+
+    /// An `ENOSPC` from any operation is the port's `StorageFull`, never a backend detail.
+    #[test]
+    fn a_full_filesystem_is_storage_full_wherever_it_is_met() {
+        assert!(matches!(
+            backend(
+                "create a staging file",
+                &std::io::Error::from(ErrorKind::StorageFull)
+            ),
+            BlobError::StorageFull {
+                operation: "create a staging file"
+            }
+        ));
+        assert!(matches!(
+            backend(
+                "create a staging file",
+                &std::io::Error::from(ErrorKind::PermissionDenied)
+            ),
+            BlobError::Backend { .. }
+        ));
     }
 
     /// Opening a root builds the three directories the layout names, and nothing else.

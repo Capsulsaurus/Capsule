@@ -75,8 +75,8 @@ use capsule_server::federation::{
 use capsule_server::gc::memory::InMemoryCollection;
 use capsule_server::index::memory::InMemoryAssetIndex;
 use capsule_server::index::{
-    AssetIndex, AssetRow, BlobOutcome, BlobRecord, FeedEntry, HoldOutcome, IndexFuture,
-    LifecycleOp, OpOutcome, PendingAsset, PurgeOutcome, Reservation, ServingHold,
+    AssetIndex, AssetRow, BlobOutcome, BlobRecord, Custody, FeedEntry, HoldOutcome, IndexFuture,
+    LifecycleOp, OpOutcome, PendingAsset, PurgeOutcome, Receipted, Reservation, ServingHold,
 };
 use capsule_server::membership::{
     InMemoryMembership, MemberRole, Membership, MembershipContext, MembershipStore, RosterOutcome,
@@ -2038,6 +2038,40 @@ impl SwitchableUploads {
             "the test must be the one that wins the claim it is simulating"
         );
     }
+
+    /// Open `count` live sessions for `uploader`, each for a different blob, as a client that
+    /// leaks sessions would leave them.
+    pub(crate) async fn fill_live_sessions_for_test(
+        &self,
+        uploader: &UserId,
+        count: usize,
+        now: jiff::Timestamp,
+    ) {
+        for index in 0..count {
+            self.inner
+                .open(UploadSessionRecord {
+                    upload_id: UploadId::new(format!("leaked-{index:06}")),
+                    asset_id: AssetId::new(format!("leaked-asset-{index:06}")),
+                    owner_id: OwnerId::new(uploader.as_str()),
+                    upload_user_id: uploader.clone(),
+                    album_id: None,
+                    content_type: None,
+                    expected_hash: format!("{index:064x}"),
+                    crypto_suite_id: 1,
+                    protocol_version: PROTOCOL_VERSION.to_owned(),
+                    blob_role: capsule_server::store::BlobRole::Original,
+                    intent_id: None,
+                    manifest_envelope: "{}".to_owned(),
+                    received_bytes: 0,
+                    total_size: 4096,
+                    status: UploadSessionStatus::Pending,
+                    created_at: now,
+                    last_progress_at: now,
+                })
+                .await
+                .expect("the in-memory store opens");
+        }
+    }
 }
 
 impl UploadSessionStore for SwitchableUploads {
@@ -2181,6 +2215,13 @@ impl UploadSessionStore for SwitchableUploads {
 pub(crate) struct SwallowingBlobs {
     inner: InMemoryBlobStore,
     swallow: AtomicBool,
+    /// Answer the next append as a full disk would, writing nothing — an adapter that honours
+    /// the port's "a failed append leaves the stage at its offset" rule.
+    full_next_append: AtomicBool,
+    /// Answer the next `begin` as a full disk would, staging nothing.
+    full_next_begin: AtomicBool,
+    /// Park every append until the test lets it go, the way [`Self::hold_puts`] parks a `put`.
+    held_appends: Mutex<Option<PutHold>>,
     /// Refuse every [`BlobStore::put`], as a full or read-only disk would.
     puts_unavailable: AtomicBool,
     /// Park every [`BlobStore::put`] until the test lets it go.
@@ -2205,6 +2246,9 @@ impl SwallowingBlobs {
         Self {
             inner: InMemoryBlobStore::new(),
             swallow: AtomicBool::new(false),
+            full_next_append: AtomicBool::new(false),
+            full_next_begin: AtomicBool::new(false),
+            held_appends: Mutex::new(None),
             puts_unavailable: AtomicBool::new(false),
             held_puts: Mutex::new(None),
         }
@@ -2226,6 +2270,29 @@ impl SwallowingBlobs {
     /// Drop the next append on the floor while telling the caller it landed.
     pub(crate) fn swallow_next_append(&self) {
         self.swallow.store(true, Ordering::SeqCst);
+    }
+
+    /// Fail the next append with `ENOSPC`, as a disk that filled mid-write would.
+    pub(crate) fn fill_disk_on_next_append(&self) {
+        self.full_next_append.store(true, Ordering::SeqCst);
+    }
+
+    /// Fail the next `begin` with `ENOSPC`, as a disk with no room for a new stage would.
+    pub(crate) fn fill_disk_on_next_begin(&self) {
+        self.full_next_begin.store(true, Ordering::SeqCst);
+    }
+
+    /// Park every subsequent append until the returned hold releases it.
+    pub(crate) fn hold_appends(&self) -> PutHold {
+        let hold = PutHold {
+            entered: Arc::new(tokio::sync::Notify::new()),
+            release: Arc::new(tokio::sync::Semaphore::new(0)),
+        };
+        *self
+            .held_appends
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(hold.clone());
+        hold
     }
 
     /// Make every subsequent `put` fail, or stop.
@@ -2288,6 +2355,13 @@ impl SwallowingBlobs {
 
 impl BlobStore for SwallowingBlobs {
     fn begin<'a>(&'a self, upload: &'a UploadId) -> BlobFuture<'a, ()> {
+        if self.full_next_begin.swap(false, Ordering::SeqCst) {
+            return Box::pin(async move {
+                Err(BlobError::StorageFull {
+                    operation: "create a staging file",
+                })
+            });
+        }
         self.inner.begin(upload)
     }
 
@@ -2300,7 +2374,37 @@ impl BlobStore for SwallowingBlobs {
         if self.swallow.swap(false, Ordering::SeqCst) {
             return Box::pin(async move { Ok(offset + bytes.len() as u64) });
         }
-        self.inner.append(upload, offset, bytes)
+        if self.full_next_append.swap(false, Ordering::SeqCst) {
+            return Box::pin(async move {
+                Err(BlobError::StorageFull {
+                    operation: "append to a staging file",
+                })
+            });
+        }
+        let hold = self
+            .held_appends
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        Box::pin(async move {
+            if let Some(hold) = hold {
+                hold.entered.notify_one();
+                let _permit = hold
+                    .release
+                    .acquire()
+                    .await
+                    .expect("the hold is never closed");
+            }
+            self.inner.append(upload, offset, bytes).await
+        })
+    }
+
+    fn truncate_staged<'a>(
+        &'a self,
+        upload: &'a UploadId,
+        len: u64,
+    ) -> BlobFuture<'a, Option<u64>> {
+        self.inner.truncate_staged(upload, len)
     }
 
     fn staged_len<'a>(&'a self, upload: &'a UploadId) -> BlobFuture<'a, Option<u64>> {
@@ -2669,6 +2773,20 @@ impl QuotaStore for SwitchableQuota {
         }
         self.inner.release_attribution(address)
     }
+
+    fn suspend<'a>(&'a self, user: &'a UserId, at: Timestamp) -> StoreFuture<'a, bool> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.suspend(user, at)
+    }
+
+    fn unsuspend<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, bool> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.unsuspend(user)
+    }
 }
 
 /// A membership store that can be made to fail on demand.
@@ -2980,6 +3098,12 @@ impl SwitchableIndex {
         Self::default()
     }
 
+    /// The receipt log the index appends finalization's custody receipts to, which the
+    /// attestation context must serve from.
+    pub(crate) fn receipts(&self) -> Arc<InMemoryReceipts> {
+        self.inner.receipts().clone()
+    }
+
     /// Make every subsequent operation fail, or stop.
     pub(crate) fn set_unavailable(&self, unavailable: bool) {
         self.unavailable.store(unavailable, Ordering::SeqCst);
@@ -3023,6 +3147,18 @@ impl AssetIndex for SwitchableIndex {
         self.inner.record_blob(asset, blob)
     }
 
+    fn record_blob_with_receipt<'a>(
+        &'a self,
+        asset: &'a AssetId,
+        blob: BlobRecord,
+        custody: Custody<'a>,
+    ) -> IndexFuture<'a, Receipted<BlobOutcome>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.record_blob_with_receipt(asset, blob, custody)
+    }
+
     fn tombstone<'a>(
         &'a self,
         asset: &'a AssetId,
@@ -3039,6 +3175,17 @@ impl AssetIndex for SwitchableIndex {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.apply_op(op)
+    }
+
+    fn apply_op_with_receipt<'a>(
+        &'a self,
+        op: LifecycleOp,
+        custody: Custody<'a>,
+    ) -> IndexFuture<'a, Receipted<OpOutcome>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.apply_op_with_receipt(op, custody)
     }
 
     fn rows<'a>(
@@ -3390,7 +3537,9 @@ impl Fixture {
         let members = Arc::new(SwitchableMembership::new());
         let quotas = Arc::new(SwitchableQuota::new());
         let marks = Arc::new(InMemoryCollection::new());
-        let receipts = Arc::new(InMemoryReceipts::new());
+        // The log the index appends custody receipts to in finalization's one critical section
+        // (#693): the attestation context serves from the same one.
+        let receipts = index.receipts();
         // The attestation key is generated per fixture and *distinct from* the token signer, as
         // the design requires: a receipt that verified under the operational key would let
         // anything holding that key manufacture custody evidence.
@@ -3578,6 +3727,7 @@ impl Fixture {
 
         let blobs = Arc::new(SwallowingBlobs::new());
         let index = Arc::new(SwitchableIndex::new());
+        let receipts = index.receipts();
         let members = Arc::new(InMemoryMembership::new());
         let albums = Arc::new(SwitchableAlbums::new());
         let der = signing_key_der();
@@ -3635,7 +3785,7 @@ impl Fixture {
                 QuotaLimits::unlimited(),
             ),
             attestation: AttestationContext::new(
-                Arc::new(InMemoryReceipts::new()),
+                receipts,
                 Arc::new(LocalAttestationKey::new(
                     SERVER_ORIGIN,
                     capsule_core::crypto::keys::HybridSigningKey::generate(),
@@ -3691,6 +3841,29 @@ impl Fixture {
             .await
             .assert_status(kynos::http::StatusCode::OK)
             .json()
+    }
+
+    /// The server's clock reading, for an assertion about an instant the server computed.
+    pub(crate) fn now(&self) -> Timestamp {
+        self.clock.now()
+    }
+
+    /// Spend every hit `budget` allows against `key`, so the next request charging it is refused.
+    ///
+    /// Through the store the server charges, at the server's own clock, so the window it opens
+    /// is the one the next request meets.
+    pub(crate) async fn spend_budget(
+        &self,
+        key: &capsule_server::counter::CounterKey,
+        budget: capsule_server::counter::Budget,
+    ) {
+        use capsule_server::counter::CounterStore as _;
+        for _ in 0..budget.limit {
+            self.counters
+                .hit(key, budget, self.clock.now())
+                .await
+                .expect("the in-memory counters answer");
+        }
     }
 
     /// An access token for the seeded account, as the `Authorization` header carries it.

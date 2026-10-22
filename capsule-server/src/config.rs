@@ -41,6 +41,7 @@ use base64::engine::general_purpose::{STANDARD as BASE64, STANDARD_NO_PAD as BAS
 use jiff::SignedDuration;
 
 use crate::auth::oidc::{ClientSecret, RedirectPolicy};
+use crate::client_addr::ProxyTrust;
 use crate::sync::CURSOR_KEY_LEN;
 
 /// The bind address a deployment gets without saying anything.
@@ -368,6 +369,12 @@ pub struct Config {
     pub shutdown_timeout: std::time::Duration,
     /// The accepted-connection ceiling.
     pub max_connections: NonZeroUsize,
+    /// Which reverse-proxy hops may name the client (`TRUSTED_PROXY_HOPS`, `TRUSTED_PROXIES`).
+    ///
+    /// Trusts nobody unless set, so every forwarding header is ignored and the socket peer is the
+    /// client. A deployment behind a proxy must set it, or every per-source limiter counts the
+    /// proxy — every client at once — against one bucket. See [`crate::client_addr`].
+    pub trusted_proxies: ProxyTrust,
     /// How the log stream is rendered.
     pub log_format: LogFormat,
     /// Which family of adapters to run on.
@@ -527,6 +534,7 @@ impl fmt::Debug for Config {
             oidc,
             shutdown_timeout,
             max_connections,
+            trusted_proxies,
             log_format,
             backends,
         } = self;
@@ -560,6 +568,7 @@ impl fmt::Debug for Config {
             .field("oidc", oidc)
             .field("shutdown_timeout", shutdown_timeout)
             .field("max_connections", max_connections)
+            .field("trusted_proxies", trusted_proxies)
             .field("log_format", log_format)
             .field("backends", backends)
             .finish()
@@ -817,6 +826,25 @@ impl Config {
                 NonZeroUsize::new(DEFAULT_MAX_CONNECTIONS)
                     .expect("the built-in connection ceiling is non-zero")
             });
+        // Which proxy hops may name the client (#704). Unset trusts nobody, the one default a
+        // spoofed `X-Forwarded-For` cannot move; a malformed entry is a fault rather than an entry
+        // quietly dropped, because a dropped proxy is every client sharing that proxy's bucket.
+        let trusted_proxies = ProxyTrust {
+            hops: parse_number::<usize>(env, "TRUSTED_PROXY_HOPS", &mut faults).unwrap_or(0),
+            networks: env
+                .var("TRUSTED_PROXIES")
+                .and_then(|text| {
+                    ProxyTrust::parse_networks(&text)
+                        .map_err(|detail| {
+                            faults.push(ConfigFault::Invalid {
+                                key: "TRUSTED_PROXIES",
+                                detail,
+                            });
+                        })
+                        .ok()
+                })
+                .unwrap_or_default(),
+        };
         let log_format = match env.var("LOG_FORMAT") {
             None => {
                 // JSON in release because the reader is a log shipper; pretty in debug because
@@ -909,6 +937,7 @@ impl Config {
                 oidc,
                 shutdown_timeout,
                 max_connections,
+                trusted_proxies,
                 log_format,
                 backends,
             })
@@ -1316,6 +1345,46 @@ mod tests {
         ]);
         let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
         assert_eq!(config.listen.to_string(), "127.0.0.1:8080");
+    }
+
+    #[test]
+    fn no_proxy_is_trusted_unless_one_is_named() {
+        let config = Config::load(&serveable(), &memory(), Demands::Serve).expect("it loads");
+        assert!(config.trusted_proxies.trusts_nobody());
+    }
+
+    #[test]
+    fn trusted_proxies_are_read_from_the_environment() {
+        let mut environment = serveable();
+        environment.insert("TRUSTED_PROXY_HOPS".to_owned(), "1".to_owned());
+        environment.insert(
+            "TRUSTED_PROXIES".to_owned(),
+            "10.0.0.0/8, fd00::/8".to_owned(),
+        );
+        let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+        assert_eq!(config.trusted_proxies.hops, 1);
+        assert_eq!(
+            config.trusted_proxies.networks,
+            vec![
+                ("10.0.0.0".parse().expect("v4"), 8),
+                ("fd00::".parse().expect("v6"), 8),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_malformed_trusted_proxy_setting_is_refused() {
+        for (key, value) in [
+            ("TRUSTED_PROXIES", "10.0.0.0/40"),
+            ("TRUSTED_PROXIES", "proxy.internal"),
+            ("TRUSTED_PROXY_HOPS", "-1"),
+        ] {
+            let mut environment = serveable();
+            environment.insert(key.to_owned(), value.to_owned());
+            let error =
+                Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
+            assert!(error.names(key), "{key}={value}: {error}");
+        }
     }
 
     #[test]

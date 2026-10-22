@@ -25,13 +25,12 @@
 //! | issue `400 error.share.malformed` | a body that cannot be a link record, including a `metadata_blob` that is not base64, exceeds 8 MiB, or does not hash to `metadata_hash` |
 //! | issue `403 error.quota.grace_locked` | any link from an account past its quota grace window (`S-C6`) |
 //! | issue `403 error.quota.exceeded` | a `metadata_blob` whose new bytes would carry the account to its hard limit (`S-C6`) |
+//! | issue `403 error.quota.suspended` | any link from an account whose quota the operator suspended (#705) |
 //! | serve `200` / `206` / `416` | the metadata, the wrapped secret, and ranged ciphertext |
 //! | serve `404` | **one answer** for a malformed id, an unknown link, a revoked one, an expired one, a blob the link does not name, and a link with no wrapped secret |
+//! | serve `429 error.share.rate_limited` / `error.share.at_capacity` | the per-source or per-link budget is spent, or its limiter partition is full, with a `retry_after` |
 //! | `401` / `403` | the framework's, on the two owner operations only |
-//! | `500 error.share.unavailable` | a store could not answer |
-//!
-//! **No `429`.** The contract's two limiters need `S-C32`'s counter; declaring the status would
-//! promise something nothing can produce.
+//! | `500 error.share.unavailable` | a store could not answer, the limiter's included |
 
 use std::collections::BTreeSet;
 
@@ -49,7 +48,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth::AccessToken;
 use crate::blob::ContentAddress;
-use crate::counter::{CounterContext, CounterKey, Verdict, budgets, unix_seconds};
+use crate::client_addr::ClientAddr;
+use crate::counter::{Budget, CounterContext, CounterKey, Verdict, budgets, unix_seconds};
 use crate::quota::{QuotaContext, WriteClass};
 use crate::serve::BlobSource;
 use crate::share::{
@@ -199,6 +199,18 @@ pub enum IssueShareRejection {
         code: &'static str,
     },
 
+    /// The account's quota is suspended by the server's operator (#705).
+    ///
+    /// A link is metadata growth, which a suspension refuses as the grace window does. Never
+    /// returned by a revocation.
+    #[error("this account's storage is suspended")]
+    #[problem(status = 403, title = "Quota suspended")]
+    QuotaSuspended {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
     /// The store could not answer.
     #[error("the share link could not be issued")]
     #[problem(status = 500, title = "Internal server error")]
@@ -263,6 +275,10 @@ pub enum ShareRejection {
 }
 
 /// Register a share link the caller's client has issued.
+///
+/// A link is metadata growth: an account past its quota grace window is refused
+/// `403 error.quota.grace_locked`, and one whose quota the operator suspended
+/// `403 error.quota.suspended`.
 #[kynos::post("/v1/shares", operation_id = "issue_share", tag = SharesTag)]
 pub async fn issue_share(
     Inject(share): Inject<ShareContext>,
@@ -422,9 +438,10 @@ pub async fn revoke_share(
 pub async fn share_metadata(
     Inject(share): Inject<ShareContext>,
     Inject(counters): Inject<CounterContext>,
+    client: ClientAddr,
     Path(path): Path<SharePath>,
 ) -> Result<Json<SharedMetadataResponse>, ShareRejection> {
-    throttle(&counters, &path.opaque_id).await?;
+    throttle(&counters, client, &path.opaque_id).await?;
     let record = live(&share, &path.opaque_id).await?;
     Ok(Json(SharedMetadataResponse {
         metadata_hash: record.metadata.as_str().to_owned(),
@@ -449,9 +466,10 @@ pub async fn share_metadata(
 pub async fn share_wrapped_secret(
     Inject(share): Inject<ShareContext>,
     Inject(counters): Inject<CounterContext>,
+    client: ClientAddr,
     Path(path): Path<SharePath>,
 ) -> Result<Binary<OctetStream>, ShareRejection> {
-    throttle(&counters, &path.opaque_id).await?;
+    throttle(&counters, client, &path.opaque_id).await?;
     let record = live(&share, &path.opaque_id).await?;
     let Some(wrapped) = record.wrapped_secret else {
         return Err(ShareRejection::NotFound);
@@ -472,10 +490,11 @@ pub async fn share_wrapped_secret(
 pub async fn share_blob(
     Inject(share): Inject<ShareContext>,
     Inject(counters): Inject<CounterContext>,
+    client: ClientAddr,
     Path(path): Path<ShareBlobPath>,
     conditions: Conditions,
 ) -> Result<Delivery<OctetStream>, ShareRejection> {
-    throttle(&counters, &path.opaque_id).await?;
+    throttle(&counters, client, &path.opaque_id).await?;
     let record = live(&share, &path.opaque_id).await?;
 
     let Ok(address) = ContentAddress::parse(&path.hash) else {
@@ -510,35 +529,53 @@ pub async fn share_blob(
         })
 }
 
-/// Charge the per-link limiter, and refuse if it is spent (`S-C4`, `S-C32`).
+/// Charge the contract's two limiters, and refuse if either is spent (`S-C4`, `S-C32`, #704).
 ///
 /// Charged **before** the link is resolved, so probing costs the prober whether or not the id
 /// exists — a limiter that only ran for real links would be a free oracle for the rest.
 ///
-/// The contract names *two* limiters, per link and per source address. Only the first is here:
-/// this server's request type carries no client address, because it is driven in-process by
-/// `TestClient` and behind a proxy in production, where the address that matters is a header a
-/// deployment must be configured to trust. Wiring a per-source key to an untrusted header would
-/// be worse than having none — it would throttle by a value the attacker chooses. Recorded as
-/// owed rather than faked; the key exists in [`CounterKey::ShareSource`] for when there is a
-/// trusted address to put in it.
-async fn throttle(counters: &CounterContext, opaque_id: &str) -> Result<(), ShareRejection> {
-    let key = CounterKey::ShareLink(opaque_id.to_owned());
-    let verdict = counters
-        .hit(&key, budgets::SHARE_LINK)
-        .await
-        .map_err(|error| {
-            // Fail closed, like every other limiter here — but say which failure it was. A full
-            // partition is the limiter working as designed and clears inside the window; only a
-            // store that could not answer is a `500`.
-            if let Some(retry_after) = counters.capacity_refusal(&error, budgets::SHARE_LINK) {
-                tracing::warn!(%error, "the share limiter is at capacity");
-                ShareRejection::at_capacity(retry_after)
-            } else {
-                tracing::error!(%error, "the share limiter could not be reached");
-                ShareRejection::unavailable()
-            }
-        })?;
+/// The per-source budget is charged first. A source that has spent its own budget is refused
+/// without touching the link's, so one address cannot drain a link's budget for every other
+/// viewer faster than its own budget lets it. The source is the [`ClientAddr`] the router
+/// resolved through the deployment's trusted proxies — never a forwarding header taken on its
+/// word, which would throttle by a value the attacker chooses.
+async fn throttle(
+    counters: &CounterContext,
+    client: ClientAddr,
+    opaque_id: &str,
+) -> Result<(), ShareRejection> {
+    charge(
+        counters,
+        &CounterKey::ShareSource(client.source_key()),
+        budgets::SHARE_SOURCE,
+    )
+    .await?;
+    charge(
+        counters,
+        &CounterKey::ShareLink(opaque_id.to_owned()),
+        budgets::SHARE_LINK,
+    )
+    .await
+}
+
+/// Charge one limiter, failing closed.
+async fn charge(
+    counters: &CounterContext,
+    key: &CounterKey,
+    budget: Budget,
+) -> Result<(), ShareRejection> {
+    let verdict = counters.hit(key, budget).await.map_err(|error| {
+        // Fail closed, like every other limiter here — but say which failure it was. A full
+        // partition is the limiter working as designed and clears inside the window; only a
+        // store that could not answer is a `500`.
+        if let Some(retry_after) = counters.capacity_refusal(&error, budget) {
+            tracing::warn!(%error, limiter = key.as_str(), "the share limiter is at capacity");
+            ShareRejection::at_capacity(retry_after)
+        } else {
+            tracing::error!(%error, limiter = key.as_str(), "the share limiter could not be reached");
+            ShareRejection::unavailable()
+        }
+    })?;
     match verdict {
         Verdict::Admitted { .. } => Ok(()),
         Verdict::Limited { retry_after } => Err(ShareRejection::RateLimited {
@@ -598,7 +635,8 @@ fn metadata_record(
     Ok(record)
 }
 
-/// Refuse a share link from an account past its quota grace window (`S-C6`).
+/// Refuse a share link from an account past its quota grace window (`S-C6`), or whose quota the
+/// operator suspended (#705).
 async fn admit_metadata_growth(
     quota: &QuotaContext,
     owner: &UserId,
@@ -613,6 +651,12 @@ async fn admit_metadata_growth(
         })?;
     if crate::quota::admits(state, WriteClass::MetadataGrowth, 0, 0, quota.limits()) {
         return Ok(());
+    }
+    if state == crate::quota::QuotaState::Suspended {
+        tracing::info!(%owner, "a share link was refused: the account's quota is suspended");
+        return Err(IssueShareRejection::QuotaSuspended {
+            code: error_codes::QUOTA_SUSPENDED,
+        });
     }
     tracing::info!(%owner, ?state, "a share link was refused: past the quota grace window");
     Err(IssueShareRejection::QuotaGraceExpired {
@@ -692,6 +736,13 @@ async fn charge_metadata(
                 code: error_codes::QUOTA_EXCEEDED,
             })
         }
+        // Suspended after `admit_metadata_growth` read the state: the charge's own check refuses.
+        crate::quota::UploadCharge::Suspended => {
+            tracing::info!(%owner, size, "a share link was refused: the account's quota is suspended");
+            Err(IssueShareRejection::QuotaSuspended {
+                code: error_codes::QUOTA_SUSPENDED,
+            })
+        }
     }
 }
 
@@ -753,3 +804,6 @@ impl ShareRejection {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

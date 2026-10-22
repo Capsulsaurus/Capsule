@@ -5,17 +5,22 @@
 //! rather than a hand-built fixture that could agree with a wrong mapping. The wire behaviour
 //! rides the shared in-process mock HTTP server, following `upload/tests.rs`.
 
-use std::collections::HashSet;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use capsule_core::crypto::keys::HybridSigningKey;
 use capsule_core::crypto::primitives::Argon2Params;
+use capsule_core::library::CustodyReceiptCore;
 use capsule_core::lifecycle::{UploadBundle, Workspace};
 use capsule_i18n::error_codes;
 
 use super::*;
 use crate::net::ConnectionClass;
 use crate::testmock::{MockRequest, MockResponse, MockServer};
+use crate::verify::{StaticToken as VerifyToken, VerifyTransport};
 
 /// The fast Argon2 cost; the production tier would dominate the suite's runtime.
 const FAST: Argon2Params = Argon2Params {
@@ -425,5 +430,470 @@ fn a_staged_policy_defers_the_original_on_a_metered_link() {
         unmetered.plan_sessions(&asset).len(),
         asset.blobs.len(),
         "unmetered Wi-Fi opens the whole ladder"
+    );
+}
+
+// ─── Custody: a transfer is not custody ──────────────────────────────────────
+
+/// The `received_at` every mock receipt carries, and the client clock the checks run at.
+const RECEIVED_AT: &str = "2026-07-10T00:00:00Z";
+
+fn now() -> i64 {
+    RECEIVED_AT.parse::<jiff::Timestamp>().unwrap().as_second()
+}
+
+/// The server attestation key the client pins.
+fn attestation_key() -> HybridSigningKey {
+    HybridSigningKey::from_seed64(&[9u8; 64])
+}
+
+/// A key the server never published.
+fn foreign_key() -> HybridSigningKey {
+    HybridSigningKey::from_seed64(&[3u8; 64])
+}
+
+/// A receipt for one blob of `bundle`, issued the way finalization issues it: the server's own
+/// address and size, the blob's wire role, and the chain position on the provenance blob only.
+fn receipt_for(
+    key: &HybridSigningKey,
+    bundle: &UploadBundle,
+    seq: u64,
+    blob: &BundleBlob<'_>,
+    hash: &str,
+) -> CustodyReceipt {
+    let core = CustodyReceiptCore {
+        version: "custody-receipt/v1".into(),
+        crypto_suite_id: bundle.crypto_suite_id,
+        protocol_version: bundle.protocol_version.clone(),
+        server_id: "capsule.example".into(),
+        server_key_id: Hash32::from_bytes([0x11; 32]),
+        receipt_seq: seq,
+        prior_receipt_hash: None,
+        upload_id: format!("sess-{seq}"),
+        asset_id: bundle.asset_id.to_string(),
+        blob_role: wire_enum(&blob.role),
+        ciphertext_hash: Hash32::from_hex(hash).unwrap(),
+        size: blob.bytes.len() as u64,
+        envelope_hash: (blob.role == BlobRole::Provenance).then(|| hash_bytes(blob.bytes)),
+        uploaded_by_user: bundle.created_by_user.to_string(),
+        uploaded_by_device: None,
+        received_at: RECEIVED_AT.into(),
+    };
+    let server_sig = key.sign(&core.signing_bytes());
+    CustodyReceipt { core, server_sig }
+}
+
+/// The ways the custody mock departs from an honest server.
+#[derive(Clone, Copy, Default)]
+struct Faults {
+    /// The last chunk is answered `204` but the finalize it raced never lands — the lost-claim
+    /// answer the server gives, read naively as success.
+    finalize_lost: bool,
+    /// Finalization fails terminally after the bytes are committed (the stage and the session's
+    /// byte count disagree). An outage is no fixture for this: `unavailable` asks the client to
+    /// wait and resume, so it does not fail the push.
+    finalize_fails: bool,
+    /// The verdict is honest per blob and says nothing is held.
+    not_durable: bool,
+    /// The verdict's aggregate says `durable: true` whatever the per-blob detail says.
+    lying_aggregate: bool,
+    /// The receipt log omits this role's receipt.
+    drop_receipt: Option<BlobRole>,
+    /// Receipts are signed by a key the client never pinned.
+    foreign_key: bool,
+    /// This role's receipt attests a size other than the one sent (validly signed).
+    wrong_size: Option<BlobRole>,
+}
+
+/// What a custody run produced: the push report, and the custody check where the push succeeded.
+struct CustodyRun {
+    pushed: Result<AssetPushReport, PushError>,
+    custody: Option<Result<VerifiedCustody, PushError>>,
+}
+
+/// Every receipt the mock server would issue for `bundle`, keyed by content address.
+fn issued_receipts(bundle: &UploadBundle, faults: Faults) -> HashMap<String, CustodyReceipt> {
+    let signer = if faults.foreign_key {
+        foreign_key()
+    } else {
+        attestation_key()
+    };
+    let mut issued = HashMap::new();
+    for (seq, (blob, hash)) in bundle_blobs(bundle).iter().enumerate() {
+        let mut receipt = receipt_for(&signer, bundle, seq as u64 + 1, blob, hash);
+        if faults.wrong_size == Some(blob.role) {
+            receipt.core.size += 1;
+            receipt.server_sig = signer.sign(&receipt.core.signing_bytes());
+        }
+        if faults.drop_receipt != Some(blob.role) {
+            issued.insert(hash.clone(), receipt);
+        }
+    }
+    issued
+}
+
+/// The in-process custody server: it stages, finalizes, verifies and serves receipts, with
+/// `faults` applied. Per-session state is `(declared hash, declared size)`; `finalized` holds the
+/// addresses whose finalize landed, in order.
+struct CustodyServer {
+    faults: Faults,
+    asset_id: String,
+    issued: HashMap<String, CustodyReceipt>,
+    sessions: Mutex<HashMap<String, (String, u64)>>,
+    finalized: Mutex<Vec<String>>,
+}
+
+impl CustodyServer {
+    fn answer(&self, req: &MockRequest) -> MockResponse {
+        let body: serde_json::Value =
+            serde_json::from_slice(&req.body).unwrap_or(serde_json::Value::Null);
+        match (req.method.as_str(), req.path.as_str()) {
+            ("POST", "/storage/verify") => self.verdict(&body),
+            ("POST", _) => self.create(&body),
+            ("PATCH", path) => self.chunk(req, path),
+            ("GET", path) if path.ends_with("/receipts") => self.receipts(),
+            other => panic!("unexpected request {other:?}"),
+        }
+    }
+
+    fn verdict(&self, body: &serde_json::Value) -> MockResponse {
+        let finalized = self.finalized.lock().unwrap();
+        let declared = body["assets"][0]["blob_hashes"].as_array().unwrap();
+        let mut all_held = true;
+        let blobs: Vec<String> = declared
+            .iter()
+            .map(|hash| {
+                let hash = hash.as_str().unwrap();
+                let held = !self.faults.not_durable && finalized.iter().any(|h| h == hash);
+                all_held &= held;
+                format!(
+                    r#"{{"hash":{hash:?},"role":"original","stored":{held},"indexed":{held},"retrievable":{held}}}"#
+                )
+            })
+            .collect();
+        let durable = self.faults.lying_aggregate || all_held;
+        MockResponse::new(200, "OK").json_body(format!(
+            r#"{{"verdicts":[{{"asset_id":{aid:?},"durable":{durable},"blobs":[{blobs}],"checked_at":{RECEIVED_AT:?}}}]}}"#,
+            aid = self.asset_id,
+            blobs = blobs.join(","),
+        ))
+    }
+
+    fn create(&self, body: &serde_json::Value) -> MockResponse {
+        let hash = body["hash"].as_str().unwrap().to_owned();
+        let size = body["size"].as_u64().unwrap();
+        let id = format!("sess-{}", &hash[..16]);
+        self.sessions
+            .lock()
+            .unwrap()
+            .insert(id.clone(), (hash, size));
+        MockResponse::new(201, "Created")
+            .header("X-Capsule-Offset", "0")
+            .json_body(format!(
+                r#"{{"id":{id:?},"upload_url":"/upload/{id}","suggested_chunk_size":262144}}"#
+            ))
+    }
+
+    fn chunk(&self, req: &MockRequest, path: &str) -> MockResponse {
+        let id = path.rsplit('/').next().unwrap();
+        let (hash, size) = self.sessions.lock().unwrap()[id].clone();
+        let offset: u64 = req
+            .header("X-Capsule-Offset")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        let next = offset + req.body.len() as u64;
+        if next == size {
+            if self.faults.finalize_fails {
+                return MockResponse::api_error(
+                    500,
+                    "Internal Server Error",
+                    error_codes::UPLOAD_STORAGE_INCONSISTENT,
+                    "the staged upload and the session's byte count disagree",
+                );
+            }
+            if !self.faults.finalize_lost {
+                self.finalized.lock().unwrap().push(hash);
+            }
+        }
+        MockResponse::new(204, "No Content").header("X-Capsule-Offset", next.to_string())
+    }
+
+    fn receipts(&self) -> MockResponse {
+        let finalized = self.finalized.lock().unwrap();
+        let receipts: Vec<String> = finalized
+            .iter()
+            .filter_map(|hash| self.issued.get(hash))
+            .map(|receipt| {
+                let b64 = BASE64.encode(receipt.to_canonical_cbor());
+                format!(
+                    r#"{{"receipt_seq":{},"receipt_cbor":{b64:?}}}"#,
+                    receipt.core.receipt_seq
+                )
+            })
+            .collect();
+        MockResponse::new(200, "OK").json_body(format!(
+            r#"{{"asset_id":{aid:?},"receipts":[{receipts}]}}"#,
+            aid = self.asset_id,
+            receipts = receipts.join(","),
+        ))
+    }
+}
+
+/// Push a real bundle through the [`CustodyServer`] with `faults` applied, then run
+/// [`verify_custody`] over what the push reported.
+async fn custody_run(faults: Faults) -> (tempfile::TempDir, UploadBundle, CustodyRun) {
+    let (dir, bundle) = real_bundle();
+    let state = Arc::new(CustodyServer {
+        faults,
+        asset_id: bundle.asset_id.to_string(),
+        issued: issued_receipts(&bundle, faults),
+        sessions: Mutex::default(),
+        finalized: Mutex::default(),
+    });
+    let server = MockServer::start(move |req: &MockRequest| state.answer(req)).await;
+
+    let uploads = server.client(&bundle.protocol_version);
+    let verify = StorageVerifyClient::new(VerifyTransport::with_static_token(
+        reqwest::Client::new(),
+        server.base_url(),
+        VerifyToken("test-token".into()),
+    ));
+    let scheduler = StagedScheduler::new(
+        capsule_core::import::UploadPolicy::Full,
+        ConnectionClass::Unmetered,
+    );
+    let pushed = push_bundle(&uploads, &scheduler, &bundle, &HashSet::new(), false).await;
+    let custody = match &pushed {
+        Ok(report) => Some(
+            verify_custody(
+                &verify,
+                &[attestation_key().verifying_key()],
+                &bundle,
+                report,
+                now(),
+            )
+            .await,
+        ),
+        Err(_) => None,
+    };
+    (dir, bundle, CustodyRun { pushed, custody })
+}
+
+/// **The honest path.** A pushed asset is confirmed durable and comes back with one verified
+/// receipt per blob, in ladder order — the provenance receipt carrying the chain position.
+#[tokio::test]
+async fn custody_is_verified_with_one_receipt_per_blob() {
+    let (_dir, bundle, run) = custody_run(Faults::default()).await;
+    let report = run.pushed.expect("the push transfers");
+    let custody = run.custody.unwrap().expect("custody verifies");
+
+    let hashes: Vec<String> = bundle_blobs(&bundle).into_iter().map(|(_, h)| h).collect();
+    assert_eq!(report.custody_hashes, hashes, "every blob is relied on");
+    assert_eq!(custody.checked_at, RECEIVED_AT);
+    assert_eq!(
+        custody
+            .receipts
+            .iter()
+            .map(|r| r.core.ciphertext_hash.to_hex())
+            .collect::<Vec<_>>(),
+        hashes,
+        "one receipt per blob, in ladder order"
+    );
+    assert_eq!(custody.receipts[0].core.blob_role, "provenance");
+    assert_eq!(
+        custody.receipts[0].core.envelope_hash,
+        Some(hash_bytes(&bundle.provenance_blob))
+    );
+    assert!(
+        custody.receipts[1..]
+            .iter()
+            .all(|r| r.core.envelope_hash.is_none())
+    );
+}
+
+/// **The lost finalize race.** Every chunk is answered `204`, so the transfer reads as a
+/// success — but the finalize never landed, and the verdict is what says so.
+#[tokio::test]
+async fn a_lost_finalize_is_not_custody() {
+    let (_dir, bundle, run) = custody_run(Faults {
+        finalize_lost: true,
+        ..Faults::default()
+    })
+    .await;
+    assert!(run.pushed.is_ok(), "the transfer itself reads as a success");
+    match run.custody.unwrap() {
+        Err(PushError::NotDurable {
+            asset_id,
+            not_durable,
+        }) => {
+            assert_eq!(asset_id, bundle.asset_id.to_string());
+            assert_eq!(not_durable.len(), bundle_blobs(&bundle).len());
+        }
+        other => panic!("expected NotDurable, got {other:?}"),
+    }
+}
+
+/// **The failed finalize.** Finalization fails terminally after the commit; the chunk that
+/// triggered it is refused with the server's code, so the push fails before custody is ever
+/// asked about.
+#[tokio::test]
+async fn a_failed_finalize_fails_the_push() {
+    let (_dir, _bundle, run) = custody_run(Faults {
+        finalize_fails: true,
+        ..Faults::default()
+    })
+    .await;
+    let error = run.pushed.expect_err("a failed finalize is a failed push");
+    assert_eq!(error.kind(), "upload");
+    assert_eq!(
+        error.error_code(),
+        Some(error_codes::UPLOAD_STORAGE_INCONSISTENT)
+    );
+    assert!(run.custody.is_none());
+}
+
+/// **Not durable.** The server says plainly that it does not hold the asset.
+#[tokio::test]
+async fn a_non_durable_verdict_fails_custody() {
+    let (_dir, _bundle, run) = custody_run(Faults {
+        not_durable: true,
+        ..Faults::default()
+    })
+    .await;
+    let error = run
+        .custody
+        .unwrap()
+        .expect_err("not durable is not custody");
+    assert_eq!(error.kind(), "not_durable");
+}
+
+/// **The aggregate is not trusted.** `durable: true` over per-blob detail that says otherwise
+/// is refused — the same re-check a release makes.
+#[tokio::test]
+async fn a_durable_aggregate_over_missing_blobs_fails_custody() {
+    let (_dir, _bundle, run) = custody_run(Faults {
+        lying_aggregate: true,
+        not_durable: true,
+        ..Faults::default()
+    })
+    .await;
+    assert!(matches!(
+        run.custody.unwrap(),
+        Err(PushError::NotDurable { ref not_durable, .. }) if !not_durable.is_empty()
+    ));
+}
+
+/// **A withheld receipt.** Durable, but the log holds no receipt for the metadata blob: a
+/// server that withholds receipts never becomes the sole holder of an asset unnoticed.
+#[tokio::test]
+async fn a_missing_receipt_fails_custody() {
+    let (_dir, bundle, run) = custody_run(Faults {
+        drop_receipt: Some(BlobRole::Metadata),
+        ..Faults::default()
+    })
+    .await;
+    match run.custody.unwrap() {
+        Err(PushError::ReceiptMissing { hash, .. }) => {
+            assert_eq!(Some(hash), bundle.metadata_blob_hash.map(|h| h.to_hex()));
+        }
+        other => panic!("expected ReceiptMissing, got {other:?}"),
+    }
+}
+
+/// **An unpinned signer.** Receipts signed by a key the server never published are refused.
+#[tokio::test]
+async fn a_receipt_under_an_unpinned_key_fails_custody() {
+    let (_dir, _bundle, run) = custody_run(Faults {
+        foreign_key: true,
+        ..Faults::default()
+    })
+    .await;
+    assert!(matches!(
+        run.custody.unwrap(),
+        Err(PushError::ReceiptRejected {
+            rejection: ReceiptRejection::Signature,
+            ..
+        })
+    ));
+}
+
+/// **A receipt for other bytes.** Validly signed, but attesting a size the client never sent.
+#[tokio::test]
+async fn a_receipt_for_a_different_size_fails_custody() {
+    let (_dir, _bundle, run) = custody_run(Faults {
+        wrong_size: Some(BlobRole::Original),
+        ..Faults::default()
+    })
+    .await;
+    let error = run
+        .custody
+        .unwrap()
+        .expect_err("a mismatched receipt is refused");
+    assert_eq!(error.kind(), "receipt_rejected");
+    assert!(matches!(
+        error,
+        PushError::ReceiptRejected {
+            rejection: ReceiptRejection::FieldMismatch("size"),
+            ..
+        }
+    ));
+}
+
+/// A deferred tier was never sent, so custody is not asked of it: the index tier alone is what
+/// a metered staged run relies on.
+#[test]
+fn custody_excludes_the_tiers_a_staged_policy_deferred() {
+    let (_dir, bundle) = real_bundle();
+    let metered = StagedScheduler::new(
+        capsule_core::import::UploadPolicy::Staged,
+        ConnectionClass::Metered,
+    );
+    let planned = plan(&metered, &bundle, &HashSet::<String>::new(), false);
+    assert_eq!(
+        planned.deferred_hashes,
+        vec![bundle.ciphertext_hash.to_hex()]
+    );
+
+    let blobs = bundle_blobs(&bundle);
+    assert_eq!(
+        custody_hashes(&blobs, &planned.deferred_hashes),
+        blobs[..2]
+            .iter()
+            .map(|(_, h)| h.clone())
+            .collect::<Vec<_>>()
+    );
+}
+
+/// A `derivative_manifest` blob has no arm in the core receipt verifier, so its receipt is held
+/// to the same signature and field checks against its wire role.
+#[test]
+fn a_derivative_manifest_receipt_is_checked_against_its_wire_role() {
+    let (_dir, mut bundle) = real_bundle();
+    bundle.derivative_manifests = vec![b"signed thumbnail manifest".to_vec()];
+    let blobs = bundle_blobs(&bundle);
+    let (blob, hash) = blobs
+        .iter()
+        .find(|(blob, _)| blob.role == BlobRole::DerivativeManifest)
+        .unwrap();
+    let parsed = Hash32::from_hex(hash).unwrap();
+    let key = attestation_key();
+    let pinned = [key.verifying_key()];
+
+    let good = receipt_for(&key, &bundle, 1, blob, hash);
+    assert_eq!(good.core.blob_role, "derivative_manifest");
+    assert_eq!(check_receipt(&good, &pinned, blob, parsed, now()), Ok(()));
+
+    let mut wrong_role = good.clone();
+    wrong_role.core.blob_role = "derivative".into();
+    wrong_role.server_sig = key.sign(&wrong_role.core.signing_bytes());
+    assert_eq!(
+        check_receipt(&wrong_role, &pinned, blob, parsed, now()),
+        Err(ReceiptRejection::FieldMismatch("blob_role"))
+    );
+
+    let unpinned = receipt_for(&foreign_key(), &bundle, 1, blob, hash);
+    assert_eq!(
+        check_receipt(&unpinned, &pinned, blob, parsed, now()),
+        Err(ReceiptRejection::Signature)
     );
 }

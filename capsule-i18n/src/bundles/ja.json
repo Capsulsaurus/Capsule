@@ -287,6 +287,7 @@
   "error.quota.exceeded": "ストレージがいっぱいです。",
   "error.quota.grace_locked": "ストレージが猶予期間を過ぎてもいっぱいのままのため、空き容量を確保するまで編集は一時停止されます。",
   "error.quota.peer_budget_exceeded": "この提供元は、あなたのアカウントでのキャッシュ上限に達しました。",
+  "error.quota.suspended": "ストレージが停止されているため、新しいものは追加できません。既存のものの閲覧と削除は引き続き可能です。",
   "error.quota.unavailable": "Capsule はストレージ使用量を確認できませんでした。もう一度お試しください。",
   "error.share.rate_limited": "試行回数が多すぎます。しばらくしてからもう一度お試しください。",
   "error.storage.asset_not_found": "That item was not found.",

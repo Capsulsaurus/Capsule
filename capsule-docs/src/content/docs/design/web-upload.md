@@ -26,7 +26,7 @@ Not in v1: guest-produced derivatives, metadata or provenance (the adopter produ
 - **Per-link caps are enforced server-side at drop-session creation**, decided and reserved in one store operation so concurrent guests cannot both take the last slot. A leaked link is bounded to wasted quota and inbox space.
 - **Quota is charged to the link owner at drop-session creation** — the single [enforcement point](/design/quota/#enforcement-points).
 - **Probing reveals nothing.** An unknown, expired, revoked, or spent link and an unknown session all return one indistinguishable `404`, never `410`. A cumulative cap on a live link is the distinct `409 error.drop.cap_exhausted`, because the guest holds a real link and needs a new one.
-- **Rate limits.** Drop-session creation is limited per `{opaque_id}` (`429 error.drop.rate_limited`) and per source IP. The per-IP limiter is not yet enforced; tracked by #704.
+- **Rate limits.** Drop-session creation is limited per source IP and per `{opaque_id}` (`429 error.drop.rate_limited`), in that order, before the link is resolved, failing closed. The source is resolved the way [Share Links](/design/share-links/#security-contract) resolves it.
 - **Optional passphrase gates the write, not confidentiality.** The link record stores an [Argon2id](/design/cryptography/primitives/#password-based-kdf) verifier; the guest sends the derived proof as `passphrase_proof`, compared in constant time **before any cap is reserved** so wrong guesses cannot burn the link down. A refusal is `403 error.drop.passphrase_required` — not `404`, since the caller already holds the id.
 - **Home-server-only.** Like a share link, an upload link is served only by the album owner's [home server](/design/federation/#album-ownership-v1-single-home-server); a peer refuses with a `{ home_server }` pointer.
 - **Adopted bytes are external-origin.** Every client decodes them only in the [sandboxed decoder](/design/clients/#sandboxed-decoder).
@@ -78,5 +78,5 @@ Re-encrypting under a derived key would upload and store every asset twice. Rewr
 - Upload-link ids are ≥128-bit and non-sequential.
 - An adopted manifest with `key_mode = wrapped` passes `verify_asset`, and a second member unwraps and decrypts the unchanged ciphertext; a forged wrapped key or mismatched `key_mode` is rejected.
 - A `DropDescriptor` cannot reach any album-write path, and the inbox never appears on the sync feed.
-- Caps, quota, the per-link limiter, and the indistinguishable `404` each refuse as specified.
+- Caps, quota, the per-source and per-link limiters, and the indistinguishable `404` each refuse as specified.
 - A crash mid-adoption leaves an `adopting` row, never a lost or duplicated asset.

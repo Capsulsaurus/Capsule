@@ -347,6 +347,9 @@ pub mod error_codes {
     /// `error.quota.peer_budget_exceeded`
     pub const QUOTA_PEER_BUDGET_EXCEEDED: &str = "error.quota.peer_budget_exceeded";
 
+    /// `error.quota.suspended`
+    pub const QUOTA_SUSPENDED: &str = "error.quota.suspended";
+
     /// `error.quota.unavailable`
     pub const QUOTA_UNAVAILABLE: &str = "error.quota.unavailable";
 
@@ -491,6 +494,9 @@ pub mod error_codes {
     /// `error.upload.owner_not_permitted`
     pub const UPLOAD_OWNER_NOT_PERMITTED: &str = "error.upload.owner_not_permitted";
 
+    /// `error.upload.rate_limited`
+    pub const UPLOAD_RATE_LIMITED: &str = "error.upload.rate_limited";
+
     /// `error.upload.receipt_not_available`
     pub const UPLOAD_RECEIPT_NOT_AVAILABLE: &str = "error.upload.receipt_not_available";
 
@@ -508,6 +514,9 @@ pub mod error_codes {
 
     /// `error.upload.stale_revival`
     pub const UPLOAD_STALE_REVIVAL: &str = "error.upload.stale_revival";
+
+    /// `error.upload.storage_full`
+    pub const UPLOAD_STORAGE_FULL: &str = "error.upload.storage_full";
 
     /// `error.upload.storage_inconsistent`
     pub const UPLOAD_STORAGE_INCONSISTENT: &str = "error.upload.storage_inconsistent";

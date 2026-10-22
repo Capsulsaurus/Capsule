@@ -1120,6 +1120,10 @@
     "message": "Esta fonte atingiu o limite de cache na sua conta.",
     "context": "Machine-translated seed pending human review."
   },
+  "error.quota.suspended": {
+    "message": "Seu armazenamento está suspenso, então nada novo pode ser adicionado. Você ainda pode ver e excluir o que já tem.",
+    "context": "Machine-translated seed pending human review."
+  },
   "error.quota.unavailable": {
     "message": "O Capsule não conseguiu verificar seu uso de armazenamento. Tente novamente.",
     "context": "Machine-translated seed pending human review."

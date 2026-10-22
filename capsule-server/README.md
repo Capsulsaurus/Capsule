@@ -112,7 +112,8 @@ it.
 
 `config` reads every setting an operator decides — command-line flag over environment over
 default — and reports **every** fault in one message, because an operator otherwise restarts the
-process once per variable. `capsule-server/.env.example` is the full list. There is no
+process once per variable. `Config::load` in `src/config.rs` is the full list;
+`capsule-server/.env.example` is a starting template. There is no
 configuration file; `--config PATH` is accepted and refused with a sentence saying why.
 
 A real deployment supplies **two** independent secrets: `JWT_ED25519_DER` signs session tokens,

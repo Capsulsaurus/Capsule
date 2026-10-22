@@ -1814,6 +1814,7 @@
     <string name="cli_help_push_about">Upload a local Capsule library to the server</string>
     <string name="cli_help_push_arg_dry_run">Report what would be uploaded without opening a single upload session</string>
     <string name="cli_help_push_arg_force">Re-drive every blob regardless of what the server already holds</string>
+    <string name="cli_help_push_arg_json">Print the run as one JSON document on stdout: the totals and each asset\'s outcome (verified, failed with its error, or planned on a dry run)</string>
     <string name="cli_help_push_arg_library">Path to the Capsule library to push</string>
     <string name="cli_help_push_arg_passphrase_stdin">Read the library passphrase from stdin instead of prompting, so pushes work in scripts and CI where there is no terminal</string>
     <string name="cli_help_push_arg_staged">Open the tier sessions in ladder order (index → preview → original), gating the above-index tiers on the connection class, instead of opening all eagerly</string>
@@ -2140,6 +2141,7 @@
     <string name="error_quota_exceeded">Your storage is full.</string>
     <string name="error_quota_grace_locked">Your storage has been full past the grace period, so edits are paused until you free space.</string>
     <string name="error_quota_peer_budget_exceeded">This source has reached its caching limit on your account.</string>
+    <string name="error_quota_suspended">Your storage is suspended, so nothing new can be added. You can still view and delete what you have.</string>
     <string name="error_quota_unavailable">Capsule couldn\'t check your storage use. Please try again.</string>
     <string name="error_request_failed">Something went wrong with that request.</string>
     <string name="error_request_forbidden">That credential isn\'t enough for this action.</string>
@@ -2188,12 +2190,14 @@
     <string name="error_upload_missing_offset">The upload request was missing its position marker.</string>
     <string name="error_upload_offset_mismatch">The upload got out of sync and is realigning.</string>
     <string name="error_upload_owner_not_permitted">You can\'t upload on behalf of this user.</string>
+    <string name="error_upload_rate_limited">Uploading is paused for a moment. It\'ll resume on its own.</string>
     <string name="error_upload_receipt_not_available">The upload hasn\'t finished, so its storage receipt isn\'t available yet.</string>
     <string name="error_upload_replace_incomplete">Capsule is still receiving this photo\'s new version. It\'ll finish on its own.</string>
     <string name="error_upload_session_not_active">This upload has already finished.</string>
     <string name="error_upload_session_not_found">The upload session expired. Starting over…</string>
     <string name="error_upload_size_exceeded">The upload sent more data than it declared.</string>
     <string name="error_upload_stale_revival">This change is based on an out-of-date version of the item.</string>
+    <string name="error_upload_storage_full">The server is out of storage space. Uploading will resume once space is freed.</string>
     <string name="error_upload_storage_inconsistent">The server hit a storage problem. Please try again.</string>
     <string name="error_upload_timestamp_out_of_range">Your device\'s clock appears to be wrong. Check its date and time.</string>
     <string name="error_upload_unavailable">The upload couldn\'t be completed. Please try again.</string>

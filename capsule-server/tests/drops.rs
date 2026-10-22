@@ -9,8 +9,14 @@
 
 mod support;
 
+use std::net::SocketAddr;
+
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use capsule_core::crypto::hash::hash_bytes;
+use capsule_core::crypto::receipts::{
+    BlobRole as ReceiptRole, CustodyReceipt, ReceiptExpectations, verify_receipt,
+};
 use capsule_server::blob::{BlobStore, ContentAddress};
 use capsule_server::index::{AssetIndex, BlobRecord, PendingAsset, Reservation};
 use capsule_server::store::{AssetId, BlobRole, OwnerId};
@@ -185,6 +191,56 @@ async fn a_guest_drop_lands_in_the_owners_inbox_and_never_in_an_album() {
             .len(),
         0,
         "a drop is not an asset until its owner signs for it"
+    );
+}
+
+/// A full disk under a guest's chunk keeps the guest surface's one storage answer, `500
+/// error.drop.unavailable`, rather than the album path's `507` (the drop wire contract is
+/// unchanged). Nothing of the refused chunk was kept, so the same chunk at the same offset lands.
+#[tokio::test]
+async fn a_full_disk_under_a_guest_chunk_is_unavailable_and_the_retry_lands() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let bytes = payload(b'f', 4096);
+    let id = opaque(40);
+    provision(
+        &fixture,
+        &bearer,
+        &link_body(&id, json!({})),
+        StatusCode::CREATED,
+    )
+    .await;
+    let opened = create_drop(&fixture, &id, &bytes, StatusCode::CREATED).await;
+    let upload_id = opened["upload_id"].as_str().expect("a session id");
+
+    fixture.blobs.fill_disk_on_next_append();
+    let problem: Value = fixture
+        .client
+        .patch(&format!("/d/{id}/{upload_id}"))
+        .header("x-capsule-offset", "0")
+        .header("x-capsule-checksum", &checksum(&bytes))
+        .body("application/octet-stream", bytes.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR)
+        .json();
+    assert_eq!(problem["code"], "error.drop.unavailable");
+    assert!(
+        inbox(&fixture, &bearer).await["drops"]
+            .as_array()
+            .expect("drops")
+            .is_empty(),
+        "a refused chunk deposits nothing"
+    );
+
+    send(&fixture, &id, upload_id, &bytes, StatusCode::NO_CONTENT).await;
+    assert_eq!(
+        inbox(&fixture, &bearer).await["drops"]
+            .as_array()
+            .expect("drops")
+            .len(),
+        1,
+        "the retry at the same offset completes the drop"
     );
 }
 
@@ -761,6 +817,19 @@ async fn adopt(
     envelope: &Value,
     expect: StatusCode,
 ) -> Value {
+    adopt_as(fixture, bearer, drop_id, ADOPTED, bytes, envelope, expect).await
+}
+
+/// Adopt `drop_id` as `asset_id` with `envelope`, expecting `expect`.
+async fn adopt_as(
+    fixture: &Fixture,
+    bearer: &str,
+    drop_id: &str,
+    asset_id: &str,
+    bytes: &[u8],
+    envelope: &Value,
+    expect: StatusCode,
+) -> Value {
     fixture
         .client
         .post(&format!("/v1/drops/{drop_id}/adopt"))
@@ -768,7 +837,7 @@ async fn adopt(
         .header("accept", "application/json")
         .json(&json!({
             "album_id": album().as_str(),
-            "asset_id": ADOPTED,
+            "asset_id": asset_id,
             "size": bytes.len(),
             "hash": checksum(bytes),
             "content_type": "image/jpeg",
@@ -884,6 +953,217 @@ async fn an_adoption_onto_an_asset_holding_another_original_is_refused_and_keeps
 
     assert_eq!(problem["code"], "error.drop.adoption_refused");
     assert_drop_kept(&fixture, &bearer).await;
+    assert!(
+        adopted_receipts(&fixture).await.is_empty(),
+        "a refused adoption committed nothing, so it has no receipt"
+    );
+}
+
+/// Every custody receipt the log holds for [`ADOPTED`].
+async fn adopted_receipts(fixture: &Fixture) -> Vec<CustodyReceipt> {
+    use capsule_server::attestation::ReceiptLog as _;
+    fixture
+        .receipts
+        .for_asset(&AssetId::new(ADOPTED))
+        .await
+        .expect("the log answers")
+}
+
+#[tokio::test]
+async fn an_adopted_blob_has_a_receipt_that_verifies_under_the_published_key() {
+    // Invariant 33: adoption is the second path that indexes a blob, so it is the second path
+    // that must write a receipt with it. Read back the way the owner reads it — the durable
+    // chain — and verified the way a client verifies one.
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (drop_id, bytes, manifest) = pending_drop(&fixture, &bearer).await;
+
+    adopt(
+        &fixture,
+        &bearer,
+        &drop_id,
+        &bytes,
+        &manifest["manifest_envelope"],
+        StatusCode::OK,
+    )
+    .await;
+
+    let body: Value = fixture
+        .client
+        .get(&format!("/v1/assets/{ADOPTED}/receipts"))
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    let entries = body["receipts"].as_array().expect("a receipts array");
+    assert_eq!(entries.len(), 1, "one custody event, one receipt");
+    assert_eq!(
+        entries[0]["upload_id"], drop_id,
+        "the receipt is filed under the drop the owner adopted"
+    );
+
+    let cbor = BASE64
+        .decode(entries[0]["receipt_cbor"].as_str().expect("base64 CBOR"))
+        .expect("the CBOR decodes from base64");
+    let receipt = CustodyReceipt::from_canonical_cbor(&cbor).expect("a receipt");
+    assert_eq!(
+        verify_receipt(
+            &receipt,
+            &[fixture.attestation_key.verifying_key()],
+            &ReceiptExpectations {
+                ciphertext_hash: hash_bytes(&bytes),
+                size: bytes.len() as u64,
+                role: ReceiptRole::Original,
+                envelope_hash: None,
+            },
+            receipt
+                .core
+                .received_at
+                .parse::<Timestamp>()
+                .expect("an instant")
+                .as_second(),
+        ),
+        Ok(()),
+    );
+    assert_eq!(receipt.core.asset_id, ADOPTED);
+    assert_eq!(
+        receipt.core.uploaded_by_user,
+        user().as_str(),
+        "an adopted drop's author is the adopter"
+    );
+}
+
+#[tokio::test]
+async fn a_retried_adoption_returns_the_same_receipt() {
+    // The index commits the blob and its receipt, and the answer is lost: the adoption is
+    // refused as unavailable and the drop returns to the inbox. The retry finds the blob
+    // already held, and must get the receipt that committed — never a second one for the same
+    // custody event.
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (drop_id, bytes, manifest) = pending_drop(&fixture, &bearer).await;
+
+    fixture.index_fault.arm_after_commit();
+    adopt(
+        &fixture,
+        &bearer,
+        &drop_id,
+        &bytes,
+        &manifest["manifest_envelope"],
+        StatusCode::INTERNAL_SERVER_ERROR,
+    )
+    .await;
+    assert_eq!(fixture.index_fault.fired(), 1, "the fault fired");
+    assert_drop_kept(&fixture, &bearer).await;
+    let committed = adopted_receipts(&fixture).await;
+    assert_eq!(
+        committed.len(),
+        1,
+        "the lost answer still committed the rows and their receipt together"
+    );
+
+    adopt(
+        &fixture,
+        &bearer,
+        &drop_id,
+        &bytes,
+        &manifest["manifest_envelope"],
+        StatusCode::OK,
+    )
+    .await;
+
+    assert_eq!(
+        adopted_receipts(&fixture).await,
+        committed,
+        "the retry returned the receipt that committed rather than minting another"
+    );
+}
+
+#[tokio::test]
+async fn a_retried_adoption_naming_another_asset_is_refused_and_indexes_nothing() {
+    // The receipt is filed under the drop id, which names no asset. A retry after a lost
+    // answer that signs a fresh manifest (another `file_id`) must not index the blob under a
+    // second asset while the log hands back the first asset's receipt: that second asset would
+    // be indexed with no receipt (invariant 33). It is refused, names the asset the drop was
+    // adopted as, and a retry naming that asset then settles the drop.
+    const RETRIED: &str = "018f3f1e-4b7a-7c9d-8e2f-00000000cafe";
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (drop_id, bytes, manifest) = pending_drop(&fixture, &bearer).await;
+
+    fixture.index_fault.arm_after_commit();
+    adopt(
+        &fixture,
+        &bearer,
+        &drop_id,
+        &bytes,
+        &manifest["manifest_envelope"],
+        StatusCode::INTERNAL_SERVER_ERROR,
+    )
+    .await;
+    assert_eq!(fixture.index_fault.fired(), 1, "the fault fired");
+    let committed = adopted_receipts(&fixture).await;
+    assert_eq!(committed.len(), 1, "the first adoption committed");
+
+    let mut retried = manifest["manifest_envelope"].clone();
+    retried["file_id"] = RETRIED.into();
+    let problem = adopt_as(
+        &fixture,
+        &bearer,
+        &drop_id,
+        RETRIED,
+        &bytes,
+        &retried,
+        StatusCode::BAD_REQUEST,
+    )
+    .await;
+
+    assert_eq!(problem["code"], "error.drop.adoption_refused");
+    assert!(
+        problem["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains(ADOPTED)),
+        "the refusal names the asset the drop was adopted as: {problem}"
+    );
+    assert_drop_kept(&fixture, &bearer).await;
+    assert!(
+        fixture
+            .index
+            .read(&AssetId::new(RETRIED))
+            .await
+            .expect("the index answers")
+            .is_none(),
+        "no second asset was reserved or indexed for the drop's blob"
+    );
+    {
+        use capsule_server::attestation::ReceiptLog as _;
+        assert!(
+            fixture
+                .receipts
+                .for_asset(&AssetId::new(RETRIED))
+                .await
+                .expect("the log answers")
+                .is_empty(),
+            "and no receipt names it"
+        );
+    }
+
+    adopt(
+        &fixture,
+        &bearer,
+        &drop_id,
+        &bytes,
+        &manifest["manifest_envelope"],
+        StatusCode::OK,
+    )
+    .await;
+    assert_eq!(
+        adopted_receipts(&fixture).await,
+        committed,
+        "the retry naming the committed asset settles on the receipt that committed"
+    );
 }
 
 #[tokio::test]
@@ -1243,4 +1523,60 @@ async fn a_saturated_limiter_partition_is_a_429_and_not_an_outage() {
     let problem = create_drop(&fixture, &id, &bytes, StatusCode::TOO_MANY_REQUESTS).await;
     assert_eq!(problem["code"], "error.drop.rate_limited");
     assert!(problem["retry_after"].as_u64().is_some_and(|s| s > 0));
+}
+
+/// Open a drop session from `peer`, returning the status.
+async fn create_drop_from(fixture: &Fixture, id: &str, bytes: &[u8], peer: &str) -> StatusCode {
+    fixture
+        .client
+        .post(&format!("/d/{id}"))
+        .header("accept", "application/json")
+        .peer(SocketAddr::new(
+            peer.parse().expect("a test address"),
+            40_000,
+        ))
+        .json(&json!({
+            "content_type": "image/jpeg",
+            "size": bytes.len(),
+            "ciphertext_hash": checksum(bytes),
+            "kem_ct": BASE64.encode([9_u8; 64]),
+        }))
+        .send()
+        .await
+        .status()
+}
+
+#[tokio::test]
+async fn drop_session_creation_is_rate_limited_per_source_independently_of_the_link() {
+    // Invariant 31's per-source half (#704). An address spraying fabricated ids never spends
+    // any one link's budget, so only a per-source key sees it — and once it is spent, the
+    // sprayer cannot drain the budget of a real link a guest was sent.
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let id = opaque(1);
+    provision(
+        &fixture,
+        &bearer,
+        &link_body(&id, json!({ "max_file_count": 1000 })),
+        StatusCode::CREATED,
+    )
+    .await;
+    let bytes = payload(b'h', 64);
+
+    // `DROP_SOURCE` is sixty an hour, each against a different unknown link.
+    for tag in 0..60_u8 {
+        let status = create_drop_from(&fixture, &opaque(100 + tag), &bytes, "203.0.113.9").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    assert_eq!(
+        create_drop_from(&fixture, &id, &bytes, "203.0.113.9").await,
+        StatusCode::TOO_MANY_REQUESTS,
+        "the sprayer is refused even on a live link"
+    );
+    assert_eq!(
+        create_drop_from(&fixture, &id, &bytes, "198.51.100.7").await,
+        StatusCode::CREATED,
+        "the link's own budget is untouched, so a guest elsewhere still deposits"
+    );
 }

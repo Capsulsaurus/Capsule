@@ -76,7 +76,14 @@ pub const SHARE_SOURCE: Budget = Budget::new(120, SignedDuration::from_mins(1));
 /// filling somebody's quota makes thousands.
 pub const DROP_LINK: Budget = Budget::new(30, SignedDuration::from_hours(1));
 
-/// Drop-session creations from one source address (invariant 31).
+/// Drop-session creations from one source address (invariant 31, #704).
+///
+/// Sixty an hour, twice the per-link budget: one guest behind one address legitimately deposits
+/// through a couple of links, while a script spraying fabricated ids from one address is held to
+/// a minute's worth of honest use per hour. Keyed on
+/// [`ClientAddr::source_key`](crate::client_addr::ClientAddr::source_key), so behind a proxy the
+/// deployment must name it in `TRUSTED_PROXIES` or `TRUSTED_PROXY_HOPS`, or every guest shares
+/// the proxy's budget.
 pub const DROP_SOURCE: Budget = Budget::new(60, SignedDuration::from_hours(1));
 
 /// Code attempts against one second-factor challenge.
@@ -125,6 +132,54 @@ pub const OIDC_DEVICE: Budget = Budget::new(60, SignedDuration::from_mins(1));
 /// re-hashes every declared blob, so an unbounded one is an I/O-amplification attack costing the
 /// attacker one small JSON body.
 pub const DEEP_VERIFY: Budget = Budget::new(4, SignedDuration::from_hours(1));
+
+/// Upload sessions one account may open (transfer/upload.md, Hostile Clients).
+///
+/// Three hundred a minute. A session is one blob, and an asset is a handful of blobs (original,
+/// derivatives, metadata, manifest), so this is an import of sixty-odd photos a minute before the
+/// limiter is felt — and a client that is felt waits out the `Retry-After` and carries on, rather
+/// than failing the import. A script opening sessions to fill the session store meets it inside a
+/// second. The fixed window's doubled burst at a boundary is six hundred, which the live-session
+/// cap below the limiter bounds anyway.
+pub const UPLOAD_SESSIONS: Budget = Budget::new(300, SignedDuration::from_mins(1));
+
+/// Chunks one account may append, across all of its sessions (transfer/upload.md, Hostile
+/// Clients).
+///
+/// Three thousand a minute, fifty a second. The SDK's smallest chunk is 256 KiB, so this is
+/// above 100 Mbit/s at the floor and far above it at the sizes a fast link adapts to; a client
+/// sending one-byte chunks at the head is the one this throttles.
+pub const UPLOAD_CHUNKS: Budget = Budget::new(3_000, SignedDuration::from_mins(1));
+
+/// Upload sessions opened from one source address, across every account behind it
+/// (transfer/upload.md, Hostile Clients; #718).
+///
+/// Six hundred a minute, twice [`UPLOAD_SESSIONS`]: a household or office behind one address
+/// legitimately has a couple of accounts importing at once, and one account alone never reaches
+/// this, because the route charges the account's budget first and a request that budget refuses
+/// spends nothing here. What it bounds is many credentials driven from one address. Keyed on
+/// [`ClientAddr::source_key`](crate::client_addr::ClientAddr::source_key), so behind a proxy the
+/// deployment must name it in `TRUSTED_PROXIES` or `TRUSTED_PROXY_HOPS`, or every uploader shares
+/// the proxy's budget.
+pub const UPLOAD_SESSIONS_SOURCE: Budget = Budget::new(600, SignedDuration::from_mins(1));
+
+/// Chunks appended from one source address, across every account behind it (transfer/upload.md,
+/// Hostile Clients; #718).
+///
+/// Six thousand a minute, twice [`UPLOAD_CHUNKS`], for the reasons [`UPLOAD_SESSIONS_SOURCE`] is
+/// twice its per-account budget.
+pub const UPLOAD_CHUNKS_SOURCE: Budget = Budget::new(6_000, SignedDuration::from_mins(1));
+
+/// Live upload sessions one account may hold at once (transfer/upload.md, Hostile Clients).
+///
+/// A cap rather than a rate: the session store holds every live session for up to its 24-hour
+/// lifetime, so the rate limit above bounds how fast an account fills it and this bounds how far.
+/// A thousand is several hundred assets in flight — far past what a client's own transfer
+/// concurrency opens — while a client that leaks sessions, by crashing between creating them and
+/// sending a byte, is stopped well short of crowding out every other account. A session leaves
+/// the count when it finalizes, is cancelled, or expires; resuming one already held never counts
+/// again, because the create that finds it answers with it before this is consulted.
+pub const UPLOAD_LIVE_SESSIONS: usize = 1_000;
 
 /// Requests from one federated peer, across the sync and blob reads (invariant 21).
 ///

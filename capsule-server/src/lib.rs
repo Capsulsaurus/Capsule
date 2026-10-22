@@ -70,6 +70,7 @@ pub mod blob;
 pub mod body;
 pub mod boot;
 pub mod cli;
+pub mod client_addr;
 pub mod config;
 pub mod counter;
 pub mod directory;
@@ -126,6 +127,11 @@ pub fn router() -> ServerRouter {
         // scheme's `401`, the gate's own `426` — because each of those is produced beneath this
         // and passes back up through it. See [`negotiation`].
         .intercept(negotiation::Negotiation::new())
+        // `Retry-After` on every problem that names a retry instant — a `429` from any limiter,
+        // and the upload surface's `503` and `507` (transfer/upload.md, Hostile Clients). Router-
+        // wide for the reason `Negotiation` is: the refusals it reads are produced beneath it on
+        // every surface. See [`problem::RetryAfter`].
+        .intercept(problem::RetryAfter::new())
         // The body-size cap is **not** mounted here. It sits on every group below instead — each
         // group carrying the cap its own operations need — because Kynos refuses two `413`
         // producers on one route, so a router-wide cap would leave no group room for a tighter
@@ -325,8 +331,11 @@ pub fn router() -> ServerRouter {
 /// so mounting one changes this signature. That is a feature: the alias is the one place the
 /// server's router-wide middleware stack is written down. The body-size cap is not in it: each
 /// group carries its own (see [`router`] and [`limits`]).
-pub type ServerRouter =
-    Router<App, Propagate, Cons<negotiation::Negotiation, Cons<problem::CodedProblems, ()>>>;
+pub type ServerRouter = Router<
+    App,
+    Propagate,
+    Cons<problem::RetryAfter, Cons<negotiation::Negotiation, Cons<problem::CodedProblems, ()>>>,
+>;
 
 /// Builds the service the server and the in-process tests both drive.
 ///
@@ -341,7 +350,24 @@ pub type ServerRouter =
 /// match its path template, two operations claiming the same method and path, or a guarded
 /// operation whose context cannot authenticate the scheme guarding it.
 pub fn service(context: App) -> kynos::Result<Service<App>> {
-    router().build(context)
+    service_behind(context, &client_addr::ProxyTrust::default())
+}
+
+/// Builds the service with the deployment's trusted-proxy policy (issue #704).
+///
+/// [`service`] is this with a policy that trusts nobody, which is what every in-process test
+/// wants: the socket peer is the client and no forwarding header is read. `serve` passes the
+/// policy [`config`] read, so the per-source limiters see the client behind the deployment's
+/// proxies — and only behind the proxies it named.
+///
+/// # Errors
+///
+/// As [`service`].
+pub fn service_behind(
+    context: App,
+    trust: &client_addr::ProxyTrust,
+) -> kynos::Result<Service<App>> {
+    router().trusted_proxies(trust.policy()).build(context)
 }
 
 /// The specification version Capsule's document targets.
@@ -383,5 +409,9 @@ pub fn openapi() -> kynos::Result<kynos::openapi::Document> {
     // included. The walk files the same three declarations under every other response, so the
     // document promises exactly what the wire carries.
     openapi::describe_negotiation_headers(&mut document);
+    // `Retry-After` is attached to a problem that names a retry instant and to nothing else, so
+    // it is declared there and taken off the success responses Kynos files an interceptor's
+    // headers under.
+    openapi::describe_retry_after_header(&mut document);
     Ok(document)
 }

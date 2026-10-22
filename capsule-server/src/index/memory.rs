@@ -11,16 +11,17 @@
 //! wrong one for anything else.
 
 use std::collections::BTreeMap;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use capsule_core::crypto::hash::Hash32;
 use jiff::Timestamp;
 
 use super::{
-    AssetIndex, AssetRow, AssetState, BlobOutcome, BlobRecord, BlobRef, FeedEntry, HoldOutcome,
-    IndexFuture, LifecycleOp, OpAction, OpOutcome, PendingAsset, PurgeOutcome, Reservation,
-    ServingHold, entry_for, is_singular, set_singular,
+    AssetIndex, AssetRow, AssetState, BlobOutcome, BlobRecord, BlobRef, Custody, FeedEntry,
+    HoldOutcome, IndexFuture, LifecycleOp, OpAction, OpOutcome, PendingAsset, PurgeOutcome,
+    Receipted, Reservation, ServingHold, entry_for, is_singular, set_singular,
 };
+use crate::attestation::InMemoryReceipts;
 use crate::blob::ContentAddress;
 use crate::store::{AlbumId, AssetId, BlobRole, OwnerId};
 
@@ -73,18 +74,223 @@ impl Inner {
         self.minted.insert(owner.clone(), next);
         next
     }
+
+    /// [`AssetIndex::record_blob`], with the lock already held.
+    fn record(&mut self, asset: &AssetId, blob: BlobRecord) -> BlobOutcome {
+        let Some(row) = self.rows.get(asset).cloned() else {
+            return BlobOutcome::NotFound;
+        };
+
+        if row
+            .blobs
+            .iter()
+            .any(|held| held.role == blob.role && held.address == blob.address)
+        {
+            return BlobOutcome::AlreadyHeld(Box::new(row));
+        }
+        if is_singular(blob.role) && row.blobs.iter().any(|held| held.role == blob.role) {
+            return BlobOutcome::Conflict;
+        }
+
+        let mut row = row;
+        row.blobs.push(BlobRef {
+            role: blob.role,
+            address: blob.address,
+            size: blob.size,
+        });
+        // Ordered so two adapters that accepted the same blobs hold the same row — the port
+        // contracts role-then-address order and a `Vec` will not sort itself.
+        row.blobs.sort();
+        row.updated_at = blob.finalized_at;
+
+        // A create's provenance blob is the asset's first accepted manifest, so it is also the
+        // chain the first lifecycle op must name (invariant 17). Set here rather than declared
+        // by the route because this is where the manifest becomes durable, and a head recorded
+        // before the bytes landed would point at a manifest nobody holds.
+        //
+        // The value is the record's own `manifest_sha256` and never the content address
+        // (`S-C31`): the two are equal today and are not the same identifier, so deriving one
+        // from the other would be correct by coincidence and would break silently the day a
+        // suite picks a different content-address digest.
+        if blob.role == BlobRole::Provenance
+            && row.chain_head.is_none()
+            && let Some(manifest_sha256) = blob.manifest_sha256
+        {
+            row.chain_head = Some(manifest_sha256);
+        }
+
+        // The publishable check runs over the *bundle*, so a blob completing the index tier and
+        // a blob arriving after it are the same code path — which is what keeps "visible" from
+        // depending on arrival order.
+        let minted = if row.state == AssetState::Tombstoned {
+            // A late blob for a deleted asset is stored (the bytes exist and GC must see the
+            // reference) but publishes nothing: the tombstone is the asset's final word.
+            None
+        } else if row.is_publishable() {
+            let owner = row.owner_id.clone();
+            let seq = self.mint(&owner);
+            row.state = AssetState::Visible;
+            row.sync_seq = Some(seq);
+            row.first_seq = Some(row.first_seq.unwrap_or(seq));
+            Some(seq)
+        } else {
+            None
+        };
+
+        self.rows.insert(asset.clone(), row.clone());
+        BlobOutcome::Recorded {
+            row: Box::new(row),
+            minted,
+        }
+    }
+
+    /// [`AssetIndex::apply_op`], with the lock already held.
+    fn apply(&mut self, op: LifecycleOp) -> OpOutcome {
+        // Idempotency first, before any invariant: a byte-identical resubmission of an op that
+        // has already been applied is not a stale chain, it is the same op arriving twice.
+        // Checking 17 first would answer `409` to a client whose only fault was losing an
+        // acknowledgement.
+        if let Some(sync_seq) = self.applied.get(&op.manifest_hash).copied() {
+            tracing::info!(
+                asset = %op.asset_id,
+                action = op.action.as_str(),
+                sync_seq,
+                "a lifecycle write was replayed; nothing was written"
+            );
+            return OpOutcome::Replayed { sync_seq };
+        }
+
+        let Some(row) = self.rows.get(&op.asset_id).cloned() else {
+            return OpOutcome::NotFound;
+        };
+        // Not this caller's asset, or not in the album the op was addressed to. Both are the
+        // same answer, and neither is distinguishable from an asset that never existed.
+        if row.owner_id != op.owner_id || row.album_id != op.album_id {
+            tracing::info!(
+                asset = %op.asset_id,
+                "a lifecycle write was refused: the asset is not this caller's"
+            );
+            return OpOutcome::NotFound;
+        }
+        // A row nothing can see yet has no chain to extend. Treated as absent rather than as a
+        // stale chain: an op against a half-finished upload is a client bug about *which*
+        // asset, not about which manifest.
+        if row.state == AssetState::Pending {
+            return OpOutcome::NotFound;
+        }
+
+        // Invariant 17.
+        if op.prior_provenance_hash != row.chain_head {
+            tracing::info!(
+                asset = %op.asset_id,
+                action = op.action.as_str(),
+                "a lifecycle write was refused: it does not chain onto the stored head"
+            );
+            return OpOutcome::StaleChain {
+                head: row.chain_head,
+            };
+        }
+
+        // Invariant 18, over the album's high-water mark rather than this row's: an epoch is an
+        // album-wide fact, so an op on a stale asset must not be able to re-admit an epoch the
+        // album has already moved past.
+        let stored = self.album_epoch(&op.album_id);
+        if op.amk_version < stored {
+            tracing::info!(
+                asset = %op.asset_id,
+                stored,
+                submitted = op.amk_version,
+                "a lifecycle write was refused: the album epoch regresses"
+            );
+            return OpOutcome::AmkRegressed { stored };
+        }
+
+        let mut row = row;
+        row.state = match op.action {
+            OpAction::Delete => AssetState::Tombstoned,
+            // A restore returns the asset to the live set. Every other action leaves the state
+            // alone — a metadata update to a tombstoned asset is still a tombstone, and so is a
+            // replace: re-uploading the bytes of something you deleted does not undelete it,
+            // because undeleting is what a `trash-restore` is for.
+            OpAction::TrashRestore => AssetState::Visible,
+            OpAction::MetadataUpdate | OpAction::Derivative | OpAction::Replace => row.state,
+        };
+        // The provenance blob is re-pointed on every op, which is the one place a singular role
+        // legitimately moves: the chain *is* a succession of manifests, so the newest one is
+        // what the feed must serve.
+        set_singular(&mut row, BlobRole::Provenance, &op.provenance);
+        if let Some(metadata) = &op.metadata {
+            set_singular(&mut row, BlobRole::Metadata, metadata);
+        }
+        // A replace's whole point (`S-C43`). It re-points the one role `record_blob` refuses to
+        // move, and the refusal keeps meaning what it means: an *upload* that swapped the
+        // original would swap bytes under a signature that still verifies against the old ones,
+        // while this arrives with a manifest that chains onto the one it supersedes — which is
+        // the difference between an authorized replacement and the defect
+        // `BlobOutcome::Conflict` was written to stop.
+        if let Some(original) = &op.original {
+            set_singular(&mut row, BlobRole::Original, original);
+        }
+        row.chain_head = Some(op.manifest_hash);
+        row.amk_version = op.amk_version;
+        row.retention_until = match op.action {
+            OpAction::Delete => op.retention_until,
+            // Back in the live set: there is no window left to run out.
+            OpAction::TrashRestore => None,
+            OpAction::MetadataUpdate | OpAction::Derivative | OpAction::Replace => {
+                row.retention_until
+            }
+        };
+        row.updated_at = op.at;
+
+        let owner = row.owner_id.clone();
+        let sync_seq = self.mint(&owner);
+        row.sync_seq = Some(sync_seq);
+        self.applied.insert(op.manifest_hash, sync_seq);
+        self.rows.insert(op.asset_id.clone(), row.clone());
+        tracing::info!(
+            asset = %op.asset_id,
+            action = op.action.as_str(),
+            sync_seq,
+            "a lifecycle write was applied"
+        );
+        OpOutcome::Applied {
+            row: Box::new(row),
+            sync_seq,
+        }
+    }
 }
 
 /// The deterministic asset index.
 #[derive(Debug, Default)]
 pub struct InMemoryAssetIndex {
     inner: Mutex<Inner>,
+    /// The receipt log a finalization's custody receipt is appended to, under [`Self::inner`]'s
+    /// lock (#693). Shared with the [`crate::attestation::AttestationContext`] that serves it,
+    /// so what the index writes is what the receipt route reads.
+    receipts: Arc<InMemoryReceipts>,
 }
 
 impl InMemoryAssetIndex {
-    /// An empty index.
+    /// An empty index, with a receipt log of its own.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// An empty index that appends custody receipts to `receipts`.
+    ///
+    /// The constructor a composition uses: the attestation context must read the same log, or
+    /// every finalized upload would report its receipt as not available.
+    pub fn with_receipts(receipts: Arc<InMemoryReceipts>) -> Self {
+        Self {
+            inner: Mutex::default(),
+            receipts,
+        }
+    }
+
+    /// The receipt log this index appends to.
+    pub fn receipts(&self) -> &Arc<InMemoryReceipts> {
+        &self.receipts
     }
 }
 
@@ -139,73 +345,24 @@ impl AssetIndex for InMemoryAssetIndex {
         asset: &'a AssetId,
         blob: BlobRecord,
     ) -> IndexFuture<'a, BlobOutcome> {
+        Box::pin(async move { Ok(lock(&self.inner).record(asset, blob)) })
+    }
+
+    fn record_blob_with_receipt<'a>(
+        &'a self,
+        asset: &'a AssetId,
+        blob: BlobRecord,
+        custody: Custody<'a>,
+    ) -> IndexFuture<'a, Receipted<BlobOutcome>> {
         Box::pin(async move {
+            // The row and the receipt under one held lock: no reader of this index sees the
+            // blob before its receipt is in the log, and the append cannot fail.
             let mut inner = lock(&self.inner);
-            let Some(row) = inner.rows.get(asset).cloned() else {
-                return Ok(BlobOutcome::NotFound);
-            };
-
-            if row
-                .blobs
-                .iter()
-                .any(|held| held.role == blob.role && held.address == blob.address)
-            {
-                return Ok(BlobOutcome::AlreadyHeld(Box::new(row)));
-            }
-            if is_singular(blob.role) && row.blobs.iter().any(|held| held.role == blob.role) {
-                return Ok(BlobOutcome::Conflict);
-            }
-
-            let mut row = row;
-            row.blobs.push(BlobRef {
-                role: blob.role,
-                address: blob.address,
-                size: blob.size,
-            });
-            // Ordered so two adapters that accepted the same blobs hold the same row — the
-            // port contracts role-then-address order and a `Vec` will not sort itself.
-            row.blobs.sort();
-            row.updated_at = blob.finalized_at;
-
-            // A create's provenance blob is the asset's first accepted manifest, so it is also
-            // the chain the first lifecycle op must name (invariant 17). Set here rather than
-            // declared by the route because this is where the manifest becomes durable, and a
-            // head recorded before the bytes landed would point at a manifest nobody holds.
-            //
-            // The value is the record's own `manifest_sha256` and never the content address
-            // (`S-C31`): the two are equal today and are not the same identifier, so deriving
-            // one from the other would be correct by coincidence and would break silently the
-            // day a suite picks a different content-address digest.
-            if blob.role == BlobRole::Provenance
-                && row.chain_head.is_none()
-                && let Some(manifest_sha256) = blob.manifest_sha256
-            {
-                row.chain_head = Some(manifest_sha256);
-            }
-
-            // The publishable check runs over the *bundle*, so a blob completing the index tier
-            // and a blob arriving after it are the same code path — which is what keeps
-            // "visible" from depending on arrival order.
-            let minted = if row.state == AssetState::Tombstoned {
-                // A late blob for a deleted asset is stored (the bytes exist and GC must see the
-                // reference) but publishes nothing: the tombstone is the asset's final word.
-                None
-            } else if row.is_publishable() {
-                let owner = row.owner_id.clone();
-                let seq = inner.mint(&owner);
-                row.state = AssetState::Visible;
-                row.sync_seq = Some(seq);
-                row.first_seq = Some(row.first_seq.unwrap_or(seq));
-                Some(seq)
-            } else {
-                None
-            };
-
-            inner.rows.insert(asset.clone(), row.clone());
-            Ok(BlobOutcome::Recorded {
-                row: Box::new(row),
-                minted,
-            })
+            let outcome = inner.record(asset, blob);
+            let receipt = outcome
+                .holds_the_blob()
+                .then(|| self.receipts.append(custody.draft.clone(), custody.signer));
+            Ok(Receipted { outcome, receipt })
         })
     }
 
@@ -294,121 +451,22 @@ impl AssetIndex for InMemoryAssetIndex {
     }
 
     fn apply_op(&self, op: LifecycleOp) -> IndexFuture<'_, OpOutcome> {
+        Box::pin(async move { Ok(lock(&self.inner).apply(op)) })
+    }
+
+    fn apply_op_with_receipt<'a>(
+        &'a self,
+        op: LifecycleOp,
+        custody: Custody<'a>,
+    ) -> IndexFuture<'a, Receipted<OpOutcome>> {
         Box::pin(async move {
+            // As `record_blob_with_receipt`: the op and its receipt under one held lock.
             let mut inner = lock(&self.inner);
-
-            // Idempotency first, before any invariant: a byte-identical resubmission of an op
-            // that has already been applied is not a stale chain, it is the same op arriving
-            // twice. Checking 17 first would answer `409` to a client whose only fault was
-            // losing an acknowledgement.
-            if let Some(sync_seq) = inner.applied.get(&op.manifest_hash).copied() {
-                tracing::info!(
-                    asset = %op.asset_id,
-                    action = op.action.as_str(),
-                    sync_seq,
-                    "a lifecycle write was replayed; nothing was written"
-                );
-                return Ok(OpOutcome::Replayed { sync_seq });
-            }
-
-            let Some(row) = inner.rows.get(&op.asset_id).cloned() else {
-                return Ok(OpOutcome::NotFound);
-            };
-            // Not this caller's asset, or not in the album the op was addressed to. Both are
-            // the same answer, and neither is distinguishable from an asset that never existed.
-            if row.owner_id != op.owner_id || row.album_id != op.album_id {
-                tracing::info!(
-                    asset = %op.asset_id,
-                    "a lifecycle write was refused: the asset is not this caller's"
-                );
-                return Ok(OpOutcome::NotFound);
-            }
-            // A row nothing can see yet has no chain to extend. Treated as absent rather than
-            // as a stale chain: an op against a half-finished upload is a client bug about
-            // *which* asset, not about which manifest.
-            if row.state == AssetState::Pending {
-                return Ok(OpOutcome::NotFound);
-            }
-
-            // Invariant 17.
-            if op.prior_provenance_hash != row.chain_head {
-                tracing::info!(
-                    asset = %op.asset_id,
-                    action = op.action.as_str(),
-                    "a lifecycle write was refused: it does not chain onto the stored head"
-                );
-                return Ok(OpOutcome::StaleChain {
-                    head: row.chain_head,
-                });
-            }
-
-            // Invariant 18, over the album's high-water mark rather than this row's: an epoch
-            // is an album-wide fact, so an op on a stale asset must not be able to re-admit an
-            // epoch the album has already moved past.
-            let stored = inner.album_epoch(&op.album_id);
-            if op.amk_version < stored {
-                tracing::info!(
-                    asset = %op.asset_id,
-                    stored,
-                    submitted = op.amk_version,
-                    "a lifecycle write was refused: the album epoch regresses"
-                );
-                return Ok(OpOutcome::AmkRegressed { stored });
-            }
-
-            let mut row = row;
-            row.state = match op.action {
-                OpAction::Delete => AssetState::Tombstoned,
-                // A restore returns the asset to the live set. Every other action leaves the
-                // state alone — a metadata update to a tombstoned asset is still a tombstone,
-                // and so is a replace: re-uploading the bytes of something you deleted does not
-                // undelete it, because undeleting is what a `trash-restore` is for.
-                OpAction::TrashRestore => AssetState::Visible,
-                OpAction::MetadataUpdate | OpAction::Derivative | OpAction::Replace => row.state,
-            };
-            // The provenance blob is re-pointed on every op, which is the one place a singular
-            // role legitimately moves: the chain *is* a succession of manifests, so the newest
-            // one is what the feed must serve.
-            set_singular(&mut row, BlobRole::Provenance, &op.provenance);
-            if let Some(metadata) = &op.metadata {
-                set_singular(&mut row, BlobRole::Metadata, metadata);
-            }
-            // A replace's whole point (`S-C43`). It re-points the one role `record_blob`
-            // refuses to move, and the refusal keeps meaning what it means: an *upload* that
-            // swapped the original would swap bytes under a signature that still verifies
-            // against the old ones, while this arrives with a manifest that chains onto the one
-            // it supersedes — which is the difference between an authorized replacement and the
-            // defect `BlobOutcome::Conflict` was written to stop.
-            if let Some(original) = &op.original {
-                set_singular(&mut row, BlobRole::Original, original);
-            }
-            row.chain_head = Some(op.manifest_hash);
-            row.amk_version = op.amk_version;
-            row.retention_until = match op.action {
-                OpAction::Delete => op.retention_until,
-                // Back in the live set: there is no window left to run out.
-                OpAction::TrashRestore => None,
-                OpAction::MetadataUpdate | OpAction::Derivative | OpAction::Replace => {
-                    row.retention_until
-                }
-            };
-            row.updated_at = op.at;
-
-            let owner = row.owner_id.clone();
-            let sync_seq = inner.mint(&owner);
-            row.sync_seq = Some(sync_seq);
-            inner.applied.insert(op.manifest_hash, sync_seq);
-            inner.rows.insert(op.asset_id.clone(), row.clone());
-            tracing::info!(
-                asset = %op.asset_id,
-                action = op.action.as_str(),
-                sync_seq,
-                "a lifecycle write was applied"
-            );
-            Ok(OpOutcome::Applied {
-                row: Box::new(row),
-                sync_seq,
-            })
+            let outcome = inner.apply(op);
+            let receipt = outcome
+                .is_applied()
+                .then(|| self.receipts.append(custody.draft.clone(), custody.signer));
+            Ok(Receipted { outcome, receipt })
         })
     }
 

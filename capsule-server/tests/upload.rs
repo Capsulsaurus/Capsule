@@ -771,30 +771,58 @@ async fn a_chunk_past_the_protocol_ceiling_is_refused() {
 }
 
 #[tokio::test]
-async fn only_the_uploader_may_append_and_the_session_is_hidden_from_others() {
+async fn a_foreign_session_is_indistinguishable_from_an_unknown_one() {
     let fixture = Fixture::working();
     let bearer = fixture.bearer().await;
     let (first, _, whole) = blob();
     let id = fixture.open_session(&whole, "original", &bearer).await;
+    let unknown = "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5eee";
 
     let intruder = fixture
         .other_bearer("01937b7c-0000-7000-8000-0000000000ff")
         .await;
-    let response = fixture.chunk(&id, 0, &first, &intruder).send().await;
-    response.assert_status(StatusCode::FORBIDDEN);
-    assert_eq!(
-        code(&response.json::<serde_json::Value>()),
-        "error.upload.forbidden"
-    );
 
-    let looking = fixture
-        .client
-        .head(&format!("/v1/upload/{id}"))
-        .header("authorization", &intruder)
-        .header("x-capsule-protocol", PROTOCOL_VERSION)
+    // Every operation answers the session somebody else holds exactly as it answers one that
+    // was never opened — status, code and body — so a guessed id confirms nothing.
+    for method in ["PATCH", "HEAD", "DELETE"] {
+        let ask = |session: &str| {
+            let request = fixture
+                .client
+                .method(
+                    method.parse().expect("an HTTP method"),
+                    &format!("/v1/upload/{session}"),
+                )
+                .header("authorization", &intruder)
+                .header("x-capsule-protocol", PROTOCOL_VERSION);
+            if method == "PATCH" {
+                request
+                    .header("x-capsule-offset", "0")
+                    .header("x-capsule-checksum", &checksum(&first))
+                    .body("application/octet-stream", first.clone())
+            } else {
+                request
+            }
+        };
+        let foreign = ask(&id).send().await;
+        let never = ask(unknown).send().await;
+        foreign.assert_status(StatusCode::NOT_FOUND);
+        never.assert_status(StatusCode::NOT_FOUND);
+        assert_eq!(foreign.bytes(), never.bytes(), "{method} tells them apart");
+        if method != "HEAD" {
+            assert_eq!(
+                code(&foreign.json::<serde_json::Value>()),
+                "error.upload.session_not_found"
+            );
+        }
+    }
+
+    // And the intruder's attempts left the session exactly as the uploader left it.
+    assert_eq!(fixture.blobs.staged_len_for_test(&id).await, Some(0));
+    fixture
+        .chunk(&id, 0, &first, &bearer)
         .send()
-        .await;
-    looking.assert_status(StatusCode::FORBIDDEN);
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
 }
 
 #[tokio::test]
@@ -1117,7 +1145,7 @@ async fn a_finalizing_session_is_not_interruptible() {
 // ===========================================================================================
 
 #[tokio::test]
-async fn a_store_that_cannot_answer_is_a_coded_500() {
+async fn a_store_that_cannot_answer_is_a_coded_503_with_retry_after() {
     let fixture = Fixture::working();
     let bearer = fixture.bearer().await;
     let (first, _, whole) = blob();
@@ -1126,11 +1154,8 @@ async fn a_store_that_cannot_answer_is_a_coded_500() {
     fixture.uploads.set_unavailable(true);
 
     let chunking = fixture.chunk(&id, 0, &first, &bearer).send().await;
-    chunking.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(
-        code(&chunking.json::<serde_json::Value>()),
-        "error.upload.unavailable"
-    );
+    chunking.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    assert_waits(&chunking, &fixture, "error.upload.unavailable");
 
     let creating = fixture
         .client
@@ -1140,11 +1165,385 @@ async fn a_store_that_cannot_answer_is_a_coded_500() {
         .json(&create_request(&fixture.clock, &whole, "original"))
         .send()
         .await;
-    creating.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    creating.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    assert_waits(&creating, &fixture, "error.upload.unavailable");
+}
+
+/// The refusal carries `code`, a `retry_after` instant, and a `Retry-After` delay that is the
+/// same instant measured from the server's clock.
+fn assert_waits(response: &kynos::test::TestResponse, fixture: &Fixture, expected: &str) {
+    let body = response.json::<serde_json::Value>();
+    assert_eq!(code(&body), expected);
+    let instant = body["retry_after"]
+        .as_u64()
+        .expect("a wait names its retry instant");
+    let now = u64::try_from(fixture.now().as_second()).expect("a post-epoch clock");
+    let header = response
+        .header("retry-after")
+        .expect("and repeats it on Retry-After")
+        .parse::<u64>()
+        .expect("in delta-seconds");
+    assert!(header > 0, "a wait is never zero seconds from now");
     assert_eq!(
-        code(&creating.json::<serde_json::Value>()),
-        "error.upload.unavailable"
+        header,
+        instant - now,
+        "the header and the member name one instant"
     );
+}
+
+// ===========================================================================================
+// Hostile clients (transfer/upload.md, Hostile Clients)
+// ===========================================================================================
+
+#[tokio::test]
+async fn a_full_disk_mid_chunk_is_a_507_and_the_retry_at_the_same_offset_lands() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, second, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+
+    fixture.blobs.fill_disk_on_next_append();
+    let full = fixture.chunk(&id, 0, &first, &bearer).send().await;
+    full.assert_status(StatusCode::INSUFFICIENT_STORAGE);
+    assert_waits(&full, &fixture, "error.upload.storage_full");
+    assert_eq!(
+        fixture.blobs.staged_len_for_test(&id).await,
+        Some(0),
+        "nothing of the refused chunk was kept"
+    );
+
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    fixture
+        .chunk(&id, 4096, &second, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(
+        fixture
+            .blobs
+            .blob_for_test(&checksum(&whole))
+            .await
+            .as_deref(),
+        Some(whole.as_slice()),
+        "and the upload completes with exactly its bytes"
+    );
+}
+
+#[tokio::test]
+async fn a_full_disk_at_creation_is_a_507_that_leaves_no_session() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (_, _, whole) = blob();
+
+    fixture.blobs.fill_disk_on_next_begin();
+    let response = fixture
+        .client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .json(&create_request(&fixture.clock, &whole, "original"))
+        .send()
+        .await;
+    response.assert_status(StatusCode::INSUFFICIENT_STORAGE);
+    assert_waits(&response, &fixture, "error.upload.storage_full");
+
+    // And the retry opens a fresh session rather than finding a half-made one.
+    fixture
+        .client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .json(&create_request(&fixture.clock, &whole, "original"))
+        .send()
+        .await
+        .assert_status(StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn a_stage_left_ahead_of_its_session_is_cut_back_rather_than_wedging_it() {
+    use capsule_server::blob::BlobStore as _;
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, second, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+
+    // An append that landed and whose acknowledgement was lost before the session recorded it:
+    // the stage is a chunk ahead of the counter.
+    fixture
+        .blobs
+        .append(
+            &capsule_server::store::UploadId::new(id.as_str()),
+            0,
+            &first,
+        )
+        .await
+        .expect("the stage takes the bytes");
+
+    // The client, never having been acknowledged, sends the chunk again at the counter.
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(fixture.blobs.staged_len_for_test(&id).await, Some(4096));
+    fixture
+        .chunk(&id, 4096, &second, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(
+        fixture
+            .blobs
+            .blob_for_test(&checksum(&whole))
+            .await
+            .as_deref(),
+        Some(whole.as_slice())
+    );
+}
+
+#[tokio::test]
+async fn concurrent_chunks_at_one_offset_land_exactly_once() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, _, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+
+    // Park the first append inside the blob store, so the second request arrives while the
+    // first holds the session — the interleaving an un-serialised append raced on.
+    let hold = fixture.blobs.hold_appends();
+    let racing = async {
+        let one = fixture.chunk(&id, 0, &first, &bearer).send();
+        let two = async {
+            hold.entered.notified().await;
+            let second = fixture.chunk(&id, 0, &first, &bearer).send();
+            tokio::pin!(second);
+            // Give the second request every chance to reach the store before the first lands.
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(50), &mut second)
+                    .await
+                    .is_err(),
+                "the second chunk waits for the first rather than racing it"
+            );
+            assert!(
+                tokio::time::timeout(
+                    std::time::Duration::from_millis(50),
+                    hold.entered.notified()
+                )
+                .await
+                .is_err(),
+                "and it waits before the blob store, not inside it"
+            );
+            hold.release.add_permits(2);
+            second.await
+        };
+        tokio::join!(one, two)
+    };
+    let (one, two) = racing.await;
+    one.assert_status(StatusCode::NO_CONTENT);
+    one.assert_header("x-capsule-offset", "4096");
+    two.assert_status(StatusCode::NO_CONTENT);
+    two.assert_header("x-capsule-offset", "4096");
+
+    assert_eq!(
+        fixture.blobs.staged_len_for_test(&id).await,
+        Some(4096),
+        "the second chunk was answered as the replay it is, and wrote nothing"
+    );
+}
+
+#[tokio::test]
+async fn a_spent_budget_is_a_429_with_retry_after_on_both_writes() {
+    use capsule_server::counter::{CounterKey, budgets};
+    use capsule_server::store::UserId;
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, _, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+    let account = UserId::new(support::user().as_str());
+
+    fixture
+        .spend_budget(
+            &CounterKey::UploadChunks(account.clone()),
+            budgets::UPLOAD_CHUNKS,
+        )
+        .await;
+    let chunking = fixture.chunk(&id, 0, &first, &bearer).send().await;
+    chunking.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    assert_waits(&chunking, &fixture, "error.upload.rate_limited");
+
+    fixture
+        .spend_budget(
+            &CounterKey::UploadSessions(account),
+            budgets::UPLOAD_SESSIONS,
+        )
+        .await;
+    let creating = fixture
+        .client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .json(&create_request(&fixture.clock, &whole, "original"))
+        .send()
+        .await;
+    creating.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    assert_waits(&creating, &fixture, "error.upload.rate_limited");
+
+    // The window passes, and the account is admitted again.
+    fixture.clock.advance(jiff::SignedDuration::from_mins(1));
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+}
+
+/// A socket peer for a case that varies the source address. No proxy is trusted in the
+/// fixture, so the peer is the client the per-source limiters key on.
+fn from(address: &str) -> std::net::SocketAddr {
+    std::net::SocketAddr::new(address.parse().expect("a test address"), 40_000)
+}
+
+#[tokio::test]
+async fn a_spent_source_budget_is_a_429_on_both_writes_and_spares_another_address() {
+    use capsule_server::counter::{CounterKey, budgets};
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, _, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+    let create = |peer: &str| {
+        fixture
+            .client
+            .post("/v1/upload")
+            .header("authorization", &bearer)
+            .header("x-capsule-protocol", PROTOCOL_VERSION)
+            .json(&create_request(&fixture.clock, &whole, "original"))
+            .peer(from(peer))
+    };
+
+    // The address's budgets are spent; the account's are untouched.
+    fixture
+        .spend_budget(
+            &CounterKey::UploadChunksSource("203.0.113.9".to_owned()),
+            budgets::UPLOAD_CHUNKS_SOURCE,
+        )
+        .await;
+    fixture
+        .spend_budget(
+            &CounterKey::UploadSessionsSource("203.0.113.9".to_owned()),
+            budgets::UPLOAD_SESSIONS_SOURCE,
+        )
+        .await;
+
+    let chunking = fixture
+        .chunk(&id, 0, &first, &bearer)
+        .peer(from("203.0.113.9"))
+        .send()
+        .await;
+    chunking.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    assert_waits(&chunking, &fixture, "error.upload.rate_limited");
+
+    let creating = create("203.0.113.9").send().await;
+    creating.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    assert_waits(&creating, &fixture, "error.upload.rate_limited");
+
+    // The same account from another address is admitted on both writes: the create finds the
+    // session it already holds, and the chunk lands.
+    create("198.51.100.7")
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .peer(from("198.51.100.7"))
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn a_request_the_account_budget_refuses_spends_nothing_of_its_address() {
+    use capsule_server::counter::{CounterKey, CounterStore as _, Verdict, budgets};
+    use capsule_server::store::UserId;
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, _, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+    let account = UserId::new(support::user().as_str());
+    let source = CounterKey::UploadChunksSource("203.0.113.9".to_owned());
+
+    fixture
+        .spend_budget(&CounterKey::UploadChunks(account), budgets::UPLOAD_CHUNKS)
+        .await;
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .peer(from("203.0.113.9"))
+        .send()
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS);
+
+    // Had the refused request been charged to the address, one hit would be gone from it.
+    let verdict = fixture
+        .counters
+        .peek(&source, budgets::UPLOAD_CHUNKS_SOURCE, fixture.now())
+        .await
+        .expect("the in-memory counters answer");
+    assert_eq!(
+        verdict,
+        Verdict::Admitted {
+            remaining: budgets::UPLOAD_CHUNKS_SOURCE.limit
+        }
+    );
+}
+
+#[tokio::test]
+async fn an_account_at_its_live_session_cap_is_a_429_but_may_still_resume() {
+    use capsule_server::counter::budgets;
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (_, _, whole) = blob();
+    let held = fixture.open_session(&whole, "original", &bearer).await;
+    fixture
+        .uploads
+        .fill_live_sessions_for_test(
+            &support::user(),
+            budgets::UPLOAD_LIVE_SESSIONS - 1,
+            fixture.now(),
+        )
+        .await;
+
+    let other = payload(b'z', 4096);
+    let refused = fixture
+        .client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .json(&create_request(&fixture.clock, &other, "derivative"))
+        .send()
+        .await;
+    refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    assert_waits(&refused, &fixture, "error.upload.rate_limited");
+
+    // The session it already holds is handed back, not refused.
+    let resumed: serde_json::Value = fixture
+        .client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .json(&create_request(&fixture.clock, &whole, "original"))
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    assert_eq!(resumed["id"], held.as_str());
 }
 
 #[tokio::test]
@@ -1163,7 +1562,7 @@ async fn an_authority_that_cannot_answer_refuses_rather_than_assuming() {
         .json(&create_request(&fixture.clock, &whole, "original"))
         .send()
         .await;
-    response.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    response.assert_status(StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
         code(&response.json::<serde_json::Value>()),
         "error.upload.unavailable"
@@ -1225,7 +1624,7 @@ async fn finalization_crash_between_rename_and_commit_leaves_no_dangling_referen
     // The last chunk completes the declared size, so this request is the one that finalizes.
     fixture.index_fault.arm();
     let crashed = fixture.chunk(&id, 4096, &second, &bearer).send().await;
-    crashed.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    crashed.assert_status(StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
         fixture.index_fault.fired(),
         1,

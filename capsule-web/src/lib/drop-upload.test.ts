@@ -204,6 +204,7 @@ describe('uploadDrop — failure classification', () => {
             coded(403, 'error.quota.grace_locked'),
             'quota',
         );
+        await expectCreateFailure(coded(403, 'error.quota.suspended'), 'quota');
         await expectCreateFailure(
             coded(403, 'error.drop.passphrase_required'),
             'passphrase',

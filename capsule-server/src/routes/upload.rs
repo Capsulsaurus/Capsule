@@ -21,22 +21,24 @@
 //! | create `409 duplicate_blob` | **restored, with `S-C22`'s structured `existing_asset`.** It was deleted while this crate had no asset index, because it must name the existing asset and answering from blob presence alone would tell one account what another holds. `S-C37` answers it honestly and owner-scoped |
 //! | create `413` | kept — the declared size past the deployment ceiling |
 //! | create `426` | kept — the manifest envelope's `protocol_version` pin, refused by the envelope gate. The *header* handshake is no longer this surface's: [`crate::negotiation::ProtocolGate`] answers it before the handler runs, and the accepted window rides `X-Capsule-Protocol-Min`/`-Max` on every response |
-//! | create `500` | kept — a collaborator that could not answer, with `error.upload.unavailable` |
+//! | create `500` | **now `503`** — a collaborator that could not answer, with `error.upload.unavailable` and a retry instant (transfer/upload.md, Hostile Clients) |
+//! | create `429` / `507` | **added** — the account's or its source address's session budget, or the live-session cap (`error.upload.rate_limited`), and a full disk (`error.upload.storage_full`); both carry a retry instant |
 //! | chunk `204` | kept — with the authoritative `X-Capsule-Offset` |
 //! | chunk `400` | kept, and now *coded*: missing offset, missing checksum, checksum mismatch, empty chunk, misalignment, size exceeded, and the two finalization failures each carry their own `error.upload.*` |
-//! | chunk `403` | kept — only the uploader may append |
-//! | chunk `404` | kept — unknown, expired and discarded sessions are one answer |
+//! | chunk `403` | **folded into the `404`.** Only the uploader may append, and anyone else is told what a caller naming an unknown session is told — "foreign is unknown" (transfer/upload.md, Hostile Clients). The `403` that remains declared is the bearer scheme's |
+//! | chunk `404` | kept — unknown, expired, discarded and foreign sessions are one answer |
 //! | chunk `409` | kept — offset mismatch (carrying the authoritative offset), chunk conflict, session not active |
 //! | chunk `413` | kept — the 16 MiB protocol ceiling, reachable because the transport backstop sits above it (`S-C33`) |
 //! | chunk `415` | kept, and it keeps its code. Kynos's own `Binary` rejection declares `400`, `415` *and* a `422` a raw-bytes body cannot produce, and carries no `error.*` code; [`ChunkBody`] delegates the enforcement to `Binary` and replaces only the rejection, so the `415` is `error.upload.unsupported_media_type` and the phantom `422` is gone |
 //! | chunk `409 finalize_in_progress` | **deleted.** Losing the finalize claim is a normal race and the chunk that triggered it was still accepted, so it answers `204`. Telling a client its accepted chunk failed was the Salvo behaviour and it was wrong |
-//! | chunk `500` | kept — storage inconsistency (the stage disagreeing with the counter) and collaborator failure |
+//! | chunk `500` | kept, narrowed — only a stage **shorter** than its counter, the one inconsistency the server cannot repair. A stage that ran ahead is cut back ([`chunk::append`]) and a collaborator failure is a `503` |
+//! | chunk `429` / `503` / `507` | **added** — the account's or its source address's chunk budget, a collaborator that could not answer, and a full disk. Each carries a retry instant, on the body and on `Retry-After` ([`crate::problem::RetryAfter`]) |
 //! | head `200` | kept — [`HeadReply::Progress`], carrying offset, declared length and state on headers, with `Cache-Control: no-store`. A `Reply` rather than a `NoContent`, because `200 with headers` and `204` are different answers |
-//! | head `400` / `401` / `403` / `404` / `500` | kept; the `403` now covers the owner as well as the uploader, both of whom may look. The `400` is the handshake's, declared by the read gate rather than by this surface; the `426` is gone from `HEAD`, because a read is admitted at any protocol date (issue #404) |
+//! | head `400` / `401` / `403` / `404` / `500` | kept, except that a session neither the caller's upload nor filed under the caller is the `404`, not a `403` of this surface's own, and the `500` is a `503` with a retry instant. The `403` left is the bearer scheme's. The `400` is the handshake's, declared by the read gate rather than by this surface; the `426` is gone from `HEAD`, because a read is admitted at any protocol date (issue #404) |
 //! | head `409` | **deleted as unreachable.** `HEAD` reports a state, it does not require one. It would have been declared for free by sharing a rejection type with `DELETE`, which is why they are two types |
 //! | delete `204` | kept |
 //! | delete `409` | kept — finalization is not interruptible, and a terminal session has nothing left to cancel |
-//! | delete `400` / `401` / `403` / `404` / `426` / `500` | kept |
+//! | delete `400` / `401` / `403` / `404` / `426` / `500` | kept, with `HEAD`'s two changes: a foreign session is the `404`, and the `500` is a `503` |
 //! | list sessions (`GET /upload/sessions`) | served by [`super::sessions`] |
 //! | receipt (`GET /upload/{id}/receipt`) | out of scope: `S-C15` owns custody receipts |
 //!
@@ -85,9 +87,11 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::auth::AccessToken;
-use crate::blob::ContentAddress;
+use crate::blob::{BlobError, ContentAddress};
+use crate::client_addr::ClientAddr;
+use crate::counter::{Budget, CounterContext, CounterKey, Verdict, budgets, unix_seconds};
 use crate::store::{
-    AlbumId, AssetId, BlobRole, OwnerId, StoreError, UploadId, UploadSessionRecord,
+    AlbumId, AssetId, BlobRole, Clock, OwnerId, StoreError, UploadId, UploadSessionRecord,
     UploadSessionStatus, UserId,
 };
 use crate::upload::body::ChunkBody;
@@ -442,13 +446,57 @@ pub enum CreateRejection {
         code: &'static str,
     },
 
+    /// The account's quota is suspended by the server's operator (#705).
+    ///
+    /// Distinct from [`Self::QuotaExceeded`], which freeing space lifts, and from
+    /// [`Self::AccountSuspended`], a moderation act: only the operator lifts this one, and the
+    /// account may still read, delete and restore.
+    #[error("this account's storage is suspended")]
+    #[problem(status = 403, title = "Quota suspended")]
+    QuotaSuspended {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// The account opened sessions faster than its budget allows, or already holds as many live
+    /// sessions as the server keeps for one account.
+    ///
+    /// `Retry-After` carries the wait; `retry_after` repeats it in the body as Unix seconds, the
+    /// spelling every other `429` on this server uses.
+    #[error("too many upload sessions")]
+    #[problem(status = 429, title = "Too many requests")]
+    RateLimited {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+        /// When the caller may retry, as Unix seconds.
+        #[problem(extension)]
+        retry_after: u64,
+    },
+
+    /// The server's disk is full, so the session's stage could not be created.
+    #[error("the server has no space left for this upload")]
+    #[problem(status = 507, title = "Insufficient storage")]
+    StorageFull {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+        /// When the caller may retry, as Unix seconds.
+        #[problem(extension)]
+        retry_after: u64,
+    },
+
     /// A collaborator could not answer, so the session neither opened nor was refused.
     #[error("the upload session could not be opened")]
-    #[problem(status = 500, title = "Internal server error")]
+    #[problem(status = 503, title = "Service unavailable")]
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
         code: &'static str,
+        /// When the caller may retry, as Unix seconds.
+        #[problem(extension)]
+        retry_after: u64,
     },
 }
 
@@ -469,19 +517,12 @@ pub enum ChunkRejection {
         code: &'static str,
     },
 
-    /// Only the uploader may append to a session.
-    #[error("this session belongs to another uploader")]
-    #[problem(status = 403, title = "Not the uploader")]
-    Forbidden {
-        /// The stable catalog code.
-        #[problem(extension)]
-        code: &'static str,
-    },
-
-    /// Unknown, expired or discarded — deliberately one answer.
+    /// Unknown, expired, discarded, or somebody else's — deliberately one answer.
     ///
-    /// The client's recovery is identical for all three: re-create the session and send that
-    /// blob again. Distinguishing them would publish which identifiers once existed.
+    /// The client's recovery is identical for the first three: re-create the session and send
+    /// that blob again. Distinguishing them would publish which identifiers once existed, and
+    /// answering a session another account holds with anything else would confirm that it
+    /// exists (transfer/upload.md, Hostile Clients: "foreign is unknown").
     #[error("there is no such upload session")]
     #[problem(status = 404, title = "Upload session not found")]
     SessionNotFound {
@@ -570,13 +611,41 @@ pub enum ChunkRejection {
         code: &'static str,
     },
 
+    /// The account appended chunks faster than its budget allows.
+    #[error("too many chunks")]
+    #[problem(status = 429, title = "Too many requests")]
+    RateLimited {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+        /// When the caller may retry, as Unix seconds.
+        #[problem(extension)]
+        retry_after: u64,
+    },
+
+    /// The server's disk is full. Nothing of this chunk was kept, so the same chunk at the same
+    /// offset lands once space is freed.
+    #[error("the server has no space left for this chunk")]
+    #[problem(status = 507, title = "Insufficient storage")]
+    StorageFull {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+        /// When the caller may retry, as Unix seconds.
+        #[problem(extension)]
+        retry_after: u64,
+    },
+
     /// A collaborator could not answer.
     #[error("the chunk could not be accepted")]
-    #[problem(status = 500, title = "Internal server error")]
+    #[problem(status = 503, title = "Service unavailable")]
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
         code: &'static str,
+        /// When the caller may retry, as Unix seconds.
+        #[problem(extension)]
+        retry_after: u64,
     },
 }
 
@@ -585,18 +654,14 @@ pub enum ChunkRejection {
 /// Shared by `HEAD` and `DELETE`, which ask the same three questions — does the session exist,
 /// may this caller see it, is it in a state that admits this — and differ only in what they do
 /// afterwards. Two identical enums would be two places for the answers to drift apart.
+///
+/// The first two questions have **one** answer: a session this caller may not see is the same
+/// `404` as one that never existed (transfer/upload.md, Hostile Clients: "foreign is unknown").
+/// A distinct `403` would confirm to anyone holding a guessed identifier that it names a live
+/// session.
 #[derive(Debug, thiserror::Error, ApiError)]
 pub enum SessionRejection {
-    /// The caller is neither the session's uploader nor the owner it files under.
-    #[error("this session belongs to another account")]
-    #[problem(status = 403, title = "Not this caller's session")]
-    Forbidden {
-        /// The stable catalog code.
-        #[problem(extension)]
-        code: &'static str,
-    },
-
-    /// Unknown, expired or discarded — deliberately one answer.
+    /// Unknown, expired, discarded, or another account's — deliberately one answer.
     #[error("there is no such upload session")]
     #[problem(status = 404, title = "Upload session not found")]
     SessionNotFound {
@@ -607,33 +672,27 @@ pub enum SessionRejection {
 
     /// A collaborator could not answer.
     #[error("the session could not be read")]
-    #[problem(status = 500, title = "Internal server error")]
+    #[problem(status = 503, title = "Service unavailable")]
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
         code: &'static str,
+        /// When the caller may retry, as Unix seconds.
+        #[problem(extension)]
+        retry_after: u64,
     },
 }
 
 /// Why a cancellation was refused.
 ///
-/// [`SessionRejection`]'s five answers plus the one only a cancellation can give. It is a
-/// second enum rather than a sixth variant on the shared one because a Kynos rejection type
+/// [`SessionRejection`]'s answers plus the one only a cancellation can give. It is a
+/// second enum rather than another variant on the shared one because a Kynos rejection type
 /// declares its statuses for *every* operation that returns it: a `409` on the shared enum
 /// would put a `409` on `HEAD`, which cannot produce one, and a promise nothing keeps is the
 /// exact `S-C28` defect this rebuild removes.
 #[derive(Debug, thiserror::Error, ApiError)]
 pub enum CancelRejection {
-    /// The caller is neither the session's uploader nor the owner it files under.
-    #[error("this session belongs to another account")]
-    #[problem(status = 403, title = "Not this caller's session")]
-    Forbidden {
-        /// The stable catalog code.
-        #[problem(extension)]
-        code: &'static str,
-    },
-
-    /// Unknown, expired or discarded — deliberately one answer.
+    /// Unknown, expired, discarded, or another account's — deliberately one answer.
     #[error("there is no such upload session")]
     #[problem(status = 404, title = "Upload session not found")]
     SessionNotFound {
@@ -657,11 +716,14 @@ pub enum CancelRejection {
 
     /// A collaborator could not answer.
     #[error("the session could not be cancelled")]
-    #[problem(status = 500, title = "Internal server error")]
+    #[problem(status = 503, title = "Service unavailable")]
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
         code: &'static str,
+        /// When the caller may retry, as Unix seconds.
+        #[problem(extension)]
+        retry_after: u64,
     },
 }
 
@@ -672,9 +734,10 @@ impl CancelRejection {
         }
     }
 
-    fn unavailable() -> Self {
+    fn unavailable(clock: &dyn Clock) -> Self {
         Self::Unavailable {
             code: error_codes::UPLOAD_UNAVAILABLE,
+            retry_after: retry_at(clock, UNAVAILABLE_RETRY),
         }
     }
 }
@@ -684,31 +747,50 @@ impl CancelRejection {
 impl From<SessionRejection> for CancelRejection {
     fn from(rejection: SessionRejection) -> Self {
         match rejection {
-            SessionRejection::Forbidden { code } => Self::Forbidden { code },
             SessionRejection::SessionNotFound { code } => Self::SessionNotFound { code },
-            SessionRejection::Unavailable { code } => Self::Unavailable { code },
+            SessionRejection::Unavailable { code, retry_after } => {
+                Self::Unavailable { code, retry_after }
+            }
         }
     }
 }
 
 impl SessionRejection {
-    fn forbidden() -> Self {
-        Self::Forbidden {
-            code: error_codes::UPLOAD_FORBIDDEN,
-        }
-    }
-
     fn not_found() -> Self {
         Self::SessionNotFound {
             code: error_codes::UPLOAD_SESSION_NOT_FOUND,
         }
     }
 
-    fn unavailable() -> Self {
+    fn unavailable(clock: &dyn Clock) -> Self {
         Self::Unavailable {
             code: error_codes::UPLOAD_UNAVAILABLE,
+            retry_after: retry_at(clock, UNAVAILABLE_RETRY),
         }
     }
+}
+
+/// How long a client is told to wait after a collaborator could not answer.
+///
+/// Short, because an outage the server noticed is usually a reconnect away from over, and the
+/// client resumes from `HEAD` rather than re-sending anything.
+const UNAVAILABLE_RETRY: jiff::SignedDuration = jiff::SignedDuration::from_secs(30);
+
+/// How long a client is told to wait after the disk filled.
+///
+/// Longer than an outage's: space comes back when an operator or the collector frees it, not when
+/// a connection recovers, and a client polling every few seconds would only fill the log.
+const STORAGE_FULL_RETRY: jiff::SignedDuration = jiff::SignedDuration::from_mins(5);
+
+/// How long a client at the live-session cap is told to wait.
+///
+/// One minute: a session leaves the count when it finalizes, is cancelled, or expires, and a
+/// client at the cap is usually one whose own transfers are about to finish.
+const SESSION_CAP_RETRY: jiff::SignedDuration = jiff::SignedDuration::from_mins(1);
+
+/// `after` from now, as the Unix seconds a `retry_after` member carries.
+fn retry_at(clock: &dyn Clock, after: jiff::SignedDuration) -> u64 {
+    unix_seconds(crate::store::deadline(clock.now(), after))
 }
 
 // ===========================================================================================
@@ -721,15 +803,42 @@ impl SessionRejection {
 /// consistency family — **before** anything is written, then stages the session's file and
 /// records the session. A request whose `(owner, hash, album)` tuple already has an active
 /// session gets that session back rather than a second one.
+///
+/// The quota is checked here and nowhere later: a declared size that would cross the hard limit
+/// is `403 error.quota.exceeded`, and an account whose quota the operator suspended is
+/// `403 error.quota.suspended`, both before anything is charged or staged.
 #[kynos::post("/v1/upload", operation_id = "create_upload", tag = UploadTag)]
 pub async fn create_upload(
     Inject(upload): Inject<UploadContext>,
     Inject(quota): Inject<crate::quota::QuotaContext>,
     Inject(moderation): Inject<crate::moderation::ModerationContext>,
+    Inject(counters): Inject<CounterContext>,
+    client: ClientAddr,
     Auth(credential): Auth<AccessToken>,
     Json(request): Json<CreateUploadRequest>,
 ) -> Result<WithHeaders<CreateReply, CreateHeaders>, CreateRejection> {
     let uploader = credential.user.clone();
+
+    // The account's session budget, then its source address's (#718), both charged before
+    // anything is read on its behalf, so a flood of creations costs the flooder rather than the
+    // stores behind this check. The account goes first so a request its own budget refuses
+    // spends nothing of the address's, which other accounts behind it share.
+    charge_both(
+        &counters,
+        (
+            &CounterKey::UploadSessions(uploader.clone()),
+            budgets::UPLOAD_SESSIONS,
+        ),
+        (
+            &CounterKey::UploadSessionsSource(client.source_key()),
+            budgets::UPLOAD_SESSIONS_SOURCE,
+        ),
+    )
+    .await
+    .map_err(|throttled| match throttled {
+        Throttled::Until(retry_after) => CreateRejection::rate_limited(retry_after),
+        Throttled::Unavailable => CreateRejection::unavailable(upload.clock()),
+    })?;
 
     // Account standing (`S-C8`), checked before anything is reserved. A suspension removes the
     // ability to *write*, so refusing here — before a session exists, before a quota is charged
@@ -741,7 +850,7 @@ pub async fn create_upload(
         .await
         .map_err(|error| {
             tracing::error!(%error, %uploader, "the moderation store could not answer");
-            CreateRejection::unavailable()
+            CreateRejection::unavailable(upload.clock())
         })?;
     if !standing.may_write() {
         tracing::info!(%uploader, "an upload was refused: the account is suspended");
@@ -766,7 +875,7 @@ pub async fn create_upload(
         .await
         .map_err(|error| {
             tracing::error!(%error, "the write authority could not answer for an album");
-            CreateRejection::unavailable()
+            CreateRejection::unavailable(upload.clock())
         })?
     else {
         tracing::info!(%uploader, %album, "an upload was refused: no write capability");
@@ -843,7 +952,7 @@ pub async fn create_upload(
         .await
         .map_err(|error| {
             tracing::error!(%error, "the write authority could not answer for a device");
-            CreateRejection::unavailable()
+            CreateRejection::unavailable(upload.clock())
         })?
     else {
         tracing::info!(%uploader, %device, "an upload was refused: unknown device");
@@ -888,13 +997,15 @@ pub async fn create_upload(
     // sessions are where an active one for it can be: only the uploader may append, so
     // handing back a session opened by somebody else would hand back one this caller could not
     // use.
-    if let Some(existing) = active_session_for(&upload, &uploader, &owner, &request.hash, &album)
+    let live = upload
+        .sessions()
+        .sessions_for_uploader(&uploader)
         .await
         .map_err(|error| {
             store_unavailable(&error, "list an uploader's sessions");
-            CreateRejection::unavailable()
-        })?
-    {
+            CreateRejection::unavailable(upload.clock())
+        })?;
+    if let Some(existing) = active_session_for(live.iter(), &owner, &request.hash, &album) {
         tracing::info!(
             upload_id = %existing.upload_id,
             received_bytes = existing.received_bytes,
@@ -911,6 +1022,25 @@ pub async fn create_upload(
         ));
     }
 
+    // The live-session cap, after the idempotent answer so a client resuming what it already
+    // holds is never refused, and before anything is reserved or staged on its behalf.
+    let open = live
+        .iter()
+        .filter(|record| record.status.is_active())
+        .count();
+    if open >= budgets::UPLOAD_LIVE_SESSIONS {
+        tracing::info!(
+            %uploader,
+            open,
+            cap = budgets::UPLOAD_LIVE_SESSIONS,
+            "an upload was refused: the account holds as many live sessions as it may"
+        );
+        return Err(CreateRejection::rate_limited(retry_at(
+            upload.clock(),
+            SESSION_CAP_RETRY,
+        )));
+    }
+
     // The finalized half of the same rule, and the same key: `(owner_id, hash, album_id)`.
     // Both scopes sit in `find_by_address`'s signature rather than in a caller's discipline —
     // owner because the blob store could say whether *anyone* holds these bytes and answering
@@ -919,7 +1049,7 @@ pub async fn create_upload(
     let address = ContentAddress::parse(&request.hash).map_err(|error| {
         // Unreachable: invariant 3 has already run. Cheap guard on an earlier check's promise.
         tracing::error!(%error, "a gate-passed hash is not a content address");
-        CreateRejection::unavailable()
+        CreateRejection::unavailable(upload.clock())
     })?;
     if let Some(existing) = upload
         .index()
@@ -927,7 +1057,7 @@ pub async fn create_upload(
         .await
         .map_err(|error| {
             store_unavailable(&error, "look up a duplicate blob");
-            CreateRejection::unavailable()
+            CreateRejection::unavailable(upload.clock())
         })?
     {
         tracing::info!(%owner, existing_asset = %existing, "an upload was refused: already held");
@@ -950,7 +1080,7 @@ pub async fn create_upload(
         .await
         .map_err(|error| {
             store_unavailable(&error, "reserve an asset row");
-            CreateRejection::unavailable()
+            CreateRejection::unavailable(upload.clock())
         })? {
         // A new bundle, or a sibling session of one already open. Both are the normal case.
         crate::index::Reservation::Created(_) | crate::index::Reservation::Joined(_) => {}
@@ -972,9 +1102,14 @@ pub async fn create_upload(
             crate::quota::UploadCharge::Admitted | crate::quota::UploadCharge::AlreadyAttributed,
         ) => {}
         Ok(crate::quota::UploadCharge::Refused) => return Err(CreateRejection::quota_exceeded()),
+        Ok(crate::quota::UploadCharge::Suspended) => {
+            return Err(CreateRejection::QuotaSuspended {
+                code: error_codes::QUOTA_SUSPENDED,
+            });
+        }
         Err(error) => {
             store_unavailable(&error, "charge an upload against its quota");
-            return Err(CreateRejection::unavailable());
+            return Err(CreateRejection::unavailable(upload.clock()));
         }
     }
 
@@ -982,10 +1117,23 @@ pub async fn create_upload(
 
     // The stage first, the record second. A stage with no session is an orphan the startup
     // scrub reclaims; a session with no stage would make every chunk a `500` until it expired.
-    upload.blobs().begin(&upload_id).await.map_err(|error| {
-        tracing::error!(%error, upload_id = %upload_id, "the stage could not be opened");
-        CreateRejection::unavailable()
-    })?;
+    upload
+        .blobs()
+        .begin(&upload_id)
+        .await
+        .map_err(|error| match error {
+            BlobError::StorageFull { .. } => {
+                tracing::warn!(%error, upload_id = %upload_id, "a session was refused: the disk is full");
+                CreateRejection::StorageFull {
+                    code: error_codes::UPLOAD_STORAGE_FULL,
+                    retry_after: retry_at(upload.clock(), STORAGE_FULL_RETRY),
+                }
+            }
+            error => {
+                tracing::error!(%error, upload_id = %upload_id, "the stage could not be opened");
+                CreateRejection::unavailable(upload.clock())
+            }
+        })?;
 
     let record = UploadSessionRecord {
         upload_id: upload_id.clone(),
@@ -1006,7 +1154,7 @@ pub async fn create_upload(
         // validated. It is never re-encoded into manifest bytes — see `S-C30`.
         manifest_envelope: serde_json::to_string(&request.manifest_envelope).map_err(|error| {
             tracing::error!(%error, "the validated envelope could not be stored");
-            CreateRejection::unavailable()
+            CreateRejection::unavailable(upload.clock())
         })?,
         received_bytes: 0,
         total_size: request.size,
@@ -1017,7 +1165,7 @@ pub async fn create_upload(
 
     upload.sessions().open(record).await.map_err(|error| {
         store_unavailable(&error, "open an upload session");
-        CreateRejection::unavailable()
+        CreateRejection::unavailable(upload.clock())
     })?;
 
     tracing::info!(
@@ -1045,30 +1193,67 @@ pub async fn create_upload(
 /// checked before a byte is written, and the checksum is verified against the received bytes
 /// *first*, so a chunk corrupted in transit persists nothing.
 #[kynos::patch("/v1/upload/{id}", operation_id = "append_chunk", tag = UploadTag)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one extractor per argument; Kynos resolves each one, and bundling them would hide which the contract declares"
+)]
 pub async fn append_chunk(
     Inject(upload): Inject<UploadContext>,
     Inject(attestation): Inject<crate::attestation::AttestationContext>,
     Auth(credential): Auth<AccessToken>,
     Path(path): Path<UploadPath>,
     Headers(headers): Headers<ChunkHeaders>,
+    Inject(counters): Inject<CounterContext>,
+    client: ClientAddr,
     body: ChunkBody,
 ) -> Result<WithHeaders<NoContent, OffsetHeader>, ChunkRejection> {
     let id = UploadId::new(path.id);
+
+    // The account's chunk budget, then its source address's (#718), before the session is
+    // read: a client hammering the head of a session it does not hold pays for that as much as
+    // one hammering its own. Ordered as the create's are, for the same reason.
+    charge_both(
+        &counters,
+        (
+            &CounterKey::UploadChunks(credential.user.clone()),
+            budgets::UPLOAD_CHUNKS,
+        ),
+        (
+            &CounterKey::UploadChunksSource(client.source_key()),
+            budgets::UPLOAD_CHUNKS_SOURCE,
+        ),
+    )
+    .await
+    .map_err(|throttled| match throttled {
+        Throttled::Until(retry_after) => ChunkRejection::RateLimited {
+            code: error_codes::UPLOAD_RATE_LIMITED,
+            retry_after,
+        },
+        Throttled::Unavailable => ChunkRejection::unavailable(upload.clock()),
+    })?;
+
     let record = upload
         .sessions()
         .read(&id)
         .await
         .map_err(|error| {
             store_unavailable(&error, "read an upload session");
-            ChunkRejection::unavailable()
+            ChunkRejection::unavailable(upload.clock())
         })?
         .ok_or_else(ChunkRejection::session_not_found)?;
 
     // Only the uploader appends. The owner may look, but the resuming party is the one that
-    // holds the bytes.
+    // holds the bytes. Anyone else is told what a caller naming an unknown session is told:
+    // "foreign is unknown" (transfer/upload.md, Hostile Clients).
     if record.upload_user_id != credential.user {
-        tracing::info!(upload_id = %id, "a chunk was refused: not this session's uploader");
-        return Err(ChunkRejection::forbidden());
+        tracing::info!(
+            upload_id = %id,
+            caller = %credential.user,
+            offset = ?headers.offset,
+            code = error_codes::UPLOAD_SESSION_NOT_FOUND,
+            "a chunk was refused: not this session's uploader"
+        );
+        return Err(ChunkRejection::session_not_found());
     }
     if !record.status.is_active() || record.status == UploadSessionStatus::WaitingForProcessing {
         return Err(ChunkRejection::session_not_active());
@@ -1114,7 +1299,7 @@ pub async fn append_chunk(
     .await
     .map_err(|error| {
         store_unavailable(&error, "append a chunk");
-        ChunkRejection::unavailable()
+        ChunkRejection::unavailable(upload.clock())
     })?;
 
     let next_offset = match accepted {
@@ -1126,7 +1311,9 @@ pub async fn append_chunk(
                 match finalize::finalize(&upload, &attestation, &id).await {
                     Ok(Outcome::Committed { .. } | Outcome::AlreadyClaimed) => {}
                     Ok(Outcome::NotFound) => return Err(ChunkRejection::session_not_found()),
-                    Err(failure) => return Err(ChunkRejection::from(failure)),
+                    Err(failure) => {
+                        return Err(ChunkRejection::from_failure(failure, upload.clock()));
+                    }
                 }
             }
             next_offset
@@ -1146,6 +1333,14 @@ pub async fn append_chunk(
         chunk::Accepted::StorageInconsistent => {
             return Err(ChunkRejection::storage_inconsistent());
         }
+        chunk::Accepted::StorageFull => {
+            return Err(ChunkRejection::StorageFull {
+                code: error_codes::UPLOAD_STORAGE_FULL,
+                retry_after: retry_at(upload.clock(), STORAGE_FULL_RETRY),
+            });
+        }
+        // A concurrent chunk completed the session while this one waited its turn.
+        chunk::Accepted::NotActive => return Err(ChunkRejection::session_not_active()),
         // Expired, discarded, or cancelled between the read and the write. The staged bytes are
         // now an orphan the scrub reclaims.
         chunk::Accepted::SessionGone => return Err(ChunkRejection::session_not_found()),
@@ -1213,7 +1408,7 @@ pub async fn cancel_upload(
     }
     upload.sessions().discard(&id).await.map_err(|error| {
         store_unavailable(&error, "discard a cancelled session");
-        CancelRejection::unavailable()
+        CancelRejection::unavailable(upload.clock())
     })?;
 
     // The reservation goes back (`S-C6`). Best-effort and logged rather than fatal: the session
@@ -1252,13 +1447,18 @@ async fn session_for(
         .await
         .map_err(|error| {
             store_unavailable(&error, "read an upload session");
-            SessionRejection::unavailable()
+            SessionRejection::unavailable(upload.clock())
         })?
         .ok_or_else(SessionRejection::not_found)?;
 
     if record.upload_user_id != *caller && record.owner_id.as_str() != caller.as_str() {
-        tracing::info!(upload_id = %id, "a session was hidden: neither uploader nor owner");
-        return Err(SessionRejection::forbidden());
+        tracing::info!(
+            upload_id = %id,
+            %caller,
+            code = error_codes::UPLOAD_SESSION_NOT_FOUND,
+            "a session was hidden: neither uploader nor owner"
+        );
+        return Err(SessionRejection::not_found());
     }
     Ok(record)
 }
@@ -1287,24 +1487,75 @@ fn resolve_owner(
 }
 
 /// The uploader's live session for this `(owner, hash, album)` tuple, if one is open.
-async fn active_session_for(
-    upload: &UploadContext,
-    uploader: &UserId,
+fn active_session_for<'a>(
+    mut live: impl Iterator<Item = &'a UploadSessionRecord>,
     owner: &OwnerId,
     hash: &str,
     album: &AlbumId,
-) -> Result<Option<UploadSessionRecord>, StoreError> {
-    Ok(upload
-        .sessions()
-        .sessions_for_uploader(uploader)
-        .await?
-        .into_iter()
-        .find(|record| {
-            record.status.is_active()
-                && &record.owner_id == owner
-                && record.expected_hash == hash
-                && record.album_id.as_ref() == Some(album)
-        }))
+) -> Option<&'a UploadSessionRecord> {
+    live.find(|record| {
+        record.status.is_active()
+            && &record.owner_id == owner
+            && record.expected_hash == hash
+            && record.album_id.as_ref() == Some(album)
+    })
+}
+
+/// Why a charge against an upload budget did not admit the request.
+enum Throttled {
+    /// The budget is spent, or the limiter is holding as many accounts as it will: wait until
+    /// this Unix second.
+    Until(u64),
+    /// The limiter could not answer. Refused rather than waved through.
+    Unavailable,
+}
+
+/// Charge the account's budget and then the source address's, stopping at the first refusal.
+///
+/// Ordered, never concurrent: a request the account's own budget refuses must not spend the
+/// address's, or one account flooding from a shared address would lock every other account
+/// behind it out (transfer/upload.md, Hostile Clients).
+async fn charge_both(
+    counters: &CounterContext,
+    account: (&CounterKey, Budget),
+    source: (&CounterKey, Budget),
+) -> Result<(), Throttled> {
+    charge(counters, account.0, account.1).await?;
+    charge(counters, source.0, source.1).await
+}
+
+/// Charge one hit against `key`'s budget.
+///
+/// Fail-closed, as every limiter on this server is: a limiter that cannot answer refuses. A full
+/// partition is the limiter working and is a `429` like a spent budget, never the `503` a broken
+/// store gets.
+async fn charge(
+    counters: &CounterContext,
+    key: &CounterKey,
+    budget: Budget,
+) -> Result<(), Throttled> {
+    let verdict = counters.hit(key, budget).await.map_err(|error| {
+        if let Some(retry_after) = counters.capacity_refusal(&error, budget) {
+            tracing::warn!(%error, counter = key.as_str(), "an upload limiter is at capacity");
+            Throttled::Until(unix_seconds(retry_after))
+        } else {
+            tracing::error!(%error, counter = key.as_str(), "an upload limiter could not answer");
+            Throttled::Unavailable
+        }
+    })?;
+    match verdict {
+        Verdict::Admitted { .. } => Ok(()),
+        Verdict::Limited { retry_after } => {
+            tracing::info!(
+                counter = key.as_str(),
+                scope = key.scope(),
+                %retry_after,
+                code = error_codes::UPLOAD_RATE_LIMITED,
+                "an upload request was throttled"
+            );
+            Err(Throttled::Until(unix_seconds(retry_after)))
+        }
+    }
 }
 
 /// The body both create replies carry.
@@ -1452,9 +1703,17 @@ impl CreateRejection {
         }
     }
 
-    fn unavailable() -> Self {
+    fn rate_limited(retry_after: u64) -> Self {
+        Self::RateLimited {
+            code: error_codes::UPLOAD_RATE_LIMITED,
+            retry_after,
+        }
+    }
+
+    fn unavailable(clock: &dyn Clock) -> Self {
         Self::Unavailable {
             code: error_codes::UPLOAD_UNAVAILABLE,
+            retry_after: retry_at(clock, UNAVAILABLE_RETRY),
         }
     }
 }
@@ -1548,12 +1807,6 @@ impl ChunkRejection {
         }
     }
 
-    fn forbidden() -> Self {
-        Self::Forbidden {
-            code: error_codes::UPLOAD_FORBIDDEN,
-        }
-    }
-
     fn chunk_too_large() -> Self {
         Self::ChunkTooLarge {
             code: error_codes::UPLOAD_CHUNK_TOO_LARGE,
@@ -1566,15 +1819,15 @@ impl ChunkRejection {
         }
     }
 
-    fn unavailable() -> Self {
+    fn unavailable(clock: &dyn Clock) -> Self {
         Self::Unavailable {
             code: error_codes::UPLOAD_UNAVAILABLE,
+            retry_after: retry_at(clock, UNAVAILABLE_RETRY),
         }
     }
-}
 
-impl From<FinalizeFailure> for ChunkRejection {
-    fn from(failure: FinalizeFailure) -> Self {
+    /// The answer for a finalization the completing chunk triggered and that did not commit.
+    fn from_failure(failure: FinalizeFailure, clock: &dyn Clock) -> Self {
         match failure {
             FinalizeFailure::ContentHashMismatch { .. } => Self::content_hash_mismatch(),
             FinalizeFailure::EnvelopeRejected(_) => Self::envelope_rejected(),
@@ -1585,7 +1838,7 @@ impl From<FinalizeFailure> for ChunkRejection {
             FinalizeFailure::ReplaceRefused { .. } => Self::ReplaceRefused {
                 code: error_codes::UPLOAD_STALE_REVIVAL,
             },
-            FinalizeFailure::Unavailable(_) => Self::unavailable(),
+            FinalizeFailure::Unavailable(_) => Self::unavailable(clock),
         }
     }
 }

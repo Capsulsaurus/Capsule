@@ -20,7 +20,7 @@
 //!
 //! # What is hand-written, and what would retire it
 //!
-//! The request body is `application/cbor`, and `spargen` 0.4's `classify_media` does not know
+//! The request body is `application/cbor`, and `spargen` 0.5's `classify_media` does not know
 //! that media type, so `capsule-sdk/build.rs` narrows the operation out of the generated client
 //! (`S-D28`) — the *surface* is narrowed, the document is never mutilated. Only the **request**
 //! is hand-written: the path, the media type, and the verbatim CBOR body. Every JSON document

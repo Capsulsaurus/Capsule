@@ -198,7 +198,7 @@ pub enum BootError {
     },
 }
 
-/// The two operator workers' collaborators.
+/// The operator workers' collaborators, and the quota ledger the operator suspends through.
 ///
 /// Assembled **without any key material**, which is what makes `config`'s claim that
 /// `gc`/`purge`/`scrub` need none structural rather than a promise: there is no signing key in
@@ -206,7 +206,7 @@ pub enum BootError {
 /// token-signing key to sweep a directory would be a reason to put the key on a maintenance
 /// host.
 ///
-/// Neither worker has a wire surface, so neither is reachable through the router — which is why
+/// None of them has a wire surface, so none is reachable through the router — which is why
 /// they are a separate assembly rather than fields on [`App`].
 #[derive(Debug)]
 pub struct Maintenance {
@@ -214,6 +214,11 @@ pub struct Maintenance {
     pub collection: CollectionContext,
     /// The integrity scrub's collaborators (`scrub`).
     pub scrub: ScrubContext,
+    /// The quota ledger, for the operator's suspension (`quota suspend`, `quota unsuspend`).
+    ///
+    /// The same ledger the server charges. Its limits are the unlimited default because a
+    /// suspension reads none: it is set by an operator, not reached by bytes.
+    pub quota: QuotaContext,
 }
 
 /// A server, ready to serve.
@@ -253,8 +258,9 @@ pub async fn assemble(config: &Config) -> Result<Assembled, BootError> {
     match config.backends {
         Backends::Memory => {
             warn_in_memory();
-            let stores = base.in_memory();
-            let ports = memory_ports(config, &stores.clock)?;
+            let receipts = Arc::new(InMemoryReceipts::new());
+            let stores = base.in_memory(receipts.clone());
+            let ports = memory_ports(config, &stores.clock, receipts)?;
             compose(config, stores, ports, "the in-memory adapters")
         }
         Backends::Durable => {
@@ -324,7 +330,11 @@ pub async fn assemble_maintenance(config: &Config) -> Result<Maintenance, BootEr
     let (stores, adapters) = match config.backends {
         Backends::Memory => {
             warn_in_memory();
-            (base.in_memory(), "the in-memory adapters")
+            // A log of its own: the maintenance workers neither finalize nor serve receipts.
+            (
+                base.in_memory(Arc::new(InMemoryReceipts::new())),
+                "the in-memory adapters",
+            )
         }
         // The same two probes, in the same order, as `serve`'s durable arm — and the same
         // stores, so a `gc` pass reads the index the server writes and the marks the previous
@@ -443,6 +453,11 @@ impl Stores {
                 self.shares.clone(),
                 self.clock.clone(),
             ),
+            quota: QuotaContext::new(
+                self.quotas.clone(),
+                self.clock.clone(),
+                QuotaLimits::unlimited(),
+            ),
         }
     }
 }
@@ -457,9 +472,12 @@ struct Base {
 
 impl Base {
     /// The shared stores on the deterministic in-crate adapters.
-    fn in_memory(self) -> Stores {
+    ///
+    /// The index appends finalization's custody receipts to `receipts` under its own lock
+    /// (#693), so the attestation context must be built over the same log.
+    fn in_memory(self, receipts: Arc<InMemoryReceipts>) -> Stores {
         Stores {
-            index: Arc::new(InMemoryAssetIndex::new()),
+            index: Arc::new(InMemoryAssetIndex::with_receipts(receipts)),
             uploads: Arc::new(InMemoryUploadSessions::with_default_ttl(self.clock.clone())),
             marks: Arc::new(InMemoryCollection::new()),
             quotas: Arc::new(InMemoryQuota::new()),
@@ -591,7 +609,14 @@ fn credentials() -> Result<Credentials, BootError> {
 }
 
 /// The development profile's ports: every deterministic in-crate adapter.
-fn memory_ports(config: &Config, clock: &Arc<SystemClock>) -> Result<Ports, BootError> {
+///
+/// `receipts` is the log the in-memory index appends to, so the receipt route reads what
+/// finalization wrote.
+fn memory_ports(
+    config: &Config,
+    clock: &Arc<SystemClock>,
+    receipts: Arc<InMemoryReceipts>,
+) -> Result<Ports, BootError> {
     Ok(Ports {
         accounts: AccountPorts::of(Arc::new(InMemoryAccounts::new(
             credentials()?,
@@ -606,7 +631,7 @@ fn memory_ports(config: &Config, clock: &Arc<SystemClock>) -> Result<Ports, Boot
         albums: Arc::new(InMemoryAlbums::new()),
         members: Arc::new(InMemoryMembership::new()),
         directories: Arc::new(InMemoryDeviceDirectory::new()),
-        receipts: Arc::new(InMemoryReceipts::new()),
+        receipts,
         capabilities: Arc::new(InMemoryCapabilities::new(clock.clone())),
         peers: Arc::new(InMemoryPeers::new()),
         escrow: Arc::new(InMemoryEscrow::new()),

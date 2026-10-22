@@ -20,7 +20,7 @@
 //! - [`sync`] — the cursor and anti-rewind state machine **over** the generated `GET /v1/sync`
 //!   operation (`S-D28` retired the gRPC feed; the wire here is generated like every other);
 //! - [`directory`], [`upgrade`], and [`verify`]'s receipt fetch — the four `application/cbor`
-//!   operations `spargen` 0.4 cannot lower, narrowed out in `build.rs`.
+//!   operations `spargen` 0.5 cannot lower, narrowed out in `build.rs`.
 
 pub mod albums;
 pub mod auth;
@@ -38,7 +38,7 @@ pub mod share;
 pub mod staged;
 pub mod sync;
 /// The album-upgrade proposal client (`S-C24`). Hand-written for one reason only: its request
-/// body is `application/cbor`, which `spargen` 0.4 cannot lower, so `build.rs` narrows the
+/// body is `application/cbor`, which `spargen` 0.5 cannot lower, so `build.rs` narrows the
 /// operation out of the generated client. The `GET` and `DELETE` on the same path are JSON and
 /// *are* generated — reach them through [`client::AuthenticatedClient`].
 pub mod upgrade;

@@ -7,8 +7,8 @@
 //! in `quota/tests.rs`, because a suite generic over a store cannot say anything about a
 //! function that takes no store.
 //!
-//! What is here is everything the *ledger* owes: the dedup rule, the two releases, and the
-//! over-limit clock. Every one of those was written against `InMemoryQuota` only, which made
+//! What is here is everything the *ledger* owes: the dedup rule, the two releases, the
+//! over-limit clock, and the suspension. Every one of those was written against `InMemoryQuota` only, which made
 //! the double an unproven stand-in for exactly the adapter that has to get concurrency right.
 //!
 //! # The rule the suite exists to protect
@@ -482,6 +482,125 @@ pub async fn parallel_charges_cannot_overshoot_the_hard_limit(h: &dyn Harness) {
 }
 
 // ===========================================================================================
+// Suspension (#705)
+// ===========================================================================================
+
+/// A suspension is recorded once, keeps its first instant, and is lifted by unsuspending.
+///
+/// The account has never been charged: an operator's suspension does not wait for the first
+/// upload, so the ledger has to hold one for an account it otherwise knows nothing about.
+pub async fn a_suspension_is_recorded_once_and_lifted(h: &dyn Harness) {
+    let account = user("suspend", 1);
+    assert_eq!(
+        ok(h.quotas().usage(&account).await, "read usage").suspended_since,
+        None
+    );
+
+    assert!(
+        ok(h.quotas().suspend(&account, day(1)).await, "suspend"),
+        "the first suspension is a change"
+    );
+    assert!(
+        !ok(h.quotas().suspend(&account, day(2)).await, "suspend again"),
+        "suspending a suspended account changes nothing"
+    );
+    assert_eq!(
+        ok(h.quotas().usage(&account).await, "read usage").suspended_since,
+        Some(day(1)),
+        "the record says when the suspension began, not when it was last repeated"
+    );
+
+    assert!(ok(h.quotas().unsuspend(&account).await, "unsuspend"));
+    assert_eq!(
+        ok(h.quotas().usage(&account).await, "read usage").suspended_since,
+        None
+    );
+    assert!(
+        !ok(h.quotas().unsuspend(&account).await, "unsuspend again"),
+        "lifting a suspension that is not there changes nothing"
+    );
+    assert!(
+        !ok(h.quotas().unsuspend(&user("suspend", 2)).await, "unsuspend"),
+        "an account the ledger has never seen is not suspended"
+    );
+}
+
+/// A suspension is independent of the usage: no charge or release sets or clears it, and it
+/// belongs to one account only.
+pub async fn a_suspension_is_independent_of_the_usage(h: &dyn Harness) {
+    let account = user("suspend-usage", 1);
+    let bystander = user("suspend-usage", 2);
+    ok(
+        h.quotas()
+            .charge(&account, &address("suspend-usage", 1), 50, day(0), limits())
+            .await,
+        "charge an address",
+    );
+    ok(h.quotas().suspend(&account, day(1)).await, "suspend");
+
+    // Crossing the hard limit stamps the clock and leaves the suspension alone.
+    ok(
+        h.quotas()
+            .charge(
+                &account,
+                &address("suspend-usage", 2),
+                300,
+                day(2),
+                limits(),
+            )
+            .await,
+        "charge past the hard limit",
+    );
+    let over = ok(h.quotas().usage(&account).await, "read usage");
+    assert_eq!(over.used, 350);
+    assert_eq!(over.over_since, Some(day(2)));
+    assert_eq!(over.suspended_since, Some(day(1)));
+
+    // Going back under stops the clock and leaves the suspension alone.
+    ok(
+        h.quotas()
+            .release(&account, &address("suspend-usage", 2))
+            .await,
+        "release",
+    );
+    let under = ok(h.quotas().usage(&account).await, "read usage");
+    assert_eq!(under.over_since, None);
+    assert_eq!(
+        under.suspended_since,
+        Some(day(1)),
+        "only an operator lifts a suspension; freeing space does not"
+    );
+
+    // And so does the collector's release.
+    ok(
+        h.quotas()
+            .release_attribution(&address("suspend-usage", 1))
+            .await,
+        "release by address",
+    );
+    assert_eq!(
+        ok(h.quotas().usage(&account).await, "read usage").suspended_since,
+        Some(day(1))
+    );
+
+    assert_eq!(
+        ok(h.quotas().usage(&bystander).await, "read usage").suspended_since,
+        None,
+        "a suspension is one account's"
+    );
+
+    // Unsuspending leaves the usage alone.
+    ok(
+        h.quotas()
+            .charge(&account, &address("suspend-usage", 3), 70, day(3), limits())
+            .await,
+        "charge an address",
+    );
+    ok(h.quotas().unsuspend(&account).await, "unsuspend");
+    assert_eq!(ok(h.quotas().usage(&account).await, "read usage").used, 70);
+}
+
+// ===========================================================================================
 // The whole suite
 // ===========================================================================================
 
@@ -501,6 +620,9 @@ pub async fn run_all(h: &dyn Harness) {
     a_collector_release_clears_the_over_limit_clock(h).await;
 
     parallel_charges_cannot_overshoot_the_hard_limit(h).await;
+
+    a_suspension_is_recorded_once_and_lifted(h).await;
+    a_suspension_is_independent_of_the_usage(h).await;
 }
 
 #[cfg(test)]
@@ -547,6 +669,8 @@ mod tests {
         the_crossing_is_stamped_once_and_cleared_by_going_under,
         a_collector_release_clears_the_over_limit_clock,
         parallel_charges_cannot_overshoot_the_hard_limit,
+        a_suspension_is_recorded_once_and_lifted,
+        a_suspension_is_independent_of_the_usage,
     }
 
     /// The whole suite, in one pass on one ledger.

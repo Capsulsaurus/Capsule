@@ -73,7 +73,10 @@ not own exists.
   with `Retry-After`. `500 error.upload.storage_inconsistent` is reserved for a state the server
   cannot explain, and is logged at `ERROR`.
 - **Bounded per client.** Session creation and chunk appends are rate-limited per account and
-  per source address (`429` with `Retry-After`); live sessions per account are capped.
+  per source address (`429` with `Retry-After`); live sessions per account are capped. The
+  source address is the client the deployment's trusted proxies resolve, never a forwarding
+  header taken on its word. The account's budget is charged first, so a request it refuses
+  spends nothing of the address's budget, which the other accounts behind that address share.
 - **Bounded per connection.** Header, body-read and idle timeouts close a connection that sends
   too slowly; a request body is never buffered beyond the chunk maximum.
 - **Requests never panic.** Every reachable failure is a typed rejection. A panic in a handler
@@ -126,7 +129,7 @@ Order is the contract (`capsule-server::upload::finalize`):
 3. **Envelope checks** re-run against the current clock and authority, so a device revoked or an album closed since creation does not slip through (`error.upload.envelope_rejected`).
 4. **Commit** — `BlobStore::commit`: atomic rename onto the content address, then directory fsync.
 5. **Ledger** — append and fsync the [owner ledger](/design/filesystem/server/#the-owner-ledger) entry.
-6. **Record and receipt** — in **one** PostgreSQL transaction, write the blob's index rows (minting the asset's next sequence number) and sign and log the [custody receipt](/design/transfer/durability/#custody-receipts). Either both commit or neither does: there is never an indexed blob without a receipt or a receipt without custody. A failure fails the session; the committed blob is unreferenced and collectable, and a retry is idempotent.
+6. **Record and receipt** — in **one** PostgreSQL transaction, write the blob's index rows (minting the asset's next sequence number) and sign and log the [custody receipt](/design/transfer/durability/#custody-receipts). Either both commit or neither does: there is never an indexed blob without a receipt or a receipt without custody. A failure fails the session; the committed blob is unreferenced and collectable, and a retry is idempotent: a retry of a write that already committed returns the receipt it already has. A `replace` member other than its manifest writes no index row, because the manifest applies the whole bundle, so its receipt is the transaction's only write.
 7. `Completed`.
 
 The server can verify only ciphertext. The client verifies plaintext on download through STREAM's per-chunk tags. `Completed` is a one-time acknowledgement; standing durability is [`/storage/verify`](/design/transfer/durability/).
@@ -164,7 +167,7 @@ Clients branch on `error.*` codes ([i18n error-code contract](/design/i18n/#serv
 | Status | Codes |
 | --- | --- |
 | `400` | `malformed_request`, `unknown_crypto_suite`, `invalid_hash`, `invalid_size`, `unsupported_content_type`, `unknown_derivative_format`, `envelope_mismatch`, `timestamp_out_of_range`, `invalid_action`, `empty_chunk`, `chunk_not_aligned`, `missing_offset`, `missing_checksum`, `checksum_mismatch`, `size_exceeded`, `content_hash_mismatch`, `envelope_rejected`, `invalid_status_filter` |
-| `403` | `album_access_denied`, `device_not_authorized`, `owner_not_permitted`, `forbidden`, `error.quota.exceeded` |
+| `403` | `album_access_denied`, `device_not_authorized`, `owner_not_permitted`, `error.quota.exceeded` |
 | `404` | `session_not_found` |
 | `409` | `duplicate_blob`, `offset_mismatch`, `chunk_conflict`, `session_not_active`, `receipt_not_available`, `replace_incomplete`, `stale_revival` |
 | `413` | `file_too_large`, `chunk_too_large` |

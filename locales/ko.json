@@ -1120,6 +1120,10 @@
     "message": "이 원본은 계정의 캐싱 한도에 도달했습니다.",
     "context": "Machine-translated seed pending human review."
   },
+  "error.quota.suspended": {
+    "message": "저장 공간이 정지되어 새 항목을 추가할 수 없습니다. 기존 항목은 계속 보고 삭제할 수 있습니다.",
+    "context": "Machine-translated seed pending human review."
+  },
   "error.quota.unavailable": {
     "message": "Capsule이 저장 공간 사용량을 확인하지 못했습니다. 다시 시도해 주세요.",
     "context": "Machine-translated seed pending human review."

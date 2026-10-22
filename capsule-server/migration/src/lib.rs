@@ -15,7 +15,8 @@
 //!   address, and the `(issuer, subject)` link;
 //! - `000017` (#524): the checksum ledger's backfill (below);
 //! - `000018` (#544): the sealed user identity key beside the escrow;
-//! - `000019` (#659): an index on `share_serves (address)`, for the collector's live-link check.
+//! - `000019` (#659): an index on `share_serves (address)`, for the collector's live-link check;
+//! - `000020` (#705): `quota_usage.suspended_since`, the quota ledger's suspended state.
 //!
 //! # Every instant is a `BIGINT` of microseconds since the Unix epoch
 //!
@@ -45,6 +46,13 @@
 //!
 //! `000017` is the ledger's backfill for a database migrated before the ledger existed: it
 //! records the checksums of the migrations already applied, as this build knows them.
+//!
+//! `000017` is the one applied migration edited since it ran, before the format freeze: sea-orm
+//! 2 renamed `ConnectionTrait::execute` for a raw `Statement` to `execute_raw` (#669), so its
+//! source no longer compiled unchanged. A database that applied it earlier is refused at boot
+//! for that checksum, which is a refusal and not a loss; its ledger row is corrected with
+//! `UPDATE capsule_migration_checksums SET checksum = '<the checksum EXPECTED_MIGRATIONS
+//! lists>' WHERE version = 'm20260902_000017_migration_checksums'`.
 
 pub use sea_orm_migration::prelude::*;
 use sea_orm_migration::sea_orm::Statement;
@@ -91,6 +99,7 @@ migrations![
     m20260902_000017_migration_checksums,
     m20260902_000018_sealed_identities,
     m20260902_000019_share_serves_address_index,
+    m20260902_000020_quota_suspended,
 ];
 
 /// The content checksum of one migration's source: lowercase hex SHA-256.
@@ -135,7 +144,7 @@ async fn record(manager: &SchemaManager<'_>, version: &str, checksum: &str) -> R
     ensure_ledger(manager).await?;
     let connection = manager.get_connection();
     connection
-        .execute(Statement::from_sql_and_values(
+        .execute_raw(Statement::from_sql_and_values(
             connection.get_database_backend(),
             format!(
                 "INSERT INTO {CHECKSUM_LEDGER} (version, checksum) VALUES ($1, $2) \
@@ -171,7 +180,7 @@ impl MigrationTrait for Checksummed {
         ensure_ledger(manager).await?;
         let connection = manager.get_connection();
         connection
-            .execute(Statement::from_sql_and_values(
+            .execute_raw(Statement::from_sql_and_values(
                 connection.get_database_backend(),
                 format!("DELETE FROM {CHECKSUM_LEDGER} WHERE version = $1"),
                 [self.inner.name().into()],

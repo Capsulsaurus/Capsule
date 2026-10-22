@@ -8,8 +8,9 @@
 //! a derivable fact, and one that drifts low hands somebody free storage.
 //!
 //! What cannot be derived is *when* an account crossed the hard limit and has not been under it
-//! since — a current total says nothing about how long it has been that total. That single
-//! instant is the whole of `quota_usage`.
+//! since — a current total says nothing about how long it has been that total. That instant is
+//! one of the two columns of `quota_usage`; the other is when an operator suspended the account
+//! (`suspended_since`, #705), which no charge or release touches.
 //!
 //! # Why `charge` is a transaction and not one statement
 //!
@@ -81,12 +82,13 @@ async fn usage_of<C: ConnectionTrait>(
     user: &UserId,
 ) -> Result<StoredUsage, StoreError> {
     let read = connection
-        .query_one(Statement::from_sql_and_values(
+        .query_one_raw(Statement::from_sql_and_values(
             DbBackend::Postgres,
             "SELECT \
                (SELECT COALESCE(SUM(size), 0)::bigint FROM quota_attributions WHERE user_id = $1) \
                  AS used, \
-               (SELECT over_since FROM quota_usage WHERE user_id = $1) AS over_since",
+               (SELECT over_since FROM quota_usage WHERE user_id = $1) AS over_since, \
+               (SELECT suspended_since FROM quota_usage WHERE user_id = $1) AS suspended_since",
             [Value::from(user.as_str().to_owned())],
         ))
         .await
@@ -98,16 +100,18 @@ async fn usage_of<C: ConnectionTrait>(
     let failed = PORT.failing("reading an account's usage");
     let used: i64 = read.try_get("", "used").map_err(&failed)?;
     let over_since: Option<i64> = read.try_get("", "over_since").map_err(&failed)?;
+    let suspended_since: Option<i64> = read.try_get("", "suspended_since").map_err(&failed)?;
     Ok(StoredUsage {
         used: size_from(used)?,
-        over_since: over_since
-            .map(|micros| {
-                from_micros(micros).ok_or_else(|| {
-                    PORT.undecodable(format!("{micros}µs is not a representable instant"))
-                })
-            })
-            .transpose()?,
+        over_since: over_since.map(instant_from).transpose()?,
+        suspended_since: suspended_since.map(instant_from).transpose()?,
     })
+}
+
+/// An instant as the port speaks it.
+fn instant_from(micros: i64) -> Result<Timestamp, StoreError> {
+    from_micros(micros)
+        .ok_or_else(|| PORT.undecodable(format!("{micros}µs is not a representable instant")))
 }
 
 /// Give an account's bytes back, and stop its over-limit clock.
@@ -122,7 +126,7 @@ async fn stop_the_clock(
     user: &UserId,
 ) -> Result<(), StoreError> {
     transaction
-        .execute(Statement::from_sql_and_values(
+        .execute_raw(Statement::from_sql_and_values(
             DbBackend::Postgres,
             "UPDATE quota_usage SET over_since = NULL WHERE user_id = $1",
             [Value::from(user.as_str().to_owned())],
@@ -169,7 +173,7 @@ impl QuotaStore for PostgresQuota {
             // for one address cannot both read "unattributed" and both debit, because neither
             // reads: they both insert, and one of them affects no row.
             let debited = transaction
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "INSERT INTO quota_attributions (address, user_id, size, charged_at) \
                      VALUES ($1, $2, $3, $4) ON CONFLICT (address) DO NOTHING",
@@ -191,7 +195,7 @@ impl QuotaStore for PostgresQuota {
             // The account's row in `quota_usage` exists from its first charge onwards, and holds
             // nothing but the clock.
             transaction
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "INSERT INTO quota_usage (user_id, over_since) VALUES ($1, NULL) \
                      ON CONFLICT (user_id) DO NOTHING",
@@ -212,7 +216,7 @@ impl QuotaStore for PostgresQuota {
             // deadlock: the insert can wait on another transaction's uncommitted attribution, but
             // a transaction holding this lock waits on nothing further, so no cycle can form.
             transaction
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "SELECT 1 FROM quota_usage WHERE user_id = $1 FOR UPDATE",
                     [Value::from(user.as_str().to_owned())],
@@ -227,7 +231,7 @@ impl QuotaStore for PostgresQuota {
                 // while still over must not restamp it, or the grace window would never expire
                 // for an account that keeps trying to upload.
                 let stamped = transaction
-                    .execute(Statement::from_sql_and_values(
+                    .execute_raw(Statement::from_sql_and_values(
                         DbBackend::Postgres,
                         "UPDATE quota_usage SET over_since = $2 \
                          WHERE user_id = $1 AND over_since IS NULL",
@@ -260,7 +264,7 @@ impl QuotaStore for PostgresQuota {
             // read-then-check would answer whether the address was attributed at all, which is
             // the disclosure the port refuses.
             let released = transaction
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "DELETE FROM quota_attributions WHERE address = $1 AND user_id = $2",
                     [
@@ -289,7 +293,7 @@ impl QuotaStore for PostgresQuota {
             // the ledger names the account rather than the caller guessing one. `RETURNING` is
             // what makes the delete and the answer one operation.
             let released = transaction
-                .query_one(Statement::from_sql_and_values(
+                .query_one_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "DELETE FROM quota_attributions WHERE address = $1 RETURNING user_id, size",
                     [Value::from(address.as_str().to_owned())],
@@ -315,6 +319,46 @@ impl QuotaStore for PostgresQuota {
                 "a swept blob's bytes were credited back to the account they were charged to"
             );
             Ok(Some((owner, size)))
+        })
+    }
+
+    fn suspend<'a>(&'a self, user: &'a UserId, at: Timestamp) -> StoreFuture<'a, bool> {
+        Box::pin(async move {
+            // One statement: the row is created for an account the ledger has never charged,
+            // and an existing suspension keeps its instant because the update's `WHERE` skips
+            // it — so the row count is the answer, as `charge`'s is.
+            let suspended = self
+                .connection
+                .execute_raw(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "INSERT INTO quota_usage (user_id, over_since, suspended_since) \
+                     VALUES ($1, NULL, $2) \
+                     ON CONFLICT (user_id) DO UPDATE SET suspended_since = EXCLUDED.suspended_since \
+                     WHERE quota_usage.suspended_since IS NULL",
+                    [
+                        Value::from(user.as_str().to_owned()),
+                        Value::from(to_micros(at)),
+                    ],
+                ))
+                .await
+                .map_err(PORT.failing("suspending an account's quota"))?;
+            Ok(suspended.rows_affected() == 1)
+        })
+    }
+
+    fn unsuspend<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, bool> {
+        Box::pin(async move {
+            let lifted = self
+                .connection
+                .execute_raw(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "UPDATE quota_usage SET suspended_since = NULL \
+                     WHERE user_id = $1 AND suspended_since IS NOT NULL",
+                    [Value::from(user.as_str().to_owned())],
+                ))
+                .await
+                .map_err(PORT.failing("lifting an account's quota suspension"))?;
+            Ok(lifted.rows_affected() == 1)
         })
     }
 }
@@ -349,6 +393,32 @@ mod tests {
                 quotas: PostgresQuota::new(database.connection().clone()),
             };
             conformance::run_all(&harness).await;
+
+            // A suspension survives a restart (#705): a fresh pool and a fresh adapter, sharing
+            // nothing with the one that wrote it but the database, read it back.
+            let user = crate::store::UserId::new("restart-user-1");
+            let at = jiff::Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_secs(86_400);
+            assert!(
+                harness
+                    .quotas
+                    .suspend(&user, at)
+                    .await
+                    .expect("the ledger suspends")
+            );
+            let reopened = PostgresQuota::new(
+                sea_orm::Database::connect(database.url())
+                    .await
+                    .expect("a second pool connects"),
+            );
+            assert_eq!(
+                reopened
+                    .usage(&user)
+                    .await
+                    .expect("the ledger answers")
+                    .suspended_since,
+                Some(at),
+                "a suspension is durable, not a property of the process that recorded it"
+            );
         }
     }
 }

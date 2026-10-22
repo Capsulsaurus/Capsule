@@ -92,15 +92,19 @@
 //! server-side `WARN` and inferring it. The distinction is the whole reason the ceiling refusal
 //! has a code of its own.
 //!
-//! What partitioning is *not* is a fix for the flood. A per-source key is what would bound it,
-//! and all three source keys wait on a trusted client address this server does not have.
+//! What partitioning is *not* is a fix for the flood. A per-source key is what bounds it: the
+//! share and drop paths charge [`CounterKey::ShareSource`] and [`CounterKey::DropSource`] first
+//! (the upload writes charge [`CounterKey::UploadSessionsSource`] and
+//! [`CounterKey::UploadChunksSource`] beside their per-account keys),
+//! keyed on the client address [`crate::client_addr`] resolves through the deployment's trusted
+//! proxies (#704), so one address cannot fill a partition faster than its own budget allows.
 //!
 //! # One lock, and what that does and does not cover
 //!
 //! Every partition lives behind the same [`Mutex`]. Admission is genuinely independent — one
 //! partition's occupancy is invisible to another's ceiling — but *latency* is not: a sustained
 //! flood against one key serialises `hit`, `peek` and `reset` for every other. The critical
-//! section holds no `.await` and does `O(log n)` work over at most twenty thousand entries, so at
+//! section holds no `.await` and does `O(log n)` work over at most [`ceilings::UPLOAD_CHUNKS_SOURCE`] entries a partition, so at
 //! these sizes it is contention rather than denial. Stated because the claim above ("the windows
 //! one surface holds are not the windows another is denied") is about admission and should not be
 //! read as a latency guarantee. Per-partition locking is deferred to issue #477, not overlooked.
@@ -151,14 +155,45 @@ pub enum CounterKey {
     EnrollmentRedemptionMalformed,
     /// Requests against one share link's opaque id (`S-C4`).
     ShareLink(String),
-    /// Requests from one source address, on the public share path.
+    /// Requests from one source address, on the public share path (#704).
+    ///
+    /// Keyed on [`ClientAddr::source_key`](crate::client_addr::ClientAddr::source_key): the
+    /// client the router resolved through the trusted proxies, never a forwarding header taken on
+    /// its word.
     ShareSource(String),
     /// Drop-session creations against one upload link (`S-C5`, invariant 31).
     DropLink(String),
-    /// Drop-session creations from one source address (`S-C5`, invariant 31).
+    /// Drop-session creations from one source address (`S-C5`, invariant 31, #704).
+    ///
+    /// Keyed as [`Self::ShareSource`] is.
     DropSource(String),
     /// Deep storage verifications for one account (`S-C41`).
     DeepVerify(UserId),
+    /// Upload sessions opened by one account (transfer/upload.md, Hostile Clients).
+    ///
+    /// Keyed on the authenticated uploader, never on the session or the hash: both are values
+    /// the caller mints per request, so a budget keyed on either is a budget each request
+    /// renews.
+    UploadSessions(UserId),
+    /// Chunks appended by one account, across every session it holds (transfer/upload.md,
+    /// Hostile Clients).
+    ///
+    /// Per account and not per session, for the reason [`Self::UploadSessions`] is: a session
+    /// is cheap to open, so a per-session budget is one a flood multiplies by opening more.
+    UploadChunks(UserId),
+    /// Upload sessions opened from one source address, across every account behind it
+    /// (transfer/upload.md, Hostile Clients; #718).
+    ///
+    /// Keyed as [`Self::ShareSource`] is. Charged **after** [`Self::UploadSessions`], so a
+    /// request the account's own budget refuses never reaches this one: one account flooding
+    /// from a shared address spends at most its own allowance of the address's, and the other
+    /// accounts behind that address keep the rest.
+    UploadSessionsSource(String),
+    /// Chunks appended from one source address, across every account and session behind it
+    /// (transfer/upload.md, Hostile Clients; #718).
+    ///
+    /// Keyed and ordered as [`Self::UploadSessionsSource`] is, after [`Self::UploadChunks`].
+    UploadChunksSource(String),
     /// Code attempts against one second-factor challenge (`S-C55`).
     ///
     /// Keyed on the **challenge** and not the account, deliberately. A per-account key would let
@@ -169,11 +204,12 @@ pub enum CounterKey {
     SecondFactor(String),
     /// Account registrations from one source address (`S-C53`).
     ///
-    /// Declared and consumed nowhere, like its two siblings above, and for the same reason: the
-    /// key names a fact this server does not have behind an unconfigured proxy chain. Registration
-    /// is the one **unauthenticated write** on the surface, so it is the place that fact is most
-    /// missed — recorded here rather than replaced by an email-keyed limiter, which would bound
-    /// repeated probes against one address while doing nothing about a sweep across many.
+    /// Declared and consumed nowhere yet. The client address it needs now exists
+    /// ([`crate::client_addr`], #704) and the share and drop paths charge their source keys with
+    /// it; registration is the one **unauthenticated write** on the surface, so it is the next
+    /// place that fact is owed — recorded here rather than replaced by an email-keyed limiter,
+    /// which would bound repeated probes against one address while doing nothing about a sweep
+    /// across many.
     RegistrationSource(String),
     /// Begun OIDC ceremonies naming one **admitted** redirect host (`S-N1`).
     ///
@@ -283,6 +319,10 @@ impl CounterKey {
             Self::DropLink(_) => "drop_link",
             Self::DropSource(_) => "drop_source",
             Self::DeepVerify(_) => "deep_verify",
+            Self::UploadSessions(_) => "upload_sessions",
+            Self::UploadChunks(_) => "upload_chunks",
+            Self::UploadSessionsSource(_) => "upload_sessions_source",
+            Self::UploadChunksSource(_) => "upload_chunks_source",
             Self::SecondFactor(_) => "second_factor",
             Self::RegistrationSource(_) => "registration_source",
             Self::OidcAuthorize(_) => "oidc_authorize",
@@ -309,7 +349,10 @@ impl CounterKey {
             Self::ShareSource(_) | Self::DropSource(_) | Self::RegistrationSource(_) => {
                 ceilings::SOURCE_ADDRESS
             }
+            Self::UploadSessionsSource(_) => ceilings::UPLOAD_SESSIONS_SOURCE,
+            Self::UploadChunksSource(_) => ceilings::UPLOAD_CHUNKS_SOURCE,
             Self::DeepVerify(_) => ceilings::DEEP_VERIFY,
+            Self::UploadSessions(_) | Self::UploadChunks(_) => ceilings::UPLOADING_ACCOUNT,
             Self::SecondFactor(_) => ceilings::SECOND_FACTOR,
             Self::OidcAuthorize(_) => ceilings::OIDC_AUTHORIZE,
             Self::OidcAuthorizeRefused => ceilings::OIDC_AUTHORIZE_REFUSED,
@@ -324,12 +367,17 @@ impl CounterKey {
     /// that carries it. Paired with [`Self::as_str`], which names the kind.
     pub fn scope(&self) -> &str {
         match self {
-            Self::LoginAttempts(user) | Self::DeepVerify(user) => user.as_str(),
+            Self::LoginAttempts(user)
+            | Self::DeepVerify(user)
+            | Self::UploadSessions(user)
+            | Self::UploadChunks(user) => user.as_str(),
             Self::EnrollmentRedemption(spelling) => spelling.as_str(),
             Self::ShareLink(scope)
             | Self::ShareSource(scope)
             | Self::DropLink(scope)
             | Self::DropSource(scope)
+            | Self::UploadSessionsSource(scope)
+            | Self::UploadChunksSource(scope)
             | Self::SecondFactor(scope)
             | Self::OidcAuthorize(scope)
             | Self::PeerRequests(scope)
@@ -489,12 +537,60 @@ pub mod ceilings {
     /// for a deep scan in the last hour.
     pub const DEEP_VERIFY: usize = 10_000;
 
-    /// The three source-address keys — 1-minute and 1-hour windows, keyed on a client address.
+    /// [`CounterKey::UploadSessions`](super::CounterKey::UploadSessions) and
+    /// [`CounterKey::UploadChunks`](super::CounterKey::UploadChunks) — 1-minute windows, keyed on
+    /// an authenticated account.
     ///
-    /// Charged nowhere yet: all three wait on a trusted client address this server does not have
-    /// behind an unconfigured proxy chain. Sized for the day one arrives — distinct addresses in
-    /// the window, which for a self-hosted deployment is thousands, not millions.
+    /// Bounded by the directory, as `LOGIN_ATTEMPTS` is: only an account that uploaded in the
+    /// last minute holds a window, and no caller can mint a key without an account. Each variant
+    /// is its own partition at this size.
+    pub const UPLOADING_ACCOUNT: usize = 10_000;
+
+    /// The share, drop and registration source-address keys — 1-minute and 1-hour windows, keyed
+    /// on a client address. The two upload source keys are sized below.
+    ///
+    /// Charged by the share and drop paths (#704); registration's is not yet charged. Sized for
+    /// distinct addresses in the window, which for a self-hosted deployment is thousands, not
+    /// millions — an IPv6 client counts once per `/64`, so walking a prefix within one `/64` does
+    /// not grow it. Each variant is its own partition at this size.
     pub const SOURCE_ADDRESS: usize = 10_000;
+
+    /// How many accounts the two upload source partitions absorb at once, each walking a fresh
+    /// source address on every request at its full per-account budget, while still holding
+    /// [`SOURCE_ADDRESS`] first-time addresses for everybody else.
+    ///
+    /// The upload source keys are the one source partition an authenticated caller can grow
+    /// faster than addresses arrive: the account budget is charged first, so an account mints at
+    /// most its own budget's worth of source keys a minute, but with a routed IPv6 prefix every
+    /// one of them can be a distinct `/64`. No ceiling sized against the directory survives every
+    /// account doing that, so this number is the stated assumption instead: sixteen accounts
+    /// turned hostile at once. Accounts on a self-hosted server are operator-issued, and every
+    /// one of those requests is logged under its account before it reaches the source key, so
+    /// past this the exposure is accepted: legitimate uploaders whose address holds no live
+    /// window are answered `429` with a `Retry-After` of at most one window (one minute) until
+    /// the flood stops or the operator disables the accounts. The refusal fails closed and loses
+    /// nothing; a client waits out the `Retry-After` and resumes.
+    pub const HOSTILE_UPLOADERS: usize = 16;
+
+    /// [`CounterKey::UploadSessionsSource`](super::CounterKey::UploadSessionsSource) — 1-minute
+    /// window, keyed on a client address.
+    ///
+    /// [`budgets::UPLOAD_SESSIONS`](super::budgets::UPLOAD_SESSIONS) × [`HOSTILE_UPLOADERS`] +
+    /// [`SOURCE_ADDRESS`] = 300 × 16 + 10 000 = 14 800: the hostile accounts' worth of fresh
+    /// addresses on top of the legitimate address population every other source key is sized
+    /// for. Derived rather than written, so raising the per-account budget raises this with it.
+    // A `u32` widened into `usize`, which is at least 32 bits on every target this server builds.
+    pub const UPLOAD_SESSIONS_SOURCE: usize =
+        super::budgets::UPLOAD_SESSIONS.limit as usize * HOSTILE_UPLOADERS + SOURCE_ADDRESS;
+
+    /// [`CounterKey::UploadChunksSource`](super::CounterKey::UploadChunksSource) — 1-minute
+    /// window, keyed on a client address.
+    ///
+    /// [`budgets::UPLOAD_CHUNKS`](super::budgets::UPLOAD_CHUNKS) × [`HOSTILE_UPLOADERS`] +
+    /// [`SOURCE_ADDRESS`] = 3 000 × 16 + 10 000 = 58 000, as [`UPLOAD_SESSIONS_SOURCE`] is
+    /// derived. Under [`SOURCE_ADDRESS`] alone this partition filled at four such accounts.
+    pub const UPLOAD_CHUNKS_SOURCE: usize =
+        super::budgets::UPLOAD_CHUNKS.limit as usize * HOSTILE_UPLOADERS + SOURCE_ADDRESS;
 
     /// [`CounterKey::OidcAuthorize`](super::CounterKey::OidcAuthorize) — 1-minute window, keyed
     /// on an **admitted** redirect host.

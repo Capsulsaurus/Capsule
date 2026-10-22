@@ -16,8 +16,9 @@
 //! A session that has not finalized has no receipt, and saying so is the honest answer rather
 //! than a `404`: the upload exists, the caller may see it, and the receipt is coming. A client
 //! waiting to release its local copy polls this and must be able to tell "not yet" from "never".
-//! It is also what a crash between custody and issuance looks like — see
-//! [`crate::attestation`]'s note on ordering — which is why it is retryable rather than final.
+//! It never means a finalized blob lost its receipt: the receipt commits in the same transaction
+//! as the index rows (see [`crate::attestation`]), so there is no state with one and not the
+//! other.
 //!
 //! # Who may read one
 //!

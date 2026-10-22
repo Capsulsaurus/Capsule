@@ -115,15 +115,10 @@ fn sweep_max_add_counter(root: &Path, device: &Uuid) -> Option<u64> {
         match SidecarV1::from_canonical_slice(&bytes, SIDECAR_SCHEMA_V1) {
             Ok(sidecar) => {
                 scanned += 1;
-                // Every `AddId`-bearing OR-set on the sidecar. The LWW registers (caption,
-                // rating, cull, hidden, stack) stamp `(ts, device_id)` and issue no `add_id`.
-                for candidate in [
-                    sidecar.tags_user.max_add_counter_for(device),
-                    sidecar.tags_ai.max_add_counter_for(device),
-                ]
-                .into_iter()
-                .flatten()
-                {
+                // Every `AddId`-bearing OR-set on the sidecar — user and AI tags and each
+                // region's labels. The LWW registers (caption, rating, cull, hidden, stack)
+                // stamp `(ts, device_id)` and issue no `add_id`.
+                if let Some(candidate) = sidecar.max_add_counter_for(device) {
                     max = Some(max.map_or(candidate, |m: u64| m.max(candidate)));
                 }
             }
