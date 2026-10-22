@@ -20,6 +20,8 @@ use std::time::{Duration, Instant};
 use capsule_core::import::UploadTier;
 use tracing::instrument;
 
+pub mod negotiation;
+
 /// The closed connection-class enum, evaluated continuously on-device.
 /// Consumers: sync criteria (small/large reconciliation), staged-upload tier
 /// gates, the cache-eviction byte budget, prefetch, adaptive chunk sizing.
@@ -750,8 +752,8 @@ pub fn protocol_headers() -> reqwest::header::HeaderMap {
 
     let mut headers = HeaderMap::with_capacity(3);
     headers.insert(
-        HeaderName::from_static("x-capsule-protocol"),
-        HeaderValue::from_static(capsule_core::crypto::primitives::PROTOCOL_VERSION),
+        HeaderName::from_static(negotiation::PROTOCOL_HEADER),
+        HeaderValue::from_static(negotiation::PROTOCOL_VERSION),
     );
     headers.insert(
         HeaderName::from_static("x-capsule-crypto-suite"),

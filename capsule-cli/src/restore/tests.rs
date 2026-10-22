@@ -83,7 +83,7 @@ fn fixture_sized(name: &str, count: u8, len: usize) -> Fixture {
         entries.push(FeedEntry {
             album_id: album.to_string().into_bytes(),
             sync_seq: u64::from(i) + 1,
-            protocol_version: "2026-12-31".to_owned(),
+            protocol_version: capsule_core::crypto::primitives::PROTOCOL_VERSION.to_owned(),
             kind: ChangeKind::Created,
             asset_id: asset.to_string().into_bytes(),
             manifest_cbor: bundle.provenance_blob.clone(),

@@ -1194,3 +1194,109 @@ fn a_byte_slice_source_refuses_a_window_past_its_end() {
     assert!(bytes.read_at(3, 2).is_err());
     assert!(bytes.read_at(u64::MAX, 1).is_err());
 }
+
+// ─── The protocol window on the upload route class (issue #674) ─────────────
+
+/// A server whose every answer advertises `floor` as its client-build floor, recording each
+/// request's method; a `HEAD` is a `404` (no such session) and anything else a `201`.
+async fn floored_server(floor: &'static str) -> (MockServer, Arc<Mutex<Vec<String>>>) {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let log = seen.clone();
+    let server = MockServer::start(move |req| {
+        log.lock().unwrap().push(req.method.clone());
+        let response = if req.method == "HEAD" {
+            MockResponse::new(404, "Not Found")
+        } else {
+            created("sess-floor", CHUNK_SIZE_256KB)
+        };
+        response
+            .header("X-Capsule-Protocol-Min", "2026-01-01")
+            .header("X-Capsule-Protocol-Max", "2099-12-31")
+            .header("X-Capsule-Min-Client-Build", floor)
+    })
+    .await;
+    (server, seen)
+}
+
+/// A server that advertised a client-build floor above this build on a read refuses the
+/// next upload **before it leaves**: the create never reaches the wire, and the refusal is
+/// the typed `UpgradeRequired` carrying the floor.
+#[tokio::test]
+async fn a_latched_build_floor_refuses_an_upload_before_it_leaves() {
+    let (server, seen) = floored_server("999.0.0").await;
+    let client = server.client(PROTOCOL);
+
+    assert!(
+        client.head("absent").await.unwrap().is_none(),
+        "the read is served"
+    );
+    let err = client
+        .upload(&request(4096), &[0u8; 4096])
+        .await
+        .unwrap_err();
+    match err {
+        UploadError::UpgradeRequired {
+            reason,
+            min_client_build,
+            ..
+        } => {
+            assert_eq!(reason, negotiation::UpgradeReason::BuildBelowFloor);
+            assert_eq!(min_client_build.as_deref(), Some("999.0.0"));
+        }
+        other => panic!("expected UpgradeRequired, got {other:?}"),
+    }
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec!["HEAD".to_owned()],
+        "the create never left"
+    );
+}
+
+/// A floor this build meets refuses nothing: the same sequence reaches the create.
+#[tokio::test]
+async fn a_build_floor_this_build_meets_refuses_nothing() {
+    let (server, seen) = floored_server("0.0.0").await;
+    let client = server.client(PROTOCOL);
+
+    assert!(client.head("absent").await.unwrap().is_none());
+    let created = client.create_session(&request(4096)).await.unwrap();
+    assert!(
+        matches!(created, CreateOutcome::Created { .. }),
+        "{created:?}"
+    );
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec!["HEAD".to_owned(), "POST".to_owned()]
+    );
+}
+
+/// The server's `426` on an upload is the same typed refusal, naming the bound the window it
+/// sent says this client broke.
+#[tokio::test]
+async fn an_upload_426_names_the_bound_it_broke() {
+    let server = MockServer::start(|_req| {
+        MockResponse::api_error(
+            426,
+            "Upgrade Required",
+            error_codes::PROTOCOL_VERSION_UNSUPPORTED,
+            "too old",
+        )
+        .header("X-Capsule-Protocol-Min", "2099-01-01")
+        .header("X-Capsule-Protocol-Max", "2099-12-31")
+    })
+    .await;
+    let err = server
+        .client(PROTOCOL)
+        .upload(&request(4096), &[0u8; 4096])
+        .await
+        .unwrap_err();
+    match err {
+        UploadError::UpgradeRequired {
+            reason, message, ..
+        } => {
+            assert_eq!(reason, negotiation::UpgradeReason::ProtocolBelowWindow);
+            assert_eq!(message, "too old");
+        }
+        other => panic!("expected UpgradeRequired, got {other:?}"),
+    }
+}

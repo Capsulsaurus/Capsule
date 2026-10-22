@@ -481,8 +481,11 @@ impl PushError {
     #[must_use]
     pub fn error_code(&self) -> Option<&str> {
         match self {
-            Self::Upload(UploadError::Rejected { code, .. })
-            | Self::Verify(VerifyError::Status { code, .. }) => code.as_deref(),
+            Self::Upload(UploadError::Rejected { code, .. }) => code.as_deref(),
+            Self::Upload(UploadError::UpgradeRequired { .. }) => {
+                Some(capsule_i18n::error_codes::PROTOCOL_VERSION_UNSUPPORTED)
+            }
+            Self::Verify(error) => error.error_code(),
             Self::Album(error) => error.error_code(),
             _ => None,
         }

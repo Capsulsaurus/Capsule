@@ -531,7 +531,7 @@ mod tests {
                 sync_endpoint: unreachable.clone(),
                 upload_endpoint: unreachable.clone(),
                 albums_endpoint: unreachable,
-                protocol_version: remote::DEFAULT_PROTOCOL_VERSION.to_owned(),
+                protocol_version: capsule_core::crypto::primitives::PROTOCOL_VERSION.to_owned(),
             };
             let store = SessionStore::new(dir.join("session.json"));
             Self {

@@ -60,7 +60,48 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
 use tracing::instrument;
 
+use crate::net::negotiation::{self, UpgradeRequired};
 use crate::rest;
+
+/// Every request this module sends goes through the protocol window (issue #674): every
+/// response's window is latched, and a `426` is [`AuthError::UpgradeRequired`] rather than a
+/// status a caller has to recognise.
+///
+/// Two strengths, by what the request is for:
+///
+/// - [`send_negotiated`](NegotiatedSend::send_negotiated) — the data requests a [`Session`]
+///   executes on behalf of the upload, album, verify and upgrade paths: a write the latched
+///   window refuses also never leaves.
+/// - [`send_screened`](NegotiatedSend::send_screened) — the session's own upkeep (sign-in,
+///   second factor, registration, refresh, sign-out): never refused here, only by the server's
+///   own `426`. Reads keep working against any server (Versioning — Update Policy), and a read
+///   needs a session; refusing a refresh because the advisory build floor is above this build
+///   would make every read fail the moment its token expired.
+trait NegotiatedSend {
+    /// [`reqwest::RequestBuilder::send`], pre-flighted against the latched window and screened.
+    async fn send_negotiated(self) -> Result<reqwest::Response, AuthError>;
+    /// [`reqwest::RequestBuilder::send`], screened only.
+    async fn send_screened(self) -> Result<reqwest::Response, AuthError>;
+}
+
+impl NegotiatedSend for reqwest::RequestBuilder {
+    async fn send_negotiated(self) -> Result<reqwest::Response, AuthError> {
+        Ok(negotiation::send_negotiated(self).await?)
+    }
+
+    async fn send_screened(self) -> Result<reqwest::Response, AuthError> {
+        Ok(negotiation::send_screened(self).await?)
+    }
+}
+
+impl From<negotiation::SendError> for AuthError {
+    fn from(error: negotiation::SendError) -> Self {
+        match error {
+            negotiation::SendError::Upgrade(refusal) => refusal.into(),
+            negotiation::SendError::Transport(error) => Self::Transport(error),
+        }
+    }
+}
 
 /// Default pre-flight refresh window: refresh once the access token is within this
 /// many seconds of expiry, so an in-flight request never races the boundary.
@@ -97,6 +138,10 @@ pub enum AuthError {
     /// Transport-level failure (DNS, TLS, connection, timeout).
     #[error("network transport error: {0}")]
     Transport(#[from] reqwest::Error),
+    /// The server will not take this client's writes: it answered `426`, or the window it
+    /// advertised already refuses this build (issue #674). Update the app.
+    #[error(transparent)]
+    UpgradeRequired(Box<UpgradeRequired>),
     /// The configured base URL could not be parsed.
     #[error("invalid base URL {url:?}: {reason}")]
     InvalidBaseUrl {
@@ -201,6 +246,12 @@ pub enum AuthError {
     },
 }
 
+impl From<UpgradeRequired> for AuthError {
+    fn from(refusal: UpgradeRequired) -> Self {
+        Self::UpgradeRequired(Box::new(refusal))
+    }
+}
+
 impl AuthError {
     /// The stable `error.*` catalog code a client localizes, when one applies.
     ///
@@ -218,6 +269,7 @@ impl AuthError {
             Self::OidcDeviceDenied => Some(error_codes::AUTH_OIDC_DEVICE_DENIED),
             Self::OidcDeviceExpired => Some(error_codes::AUTH_OIDC_DEVICE_EXPIRED),
             Self::OidcRejected { code } | Self::Unexpected { code, .. } => code.as_deref(),
+            Self::UpgradeRequired(refusal) => Some(refusal.error_code()),
             _ => None,
         }
     }
@@ -645,7 +697,13 @@ impl AuthClient {
         refresh_skew_secs: i64,
     ) -> Result<Self, AuthError> {
         let base = AuthEndpoints::from_base(base_url)?;
-        let rest = rest::Client::with_client(http.clone(), &base.server_root).map_err(|e| {
+        // Executed on `http` (and so carrying its handshake headers), latching the window like
+        // the typed client (issue #674). The OIDC legs are session upkeep, so only the server's
+        // own `426` refuses them — see `NegotiatedSend`.
+        let backend: Arc<dyn rest::HttpBackend> = Arc::new(crate::client::Negotiate::observing(
+            Arc::new(rest::ReqwestBackend::new(http.clone())),
+        ));
+        let rest = rest::Client::with_backend(backend, &base.server_root).map_err(|e| {
             AuthError::InvalidBaseUrl {
                 url: base_url.to_string(),
                 reason: e.to_string(),
@@ -699,7 +757,7 @@ impl AuthClient {
                 password,
                 cohort_hash: self.cohort(),
             })
-            .send()
+            .send_screened()
             .await?;
 
         let outcome = self.read_login_outcome(Endpoint::Login, response).await?;
@@ -1037,7 +1095,7 @@ impl AuthClient {
                 totp_code,
                 cohort_hash: self.cohort(),
             })
-            .send()
+            .send_screened()
             .await?;
         let tokens = read_tokens(Endpoint::VerifyTotp, response).await?;
         tracing::info!("second factor accepted; session established");
@@ -1057,7 +1115,7 @@ impl AuthClient {
             .http
             .post(&self.base.register)
             .json(&RegisterRequestBody { email, password })
-            .send()
+            .send_screened()
             .await?;
         let tokens = read_tokens(Endpoint::Register, response).await?;
         tracing::info!("registration succeeded; session established");
@@ -1167,7 +1225,7 @@ impl Session {
         let token = self.valid_access_token().await?;
         let response = build(&self.http)
             .bearer_auth(token.expose_secret())
-            .send()
+            .send_negotiated()
             .await?;
         if response.status() != reqwest::StatusCode::UNAUTHORIZED {
             return Ok(response);
@@ -1180,7 +1238,7 @@ impl Session {
             .await?;
         let retried = build(&self.http)
             .bearer_auth(fresh.expose_secret())
-            .send()
+            .send_negotiated()
             .await?;
         Ok(retried)
     }
@@ -1234,13 +1292,18 @@ impl Session {
             }
             Err(other) => return Err(other),
         };
-        let response = self
+        let sent = self
             .http
             .post(&self.base.logout)
             .bearer_auth(token.expose_secret())
-            .send()
-            .await?;
-        *self.inner.tokens.write().await = None;
+            .send_screened()
+            .await;
+        // Any answer clears the local store, a `426` included: an out-of-window client can
+        // still sign out on this device, and the error says the server-side revoke did not land.
+        if matches!(sent, Ok(_) | Err(AuthError::UpgradeRequired(_))) {
+            *self.inner.tokens.write().await = None;
+        }
+        let response = sent?;
         let status = response.status();
         if status.is_success() || status == reqwest::StatusCode::UNAUTHORIZED {
             tracing::info!("session logged out; local tokens cleared");
@@ -1318,7 +1381,7 @@ impl Session {
             .json(&RefreshRequestBody {
                 refresh_token: refresh_token.expose_secret(),
             })
-            .send()
+            .send_screened()
             .await?;
         read_tokens(Endpoint::Refresh, response).await
     }
@@ -1414,11 +1477,14 @@ fn keeps_polling(refused: &rest::PollOidcDeviceLoginError) -> Option<OidcDeviceP
 /// mapping is the one the hand-rolled path uses; the generated client's own classes — transport,
 /// timeout, protocol, redirect, construction — become [`AuthError::Network`], an undocumented
 /// status [`AuthError::Unexpected`], and a body that did not decode [`AuthError::MalformedResponse`].
-fn map_rest_error<E: std::fmt::Display>(
+fn map_rest_error<E: std::error::Error + 'static>(
     endpoint: Endpoint,
     error: rest::Error<E>,
     problem: impl FnOnce(E) -> Option<rest::types::CodedProblem>,
 ) -> AuthError {
+    if let Some(refusal) = crate::client::upgrade_required_of(&error) {
+        return refusal.into();
+    }
     match error {
         rest::Error::Api(refused) => {
             let status = refused.status().as_u16();
@@ -1525,6 +1591,7 @@ mod tests {
 
     async fn start_mock(handler: Handler) -> MockServer {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        crate::net::negotiation::forget_addr(listener.local_addr().unwrap());
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
             loop {
