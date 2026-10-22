@@ -50,6 +50,7 @@ use super::{
 };
 use crate::attestation;
 use crate::blob::ContentAddress;
+use crate::ledger::LedgerHead;
 use crate::postgres::error::Port;
 use crate::postgres::time::{from_micros, stored, to_micros};
 use crate::store::{AlbumId, AssetId, BlobRole, OwnerId, StoreError};
@@ -151,6 +152,14 @@ fn hash_from(bytes: Option<Vec<u8>>) -> Result<Option<Hash32>, StoreError> {
 /// than a number to clamp.
 fn sequence_from(value: i64) -> Result<u64, StoreError> {
     u64::try_from(value).map_err(|_| PORT.undecodable(format!("{value} is not a sequence number")))
+}
+
+/// A ledger position as the column holds it.
+fn sequence_to(seq: u64) -> Result<i64, StoreError> {
+    i64::try_from(seq).map_err(|_| StoreError::Rejected {
+        store: PORT.store,
+        detail: format!("ledger position {seq} is past what a BIGINT column holds"),
+    })
 }
 
 /// A byte count as the column holds it.
@@ -1428,6 +1437,120 @@ impl AssetIndex for PostgresAssetIndex {
             let epoch = sequence_from(epoch)?;
             tracing::info!(%owner, epoch, "an owner moved to a new sync epoch");
             Ok(epoch)
+        })
+    }
+
+    fn ledger_head<'a>(&'a self, owner: &'a OwnerId) -> IndexFuture<'a, Option<LedgerHead>> {
+        Box::pin(async move {
+            let found = self
+                .connection
+                .query_one_raw(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "SELECT ledger_seq, ledger_hash FROM owner_ledger_heads WHERE owner_id = $1",
+                    [Value::from(owner.as_str().to_owned())],
+                ))
+                .await
+                .map_err(PORT.failing("reading an owner's ledger head"))?;
+            let Some(found) = found else { return Ok(None) };
+            let seq: i64 = found
+                .try_get("", "ledger_seq")
+                .map_err(PORT.failing("reading an owner's ledger head"))?;
+            let hash: Vec<u8> = found
+                .try_get("", "ledger_hash")
+                .map_err(PORT.failing("reading an owner's ledger head"))?;
+            let hash = hash_from(Some(hash))?
+                .ok_or_else(|| PORT.undecodable("a stored ledger head has no hash".to_owned()))?;
+            Ok(Some(LedgerHead {
+                seq: sequence_from(seq)?,
+                hash,
+            }))
+        })
+    }
+
+    fn anchored_owners(&self) -> IndexFuture<'_, Vec<OwnerId>> {
+        Box::pin(async move {
+            // `COLLATE "C"`: byte order, which is the order the in-memory adapter and the ledger's
+            // own listing use.
+            let found = self
+                .connection
+                .query_all_raw(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "SELECT owner_id FROM owner_ledger_heads ORDER BY owner_id COLLATE \"C\"",
+                    [],
+                ))
+                .await
+                .map_err(PORT.failing("listing the owners with a ledger head"))?;
+            let column = PORT.failing("reading an anchored owner");
+            found
+                .iter()
+                .map(|row| {
+                    row.try_get::<String>("", "owner_id")
+                        .map(OwnerId::new)
+                        .map_err(&column)
+                })
+                .collect()
+        })
+    }
+
+    fn record_ledger_head<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        head: LedgerHead,
+    ) -> IndexFuture<'a, ()> {
+        Box::pin(async move {
+            // One conditional upsert: the comparison and the write are one statement, so two
+            // appends recording out of order cannot pull the head back.
+            self.connection
+                .execute_raw(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "INSERT INTO owner_ledger_heads (owner_id, ledger_seq, ledger_hash) \
+                     VALUES ($1, $2, $3) \
+                     ON CONFLICT (owner_id) DO UPDATE \
+                     SET ledger_seq = EXCLUDED.ledger_seq, ledger_hash = EXCLUDED.ledger_hash \
+                     WHERE owner_ledger_heads.ledger_seq < EXCLUDED.ledger_seq",
+                    [
+                        Value::from(owner.as_str().to_owned()),
+                        Value::from(sequence_to(head.seq)?),
+                        Value::from(head.hash.as_bytes().to_vec()),
+                    ],
+                ))
+                .await
+                .map_err(PORT.failing("recording an owner's ledger head"))?;
+            Ok(())
+        })
+    }
+
+    fn reset_ledger_head<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        head: Option<LedgerHead>,
+    ) -> IndexFuture<'a, ()> {
+        Box::pin(async move {
+            let statement = match head {
+                Some(head) => Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "INSERT INTO owner_ledger_heads (owner_id, ledger_seq, ledger_hash) \
+                     VALUES ($1, $2, $3) \
+                     ON CONFLICT (owner_id) DO UPDATE \
+                     SET ledger_seq = EXCLUDED.ledger_seq, ledger_hash = EXCLUDED.ledger_hash",
+                    [
+                        Value::from(owner.as_str().to_owned()),
+                        Value::from(sequence_to(head.seq)?),
+                        Value::from(head.hash.as_bytes().to_vec()),
+                    ],
+                ),
+                None => Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "DELETE FROM owner_ledger_heads WHERE owner_id = $1",
+                    [Value::from(owner.as_str().to_owned())],
+                ),
+            };
+            self.connection
+                .execute_raw(statement)
+                .await
+                .map_err(PORT.failing("resetting an owner's ledger head"))?;
+            tracing::info!(%owner, ledger_seq = ?head.map(|head| head.seq), "re-anchored an owner ledger");
+            Ok(())
         })
     }
 

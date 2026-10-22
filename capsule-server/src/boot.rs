@@ -93,9 +93,9 @@ use crate::gc::{CollectionContext, CollectionStore};
 use crate::index::AssetIndex;
 use crate::index::memory::InMemoryAssetIndex;
 use crate::index::postgres::PostgresAssetIndex;
-use crate::ledger::FilesystemLedger;
 use crate::ledger::rebuild::RebuildContext;
 use crate::ledger::replay::LedgerKeys;
+use crate::ledger::{AnchoredLedger, FilesystemLedger};
 use crate::membership::{
     InMemoryMembership, MembershipContext, MembershipStore, PostgresMembership,
 };
@@ -984,7 +984,9 @@ fn compose(
             // Publishing a rotation history is `ATTESTATION_KEY_HISTORY`'s job and nobody's yet.
             Timestamp::UNIX_EPOCH,
         )
-        .with_ledger(ledger),
+        // Every producer appends through the anchor, so each owner's head is recorded in the
+        // index the rebuild and the scrub verify the ledger against (#757).
+        .with_ledger(Arc::new(AnchoredLedger::new(ledger, index.clone()))),
         discovery: DiscoveryContext::new(server_info, revocations),
         escrow: EscrowContext::new(escrow, clock.clone()),
         federation: FederationContext::new(FederationCollaborators {

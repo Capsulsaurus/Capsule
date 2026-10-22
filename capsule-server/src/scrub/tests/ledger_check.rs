@@ -144,3 +144,92 @@ async fn without_keys_the_check_verifies_links_and_says_so() {
     assert!(report.ledger_links_only);
     assert!(report.is_clean());
 }
+
+/// An owner whose ledger lost every entry is not listed by the ledger; its anchor is, so the
+/// cut at position 0 is still reported.
+#[tokio::test]
+async fn a_ledger_that_lost_every_entry_is_reported_from_its_anchor() {
+    use crate::index::AssetIndex as _;
+    use crate::ledger::LedgerHead;
+
+    let h = Harness::new();
+    let owner = OwnerId::new("emptied-owner");
+    h.index
+        .record_ledger_head(
+            &owner,
+            LedgerHead {
+                seq: 2,
+                hash: hash_bytes(b"the entry that was lost"),
+            },
+        )
+        .await
+        .expect("anchored");
+    let context = h
+        .context
+        .clone()
+        .with_ledger(Arc::new(InMemoryLedger::new()), LedgerKeys::default());
+    let report = scrub(&context, Depth::Structural).await.expect("a pass");
+    assert_eq!(
+        report.findings,
+        vec![Finding::LedgerBroken {
+            owner,
+            verified: 0,
+            fault: ChainFault::BehindAnchor {
+                found: 0,
+                anchored: 2,
+            },
+        }]
+    );
+}
+
+/// A ledger cut at an entry boundary is a valid shorter chain; against the head the index
+/// recorded it is a break, with the keys and without them, and the scrub moves no anchor (#757).
+#[tokio::test]
+async fn a_boundary_cut_is_reported_against_the_recorded_head() {
+    use crate::index::AssetIndex as _;
+    use crate::ledger::{LedgerHead, OwnerLedger as _};
+
+    let h = Harness::new();
+    h.publish("ledgered").await;
+    let signer = signer(9);
+    let owner = OwnerId::new("scrub-owner");
+    let id = asset_id("ledgered");
+    let ledger = Arc::new(InMemoryLedger::new());
+    append(&ledger, &signer, custody("u1", &id)).await;
+    append(&ledger, &signer, indexed("u1", &id)).await;
+    // The entry that was cut away: written, anchored, then lost with the tail.
+    let lost = InMemoryLedger::new();
+    for event in [custody("u1", &id), indexed("u1", &id), custody("u2", &id)] {
+        append(&lost, &signer, event).await;
+    }
+    let gone = lost.scan(&owner).await.expect("scan").entries[2].clone();
+    let anchor = LedgerHead {
+        seq: gone.core.seq,
+        hash: gone.chain_hash(),
+    };
+    h.index
+        .record_ledger_head(&owner, anchor)
+        .await
+        .expect("anchored");
+
+    for keys in [keys(&signer), LedgerKeys::default()] {
+        let context = h.context.clone().with_ledger(ledger.clone(), keys);
+        let report = scrub(&context, Depth::Structural).await.expect("a pass");
+        assert_eq!(
+            report.findings,
+            vec![Finding::LedgerBroken {
+                owner: owner.clone(),
+                verified: 2,
+                fault: ChainFault::BehindAnchor {
+                    found: 2,
+                    anchored: 3,
+                },
+            }]
+        );
+    }
+    assert_eq!(
+        h.index.ledger_head(&owner).await.expect("read"),
+        Some(anchor),
+        "the scrub moved the anchor"
+    );
+}
