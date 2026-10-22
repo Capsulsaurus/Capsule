@@ -410,11 +410,16 @@ pub(crate) fn chain_hash(receipt: &CustodyReceipt) -> Hash32 {
 }
 
 /// The attestation module's collaborators.
+///
+/// The [owner ledger](crate::ledger) rides here because the attestation key signs its entries
+/// exactly as it signs receipts, and finalization — its one writer so far — already holds this
+/// context.
 #[derive(Debug, Clone)]
 pub struct AttestationContext {
     receipts: Arc<dyn ReceiptLog>,
     signer: Arc<dyn ReceiptSigner>,
     history: Vec<PublishedKey>,
+    ledger: Arc<dyn crate::ledger::OwnerLedger>,
 }
 
 impl AttestationContext {
@@ -439,7 +444,22 @@ impl AttestationContext {
             receipts,
             signer,
             history,
+            // The deterministic double until a deployment names its blob root's ledger: a
+            // context nobody gave a ledger still records, so no test path skips the append.
+            ledger: Arc::new(crate::ledger::InMemoryLedger::new()),
         }
+    }
+
+    /// The same, appending to `ledger` — the blob root's, in a deployment.
+    #[must_use]
+    pub fn with_ledger(mut self, ledger: Arc<dyn crate::ledger::OwnerLedger>) -> Self {
+        self.ledger = ledger;
+        self
+    }
+
+    /// The owner ledger finalization appends to.
+    pub fn ledger(&self) -> &dyn crate::ledger::OwnerLedger {
+        self.ledger.as_ref()
     }
 
     /// The same, with keys this server has retired.

@@ -50,10 +50,43 @@ pub fn from_slice<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, CanonicalError
 
 /// Re-encode arbitrary CBOR bytes into their canonical form. Used on the receive path:
 /// decode what arrived, then verify a signature against the canonical re-encoding.
+///
+/// The result is a fixed point: canonicalizing it again returns the same bytes. Input
+/// holding a negative bignum (tag 3) below `-2^127` is refused with
+/// [`CanonicalError::Deserialize`], because its canonical form is one the decoder cannot
+/// read back; the decoder already refuses that value written as a definite-length bignum,
+/// and this refuses it however else it was framed.
 pub fn canonicalize(bytes: &[u8]) -> Result<Vec<u8>, CanonicalError> {
     let value: Value =
         ciborium::de::from_reader(bytes).map_err(|e| CanonicalError::Deserialize(e.to_string()))?;
+    if has_unreadable_bignum(&value) {
+        return Err(CanonicalError::Deserialize(
+            "negative bignum below -2^127 is out of range".into(),
+        ));
+    }
     Ok(value_to_canonical_vec(&value))
+}
+
+/// Whether `value` holds a tag-3 bignum whose canonical form the decoder refuses: a
+/// 16-byte magnitude with its top bit set, i.e. a value below `-2^127`, which does not fit
+/// the `i128` the decoder reads a definite-length bignum into. Larger magnitudes (more than
+/// 16 bytes) decode as an opaque tag and are not affected.
+fn has_unreadable_bignum(value: &Value) -> bool {
+    match value {
+        Value::Tag(tag, inner) => {
+            if let (encode::TAG_BIGNUM_NEG, Value::Bytes(b)) = (*tag, &**inner) {
+                let magnitude = encode::bignum_magnitude(b);
+                magnitude.len() == 16 && magnitude[0] & 0x80 != 0
+            } else {
+                has_unreadable_bignum(inner)
+            }
+        }
+        Value::Array(items) => items.iter().any(has_unreadable_bignum),
+        Value::Map(entries) => entries
+            .iter()
+            .any(|(k, v)| has_unreadable_bignum(k) || has_unreadable_bignum(v)),
+        _ => false,
+    }
 }
 
 /// Model a `T` as a CBOR [`Value`] (the intermediate non-canonical encoding is irrelevant;
@@ -212,6 +245,104 @@ mod tests {
         } else {
             panic!("expected map");
         }
+    }
+
+    // ── Bignums (tags 2 and 3) in preferred form (RFC 8949 §3.4.3) ───────────────
+    fn big(tag: u64, bytes: &[u8]) -> Value {
+        Value::Tag(tag, Box::new(Value::Bytes(bytes.to_vec())))
+    }
+
+    #[test]
+    fn bignum_that_fits_64_bits_is_the_plain_integer() {
+        assert_eq!(enc(big(2, &[])), [0x00]);
+        assert_eq!(enc(big(3, &[])), [0x20]); // -1 - 0
+        assert_eq!(enc(big(2, &[0x00, 0x00, 0x01])), [0x01]);
+        assert_eq!(enc(big(3, &[0x00, 0x03, 0xe7])), [0x39, 0x03, 0xe7]); // -1000
+        assert_eq!(
+            enc(big(2, &[0xff; 8])),
+            [0x1b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]
+        );
+        assert_eq!(
+            enc(big(
+                3,
+                &[0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]
+            )),
+            [0x3b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]
+        ); // -2^64
+    }
+
+    #[test]
+    fn bignum_beyond_64_bits_drops_leading_zeros() {
+        // 2^64, written with two leading zero bytes.
+        let two_pow_64 = [0x01, 0, 0, 0, 0, 0, 0, 0, 0];
+        let expected = [0xc2, 0x49, 0x01, 0, 0, 0, 0, 0, 0, 0, 0];
+        assert_eq!(enc(big(2, &[&[0, 0][..], &two_pow_64].concat())), expected);
+        assert_eq!(enc(big(2, &two_pow_64)), expected);
+        // -1 - 2^64.
+        assert_eq!(
+            enc(big(3, &[&[0][..], &two_pow_64].concat())),
+            [0xc3, 0x49, 0x01, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
+        // A magnitude wider than 128 bits keeps every significant byte.
+        let wide: Vec<u8> = (1..=17).collect();
+        let mut expected = vec![0xc2, 0x51];
+        expected.extend_from_slice(&wide);
+        assert_eq!(enc(big(2, &[&[0][..], &wide].concat())), expected);
+        // A bignum tag over anything but a byte string is just a tag.
+        assert_eq!(enc(Value::Tag(2, Box::new(int(5)))), [0xc2, 0x05]);
+    }
+
+    #[test]
+    fn canonicalize_is_a_fixed_point_on_bignums() {
+        let inputs: [&[u8]; 6] = [
+            &[0xc2, 0x40],                                     // tag 2 over an empty byte string
+            &[0xc2, 0x5f, 0xff],                               // ... framed indefinite-length
+            &[0xc2, 0x5f, 0xff, 0xff, 0xff, 0xff, 0x40, 0x5f], // the fuzzer's find (#749)
+            &[0xc3, 0x5f, 0x42, 0x03, 0xe7, 0xff],             // -1000, indefinite-length
+            &[0xc2, 0x4a, 0x00, 0x01, 0, 0, 0, 0, 0, 0, 0, 0], // 2^64 with a leading zero
+            &[
+                0xc2, 0x52, 0x00, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
+            ],
+        ];
+        for input in inputs {
+            let once = canonicalize(input).unwrap();
+            assert_eq!(
+                canonicalize(&once).unwrap(),
+                once,
+                "input {}",
+                hex::encode(input)
+            );
+        }
+        assert_eq!(canonicalize(&[0xc2, 0x40]).unwrap(), [0x00]);
+        assert_eq!(canonicalize(&[0xc2, 0x5f, 0xff]).unwrap(), [0x00]);
+        assert_eq!(
+            canonicalize(&[0xc3, 0x5f, 0x42, 0x03, 0xe7, 0xff]).unwrap(),
+            [0x39, 0x03, 0xe7]
+        );
+    }
+
+    #[test]
+    fn canonicalize_refuses_a_negative_bignum_below_i128() {
+        // -1 - 2^127: a 16-byte magnitude with its top bit set.
+        let mut magnitude = vec![0x80];
+        magnitude.extend_from_slice(&[0; 15]);
+        let mut definite = vec![0xc3, 0x50];
+        definite.extend_from_slice(&magnitude);
+        assert!(canonicalize(&definite).is_err());
+        // The same value framed so the decoder accepts it, nested in an array.
+        let mut indefinite = vec![0x81, 0xc3, 0x5f, 0x51, 0x00];
+        indefinite.extend_from_slice(&magnitude);
+        indefinite.push(0xff);
+        assert!(matches!(
+            canonicalize(&indefinite),
+            Err(CanonicalError::Deserialize(_))
+        ));
+        // One below that bound still canonicalizes.
+        let mut fits = vec![0xc3, 0x5f, 0x50, 0x7f];
+        fits.extend_from_slice(&[0xff; 15]);
+        fits.push(0xff);
+        let once = canonicalize(&fits).unwrap();
+        assert_eq!(canonicalize(&once).unwrap(), once);
     }
 
     // ── Golden vector: the cross-language conformance contract ───────────────────
