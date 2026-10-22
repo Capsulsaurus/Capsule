@@ -34,7 +34,6 @@ Closing every path by which an original could be lost.
 - [#696](https://github.com/Capsulsaurus/Capsule/issues/696) Per-owner ledger in the blob store
 - [#697](https://github.com/Capsulsaurus/Capsule/issues/697) `capsule-server rebuild`, sync epoch and client re-announce
 - [#704](https://github.com/Capsulsaurus/Capsule/issues/704) A trusted client address; per-source-IP limits on share serve and drop creation
-- [#705](https://github.com/Capsulsaurus/Capsule/issues/705) Enforce the Suspended quota state
 - [#706](https://github.com/Capsulsaurus/Capsule/issues/706) Signed storage attestation for the durability verdict
 - [#707](https://github.com/Capsulsaurus/Capsule/issues/707) Client cache budget driven by the connection class
 - Also: [#409](https://github.com/Capsulsaurus/Capsule/issues/409), [#440](https://github.com/Capsulsaurus/Capsule/issues/440), [#452](https://github.com/Capsulsaurus/Capsule/issues/452), [#621](https://github.com/Capsulsaurus/Capsule/issues/621), [#646](https://github.com/Capsulsaurus/Capsule/issues/646)

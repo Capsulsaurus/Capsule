@@ -31,9 +31,13 @@
 //! | create `413 error.drop.file_too_large` | invariant 28 |
 //! | create `400 error.drop.malformed` | invariants 27 and 30 |
 //! | create `403 error.quota.exceeded` | invariant 29, charged to the **link owner** |
+//! | create `403 error.quota.suspended` | the link owner's quota is suspended by the operator (#705) |
 //! | create `429 error.drop.rate_limited` / `error.drop.at_capacity` | invariant 31: the per-source or per-link budget is spent, or its limiter partition is full, with a `retry_after` |
 //! | adopt `404` / `409` | the row is not the caller's, or another adoption holds it |
-//! | `500` | a store could not answer, the limiter's included |
+//! | chunk `507 error.drop.storage_full` | the server's disk is full; nothing of the chunk was kept, so the same chunk at the same offset lands later. Carries a `retry_after`, and so `Retry-After` |
+//! | chunk `503 error.drop.chunk_unavailable` | a collaborator could not answer before the chunk was recorded. Carries a `retry_after`; the guest resends the same chunk at the same offset |
+//! | chunk `500` | the stage is shorter than the session's counter, or filing the finished drop failed — neither is repaired by a retry |
+//! | `500` | elsewhere, a store could not answer, the limiter's included |
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -53,7 +57,10 @@ use crate::drop::{
     Admission, DropContext, InboxEntry, LinkCaps, LinkProvisionOutcome, UploadLinkRecord,
     is_opaque_id,
 };
-use crate::store::{BlobRole, OwnerId, UploadId, UploadSessionRecord, UploadSessionStatus, UserId};
+use crate::routes::upload::{STORAGE_FULL_RETRY, UNAVAILABLE_RETRY, retry_at};
+use crate::store::{
+    BlobRole, Clock, OwnerId, UploadId, UploadSessionRecord, UploadSessionStatus, UserId,
+};
 use crate::upload::body::ChunkBody;
 use crate::upload::chunk::{self, parse_checksum, parse_offset};
 
@@ -317,13 +324,42 @@ pub enum DropChunkRejection {
         code: &'static str,
     },
 
-    /// A store could not answer.
+    /// A failure a retry of this chunk cannot repair, so it is not a wait: the stage is shorter
+    /// than the session's counter, or the drop's last chunk was recorded and filing the finished
+    /// drop then failed. A re-sent final chunk is answered as a replay and never files it again,
+    /// so telling the guest to wait and resend would promise a deposit nothing will make.
     #[error("the chunk could not be accepted")]
     #[problem(status = 500, title = "Internal server error")]
+    Internal {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// The server's disk is full. Nothing of this chunk was kept, so the same chunk at the same
+    /// offset lands once space is freed.
+    #[error("the server has no space left for this chunk")]
+    #[problem(status = 507, title = "Insufficient storage")]
+    StorageFull {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+        /// When the guest may retry, as Unix seconds.
+        #[problem(extension)]
+        retry_after: u64,
+    },
+
+    /// A collaborator could not answer. Retryable: the guest waits out `Retry-After` and sends
+    /// the same chunk at the same offset.
+    #[error("the chunk could not be accepted")]
+    #[problem(status = 503, title = "Service unavailable")]
     Unavailable {
         /// The stable catalog code.
         #[problem(extension)]
         code: &'static str,
+        /// When the guest may retry, as Unix seconds.
+        #[problem(extension)]
+        retry_after: u64,
     },
 }
 
@@ -344,9 +380,25 @@ impl DropChunkRejection {
         }
     }
 
-    /// A store could not answer.
-    fn unavailable() -> Self {
+    /// A collaborator could not answer; the guest retries after a short wait.
+    fn unavailable(clock: &dyn Clock) -> Self {
         Self::Unavailable {
+            code: error_codes::DROP_CHUNK_UNAVAILABLE,
+            retry_after: retry_at(clock, UNAVAILABLE_RETRY),
+        }
+    }
+
+    /// The disk is full; the guest retries once space has had time to come back.
+    fn storage_full(clock: &dyn Clock) -> Self {
+        Self::StorageFull {
+            code: error_codes::DROP_STORAGE_FULL,
+            retry_after: retry_at(clock, STORAGE_FULL_RETRY),
+        }
+    }
+
+    /// A failure a retry of the chunk cannot repair.
+    fn internal() -> Self {
+        Self::Internal {
             code: error_codes::DROP_UNAVAILABLE,
         }
     }
@@ -392,6 +444,18 @@ pub enum DropRejection {
     #[error("the link owner's quota will not admit this drop")]
     #[problem(status = 403, title = "Quota exceeded")]
     QuotaExceeded {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// The link owner's quota is suspended by the server's operator (#705).
+    ///
+    /// Distinct from [`Self::QuotaExceeded`] because waiting for the owner to free space will not
+    /// lift it, which is what the guest needs to know.
+    #[error("the link owner's storage is suspended")]
+    #[problem(status = 403, title = "Quota suspended")]
+    QuotaSuspended {
         /// The stable catalog code.
         #[problem(extension)]
         code: &'static str,
@@ -655,7 +719,9 @@ async fn charge_drop_limiter(
 /// Open a drop session through a link.
 ///
 /// Invariants 26–30 in order: the link admits the file and reserves its caps in one store
-/// operation, then the owner's quota is charged, then the declaration is checked.
+/// operation, then the owner's quota is charged, then the declaration is checked. A drop the
+/// owner's quota will not admit is `403 error.quota.exceeded`, or `403 error.quota.suspended`
+/// while the operator has suspended the owner's quota.
 #[kynos::post("/d/{opaque_id}", operation_id = "create_drop", tag = DropsTag)]
 pub async fn create_drop(
     Inject(drops): Inject<DropContext>,
@@ -776,7 +842,7 @@ pub async fn create_drop(
         tracing::error!(%error, %owner, "the quota ledger could not answer for a drop");
         DropRejection::unavailable()
     })?;
-    let state = crate::quota::state_of(usage.used, usage.over_since, now, quota.limits());
+    let state = crate::quota::classify(usage, now, quota.limits());
     if !crate::quota::admits(
         state,
         crate::quota::WriteClass::Upload,
@@ -787,6 +853,12 @@ pub async fn create_drop(
         // The reservation goes back: a drop the quota refused never happened, and leaving the
         // cap spent would let a full account burn a guest's link down.
         refund(&drops, &path.opaque_id, request.size).await;
+        if state == crate::quota::QuotaState::Suspended {
+            tracing::info!(%owner, "a drop was refused: the link owner's quota is suspended");
+            return Err(DropRejection::QuotaSuspended {
+                code: error_codes::QUOTA_SUSPENDED,
+            });
+        }
         return Err(DropRejection::QuotaExceeded {
             code: error_codes::QUOTA_EXCEEDED,
         });
@@ -886,7 +958,7 @@ pub async fn append_drop_chunk(
         .await
         .map_err(|error| {
             tracing::error!(%error, "the drop store could not resolve a link");
-            DropChunkRejection::unavailable()
+            DropChunkRejection::unavailable(drops.clock())
         })?;
     // A revoked link stops accepting chunks for sessions already open under it. That is the
     // point of revoking: a guest mid-upload is exactly who the owner is revoking against.
@@ -897,7 +969,7 @@ pub async fn append_drop_chunk(
     let id = UploadId::new(&path.upload_id);
     let record = drops.sessions().read(&id).await.map_err(|error| {
         tracing::error!(%error, "the upload session store could not answer for a drop");
-        DropChunkRejection::unavailable()
+        DropChunkRejection::unavailable(drops.clock())
     })?;
     // The session must belong to *this* link's owner, or a guest holding one link could append
     // to another's session by guessing its id.
@@ -945,7 +1017,7 @@ pub async fn append_drop_chunk(
     .await
     .map_err(|error| {
         tracing::error!(%error, "a drop chunk could not be appended");
-        DropChunkRejection::unavailable()
+        DropChunkRejection::unavailable(drops.clock())
     })?;
 
     let next_offset = match accepted {
@@ -980,10 +1052,15 @@ pub async fn append_drop_chunk(
         chunk::Accepted::NotActive => {
             return Err(DropChunkRejection::refused("this session is not active"));
         }
-        // The guest surface keeps its one storage answer for now: a full disk is reported as the
-        // store failing, exactly as it was before the album path learned to say `507`.
-        chunk::Accepted::StorageInconsistent | chunk::Accepted::StorageFull => {
-            return Err(DropChunkRejection::unavailable());
+        // The album path's answers, verbatim: a full disk is a wait, the server's own
+        // inconsistency is not.
+        chunk::Accepted::StorageFull => {
+            tracing::warn!("a drop chunk met a full disk");
+            return Err(DropChunkRejection::storage_full(drops.clock()));
+        }
+        chunk::Accepted::StorageInconsistent => {
+            tracing::error!("a drop's stage and its session disagree");
+            return Err(DropChunkRejection::internal());
         }
         chunk::Accepted::SessionGone => return Err(DropChunkRejection::NotFound),
     };
@@ -1044,6 +1121,7 @@ pub struct AdoptRequest {
 pub async fn adopt_drop(
     Inject(drops): Inject<DropContext>,
     Inject(upload): Inject<crate::upload::UploadContext>,
+    Inject(attestation): Inject<crate::attestation::AttestationContext>,
     Auth(credential): Auth<AccessToken>,
     Path(path): Path<DropPath>,
     Json(request): Json<AdoptRequest>,
@@ -1083,7 +1161,7 @@ pub async fn adopt_drop(
         return Err(AdoptRejection::not_found());
     };
 
-    match adopt_claimed(&drops, &upload, &owner, &entry, &request).await {
+    match adopt_claimed(&drops, &upload, &attestation, &owner, &entry, &request).await {
         Ok(asset_id) => {
             drops
                 .drops()
@@ -1118,6 +1196,7 @@ pub async fn adopt_drop(
 async fn adopt_claimed(
     drops: &DropContext,
     upload: &crate::upload::UploadContext,
+    attestation: &crate::attestation::AttestationContext,
     owner: &UserId,
     entry: &InboxEntry,
     request: &AdoptRequest,
@@ -1216,6 +1295,29 @@ async fn adopt_claimed(
     .map_err(|reject| AdoptRejection::refused(&format!("the manifest is refused: {reject:?}")))?;
 
     let asset_id = crate::store::AssetId::new(&request.asset_id);
+
+    // The receipt is keyed by the drop id, which names no asset, so the binding is checked
+    // here: a drop whose adoption already committed (its answer lost) has its receipt under
+    // that asset, and a retry naming another asset would index the blob a second time while
+    // the log's per-upload idempotency handed back the first asset's receipt — leaving the new
+    // asset indexed with none (invariant 33). Refused before anything is reserved, naming the
+    // asset the drop was adopted as so the retry can name it. The claim held above makes this
+    // read race-free: no other adoption of this drop can commit until it is released.
+    if let Some(committed) = adopted_as(attestation, entry).await?
+        && committed != request.asset_id
+    {
+        tracing::info!(
+            %owner,
+            drop_id = %entry.drop_id,
+            %asset_id,
+            committed_asset_id = %committed,
+            "an adoption was refused: the drop was already adopted as another asset"
+        );
+        return Err(AdoptRejection::refused(&format!(
+            "this drop was already adopted as asset {committed}"
+        )));
+    }
+
     let now = drops.clock().now();
     match upload
         .index()
@@ -1247,10 +1349,13 @@ async fn adopt_claimed(
 
     // The bytes are already committed — that is what makes adoption an in-place promotion
     // rather than a re-upload — so this records the blob the guest deposited against the asset
-    // the owner just signed for.
-    match upload
+    // the owner just signed for, with its custody receipt in the same critical section
+    // (invariant 33): an adoption is the second path by which a blob becomes indexed, and it
+    // must not be the one that leaves an indexed blob without a receipt.
+    let draft = adoption_receipt(entry, request, owner, &asset_id, now)?;
+    let crate::index::Receipted { outcome, receipt } = upload
         .index()
-        .record_blob(
+        .record_blob_with_receipt(
             &asset_id,
             crate::index::BlobRecord {
                 role: crate::store::BlobRole::Original,
@@ -1259,12 +1364,31 @@ async fn adopt_claimed(
                 manifest_sha256: None,
                 finalized_at: now,
             },
+            crate::index::Custody {
+                draft: &draft,
+                signer: attestation.signer(),
+            },
         )
         .await
         .map_err(|error| {
-            tracing::error!(%error, "an adoption could not record its blob");
+            tracing::error!(
+                %error,
+                drop_id = %entry.drop_id,
+                %asset_id,
+                "an adoption could not confirm its blob and receipt; the outcome is unknown \
+                 (both committed together or neither did) and a retry of the same asset resolves it"
+            );
             AdoptRejection::unavailable()
-        })? {
+        })?;
+    if let Some(receipt) = &receipt {
+        tracing::info!(
+            drop_id = %entry.drop_id,
+            %asset_id,
+            receipt_seq = receipt.core.receipt_seq,
+            "custody receipt committed with the adoption"
+        );
+    }
+    match outcome {
         // Recorded, or already held at this exact address: a retried adoption.
         crate::index::BlobOutcome::Recorded { .. } | crate::index::BlobOutcome::AlreadyHeld(_) => {}
         // The asset already holds a different original. Re-pointing it would swap the bytes
@@ -1284,6 +1408,68 @@ async fn adopt_claimed(
     }
 
     Ok(asset_id)
+}
+
+/// The asset `entry` was already adopted as, read from the custody receipt filed under its
+/// drop id, or `None` when no adoption of it has committed.
+async fn adopted_as(
+    attestation: &crate::attestation::AttestationContext,
+    entry: &InboxEntry,
+) -> Result<Option<String>, AdoptRejection> {
+    let receipt = attestation
+        .receipts()
+        .for_upload(&UploadId::new(&entry.drop_id))
+        .await
+        .map_err(|error| {
+            tracing::error!(
+                %error,
+                drop_id = %entry.drop_id,
+                "the receipt log could not answer for an adopted drop"
+            );
+            AdoptRejection::unavailable()
+        })?;
+    Ok(receipt.map(|receipt| receipt.core.asset_id))
+}
+
+/// The custody receipt an adoption commits with its index rows.
+///
+/// The facts are the server's, as finalization's are: the address and size the drop's own
+/// commit established (the request restates them and was checked against them), and the
+/// adopting owner as the uploader, since an adopted drop's author is the adopter
+/// (design/web-upload.md).
+///
+/// `upload_id` is the **drop id**. A deposit has no session of the owner's — the guest's
+/// session id was never shown to them — while the drop id is the identifier the owner adopted
+/// by, and it is stable across a retried adoption, which is what keeps the log's per-upload
+/// idempotency returning the one receipt rather than minting a second. The owner reads it back
+/// through `GET /v1/assets/{asset_id}/receipts`.
+fn adoption_receipt(
+    entry: &InboxEntry,
+    request: &AdoptRequest,
+    owner: &UserId,
+    asset_id: &crate::store::AssetId,
+    now: jiff::Timestamp,
+) -> Result<crate::attestation::ReceiptDraft, AdoptRejection> {
+    let ciphertext_hash = capsule_core::crypto::hash::Hash32::from_hex(entry.address.as_str())
+        .map_err(|_| {
+            // Unreachable while a content address is a digest: the drop's commit parsed it as
+            // one. Guarded because an index write must not go ahead without its receipt.
+            tracing::error!(drop_id = %entry.drop_id, "a drop's address is not a digest");
+            AdoptRejection::unavailable()
+        })?;
+    Ok(crate::attestation::ReceiptDraft {
+        crypto_suite_id: request.crypto_suite_id,
+        protocol_version: request.protocol_version.clone(),
+        upload_id: UploadId::new(&entry.drop_id),
+        asset_id: asset_id.clone(),
+        blob_role: crate::store::BlobRole::Original.as_str().to_owned(),
+        ciphertext_hash,
+        size: entry.size,
+        envelope_hash: None,
+        uploaded_by_user: owner.as_str().to_owned(),
+        uploaded_by_device: None,
+        received_at: now.to_string(),
+    })
 }
 
 /// The caller's pending drops.
@@ -1337,13 +1523,17 @@ pub async fn discard_drop(
 }
 
 /// File a finished drop in its owner's inbox.
+///
+/// Every failure here is a `500`, never the chunk path's `503`: the last chunk is already
+/// recorded, so the guest's retry of it is answered as a replay and would not reach this
+/// function again.
 async fn deposit(
     drops: &DropContext,
     link: &UploadLinkRecord,
     record: &UploadSessionRecord,
 ) -> Result<(), DropChunkRejection> {
-    let address = ContentAddress::parse(&record.expected_hash)
-        .map_err(|_| DropChunkRejection::unavailable())?;
+    let address =
+        ContentAddress::parse(&record.expected_hash).map_err(|_| DropChunkRejection::internal())?;
 
     // The staged bytes are what the guest declared, or nothing is committed. Same check the
     // album path's finalization runs, and for the same reason: the hash is the only thing that
@@ -1352,9 +1542,9 @@ async fn deposit(
         .blobs()
         .staged_len(&record.upload_id)
         .await
-        .map_err(|_| DropChunkRejection::unavailable())?;
+        .map_err(|_| DropChunkRejection::internal())?;
     if staged != Some(record.total_size) {
-        return Err(DropChunkRejection::unavailable());
+        return Err(DropChunkRejection::internal());
     }
 
     drops
@@ -1363,7 +1553,7 @@ async fn deposit(
         .await
         .map_err(|error| {
             tracing::error!(%error, "a drop could not be committed");
-            DropChunkRejection::unavailable()
+            DropChunkRejection::internal()
         })?;
 
     let pending = drops
@@ -1372,12 +1562,12 @@ async fn deposit(
         .await
         .map_err(|error| {
             tracing::error!(%error, "a drop declaration could not be read back");
-            DropChunkRejection::unavailable()
+            DropChunkRejection::internal()
         })?
         // A finished session with no held declaration is a server-side inconsistency, never a
         // guest's fault — and filing an inbox row with an empty `kem_ct` would hand the owner a
         // drop they can never decrypt.
-        .ok_or_else(DropChunkRejection::unavailable)?;
+        .ok_or_else(DropChunkRejection::internal)?;
 
     drops
         .drops()
@@ -1396,7 +1586,7 @@ async fn deposit(
         .await
         .map_err(|error| {
             tracing::error!(%error, "a drop could not be filed in an inbox");
-            DropChunkRejection::unavailable()
+            DropChunkRejection::internal()
         })?;
 
     drops
@@ -1405,7 +1595,7 @@ async fn deposit(
         .await
         .map_err(|error| {
             tracing::error!(%error, "a finished drop's session could not be closed");
-            DropChunkRejection::unavailable()
+            DropChunkRejection::internal()
         })?;
     Ok(())
 }

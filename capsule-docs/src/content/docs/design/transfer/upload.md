@@ -73,7 +73,10 @@ not own exists.
   with `Retry-After`. `500 error.upload.storage_inconsistent` is reserved for a state the server
   cannot explain, and is logged at `ERROR`.
 - **Bounded per client.** Session creation and chunk appends are rate-limited per account and
-  per source address (`429` with `Retry-After`); live sessions per account are capped.
+  per source address (`429` with `Retry-After`); live sessions per account are capped. The
+  source address is the client the deployment's trusted proxies resolve, never a forwarding
+  header taken on its word. The account's budget is charged first, so a request it refuses
+  spends nothing of the address's budget, which the other accounts behind that address share.
 - **Bounded per connection.** Header, body-read and idle timeouts close a connection that sends
   too slowly; a request body is never buffered beyond the chunk maximum.
 - **Requests never panic.** Every reachable failure is a typed rejection. A panic in a handler

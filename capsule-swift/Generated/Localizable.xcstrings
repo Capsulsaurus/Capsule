@@ -31235,6 +31235,76 @@
         }
       }
     },
+    "cli.help.restore.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download originals from the server and verify them byte for byte"
+          }
+        }
+      }
+    },
+    "cli.help.restore.arg.album": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restore only the assets of this album"
+          }
+        }
+      }
+    },
+    "cli.help.restore.arg.asset": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restore only this asset"
+          }
+        }
+      }
+    },
+    "cli.help.restore.arg.json": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Print the run as one JSON document on stdout: the totals and each asset's outcome (restored, already present, or failed with its error)"
+          }
+        }
+      }
+    },
+    "cli.help.restore.arg.library": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Path to the Capsule library whose album keys open the originals"
+          }
+        }
+      }
+    },
+    "cli.help.restore.arg.out": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Directory the originals are written to, one file per asset named by its id; an interrupted run resumes from what it left there"
+          }
+        }
+      }
+    },
+    "cli.help.restore.arg.passphrase_stdin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read the library passphrase from stdin instead of prompting, so restores work in scripts and CI where there is no terminal"
+          }
+        }
+      }
+    },
     "cli.help.root.about": {
       "localizations": {
         "en": {
@@ -41411,6 +41481,16 @@
         }
       }
     },
+    "error.drop.chunk_unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule couldn't reach the upload service. The upload will resume shortly."
+          }
+        }
+      }
+    },
     "error.drop.file_too_large": {
       "localizations": {
         "en": {
@@ -41765,6 +41845,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "嘗試次數過多。請稍候再試。"
+          }
+        }
+      }
+    },
+    "error.drop.storage_full": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The server is out of storage space. Uploading will resume once space is freed."
           }
         }
       }
@@ -43627,6 +43717,88 @@
           "stringUnit": {
             "state": "translated",
             "value": "此來源在您帳戶上的快取已達上限。"
+          }
+        }
+      }
+    },
+    "error.quota.suspended": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "تم تعليق مساحة التخزين لديك، لذا لا يمكن إضافة أي شيء جديد. لا يزال بإمكانك عرض ما لديك وحذفه."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dein Speicher ist gesperrt, daher kann nichts Neues hinzugefügt werden. Du kannst deine Inhalte weiterhin ansehen und löschen."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your storage is suspended, so nothing new can be added. You can still view and delete what you have."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tu almacenamiento está suspendido, así que no se puede añadir nada nuevo. Aún puedes ver y eliminar lo que tienes."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Votre stockage est suspendu : rien de nouveau ne peut être ajouté. Vous pouvez toujours consulter et supprimer ce que vous avez."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "आपका संग्रहण निलंबित है, इसलिए कुछ भी नया नहीं जोड़ा जा सकता। आप अब भी अपनी सामग्री देख और हटा सकते हैं।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il tuo spazio di archiviazione è sospeso, quindi non è possibile aggiungere nulla di nuovo. Puoi comunque visualizzare ed eliminare ciò che hai."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ストレージが停止されているため、新しいものは追加できません。既存のものの閲覧と削除は引き続き可能です。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "저장 공간이 정지되어 새 항목을 추가할 수 없습니다. 기존 항목은 계속 보고 삭제할 수 있습니다."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seu armazenamento está suspenso, então nada novo pode ser adicionado. Você ainda pode ver e excluir o que já tem."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ваше хранилище приостановлено, поэтому добавить ничего нового нельзя. Вы по-прежнему можете просматривать и удалять то, что у вас есть."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你的存储空间已被暂停，因此无法添加新内容。你仍可以查看和删除现有内容。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你的儲存空間已被暫停，因此無法新增內容。你仍可以檢視和刪除現有內容。"
           }
         }
       }

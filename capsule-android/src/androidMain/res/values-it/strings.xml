@@ -279,6 +279,7 @@
     <string name="error_quota_exceeded">Lo spazio di archiviazione è pieno.</string>
     <string name="error_quota_grace_locked">Lo spazio di archiviazione è rimasto pieno oltre il periodo di tolleranza, quindi le modifiche sono sospese finché non liberi spazio.</string>
     <string name="error_quota_peer_budget_exceeded">Questa fonte ha raggiunto il limite di memorizzazione nella cache sul tuo account.</string>
+    <string name="error_quota_suspended">Il tuo spazio di archiviazione è sospeso, quindi non è possibile aggiungere nulla di nuovo. Puoi comunque visualizzare ed eliminare ciò che hai.</string>
     <string name="error_quota_unavailable">Capsule non è riuscito a verificare l\'utilizzo dello spazio. Riprova.</string>
     <string name="error_share_rate_limited">Troppi tentativi. Attendi e riprova.</string>
     <string name="error_storage_asset_not_found">That item was not found.</string>

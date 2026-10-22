@@ -1403,6 +1403,106 @@ async fn a_spent_budget_is_a_429_with_retry_after_on_both_writes() {
         .assert_status(StatusCode::NO_CONTENT);
 }
 
+/// A socket peer for a case that varies the source address. No proxy is trusted in the
+/// fixture, so the peer is the client the per-source limiters key on.
+fn from(address: &str) -> std::net::SocketAddr {
+    std::net::SocketAddr::new(address.parse().expect("a test address"), 40_000)
+}
+
+#[tokio::test]
+async fn a_spent_source_budget_is_a_429_on_both_writes_and_spares_another_address() {
+    use capsule_server::counter::{CounterKey, budgets};
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, _, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+    let create = |peer: &str| {
+        fixture
+            .client
+            .post("/v1/upload")
+            .header("authorization", &bearer)
+            .header("x-capsule-protocol", PROTOCOL_VERSION)
+            .json(&create_request(&fixture.clock, &whole, "original"))
+            .peer(from(peer))
+    };
+
+    // The address's budgets are spent; the account's are untouched.
+    fixture
+        .spend_budget(
+            &CounterKey::UploadChunksSource("203.0.113.9".to_owned()),
+            budgets::UPLOAD_CHUNKS_SOURCE,
+        )
+        .await;
+    fixture
+        .spend_budget(
+            &CounterKey::UploadSessionsSource("203.0.113.9".to_owned()),
+            budgets::UPLOAD_SESSIONS_SOURCE,
+        )
+        .await;
+
+    let chunking = fixture
+        .chunk(&id, 0, &first, &bearer)
+        .peer(from("203.0.113.9"))
+        .send()
+        .await;
+    chunking.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    assert_waits(&chunking, &fixture, "error.upload.rate_limited");
+
+    let creating = create("203.0.113.9").send().await;
+    creating.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    assert_waits(&creating, &fixture, "error.upload.rate_limited");
+
+    // The same account from another address is admitted on both writes: the create finds the
+    // session it already holds, and the chunk lands.
+    create("198.51.100.7")
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .peer(from("198.51.100.7"))
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn a_request_the_account_budget_refuses_spends_nothing_of_its_address() {
+    use capsule_server::counter::{CounterKey, CounterStore as _, Verdict, budgets};
+    use capsule_server::store::UserId;
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, _, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+    let account = UserId::new(support::user().as_str());
+    let source = CounterKey::UploadChunksSource("203.0.113.9".to_owned());
+
+    fixture
+        .spend_budget(&CounterKey::UploadChunks(account), budgets::UPLOAD_CHUNKS)
+        .await;
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .peer(from("203.0.113.9"))
+        .send()
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS);
+
+    // Had the refused request been charged to the address, one hit would be gone from it.
+    let verdict = fixture
+        .counters
+        .peek(&source, budgets::UPLOAD_CHUNKS_SOURCE, fixture.now())
+        .await
+        .expect("the in-memory counters answer");
+    assert_eq!(
+        verdict,
+        Verdict::Admitted {
+            remaining: budgets::UPLOAD_CHUNKS_SOURCE.limit
+        }
+    );
+}
+
 #[tokio::test]
 async fn an_account_at_its_live_session_cap_is_a_429_but_may_still_resume() {
     use capsule_server::counter::budgets;

@@ -1220,6 +1220,32 @@ async fn the_sdk_fetches_a_custody_receipt_and_verifies_it_under_the_attestation
         "a receipt verifies only under the key that signed it"
     );
 
+    // The signed durability verdict for the same write verifies under the same fetched pin, and
+    // binds the nonce the SDK sent (transfer/durability.md, Signed Storage Attestation).
+    let query = capsule_sdk::verify::AssetQuery {
+        asset_id: uuid::Uuid::parse_str(&receipt.core.asset_id).expect("an asset id is a UUID"),
+        blob_hashes: vec![hash_bytes(&whole)],
+    };
+    let nonce = [0x6E; 32];
+    let signed = client
+        .verify_signed(std::slice::from_ref(&query), false, &nonce, &pinned)
+        .await
+        .expect("the server's signed verdict verifies in the SDK");
+    assert_eq!(signed.attestation.core.nonce, nonce);
+    assert_eq!(signed.verdicts.len(), 1);
+    assert_eq!(signed.verdicts[0].asset_id, query.asset_id);
+    assert_eq!(signed.verdicts[0].blobs[0].hash, hash_bytes(&whole));
+    let err = client
+        .verify_signed(
+            std::slice::from_ref(&query),
+            false,
+            &nonce,
+            &[HybridSigningKey::generate().verifying_key()],
+        )
+        .await
+        .expect_err("a signed verdict verifies only under the key that signed it");
+    assert!(matches!(err, VerifyError::Attestation(_)), "got {err:?}");
+
     // A session that never finalized has no receipt, and the SDK reports the stable code.
     let pending = fixture
         .open_session(&support::payload(b'c', 4096), "original", &bearer)

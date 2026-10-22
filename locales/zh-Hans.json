@@ -1120,6 +1120,10 @@
     "message": "此来源在您账户上的缓存已达到上限。",
     "context": "Machine-translated seed pending human review."
   },
+  "error.quota.suspended": {
+    "message": "你的存储空间已被暂停，因此无法添加新内容。你仍可以查看和删除现有内容。",
+    "context": "Machine-translated seed pending human review."
+  },
   "error.quota.unavailable": {
     "message": "Capsule 无法检查你的存储使用情况，请重试。",
     "context": "Machine-translated seed pending human review."
