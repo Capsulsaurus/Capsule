@@ -419,8 +419,10 @@ impl Workspace {
                 metadata_blob: restored.metadata_blob.clone(),
                 stack: None,
             };
-            self.write_asset_files(&asset, &restored.plaintext)?;
-            // The evidence logs the artifact carried go back beside the chain, byte for byte.
+            // The evidence logs the artifact carried go back beside the chain, byte for byte —
+            // and **before** it: the chain on disk is what marks the asset present, and a later
+            // restore skips a present asset, so a crash between the two must leave the logs
+            // written and the asset absent (retried whole), never the reverse.
             restore_evidence_log(
                 &crate::library::receipts_path(&self.root, &restored.asset_id, Some(capture_utc)),
                 &restored.receipts,
@@ -433,6 +435,7 @@ impl Workspace {
                 ),
                 &restored.attestations,
             )?;
+            self.write_asset_files(&asset, &restored.plaintext)?;
             self.index_asset_row(&asset)?;
             self.index_original_representation(&asset, restored.plaintext.len())?;
             self.assets.insert(restored.asset_id, asset);
@@ -586,6 +589,9 @@ fn read_evidence_log(path: &Path) -> Result<Vec<u8>> {
 /// Nothing is written when the artifact carried none. A log already on disk is kept, not
 /// overwritten: a restore only adds assets absent locally, so one there is a stray, but it is
 /// still evidence, and the artifact's copy stays in the artifact.
+///
+/// The log is staged in a temporary sibling, flushed, and renamed into place, so a crash leaves
+/// either no log or the whole one — never a torn log a retried restore would then keep.
 fn restore_evidence_log(path: &Path, bytes: &[u8]) -> Result<()> {
     if bytes.is_empty() {
         return Ok(());
@@ -600,7 +606,15 @@ fn restore_evidence_log(path: &Path, bytes: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| LifecycleError::Io(e.to_string()))?;
     }
-    fs::write(path, bytes).map_err(|e| LifecycleError::Io(e.to_string()))?;
+    let io =
+        |e: std::io::Error| LifecycleError::Io(format!("evidence log {}: {e}", path.display()));
+    let tmp = crate::library::tmp_path(path);
+    {
+        let mut file = fs::File::create(&tmp).map_err(io)?;
+        std::io::Write::write_all(&mut file, bytes).map_err(io)?;
+        file.sync_all().map_err(io)?;
+    }
+    fs::rename(&tmp, path).map_err(io)?;
     tracing::debug!(log = %path.display(), bytes = bytes.len(), "backup: evidence log restored");
     Ok(())
 }
@@ -848,6 +862,10 @@ mod tests {
 
         restore_evidence_log(&path, b"from the artifact").unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"from the artifact");
+        assert!(
+            !crate::library::tmp_path(&path).exists(),
+            "the staged temporary was renamed into place"
+        );
 
         restore_evidence_log(&path, b"a different copy").unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"from the artifact");
