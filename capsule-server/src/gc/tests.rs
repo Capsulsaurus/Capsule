@@ -1296,6 +1296,28 @@ impl OwnerLedger for RefusingLedger {
     fn owners(&self) -> crate::ledger::LedgerFuture<'_, Vec<OwnerId>> {
         Box::pin(async { Ok(Vec::new()) })
     }
+
+    /// Refused like an append: a full ledger keeps nothing beside it either.
+    fn attach<'a>(
+        &'a self,
+        _owner: &'a OwnerId,
+        _key: capsule_core::crypto::hash::Hash32,
+        _bytes: Vec<u8>,
+    ) -> crate::ledger::LedgerFuture<'a, ()> {
+        Box::pin(async {
+            Err(LedgerError::StorageFull {
+                operation: "attach",
+            })
+        })
+    }
+
+    fn attachment<'a>(
+        &'a self,
+        _owner: &'a OwnerId,
+        _key: &'a capsule_core::crypto::hash::Hash32,
+    ) -> crate::ledger::LedgerFuture<'a, Option<Vec<u8>>> {
+        Box::pin(async { Ok(None) })
+    }
 }
 
 /// The purge entry `purge_expired` writes for `asset`.

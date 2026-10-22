@@ -88,6 +88,7 @@ use kynos::response::headers::WithHeaders;
 use kynos::response::status::NoContent;
 use kynos::security::auth::Auth;
 use serde::{Deserialize, Serialize};
+use tracing::Instrument as _;
 use uuid::Uuid;
 
 use crate::auth::AccessToken;
@@ -1311,13 +1312,16 @@ pub async fn append_chunk(
     // Only the uploader appends. The owner may look, but the resuming party is the one that
     // holds the bytes. Anyone else is told what a caller naming an unknown session is told:
     // "foreign is unknown" (transfer/upload.md, Hostile Clients).
-    if record.upload_user_id != credential.user {
+    // A guest drop's session is the link owner's too, but it is not an album upload: finalizing
+    // it here would fail it on its absent envelope and drop the guest's bytes. It is answered as
+    // unknown, which on this surface it is.
+    if record.upload_user_id != credential.user || record.is_guest_drop() {
         tracing::info!(
             upload_id = %id,
             caller = %credential.user,
             offset = ?headers.offset,
             code = error_codes::UPLOAD_SESSION_NOT_FOUND,
-            "a chunk was refused: not this session's uploader"
+            "a chunk was refused: not an album upload of this caller's"
         );
         return Err(ChunkRejection::session_not_found());
     }
@@ -1353,53 +1357,46 @@ pub async fn append_chunk(
     // drift on exactly the case a client hits after losing a connection. What stays here is
     // what genuinely differs — who is allowed to append, and how a refusal is spelled on the
     // wire.
-    let accepted = chunk::append(
-        upload.sessions(),
-        upload.blobs(),
-        upload.clock(),
-        &record,
-        offset,
-        bytes,
-        &received_hash,
+    // The append and the finalization it triggers are one task, awaited here for the answer: a
+    // client that disconnects drops this future, and neither may stop with it. An append whose
+    // record landed but whose finalization never started leaves a full session nobody finishes;
+    // a finalization stopped between the commit and the index write strands the claim and
+    // orphans the bytes (#801, #818).
+    let landed = tokio::spawn(
+        append_and_finish(
+            upload.clone(),
+            attestation.clone(),
+            record,
+            offset,
+            body,
+            received_hash,
+        )
+        .instrument(tracing::Span::current()),
     )
     .await
+    .map_err(|join| {
+        // A panic inside the append or the finalization. A claim it held is left for the next
+        // boot's recovery to drive, and a full session it left unclaimed is finished by the
+        // client's replay of its last chunk; this client is told to come back.
+        tracing::error!(upload_id = %id, error = %join, "the chunk task did not finish");
+        ChunkRejection::unavailable(upload.clock())
+    })?
     .map_err(|error| {
         store_unavailable(&error, "append a chunk");
         ChunkRejection::unavailable(upload.clock())
     })?;
 
-    let next_offset = match accepted {
-        chunk::Accepted::Advanced {
-            next_offset,
-            complete,
-        } => {
-            if complete {
-                // Its own task, awaited here for the answer: a client that disconnects drops
-                // this future, and the finalization must not stop with it — a claim abandoned
-                // between the commit and the index write strands the session and orphans the
-                // bytes (`finalize::spawn`).
-                let finalizing = finalize::spawn(upload.clone(), attestation.clone(), id.clone());
-                match finalizing.await {
-                    Ok(Ok(Outcome::Committed { .. } | Outcome::AlreadyClaimed)) => {}
-                    Ok(Ok(Outcome::NotFound)) => return Err(ChunkRejection::session_not_found()),
-                    Ok(Err(failure)) => {
-                        return Err(ChunkRejection::from_failure(failure, upload.clock()));
-                    }
-                    Err(join) => {
-                        // A panic inside finalization. The claim it held is left for the next
-                        // boot's recovery to drive; this client is told to come back.
-                        tracing::error!(
-                            upload_id = %id,
-                            error = %join,
-                            "the finalization task did not finish"
-                        );
-                        return Err(ChunkRejection::unavailable(upload.clock()));
-                    }
-                }
-            }
-            next_offset
+    if let Some(finalized) = landed.finalized {
+        match finalized {
+            Ok(Outcome::Committed { .. } | Outcome::AlreadyClaimed) => {}
+            Ok(Outcome::NotFound) => return Err(ChunkRejection::session_not_found()),
+            Err(failure) => return Err(ChunkRejection::from_failure(failure, upload.clock())),
         }
-        chunk::Accepted::Replayed { next_offset } => next_offset,
+    }
+
+    let next_offset = match landed.accepted {
+        chunk::Accepted::Advanced { next_offset, .. }
+        | chunk::Accepted::Replayed { next_offset, .. } => next_offset,
         chunk::Accepted::Conflict => return Err(ChunkRejection::chunk_conflict()),
         chunk::Accepted::OffsetMismatch { expected } => {
             return Err(ChunkRejection::offset_mismatch(expected));
@@ -1433,6 +1430,61 @@ pub async fn append_chunk(
             offset: next_offset,
         },
     ))
+}
+
+/// What one chunk did, with the finalization it started.
+struct Landed {
+    /// What the append did.
+    accepted: chunk::Accepted,
+    /// The finalization the chunk ran — present when it completed the session, or replayed a
+    /// chunk of a full session nobody had finished.
+    finalized: Option<Result<Outcome, FinalizeFailure>>,
+}
+
+/// Append one chunk and, when the session then holds every byte and nobody has claimed its
+/// finish, finalize it.
+///
+/// Run as its own task by [`append_chunk`], so it reaches its end whether or not the request
+/// does. Finalizing on a replay is what finishes a session the completing request left full
+/// and unclaimed — a request dropped while its progress write was in flight, or a process that
+/// died before claiming: the client's resend of its last chunk is the one request left to
+/// finish it, and [`finalize::finalize`]'s claim makes a replay that races the original request
+/// stand down rather than finalize twice.
+async fn append_and_finish(
+    upload: UploadContext,
+    attestation: crate::attestation::AttestationContext,
+    record: UploadSessionRecord,
+    offset: u64,
+    body: ChunkBody,
+    received_hash: String,
+) -> Result<Landed, StoreError> {
+    let accepted = chunk::append(
+        upload.sessions(),
+        upload.blobs(),
+        upload.clock(),
+        &record,
+        offset,
+        body.bytes(),
+        &received_hash,
+    )
+    .await?;
+    let finishes = matches!(
+        accepted,
+        chunk::Accepted::Advanced { complete: true, .. }
+            | chunk::Accepted::Replayed {
+                unfinished: true,
+                ..
+            }
+    );
+    let finalized = if finishes {
+        Some(finalize::finalize(&upload, &attestation, &record.upload_id).await)
+    } else {
+        None
+    };
+    Ok(Landed {
+        accepted,
+        finalized,
+    })
 }
 
 /// Report a session's progress and state.

@@ -1263,12 +1263,30 @@ impl SwitchableSessions {
 pub(crate) struct SwitchableDrops {
     inner: InMemoryDrops,
     unavailable: AtomicBool,
+    file_fault: Mutex<Option<FileFault>>,
+}
+
+/// How the next [`DropStore::file`] goes wrong.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FileFault {
+    /// The move commits and its answer is lost: the caller sees an error.
+    AnswerLost,
+    /// The move never happens and the caller sees an error.
+    Refused,
 }
 
 impl SwitchableDrops {
     /// A working store.
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    /// Make the next `file` go wrong as `fault` says; every later one works.
+    pub(crate) fn fault_next_file(&self, fault: FileFault) {
+        *self
+            .file_fault
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(fault);
     }
 
     /// Make every subsequent operation fail, or stop.
@@ -1356,6 +1374,30 @@ impl DropStore for SwitchableDrops {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.deposit(entry)
+    }
+
+    fn file<'a>(
+        &'a self,
+        upload: &'a UploadId,
+        address: &'a ContentAddress,
+        received_at: Timestamp,
+    ) -> StoreFuture<'a, Option<InboxEntry>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        let fault = self
+            .file_fault
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        match fault {
+            None => self.inner.file(upload, address, received_at),
+            Some(FileFault::Refused) => Box::pin(async { Self::refuse() }),
+            Some(FileFault::AnswerLost) => Box::pin(async move {
+                self.inner.file(upload, address, received_at).await?;
+                Self::refuse()
+            }),
+        }
     }
 
     fn inbox<'a>(&'a self, owner: &'a UserId) -> StoreFuture<'a, Vec<InboxEntry>> {
@@ -2796,12 +2838,20 @@ pub(crate) struct SwitchableIndex {
 pub(crate) struct SwitchableLedger {
     inner: InMemoryLedger,
     unavailable: AtomicBool,
+    /// Fail [`OwnerLedger::append`] alone, so a caller that attaches first gets past the attach.
+    appends_unavailable: AtomicBool,
 }
 
 impl SwitchableLedger {
     /// Make every subsequent append fail, or stop.
     pub(crate) fn set_unavailable(&self, unavailable: bool) {
         self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    /// Make every subsequent append fail while attachments still land, or stop.
+    pub(crate) fn set_appends_unavailable(&self, unavailable: bool) {
+        self.appends_unavailable
+            .store(unavailable, Ordering::SeqCst);
     }
 }
 
@@ -2813,7 +2863,9 @@ impl OwnerLedger for SwitchableLedger {
         recorded_at: Timestamp,
         signer: &'a dyn capsule_server::attestation::ReceiptSigner,
     ) -> LedgerFuture<'a, LedgerEntry> {
-        if self.unavailable.load(Ordering::SeqCst) {
+        if self.unavailable.load(Ordering::SeqCst)
+            || self.appends_unavailable.load(Ordering::SeqCst)
+        {
             return Box::pin(async {
                 Err(LedgerError::Backend {
                     operation: "append",
@@ -2830,6 +2882,33 @@ impl OwnerLedger for SwitchableLedger {
 
     fn owners(&self) -> LedgerFuture<'_, Vec<OwnerId>> {
         self.inner.owners()
+    }
+
+    /// Refused while the switch is on, as an append is: a ledger that cannot write cannot keep
+    /// an attachment either.
+    fn attach<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        key: capsule_core::crypto::hash::Hash32,
+        bytes: Vec<u8>,
+    ) -> LedgerFuture<'a, ()> {
+        if self.unavailable.load(Ordering::SeqCst) {
+            return Box::pin(async {
+                Err(LedgerError::Backend {
+                    operation: "attach",
+                    detail: REFUSAL.to_owned(),
+                })
+            });
+        }
+        self.inner.attach(owner, key, bytes)
+    }
+
+    fn attachment<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        key: &'a capsule_core::crypto::hash::Hash32,
+    ) -> LedgerFuture<'a, Option<Vec<u8>>> {
+        self.inner.attachment(owner, key)
     }
 }
 

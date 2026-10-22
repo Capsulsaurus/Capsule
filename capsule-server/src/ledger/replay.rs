@@ -176,6 +176,43 @@ pub fn lifecycle(entries: &[LedgerEntry]) -> Vec<Lifecycle> {
     out
 }
 
+/// One device-directory publish the ledger recorded: an offer, which the store may have
+/// refused after the entry was written ([`crate::routes::directory`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirectoryOffer {
+    /// The entry's position in the ledger.
+    pub ledger_seq: u64,
+    /// The account whose directory it is.
+    pub user_id: String,
+    /// The version it offered.
+    pub directory_version: u64,
+    /// The hash of the signed document, which is also its attachment's key.
+    pub document_hash: Hash32,
+    /// The server's clock when the entry was written.
+    pub recorded_at: String,
+}
+
+/// Every device-directory offer in `entries`, in ledger order.
+pub fn directory(entries: &[LedgerEntry]) -> Vec<DirectoryOffer> {
+    entries
+        .iter()
+        .filter_map(|entry| match &entry.core.event {
+            LedgerEvent::Directory {
+                user_id,
+                directory_version,
+                document_hash,
+            } => Some(DirectoryOffer {
+                ledger_seq: entry.core.seq,
+                user_id: user_id.clone(),
+                directory_version: *directory_version,
+                document_hash: *document_hash,
+                recorded_at: entry.core.recorded_at.clone(),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Resolve every open custody entry for `upload` with `resolution`.
 fn resolve(
     out: &mut [Custody],

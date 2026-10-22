@@ -179,6 +179,19 @@ pub struct UploadSessionRecord {
     pub last_progress_at: Timestamp,
 }
 
+impl UploadSessionRecord {
+    /// Whether this session is a guest drop's rather than an album upload's.
+    ///
+    /// A drop carries no manifest (invariant 30), so its envelope is empty, while every album
+    /// session holds the serialized envelope its create passed the gate with. The two finish
+    /// differently — a drop is filed in its owner's inbox, an album upload is finalized into
+    /// the asset index — so anything that drives a session it did not open, boot recovery
+    /// first, asks this before choosing which.
+    pub fn is_guest_drop(&self) -> bool {
+        self.manifest_envelope.is_empty()
+    }
+}
+
 /// One chunk the server durably appended.
 ///
 /// The replay half of the `(upload_id, offset, chunk_hash)` idempotency tuple: a client that
