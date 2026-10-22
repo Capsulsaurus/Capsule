@@ -18,8 +18,8 @@
 //!      and `--apply` restores it;
 //!    - a deep scrub finds nothing but the `amk_version` mismatch #790 tracks;
 //!    - the account signs in again, the feed lists all three assets at the sequence numbers host
-//!      A gave them, and every blob the library uploaded is served byte for byte as host A
-//!      stored it. The `capsule restore` plaintext leg waits on #791.
+//!      A gave them, every blob the library uploaded is served byte for byte as host A stored
+//!      it, and `capsule restore` writes every original back byte for byte.
 //! 4. **The index-rebuild drill**: a database that never saw a backup, migrated and empty,
 //!    rebuilt from the same blob directory's owner ledgers, holds the same rows as host B's
 //!    restored index.
@@ -36,6 +36,9 @@ mod postgres_conformance {
     use std::path::{Path, PathBuf};
 
     use capsule_cli::remote::{self, PushOptions, RemoteConfig};
+    use capsule_cli::restore::{
+        AssetRestoreStatus, RESTORE_RANGE_WINDOW, RestoreOptions, RestoreScope,
+    };
     use capsule_cli::session::SessionStore;
     use capsule_e2e::fixtures::{large_synthetic_jpeg, synthetic_jpeg, synthetic_jpeg_sized};
     use capsule_e2e::{
@@ -43,6 +46,7 @@ mod postgres_conformance {
     };
     use capsule_sdk::auth::Session;
     use capsule_sdk::fetch::{BlobSource as _, HttpBlobSource, RangeOutcome};
+    use capsule_sdk::net::ConnectionClass;
     use capsule_sdk::push::bundle_blobs;
     use capsule_server::blob::address::{ContentAddress, blob_path};
     use capsule_server::boot;
@@ -515,8 +519,7 @@ mod postgres_conformance {
         }
 
         // Every blob the library uploaded, served by host B over the blob route byte for byte
-        // as host A stored it. `capsule restore`'s plaintext leg is #791: against a real server
-        // it cannot size the metadata blob, which the feed does not list.
+        // as host A stored it.
         let source = HttpBlobSource::new(session_b.clone(), server_b.v1());
         for id in originals.keys() {
             let bundle = device
@@ -536,6 +539,38 @@ mod postgres_conformance {
                     "blob {hash} of {id} is served byte for byte"
                 );
             }
+        }
+
+        // `capsule restore` from host B: every original, decrypted and written back, is the
+        // file that was imported on host A, byte for byte. That includes the asset only the
+        // rebuild restored.
+        let (_restore_home, store) = persisted(&session_b).await;
+        let out = tempfile::tempdir().expect("a restore directory");
+        let summary = remote::restore(
+            &remote_config(&server_b),
+            &store,
+            &device.workspace,
+            &RestoreOptions {
+                scope: RestoreScope::Library,
+                out: out.path().to_path_buf(),
+                connection: ConnectionClass::Unmetered,
+                range_window: RESTORE_RANGE_WINDOW,
+            },
+        )
+        .await
+        .expect("the restore runs");
+        assert_eq!(summary.failed, 0, "{summary:#?}");
+        assert_eq!(summary.restored, originals.len(), "{summary:#?}");
+        for outcome in &summary.outcomes {
+            assert_eq!(outcome.status, AssetRestoreStatus::Restored, "{outcome:#?}");
+            let id = Uuid::parse_str(&outcome.asset_id).expect("an asset id");
+            let path = outcome.path.as_ref().expect("a restored asset has a path");
+            let written = std::fs::read(path).expect("the restored original reads");
+            assert_eq!(
+                &written,
+                originals.get(&id).expect("an asset this drill imported"),
+                "asset {id} restores byte for byte"
+            );
         }
 
         // ── 4. The index-rebuild drill: no database backup at all ─────────────────────────
