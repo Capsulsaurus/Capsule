@@ -7,6 +7,11 @@
 //! records, **except** for album membership, favorites, and user-typed descriptions, which the
 //! exporter is authoritative for.
 //!
+//! **Every file is kept.** JSON is the exporter's sidecar and album-manifest channel; every other
+//! file of an export is a media file whatever its extension (a GIF, a WebP, a 3GP video, a suffix
+//! Capsule has never seen), and only Takeout's own named non-media artefacts (`archive_browser.html`)
+//! are left out, each with a log line.
+//!
 //! Takeout's structural quirks are handled here so the pure planner never special-cases them:
 //!
 //! - **Truncated filenames.** Takeout truncates long sidecar names; the media file and its JSON can
@@ -284,8 +289,15 @@ fn strip_edited_marker(stem_lower: &str) -> Option<String> {
     })
 }
 
-fn is_media_ext(ext: &str) -> bool {
-    group::is_primary(ext) || group::is_raw(ext) || group::is_video(ext)
+/// Takeout's own non-media artefacts, by lowercase file name: the files the exporter writes beside
+/// a user's originals that are not originals themselves. These are the only non-JSON files of an
+/// export the adapter leaves out (**every file is kept** — thumbnails § Media Is Rawshift's); an
+/// extension Capsule does not recognise is never a reason to leave a file out.
+const TAKEOUT_ARTEFACTS: &[&str] = &["archive_browser.html"];
+
+/// Whether `name_lower` (a lowercase file name) is one of [`TAKEOUT_ARTEFACTS`].
+fn is_takeout_artefact(name_lower: &str) -> bool {
+    TAKEOUT_ARTEFACTS.contains(&name_lower)
 }
 
 fn file_name_lower(path: &Path) -> String {
@@ -329,6 +341,9 @@ struct ExportWalk {
 }
 
 impl ExportWalk {
+    /// Walk one export part. JSON files are the sidecar and album-manifest channel; every other
+    /// file is a media file whatever its extension, except a named [`TAKEOUT_ARTEFACTS`] entry,
+    /// which is left out and logged.
     fn absorb_root(&mut self, root: &Path) -> Result<(), AdapterError> {
         for entry in WalkDir::new(root) {
             let entry = entry.map_err(|e| AdapterError::Io {
@@ -353,17 +368,24 @@ impl ExportWalk {
                 self.absorb_sidecar(path, &name);
                 continue;
             }
-            if is_media_ext(&ext) {
-                let key = media_key_from_name(&name);
-                let parent = path.parent().map(Path::to_path_buf).unwrap_or_default();
-                self.media.push(MediaFile {
-                    path,
-                    parent,
-                    file_name: name,
-                    ext,
-                    key,
-                });
+            if is_takeout_artefact(&name) {
+                tracing::debug!(
+                    path = %path.display(),
+                    reason = "takeout_artefact",
+                    "takeout import: left out a Takeout artefact that is not an original"
+                );
+                continue;
             }
+            tracing::trace!(path = %path.display(), ext = %ext, "takeout import: media file");
+            let key = media_key_from_name(&name);
+            let parent = path.parent().map(Path::to_path_buf).unwrap_or_default();
+            self.media.push(MediaFile {
+                path,
+                parent,
+                file_name: name,
+                ext,
+                key,
+            });
         }
         Ok(())
     }
@@ -931,6 +953,138 @@ mod tests {
             assert_eq!(ea.metadata, eb.metadata);
             assert_eq!(ea.candidate.members.len(), eb.candidate.members.len());
         }
+    }
+
+    // ── Every file is kept ───────────────────────────────────────────────────
+
+    /// Build an export holding kinds outside Capsule's extension lists, each beside its sidecar
+    /// where one exists, plus Takeout's own `archive_browser.html`.
+    fn build_every_kind_fixture(root: &Path) {
+        let takeout = root.join("Takeout");
+        let y = takeout.join("Google Photos/Photos from 2019");
+        write(&takeout.join("archive_browser.html"), b"<html></html>");
+        write(&y.join("loop.gif"), b"GIF89a-bytes");
+        write(
+            &y.join("loop.gif.json"),
+            br#"{"title":"loop.gif","description":"A gif","photoTakenTime":{"timestamp":"1546300800"}}"#,
+        );
+        write(&y.join("sticker.webp"), b"RIFF-webp-bytes");
+        write(
+            &y.join("sticker.webp.supplemental-metadata.json"),
+            br#"{"title":"sticker.webp","description":"A webp","favorited":true}"#,
+        );
+        write(&y.join("old-phone.3gp"), b"3gp-bytes");
+        write(
+            &y.join("old-phone.3gp.json"),
+            br#"{"title":"old-phone.3gp","geoData":{"latitude":10.0,"longitude":20.0}}"#,
+        );
+        // An unknown suffix with no sidecar, and a file with no extension at all.
+        write(&y.join("mystery.zzq"), b"mystery-bytes");
+        write(&y.join("NOEXTENSION"), b"no-extension-bytes");
+    }
+
+    #[test]
+    fn every_non_json_file_is_imported_whatever_its_extension() {
+        let tmp = TempDir::new().unwrap();
+        build_every_kind_fixture(tmp.path());
+        let ex = TakeoutAdapter::new()
+            .extract(&[tmp.path().to_path_buf()])
+            .unwrap();
+
+        let mut names: Vec<String> = ex
+            .entries
+            .iter()
+            .map(|e| {
+                e.primary_path()
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                "NOEXTENSION",
+                "loop.gif",
+                "mystery.zzq",
+                "old-phone.3gp",
+                "sticker.webp"
+            ],
+            "every non-JSON file is an asset; no JSON and no Takeout artefact is"
+        );
+
+        // Each pairs with its own sidecar where one exists.
+        let gif = meta(&ex, tmp.path(), "loop.gif");
+        assert_eq!(gif.description.as_deref(), Some("A gif"));
+        assert_eq!(gif.taken_time.unwrap().as_second(), 1_546_300_800);
+        let webp = meta(&ex, tmp.path(), "sticker.webp");
+        assert_eq!(webp.description.as_deref(), Some("A webp"));
+        assert!(webp.favorite);
+        let three_gp = meta(&ex, tmp.path(), "old-phone.3gp");
+        assert_eq!(
+            three_gp.gps.unwrap(),
+            GeoPoint {
+                lat: 10.0,
+                lon: 20.0
+            }
+        );
+        let mystery = meta(&ex, tmp.path(), "mystery.zzq");
+        assert_eq!(mystery.taken_time_source, FoldSource::Absent);
+        assert!(mystery.description.is_none());
+    }
+
+    #[test]
+    fn every_kind_imports_through_the_planner_and_executor() {
+        use crate::crypto::primitives::Argon2Params;
+        use crate::import::execute;
+        use crate::import::executor_cancellation::CancellationToken;
+        use crate::import::planner::{ImportConfig, plan};
+        use crate::lifecycle::Workspace;
+
+        let src = TempDir::new().unwrap();
+        build_every_kind_fixture(src.path());
+        let lib = TempDir::new().unwrap();
+        let mut ws = Workspace::create_with_params(
+            lib.path(),
+            b"passphrase",
+            Argon2Params {
+                mem_kib: 64,
+                t_cost: 1,
+                p_cost: 1,
+            },
+        )
+        .unwrap();
+        let default = ws.default_album_id();
+        ws.create_album_with_id(default, "Imports").unwrap();
+
+        let config = ImportConfig::default();
+        let ex = TakeoutAdapter::new()
+            .extract(&[src.path().to_path_buf()])
+            .unwrap();
+        let planned = plan(&ex.to_scan_result(), ws.db(), &config).unwrap();
+        assert_eq!(
+            planned.counts.to_import, 5,
+            "each kind is planned as an asset"
+        );
+        let summary = execute(
+            &planned,
+            &mut ws,
+            &config,
+            |_| {},
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        assert_eq!(summary.imported_count(), 5, "each kind is imported");
+    }
+
+    #[test]
+    fn only_named_takeout_artefacts_are_left_out() {
+        assert!(is_takeout_artefact("archive_browser.html"));
+        assert!(!is_takeout_artefact("index.html"));
+        assert!(!is_takeout_artefact("loop.gif"));
+        assert!(!is_takeout_artefact("noextension"));
     }
 
     // ── Resume: the adapter feeds the unchanged planner + executor ───────────
