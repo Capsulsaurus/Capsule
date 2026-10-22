@@ -3934,6 +3934,9 @@
     },
     "/v1/auth/escrow/albums/{album_id}": {
       "put": {
+        "tags": [
+          "escrow"
+        ],
         "summary": "Store the caller's key escrow for one album, replacing whatever that album's slot held.",
         "description": "The album's whole key state — every epoch's content key, its signing seeds and its\nauthority — sealed by the client under the account master key, so a device recovered from the\nescrow can open the album (#741). Opaque here: one slot per album, replaced in one operation,\nnever versioned, and refused only empty, past its coarse ceiling, or past the account's bound\non escrowed albums (`409 error.escrow.album_keys_full`, [`crate::escrow::album_keys_fit`]):\nslots are never deleted, so without a bound an account could grow them, and the listing\nevery push reads, without limit. The album id is the\nslot's name and nothing more; the server does not check the album exists, because a client\nescrows an album's keys **before** the album's first asset reaches the server.",
         "operationId": "store_album_keys",
@@ -3997,7 +4000,6 @@
             "headers": {
               "WWW-Authenticate": {
                 "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
-                "required": true,
                 "schema": {
                   "type": "string"
                 },
@@ -4073,7 +4075,7 @@
             }
           },
           "400": {
-            "description": "Bad Request",
+            "description": "Bad Request; Malformed request; Malformed escrow; Malformed handshake",
             "headers": {
               "X-Capsule-Protocol-Min": {
                 "description": "The oldest protocol version this server accepts.",
@@ -4277,6 +4279,13 @@
                 "schema": {
                   "type": "string",
                   "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
                 }
               }
             }
@@ -23062,6 +23071,9 @@
     },
     "/v1/auth/escrow/albums": {
       "get": {
+        "tags": [
+          "escrow"
+        ],
         "summary": "List every album key escrow the caller holds, each blob verbatim.",
         "description": "What `capsule auth recover` reads to give a library created from the master key the\naccount's albums before anything creates one, and what a push compares its albums against\nto re-escrow only the ones that changed.",
         "operationId": "list_album_keys",
@@ -23105,7 +23117,6 @@
             "headers": {
               "WWW-Authenticate": {
                 "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
-                "required": true,
                 "schema": {
                   "type": "string"
                 },
@@ -23277,6 +23288,13 @@
                 "schema": {
                   "type": "string",
                   "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
                 }
               }
             }

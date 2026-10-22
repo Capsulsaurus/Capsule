@@ -975,8 +975,8 @@ fn store_album_keys_error(error: rest::Error<rest::StoreAlbumKeysError>) -> Reco
             rest::StoreAlbumKeysError::Status401(problem)
             | rest::StoreAlbumKeysError::Status403(problem) => refused(&problem),
             rest::StoreAlbumKeysError::Status500(problem) => unavailable(&problem),
-            rest::StoreAlbumKeysError::Status413 => RecoveryError::Malformed {
-                code: None,
+            rest::StoreAlbumKeysError::Status413(problem) => RecoveryError::Malformed {
+                code: Some(problem.code.clone()),
                 detail: "the album key escrow exceeds the server's request-body limit".to_owned(),
             },
         },
@@ -999,9 +999,9 @@ fn list_album_keys_error(error: rest::Error<rest::ListAlbumKeysError>) -> Recove
             rest::ListAlbumKeysError::Status401(problem)
             | rest::ListAlbumKeysError::Status403(problem) => refused(&problem),
             rest::ListAlbumKeysError::Status500(problem) => unavailable(&problem),
-            rest::ListAlbumKeysError::Status413 => RecoveryError::Unexpected {
+            rest::ListAlbumKeysError::Status413(problem) => RecoveryError::Unexpected {
                 status: 413,
-                code: None,
+                code: Some(problem.code.clone()),
             },
         },
         other => wire_error(&other),

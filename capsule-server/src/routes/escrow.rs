@@ -475,8 +475,8 @@ pub enum ListAlbumKeysRejection {
     tag = EscrowTag
 )]
 pub async fn store_album_keys(
-    Inject(escrow): Inject<EscrowContext>,
     Auth(credential): Auth<AccessToken>,
+    Inject(escrow): Inject<EscrowContext>,
     Path(path): Path<AlbumKeysPath>,
     body: EscrowBody,
 ) -> Result<Json<StoreAlbumKeysResponse>, StoreAlbumKeysRejection> {
@@ -539,8 +539,8 @@ pub async fn store_album_keys(
     tag = EscrowTag
 )]
 pub async fn list_album_keys(
-    Inject(escrow): Inject<EscrowContext>,
     Auth(credential): Auth<AccessToken>,
+    Inject(escrow): Inject<EscrowContext>,
 ) -> Result<Json<AlbumKeysListing>, ListAlbumKeysRejection> {
     let user = UserId::new(credential.user.as_str());
     let held = escrow
