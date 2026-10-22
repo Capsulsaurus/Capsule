@@ -745,6 +745,7 @@ impl std::fmt::Display for Rendered<'_, RebuildReport> {
                 (restored, &owner.restored),
                 ("unprovable sequence", &owner.unprovable),
                 ("incomplete bundle", &owner.incomplete),
+                ("purged, backup only", &owner.purged),
             ] {
                 if assets.is_empty() {
                     continue;
@@ -1155,6 +1156,7 @@ mod tests {
             }],
             unprovable: vec![AssetId::new("asset-unprovable")],
             incomplete: Vec::new(),
+            purged: Vec::new(),
             dangling: vec![(AssetId::new("asset-dangling"), address(0xCC))],
             unusable_manifests: Vec::new(),
             foreign_manifests: Vec::new(),

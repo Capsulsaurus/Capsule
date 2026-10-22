@@ -4,7 +4,7 @@
 
 use capsule_core::crypto::hash::hash_bytes;
 use capsule_core::crypto::keys::{AmkVersion, HybridSigningKey};
-use capsule_core::crypto::provenance::{ASSET_MANIFEST_VERSION, KeyMode, ManifestCore};
+use capsule_core::crypto::provenance::{ASSET_MANIFEST_VERSION, Action, KeyMode, ManifestCore};
 
 use super::*;
 use crate::attestation::{LocalAttestationKey, PublishedKey, ReceiptSigner as _};
@@ -221,6 +221,80 @@ impl Server {
             .await;
         id
     }
+
+    /// Delete `asset` the way `POST /albums/{id}/ops` orders it (#753): a lifecycle entry, the
+    /// index's apply, then the entry carrying the sequence number — or, with `crash`, no second
+    /// entry. `prior` overrides the predecessor the manifest names, to write one that does not
+    /// chain; the index is then not asked at all, as it would refuse.
+    async fn delete(&self, owner: &OwnerId, asset: &AssetId, crash: bool, prior: Option<Hash32>) {
+        let row = self.index.read(asset).await.expect("read").expect("a row");
+        let chains = prior.is_none();
+        let prior = prior.or(row.chain_head);
+        let bytes = delete_record(asset, prior.expect("a published row has a head"));
+        let address = self.store(&bytes).await;
+        let manifest_hash = hash_bytes(&bytes);
+        let event = |sync_seq| LedgerEvent::Lifecycle {
+            asset_id: asset.as_str().to_owned(),
+            action: OpAction::Delete.as_str().to_owned(),
+            manifest_hash: Some(manifest_hash),
+            sync_seq,
+        };
+        self.append(owner, event(None)).await;
+        if !chains {
+            return;
+        }
+        let outcome = self
+            .index
+            .apply_op(crate::index::LifecycleOp {
+                asset_id: asset.clone(),
+                owner_id: owner.clone(),
+                album_id: row.album_id.clone(),
+                action: OpAction::Delete,
+                manifest_hash,
+                prior_provenance_hash: prior,
+                amk_version: 0,
+                provenance: address,
+                metadata: None,
+                original: None,
+                retention_until: Some(retention()),
+                at: at(),
+            })
+            .await
+            .expect("the index applies");
+        let crate::index::OpOutcome::Applied { sync_seq, .. } = outcome else {
+            panic!("the delete answered {outcome:?}");
+        };
+        if !crash {
+            self.append(owner, event(Some(sync_seq))).await;
+        }
+    }
+}
+
+/// The retention floor every fixture delete signs.
+fn retention() -> Timestamp {
+    Timestamp::from_second(1_769_904_000).expect("a valid instant")
+}
+
+/// A signed `delete` for `asset`, chaining onto `prior`, in its provenance record.
+fn delete_record(asset: &AssetId, prior: Hash32) -> Vec<u8> {
+    let metadata = ContentAddress::parse(&hash_bytes(b"unused").to_hex()).expect("an address");
+    let created = manifest(asset, &metadata);
+    let record: capsule_core::crypto::provenance::ProvenanceRecord =
+        capsule_core::cbor::from_slice(&created).expect("the create record decodes");
+    let mut core = record.manifest.core;
+    core.action = Action::Delete;
+    core.metadata_blob_hash = None;
+    core.prior_provenance_hash = Some(prior);
+    core.retention_until = Some(retention().to_string());
+    let device = HybridSigningKey::from_seed64(&[1; 64]);
+    let write_tier = HybridSigningKey::from_seed64(&[2; 64]);
+    let signed = core.sign(&device, &write_tier).expect("a manifest signs");
+    let record = capsule_core::crypto::provenance::ProvenanceRecord::new(
+        uuid::Uuid::parse_str(asset.as_str()).expect("a uuid"),
+        signed,
+        Some(prior),
+    );
+    capsule_core::cbor::to_canonical_vec(&record).expect("a record encodes")
 }
 
 async fn rows(index: &InMemoryAssetIndex) -> Vec<AssetRow> {
@@ -492,6 +566,122 @@ async fn without_keys_a_rebuild_verifies_links_and_says_so() {
     let report = rebuild(&context, Mode::DryRun).await.expect("a pass");
     assert!(report.links_only);
     assert_eq!(report.owners[0].restored.len(), 1);
+}
+
+#[tokio::test]
+async fn a_ledgered_delete_is_replayed_into_the_rebuilt_row() {
+    let server = Server::new();
+    let alice = owner("alice");
+    let id = server.publish(&alice, "deleted", false).await;
+    server.delete(&alice, &id, false, None).await;
+    let original = rows(&server.index).await;
+    assert_eq!(original[0].state, AssetState::Tombstoned);
+
+    let empty = Arc::new(InMemoryAssetIndex::new());
+    let report = rebuild(&server.rebuild_into(empty.clone()), Mode::Apply)
+        .await
+        .expect("a pass");
+    assert!(!report.owners[0].epoch_bump_needed, "{report:?}");
+    assert_eq!(
+        rows(&empty).await,
+        original,
+        "the tombstone, its retention floor, the re-pointed head and the superseded create \
+         all come back"
+    );
+}
+
+#[tokio::test]
+async fn a_ledgered_purge_drops_the_tombstones_references_and_keeps_the_row() {
+    // The entry #767 specifies: a `purge` lifecycle entry with no manifest, before the index's
+    // purge commits. The purged blobs are then collected, so without the entry a rebuild would
+    // report every one of them as dangling.
+    let server = Server::new();
+    let alice = owner("alice");
+    let id = server.publish(&alice, "purged", false).await;
+    server.delete(&alice, &id, false, None).await;
+    let held = server.index.read(&id).await.expect("read").expect("a row");
+    server
+        .append(
+            &alice,
+            LedgerEvent::Lifecycle {
+                asset_id: id.as_str().to_owned(),
+                action: "purge".to_owned(),
+                manifest_hash: None,
+                sync_seq: None,
+            },
+        )
+        .await;
+    assert!(matches!(
+        server
+            .index
+            .purge(&id, retention())
+            .await
+            .expect("the index purges"),
+        crate::index::PurgeOutcome::Purged(_)
+    ));
+    let original = rows(&server.index).await;
+
+    // Before the collector runs, the manifests are still there: the purged tombstone comes back
+    // exactly.
+    let before_gc = Arc::new(InMemoryAssetIndex::new());
+    let report = rebuild(&server.rebuild_into(before_gc.clone()), Mode::Apply)
+        .await
+        .expect("a pass");
+    assert!(report.owners[0].dangling.is_empty(), "{report:?}");
+    assert_eq!(rows(&before_gc).await, original);
+
+    // The collector sweeps what the purge released. Nothing names the album any more, so the
+    // row is the backup's alone — reported as purged, and not as damage.
+    for address in held
+        .blobs
+        .iter()
+        .map(|blob| &blob.address)
+        .chain(&held.superseded)
+    {
+        server.blobs.remove(address).await.expect("removed");
+    }
+    let after_gc = Arc::new(InMemoryAssetIndex::new());
+    let report = rebuild(&server.rebuild_into(after_gc.clone()), Mode::Apply)
+        .await
+        .expect("a pass");
+    assert_eq!(report.owners[0].purged, vec![id]);
+    assert!(report.owners[0].dangling.is_empty(), "{report:?}");
+    assert!(!report.has_faults(), "{report:?}");
+}
+
+#[tokio::test]
+async fn an_unrecorded_delete_that_chains_is_replayed_and_moves_the_epoch() {
+    let server = Server::new();
+    let alice = owner("alice");
+    let id = server.publish(&alice, "crashed-delete", false).await;
+    server.delete(&alice, &id, true, None).await;
+
+    let empty = Arc::new(InMemoryAssetIndex::new());
+    let report = rebuild(&server.rebuild_into(empty.clone()), Mode::Apply)
+        .await
+        .expect("a pass");
+    assert_eq!(report.owners[0].unprovable, vec![id.clone()]);
+    assert_eq!(report.owners[0].epoch, Some(1));
+    let row = empty.read(&id).await.expect("read").expect("a row");
+    assert_eq!(row.state, AssetState::Tombstoned);
+}
+
+#[tokio::test]
+async fn an_unrecorded_op_that_does_not_chain_was_refused_and_is_not_replayed() {
+    let server = Server::new();
+    let alice = owner("alice");
+    let id = server.publish(&alice, "refused-delete", false).await;
+    server
+        .delete(&alice, &id, true, Some(hash_bytes(b"not the head")))
+        .await;
+    let original = rows(&server.index).await;
+
+    let empty = Arc::new(InMemoryAssetIndex::new());
+    let report = rebuild(&server.rebuild_into(empty.clone()), Mode::Apply)
+        .await
+        .expect("a pass");
+    assert!(report.owners[0].unprovable.is_empty(), "{report:?}");
+    assert_eq!(rows(&empty).await, original);
 }
 
 #[test]

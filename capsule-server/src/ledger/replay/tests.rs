@@ -120,6 +120,42 @@ async fn a_retried_custody_entry_is_resolved_by_the_one_resolution_after_both() 
     );
 }
 
+fn op(asset: &str, manifest: &[u8], sync_seq: Option<u64>) -> LedgerEvent {
+    LedgerEvent::Lifecycle {
+        asset_id: asset.to_owned(),
+        action: "delete".to_owned(),
+        manifest_hash: Some(hash_bytes(manifest)),
+        sync_seq,
+    }
+}
+
+#[tokio::test]
+async fn each_lifecycle_op_is_paired_with_the_entry_that_recorded_its_position() {
+    let key = signer(1);
+    let scan = ledger_of(
+        vec![
+            op("asset-a", b"m1", None),
+            custody_event("x"),
+            op("asset-a", b"m1", Some(4)),
+            op("asset-b", b"m2", None),
+        ],
+        &key,
+    )
+    .await;
+    let found = lifecycle(&scan.entries);
+    assert_eq!(found.len(), 2);
+    assert_eq!(
+        (found[0].ledger_seq, found[0].sync_seq),
+        (1, Some(4)),
+        "the op committed at 4"
+    );
+    assert_eq!(found[1].asset_id, "asset-b");
+    assert_eq!(
+        found[1].sync_seq, None,
+        "nothing recorded the second op's position"
+    );
+}
+
 #[tokio::test]
 async fn keys_check_signatures_and_no_keys_check_links_only() {
     let key = signer(1);

@@ -4,9 +4,11 @@
 //!
 //! 1. Verify the ledger chain ([`LedgerKeys::verify`]). A break stops that owner's replay at
 //!    the last good entry and is reported; other owners continue.
-//! 2. Replay the verified custody entries the index did not refuse, in ledger order: read each
-//!    named blob's presence, decode each provenance blob through the one manifest parser
-//!    ([`super::manifest`]), and assemble the row the entries imply.
+//! 2. Replay the verified entries in ledger order: each custody entry the index did not refuse
+//!    (an upload or a drop adoption) and each lifecycle op (a delete, a restore, a metadata
+//!    update, a derivative, a retention purge). Read each named blob's presence, decode each
+//!    manifest through the one manifest parser ([`super::manifest`]), and assemble the row the
+//!    entries imply, the way the index's own writes would have.
 //! 3. Compare each row with the index. A row the index lacks is restored with the `sync_seq`
 //!    the ledger proved ([`AssetIndex::restore`]); a row it holds is compared and never
 //!    overwritten. Quota attribution is recomputed for every restored blob; reference counts are
@@ -14,8 +16,9 @@
 //! 4. Report blobs nothing names, entries naming a missing blob, and provenance blobs that fail
 //!    structural validation (moved to `quarantine/` with their reason, never dropped).
 //!
-//! When the ledger cannot prove an owner's sequence — the chain breaks, or a custody entry was
-//! never resolved because the process stopped between it and the index write — the rows it
+//! When the ledger cannot prove an owner's sequence — the chain breaks, a custody entry was
+//! never resolved because the process stopped between it and the index write, or a lifecycle
+//! op that still chains has no entry recording its position — the rows it
 //! cannot number are given numbers above every number the owner has used, and the owner moves to
 //! a new sync epoch ([`AssetIndex::bump_sync_epoch`]), so a client's cursor from before the
 //! rebuild is refused rather than resumed against a numbering it never saw.
@@ -37,11 +40,14 @@
 //! # What a rebuild trusts
 //!
 //! The ledger's own signatures when the host holds the attestation key's public half, its links
-//! otherwise (the report says which). It does not re-verify a manifest's device signature: the
-//! ledger records the device-directory versions it would need (`LedgerEvent::Directory`), and
-//! no producer appends them yet. Lifecycle actions taken through `POST /albums/{id}/ops` are not
-//! ledgered either, so a rebuild into an empty schema restores what was uploaded and not what
-//! was deleted since; both are named in the design doc as the ledger's remaining producers.
+//! otherwise (the report says which). It does not re-verify a manifest's device signature
+//! against the directory version the ledger recorded (`LedgerEvent::Directory`): the server
+//! verified the write when it accepted it, the entry that says so is signed, and checking it
+//! again needs the published directory documents, which live in the database the rebuild may
+//! not have.
+//!
+//! An op with no recorded position is re-checked against invariant 17 only (it must chain onto
+//! the head the replay has reached). Invariant 18 is album-wide and is not re-run.
 //!
 //! [Server Filesystem § Rebuild]: https://github.com/Capsulsaurus/Capsule/blob/master/capsule-docs/src/content/docs/design/filesystem/server.md#rebuild
 
@@ -49,7 +55,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use capsule_core::crypto::hash::Hash32;
-use capsule_core::crypto::provenance::{Action, ManifestCore};
+use capsule_core::crypto::provenance::ManifestCore;
 use capsule_i18n::error_codes;
 use jiff::Timestamp;
 
@@ -58,7 +64,7 @@ use super::replay::{self, Custody, LedgerKeys, Resolution};
 use super::{ChainFault, LedgerError, OwnerLedger};
 use crate::blob::{BlobError, BlobStore, ContentAddress, QuarantineReason};
 use crate::gc::Mode;
-use crate::index::{AssetIndex, AssetRow, AssetState, BlobRef, RestoreOutcome};
+use crate::index::{AssetIndex, AssetRow, AssetState, BlobRef, OpAction, RestoreOutcome};
 use crate::quota::{QuotaLimits, QuotaStore};
 use crate::store::{AlbumId, AssetId, BlobRole, Clock, OwnerId, StoreError, UserId};
 
@@ -140,6 +146,10 @@ pub struct OwnerReport {
     /// Bundles the ledger records without a decodable manifest and metadata blob: nothing a
     /// client could see, so nothing to restore.
     pub incomplete: Vec<AssetId>,
+    /// Tombstones a retention purge emptied whose manifests the collector has since swept:
+    /// nothing in the blob root names their album any more, so only the database backup holds
+    /// their rows. Not a fault: it is what a completed purge leaves.
+    pub purged: Vec<AssetId>,
     /// Entries naming a blob the store does not hold.
     pub dangling: Vec<(AssetId, ContentAddress)>,
     /// Provenance blobs that are not a usable manifest, and why. Under `--apply` a malformed one
@@ -185,6 +195,9 @@ impl RebuildReport {
     }
 }
 
+/// The lifecycle action a retention purge is ledgered under (#767).
+const PURGE: &str = "purge";
+
 /// Run one rebuild pass.
 ///
 /// # Errors
@@ -228,18 +241,53 @@ pub async fn rebuild(context: &RebuildContext, mode: Mode) -> Result<RebuildRepo
     Ok(report)
 }
 
-/// One asset's facts, accumulated over its custody entries in ledger order.
+/// One asset's facts, accumulated over its ledger entries in ledger order.
 #[derive(Debug, Default)]
 struct Accumulated {
     blobs: BTreeMap<(BlobRole, String), BlobRef>,
     /// The account each address's storage is attributed to, from its latest custody entry.
     uploaders: BTreeMap<ContentAddress, UserId>,
     superseded: Vec<ContentAddress>,
+    /// The manifest the asset was created under: its album, protocol pin and suite are the
+    /// row's for life.
+    first: Option<ManifestCore>,
+    /// The chain head: the provenance blob's address, the chain-head hash, and its manifest.
     head: Option<(ContentAddress, Option<Hash32>, ManifestCore)>,
+    /// A lifecycle op's state change, when one applied.
+    state: Option<AssetState>,
+    /// A lifecycle op's retention floor, when one applied.
+    retention_until: Option<Option<Timestamp>>,
+    /// Addresses the replay named that the store does not hold. Reported when the replay ends,
+    /// unless a purge retired the reference first.
+    dangling: Vec<ContentAddress>,
+    /// Whether a retention purge ended the asset's references.
+    purged: bool,
     proven: Vec<u64>,
     unresolved: bool,
     created_at: Option<Timestamp>,
     updated_at: Option<Timestamp>,
+}
+
+/// One verified ledger entry a rebuild replays, in ledger order.
+enum Replayed {
+    Custody(Custody),
+    Lifecycle(replay::Lifecycle),
+}
+
+impl Replayed {
+    fn ledger_seq(&self) -> u64 {
+        match self {
+            Self::Custody(record) => record.ledger_seq,
+            Self::Lifecycle(op) => op.ledger_seq,
+        }
+    }
+
+    fn asset(&self) -> AssetId {
+        match self {
+            Self::Custody(record) => AssetId::new(record.asset_id.as_str()),
+            Self::Lifecycle(op) => AssetId::new(op.asset_id.as_str()),
+        }
+    }
 }
 
 /// Steps 1–3 for one owner.
@@ -261,26 +309,45 @@ async fn rebuild_owner(
         differs: Vec::new(),
         unprovable: Vec::new(),
         incomplete: Vec::new(),
+        purged: Vec::new(),
         dangling: Vec::new(),
         unusable_manifests: Vec::new(),
         foreign_manifests: Vec::new(),
         epoch: None,
     };
 
-    // Ledger order, and assets in the order they first appear, so unprovable rows are numbered
-    // in the order the server took custody of them.
+    // Ledger order, uploads and lifecycle ops interleaved as the server accepted them, and
+    // assets in the order they first appear, so unprovable rows are numbered in the order the
+    // server took custody of them.
+    let verified = &scan.entries[..chain.verified];
+    let mut replayed: Vec<Replayed> = replay::custody(verified)
+        .into_iter()
+        .filter(|record| record.resolution != Resolution::Refused)
+        .map(Replayed::Custody)
+        .chain(
+            replay::lifecycle(verified)
+                .into_iter()
+                .map(Replayed::Lifecycle),
+        )
+        .collect();
+    replayed.sort_by_key(Replayed::ledger_seq);
+
     let mut order: Vec<AssetId> = Vec::new();
     let mut assets: BTreeMap<AssetId, Accumulated> = BTreeMap::new();
-    for record in replay::custody(&scan.entries[..chain.verified]) {
-        if record.resolution == Resolution::Refused {
-            continue;
-        }
-        let asset = AssetId::new(record.asset_id.as_str());
+    for entry in replayed {
+        let asset = entry.asset();
         if !assets.contains_key(&asset) {
             order.push(asset.clone());
         }
         let facts = assets.entry(asset.clone()).or_default();
-        accumulate(context, mode, &asset, &record, facts, &mut report, named).await?;
+        match entry {
+            Replayed::Custody(record) => {
+                accumulate(context, mode, &asset, &record, facts, &mut report, named).await?;
+            }
+            Replayed::Lifecycle(op) => {
+                apply_lifecycle(context, mode, &asset, &op, facts, &mut report, named).await?;
+            }
+        }
     }
 
     // The owner's numbering as it stands: what the ledger proved and what the index has used.
@@ -293,8 +360,18 @@ async fn rebuild_owner(
         let Some(facts) = assets.remove(&asset) else {
             continue;
         };
+        report.dangling.extend(
+            facts
+                .dangling
+                .iter()
+                .map(|address| (asset.clone(), address.clone())),
+        );
         let Some(mut row) = assemble(owner, &asset, &facts) else {
-            report.incomplete.push(asset);
+            if facts.purged {
+                report.purged.push(asset);
+            } else {
+                report.incomplete.push(asset);
+            }
             continue;
         };
         if facts.unresolved || row.sync_seq.is_none() {
@@ -351,14 +428,14 @@ async fn accumulate(
         return Ok(());
     };
     if context.blobs.stat(&address).await?.is_none() {
-        report.dangling.push((asset.clone(), address));
+        facts.dangling.push(address);
         return Ok(());
     }
 
     if role == BlobRole::Provenance {
         match manifest::read(context.blobs.as_ref(), &address).await? {
             None => {
-                report.dangling.push((asset.clone(), address));
+                facts.dangling.push(address);
                 return Ok(());
             }
             Some(Err(fault)) => {
@@ -374,12 +451,8 @@ async fn accumulate(
                     report.foreign_manifests.push((asset.clone(), address));
                     return Ok(());
                 }
-                if let Some((previous, _, _)) = &facts.head
-                    && previous != &address
-                    && !facts.superseded.contains(previous)
-                {
-                    facts.superseded.push(previous.clone());
-                }
+                supersede(facts, &address);
+                facts.first.get_or_insert_with(|| parsed.core.clone());
                 facts.head = Some((address.clone(), record.manifest_sha256, parsed.core));
             }
         }
@@ -398,6 +471,142 @@ async fn accumulate(
             size: record.size,
         },
     );
+    Ok(())
+}
+
+/// Move the current head into the superseded chain when `address` replaces it.
+///
+/// The rule [`crate::index`] applies on a re-point: a superseded manifest stays referenced, so
+/// the chain the scrub walks and the takedown rebuttal rests on survive a rebuild.
+fn supersede(facts: &mut Accumulated, address: &ContentAddress) {
+    if let Some((previous, _, _)) = &facts.head
+        && previous != address
+        && !facts.superseded.contains(previous)
+    {
+        facts.superseded.push(previous.clone());
+    }
+}
+
+/// Point a singular `role` at `address`, as a lifecycle op does: with no size, because the op
+/// path never learns one ([`crate::index`]'s `set_singular`).
+fn repoint(facts: &mut Accumulated, role: BlobRole, address: &ContentAddress) {
+    facts.blobs.retain(|(held, _), _| *held != role);
+    facts.blobs.insert(
+        (role, address.as_str().to_owned()),
+        BlobRef {
+            role,
+            address: address.clone(),
+            size: 0,
+        },
+    );
+}
+
+/// Fold one lifecycle op into its asset's facts.
+///
+/// An op whose position was recorded is applied as the index applied it. An op with no recorded
+/// position was refused by the index, or the process stopped before the second entry: the
+/// replay re-runs invariant 17 (the manifest must chain onto the head the replay has reached),
+/// applies it when it passes, and cannot prove its number. Invariant 18 is album-wide and is not
+/// re-run; an op it refused and that still chains is replayed, and the epoch moves for it.
+async fn apply_lifecycle(
+    context: &RebuildContext,
+    mode: Mode,
+    asset: &AssetId,
+    op: &replay::Lifecycle,
+    facts: &mut Accumulated,
+    report: &mut OwnerReport,
+    named: &mut BTreeSet<ContentAddress>,
+) -> Result<(), RebuildError> {
+    // A retention purge (#767) carries no manifest: the server initiates it under the signed
+    // `retention_until`. It drops the tombstone's references and keeps the row, as the index's
+    // purge does, and only for a tombstone — the index refuses any other.
+    if op.action == PURGE {
+        if facts.state == Some(AssetState::Tombstoned) || facts.head.is_none() {
+            facts.blobs.clear();
+            facts.superseded.clear();
+            facts.dangling.clear();
+            facts.purged = true;
+        }
+        return Ok(());
+    }
+    let Some(manifest_hash) = op.manifest_hash else {
+        return Ok(());
+    };
+    let Ok(address) = ContentAddress::parse(&manifest_hash.to_hex()) else {
+        return Ok(());
+    };
+    named.insert(address.clone());
+    // An op on an asset whose create the replay never reached is one the index answered
+    // `NotFound`: there is no row for it to change.
+    let Some((head_address, head_hash, _)) = &facts.head else {
+        return Ok(());
+    };
+    // The same op twice — a client retry the index answered as a replay — applies once.
+    if *head_address == address {
+        if let Some(seq) = op.sync_seq {
+            facts.proven.push(seq);
+        }
+        return Ok(());
+    }
+    let head_hash = *head_hash;
+    let parsed = match manifest::read(context.blobs.as_ref(), &address).await? {
+        None => {
+            facts.dangling.push(address);
+            return Ok(());
+        }
+        Some(Err(fault)) => {
+            quarantine(context, mode, asset, &address, fault, report).await?;
+            return Ok(());
+        }
+        Some(Ok(parsed)) => parsed,
+    };
+    if let Err(fault) = manifest::check_structure(&parsed) {
+        quarantine(context, mode, asset, &address, fault, report).await?;
+        return Ok(());
+    }
+    if parsed.core.file_id.to_string() != asset.as_str() {
+        report.foreign_manifests.push((asset.clone(), address));
+        return Ok(());
+    }
+    if let Some(seq) = op.sync_seq {
+        facts.proven.push(seq);
+    } else {
+        if parsed.core.prior_provenance_hash != head_hash {
+            tracing::debug!(%asset, action = %op.action, "an unrecorded op does not chain; the index refused it");
+            return Ok(());
+        }
+        facts.unresolved = true;
+    }
+
+    supersede(facts, &address);
+    repoint(facts, BlobRole::Provenance, &address);
+    if let Ok(at) = op.recorded_at.parse::<Timestamp>() {
+        facts.updated_at = Some(at);
+    }
+    if op.action == OpAction::MetadataUpdate.as_str()
+        && let Some(metadata) = parsed.core.metadata_blob_hash
+        && let Ok(metadata) = ContentAddress::parse(&metadata.to_hex())
+    {
+        named.insert(metadata.clone());
+        if context.blobs.stat(&metadata).await?.is_none() {
+            facts.dangling.push(metadata.clone());
+        }
+        repoint(facts, BlobRole::Metadata, &metadata);
+    }
+    if op.action == OpAction::Delete.as_str() {
+        facts.state = Some(AssetState::Tombstoned);
+        facts.retention_until = Some(
+            parsed
+                .core
+                .retention_until
+                .as_deref()
+                .and_then(|at| at.parse::<Timestamp>().ok()),
+        );
+    } else if op.action == OpAction::TrashRestore.as_str() {
+        facts.state = Some(AssetState::Visible);
+        facts.retention_until = Some(None);
+    }
+    facts.head = Some((address, Some(manifest_hash), parsed.core));
     Ok(())
 }
 
@@ -437,17 +646,19 @@ async fn quarantine(
     Ok(())
 }
 
-/// The row an asset's accumulated facts imply, or `None` when its index tier never landed.
+/// The row an asset's accumulated facts imply, or `None` when its index tier never landed and
+/// it is not a tombstone.
 fn assemble(owner: &OwnerId, asset: &AssetId, facts: &Accumulated) -> Option<AssetRow> {
     let (_, chain_head, core) = facts.head.as_ref()?;
+    let first = facts.first.as_ref().unwrap_or(core);
     let blobs: Vec<BlobRef> = facts.blobs.values().cloned().collect();
-    let mut row = AssetRow {
+    let row = AssetRow {
         asset_id: asset.clone(),
         owner_id: owner.clone(),
-        album_id: AlbumId::new(core.album_id.to_string()),
-        protocol_version: core.protocol_version.clone(),
-        crypto_suite_id: core.crypto_suite_id,
-        state: AssetState::Visible,
+        album_id: AlbumId::new(first.album_id.to_string()),
+        protocol_version: first.protocol_version.clone(),
+        crypto_suite_id: first.crypto_suite_id,
+        state: facts.state.unwrap_or(AssetState::Visible),
         blobs,
         first_seq: facts.proven.iter().copied().min(),
         sync_seq: facts.proven.iter().copied().max(),
@@ -455,20 +666,13 @@ fn assemble(owner: &OwnerId, asset: &AssetId, facts: &Accumulated) -> Option<Ass
         amk_version: u64::from(core.amk_version.0),
         superseded: facts.superseded.clone(),
         hold: None,
-        retention_until: core
-            .retention_until
-            .as_deref()
-            .and_then(|at| at.parse::<Timestamp>().ok()),
+        retention_until: facts.retention_until.flatten(),
         created_at: facts.created_at.unwrap_or(Timestamp::UNIX_EPOCH),
         updated_at: facts.updated_at.unwrap_or(Timestamp::UNIX_EPOCH),
     };
-    if !row.is_publishable() {
-        return None;
-    }
-    if core.action == Action::Delete {
-        row.state = AssetState::Tombstoned;
-    }
-    Some(row)
+    // A purged tombstone holds no blobs and is still a row: the deletion has to reach a client
+    // that has not synced since.
+    (row.is_publishable() || row.state == AssetState::Tombstoned).then_some(row)
 }
 
 /// Step 3 for one row: compare it with the index, or restore it.

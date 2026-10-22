@@ -113,6 +113,67 @@ pub fn custody(entries: &[LedgerEntry]) -> Vec<Custody> {
     out
 }
 
+/// One lifecycle op, paired with the entry that recorded its sequence number.
+///
+/// A lifecycle op appends a [`LedgerEvent::Lifecycle`] with no `sync_seq` before the index call
+/// and a second one carrying the position once the index has applied it (#753). The pair shares
+/// the asset and the manifest hash, which is the index's replay key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Lifecycle {
+    /// The first entry's position in the ledger.
+    pub ledger_seq: u64,
+    /// The asset the op applies to.
+    pub asset_id: String,
+    /// The op, as the wire spells it.
+    pub action: String,
+    /// The SHA-256 of the manifest that authorised it, which is also its blob's address.
+    pub manifest_hash: Option<Hash32>,
+    /// `Some(position)` once the index applied it; `None` when nothing recorded a position —
+    /// the index refused it, or the process stopped, or the second append was lost.
+    pub sync_seq: Option<u64>,
+    /// The server's clock when the first entry was written: when the op was accepted.
+    pub recorded_at: String,
+}
+
+/// Every lifecycle op in `entries`, in ledger order, paired with the entry that recorded its
+/// sequence number.
+///
+/// An entry that already carries a `sync_seq` with no open op before it (a server that wrote
+/// one entry per op) stands on its own.
+pub fn lifecycle(entries: &[LedgerEntry]) -> Vec<Lifecycle> {
+    let mut out: Vec<Lifecycle> = Vec::new();
+    for entry in entries {
+        let LedgerEvent::Lifecycle {
+            asset_id,
+            action,
+            manifest_hash,
+            sync_seq,
+        } = &entry.core.event
+        else {
+            continue;
+        };
+        if let Some(seq) = sync_seq
+            && let Some(open) = out.iter_mut().rev().find(|op| {
+                op.sync_seq.is_none()
+                    && op.asset_id == *asset_id
+                    && op.manifest_hash == *manifest_hash
+            })
+        {
+            open.sync_seq = Some(*seq);
+            continue;
+        }
+        out.push(Lifecycle {
+            ledger_seq: entry.core.seq,
+            asset_id: asset_id.clone(),
+            action: action.clone(),
+            manifest_hash: *manifest_hash,
+            sync_seq: *sync_seq,
+            recorded_at: entry.core.recorded_at.clone(),
+        });
+    }
+    out
+}
+
 /// Resolve every open custody entry for `upload` with `resolution`.
 fn resolve(
     out: &mut [Custody],
