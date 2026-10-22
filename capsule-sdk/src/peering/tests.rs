@@ -538,35 +538,78 @@ fn handshake_limiter_is_per_source_and_slides() {
     );
 }
 
-/// A flood of distinct live sources never grows the table past its cap: a new source that finds
-/// it full of live ones is refused, a tracked source keeps its budget, and once the flood ages
-/// out a new source is admitted again.
+/// A flood of distinct live sources never grows the table past its cap, and never locks a new
+/// source out: a full table of live sources evicts the least recently active one, a source
+/// that stays tracked keeps its budget, and once the flood ages out idle sources are pruned.
 #[test]
 fn handshake_limiter_caps_tracked_sources() {
     let limiter = HandshakeLimiter::new(2, Duration::from_secs(10));
     let t0 = Instant::now();
+    let at = |n: usize| t0 + Duration::from_millis(n as u64);
     let source = |n: usize| IpAddr::from((n as u32 + 0x0A00_0000).to_be_bytes());
     for n in 0..MAX_TRACKED_SOURCES {
-        assert!(limiter.admit(source(n), t0));
+        assert!(limiter.admit(source(n), at(n)));
     }
     assert_eq!(limiter.tracked(), MAX_TRACKED_SOURCES);
 
+    let now = at(MAX_TRACKED_SOURCES);
     assert!(
-        !limiter.admit(source(MAX_TRACKED_SOURCES), t0),
-        "a new source is refused while the table is full of live ones"
+        limiter.admit(source(MAX_TRACKED_SOURCES), now),
+        "a new source is admitted while the table is full of live ones"
     );
     assert_eq!(limiter.tracked(), MAX_TRACKED_SOURCES, "the cap holds");
     assert!(
-        limiter.admit(source(0), t0 + Duration::from_secs(1)),
+        limiter.admit(source(MAX_TRACKED_SOURCES), now),
+        "the admitted source is tracked with its own budget"
+    );
+    assert!(
+        !limiter.admit(source(MAX_TRACKED_SOURCES), now),
+        "the admitted source is held to its budget"
+    );
+    assert!(
+        limiter.admit(source(1), now),
         "a tracked source keeps its budget"
     );
-
-    let later = t0 + Duration::from_secs(11);
     assert!(
-        limiter.admit(source(MAX_TRACKED_SOURCES), later),
+        !limiter.admit(source(1), now),
+        "a source that was not evicted keeps the attempts it spent"
+    );
+
+    let later = at(MAX_TRACKED_SOURCES) + Duration::from_secs(11);
+    assert!(
+        limiter.admit(source(MAX_TRACKED_SOURCES + 1), later),
         "idle sources are pruned to make room"
     );
-    assert!(limiter.tracked() <= MAX_TRACKED_SOURCES);
+    assert_eq!(limiter.tracked(), 1, "every idle source was pruned");
+}
+
+/// One attacker holding a whole IPv6 /64 cannot lock new peers out: cycling through far more
+/// addresses than the table tracks, all live, keeps the table at its cap, and a new peer, in
+/// that prefix or outside it, is still admitted.
+#[test]
+fn handshake_limiter_many_addresses_in_one_prefix_cannot_lock_out() {
+    let limiter = HandshakeLimiter::new(2, Duration::from_secs(60));
+    let t0 = Instant::now();
+    let in_prefix = |n: usize| {
+        let mut octets = [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        octets[8..].copy_from_slice(&(n as u64).to_be_bytes());
+        IpAddr::from(octets)
+    };
+    for n in 0..MAX_TRACKED_SOURCES * 2 {
+        let now = t0 + Duration::from_millis(n as u64);
+        assert!(limiter.admit(in_prefix(n), now), "attacker address {n}");
+        assert!(limiter.tracked() <= MAX_TRACKED_SOURCES, "the cap holds");
+    }
+    let now = t0 + Duration::from_millis((MAX_TRACKED_SOURCES * 2) as u64);
+    assert!(
+        limiter.admit(ip(10), now),
+        "a peer outside the prefix is admitted"
+    );
+    assert!(
+        limiter.admit(in_prefix(usize::MAX), now),
+        "a new address inside the prefix is admitted"
+    );
+    assert_eq!(limiter.tracked(), MAX_TRACKED_SOURCES);
 }
 
 /// The application-layer check in isolation (deterministic, no socket): the full rejection
