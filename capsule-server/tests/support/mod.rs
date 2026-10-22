@@ -75,8 +75,8 @@ use capsule_server::federation::{
 use capsule_server::gc::memory::InMemoryCollection;
 use capsule_server::index::memory::InMemoryAssetIndex;
 use capsule_server::index::{
-    AssetIndex, AssetRow, BlobOutcome, BlobRecord, FeedEntry, HoldOutcome, IndexFuture,
-    LifecycleOp, OpOutcome, PendingAsset, PurgeOutcome, Reservation, ServingHold,
+    AssetIndex, AssetRow, BlobOutcome, BlobRecord, Custody, FeedEntry, HoldOutcome, IndexFuture,
+    LifecycleOp, OpOutcome, PendingAsset, PurgeOutcome, Receipted, Reservation, ServingHold,
 };
 use capsule_server::membership::{
     InMemoryMembership, MemberRole, Membership, MembershipContext, MembershipStore, RosterOutcome,
@@ -2980,6 +2980,12 @@ impl SwitchableIndex {
         Self::default()
     }
 
+    /// The receipt log the index appends finalization's custody receipts to, which the
+    /// attestation context must serve from.
+    pub(crate) fn receipts(&self) -> Arc<InMemoryReceipts> {
+        self.inner.receipts().clone()
+    }
+
     /// Make every subsequent operation fail, or stop.
     pub(crate) fn set_unavailable(&self, unavailable: bool) {
         self.unavailable.store(unavailable, Ordering::SeqCst);
@@ -3023,6 +3029,18 @@ impl AssetIndex for SwitchableIndex {
         self.inner.record_blob(asset, blob)
     }
 
+    fn record_blob_with_receipt<'a>(
+        &'a self,
+        asset: &'a AssetId,
+        blob: BlobRecord,
+        custody: Custody<'a>,
+    ) -> IndexFuture<'a, Receipted<BlobOutcome>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.record_blob_with_receipt(asset, blob, custody)
+    }
+
     fn tombstone<'a>(
         &'a self,
         asset: &'a AssetId,
@@ -3039,6 +3057,17 @@ impl AssetIndex for SwitchableIndex {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.apply_op(op)
+    }
+
+    fn apply_op_with_receipt<'a>(
+        &'a self,
+        op: LifecycleOp,
+        custody: Custody<'a>,
+    ) -> IndexFuture<'a, Receipted<OpOutcome>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.apply_op_with_receipt(op, custody)
     }
 
     fn rows<'a>(
@@ -3390,7 +3419,9 @@ impl Fixture {
         let members = Arc::new(SwitchableMembership::new());
         let quotas = Arc::new(SwitchableQuota::new());
         let marks = Arc::new(InMemoryCollection::new());
-        let receipts = Arc::new(InMemoryReceipts::new());
+        // The log the index appends custody receipts to in finalization's one critical section
+        // (#693): the attestation context serves from the same one.
+        let receipts = index.receipts();
         // The attestation key is generated per fixture and *distinct from* the token signer, as
         // the design requires: a receipt that verified under the operational key would let
         // anything holding that key manufacture custody evidence.
@@ -3578,6 +3609,7 @@ impl Fixture {
 
         let blobs = Arc::new(SwallowingBlobs::new());
         let index = Arc::new(SwitchableIndex::new());
+        let receipts = index.receipts();
         let members = Arc::new(InMemoryMembership::new());
         let albums = Arc::new(SwitchableAlbums::new());
         let der = signing_key_der();
@@ -3635,7 +3667,7 @@ impl Fixture {
                 QuotaLimits::unlimited(),
             ),
             attestation: AttestationContext::new(
-                Arc::new(InMemoryReceipts::new()),
+                receipts,
                 Arc::new(LocalAttestationKey::new(
                     SERVER_ORIGIN,
                     capsule_core::crypto::keys::HybridSigningKey::generate(),
