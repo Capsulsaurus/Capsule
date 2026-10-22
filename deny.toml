@@ -112,6 +112,12 @@ ignore = [
     # compile time. Remove when those upstreams drop them.
     { id = "RUSTSEC-2024-0436", reason = "paste (unmaintained proc macro) via little_exif and rav1e; compile-time only" },
     { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 (unmaintained proc macro) via sea-orm 1.x; compile-time only" },
+
+    # Unmaintained, no vulnerability. basic-toml is the config parser inside askama_derive, a
+    # proc macro reached through uniffi_bindgen (uniffi 0.31.1). askama_derive 0.16.1, the
+    # latest release, still depends on it, so no uniffi upgrade drops it. It parses only
+    # askama's build-time configuration. Remove when askama_derive replaces basic-toml, in #720.
+    { id = "RUSTSEC-2026-0374", reason = "basic-toml (unmaintained) via askama_derive (latest 0.16.1) via uniffi_bindgen; compile-time only; tracked in #720" },
 ]
 
 [bans]
