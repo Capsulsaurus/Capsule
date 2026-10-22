@@ -26,9 +26,8 @@ pub(crate) enum ImportProviderArg {
 }
 
 impl ImportProviderArg {
-    /// The provider's name as shown to the user. A brand name is displayed verbatim in
-    /// every locale, so it is a *value* substituted into the `cli.import.provider_notice`
-    /// message rather than translatable prose of its own.
+    /// The provider's name as shown to the user, substituted into the line `capsule import`
+    /// prints when it reads a source as that provider's export.
     #[must_use]
     pub(crate) const fn display_name(self) -> &'static str {
         match self {
@@ -124,6 +123,32 @@ pub(crate) enum Commands {
         passphrase_stdin: bool,
         /// Print the run as one JSON document on stdout: the totals and each asset's outcome
         /// (restored, already present, or failed with its error)
+        #[arg(long)]
+        json: bool,
+    },
+    /// Ask the server whether it durably holds this library's originals, and keep its signed
+    /// answer as evidence
+    Verify {
+        /// Path to the Capsule library
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// Verify only this asset (repeatable); every asset in the library when omitted
+        #[arg(long, value_name = "ASSET_ID")]
+        asset: Vec<Uuid>,
+        /// Ask for the server's signed verdict, check it under the server's attestation key,
+        /// and keep it in the library beside each asset's custody receipts
+        #[arg(long)]
+        signed: bool,
+        /// Have the server re-hash the stored bytes rather than only check they are present;
+        /// spends the account's deep-verify budget
+        #[arg(long)]
+        deep: bool,
+        /// Read the library passphrase from stdin instead of prompting, so the command
+        /// works in scripts and CI where there is no terminal.
+        #[arg(long)]
+        passphrase_stdin: bool,
+        /// Print the run as one JSON document on stdout: the totals and each asset's verdict
+        /// (durable, not durable, or failed with its error)
         #[arg(long)]
         json: bool,
     },

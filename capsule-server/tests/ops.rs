@@ -912,3 +912,234 @@ async fn an_op_attributed_to_another_account_is_refused() {
     let mine = apply(&fixture, &owner_bearer, &theirs, StatusCode::BAD_REQUEST).await;
     assert_eq!(mine["code"], "error.upload.envelope_mismatch");
 }
+
+// ===========================================================================================
+// The owner ledger (#753)
+// ===========================================================================================
+
+/// The kinds of the owner's verified ledger, in order.
+async fn ledger_kinds(fixture: &Fixture) -> Vec<&'static str> {
+    fixture
+        .verified_ledger(&owner())
+        .await
+        .iter()
+        .map(|entry| entry.core.event.kind())
+        .collect()
+}
+
+/// An op is ledgered before the index applies it, and the sequence number it took after.
+#[tokio::test]
+async fn an_op_is_ledgered_before_the_index_and_its_sequence_after() {
+    use capsule_server::ledger::LedgerEvent;
+
+    let fixture = Fixture::working();
+    let bearer = token(&fixture).await;
+    publish(&fixture).await;
+
+    let applied = apply(
+        &fixture,
+        &bearer,
+        &bundle(&fixture, "delete", "d1", Some(&created_head()), None),
+        StatusCode::OK,
+    )
+    .await;
+
+    let entries = fixture.verified_ledger(&owner()).await;
+    let [before, after] = entries.as_slice() else {
+        panic!("two lifecycle entries, got {entries:?}");
+    };
+    let expected = |sync_seq| LedgerEvent::Lifecycle {
+        asset_id: ASSET.to_owned(),
+        action: "delete".to_owned(),
+        manifest_hash: Some(Hash32::from_hex(&manifest_hash("d1")).expect("a digest")),
+        sync_seq,
+    };
+    assert_eq!(
+        before.core.event,
+        expected(None),
+        "the entry written before the index call cannot know the sequence number"
+    );
+    assert_eq!(
+        after.core.event,
+        expected(Some(
+            applied["sync_seq"].as_u64().expect("a sequence number")
+        )),
+        "the entry after it carries the position the op holds"
+    );
+}
+
+/// A ledger that cannot append refuses the op before the index is touched.
+#[tokio::test]
+async fn a_ledger_that_cannot_append_refuses_the_op_and_applies_nothing() {
+    let fixture = Fixture::working();
+    let bearer = token(&fixture).await;
+    publish(&fixture).await;
+    let before = feed(&fixture, &bearer).await;
+    fixture.ledger.set_unavailable(true);
+
+    let problem = apply(
+        &fixture,
+        &bearer,
+        &bundle(&fixture, "delete", "d1", Some(&created_head()), None),
+        StatusCode::INTERNAL_SERVER_ERROR,
+    )
+    .await;
+    assert_eq!(problem["code"], "error.upload.unavailable");
+    assert_eq!(
+        feed(&fixture, &bearer).await,
+        before,
+        "no change without a ledger entry"
+    );
+
+    // And the same manifest applies once the ledger is back: the refusal wrote nothing the
+    // retry would trip over.
+    fixture.ledger.set_unavailable(false);
+    apply(
+        &fixture,
+        &bearer,
+        &bundle(&fixture, "delete", "d1", Some(&created_head()), None),
+        StatusCode::OK,
+    )
+    .await;
+    assert_eq!(ledger_kinds(&fixture).await, ["lifecycle", "lifecycle"]);
+}
+
+/// An op the index refuses leaves its first entry and no second one.
+#[tokio::test]
+async fn a_refused_op_leaves_only_the_entry_written_before_the_index() {
+    use capsule_server::ledger::LedgerEvent;
+
+    let fixture = Fixture::working();
+    let bearer = token(&fixture).await;
+    publish(&fixture).await;
+
+    // Chains onto nothing the asset holds: invariant 17 refuses it inside the index.
+    apply(
+        &fixture,
+        &bearer,
+        &bundle(
+            &fixture,
+            "delete",
+            "d1",
+            Some(&manifest_hash("elsewhere")),
+            None,
+        ),
+        StatusCode::CONFLICT,
+    )
+    .await;
+
+    let entries = fixture.verified_ledger(&owner()).await;
+    let [only] = entries.as_slice() else {
+        panic!("one entry, got {entries:?}");
+    };
+    assert!(
+        matches!(
+            &only.core.event,
+            LedgerEvent::Lifecycle { sync_seq: None, .. }
+        ),
+        "the refused op is recorded as attempted, with no sequence number: {only:?}"
+    );
+}
+
+/// A malformed predecessor or retention floor is the client's `400`, refused before the ledger:
+/// an op that never reached the index's checks leaves no entry for a rebuild to replay.
+#[tokio::test]
+async fn a_malformed_envelope_field_is_refused_before_the_ledger() {
+    let fixture = Fixture::working();
+    let bearer = token(&fixture).await;
+    publish(&fixture).await;
+
+    let mut bad_prior = bundle(&fixture, "delete", "d1", Some(&created_head()), None);
+    bad_prior["manifest_envelope"]["prior_provenance_hash"] = "not a digest".into();
+    let mut bad_retention = bundle(&fixture, "delete", "d2", Some(&created_head()), None);
+    bad_retention["manifest_envelope"]["retention_until"] = "not an instant".into();
+
+    for body in [bad_prior, bad_retention] {
+        let problem = apply(&fixture, &bearer, &body, StatusCode::BAD_REQUEST).await;
+        assert_eq!(problem["code"], "error.upload.envelope_mismatch");
+    }
+    assert!(
+        fixture.verified_ledger(&owner()).await.is_empty(),
+        "a refusal before the index call ledgers nothing"
+    );
+}
+
+/// The chain verifies across every producer: a finalization, a directory publish and ops.
+#[tokio::test]
+async fn the_chain_verifies_after_finalizations_directory_publishes_and_ops() {
+    use capsule_core::crypto::keys::{DeviceDirectory, DirectoryCore, HybridSigningKey};
+
+    let fixture = Fixture::working();
+    let bearer = token(&fixture).await;
+    publish(&fixture).await;
+
+    // A finalization: the asset's original, in one chunk.
+    let original = vec![b'o'; 4096];
+    let session = fixture.open_session(&original, "original", &bearer).await;
+    fixture
+        .chunk(&session, 0, &original, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    // A device-directory publish.
+    let ik = HybridSigningKey::generate();
+    let directory: DeviceDirectory = DirectoryCore {
+        user_id: uuid::Uuid::parse_str(user().as_str()).expect("the seeded account is a uuid"),
+        directory_version: 1,
+        updated_at: "2026-01-01T00:00:00Z".to_owned(),
+        devices: Vec::new(),
+    }
+    .sign(&ik);
+    fixture
+        .client
+        .post("/v1/auth/devices/directory")
+        .header("authorization", &bearer)
+        .header(
+            "x-capsule-identity-key",
+            &BASE64.encode(ik.verifying_key().to_bytes()),
+        )
+        .body(
+            "application/cbor",
+            capsule_core::cbor::to_canonical_vec(&directory).expect("a directory serializes"),
+        )
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+
+    // Two ops.
+    apply(
+        &fixture,
+        &bearer,
+        &bundle(&fixture, "delete", "d1", Some(&created_head()), None),
+        StatusCode::OK,
+    )
+    .await;
+    apply(
+        &fixture,
+        &bearer,
+        &bundle(
+            &fixture,
+            "trash-restore",
+            "r1",
+            Some(&manifest_hash("d1")),
+            None,
+        ),
+        StatusCode::OK,
+    )
+    .await;
+
+    assert_eq!(
+        ledger_kinds(&fixture).await,
+        [
+            "custody",
+            "indexed",
+            "directory",
+            "lifecycle",
+            "lifecycle",
+            "lifecycle",
+            "lifecycle"
+        ],
+        "one owner, one chain, every producer in the order the server accepted its write"
+    );
+}

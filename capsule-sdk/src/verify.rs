@@ -863,7 +863,7 @@ impl HeldRelease {
     pub fn for_original(bundle: &UploadBundle) -> Self {
         let mut blobs = vec![ReceiptExpectations {
             ciphertext_hash: bundle.ciphertext_hash,
-            size: bundle.ciphertext.len() as u64,
+            size: bundle.ciphertext_size(),
             role: BlobRole::Original,
             envelope_hash: None,
         }];

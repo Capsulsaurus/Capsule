@@ -200,8 +200,8 @@ pub struct UnmigratedSidecar {
 }
 
 /// Every `{uuid}.cbor` under `root/media` — the sidecars, never the sibling
-/// `.provenance.cbor` / `.receipts.cbor` logs. The same filter `rebuild_index` and the add-id
-/// sweep apply.
+/// `.provenance.cbor` / `.receipts.cbor` / `.attestations.cbor` logs. The same filter
+/// `rebuild_index` and the add-id sweep apply.
 fn sidecar_files(root: &Path) -> Vec<PathBuf> {
     let media = root.join("media");
     if !media.exists() {
@@ -211,12 +211,7 @@ fn sidecar_files(root: &Path) -> Vec<PathBuf> {
         .into_iter()
         .filter_map(std::result::Result::ok)
         .filter(|e| e.path().is_file())
-        .filter(|e| {
-            let name = e.file_name().to_string_lossy();
-            name.ends_with(".cbor")
-                && !name.ends_with(".provenance.cbor")
-                && !name.ends_with(".receipts.cbor")
-        })
+        .filter(|e| crate::library::paths::is_sidecar_file_name(&e.file_name().to_string_lossy()))
         .map(|e| e.path().to_path_buf())
         .collect();
     // Deterministic order regardless of directory-walk order.
@@ -1569,6 +1564,28 @@ mod tests {
             2,
             "no duplicate stack members after repeated rebuilds"
         );
+    }
+
+    /// The receipt and attestation logs share the sidecar's `.cbor` suffix; beside a signed
+    /// asset they are evidence, never an unanchored sidecar for the verb to pick up.
+    #[test]
+    fn the_evidence_logs_beside_a_signed_asset_are_not_unmigrated_sidecars() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let img = src.path().join("signed.jpg");
+        fs::write(&img, b"\xFF\xD8\xFF evidence beside it").unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Imports").unwrap();
+        let id = ws.import_asset(album, &img).unwrap();
+        let capture = Some(ws.asset(&id).unwrap().capture_utc);
+        for path in [
+            crate::library::receipts_path(lib.path(), &id, capture),
+            crate::library::attestations_path(lib.path(), &id, capture),
+        ] {
+            fs::write(path, b"not a sidecar").unwrap();
+        }
+
+        assert!(unmigrated_sidecars(lib.path()).is_empty());
     }
 
     // ── T5: the open outcome, before and after ──────────────────────────────

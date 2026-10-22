@@ -52,7 +52,7 @@ fn upload_bundle_ciphertext_matches_the_manifest_hash() {
 
     assert_eq!(bundle.ciphertext_hash, head.ciphertext_hash);
     assert_eq!(
-        crate::crypto::hash::hash_bytes(&bundle.ciphertext),
+        crate::crypto::hash::hash_bytes(&bundle.original.to_vec().unwrap()),
         head.ciphertext_hash,
         "the bundle's bytes must content-address to the manifest's hash"
     );
@@ -102,7 +102,11 @@ fn upload_bundle_survives_a_reopen() {
         ws.upload_bundle(&asset_id).expect("bundle after reopen")
     };
 
-    assert_eq!(before.ciphertext, after.ciphertext, "ciphertext is stable");
+    assert_eq!(
+        before.original.to_vec().unwrap(),
+        after.original.to_vec().unwrap(),
+        "ciphertext is stable"
+    );
     assert_eq!(before.ciphertext_hash, after.ciphertext_hash);
     assert_eq!(
         before.metadata_blob, after.metadata_blob,
@@ -345,7 +349,7 @@ fn a_tampered_derivative_is_skipped_rather_than_shipped() {
         "and only that one is dropped: the untouched derivatives still ship"
     );
     assert!(
-        !bundle.ciphertext.is_empty(),
+        bundle.original.size() > 0,
         "and the original is still shipped — the backup is what must not be lost"
     );
 }
@@ -560,8 +564,11 @@ fn a_derivative_that_cannot_be_persisted_never_costs_the_original() {
     // And the original's own bytes are on disk and re-derive to their signed address, which is
     // the property that makes this a backup rather than a thumbnail service.
     let bundle = ws.upload_bundle(&asset_id).unwrap();
-    assert!(!bundle.ciphertext.is_empty());
-    assert_eq!(hash::hash_bytes(&bundle.ciphertext), bundle.ciphertext_hash);
+    assert!(bundle.original.size() > 0);
+    assert_eq!(
+        hash::hash_bytes(&bundle.original.to_vec().unwrap()),
+        bundle.ciphertext_hash
+    );
 }
 
 /// A persisted derivative survives a `Workspace` reopen and still reaches `UploadBundle`: the
@@ -691,7 +698,7 @@ fn a_derivative_naming_an_unheld_epoch_is_skipped_rather_than_panicking() {
         "a derivative whose key epoch is absent is skipped"
     );
     assert!(
-        !bundle.ciphertext.is_empty(),
+        bundle.original.size() > 0,
         "and the original is still shipped"
     );
 }
@@ -872,5 +879,277 @@ fn the_original_sentinel_ships_its_manifest_and_no_blob() {
         shipped_manifests(&bundle),
         vec![sentinel],
         "the sentinel's manifest ships, and only it"
+    );
+}
+
+// ─── The original as a bounded-memory source ─────────────────────────────────
+
+/// A library whose one asset is `bytes`, returning the bundle and the plaintext's path.
+fn bundle_of(lib: &TempDir, src: &TempDir, bytes: &[u8]) -> (UploadBundle, std::path::PathBuf) {
+    let img = src.path().join("photo.jpg");
+    fs::write(&img, bytes).unwrap();
+    let mut ws = Workspace::create_with_params(lib.path(), b"passphrase", FAST).unwrap();
+    let album = ws.default_album_id();
+    ws.ensure_album(album, "Imports").unwrap();
+    let asset_id = ws.import_asset(album, &img).unwrap();
+    let path = ws.media_path(ws.asset(&asset_id).unwrap());
+    (ws.upload_bundle(&asset_id).unwrap(), path)
+}
+
+/// Plaintext spanning several STREAM chunks, every chunk distinct.
+fn multi_chunk_plaintext() -> Vec<u8> {
+    let mut bytes = b"\xFF\xD8\xFF".to_vec();
+    bytes.extend((0..crate::crypto::encryption::PLAINTEXT_CHUNK * 3 + 77).map(|i| (i % 251) as u8));
+    bytes
+}
+
+/// Any window sequence an upload might read — a fresh run, a resume mid-chunk, a re-send —
+/// reassembles to exactly the ciphertext the signed manifest addresses.
+#[test]
+fn original_windows_reassemble_to_the_signed_ciphertext() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let plaintext = multi_chunk_plaintext();
+    let (bundle, _) = bundle_of(&lib, &src, &plaintext);
+    let original = &bundle.original;
+
+    let whole = original.to_vec().unwrap();
+    assert_eq!(whole.len() as u64, original.size());
+    assert_eq!(original.size(), bundle.ciphertext_size());
+    assert_eq!(hash::hash_bytes(&whole), bundle.ciphertext_hash);
+    assert_eq!(
+        original.write_to(std::io::sink()).unwrap(),
+        bundle.ciphertext_hash
+    );
+
+    for window in [4096, 65_536, 256 * 1024, 1 << 20] {
+        let mut offset = 0u64;
+        let mut assembled = Vec::new();
+        while offset < original.size() {
+            let got = original.read_at(offset, window).unwrap();
+            offset += got.len() as u64;
+            assembled.extend_from_slice(&got);
+        }
+        assert_eq!(assembled, whole, "window {window}");
+    }
+    // A re-send from an arbitrary realigned offset is the same bytes again.
+    assert_eq!(
+        original.read_at(70_000, 1000).unwrap(),
+        &whole[70_000..71_000]
+    );
+
+    // And the ciphertext opens to the plaintext on disk.
+    let opened = crate::crypto::encryption::decrypt_asset_vec(
+        &original.file_key,
+        &original.nonce_prefix,
+        &whole,
+    )
+    .unwrap();
+    assert_eq!(opened, plaintext);
+}
+
+/// A plaintext changed after its manifest was signed is refused before anything is built, and
+/// one changed after the bundle was built makes reads fail rather than yield bytes the manifest
+/// never addressed.
+#[test]
+fn a_changed_original_is_never_shipped() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (bundle, path) = bundle_of(&lib, &src, &multi_chunk_plaintext());
+    let asset_id = bundle.asset_id;
+
+    // Shrink it under the built bundle: reads past the new end fail, `write_to` fails.
+    let full = fs::read(&path).unwrap();
+    fs::write(&path, &full[..1000]).unwrap();
+    let err = bundle
+        .original
+        .read_at(bundle.original.size() - 10, 10)
+        .unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
+    assert!(bundle.original.write_to(std::io::sink()).is_err());
+
+    // A same-size edit: the bundle is refused outright.
+    let mut edited = full.clone();
+    edited[500] ^= 0xFF;
+    fs::write(&path, &edited).unwrap();
+    let ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
+    assert!(matches!(
+        ws.upload_bundle(&asset_id),
+        Err(LifecycleError::CiphertextMismatch(id)) if id == asset_id
+    ));
+
+    // A grown file is refused too, even though its first bytes still match.
+    let mut grown = full;
+    grown.extend_from_slice(b"appended");
+    fs::write(&path, &grown).unwrap();
+    assert!(matches!(
+        ws.upload_bundle(&asset_id),
+        Err(LifecycleError::CiphertextMismatch(_))
+    ));
+}
+
+#[test]
+fn original_debug_redacts_the_file_key() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (bundle, _) = bundle_of(&lib, &src, b"\xFF\xD8\xFF small");
+    let shown = format!("{:?}", bundle.original);
+    assert!(shown.contains("<redacted>"), "{shown}");
+    let key_bytes = format!("{:?}", bundle.original.file_key);
+    assert!(!shown.contains(&key_bytes), "{shown}");
+}
+
+/// Heap accounting for the bounded-memory tests: every allocation and free made **on the
+/// calling thread** is tallied, so a test reads its own peak without interference from the
+/// tests running beside it. It wraps the system allocator and changes nothing else.
+mod heap {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    struct Counting;
+
+    thread_local! {
+        static LIVE: Cell<isize> = const { Cell::new(0) };
+        static PEAK: Cell<isize> = const { Cell::new(0) };
+    }
+
+    fn track(delta: isize) {
+        // `try_with`: an allocation during thread teardown must not panic.
+        let _ = LIVE.try_with(|live| {
+            let now = live.get() + delta;
+            live.set(now);
+            let _ = PEAK.try_with(|peak| peak.set(peak.get().max(now)));
+        });
+    }
+
+    // SAFETY: every method delegates to `System` with the caller's own arguments and only adds
+    // thread-local bookkeeping, so `System`'s guarantees pass through unchanged.
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            // SAFETY: forwarded verbatim; the caller upholds `alloc`'s contract.
+            let ptr = unsafe { System.alloc(layout) };
+            if !ptr.is_null() {
+                track(layout.size() as isize);
+            }
+            ptr
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            // SAFETY: forwarded verbatim; the caller upholds `dealloc`'s contract.
+            unsafe { System.dealloc(ptr, layout) };
+            track(-(layout.size() as isize));
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            // SAFETY: forwarded verbatim; the caller upholds `realloc`'s contract.
+            let new = unsafe { System.realloc(ptr, layout, new_size) };
+            if !new.is_null() {
+                track(new_size as isize - layout.size() as isize);
+            }
+            new
+        }
+    }
+
+    #[global_allocator]
+    static COUNTING: Counting = Counting;
+
+    /// Run `f` and return its result with the peak heap it grew this thread by, in bytes.
+    pub(super) fn peak_during<T>(f: impl FnOnce() -> T) -> (T, usize) {
+        let base = LIVE.with(Cell::get);
+        PEAK.with(|peak| peak.set(base));
+        let out = f();
+        let peak = PEAK.with(Cell::get);
+        (out, usize::try_from(peak - base).unwrap_or(0))
+    }
+}
+
+/// The restore's destination: checks every plaintext byte is the sparse file's zero and counts
+/// them, storing none.
+struct ZeroSink(u64);
+
+impl std::io::Write for ZeroSink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        assert!(
+            buf.iter().all(|b| *b == 0),
+            "restored bytes differ from the original"
+        );
+        self.0 += buf.len() as u64;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Push and restore an original of `size` plaintext bytes through the two seams every transfer
+/// uses — [`OriginalCiphertext::read_at`] windows out, a
+/// [`StreamDecryptor`](crate::crypto::encryption::StreamDecryptor) in — and return the peak
+/// heap it took. The plaintext is a sparse file, so a multi-gigabyte original costs no disk.
+fn push_and_restore_peak(size: u64, window: usize) -> usize {
+    use std::io::Write as _;
+
+    use crate::crypto::encryption::{NONCE_PREFIX_LEN, StreamDecryptor};
+    use crate::crypto::hash::Sha256Hasher;
+
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("original.bin");
+    fs::File::create(&path).unwrap().set_len(size).unwrap();
+    let original = OriginalCiphertext {
+        path,
+        file_key: [0x42; 32],
+        nonce_prefix: [7; NONCE_PREFIX_LEN],
+        plaintext_size: size,
+    };
+
+    let ((pushed_hash, restored), peak) = heap::peak_during(|| {
+        let mut sent = Sha256Hasher::new();
+        let mut restore =
+            StreamDecryptor::new(&original.file_key, &original.nonce_prefix, ZeroSink(0));
+        let mut offset = 0u64;
+        while offset < original.size() {
+            // What the upload client does per chunk, and what a ranged fetch hands the
+            // restore: one window, never the file.
+            let chunk = original.read_at(offset, window).unwrap();
+            sent.update(&chunk);
+            restore.write_all(&chunk).unwrap();
+            offset += chunk.len() as u64;
+        }
+        (sent.finalize(), restore.finish().unwrap().0)
+    });
+
+    assert_eq!(restored, size, "every plaintext byte came back");
+    assert_eq!(
+        original.write_to(std::io::sink()).unwrap(),
+        pushed_hash,
+        "the windows are the ciphertext the bundle verifies"
+    );
+    peak
+}
+
+/// The memory ceiling is a property of the transfer window, not the file: a 32 MiB original
+/// pushed and restored in 1 MiB windows never holds more than a few windows.
+#[test]
+fn push_and_restore_hold_a_window_not_the_file() {
+    const CEILING: usize = 4 << 20;
+    let peak = push_and_restore_peak(32 << 20, 1 << 20);
+    assert!(
+        peak < CEILING,
+        "peak heap {peak} B exceeds the {CEILING} B ceiling"
+    );
+}
+
+/// The acceptance case: a 4 GiB original — the largest the server accepts — pushes and restores
+/// within a fixed ceiling at the upload protocol's largest chunk (16 MiB). Ignored by default
+/// because it encrypts and decrypts 4 GiB; run it with
+/// `cargo test -p capsule-core --lib --release -- --ignored four_gib`.
+#[test]
+#[ignore = "encrypts and decrypts 4 GiB; run with --release -- --ignored"]
+fn four_gib_original_pushes_and_restores_in_bounded_memory() {
+    const CEILING: usize = 40 << 20;
+    let peak = push_and_restore_peak(4 << 30, 16 << 20);
+    assert!(
+        peak < CEILING,
+        "peak heap {peak} B exceeds the {CEILING} B ceiling"
     );
 }

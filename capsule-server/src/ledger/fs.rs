@@ -189,12 +189,10 @@ impl FilesystemLedger {
                     );
                     cut(&path, decoded.whole_len as u64).await?;
                 }
-                Some(_) => {
+                Some(damage) => {
                     return Err(LedgerError::Damaged {
                         owner: owner.clone(),
-                        fault: ChainFault::Undecodable {
-                            entries: entries.len(),
-                        },
+                        fault: across_segments(&damage, entries.len()),
                     });
                 }
             }
@@ -249,6 +247,18 @@ async fn segments(dir: &Path) -> Result<Vec<(u64, PathBuf)>, LedgerError> {
     }
     found.sort_by_key(|(first, _)| *first);
     Ok(found)
+}
+
+/// `damage` found in one segment, restated for the whole ledger with `entries` before it.
+///
+/// Anything that is not a cuttable tail is a hole, except an intact entry this server cannot
+/// read, which keeps its own fault so an operator sees it was most likely written by a newer
+/// server rather than damaged.
+fn across_segments(damage: &ChainFault, entries: usize) -> ChainFault {
+    match damage {
+        ChainFault::Unrecognised { .. } => ChainFault::Unrecognised { entries },
+        _ => ChainFault::Undecodable { entries },
+    }
 }
 
 /// A segment's bytes.
@@ -379,7 +389,7 @@ impl OwnerLedger for FilesystemLedger {
                         ChainFault::TornTail { .. } if index + 1 == count => {
                             ChainFault::TornTail { entries }
                         }
-                        _ => ChainFault::Undecodable { entries },
+                        other => across_segments(&other, entries),
                     });
                     break;
                 }

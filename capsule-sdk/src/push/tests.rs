@@ -100,7 +100,7 @@ fn manifest_envelope_mirrors_the_signed_manifest() {
             request.protocol_version,
             request.manifest_envelope.protocol_version
         );
-        assert_eq!(request.size, blob.bytes.len() as u64);
+        assert_eq!(request.size, blob.bytes.size());
     }
 }
 
@@ -189,7 +189,11 @@ fn derivative_manifests_ship_in_the_preview_tier_ahead_of_their_derivatives() {
     );
     for (manifest, (blob, hash)) in bundle.derivative_manifests.iter().zip(&blobs[2..4]) {
         assert_eq!(blob.tier, UploadTier::Preview);
-        assert_eq!(blob.bytes, manifest.as_slice(), "the exact bytes ship");
+        assert_eq!(
+            blob.bytes.inline(),
+            Some(manifest.as_slice()),
+            "the exact bytes ship"
+        );
         assert_eq!(*hash, hash_bytes(manifest).to_hex());
         assert_eq!(blob.content_type, "application/octet-stream");
 
@@ -243,7 +247,10 @@ fn tier_blobs_are_ladder_ordered() {
          claims out of"
     );
     assert_eq!(blobs[0].0.content_type, "application/octet-stream");
-    assert_eq!(blobs[0].0.bytes, bundle.provenance_blob.as_slice());
+    assert_eq!(
+        blobs[0].0.bytes.inline(),
+        Some(bundle.provenance_blob.as_slice())
+    );
     assert_eq!(blobs[1].0.content_type, "application/octet-stream");
     assert_eq!(blobs[1].1, bundle.metadata_blob_hash.unwrap().to_hex());
     assert_eq!(blobs.last().unwrap().1, bundle.ciphertext_hash.to_hex());
@@ -277,8 +284,8 @@ fn the_index_tier_carries_the_provenance_rung() {
     assert_eq!(rung.role, BlobRole::Provenance);
     assert_eq!(rung.tier, UploadTier::Index);
 
-    let record: ProvenanceRecord =
-        capsule_core::cbor::from_slice(rung.bytes).expect("the rung is a provenance record");
+    let record: ProvenanceRecord = capsule_core::cbor::from_slice(rung.bytes.inline().unwrap())
+        .expect("the rung is a provenance record");
     assert_eq!(record.asset_id, bundle.asset_id);
     assert_eq!(
         *hash,
@@ -286,7 +293,7 @@ fn the_index_tier_carries_the_provenance_rung() {
         "the rung's content address is record_hash(), which is what makes the server's chain \
          head and a client's next prior_provenance_hash the same number"
     );
-    assert_eq!(hash_bytes(rung.bytes).to_hex(), *hash);
+    assert_eq!(hash_bytes(rung.bytes.inline().unwrap()).to_hex(), *hash);
 
     // The envelope the server checks against invariant 15 names *this* blob.
     let request = create_request(&bundle, rung, hash);
@@ -473,8 +480,9 @@ fn receipt_for(
         asset_id: bundle.asset_id.to_string(),
         blob_role: wire_enum(&blob.role),
         ciphertext_hash: Hash32::from_hex(hash).unwrap(),
-        size: blob.bytes.len() as u64,
-        envelope_hash: (blob.role == BlobRole::Provenance).then(|| hash_bytes(blob.bytes)),
+        size: blob.bytes.size(),
+        envelope_hash: (blob.role == BlobRole::Provenance)
+            .then(|| hash_bytes(blob.bytes.inline().unwrap())),
         uploaded_by_user: bundle.created_by_user.to_string(),
         uploaded_by_device: None,
         received_at: RECEIVED_AT.into(),

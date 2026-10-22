@@ -4031,6 +4031,24 @@ impl Fixture {
             .header("x-capsule-checksum", &checksum(payload))
             .body("application/octet-stream", payload.to_vec())
     }
+
+    /// Every entry of `owner`'s ledger, asserting the chain verifies to its end under the
+    /// fixture's attestation key.
+    pub(crate) async fn verified_ledger(&self, owner: &OwnerId) -> Vec<LedgerEntry> {
+        use capsule_server::attestation::ReceiptSigner as _;
+
+        let scan = self.ledger.scan(owner).await.expect("the ledger reads");
+        let key = self.attestation_key.clone();
+        let report = capsule_server::ledger::verify_chain(
+            owner,
+            &scan,
+            &|id| (*id == key.key_id()).then(|| key.verifying_key()),
+            None,
+        );
+        assert_eq!(report.fault, None, "the owner's ledger verifies to its end");
+        assert_eq!(report.verified, scan.entries.len());
+        scan.entries
+    }
 }
 
 /// A peer server's operational key pair: the signer, and the raw thirty-two public bytes an

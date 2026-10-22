@@ -686,7 +686,12 @@ mod tests {
             .assets
             .iter()
             .map(|asset| {
-                let served = ws.upload_bundle(&asset.asset_id).unwrap().ciphertext;
+                let served = ws
+                    .upload_bundle(&asset.asset_id)
+                    .unwrap()
+                    .original
+                    .to_vec()
+                    .unwrap();
                 assert_eq!(
                     crate::crypto::hash::hash_bytes(&served),
                     asset.content_hash,

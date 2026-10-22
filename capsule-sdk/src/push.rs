@@ -31,7 +31,8 @@
 //! order in which the asset's own claims arrive before the bytes they describe.
 //!
 //! **Every blob this module ships is ciphertext.** The original is re-derived from its
-//! manifest's nonce prefix, the metadata blob is carried sealed, and **derivative blobs are
+//! manifest's nonce prefix one upload chunk at a time ([`BlobBytes::Original`]), so a push holds
+//! one chunk window of an original and never the whole file; the metadata blob is carried sealed, and **derivative blobs are
 //! encrypted too** — `capsule-core` re-derives each one from the plaintext it holds locally
 //! using the prefix that derivative's signed manifest recorded. Nothing here decrypts, encrypts,
 //! or inspects a blob; it moves opaque bytes.
@@ -53,6 +54,7 @@
 //! exact bytes, size and role the client sent. Only then is the asset reported as pushed, and
 //! the verified receipts are what the caller persists beside the provenance chain.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 
 use capsule_core::crypto::hash::{Hash32, hash_bytes};
@@ -62,7 +64,7 @@ use capsule_core::import::UploadTier;
 use capsule_core::library::{
     BlobRole as CoreBlobRole, CustodyReceipt, ReceiptExpectations, ReceiptRejection, verify_receipt,
 };
-use capsule_core::lifecycle::UploadBundle;
+use capsule_core::lifecycle::{OriginalCiphertext, UploadBundle};
 use serde::Serialize;
 use tracing::instrument;
 
@@ -70,6 +72,7 @@ use crate::albums::{AlbumClient, AlbumError, ProvisionedAlbum};
 use crate::staged::{StagedAsset, StagedScheduler, TierBlob, TierSessionOutcome, remaining_tiers};
 use crate::upload::{
     BlobRole, CreateUploadRequest, ManifestEnvelope, UploadClient, UploadError, UploadOutcome,
+    UploadSource,
 };
 use crate::verify::{AssetQuery, StorageVerifyClient, VerifyError};
 
@@ -95,7 +98,61 @@ pub struct BundleBlob<'a> {
     /// The derivative's signed role, for a [`BlobRole::Derivative`] blob and for nothing else.
     pub derivative_role: Option<DerivativeRole>,
     /// The bytes to transfer.
-    pub bytes: &'a [u8],
+    pub bytes: BlobBytes<'a>,
+}
+
+/// Where a [`BundleBlob`]'s bytes come from. Everything but the original is small and already
+/// in the bundle; the original is a [`OriginalCiphertext`] source the upload client reads one
+/// chunk window at a time, so a push never holds an original whole.
+#[derive(Debug, Clone, Copy)]
+pub enum BlobBytes<'a> {
+    /// Bytes the bundle holds: the provenance and metadata blobs, derivative manifests and
+    /// derivatives.
+    Inline(&'a [u8]),
+    /// The original's ciphertext, re-derived per window from the plaintext on disk.
+    Original(&'a OriginalCiphertext),
+}
+
+impl BlobBytes<'_> {
+    /// The blob's size in bytes — what `POST /upload` declares.
+    #[must_use]
+    pub fn size(&self) -> u64 {
+        match self {
+            Self::Inline(bytes) => bytes.len() as u64,
+            Self::Original(original) => original.size(),
+        }
+    }
+
+    /// The bytes, when the bundle holds them.
+    #[must_use]
+    pub fn inline(&self) -> Option<&[u8]> {
+        match self {
+            Self::Inline(bytes) => Some(bytes),
+            Self::Original(_) => None,
+        }
+    }
+
+    /// The whole blob in memory, for a caller that can only take a buffer (the FFI's
+    /// `FfiUploadBlob`). An original read this way costs its full size; the SDK's own push
+    /// never does it.
+    pub fn to_vec(&self) -> std::io::Result<Vec<u8>> {
+        match self {
+            Self::Inline(bytes) => Ok(bytes.to_vec()),
+            Self::Original(original) => original.to_vec(),
+        }
+    }
+}
+
+impl UploadSource for BlobBytes<'_> {
+    fn read_at(&self, offset: u64, len: usize) -> std::io::Result<Cow<'_, [u8]>> {
+        match self {
+            Self::Inline(bytes) => bytes.read_at(offset, len),
+            Self::Original(original) => {
+                let window = original.read_at(offset, len)?;
+                Ok(Cow::Owned(window))
+            }
+        }
+    }
 }
 
 /// Every transferable blob of `bundle`, in ladder order: the **index tier** (T0) — the
@@ -117,7 +174,7 @@ pub fn bundle_blobs(bundle: &UploadBundle) -> Vec<(BundleBlob<'_>, String)> {
             role: BlobRole::Provenance,
             content_type: OPAQUE_CONTENT_TYPE,
             derivative_role: None,
-            bytes: &bundle.provenance_blob,
+            bytes: BlobBytes::Inline(&bundle.provenance_blob),
         },
         // The content address of the provenance blob is `record_hash()` by definition — the
         // digest of the canonical record — so it is derived from the bytes rather than read off
@@ -131,7 +188,7 @@ pub fn bundle_blobs(bundle: &UploadBundle) -> Vec<(BundleBlob<'_>, String)> {
                 role: BlobRole::Metadata,
                 content_type: OPAQUE_CONTENT_TYPE,
                 derivative_role: None,
-                bytes: &bundle.metadata_blob,
+                bytes: BlobBytes::Inline(&bundle.metadata_blob),
             },
             hash.to_hex(),
         ));
@@ -145,7 +202,7 @@ pub fn bundle_blobs(bundle: &UploadBundle) -> Vec<(BundleBlob<'_>, String)> {
                 role: BlobRole::DerivativeManifest,
                 content_type: OPAQUE_CONTENT_TYPE,
                 derivative_role: None,
-                bytes: manifest,
+                bytes: BlobBytes::Inline(manifest),
             },
             // Signed CBOR, not ciphertext, so — as for the provenance blob — its address is
             // derived from the bytes rather than read off a field.
@@ -159,7 +216,7 @@ pub fn bundle_blobs(bundle: &UploadBundle) -> Vec<(BundleBlob<'_>, String)> {
                 role: BlobRole::Derivative,
                 content_type: &derivative.format,
                 derivative_role: Some(derivative.role),
-                bytes: &derivative.bytes,
+                bytes: BlobBytes::Inline(&derivative.bytes),
             },
             derivative.ciphertext_hash.to_hex(),
         ));
@@ -170,7 +227,7 @@ pub fn bundle_blobs(bundle: &UploadBundle) -> Vec<(BundleBlob<'_>, String)> {
             role: BlobRole::Original,
             content_type: &bundle.content_type,
             derivative_role: None,
-            bytes: &bundle.ciphertext,
+            bytes: BlobBytes::Original(&bundle.original),
         },
         bundle.ciphertext_hash.to_hex(),
     ));
@@ -184,7 +241,7 @@ pub fn staged_asset(bundle: &UploadBundle) -> StagedAsset {
         bundle.asset_id.to_string(),
         bundle_blobs(bundle)
             .into_iter()
-            .map(|(blob, hash)| TierBlob::new(blob.tier, hash, blob.bytes.len() as u64))
+            .map(|(blob, hash)| TierBlob::new(blob.tier, hash, blob.bytes.size()))
             .collect(),
     )
 }
@@ -245,7 +302,7 @@ pub fn create_request(
         manifest_envelope.derivative_format = Some(blob.content_type.to_string());
     }
     CreateUploadRequest {
-        size: blob.bytes.len() as u64,
+        size: blob.bytes.size(),
         hash: hash.to_string(),
         content_type: blob.content_type.to_string(),
         crypto_suite_id: bundle.crypto_suite_id,
@@ -522,11 +579,11 @@ pub async fn push_bundle<H: std::hash::BuildHasher + Sync>(
             tier = ?tier_blob.tier,
             role = ?blob.role,
             hash = %hash,
-            bytes = blob.bytes.len(),
+            bytes = blob.bytes.size(),
             content_type = %blob.content_type,
             "push: opening upload session"
         );
-        let outcome = match client.upload(&request, blob.bytes).await? {
+        let outcome = match client.upload(&request, &blob.bytes).await? {
             UploadOutcome::Completed { session_id } => {
                 tracing::info!(tier = ?tier_blob.tier, hash = %hash, %session_id, "push: blob transferred");
                 TierSessionOutcome::Uploaded { session_id }
@@ -536,7 +593,7 @@ pub async fn push_bundle<H: std::hash::BuildHasher + Sync>(
                 TierSessionOutcome::AlreadyStored { asset_ref }
             }
         };
-        report.bytes += blob.bytes.len() as u64;
+        report.bytes += blob.bytes.size();
         report.pushed.push(PushedBlob {
             tier: tier_blob.tier,
             hash: hash.clone(),
@@ -589,10 +646,12 @@ fn check_receipt(
     hash: Hash32,
     now_unix: i64,
 ) -> Result<(), ReceiptRejection> {
-    let size = blob.bytes.len() as u64;
+    let size = blob.bytes.size();
     // The chain position, and only on the blob that *is* the manifest. SHA-256 by definition,
     // which is what `hash_bytes` computes, whatever digest the suite addresses blobs with.
-    let envelope_hash = (blob.role == BlobRole::Provenance).then(|| hash_bytes(blob.bytes));
+    let envelope_hash = (blob.role == BlobRole::Provenance)
+        .then(|| blob.bytes.inline().map(hash_bytes))
+        .flatten();
     if let Some(role) = core_role(blob.role) {
         let expected = ReceiptExpectations {
             ciphertext_hash: hash,
@@ -636,9 +695,9 @@ fn check_receipt(
 /// The durable log rather than the per-session fetch, because a blob this run did not
 /// transfer — one the feed said was held, or one a retry of this same asset found finalized as
 /// `duplicate_blob` — has no session to ask about, and its custody needs the same evidence as a
-/// fresh one. A `duplicate_blob` naming a *different* asset is not covered: until the server
-/// records cross-asset shared blobs (#672) it neither indexes that blob under this asset nor
-/// receipts it, so this asset fails custody on every run.
+/// fresh one. A `duplicate_blob` naming a *different* asset is covered the same way: the server
+/// adopts that blob onto this asset before refusing (#672), indexing it under this asset and
+/// receipting it in this asset's log.
 ///
 /// `now_unix` is the client's clock, injected for the receipt's drift bound.
 #[instrument(skip_all, fields(asset_id = %bundle.asset_id, blobs = report.custody_hashes.len()))]

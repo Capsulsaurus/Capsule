@@ -256,7 +256,7 @@ async fn e2e_case_13_a_guest_drop_is_deposited_without_a_handshake_and_adopted_i
         .workspace
         .upload_bundle(&asset)
         .expect("the library builds an upload bundle for the adopted asset");
-    assert_eq!(bundle.ciphertext, sealed.ciphertext);
+    assert_eq!(bundle.original.to_vec().unwrap(), sealed.ciphertext);
     assert_eq!(bundle.key_mode, KeyMode::Wrapped);
     assert_eq!(bundle.metadata_blob, adopted.metadata_blob);
     assert_eq!(
