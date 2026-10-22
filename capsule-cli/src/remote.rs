@@ -1103,7 +1103,7 @@ async fn drain_feed(
 /// each byte for byte.
 ///
 /// The feed is drained fresh, as a push reads it, and each live asset's head is restored by
-/// [`restore::restore_entries`](crate::restore::restore_entries) over the SDK's
+/// [`restore::restore_entries`] over the SDK's
 /// [`HttpBlobSource`] at `GET /v1/blob/{hash}`: a resumable ranged fetch, the library's
 /// `verify_asset` chokepoint, decryption under the library's album keys, a check of the
 /// plaintext against the signed sidecar's digest, and an atomic write.
