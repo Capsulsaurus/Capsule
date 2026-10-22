@@ -3,6 +3,7 @@ pub(crate) mod auth_gate;
 pub(crate) mod cache;
 pub(crate) mod error;
 pub(crate) mod init;
+pub(crate) mod key_pins;
 #[allow(clippy::module_inception)]
 pub(crate) mod library;
 pub(crate) mod lock;
@@ -25,6 +26,10 @@ pub use auth_gate::{
 pub use cache::{EvictionReport, cache_sweep};
 pub use error::LibraryError;
 pub use init::init_library;
+pub use key_pins::{
+    KeyPinError, KeyPinOutcome, PinnedKeys, attestation_key_pins_path,
+    load_pinned_attestation_keys, pin_attestation_keys,
+};
 pub use library::Library;
 pub use open::open_library;
 pub use paths::{

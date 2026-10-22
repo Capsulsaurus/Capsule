@@ -11,10 +11,13 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use capsule_core::crypto::keys::MasterKey;
+use capsule_core::crypto::keys::{HybridVerifyingKey, MasterKey};
 use capsule_core::crypto::primitives::{Argon2Params, DeviceTier};
 use capsule_core::import::UploadPolicy;
-use capsule_core::library::{ReleaseDecision, RetainReason, StorageVerdict, StorageVerifier};
+use capsule_core::library::{
+    KeyPinError, ReleaseDecision, RetainReason, StorageVerdict, StorageVerifier,
+    pin_attestation_keys,
+};
 use capsule_core::lifecycle::{LifecycleError, Workspace};
 use capsule_sdk::albums::{AlbumClient, AlbumTransport};
 use capsule_sdk::auth::{AuthClient, AuthError, LoginOutcome, Session};
@@ -151,6 +154,21 @@ pub enum RemoteError {
     /// could be verified and a push could confirm nothing.
     #[error("the server's attestation keys could not be fetched: {0}")]
     AttestationKeys(#[source] VerifyError),
+    /// The server's published attestation keys contradict the history this library pinned for
+    /// it (a pinned key was dropped or replaced), or the pin could not be read or written. The
+    /// run trusts nothing the server signs and the pin is left as it was.
+    #[error(transparent)]
+    AttestationKeyPin(#[from] KeyPinError),
+    /// The server endpoint has no origin to key its attestation-key pin by.
+    #[error(
+        "the server endpoint {endpoint:?} has no origin to pin attestation keys under: {reason}"
+    )]
+    ServerOrigin {
+        /// The endpoint as configured.
+        endpoint: String,
+        /// Why no origin could be derived from it.
+        reason: String,
+    },
     /// A command needing an authenticated session found none stored.
     #[error("not authenticated")]
     NotAuthenticated,
@@ -1194,14 +1212,19 @@ async fn restore_with(
 ///
 /// **A transfer is not custody** (issue #670). After an asset's ladder, the run asks the server
 /// whether it durably holds every blob the asset relies on and requires a custody receipt per
-/// blob that verifies under the server's published attestation key
+/// blob that verifies under the server's attestation-key history as this library pinned it
 /// (`capsule_sdk::push::verify_custody`); the verified receipts are appended to the asset's
 /// `{uuid}.receipts.cbor` log in the library. Only then is the asset `Verified`.
+///
+/// **The key history is pinned, not trusted per run** (issue #714). The first run against a
+/// server pins the history it publishes, keyed by the server's canonical origin; a later run
+/// accepts only an extension of it, and a history that drops or replaces a pinned key fails
+/// the run with [`RemoteError::AttestationKeyPin`] before anything is sent.
 ///
 /// **One asset's failure is that asset's.** An asset whose bundle, album, transfer, custody
 /// check or receipt write fails is recorded as `Failed` with its error, and the run moves on to
 /// the next one; the caller reports every failure and exits non-zero. What fails the whole run
-/// is what every asset needs: the session, the feed read, and the attestation keys.
+/// is what every asset needs: the session, the feed read, and the pinned attestation keys.
 ///
 /// Re-runnable by construction. The outstanding transfer work comes from server truth, so a
 /// second run against an unchanged library uploads nothing; it re-confirms custody of every
@@ -1271,16 +1294,9 @@ async fn push_with(
         return Ok(summary);
     }
 
-    // Every receipt is checked under the server's published key history, so without it no
-    // asset could be confirmed: that is a failure of the run, not of an asset.
-    let attestation_keys = verify
-        .fetch_attestation_keys()
-        .await
-        .map_err(RemoteError::AttestationKeys)?;
-    tracing::info!(
-        keys = attestation_keys.len(),
-        "push: attestation keys fetched"
-    );
+    // Every receipt is checked under the server's pinned key history, so without it no asset
+    // could be confirmed: that is a failure of the run, not of an asset.
+    let attestation_keys = pinned_attestation_keys(remote, workspace, &verify).await?;
 
     let mut run = AssetPusher {
         workspace,
@@ -1304,6 +1320,48 @@ async fn push_with(
     }
     summary.log();
     Ok(summary)
+}
+
+/// The canonical origin (`scheme://host[:port]`, default port elided, host lowercased) of the
+/// server endpoint: the key its attestation-key history is pinned under, so the same server
+/// reached through a differently written endpoint shares one pin.
+fn server_origin(endpoint: &str) -> Result<String, RemoteError> {
+    let refuse = |reason: String| RemoteError::ServerOrigin {
+        endpoint: endpoint.to_owned(),
+        reason,
+    };
+    let url = url::Url::parse(endpoint).map_err(|e| refuse(e.to_string()))?;
+    let origin = url.origin();
+    if !origin.is_tuple() {
+        return Err(refuse("the URL has no network origin".to_owned()));
+    }
+    Ok(origin.ascii_serialization())
+}
+
+/// Fetch the server's published attestation-key history and check it against the history this
+/// library pinned for the server's origin: pinned on first contact, re-pinned when only
+/// extended, refused when a pinned key was dropped or replaced
+/// ([`capsule_core::library::pin_attestation_keys`]). The returned pinned history is what every
+/// receipt and signed attestation of the run is verified under.
+async fn pinned_attestation_keys(
+    remote: &RemoteConfig,
+    workspace: &Workspace,
+    verify: &StorageVerifyClient,
+) -> Result<Vec<HybridVerifyingKey>, RemoteError> {
+    let origin = server_origin(&remote.sync_endpoint)?;
+    let published = verify
+        .fetch_attestation_keys()
+        .await
+        .map_err(RemoteError::AttestationKeys)?;
+    let pinned = pin_attestation_keys(workspace.root(), &origin, &published)?;
+    tracing::info!(
+        %origin,
+        published = published.len(),
+        pinned = pinned.keys.len(),
+        outcome = ?pinned.outcome,
+        "attestation keys checked against the pin"
+    );
+    Ok(pinned.keys)
 }
 
 /// A dry run's plan for one asset: what would be sent, from server truth, with nothing sent.
@@ -1343,7 +1401,7 @@ struct AssetPusher<'a> {
     upload: UploadClient,
     albums: AlbumClient,
     verify: StorageVerifyClient,
-    attestation_keys: Vec<capsule_core::crypto::keys::HybridVerifyingKey>,
+    attestation_keys: Vec<HybridVerifyingKey>,
     scheduler: StagedScheduler,
     held: HashSet<String>,
     force: bool,
@@ -1556,8 +1614,9 @@ fn kept_because(reason: &RetainReason) -> &'static str {
 /// # Errors
 ///
 /// [`RemoteError::NotAuthenticated`] with no stored session, and
-/// [`RemoteError::AttestationKeys`] when the server's keys cannot be fetched. Either way no
-/// source has been touched.
+/// [`RemoteError::AttestationKeys`] when the server's keys cannot be fetched, and
+/// [`RemoteError::AttestationKeyPin`] when they contradict the history pinned for the server.
+/// Either way no source has been touched.
 #[instrument(skip(store, workspace, moved), fields(sources = moved.len()))]
 pub async fn release_moved_sources(
     remote: &RemoteConfig,
@@ -1583,10 +1642,7 @@ async fn release_moved_with(
         session,
         format!("{}/v1", remote.sync_endpoint.trim_end_matches('/')),
     ));
-    let attestation_keys = verify
-        .fetch_attestation_keys()
-        .await
-        .map_err(RemoteError::AttestationKeys)?;
+    let attestation_keys = pinned_attestation_keys(remote, workspace, &verify).await?;
     let coordinator = ReleaseCoordinator::new(verify, attestation_keys);
     let verifier = coordinator
         .resolve_custody(&held_releases(workspace, moved))
@@ -1682,16 +1738,17 @@ pub fn sources_kept_offline_line(count: usize) -> String {
 /// `options.signed` keep its signed answer in each asset's attestation log.
 ///
 /// The orchestration is `verify::verify_assets`; this function supplies its network legs over
-/// the SDK. A signed run first fetches the server's attestation-key history, as a push does,
-/// and every attestation is verified under it, bound to a nonce drawn fresh per request
+/// the SDK. A signed run first checks the server's attestation-key history against the pin, as
+/// a push does, and every attestation is verified under the pinned history, bound to a nonce drawn fresh per request
 /// ([`ReleaseCoordinator::fetch_verified_attestation`]). An attestation that does not verify is
 /// reported against its assets and never stored.
 ///
 /// # Errors
 ///
 /// [`RemoteError::NotAuthenticated`] with no stored session, and, on a signed run,
-/// [`RemoteError::AttestationKeys`] when the server's keys cannot be fetched. Either way nothing
-/// has been stored.
+/// [`RemoteError::AttestationKeys`] when the server's keys cannot be fetched, or
+/// [`RemoteError::AttestationKeyPin`] when they contradict the history pinned for the server.
+/// Either way nothing has been stored.
 #[instrument(skip(store, workspace), fields(signed = options.signed, deep = options.deep))]
 pub async fn verify_storage(
     remote: &RemoteConfig,
@@ -1718,11 +1775,7 @@ async fn verify_storage_with(
         format!("{}/v1", remote.sync_endpoint.trim_end_matches('/')),
     ));
     let coordinator = if options.signed {
-        let keys = client
-            .fetch_attestation_keys()
-            .await
-            .map_err(RemoteError::AttestationKeys)?;
-        tracing::info!(keys = keys.len(), "verify: attestation keys fetched");
+        let keys = pinned_attestation_keys(remote, workspace, &client).await?;
         Some(ReleaseCoordinator::new(client.clone(), keys))
     } else {
         None
@@ -2316,5 +2369,41 @@ mod tests {
         let line = sources_kept_offline_line(3);
         assert!(line.starts_with("Kept 3 source files"), "{line}");
         assert!(line.contains("--push"), "{line}");
+    }
+
+    /// One server, however its endpoint is written, has one pin.
+    #[test]
+    fn the_pin_key_is_the_canonical_origin_of_the_endpoint() {
+        for (endpoint, origin) in [
+            ("https://capsule.example", "https://capsule.example"),
+            ("https://Capsule.Example:443/", "https://capsule.example"),
+            ("https://capsule.example/v1?x=1", "https://capsule.example"),
+            ("http://127.0.0.1:8080", "http://127.0.0.1:8080"),
+            ("http://host:80/", "http://host"),
+        ] {
+            assert_eq!(
+                server_origin(endpoint).expect("an origin"),
+                origin,
+                "{endpoint}"
+            );
+        }
+        assert_ne!(
+            server_origin("http://capsule.example").expect("an origin"),
+            server_origin("https://capsule.example").expect("an origin"),
+            "a scheme change is another origin"
+        );
+    }
+
+    #[test]
+    fn an_endpoint_with_no_network_origin_is_refused() {
+        for endpoint in ["not a url", "file:///tmp/server"] {
+            assert!(
+                matches!(
+                    server_origin(endpoint),
+                    Err(RemoteError::ServerOrigin { .. })
+                ),
+                "{endpoint}"
+            );
+        }
     }
 }

@@ -6,7 +6,9 @@
 //! composition root. One asset pushes cleanly; the other cannot even build its upload bundle,
 //! because its original was removed from the library. The run must not stop at the second: the
 //! first reaches verified custody, its receipts land in the library's receipt log beside its
-//! provenance chain, and the second is reported failed with its reason.
+//! provenance chain, and the second is reported failed with its reason. The first run pins the
+//! server's attestation-key history in the library (issue #714), and a run against a history
+//! that no longer holds a pinned key is refused whole.
 //!
 //! The fault matrix of the custody check itself — a lost finalize, an index failure, a verdict
 //! that is not durable, a withheld or mis-signed receipt — is driven against the mock server in
@@ -14,9 +16,13 @@
 
 use std::path::{Path, PathBuf};
 
-use capsule_cli::remote::{self, AssetPushStatus, PushOptions, RemoteConfig};
+use capsule_cli::remote::{self, AssetPushStatus, PushOptions, RemoteConfig, RemoteError};
 use capsule_cli::session::SessionStore;
-use capsule_core::library::load_receipts;
+use capsule_core::crypto::keys::{HybridSigningKey, HybridVerifyingKey};
+use capsule_core::library::{
+    KeyPinError, attestation_key_pins_path, load_pinned_attestation_keys, load_receipts,
+    pin_attestation_keys,
+};
 use capsule_e2e::fixtures::{large_synthetic_jpeg, synthetic_jpeg};
 use capsule_e2e::{Device, PROTOCOL_VERSION, Server};
 use capsule_sdk::push::bundle_blobs;
@@ -116,4 +122,51 @@ async fn e2e_case_15_push_verifies_custody_persists_receipts_and_carries_on_past
     assert_eq!(again.uploaded_blobs, 0, "nothing new crosses the wire");
     let relog = load_receipts(device.root.path(), &good, capture_utc).expect("the log decodes");
     assert_eq!(relog.len(), log.len(), "re-persisting is a no-op");
+
+    // The first run pinned the server's attestation-key history under its origin (issue #714),
+    // and every persisted receipt verifies under the pin.
+    let origin = server.base_url().trim_end_matches('/');
+    let pinned = load_pinned_attestation_keys(device.root.path(), origin)
+        .expect("the pin reads")
+        .expect("the first push pinned the server's keys");
+    assert!(!pinned.is_empty());
+    assert!(
+        relog
+            .iter()
+            .all(|r| pinned.iter().any(|key| r.verify_under(key))),
+        "every kept receipt verifies under the pinned history"
+    );
+
+    // A server whose published history no longer holds a pinned key is refused for the whole
+    // run, and the pin is not silently replaced. Stand in for the rewrite by pinning a key the
+    // server never published.
+    std::fs::remove_file(attestation_key_pins_path(device.root.path())).expect("the pin exists");
+    let foreign = HybridSigningKey::from_seed64(&[0x5A; 64]).verifying_key();
+    pin_attestation_keys(device.root.path(), origin, std::slice::from_ref(&foreign))
+        .expect("the foreign key pins");
+    let refused = remote::push(&remote, &store, &device.workspace, PushOptions::default()).await;
+    assert!(
+        matches!(
+            refused,
+            Err(RemoteError::AttestationKeyPin(
+                KeyPinError::HistoryRewritten {
+                    missing: 1,
+                    pinned: 1,
+                    ..
+                }
+            ))
+        ),
+        "{refused:?}"
+    );
+    let still = load_pinned_attestation_keys(device.root.path(), origin)
+        .expect("the pin reads")
+        .expect("the pin is still there");
+    assert_eq!(
+        still
+            .iter()
+            .map(HybridVerifyingKey::to_bytes)
+            .collect::<Vec<_>>(),
+        [foreign.to_bytes()],
+        "a refused run leaves the pin as it was"
+    );
 }
