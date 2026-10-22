@@ -361,6 +361,7 @@ pub(crate) fn sign_receipt(
         uploaded_by_user: draft.uploaded_by_user,
         uploaded_by_device: draft.uploaded_by_device,
         received_at: draft.received_at,
+        unknown: Default::default(),
     };
     CustodyReceipt {
         server_sig: signer.sign(&core.signing_bytes()),

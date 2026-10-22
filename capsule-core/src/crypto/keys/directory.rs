@@ -28,12 +28,16 @@
 //!
 //! [Cryptography — Keys § Device Directory]: https://docs/design/cryptography/keys/#device-directory
 
+use std::collections::BTreeMap;
+
+use ciborium::value::Value;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::hybrid_sig::{HybridSignature, HybridSigningKey, HybridVerifyingKey};
 use super::kem::{DEK_PUBLIC_LEN, encapsulate_to_public};
 use super::kem_p256::{DEK_P256_PUBLIC_LEN, encapsulate_to_p256_public};
+use crate::cbor::OpenMap;
 use crate::crypto::CryptoError;
 
 /// A device's published **DEK** public encapsulation key: the bytes a peer wraps a key to so
@@ -131,7 +135,7 @@ impl<'de> Deserialize<'de> for DekPublic {
 
 /// One device's published entry. A revoked device's entry is **retained** (marked with
 /// `revoked_at`), never deleted, so manifests it signed before revocation stay verifiable.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DeviceEntry {
     /// Stable device id.
     pub device_id: Uuid,
@@ -148,6 +152,32 @@ pub struct DeviceEntry {
     pub added_at: String,
     /// RFC3339 revocation time, if revoked.
     pub revoked_at: Option<String>,
+    /// Keys a newer writer added that this build does not know, preserved verbatim and signed
+    /// over as part of the core. Empty (and so wire-absent) on everything this build writes.
+    ///
+    /// A key here must never collide with a known field name: the decoder only ever places the
+    /// keys it did not recognise here, and a caller building an entry by hand must do the same.
+    #[serde(flatten)]
+    pub unknown: BTreeMap<String, Value>,
+}
+
+// `Value` holds floats, so it is only `PartialEq`; see `ManifestCore` for why `Eq` stays.
+impl Eq for DeviceEntry {}
+
+impl<'de> Deserialize<'de> for DeviceEntry {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let mut m = OpenMap::deserialize("device entry", d)?;
+        Ok(Self {
+            device_id: m.take("device_id")?,
+            dsk_public: m.take("dsk_public")?,
+            dek_public: m.take_opt("dek_public")?,
+            added_at: m.take("added_at")?,
+            // Legacy present-`null`: an absent key and a `null` both read as `None`, exactly as
+            // the derived decoder did, and `None` re-emits as `null`.
+            revoked_at: m.take_opt("revoked_at")?,
+            unknown: m.into_unknown(),
+        })
+    }
 }
 
 impl DeviceEntry {
@@ -171,7 +201,13 @@ impl DeviceEntry {
 }
 
 /// The unsigned core of a directory — exactly the bytes the master signature covers.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// **Unknown keys survive under the signature** ([Versioning — invariant 2]), here and in every
+/// [`DeviceEntry`]: a directory from a newer writer that only adds a key decodes, re-emits that
+/// key canonically, and so still verifies; stripping it fails verification.
+///
+/// [Versioning — invariant 2]: https://docs/design/versioning/#system-invariants
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DirectoryCore {
     /// Account owner.
     pub user_id: Uuid,
@@ -181,6 +217,29 @@ pub struct DirectoryCore {
     pub updated_at: String,
     /// The user's devices.
     pub devices: Vec<DeviceEntry>,
+    /// Keys a newer writer added that this build does not know, preserved verbatim and signed
+    /// over. Empty (and so wire-absent) on everything this build writes.
+    ///
+    /// A key here must never collide with a known field name: the decoder only ever places the
+    /// keys it did not recognise here, and a caller building a core by hand must do the same.
+    #[serde(flatten)]
+    pub unknown: BTreeMap<String, Value>,
+}
+
+// `Value` holds floats, so it is only `PartialEq`; see `ManifestCore` for why `Eq` stays.
+impl Eq for DirectoryCore {}
+
+impl<'de> Deserialize<'de> for DirectoryCore {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let mut m = OpenMap::deserialize("directory core", d)?;
+        Ok(Self {
+            user_id: m.take("user_id")?,
+            directory_version: m.take("directory_version")?,
+            updated_at: m.take("updated_at")?,
+            devices: m.take("devices")?,
+            unknown: m.into_unknown(),
+        })
+    }
 }
 
 /// Why a device could not be cross-signed into a directory.
@@ -302,6 +361,7 @@ mod tests {
             dek_public,
             added_at: "2026-05-30T00:00:00Z".into(),
             revoked_at: None,
+            unknown: Default::default(),
         }
     }
 
@@ -315,6 +375,7 @@ mod tests {
             directory_version: version,
             updated_at: "2026-05-31T00:00:00Z".into(),
             devices: vec![entry(device, None)],
+            unknown: Default::default(),
         }
     }
 
@@ -394,6 +455,7 @@ mod tests {
             dek_public: Some(DekPublic(DekKeypair::generate().public_bytes())),
             added_at: "2026-06-01T00:00:00Z".into(),
             revoked_at: None,
+            unknown: Default::default(),
         }
     }
 

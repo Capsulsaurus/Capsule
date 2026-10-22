@@ -123,6 +123,7 @@ impl EnrolleeKeys {
             dek_public: Some(self.dek_public),
             added_at,
             revoked_at: None,
+            unknown: Default::default(),
         }
     }
 }

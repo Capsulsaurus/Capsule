@@ -118,6 +118,7 @@ mod tests {
             uploaded_by_user: Uuid::from_u128(7).to_string(),
             uploaded_by_device: None,
             received_at: "2026-07-10T00:00:00Z".into(),
+            unknown: Default::default(),
         }
     }
 

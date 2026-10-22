@@ -77,6 +77,7 @@ impl Fx {
             dek_public: None,
             added_at: "2026-05-01T00:00:00Z".into(),
             revoked_at: revoked.then(|| "2026-05-15T00:00:00Z".to_string()),
+            unknown: Default::default(),
         }
     }
 
@@ -96,6 +97,7 @@ impl Fx {
                 self.entry(self.id_a, &self.dev_a, false),
                 self.entry(self.id_b, &self.dev_b, revoke_b),
             ],
+            unknown: Default::default(),
         }
         .sign(signer)
     }

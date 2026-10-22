@@ -244,7 +244,9 @@ mod tests {
                 dek_public: None,
                 added_at: "2026-05-30T00:00:00Z".into(),
                 revoked_at: None,
+                unknown: Default::default(),
             }],
+            unknown: Default::default(),
         }
         .sign(&ik);
         assert!(directory.verify(&ik.verifying_key()));
