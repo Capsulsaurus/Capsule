@@ -93,7 +93,9 @@
 //! has a code of its own.
 //!
 //! What partitioning is *not* is a fix for the flood. A per-source key is what bounds it: the
-//! share and drop paths charge [`CounterKey::ShareSource`] and [`CounterKey::DropSource`] first,
+//! share and drop paths charge [`CounterKey::ShareSource`] and [`CounterKey::DropSource`] first
+//! (the upload writes charge [`CounterKey::UploadSessionsSource`] and
+//! [`CounterKey::UploadChunksSource`] beside their per-account keys),
 //! keyed on the client address [`crate::client_addr`] resolves through the deployment's trusted
 //! proxies (#704), so one address cannot fill a partition faster than its own budget allows.
 //!
@@ -102,7 +104,7 @@
 //! Every partition lives behind the same [`Mutex`]. Admission is genuinely independent — one
 //! partition's occupancy is invisible to another's ceiling — but *latency* is not: a sustained
 //! flood against one key serialises `hit`, `peek` and `reset` for every other. The critical
-//! section holds no `.await` and does `O(log n)` work over at most twenty thousand entries, so at
+//! section holds no `.await` and does `O(log n)` work over at most [`ceilings::UPLOAD_CHUNKS_SOURCE`] entries a partition, so at
 //! these sizes it is contention rather than denial. Stated because the claim above ("the windows
 //! one surface holds are not the windows another is denied") is about admission and should not be
 //! read as a latency guarantee. Per-partition locking is deferred to issue #477, not overlooked.
@@ -179,6 +181,19 @@ pub enum CounterKey {
     /// Per account and not per session, for the reason [`Self::UploadSessions`] is: a session
     /// is cheap to open, so a per-session budget is one a flood multiplies by opening more.
     UploadChunks(UserId),
+    /// Upload sessions opened from one source address, across every account behind it
+    /// (transfer/upload.md, Hostile Clients; #718).
+    ///
+    /// Keyed as [`Self::ShareSource`] is. Charged **after** [`Self::UploadSessions`], so a
+    /// request the account's own budget refuses never reaches this one: one account flooding
+    /// from a shared address spends at most its own allowance of the address's, and the other
+    /// accounts behind that address keep the rest.
+    UploadSessionsSource(String),
+    /// Chunks appended from one source address, across every account and session behind it
+    /// (transfer/upload.md, Hostile Clients; #718).
+    ///
+    /// Keyed and ordered as [`Self::UploadSessionsSource`] is, after [`Self::UploadChunks`].
+    UploadChunksSource(String),
     /// Code attempts against one second-factor challenge (`S-C55`).
     ///
     /// Keyed on the **challenge** and not the account, deliberately. A per-account key would let
@@ -306,6 +321,8 @@ impl CounterKey {
             Self::DeepVerify(_) => "deep_verify",
             Self::UploadSessions(_) => "upload_sessions",
             Self::UploadChunks(_) => "upload_chunks",
+            Self::UploadSessionsSource(_) => "upload_sessions_source",
+            Self::UploadChunksSource(_) => "upload_chunks_source",
             Self::SecondFactor(_) => "second_factor",
             Self::RegistrationSource(_) => "registration_source",
             Self::OidcAuthorize(_) => "oidc_authorize",
@@ -332,6 +349,8 @@ impl CounterKey {
             Self::ShareSource(_) | Self::DropSource(_) | Self::RegistrationSource(_) => {
                 ceilings::SOURCE_ADDRESS
             }
+            Self::UploadSessionsSource(_) => ceilings::UPLOAD_SESSIONS_SOURCE,
+            Self::UploadChunksSource(_) => ceilings::UPLOAD_CHUNKS_SOURCE,
             Self::DeepVerify(_) => ceilings::DEEP_VERIFY,
             Self::UploadSessions(_) | Self::UploadChunks(_) => ceilings::UPLOADING_ACCOUNT,
             Self::SecondFactor(_) => ceilings::SECOND_FACTOR,
@@ -357,6 +376,8 @@ impl CounterKey {
             | Self::ShareSource(scope)
             | Self::DropLink(scope)
             | Self::DropSource(scope)
+            | Self::UploadSessionsSource(scope)
+            | Self::UploadChunksSource(scope)
             | Self::SecondFactor(scope)
             | Self::OidcAuthorize(scope)
             | Self::PeerRequests(scope)
@@ -525,12 +546,51 @@ pub mod ceilings {
     /// is its own partition at this size.
     pub const UPLOADING_ACCOUNT: usize = 10_000;
 
-    /// The three source-address keys — 1-minute and 1-hour windows, keyed on a client address.
+    /// The share, drop and registration source-address keys — 1-minute and 1-hour windows, keyed
+    /// on a client address. The two upload source keys are sized below.
     ///
     /// Charged by the share and drop paths (#704); registration's is not yet charged. Sized for
     /// distinct addresses in the window, which for a self-hosted deployment is thousands, not
-    /// millions — an IPv6 client counts once per `/64`, so walking a prefix does not grow it.
+    /// millions — an IPv6 client counts once per `/64`, so walking a prefix within one `/64` does
+    /// not grow it. Each variant is its own partition at this size.
     pub const SOURCE_ADDRESS: usize = 10_000;
+
+    /// How many accounts the two upload source partitions absorb at once, each walking a fresh
+    /// source address on every request at its full per-account budget, while still holding
+    /// [`SOURCE_ADDRESS`] first-time addresses for everybody else.
+    ///
+    /// The upload source keys are the one source partition an authenticated caller can grow
+    /// faster than addresses arrive: the account budget is charged first, so an account mints at
+    /// most its own budget's worth of source keys a minute, but with a routed IPv6 prefix every
+    /// one of them can be a distinct `/64`. No ceiling sized against the directory survives every
+    /// account doing that, so this number is the stated assumption instead: sixteen accounts
+    /// turned hostile at once. Accounts on a self-hosted server are operator-issued, and every
+    /// one of those requests is logged under its account before it reaches the source key, so
+    /// past this the exposure is accepted: legitimate uploaders whose address holds no live
+    /// window are answered `429` with a `Retry-After` of at most one window (one minute) until
+    /// the flood stops or the operator disables the accounts. The refusal fails closed and loses
+    /// nothing; a client waits out the `Retry-After` and resumes.
+    pub const HOSTILE_UPLOADERS: usize = 16;
+
+    /// [`CounterKey::UploadSessionsSource`](super::CounterKey::UploadSessionsSource) — 1-minute
+    /// window, keyed on a client address.
+    ///
+    /// [`budgets::UPLOAD_SESSIONS`](super::budgets::UPLOAD_SESSIONS) × [`HOSTILE_UPLOADERS`] +
+    /// [`SOURCE_ADDRESS`] = 300 × 16 + 10 000 = 14 800: the hostile accounts' worth of fresh
+    /// addresses on top of the legitimate address population every other source key is sized
+    /// for. Derived rather than written, so raising the per-account budget raises this with it.
+    // A `u32` widened into `usize`, which is at least 32 bits on every target this server builds.
+    pub const UPLOAD_SESSIONS_SOURCE: usize =
+        super::budgets::UPLOAD_SESSIONS.limit as usize * HOSTILE_UPLOADERS + SOURCE_ADDRESS;
+
+    /// [`CounterKey::UploadChunksSource`](super::CounterKey::UploadChunksSource) — 1-minute
+    /// window, keyed on a client address.
+    ///
+    /// [`budgets::UPLOAD_CHUNKS`](super::budgets::UPLOAD_CHUNKS) × [`HOSTILE_UPLOADERS`] +
+    /// [`SOURCE_ADDRESS`] = 3 000 × 16 + 10 000 = 58 000, as [`UPLOAD_SESSIONS_SOURCE`] is
+    /// derived. Under [`SOURCE_ADDRESS`] alone this partition filled at four such accounts.
+    pub const UPLOAD_CHUNKS_SOURCE: usize =
+        super::budgets::UPLOAD_CHUNKS.limit as usize * HOSTILE_UPLOADERS + SOURCE_ADDRESS;
 
     /// [`CounterKey::OidcAuthorize`](super::CounterKey::OidcAuthorize) — 1-minute window, keyed
     /// on an **admitted** redirect host.
