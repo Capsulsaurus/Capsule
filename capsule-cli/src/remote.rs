@@ -1258,8 +1258,10 @@ struct AssetPusher<'a> {
 }
 
 impl AssetPusher<'_> {
-    /// Push one asset, confirm custody, and persist its receipts — filling `outcome` as far as
-    /// the asset got, so a failure still reports what moved before it.
+    /// Push one asset, confirm custody, and persist its receipts, filling `outcome` once each
+    /// step completes. A transfer that fails partway leaves `uploaded`, `merged` and `bytes` at
+    /// zero for the asset even when some of its blobs landed, because [`push::push_bundle`]
+    /// returns only its error; a re-run derives the remaining work from server truth.
     #[instrument(skip(self, outcome, summary), fields(%asset_id))]
     async fn push(
         &mut self,

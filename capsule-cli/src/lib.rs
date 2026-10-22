@@ -1504,8 +1504,10 @@ fn push_options(dry_run: bool, force: bool, staged: bool) -> remote::PushOptions
 /// pull), so a second run against an unchanged library uploads nothing.
 ///
 /// An asset that fails does not stop the run; every failure is reported once the run is done
-/// and the command exits non-zero. With `json`, stdout carries exactly one JSON document — the
-/// [`remote::PushSummary`], each asset's outcome included — and nothing else.
+/// and the command exits non-zero. With `json`, a run that reaches its assets prints exactly one
+/// JSON document on stdout — the [`remote::PushSummary`], each asset's outcome included — and
+/// nothing else. A run-level failure (no session, no feed, no attestation keys) prints nothing
+/// on stdout; its error goes to stderr and the command exits non-zero.
 async fn push_workspace(
     workspace: &Workspace,
     options: remote::PushOptions,
