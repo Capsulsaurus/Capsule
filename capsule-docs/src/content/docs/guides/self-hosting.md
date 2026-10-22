@@ -28,7 +28,8 @@ cargo build --release -p capsule-server -p capsule-server-migration
 
 ## Configure
 
-Configuration is environment only; `capsule-server/.env.example` lists every variable. A durable
+Configuration is environment only; `capsule-server/.env.example` is a starting template, and this
+page names the variables an operator must decide. A durable
 server refuses to start (exit 2), naming every missing variable at once, without:
 
 | Variable | Purpose |
@@ -48,6 +49,18 @@ Name your reverse proxy so the per-source rate limits see the client rather than
 `TRUSTED_PROXY_HOPS` trusts that many forwarding hops nearest the server, whatever their address.
 Unset, no `Forwarded` or `X-Forwarded-For` header is believed. That is safe, but every client
 behind the proxy then shares the proxy's budget.
+
+Once you name a proxy, it must strip or overwrite any `Forwarded` header the client sent. The
+server reads `Forwarded` in preference to `X-Forwarded-For`, and it believes an element that a
+named proxy passed on. A client-sent `Forwarded` that reaches the server unchanged therefore lets
+the client choose its own rate-limit key, and fill the per-source table with keys it invents. nginx
+passes the header through by default. Drop it there, and send the address the proxy saw in
+`X-Forwarded-For`:
+
+```nginx
+proxy_set_header Forwarded "";
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+```
 
 ## Migrate, then start
 
