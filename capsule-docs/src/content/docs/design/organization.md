@@ -166,8 +166,10 @@ number of devices converge deterministically, and every change is a signed `meta
 - **Restore.** A backup artifact carries each album's and stack's record sealed under its AMK,
   so a restored device recovers album names and labels rather than showing `Recovered album`.
 
-Not yet implemented: smart-album search across label levels, and the label rule (NFC, trim,
-1–256 bytes) on asset labels in `tags_user`, which still accept any string.
+Not yet implemented: smart-album search across label levels
+([#722](https://github.com/Capsulsaurus/Capsule/issues/722)), and the label rule (NFC, trim,
+1–256 bytes) on asset labels in `tags_user`, which still accept any string
+([#721](https://github.com/Capsulsaurus/Capsule/issues/721)).
 
 ## Culling
 

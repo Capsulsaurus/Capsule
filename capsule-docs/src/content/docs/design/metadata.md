@@ -141,7 +141,7 @@ When an asset crosses a trust boundary — a [share link](/design/share-links/) 
 
 Stripping applies to the exported copy only; the library sidecar is untouched. Syncing the same user's own devices is not a boundary crossing. Stripping is the **issuing client's** obligation (the server holds no key); the server's half is containment — a share serves only the content addresses its record enumerates.
 
-Not implemented: only the region row exists, as a per-export strip over the sidecar (`sidecar_for_export`) that no boundary crossing calls yet — a share record carries no sidecar. The rest of the client-side strip is tracked by #432; the external-backup crossing waits on a post-v1 client export command.
+Not implemented: only the region row exists, as a per-export strip over the sidecar (`sidecar_for_export`) that no boundary crossing calls yet — a share record carries no sidecar. The rest of the client-side strip is tracked by [#432](https://github.com/Capsulsaurus/Capsule/issues/432); the external-backup crossing waits on a post-v1 client export command.
 
 ## Collaborative Metadata
 
