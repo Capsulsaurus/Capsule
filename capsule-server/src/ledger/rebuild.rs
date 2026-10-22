@@ -243,7 +243,10 @@ impl RebuildReport {
 }
 
 /// The lifecycle action a retention purge is ledgered under (#767).
-const PURGE: &str = "purge";
+///
+/// One constant for the producer ([`crate::gc::purge_expired`]) and this replay, so the two
+/// cannot spell it differently.
+pub const PURGE: &str = "purge";
 
 /// Run one rebuild pass.
 ///

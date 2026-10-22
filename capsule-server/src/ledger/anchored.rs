@@ -10,14 +10,18 @@
 //!
 //! # Never extend a cut chain
 //!
-//! An adapter reads an owner's tail from disk once per process and extends what it found. After
+//! An adapter extends the tail it finds on disk, and it trusts that tail rather than the anchor.
+//! (The filesystem adapter re-reads it whenever another process, such as `purge --apply`, has
+//! appended since, which keeps a second writer on the chain but cannot see a cut one.) After
 //! a restart over a ledger that lost its tail at an entry boundary, it would append at a position
 //! the anchor already names, and the rewrite would bury the loss. So the first append per owner
 //! in a process first checks the ledger's links against the anchor, and refuses the write with
 //! [`LedgerError::Damaged`] while the ledger is behind it or disagrees with it. The refusal
 //! holds until a rebuild under `--apply` reports the loss and re-anchors; nothing is lost by
 //! refusing, and a write accepted onto the cut chain could not be told apart from a forgery.
-//! Once an owner passes, the adapter's own tail is authoritative for the life of the process.
+//! Once an owner passes, the adapter's tail is authoritative for the life of the process. Every
+//! process that appends checks on its own first append, the server's and an operator's purge
+//! alike. The anchor is raise-only, so their records may interleave.
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, PoisonError};

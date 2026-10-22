@@ -287,6 +287,18 @@ pub trait UploadSessionStore: std::fmt::Debug + Send + Sync {
     /// progress view rather than being evicted out from under itself.
     fn claim_finalize<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, FinalizeClaim>;
 
+    /// Every live session whose finalization is claimed — `WaitingForProcessing` — oldest first,
+    /// ties broken by upload id.
+    ///
+    /// The listing boot recovery reads (transfer upload design doc, the finalization claim): a
+    /// claim is held by a finalizer *in a process*, and the claim outlives the process in the
+    /// store, so a process that died between claiming and a terminal status leaves a session no
+    /// live finalizer is driving. Read before the listener accepts a request, every claim it
+    /// returns belongs to a process that is gone. A session reaching a terminal status, or being
+    /// discarded, leaves this listing in the same step. Adapters need a secondary index; scanning
+    /// is acceptable only in the in-memory double.
+    fn claimed(&self) -> StoreFuture<'_, Vec<UploadSessionRecord>>;
+
     /// Discard a session: its record, its accepted-chunk replay entries, and its place in
     /// both views, together. Returns the record that was removed, or `None`.
     fn discard<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, Option<UploadSessionRecord>>;

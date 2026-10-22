@@ -28,6 +28,7 @@ use thiserror::Error;
 use crate::crypto::primitives::DeviceTier;
 use crate::crypto::pwkdf::{self, WrappedSecret};
 use crate::crypto::{CryptoError, kdf, rng};
+use crate::library::KeyPinError;
 
 /// The backup artifact format version.
 ///
@@ -45,6 +46,10 @@ use crate::crypto::{CryptoError, kdf, rng};
 /// storage-attestation log, verbatim, as `receipts/{asset_id}` carries its receipt log (#747).
 /// Additive for the same reason: an older reader hash-checks it as a manifest entry and
 /// restores the asset without it.
+///
+/// Format 2 likewise carries an optional `library/attestation-keys.cbor` entry: the library's
+/// pinned attestation-key history, verbatim (#805). Additive again: an older reader hash-checks
+/// it and ignores it, and an artifact without it restores as before.
 pub const ARTIFACT_FORMAT_VERSION: u16 = 2;
 
 /// Errors from backup export/restore and recovery.
@@ -62,9 +67,44 @@ pub enum BackupError {
     /// The AMK ledger is missing an `amk_version` an included asset references.
     #[error("backup AMK ledger incomplete: missing {0}")]
     AmkIncomplete(String),
+    /// The artifact pins an attestation-key history for `origin` that diverges from the one the
+    /// target library pins: each holds a key the other lacks. Neither is overwritten, and the
+    /// restore is refused before it writes anything.
+    #[error(
+        "backup attestation-key pin for {origin} diverges from the library's: {only_carried} \
+         key(s) only in the backup, {only_local} only in the library"
+    )]
+    AttestationKeyPinsDiverge {
+        /// The canonical origin whose two pinned histories diverge.
+        origin: String,
+        /// How many keys only the artifact's pin holds.
+        only_carried: usize,
+        /// How many keys only the library's pin holds.
+        only_local: usize,
+    },
+    /// The artifact's pinned attestation-key history could not be read, decoded or restored.
+    #[error("backup attestation-key pin: {0}")]
+    AttestationKeyPins(String),
     /// Underlying cryptographic failure.
     #[error(transparent)]
     Crypto(#[from] CryptoError),
+}
+
+impl From<KeyPinError> for BackupError {
+    fn from(error: KeyPinError) -> Self {
+        match error {
+            KeyPinError::HistoriesDiverge {
+                origin,
+                only_carried,
+                only_local,
+            } => Self::AttestationKeyPinsDiverge {
+                origin,
+                only_carried,
+                only_local,
+            },
+            other => Self::AttestationKeyPins(other.to_string()),
+        }
+    }
 }
 
 // ── Master-key escrow ───────────────────────────────────────────────────────

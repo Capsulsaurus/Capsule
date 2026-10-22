@@ -105,7 +105,7 @@ Pending ─▶ Uploading ─▶ WaitingForProcessing ─▶ Completed
 | `WaitingForProcessing` | `Completed` | finalization succeeded |
 | `WaitingForProcessing` | `FailedProcessing` | hash, size or envelope failure |
 
-`WaitingForProcessing` is neither evictable nor cancellable. `FailedProcessing` removes the staged bytes and reservation and keeps the status record so a client whose ACK was lost can read the outcome. Session state lives in the session store (Valkey via `redis-rs`, or in-memory), never in PostgreSQL; see [Filesystem — Server](/design/filesystem/server/#required-services).
+`WaitingForProcessing` is neither evictable nor cancellable, and always reaches a terminal state ([Finalization and Integrity](#finalization-and-integrity)). `FailedProcessing` removes the staged bytes and reservation and keeps the status record so a client whose ACK was lost can read the outcome. Session state lives in the session store (Valkey via `redis-rs`, or in-memory), never in PostgreSQL; see [Filesystem — Server](/design/filesystem/server/#required-services).
 
 ## Session Lifetime and Discard
 
@@ -131,6 +131,8 @@ Order is the contract (`capsule-server::upload::finalize`):
 5. **Ledger** — append and fsync the [owner ledger](/design/filesystem/server/#the-owner-ledger) entry.
 6. **Record and receipt** — in **one** PostgreSQL transaction, write the blob's index rows (minting the asset's next sequence number) and sign and log the [custody receipt](/design/transfer/durability/#custody-receipts). Either both commit or neither does: there is never an indexed blob without a receipt or a receipt without custody. A failure fails the session; the committed blob is unreferenced and collectable, and a retry is idempotent: a retry of a write that already committed returns the receipt it already has. A `replace` member other than its manifest writes no index row, because the manifest applies the whole bundle, so its receipt is the transaction's only write.
 7. `Completed`.
+
+A claim is driven to `Completed` or `FailedProcessing` independent of the request that triggered it: a client that disconnects mid-finalize does not stop finalization. A claim whose process died is recovered on boot: before the listener accepts a request, the server lists every `WaitingForProcessing` session and drives each through the same steps. If the stage was already committed, the committed blob is re-hashed in place of the stage and step 4 is skipped; the later steps are idempotent. A claim with neither a stage nor a committed blob fails. There is no claim lease: one process serves a blob root, so every claim listed before it serves belongs to a process that is gone.
 
 The server can verify only ciphertext. The client verifies plaintext on download through STREAM's per-chunk tags. `Completed` is a one-time acknowledgement; standing durability is [`/storage/verify`](/design/transfer/durability/).
 

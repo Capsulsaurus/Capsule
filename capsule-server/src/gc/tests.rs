@@ -11,12 +11,35 @@ use capsule_core::crypto::hash::{Hash32, hash_bytes};
 
 use super::memory::InMemoryCollection;
 use super::*;
+use crate::attestation::{
+    AttestationContext, InMemoryReceipts, LocalAttestationKey, PublishedKey, ReceiptSigner as _,
+};
 use crate::blob::{BlobStore, InMemoryBlobStore};
 use crate::index::memory::InMemoryAssetIndex;
 use crate::index::{
     AssetIndex, BlobRecord, LifecycleOp, OpAction, OpOutcome, PendingAsset, Reservation,
 };
+use crate::ledger::replay::LedgerKeys;
+use crate::ledger::{InMemoryLedger, LedgerError, LedgerEvent, OwnerLedger};
 use crate::store::{AlbumId, BlobRole, Clock, OwnerId, SystemClock};
+
+/// The attestation key every harness signs its owner-ledger entries with.
+fn attestation_key() -> Arc<LocalAttestationKey> {
+    Arc::new(LocalAttestationKey::new(
+        "gc.test",
+        capsule_core::crypto::keys::HybridSigningKey::from_seed64(&[7; 64]),
+    ))
+}
+
+/// An attestation context appending to `ledger`.
+fn attestation_over(ledger: Arc<dyn OwnerLedger>) -> AttestationContext {
+    AttestationContext::new(
+        Arc::new(InMemoryReceipts::new()),
+        attestation_key(),
+        Timestamp::UNIX_EPOCH,
+    )
+    .with_ledger(ledger)
+}
 
 /// A test clock that starts at the epoch and moves when told.
 #[derive(Debug, Default)]
@@ -54,6 +77,10 @@ struct Harness {
     quotas: Arc<crate::quota::InMemoryQuota>,
     shares: Arc<crate::share::InMemoryShares>,
     clock: Arc<StepClock>,
+    /// The owner ledgers the purge appends to.
+    ledger: Arc<InMemoryLedger>,
+    /// Signs into [`Self::ledger`].
+    attestation: AttestationContext,
 }
 
 impl Harness {
@@ -64,6 +91,8 @@ impl Harness {
         let quotas = Arc::new(crate::quota::InMemoryQuota::new());
         let shares = Arc::new(crate::share::InMemoryShares::new());
         let clock = StepClock::new();
+        let ledger = Arc::new(InMemoryLedger::new());
+        let attestation = attestation_over(ledger.clone());
         let context = CollectionContext::new(
             index.clone(),
             blobs.clone(),
@@ -72,7 +101,8 @@ impl Harness {
             shares.clone(),
             clock.clone(),
             DEFAULT_GRACE_WINDOW,
-        );
+        )
+        .with_attestation(attestation.clone());
         Self {
             context,
             index,
@@ -81,7 +111,39 @@ impl Harness {
             quotas,
             shares,
             clock,
+            ledger,
+            attestation,
         }
+    }
+
+    /// A collector over these stores whose index is `index`, ledgering through `attestation`.
+    fn collector(
+        &self,
+        index: Arc<dyn AssetIndex>,
+        attestation: Option<AttestationContext>,
+    ) -> CollectionContext {
+        let context = CollectionContext::new(
+            index,
+            self.blobs.clone(),
+            self.marks.clone(),
+            self.quotas.clone(),
+            self.shares.clone(),
+            self.clock.clone(),
+            DEFAULT_GRACE_WINDOW,
+        );
+        match attestation {
+            Some(attestation) => context.with_attestation(attestation),
+            None => context,
+        }
+    }
+
+    /// The owner ledger of the harness's one owner, as appended so far.
+    async fn ledger_entries(&self) -> Vec<crate::ledger::LedgerEntry> {
+        self.ledger
+            .scan(&OwnerId::new("gc-owner"))
+            .await
+            .expect("the ledger scans")
+            .entries
     }
 
     /// Issue a link that serves `serves`, the first of them its metadata record.
@@ -752,6 +814,24 @@ struct RacesTheListing {
     inner: Arc<InMemoryAssetIndex>,
     restore: std::sync::Mutex<Option<LifecycleOp>>,
     dropped: Option<AssetId>,
+    /// When set, every `purge` call first records how many entries this owner ledger holds, so
+    /// a test can assert the purge entry was durable before the index was asked.
+    ledger: Option<Arc<InMemoryLedger>>,
+    /// The ledger lengths [`Self::ledger`] recorded, one per `purge` call.
+    ledger_at_purge: std::sync::Mutex<Vec<usize>>,
+}
+
+impl RacesTheListing {
+    /// An index that changes nothing between the listing and the purge.
+    fn new(inner: Arc<InMemoryAssetIndex>) -> Self {
+        Self {
+            inner,
+            restore: std::sync::Mutex::new(None),
+            dropped: None,
+            ledger: None,
+            ledger_at_purge: std::sync::Mutex::new(Vec::new()),
+        }
+    }
 }
 
 impl AssetIndex for RacesTheListing {
@@ -866,10 +946,24 @@ impl AssetIndex for RacesTheListing {
         asset: &'a AssetId,
         now: Timestamp,
     ) -> crate::index::IndexFuture<'a, crate::index::PurgeOutcome> {
-        if self.dropped.as_ref() == Some(asset) {
-            return Box::pin(async { Ok(crate::index::PurgeOutcome::Unknown) });
-        }
-        self.inner.purge(asset, now)
+        Box::pin(async move {
+            if let Some(ledger) = &self.ledger {
+                let held = ledger
+                    .scan(&OwnerId::new("gc-owner"))
+                    .await
+                    .expect("the ledger scans")
+                    .entries
+                    .len();
+                self.ledger_at_purge
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(held);
+            }
+            if self.dropped.as_ref() == Some(asset) {
+                return Ok(crate::index::PurgeOutcome::Unknown);
+            }
+            self.inner.purge(asset, now).await
+        })
     }
 
     fn feed_page<'a>(
@@ -969,20 +1063,12 @@ async fn a_restore_between_listing_and_purge_keeps_its_bytes() {
         retention_until: None,
         at: h.clock.now(),
     };
-    let racing = Arc::new(RacesTheListing {
-        inner: h.index.clone(),
-        restore: std::sync::Mutex::new(Some(restore)),
-        dropped: None,
-    });
-    let context = CollectionContext::new(
-        racing,
-        h.blobs.clone(),
-        h.marks.clone(),
-        h.quotas.clone(),
-        h.shares.clone(),
-        h.clock.clone(),
-        DEFAULT_GRACE_WINDOW,
-    );
+    let racing = Arc::new(RacesTheListing::new(h.index.clone()));
+    *racing
+        .restore
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(restore);
+    let context = h.collector(racing, Some(h.attestation.clone()));
 
     let report = purge_expired(&context, Mode::Apply, 10)
         .await
@@ -1028,19 +1114,10 @@ async fn a_listed_tombstone_whose_row_is_gone_at_purge_time_is_skipped() {
 
     let id = AssetId::new("vanished");
     let racing = Arc::new(RacesTheListing {
-        inner: h.index.clone(),
-        restore: std::sync::Mutex::new(None),
         dropped: Some(id.clone()),
+        ..RacesTheListing::new(h.index.clone())
     });
-    let context = CollectionContext::new(
-        racing,
-        h.blobs.clone(),
-        h.marks.clone(),
-        h.quotas.clone(),
-        h.shares.clone(),
-        h.clock.clone(),
-        DEFAULT_GRACE_WINDOW,
-    );
+    let context = h.collector(racing, Some(h.attestation.clone()));
 
     let report = purge_expired(&context, Mode::Apply, 10)
         .await
@@ -1183,4 +1260,248 @@ async fn the_upload_session_store_sweeps_through_its_pressure_listing() {
     let evictable = uploads.sweep_progress(clock.now()).await.expect("a sweep");
 
     assert_eq!(evictable, 3);
+}
+
+/// An owner ledger that refuses every append, as a full or unwritable blob root would.
+#[derive(Debug)]
+struct RefusingLedger;
+
+impl OwnerLedger for RefusingLedger {
+    fn append<'a>(
+        &'a self,
+        _owner: &'a OwnerId,
+        _event: LedgerEvent,
+        _recorded_at: Timestamp,
+        _signer: &'a dyn crate::attestation::ReceiptSigner,
+    ) -> crate::ledger::LedgerFuture<'a, crate::ledger::LedgerEntry> {
+        Box::pin(async {
+            Err(LedgerError::StorageFull {
+                operation: "append",
+            })
+        })
+    }
+
+    fn scan<'a>(
+        &'a self,
+        _owner: &'a OwnerId,
+    ) -> crate::ledger::LedgerFuture<'a, crate::ledger::LedgerScan> {
+        Box::pin(async {
+            Ok(crate::ledger::LedgerScan {
+                entries: Vec::new(),
+                damage: None,
+            })
+        })
+    }
+
+    fn owners(&self) -> crate::ledger::LedgerFuture<'_, Vec<OwnerId>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+}
+
+/// The purge entry `purge_expired` writes for `asset`.
+fn purge_event(asset: &str) -> LedgerEvent {
+    LedgerEvent::Lifecycle {
+        asset_id: asset.to_owned(),
+        action: PURGE_ACTION.to_owned(),
+        manifest_hash: None,
+        sync_seq: None,
+    }
+}
+
+#[tokio::test]
+async fn a_purge_appends_its_ledger_entry_before_the_index_write() {
+    // `design/filesystem/server.md`: an entry is appended **before** the index row commits, so a
+    // crash between the two leaves an entry without a row change, never the reverse.
+    let h = Harness::new();
+    h.publish("ledgered", b"purged under a signed floor").await;
+    h.delete("ledgered", Some(Timestamp::UNIX_EPOCH), 1).await;
+    h.clock.advance(days(1));
+
+    let observed = Arc::new(RacesTheListing {
+        ledger: Some(h.ledger.clone()),
+        ..RacesTheListing::new(h.index.clone())
+    });
+    let context = h.collector(observed.clone(), Some(h.attestation.clone()));
+    let report = purge_expired(&context, Mode::Apply, 10)
+        .await
+        .expect("a pass");
+    assert_eq!(report.purged, vec![AssetId::new("ledgered")]);
+
+    let entries = h.ledger_entries().await;
+    assert_eq!(entries.len(), 1, "one purge, one entry");
+    assert_eq!(entries[0].core.event, purge_event("ledgered"));
+    assert_eq!(entries[0].core.recorded_at, h.clock.now().to_string());
+    assert_eq!(
+        *observed
+            .ledger_at_purge
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        vec![1],
+        "the purge entry was durable when the index was asked to purge"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_ledger_append_leaves_the_tombstones_blobs_referenced() {
+    let h = Harness::new();
+    let held = h.publish("unledgered", b"the ledger is full").await;
+    h.delete("unledgered", Some(Timestamp::UNIX_EPOCH), 1).await;
+    h.clock.advance(days(1));
+
+    let refusing = h.collector(
+        h.index.clone(),
+        Some(attestation_over(Arc::new(RefusingLedger))),
+    );
+    let report = purge_expired(&refusing, Mode::Apply, 10)
+        .await
+        .expect("a failed append skips the asset rather than failing the pass");
+    let id = AssetId::new("unledgered");
+    assert!(report.purged.is_empty(), "{report:?}");
+    assert_eq!(report.unrecorded, vec![id.clone()], "counted in the report");
+
+    let row = h.index.read(&id).await.expect("read").expect("row");
+    assert_eq!(row.state, crate::index::AssetState::Tombstoned);
+    assert!(
+        row.blobs.iter().any(|blob| blob.address == held),
+        "a purge the ledger does not hold is not applied"
+    );
+
+    // Two collection passes a grace window apart: a dropped reference would be swept.
+    collect(&h.context, Mode::Apply).await.expect("a pass");
+    h.clock.advance(days(2));
+    let report = collect(&h.context, Mode::Apply).await.expect("a pass");
+    assert!(!report.swept.contains(&held), "{report:?}");
+
+    // The next pass, with a ledger that answers, purges it.
+    let report = purge_expired(&h.context, Mode::Apply, 10)
+        .await
+        .expect("a pass");
+    assert_eq!(report.purged, vec![id]);
+    assert!(report.unrecorded.is_empty());
+}
+
+#[tokio::test]
+async fn the_owners_chain_verifies_after_a_delete_followed_by_a_purge() {
+    let h = Harness::new();
+    h.publish("chained", b"deleted, then purged").await;
+    // The delete's entry, appended as the lifecycle route appends it before the index call.
+    h.attestation
+        .append_to_ledger(
+            &OwnerId::new("gc-owner"),
+            LedgerEvent::Lifecycle {
+                asset_id: "chained".to_owned(),
+                action: OpAction::Delete.as_str().to_owned(),
+                manifest_hash: Some(Hash32([1; 32])),
+                sync_seq: None,
+            },
+            h.clock.now(),
+        )
+        .await
+        .expect("the delete is ledgered");
+    h.delete("chained", Some(Timestamp::UNIX_EPOCH), 1).await;
+    h.clock.advance(days(1));
+
+    let report = purge_expired(&h.context, Mode::Apply, 10)
+        .await
+        .expect("a pass");
+    assert_eq!(report.purged, vec![AssetId::new("chained")]);
+
+    let owner = OwnerId::new("gc-owner");
+    let scan = h.ledger.scan(&owner).await.expect("the ledger scans");
+    let key = attestation_key();
+    let keys = LedgerKeys::new(vec![PublishedKey {
+        key_id: key.key_id(),
+        public: key.verifying_key(),
+        active_from: Timestamp::UNIX_EPOCH,
+        active_to: None,
+    }]);
+    let chain = keys.verify(&owner, &scan, None);
+    assert_eq!(chain.fault, None, "{chain:?}");
+    assert_eq!(chain.verified, 2, "the delete and the purge both verify");
+    assert_eq!(scan.entries[1].core.event, purge_event("chained"));
+
+    // Replay reads the purge as a lifecycle op of its own, which rebuild empties the tombstone
+    // for.
+    let ops = crate::ledger::replay::lifecycle(&scan.entries);
+    assert_eq!(
+        ops.iter().map(|op| op.action.as_str()).collect::<Vec<_>>(),
+        vec![OpAction::Delete.as_str(), PURGE_ACTION]
+    );
+}
+
+#[tokio::test]
+async fn a_purge_the_index_no_longer_allows_gets_no_resolving_entry() {
+    // The decision #767 records: the purge entry is not followed by a resolving one when the
+    // index's re-check keeps the row, because rebuild re-checks the replayed state and empties
+    // only a tombstone.
+    let h = Harness::new();
+    h.publish("vanished", b"its row went before the purge")
+        .await;
+    h.delete("vanished", Some(Timestamp::UNIX_EPOCH), 1).await;
+    h.clock.advance(days(1));
+
+    let id = AssetId::new("vanished");
+    let racing = Arc::new(RacesTheListing {
+        dropped: Some(id.clone()),
+        ..RacesTheListing::new(h.index.clone())
+    });
+    let context = h.collector(racing, Some(h.attestation.clone()));
+    let report = purge_expired(&context, Mode::Apply, 10)
+        .await
+        .expect("a pass");
+    assert_eq!(report.skipped, vec![id]);
+
+    let entries = h.ledger_entries().await;
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry.core.event.clone())
+            .collect::<Vec<_>>(),
+        vec![purge_event("vanished")]
+    );
+}
+
+#[tokio::test]
+async fn an_applied_purge_without_an_attestation_context_is_refused_before_it_lists() {
+    let h = Harness::new();
+    let held = h.publish("unsigned", b"no key on this host").await;
+    h.delete("unsigned", Some(Timestamp::UNIX_EPOCH), 1).await;
+    h.clock.advance(days(1));
+
+    let keyless = h.collector(h.index.clone(), None);
+    let error = purge_expired(&keyless, Mode::Apply, 10)
+        .await
+        .expect_err("a purge no ledger can record is not applied");
+    assert!(
+        error.to_string().contains("ATTESTATION_KEY_SEED"),
+        "{error}"
+    );
+
+    let row = h
+        .index
+        .read(&AssetId::new("unsigned"))
+        .await
+        .expect("read")
+        .expect("row");
+    assert!(row.blobs.iter().any(|blob| blob.address == held));
+
+    // A dry run writes nothing, so it needs no key.
+    let report = purge_expired(&keyless, Mode::DryRun, 10)
+        .await
+        .expect("a dry run");
+    assert_eq!(report.purged, vec![AssetId::new("unsigned")]);
+    assert!(h.ledger_entries().await.is_empty());
+}
+
+#[tokio::test]
+async fn a_purge_dry_run_appends_nothing_to_the_ledger() {
+    let h = Harness::new();
+    h.publish("preview", b"a purge preview").await;
+    h.delete("preview", Some(Timestamp::UNIX_EPOCH), 1).await;
+    h.clock.advance(days(1));
+
+    purge_expired(&h.context, Mode::DryRun, 10)
+        .await
+        .expect("a pass");
+    assert!(h.ledger_entries().await.is_empty());
 }

@@ -56,6 +56,15 @@ every boot and at least every 24 h, never a handle, device name or model. Same-u
 established inside the channel; no answer means silent fallback to the server. Handshake
 attempts are rate-limited per source address, so the LAN cannot probe a device for membership.
 
+The limiter tracks a bounded number of source addresses. A new source that finds the table full
+of live ones **evicts the least recently active source**; it is never refused. The limiter keys
+on the **full address**, not a prefix: on a LAN every IPv6 peer shares the link's /64 (and every
+link-local peer shares `fe80::/64`), so keying by prefix would let one host exhaust the budget of
+every peer on the link. The trade-off is that a host holding more addresses than the table
+tracks can flush the oldest entries, resetting their budgets. That weakens the rate limit only
+for a host that already gets a fresh budget with every new address it uses, and it never locks
+a peer out.
+
 The live mDNS responder ships behind the `Discovery` seam, tested in process.
 
 ## Establishing the Channel
@@ -153,7 +162,8 @@ Deadlines use monotonic time, so clock skew between devices changes nothing.
 
 - **Advertisement (unit):** no handle, device name or model; rotates per boot and per 24 h.
 - **Handshake (unit):** same-IK succeeds; revoked device, foreign IK and a rolled-back
-  directory fail; handshake rate limit holds.
+  directory fail; handshake rate limit holds; a table full of live sources, even one prefix's
+  worth, still admits a new peer.
 - **Version window (unit):** overlapping windows pick the highest common version; disjoint
   windows refuse with the typed error.
 - **Delta (unit):** complement of two address sets; offers are padded and capped.

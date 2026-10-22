@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use capsule_core::crypto::keys::HybridSigningKey;
 
 use super::conformance::{self, Harness};
@@ -212,6 +214,94 @@ async fn a_reopened_ledger_continues_the_chain_it_finds_on_disk() {
         [owner],
         "the owner listing reads the directory"
     );
+}
+
+/// Two adapters on one blob root, as the server and a `purge --apply` run from cron are (#767):
+/// each holds its own in-process lock and cached tail, so only the cross-process lock and the
+/// on-disk re-check keep them on one chain.
+async fn two_writers(
+    segment_bytes: u64,
+) -> (tempfile::TempDir, FilesystemLedger, FilesystemLedger) {
+    let root = tempfile::tempdir().expect("a temporary directory");
+    let server = FilesystemLedger::with_segment_bytes(root.path(), segment_bytes)
+        .await
+        .expect("open");
+    let purge = FilesystemLedger::with_segment_bytes(root.path(), segment_bytes)
+        .await
+        .expect("open a second time");
+    (root, server, purge)
+}
+
+/// `owner`'s chain verifies end to end under `signer`, holding `expected` entries.
+async fn assert_one_chain(
+    ledger: &FilesystemLedger,
+    owner: &OwnerId,
+    signer: &LocalAttestationKey,
+    expected: usize,
+) {
+    let scan = ledger.scan(owner).await.expect("scan");
+    assert_eq!(scan.damage, None, "nothing torn or cut");
+    let report = verify_chain(
+        owner,
+        &scan,
+        &|id| (*id == signer.key_id()).then(|| signer.verifying_key()),
+        None,
+    );
+    assert_eq!(report.fault, None, "one chain, not two forks");
+    assert_eq!(report.verified, expected);
+    let seqs: Vec<u64> = scan.entries.iter().map(|entry| entry.core.seq).collect();
+    assert_eq!(seqs, (1..=expected as u64).collect::<Vec<_>>());
+}
+
+#[tokio::test]
+async fn two_adapters_on_one_root_appending_alternately_keep_one_chain() {
+    for segment_bytes in [fs::DEFAULT_SEGMENT_BYTES, 1] {
+        let (_root, server, purge) = two_writers(segment_bytes).await;
+        let signer = key();
+        let owner = OwnerId::new("shared-root");
+        for tag in 1..=6 {
+            let writer = if tag % 2 == 1 { &server } else { &purge };
+            let entry = writer
+                .append(&owner, event(tag), Timestamp::UNIX_EPOCH, &signer)
+                .await
+                .expect("append");
+            assert_eq!(
+                entry.core.seq, tag,
+                "each writer sees the other's append before taking a position"
+            );
+        }
+        assert_one_chain(&server, &owner, &signer, 6).await;
+        assert_one_chain(&purge, &owner, &signer, 6).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_adapters_on_one_root_appending_concurrently_keep_one_chain() {
+    let (_root, server, purge) = two_writers(fs::DEFAULT_SEGMENT_BYTES).await;
+    let server = Arc::new(server);
+    let purge = Arc::new(purge);
+    let signer = Arc::new(key());
+    let owner = OwnerId::new("shared-root");
+    let mut tasks = Vec::new();
+    for tag in 1..=40_u64 {
+        let writer = if tag % 2 == 1 {
+            server.clone()
+        } else {
+            purge.clone()
+        };
+        let signer = signer.clone();
+        let owner = owner.clone();
+        tasks.push(tokio::spawn(async move {
+            writer
+                .append(&owner, event(tag), Timestamp::UNIX_EPOCH, signer.as_ref())
+                .await
+                .expect("append")
+        }));
+    }
+    for task in tasks {
+        task.await.expect("the task ran");
+    }
+    assert_one_chain(&server, &owner, &signer, 40).await;
 }
 
 #[tokio::test]
