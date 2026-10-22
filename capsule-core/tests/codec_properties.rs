@@ -87,14 +87,47 @@ fn value() -> impl Strategy<Value = Value> {
         prop_oneof![
             proptest::collection::vec(inner.clone(), 0..6).prop_map(Value::Array),
             proptest::collection::vec((key, inner.clone()), 0..6).prop_map(unique_keys),
-            // Tags 2 and 3 (bignums) are left out until #749: the encoder writes a bignum tag
-            // verbatim, and decoding it back yields a plain integer, so canonicalization is not
-            // yet a fixed point on them. #749 restores them here.
             (0u64..64, inner)
-                .prop_filter("bignum tags wait on #749", |(tag, _)| !matches!(tag, 2 | 3))
-                .prop_map(|(tag, v)| Value::Tag(tag, Box::new(v))),
+                .prop_map(|(tag, v)| Value::Tag(tag, Box::new(v)))
+                .prop_filter("decodable bignum", readable),
+            bignum(),
         ]
     })
+}
+
+/// A bignum (tag 2 or 3 over a byte string), with leading zero bytes and magnitudes on
+/// either side of the 64-bit and 128-bit boundaries, so the preferred-form rules all run.
+///
+/// The one value left out is a negative bignum below `-2^127` (a 16-byte magnitude with its
+/// top bit set): the decoder refuses it, so it has no canonical form to be a fixed point of,
+/// and `canonicalize` refuses it on the way in (pinned by the `cbor` unit tests).
+fn bignum() -> impl Strategy<Value = Value> {
+    (
+        2u64..=3,
+        0usize..3,
+        proptest::collection::vec(any::<u8>(), 0..20),
+    )
+        .prop_map(|(tag, zeros, magnitude)| {
+            let mut bytes = vec![0u8; zeros];
+            bytes.extend(magnitude);
+            Value::Tag(tag, Box::new(Value::Bytes(bytes)))
+        })
+        .prop_filter("decodable bignum", readable)
+}
+
+/// Whether `v` is anything but a negative bignum below `-2^127`, the one value with no
+/// canonical form the decoder reads back.
+fn readable(v: &Value) -> bool {
+    match v {
+        Value::Tag(3, inner) => match &**inner {
+            Value::Bytes(b) => {
+                let significant: Vec<u8> = b.iter().copied().skip_while(|&b| b == 0).collect();
+                !(significant.len() == 16 && significant[0] & 0x80 != 0)
+            }
+            _ => true,
+        },
+        _ => true,
+    }
 }
 
 /// A map from generated entries, keeping the first entry per key: a CBOR map with a repeated
