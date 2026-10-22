@@ -1009,6 +1009,338 @@ async fn ffi_fetch_blob_to_path_keeps_a_failing_refresh_transient() {
     assert!(!path.exists());
 }
 
+// ─── Bounded-memory apply and open of a synced original ─────────────────────
+
+/// Heap accounting for the bounded-memory tests: every allocation and free made **on the
+/// calling thread** is tallied, so a test reads its own peak without interference from the
+/// tests running beside it. It wraps the system allocator and changes nothing else.
+mod heap {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    struct Counting;
+
+    thread_local! {
+        static LIVE: Cell<isize> = const { Cell::new(0) };
+        static PEAK: Cell<isize> = const { Cell::new(0) };
+    }
+
+    fn track(delta: isize) {
+        // `try_with`: an allocation during thread teardown must not panic.
+        let _ = LIVE.try_with(|live| {
+            let now = live.get() + delta;
+            live.set(now);
+            let _ = PEAK.try_with(|peak| peak.set(peak.get().max(now)));
+        });
+    }
+
+    // SAFETY: every method delegates to `System` with the caller's own arguments and only adds
+    // thread-local bookkeeping, so `System`'s guarantees pass through unchanged.
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            // SAFETY: forwarded verbatim; the caller upholds `alloc`'s contract.
+            let ptr = unsafe { System.alloc(layout) };
+            if !ptr.is_null() {
+                track(layout.size() as isize);
+            }
+            ptr
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            // SAFETY: forwarded verbatim; the caller upholds `dealloc`'s contract.
+            unsafe { System.dealloc(ptr, layout) };
+            track(-(layout.size() as isize));
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            // SAFETY: forwarded verbatim; the caller upholds `realloc`'s contract.
+            let new = unsafe { System.realloc(ptr, layout, new_size) };
+            if !new.is_null() {
+                track(new_size as isize - layout.size() as isize);
+            }
+            new
+        }
+    }
+
+    #[global_allocator]
+    static COUNTING: Counting = Counting;
+
+    /// Run `f` and return its result with the peak heap it grew this thread by, in bytes.
+    pub(super) fn peak_during<T>(f: impl FnOnce() -> T) -> (T, usize) {
+        let base = LIVE.with(Cell::get);
+        PEAK.with(|peak| peak.set(base));
+        let out = f();
+        let peak = PEAK.with(Cell::get);
+        (out, usize::try_from(peak - base).unwrap_or(0))
+    }
+}
+
+/// A sealed asset's feed head and the path of its original ciphertext, written to `dir` as
+/// `fetch_blob_to_path` would have left it. The in-memory copy is dropped before returning.
+struct SyncedOriginal {
+    asset: String,
+    head: FfiSyncHead,
+    ciphertext_path: std::path::PathBuf,
+    ciphertext_len: usize,
+}
+
+fn synced_original(
+    workspace: &FfiWorkspace,
+    album: &str,
+    plaintext: Vec<u8>,
+    dir: &std::path::Path,
+) -> SyncedOriginal {
+    let asset = workspace
+        .seal_asset(album.to_string(), "VID_0042.JPG".into(), plaintext)
+        .unwrap();
+    let mut blobs = workspace.upload_blobs(asset.clone()).unwrap();
+    assert_eq!(
+        blobs.iter().map(|b| b.tier.as_str()).collect::<Vec<_>>(),
+        vec!["index", "index", "original"]
+    );
+    let original = blobs.pop().unwrap();
+    let ciphertext_path = dir.join(format!("{}.blob", original.hash));
+    std::fs::write(&ciphertext_path, &original.bytes).unwrap();
+    SyncedOriginal {
+        head: FfiSyncHead {
+            album_id: uuid::Uuid::parse_str(album).unwrap().as_bytes().to_vec(),
+            manifest_cbor: workspace.provenance_head(asset.clone()).unwrap(),
+            metadata_blob: blobs[1].bytes.clone(),
+            local_chain_head: None,
+        },
+        asset,
+        ciphertext_path,
+        ciphertext_len: original.bytes.len(),
+    }
+}
+
+fn path_string(path: &std::path::Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+/// The names in `dir`, sorted.
+fn dir_names(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+/// **The bounded-memory apply and open.** An original many STREAM chunks and read windows long
+/// is applied and opened from its ciphertext file holding a few chunks of it: the peak heap of
+/// each verb stays under a ceiling that is a fraction of the smaller original, and the larger
+/// original's peak is the smaller's within one chunk, so buffering does not grow with the
+/// original. The opened file is the original byte for byte, the apply's facts are
+/// `apply_sync_entry`'s, and no staging file is left behind.
+#[test]
+fn ffi_apply_and_open_a_synced_original_from_disk_in_bounded_memory() {
+    use capsule_core::crypto::encryption::CIPHERTEXT_CHUNK;
+    const CEILING: usize = 512 * 1024;
+    const SMALL: usize = 2 * 1024 * 1024;
+    const LARGE: usize = 6 * 1024 * 1024;
+
+    let lib = tempfile::TempDir::new().unwrap();
+    let blobs = tempfile::TempDir::new().unwrap();
+    let out = tempfile::TempDir::new().unwrap();
+    let workspace = enroll(lib.path());
+    let album = workspace
+        .ensure_album(workspace.default_album_id().unwrap(), "Camera Roll".into())
+        .unwrap();
+
+    let mut peaks = Vec::new();
+    let mut opened_names = Vec::new();
+    for len in [SMALL, LARGE] {
+        let synced = synced_original(&workspace, &album, original_plaintext(len), blobs.path());
+        assert!(
+            synced.ciphertext_len > 4 * CEILING,
+            "the original dwarfs the ceiling, which is itself several STREAM chunks and read \
+             windows"
+        );
+        const { assert!(CEILING > 4 * CIPHERTEXT_CHUNK) };
+        let destination = out.path().join(format!("{}.jpg", synced.asset));
+        // The control: the meter sees a whole-original buffer, so a verb's low peak is real.
+        let (_, whole) = heap::peak_during(|| std::fs::read(&synced.ciphertext_path).unwrap());
+        assert!(whole >= synced.ciphertext_len, "the heap meter counts");
+
+        let (applied, apply_peak) = heap::peak_during(|| {
+            workspace.apply_sync_entry_from_file(
+                synced.head.clone(),
+                path_string(&synced.ciphertext_path),
+            )
+        });
+        let facts = match applied.unwrap() {
+            FfiSyncApplyOutcome::Applied { facts } => facts,
+            other => panic!("expected the entry to apply, got {other:?}"),
+        };
+        assert_eq!(facts.asset_id, synced.asset);
+        assert_eq!(facts.plaintext_size, len as u64);
+
+        let (opened, open_peak) = heap::peak_during(|| {
+            workspace.open_synced_original(
+                synced.head.clone(),
+                path_string(&synced.ciphertext_path),
+                path_string(&destination),
+            )
+        });
+        match opened.unwrap() {
+            FfiOpenedOriginal::Opened { facts: opened } => {
+                assert_eq!(opened.asset_id, synced.asset);
+                assert_eq!(opened.provenance_head, facts.provenance_head);
+            }
+            other => panic!("expected the original to open, got {other:?}"),
+        }
+        assert_eq!(
+            std::fs::read(&destination).unwrap(),
+            workspace.read_plaintext(synced.asset.clone()).unwrap(),
+            "the destination holds the original byte for byte"
+        );
+
+        for (verb, peak) in [("apply", apply_peak), ("open", open_peak)] {
+            assert!(
+                peak < CEILING,
+                "{verb} peaked at {peak} B, over the {CEILING} B ceiling, for a {} B original",
+                synced.ciphertext_len
+            );
+        }
+        peaks.push((apply_peak, open_peak));
+        opened_names.push(format!("{}.jpg", synced.asset));
+    }
+    let [(small_apply, small_open), (large_apply, large_open)] = peaks[..] else {
+        panic!("two sizes measured");
+    };
+    assert!(
+        large_apply <= small_apply + CIPHERTEXT_CHUNK
+            && large_open <= small_open + CIPHERTEXT_CHUNK,
+        "buffering grew with the original: apply {small_apply} -> {large_apply} B, open \
+         {small_open} -> {large_open} B"
+    );
+    opened_names.sort();
+    assert_eq!(
+        dir_names(out.path()),
+        opened_names,
+        "only the opened originals are left"
+    );
+}
+
+/// A tampered ciphertext file quarantines with the code `apply_sync_entry` gives the same
+/// bytes, through both verbs, and the open leaves nothing at the destination — not a partial
+/// original, not a staging file, and not a change to a file already there.
+#[test]
+fn ffi_a_tampered_ciphertext_file_quarantines_and_places_nothing() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let blobs = tempfile::TempDir::new().unwrap();
+    let out = tempfile::TempDir::new().unwrap();
+    let workspace = enroll(lib.path());
+    let album = workspace.create_album("Trip".into()).unwrap();
+    let synced = synced_original(
+        &workspace,
+        &album,
+        original_plaintext(300 * 1024),
+        blobs.path(),
+    );
+    let mut ciphertext = std::fs::read(&synced.ciphertext_path).unwrap();
+    // Past the first chunk, so the decryptor has already written plaintext when it fails.
+    let at = ciphertext.len() - 10;
+    ciphertext[at] ^= 0xFF;
+    std::fs::write(&synced.ciphertext_path, &ciphertext).unwrap();
+
+    let in_memory = workspace
+        .apply_sync_entry(FfiSyncEntry {
+            album_id: synced.head.album_id.clone(),
+            manifest_cbor: synced.head.manifest_cbor.clone(),
+            metadata_blob: synced.head.metadata_blob.clone(),
+            original_ciphertext: ciphertext,
+            local_chain_head: None,
+        })
+        .unwrap();
+    let FfiSyncApplyOutcome::Quarantined {
+        reason: expected, ..
+    } = in_memory
+    else {
+        panic!("expected apply_sync_entry to quarantine, got {in_memory:?}");
+    };
+    assert_eq!(expected, "Rejected.CiphertextHashMismatch");
+
+    match workspace
+        .apply_sync_entry_from_file(synced.head.clone(), path_string(&synced.ciphertext_path))
+        .unwrap()
+    {
+        FfiSyncApplyOutcome::Quarantined { reason, .. } => assert_eq!(reason, expected),
+        other => panic!("expected a quarantine, got {other:?}"),
+    }
+
+    let fresh = out.path().join("fresh.jpg");
+    let existing = out.path().join("existing.jpg");
+    std::fs::write(&existing, b"what the app already had").unwrap();
+    for destination in [&fresh, &existing] {
+        match workspace
+            .open_synced_original(
+                synced.head.clone(),
+                path_string(&synced.ciphertext_path),
+                path_string(destination),
+            )
+            .unwrap()
+        {
+            FfiOpenedOriginal::Refused {
+                outcome: FfiSyncApplyOutcome::Quarantined { reason, .. },
+            } => assert_eq!(reason, expected),
+            other => panic!("expected a quarantine, got {other:?}"),
+        }
+    }
+    assert!(!fresh.exists(), "nothing is placed at the destination");
+    assert_eq!(
+        std::fs::read(&existing).unwrap(),
+        b"what the app already had",
+        "a refused original replaces nothing"
+    );
+    assert_eq!(
+        dir_names(out.path()),
+        vec!["existing.jpg".to_string()],
+        "no staging file is left behind"
+    );
+}
+
+/// The verbs refuse what they cannot act on as typed errors: a missing ciphertext file, a
+/// destination that names no file, and a malformed provenance head.
+#[test]
+fn ffi_apply_and_open_from_disk_surface_bad_arguments_as_errors() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let blobs = tempfile::TempDir::new().unwrap();
+    let workspace = enroll(lib.path());
+    let album = workspace.create_album("Trip".into()).unwrap();
+    let synced = synced_original(&workspace, &album, original_plaintext(1024), blobs.path());
+    let missing = path_string(&blobs.path().join("missing.blob"));
+    let ciphertext = path_string(&synced.ciphertext_path);
+
+    match workspace.apply_sync_entry_from_file(synced.head.clone(), missing.clone()) {
+        Err(FfiError::Workspace { message }) => assert!(message.contains("missing.blob")),
+        other => panic!("expected a workspace error, got {other:?}"),
+    }
+    match workspace.open_synced_original(
+        synced.head.clone(),
+        missing,
+        path_string(&blobs.path().join("out.jpg")),
+    ) {
+        Err(FfiError::Workspace { .. }) => {}
+        other => panic!("expected a workspace error, got {other:?}"),
+    }
+    match workspace.open_synced_original(synced.head.clone(), ciphertext.clone(), "/".into()) {
+        Err(FfiError::InvalidArgument { .. }) => {}
+        other => panic!("expected InvalidArgument, got {other:?}"),
+    }
+    let bad_head = FfiSyncHead {
+        local_chain_head: Some(vec![0; 31]),
+        ..synced.head
+    };
+    match workspace.apply_sync_entry_from_file(bad_head, ciphertext) {
+        Err(FfiError::InvalidArgument { .. }) => {}
+        other => panic!("expected InvalidArgument, got {other:?}"),
+    }
+    assert!(!blobs.path().join("out.jpg").exists());
+}
+
 /// Escrow put/get and device-directory publish, through the session handle. The
 /// workspace mints both documents (the master key and the identity key never cross the
 /// boundary); the session only ever carries opaque bytes.
