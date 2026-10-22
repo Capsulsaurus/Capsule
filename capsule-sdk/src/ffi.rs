@@ -42,7 +42,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use capsule_core::import::UploadPolicy;
-use capsule_core::lifecycle::LifecycleError;
+use capsule_core::lifecycle::{LifecycleError, UploadBundle};
 use secrecy::{ExposeSecret as _, SecretString};
 
 use crate::auth::{AuthClient, AuthError, LoginOutcome, Session};
@@ -246,7 +246,7 @@ impl From<PushError> for FfiError {
     fn from(err: PushError) -> Self {
         // A transfer failure keeps the upload mapping (and with it the auth identity of a
         // refused credential); everything else a push can say is an upload-flow failure.
-        if let PushError::Upload(upload) = err {
+        if let PushError::Upload(upload) | PushError::CreateRefused { source: upload, .. } = err {
             return upload.into();
         }
         Self::Upload {
@@ -922,28 +922,32 @@ impl FfiSession {
     /// Every blob is driven; one the server already holds answers `duplicate_blob` and comes
     /// back [`FfiUploadOutcome::AlreadyStored`], so pushing twice is safe. The album must
     /// already be provisioned on the server.
+    ///
+    /// **A create the server refused is re-sealed and retried once** (issue #822). When the
+    /// album's epoch moved past the one the asset was sealed under, the server refuses its
+    /// create for good; if this device holds a newer epoch, the asset is re-sealed at it
+    /// (`Workspace::reseal_create`) and pushed again, once. A second refusal fails the push.
+    /// When this device holds no newer epoch — another device rotated the album and its key has
+    /// not reached this one — the push fails with [`FfiError::Upload`] carrying the server's
+    /// code and a detail saying so; the asset stays local and pushes once the key arrives.
     pub async fn push_asset(
         &self,
         workspace: Arc<FfiWorkspace>,
         asset_id: String,
     ) -> Result<FfiPushReport, FfiError> {
         let bundle = workspace.bundle(&asset_id)?;
-        tracing::info!(
+        let refused = match self.push_bundle(&bundle).await {
+            Err(PushError::CreateRefused { source, .. }) => source,
+            other => return Ok(other?.into()),
+        };
+        tracing::warn!(
             asset_id = %bundle.asset_id,
-            original_bytes = bundle.original.size(),
-            "ffi: pushing a sealed asset"
+            amk_version = bundle.amk_version,
+            "ffi: the server refused this create; re-sealing it at the album's current epoch"
         );
-        // Eager, unmetered ordering: the policy `upload` callers have always had. A
-        // connection class from the app would plug in here.
-        let scheduler = StagedScheduler::new(UploadPolicy::Full, ConnectionClass::Unmetered);
-        let report = crate::push::push_bundle(
-            &self.upload_client(),
-            &scheduler,
-            &bundle,
-            &HashSet::<String>::new(),
-            false,
-        )
-        .await?;
+        workspace.reseal(&bundle.asset_id, &refused)?;
+        let resealed = workspace.bundle(&asset_id)?;
+        let report = self.push_bundle(&resealed).await?;
         Ok(report.into())
     }
 
@@ -1121,6 +1125,27 @@ impl FfiSession {
             self.protocol_version.clone(),
         );
         UploadClient::new(transport)
+    }
+
+    /// Drive one bundle's ladder. The workspace lock is not held: the bundle is owned.
+    async fn push_bundle(&self, bundle: &UploadBundle) -> Result<AssetPushReport, PushError> {
+        tracing::info!(
+            asset_id = %bundle.asset_id,
+            amk_version = bundle.amk_version,
+            original_bytes = bundle.original.size(),
+            "ffi: pushing a sealed asset"
+        );
+        // Eager, unmetered ordering: the policy `upload` callers have always had. A
+        // connection class from the app would plug in here.
+        let scheduler = StagedScheduler::new(UploadPolicy::Full, ConnectionClass::Unmetered);
+        crate::push::push_bundle(
+            &self.upload_client(),
+            &scheduler,
+            bundle,
+            &HashSet::<String>::new(),
+            false,
+        )
+        .await
     }
 }
 

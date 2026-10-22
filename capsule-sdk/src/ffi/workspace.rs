@@ -51,6 +51,7 @@ use capsule_core::sidecar::SidecarV1;
 use uuid::Uuid;
 
 use super::{FfiError, FfiUploadRequest};
+use crate::upload::UploadError;
 
 // ─── Hardware-signer seam (this namespace's declaration of core's contract) ───
 
@@ -693,6 +694,39 @@ impl FfiWorkspace {
     pub(super) fn bundle(&self, asset_id: &str) -> Result<UploadBundle, FfiError> {
         let asset_id = parse_uuid("asset_id", asset_id)?;
         self.with(|ws| Ok(ws.upload_bundle(&asset_id)?))
+    }
+
+    /// Re-seal a create the server `refused` at the album's current epoch, under the lock
+    /// (issue #822).
+    ///
+    /// A re-seal that cannot happen is reported as the push failure it is: an
+    /// [`FfiError::Upload`] carrying the server's code, with a detail naming why the asset
+    /// cannot be re-sealed — most often that this device holds no newer album key than the one
+    /// the asset is sealed under, which only the key reaching this device can fix.
+    pub(super) fn reseal(&self, asset_id: &Uuid, refused: &UploadError) -> Result<(), FfiError> {
+        self.with(|ws| match ws.reseal_create(asset_id) {
+            Ok(outcome) => {
+                tracing::info!(
+                    asset_id = %asset_id,
+                    from_epoch = outcome.from_epoch,
+                    to_epoch = outcome.to_epoch,
+                    derivatives = outcome.derivatives,
+                    "ffi: refused create re-sealed at the album's current epoch"
+                );
+                Ok(())
+            }
+            Err(error) => {
+                tracing::warn!(asset_id = %asset_id, %error, "ffi: the refused create cannot be re-sealed");
+                let code = match refused {
+                    UploadError::Rejected { code, .. } => code.clone(),
+                    _ => None,
+                };
+                Err(FfiError::Upload {
+                    code,
+                    message: format!("the server refused this create ({refused}); {error}"),
+                })
+            }
+        })
     }
 }
 
