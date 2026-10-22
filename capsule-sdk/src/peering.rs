@@ -17,6 +17,8 @@
 //!   proves only classical possession; the **hybrid** identity check (that the peer chains to
 //!   the shared User IK exactly as published in the [device directory]) rides *above* the
 //!   channel, before any payload byte, bound to the session via the RFC 5705 TLS exporter.
+//! - [`session`] — the directory anti-rollback floor, the per-source handshake rate limit, and
+//!   the per-request revocation check that quarantines deliveries made after a revocation.
 //! - [`delta`] — "what's missing" is the complement of two content-address sets, reusing the
 //!   sync-cursor model rather than inventing a diff.
 //! - [`transfer`] — the payload is a **delta-scoped [backup artifact]**, fetched with ranged
@@ -34,21 +36,34 @@
 pub mod channel;
 pub mod delta;
 pub mod discovery;
+pub mod session;
 pub mod transfer;
+
+use std::net::IpAddr;
 
 use capsule_core::backup::BackupError;
 use capsule_core::crypto::CryptoError;
-pub use channel::{PEERING_PROTOCOL, PeerHello, PinnedTrust, VerifiedPeer, accept, connect};
-pub use delta::{Offer, missing_from, symmetric_difference};
-pub use discovery::{
-    DiscoveredPeer, Discovery, MockDiscovery, OpaqueAdvertisement, SERVICE_TYPE, rotation_epoch,
+pub use channel::{
+    ArtifactSecret, LocalPeer, PEERING_PROTOCOL, PEERING_PROTOCOL_MIN, PeerHello, PinnedTrust,
+    UpdateDevice, VerifiedPeer, VersionWindow, accept, connect,
 };
+pub use delta::{
+    OFFER_PAGE_CAP, Offer, OfferPage, decode_offer_page, missing_from, offer_bucket,
+    symmetric_difference,
+};
+pub use discovery::{
+    DiscoveredPeer, Discovery, MockDiscovery, OpaqueAdvertisement, RotationEpoch, SERVICE_TYPE,
+    new_boot_id, rotation_epoch,
+};
+pub use session::{DirectoryVersions, HandshakeLimiter, MemoryDirectoryVersions, PeerSession};
 use thiserror::Error;
 pub use transfer::{
-    ArtifactBlobSource, DeltaExport, PeerRestore, artifact_address, build_delta_artifact, ingest,
-    pull_artifact,
+    ArtifactBlobSource, DeltaExport, LocalLibrary, PeerRestore, artifact_address,
+    build_delta_artifact, ingest, pull_artifact,
 };
 use uuid::Uuid;
+
+use crate::fetch::FetchScope;
 
 /// Everything peering can fail with. Peering is best-effort — a caller treats most of these as
 /// "no peer / fall back to server sync" — but the identity-check variants are load-bearing
@@ -61,19 +76,46 @@ pub enum PeeringError {
     /// A socket read/write failure on the peering channel.
     #[error("peering I/O error: {0}")]
     Io(String),
-    /// The peer advertised a peering **transport protocol** this device does not speak. There is
-    /// no degraded-mode fallback — the channel is torn down (`426 Upgrade Required` in framing)
-    /// before any payload byte, and the device proceeds to ordinary server sync.
-    #[error("peering protocol mismatch: peer speaks {theirs}, we speak {ours}")]
-    ProtocolMismatch {
-        /// The peer's advertised peering-protocol value.
-        theirs: String,
-        /// This device's peering-protocol value.
-        ours: String,
+    /// The two devices' peering-protocol windows share no version. The channel is torn down
+    /// before any payload byte, and `update` names the device that must update.
+    #[error(
+        "peering protocol windows are disjoint: ours {ours}, peer's {theirs}; update {update:?}"
+    )]
+    VersionDisjoint {
+        /// This device's window.
+        ours: VersionWindow,
+        /// The peer's advertised window.
+        theirs: VersionWindow,
+        /// Which device must update for the windows to meet.
+        update: UpdateDevice,
     },
     /// The peer's pinned directory is not signed by the User IK we trust — a foreign identity.
     #[error("peer directory does not chain to the pinned User IK")]
     ForeignIdentity,
+    /// The pinned device directory is older than one this device has already verified: a stale
+    /// directory could readmit a revoked device.
+    #[error("pinned device directory version {pinned} is below the verified {highest}")]
+    DirectoryRollback {
+        /// The pinned directory's version.
+        pinned: u64,
+        /// The highest version this device has verified.
+        highest: u64,
+    },
+    /// The peer presented a device directory older than the one this device pins.
+    #[error("peer presented device directory version {theirs}, below ours {ours}")]
+    PeerDirectoryStale {
+        /// The version the peer presented.
+        theirs: u64,
+        /// The version this device pins.
+        ours: u64,
+    },
+    /// The source address exceeded the handshake rate limit.
+    #[error("peering handshake rate limit reached for {0}")]
+    RateLimited(IpAddr),
+    /// The receiver's synchronization scope does not eagerly hold originals, which every backup
+    /// artifact carries; the receiver syncs from the server instead.
+    #[error("receiver scope {0:?} does not take originals over peering")]
+    OutOfScope(FetchScope),
     /// The peer presented a `device_id` that is absent from our pinned device directory: it is
     /// not one of this user's enrolled devices.
     #[error("peer device {0} is not in the pinned device directory")]
