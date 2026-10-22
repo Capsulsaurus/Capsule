@@ -84,11 +84,15 @@ pub(crate) fn pending(case: &str, n: u32) -> PendingAsset {
 /// computes over the bytes it committed and it is what the chain head is set from (`S-C31`).
 /// Taken from the address here only because the double's addresses *are* SHA-256 digests; the
 /// port is what refuses to make that assumption.
+///
+/// It also carries the manifest's album-key epoch, as finalization does, at `0` — below every
+/// lifecycle op [`op`] builds, so a case about the chain is not also a case about the epoch.
 pub(crate) fn blob(role: BlobRole, seed: &str) -> BlobRecord {
     let address = address(seed);
     BlobRecord {
         manifest_sha256: (role == BlobRole::Provenance)
             .then(|| Hash32::from_hex(address.as_str()).expect("an address is a digest")),
+        amk_version: (role == BlobRole::Provenance).then_some(0),
         role,
         address,
         size: 1024,
@@ -738,6 +742,7 @@ pub async fn the_duplicate_lookup_is_scoped_to_owner_and_album(index: &dyn Asset
             address: held.clone(),
             size: 1024,
             manifest_sha256: None,
+            amk_version: None,
             finalized_at: Timestamp::UNIX_EPOCH,
         },
     )
@@ -831,6 +836,7 @@ pub async fn a_live_holder_outranks_a_deleted_one(index: &dyn AssetIndex) {
         address: shared.clone(),
         size: 1024,
         manifest_sha256: None,
+        amk_version: None,
         finalized_at: Timestamp::UNIX_EPOCH,
     };
 
@@ -866,6 +872,7 @@ pub async fn a_shared_address_lists_every_holder_across_owners(index: &dyn Asset
         address: shared.clone(),
         size: 1024,
         manifest_sha256: None,
+        amk_version: None,
         finalized_at: Timestamp::UNIX_EPOCH,
     };
 
@@ -1239,6 +1246,137 @@ pub async fn an_epoch_that_regresses_the_album_is_refused(index: &dyn AssetIndex
     );
 }
 
+/// A create's row carries its manifest's album-key epoch, and that epoch counts toward the
+/// album's high-water mark (#790).
+///
+/// The epoch rides the provenance blob, like the chain head: a member that is not the manifest
+/// leaves it alone, and the row a rebuild would assemble from the same manifest is the row the
+/// write path made. A row left at `0` would be reported by the integrity scrub as disagreeing
+/// with the manifest it publishes, and would let a lifecycle op on a sibling asset re-admit an
+/// epoch the album's own creates had already moved past.
+pub async fn a_create_carries_its_manifests_epoch(index: &dyn AssetIndex) {
+    let case = "create-epoch";
+    // Published first, at epoch 0, so the create below is what moves the album's mark.
+    let (sibling, _) = publish(index, case, 2).await;
+    let row = pending(case, 1);
+    let asset = row.asset_id.clone();
+    ok(index.reserve(row).await, "reserve a row");
+
+    // A non-manifest member says nothing about the epoch, even when it names one.
+    let mut metadata = blob(BlobRole::Metadata, "create-epochm1");
+    metadata.amk_version = Some(7);
+    record(index, &asset, metadata).await;
+    let stored = ok(index.read(&asset).await, "read the pending row").expect("the row exists");
+    assert_eq!(
+        stored.amk_version, 0,
+        "only the manifest's own blob carries the manifest's epoch"
+    );
+
+    let mut provenance = blob(BlobRole::Provenance, "create-epochp1");
+    provenance.amk_version = Some(3);
+    let BlobOutcome::Recorded { row, minted } = ok(
+        index.record_blob(&asset, provenance).await,
+        "record the manifest",
+    ) else {
+        panic!("the manifest was not recorded")
+    };
+    assert!(minted.is_some(), "the index tier is complete");
+    assert_eq!(
+        row.amk_version, 3,
+        "the returned row carries the epoch its manifest was sealed under"
+    );
+    let stored = ok(index.read(&asset).await, "read the published row").expect("the row exists");
+    assert_eq!(
+        stored.amk_version, 3,
+        "the stored row agrees with the manifest"
+    );
+
+    // The create's epoch is the album's high-water mark: a sibling may not regress below it.
+    let mut behind = op(
+        case,
+        2,
+        OpAction::MetadataUpdate,
+        head_of(index, &sibling).await,
+        manifest(94),
+    );
+    behind.amk_version = 2;
+    assert_eq!(
+        ok(
+            index.apply_op(behind).await,
+            "regress below a create's epoch"
+        ),
+        OpOutcome::AmkRegressed { stored: 3 },
+        "an epoch a create established is part of the album's history",
+    );
+}
+
+/// A create whose manifest was written under an epoch below the album's high-water mark is
+/// refused when the manifest lands, and leaves the row as it was (invariant 18).
+///
+/// The create-side half of [`an_epoch_that_regresses_the_album_is_refused`]: a removed writer
+/// still holding a retired write-tier key must not be able to publish a *new* asset at that
+/// epoch either. The same epoch as the mark is not a regression, and a member that is not the
+/// manifest carries no epoch to refuse.
+pub async fn a_create_below_the_albums_epoch_is_refused(index: &dyn AssetIndex) {
+    let case = "create-epoch-regress";
+    let (ahead, _) = publish(index, case, 1).await;
+    let mut forward = op(
+        case,
+        1,
+        OpAction::MetadataUpdate,
+        head_of(index, &ahead).await,
+        manifest(95),
+    );
+    forward.amk_version = 5;
+    let OpOutcome::Applied { .. } = ok(index.apply_op(forward).await, "advance the epoch") else {
+        panic!("an advancing epoch was refused")
+    };
+
+    let row = pending(case, 2);
+    let asset = row.asset_id.clone();
+    ok(index.reserve(row).await, "reserve a row");
+    record(
+        index,
+        &asset,
+        blob(BlobRole::Metadata, "create-epoch-regressm2"),
+    )
+    .await;
+
+    let mut stale = blob(BlobRole::Provenance, "create-epoch-regressp2");
+    stale.amk_version = Some(4);
+    assert_eq!(
+        ok(
+            index.record_blob(&asset, stale).await,
+            "record a stale manifest"
+        ),
+        BlobOutcome::AmkRegressed { stored: 5 },
+        "a create may not publish an epoch the album has moved past",
+    );
+    let unchanged = ok(index.read(&asset).await, "read the refused row").expect("the row exists");
+    assert_eq!(
+        unchanged.state,
+        AssetState::Pending,
+        "nothing was published"
+    );
+    assert_eq!(unchanged.chain_head, None);
+    assert_eq!(unchanged.amk_version, 0);
+    assert!(
+        unchanged.address_for(BlobRole::Provenance).is_none(),
+        "the refused manifest is not referenced"
+    );
+
+    let mut current = blob(BlobRole::Provenance, "create-epoch-regressp2b");
+    current.amk_version = Some(5);
+    let BlobOutcome::Recorded { row, minted } = ok(
+        index.record_blob(&asset, current).await,
+        "record a current manifest",
+    ) else {
+        panic!("a manifest at the album's own epoch was refused")
+    };
+    assert!(minted.is_some(), "the index tier is complete");
+    assert_eq!(row.amk_version, 5);
+}
+
 /// How many albums [`racing_epochs_in_one_album_are_decided_in_sequence_order`] races in.
 ///
 /// One race is a coin toss for an adapter whose epoch check is not serialized per album; a
@@ -1606,6 +1744,7 @@ pub async fn references_are_counted_from_the_rows_that_name_them(index: &dyn Ass
                 address: shared.clone(),
                 size: 16,
                 manifest_sha256: None,
+                amk_version: None,
                 finalized_at: Timestamp::UNIX_EPOCH,
             },
         )
@@ -2016,7 +2155,10 @@ pub async fn the_row_walk_orders_by_the_identifiers_own_bytes(index: &dyn AssetI
         ok(index.reserve(row).await, "reserve a row");
     }
 
-    let walked: Vec<String> = ok(index.rows(None, 100).await, "walk the asset rows")
+    // Started just below the three ids rather than at the beginning: the suite shares one index
+    // across its cases, so a fixed page from the start would stop reaching them as cases grow.
+    let floor = AssetId::new("walkord");
+    let walked: Vec<String> = ok(index.rows(Some(&floor), 100).await, "walk the asset rows")
         .into_iter()
         .filter(|row| row.asset_id.as_str().starts_with("walkord-"))
         .map(|row| row.asset_id.as_str().to_owned())
@@ -2662,6 +2804,8 @@ pub async fn run_all(index: &dyn AssetIndex) {
     racing_identical_submissions_apply_once_and_replay_once(index).await;
     delete_and_restore_are_both_publishable_changes(index).await;
     an_epoch_that_regresses_the_album_is_refused(index).await;
+    a_create_carries_its_manifests_epoch(index).await;
+    a_create_below_the_albums_epoch_is_refused(index).await;
     racing_epochs_in_one_album_are_decided_in_sequence_order(index).await;
     an_op_on_an_asset_that_is_not_the_callers_is_not_found(index).await;
     a_lifecycle_write_repoints_the_provenance_blob(index).await;

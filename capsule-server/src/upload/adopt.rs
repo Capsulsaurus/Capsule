@@ -158,6 +158,7 @@ pub async fn adopt(
                 address: adoption.address.clone(),
                 size: stat.size,
                 manifest_sha256: None,
+                amk_version: None,
                 finalized_at: context.clock().now(),
             },
             Custody {
@@ -211,6 +212,25 @@ pub async fn adopt(
             )
             .await;
             Adopted::Conflict
+        }
+        // Unreachable: an adoption never records a manifest (see the module docs), so it never
+        // carries an epoch to refuse. Kept total as the server's own inconsistency.
+        BlobOutcome::AmkRegressed { stored } => {
+            ledger_refused(
+                context,
+                attestation,
+                adoption.owner,
+                &draft,
+                "the index refused an epoch the adoption does not carry".to_owned(),
+            )
+            .await;
+            tracing::error!(
+                stored,
+                "an adoption was refused on an epoch it does not carry"
+            );
+            return Err(FinalizeFailure::Unavailable(
+                "the index refused an adoption on an epoch".to_owned(),
+            ));
         }
         BlobOutcome::NotFound => {
             ledger_refused(
