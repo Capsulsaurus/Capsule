@@ -48,4 +48,11 @@ capsule-cli-migration = { path = "../capsule-cli/migration" }
 # Case 14's viewer leg opens a share link through the entry points the web viewer calls, run
 # natively — the same use `capsule-server/tests/share.rs` makes of it in-process.
 capsule-wasm = { path = "../capsule-wasm" }
+# The golden wire fixtures (`tests/golden_wire.rs`) record and replay raw HTTP exchanges: a
+# fixture is the bytes on the wire, so it must be sent as recorded rather than through a typed
+# client that would re-serialize it, and the unauthenticated half (register, login, the
+# well-known documents) has no SDK session to borrow a client from.
+reqwest = { workspace = true }
+# The golden records are canonical CBOR, committed as hex.
+hex = { workspace = true }
 sea-orm = { workspace = true, features = ["sqlx-sqlite", "runtime-tokio-rustls"] }
