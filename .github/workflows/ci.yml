@@ -211,6 +211,11 @@ jobs:
           install: false
       - name: Check (fmt + clippy + build)
         run: mise run check-rust
+      # The cargo-fuzz targets live in their own workspace, which no step above builds. Type-
+      # checking them on every pull request keeps a decoder change from silently breaking a
+      # target the scheduled workflow only runs nightly.
+      - name: Check fuzz targets
+        run: mise run fuzz-check
 
   # RustSec advisories, crate bans and crate sources against Cargo.lock (#507). Not gated on
   # the `changes` filter: an advisory is published against a lockfile nobody touched, so the

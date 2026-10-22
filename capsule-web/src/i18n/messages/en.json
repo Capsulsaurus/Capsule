@@ -1798,7 +1798,7 @@
   "cli.help.import.about": "Import files into a local Capsule library",
   "cli.help.import.arg.force": "Re-import files even if they already exist (duplicate override)",
   "cli.help.import.arg.library": "Path to the Capsule library",
-  "cli.help.import.arg.move": "Move files instead of copying them",
+  "cli.help.import.arg.move": "Move files: delete each source once the server holds it, which needs `--push`. Without it every source is kept",
   "cli.help.import.arg.passphrase_stdin": "Read the library passphrase from stdin instead of prompting, so imports work in scripts and CI where there is no terminal",
   "cli.help.import.arg.paths": "Source file or directory to import. Repeatable: a split Takeout export extracted into several folders is imported by naming every part in one run, so a media file and a sidecar that landed in different parts are still paired",
   "cli.help.import.arg.provider": "Read the source as an export from this service instead of as a plain directory tree, so its out-of-band metadata (capture time, GPS, captions, favorites, album membership) is folded into the imported assets",

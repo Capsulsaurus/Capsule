@@ -30840,7 +30840,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Move files instead of copying them"
+            "value": "Move files: delete each source once the server holds it, which needs `--push`. Without it every source is kept"
           }
         }
       }

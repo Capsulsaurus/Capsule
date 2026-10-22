@@ -23,6 +23,7 @@
 //! | Status | Verdict |
 //! | --- | --- |
 //! | provision `201` / revoke `204` / discard `204` | the owner's operations |
+//! | provision `403 error.quota.grace_locked` / `error.quota.suspended` | a link is metadata growth: the owner is past the quota grace window, or the operator suspended their quota (#725). A revocation is never refused |
 //! | create `201` | a drop session, with its suggested chunk size |
 //! | chunk `204` | staged, with the authoritative offset |
 //! | adopt `200` | the asset exists and the inbox row is gone |
@@ -274,6 +275,30 @@ pub enum LinkRejection {
     Malformed {
         /// What was wrong, in English.
         detail: String,
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// The owner is over their storage limit and past the grace window.
+    ///
+    /// A new upload link is metadata growth (quota.md, "Grace expired"), refused as a new share
+    /// link is. Never returned by a revocation, which frees nothing but must never be refused.
+    #[error("this account is over its storage limit and past the grace window")]
+    #[problem(status = 403, title = "Quota grace expired")]
+    QuotaGraceExpired {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// The owner's quota is suspended by the server's operator (#705).
+    ///
+    /// A new upload link is metadata growth, which a suspension refuses as the grace window
+    /// does. Never returned by a revocation.
+    #[error("this account's storage is suspended")]
+    #[problem(status = 403, title = "Quota suspended")]
+    QuotaSuspended {
         /// The stable catalog code.
         #[problem(extension)]
         code: &'static str,
@@ -593,9 +618,14 @@ pub enum AdoptRejection {
 }
 
 /// Provision an upload link.
+///
+/// A link is metadata growth: an owner past their quota grace window is refused
+/// `403 error.quota.grace_locked`, and one whose quota the operator suspended
+/// `403 error.quota.suspended`.
 #[kynos::post("/v1/drops/links", operation_id = "provision_link", tag = DropsTag)]
 pub async fn provision_link(
     Inject(drops): Inject<DropContext>,
+    Inject(quota): Inject<crate::quota::QuotaContext>,
     Auth(credential): Auth<AccessToken>,
     Json(request): Json<ProvisionLinkRequest>,
 ) -> Result<ProvisionLinkReply, LinkRejection> {
@@ -627,6 +657,10 @@ pub async fn provision_link(
                 .map_err(|_| LinkRejection::malformed("expires_at is not RFC 3339"))?,
         ),
     };
+
+    // After the body is known to be a link, so a malformed request is told so whatever the
+    // owner's state, and before anything is recorded (quota.md, "Grace expired").
+    admit_link_growth(&quota, &owner).await?;
 
     let outcome = drops
         .drops()
@@ -664,7 +698,40 @@ pub async fn provision_link(
     }))
 }
 
+/// Refuse a new upload link from an owner past their quota grace window, or whose quota the
+/// operator suspended (#705) — the states a share link is refused in, decided by the same
+/// [`crate::routes::share::metadata_growth_refusal`].
+async fn admit_link_growth(
+    quota: &crate::quota::QuotaContext,
+    owner: &UserId,
+) -> Result<(), LinkRejection> {
+    let refusal = crate::routes::share::metadata_growth_refusal(quota, owner)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %owner, "the quota ledger could not answer for an upload link");
+            LinkRejection::unavailable()
+        })?;
+    match refusal {
+        None => Ok(()),
+        Some(crate::quota::QuotaState::Suspended) => {
+            tracing::info!(%owner, "an upload link was refused: the account's quota is suspended");
+            Err(LinkRejection::QuotaSuspended {
+                code: error_codes::QUOTA_SUSPENDED,
+            })
+        }
+        Some(state) => {
+            tracing::info!(%owner, ?state, "an upload link was refused: past the quota grace window");
+            Err(LinkRejection::QuotaGraceExpired {
+                code: error_codes::QUOTA_GRACE_LOCKED,
+            })
+        }
+    }
+}
+
 /// Revoke one of the caller's links.
+///
+/// Never consults the quota: a revocation frees nothing but is admitted in every state,
+/// suspended and past the grace window included.
 ///
 /// Indistinguishable and idempotent, for the same reason a share revocation is: saying "there
 /// was nothing to revoke" would be a lookup.

@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use uuid::Uuid;
+
 use crate::lifecycle::DerivativeStatus;
 
 /// Outcome for a single imported file.
@@ -11,6 +13,8 @@ pub enum ImportOutcome {
     /// **not** a success/failure flag: an asset whose format has no codec in this build is a
     /// fully successful import that happens to be missing its derivative (slice `S-B13`).
     Imported {
+        /// The asset the file became — what a Move-mode caller releases the source against.
+        asset_id: Uuid,
         derivatives: DerivativeStatus,
         /// How many `(tier, format)` pairs the tier table commits to and this build cannot
         /// encode. Orthogonal to `derivatives`: a `Decoded` asset with a renderable JXL
@@ -128,6 +132,27 @@ impl ImportExecutionSummary {
                 )
             })
             .count()
+    }
+
+    /// Every source file the library now holds, paired with the asset that holds it: each
+    /// imported file, and each file skipped as a duplicate of an asset already in the library.
+    ///
+    /// These are the sources a Move-mode import may delete, and only through the release gate
+    /// ([`Workspace::release_move_source`](crate::lifecycle::Workspace::release_move_source)):
+    /// the executor never deletes one itself. A duplicate is listed so a re-run of a Move import
+    /// whose first run kept its sources can release them; the gate's read-back check still
+    /// refuses any source whose bytes do not hash to that asset's signed original.
+    pub fn held_sources(&self) -> Vec<(PathBuf, Uuid)> {
+        self.outcomes
+            .iter()
+            .filter_map(|(path, outcome)| match outcome {
+                ImportOutcome::Imported { asset_id, .. } => Some((path.clone(), *asset_id)),
+                ImportOutcome::DuplicateSkipped { existing_uuid } => Uuid::parse_str(existing_uuid)
+                    .ok()
+                    .map(|asset_id| (path.clone(), asset_id)),
+                _ => None,
+            })
+            .collect()
     }
 
     pub fn duplicate_count(&self) -> usize {

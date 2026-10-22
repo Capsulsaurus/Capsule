@@ -120,6 +120,10 @@ pub enum RetainReason {
     VerifyUnavailable,
     /// The receipt fetch failed on the wire — retry with backoff.
     ReceiptUnavailable,
+    /// The read-back check failed: the library copy, or the Move source itself, no longer
+    /// hashes to the asset's signed original. Deleting the source could lose the only copy of
+    /// those bytes, so it is kept whatever the server says.
+    ReadBackMismatch,
 }
 
 /// The gate's decision. `Release` is returned **only** when all three checks pass (durable
@@ -208,8 +212,9 @@ pub fn release_owned_original<V: StorageVerifier + ?Sized>(
 /// **Move-import source deletion.** Deleting the external source after a Move-mode import waits
 /// on the server's `durable` verdict + a verified receipt — never on the local library copy
 /// alone — so a crash mid-import cannot lose the only copy. Returns the decision; the source is
-/// unlinked only on `Release`. This is the seam [streaming import](../../import/index.html)
-/// (`S-B3`) drives per asset in its import→upload→verify→release window.
+/// unlinked only on `Release`. The gate alone: a caller holding the library uses
+/// [`Workspace::release_move_source`](crate::lifecycle::Workspace::release_move_source), which
+/// adds the read-back hash check before it reaches here.
 pub fn release_move_source<V: StorageVerifier + ?Sized>(
     verifier: &V,
     asset_id: Uuid,

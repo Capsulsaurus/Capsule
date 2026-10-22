@@ -7196,7 +7196,7 @@
     "context": "clap --help: help for the `--library` option of `capsule import`."
   },
   "cli.help.import.arg.move": {
-    "message": "Move files instead of copying them",
+    "message": "Move files: delete each source once the server holds it, which needs `--push`. Without it every source is kept",
     "context": "clap --help: help for the `--move` flag of `capsule import`."
   },
   "cli.help.import.arg.passphrase_stdin": {

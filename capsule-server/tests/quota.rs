@@ -16,6 +16,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use capsule_core::crypto::hash::Hash32;
 use capsule_server::blob::BlobStore;
+use capsule_server::drop::{DropStore, UploadLinkRecord};
 use capsule_server::index::{AssetIndex, BlobRecord, PendingAsset};
 use capsule_server::quota::{DEFAULT_GRACE_WINDOW, QuotaLimits, QuotaStore};
 use capsule_server::store::{AssetId, BlobRole, Clock};
@@ -467,6 +468,142 @@ async fn a_drop_to_a_suspended_owners_link_is_refused_until_the_owner_is_unsuspe
 
     unsuspend(&fixture).await;
     drop(StatusCode::CREATED).await;
+}
+
+/// An upload link's opaque id, distinct per `tag`.
+fn link_id(tag: u8) -> String {
+    format!(
+        "{:032x}",
+        u128::from(tag) | 0x1234_5678_9abc_def0_1234_5678_9abc_0000
+    )
+}
+
+/// Provision an upload link over the wire, asserting the status, and return the body.
+async fn provision_link(fixture: &Fixture, bearer: &str, tag: u8, expect: StatusCode) -> Value {
+    fixture
+        .client
+        .post("/v1/drops/links")
+        .header("authorization", bearer)
+        .header("accept", "application/json")
+        .json(&json!({
+            "opaque_id": link_id(tag),
+            "drop_pubkey": BASE64.encode([7_u8; 32]),
+            "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
+        }))
+        .send()
+        .await
+        .assert_status(expect)
+        .json()
+}
+
+/// Revoke an upload link over the wire; never refused, whatever the quota state.
+async fn revoke_link(fixture: &Fixture, bearer: &str, tag: u8) {
+    fixture
+        .client
+        .delete(&format!("/v1/drops/links/{}", link_id(tag)))
+        .header("authorization", bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+}
+
+/// The link the drop store holds under `tag`'s id, if any.
+async fn stored_link(fixture: &Fixture, tag: u8) -> Option<UploadLinkRecord> {
+    fixture
+        .dropstore
+        .resolve(&link_id(tag))
+        .await
+        .expect("the drop store answers")
+}
+
+/// Whether the drop store holds a link under `tag`'s id.
+async fn link_exists(fixture: &Fixture, tag: u8) -> bool {
+    stored_link(fixture, tag).await.is_some()
+}
+
+/// Whether the link under `tag`'s id has been revoked.
+async fn link_revoked(fixture: &Fixture, tag: u8) -> bool {
+    stored_link(fixture, tag)
+        .await
+        .is_some_and(|link| link.revoked_at.is_some())
+}
+
+/// A new upload link is metadata growth: refused while suspended, admitted after; revoking an
+/// existing one is admitted throughout (#725).
+#[tokio::test]
+async fn a_suspended_account_cannot_provision_an_upload_link_but_can_revoke_one() {
+    let fixture = Fixture::working();
+    let bearer = token(&fixture).await;
+    provision_link(&fixture, &bearer, 1, StatusCode::CREATED).await;
+
+    suspend(&fixture).await;
+    let problem = provision_link(&fixture, &bearer, 2, StatusCode::FORBIDDEN).await;
+    assert_eq!(problem["code"], "error.quota.suspended");
+    assert!(
+        !link_exists(&fixture, 2).await,
+        "a refused link is not recorded"
+    );
+    revoke_link(&fixture, &bearer, 1).await;
+    assert!(
+        link_revoked(&fixture, 1).await,
+        "the revocation took effect"
+    );
+
+    unsuspend(&fixture).await;
+    provision_link(&fixture, &bearer, 2, StatusCode::CREATED).await;
+    assert!(
+        link_exists(&fixture, 2).await,
+        "an admitted link is recorded"
+    );
+}
+
+/// Past the grace window a new upload link is refused `grace_locked`, inside it and after the
+/// account is back under its limit it is admitted, and a revocation is never refused (#725).
+#[tokio::test]
+async fn the_grace_window_stops_upload_link_provisioning_but_never_a_revocation() {
+    let fixture = Fixture::with_quota(limits());
+    let bearer = token(&fixture).await;
+    provision_link(&fixture, &bearer, 1, StatusCode::CREATED).await;
+
+    let storage = capsule_server::blob::ContentAddress::parse(&checksum(b"pre-existing storage"))
+        .expect("a content address");
+    fixture
+        .quotas
+        .charge(&account(), &storage, 20_000, fixture.clock.now(), limits())
+        .await
+        .expect("the ledger accepts");
+    assert_eq!(snapshot(&fixture, &bearer).await["state"], "hard_exceeded");
+    // Inside the window a link is still metadata growth the account may make.
+    provision_link(&fixture, &bearer, 2, StatusCode::CREATED).await;
+
+    fixture
+        .clock
+        .advance(DEFAULT_GRACE_WINDOW + SignedDuration::from_hours(1));
+    let bearer = token(&fixture).await;
+    assert_eq!(snapshot(&fixture, &bearer).await["state"], "grace_expired");
+    let problem = provision_link(&fixture, &bearer, 3, StatusCode::FORBIDDEN).await;
+    assert_eq!(problem["code"], "error.quota.grace_locked");
+    assert!(
+        !link_exists(&fixture, 3).await,
+        "a refused link is not recorded"
+    );
+    revoke_link(&fixture, &bearer, 1).await;
+    assert!(
+        link_revoked(&fixture, 1).await,
+        "the revocation took effect"
+    );
+
+    // Back under the limit, the state clears and provisioning is admitted again.
+    assert!(
+        fixture
+            .quotas
+            .release(&account(), &storage)
+            .await
+            .expect("the ledger releases"),
+        "the storage was the account's"
+    );
+    assert_eq!(snapshot(&fixture, &bearer).await["state"], "ok");
+    provision_link(&fixture, &bearer, 3, StatusCode::CREATED).await;
 }
 
 // ===========================================================================================

@@ -94,3 +94,7 @@ reqwest = { workspace = true }
 # `test-util` gives the OIDC loopback listener's tests a paused clock, so its ten-second read
 # timeout is exercised without the test waiting ten seconds.
 tokio = { workspace = true, features = ["test-util"] }
+# `tests/json_contract.rs` snapshots each `--json` run's exit status, stdout and stderr, so a
+# change to the machine contract shows up as a reviewed snapshot diff. The binary is spawned
+# through `CARGO_BIN_EXE_capsule`, per the test-runner row of the dependencies doc.
+insta = { workspace = true }
