@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use std::future::Future;
 
 use capsule_core::crypto::hash::Hash32;
-use capsule_core::library::{BlobRole, BlobVerdict, StorageVerdict};
+use capsule_core::library::{BlobRole, StorageVerdict, release_is_safe};
 use capsule_core::lifecycle::Workspace;
 use capsule_sdk::verify::{AssetQuery, VerifiedAttestation, VerifyError};
 use serde::Serialize;
@@ -159,8 +159,18 @@ impl AssetVerifyOutcome {
         }
     }
 
-    fn answered(verdict: &StorageVerdict) -> Self {
-        let durable = verdict.durable && verdict.blobs.iter().all(BlobVerdict::safely_stored);
+    /// The outcome of a verdict answering for `declared`. Durable only under the release gate's
+    /// own predicate ([`release_is_safe`]: `durable`, a non-empty blob list, every blob safely
+    /// stored) **and** when every declared hash is among the blobs the verdict re-checks — a
+    /// verdict that drops a declared blob has not confirmed it, whatever its aggregate says.
+    fn answered(verdict: &StorageVerdict, declared: &[Hash32]) -> Self {
+        let covers_declared = declared.iter().all(|hash| {
+            verdict
+                .blobs
+                .iter()
+                .any(|blob| blob.hash == *hash && blob.safely_stored())
+        });
+        let durable = release_is_safe(verdict, true) && covers_declared;
         Self {
             asset_id: verdict.asset_id.to_string(),
             status: if durable {
@@ -382,7 +392,7 @@ async fn verify_batch<S: VerdictSource>(
                     ),
                 );
             };
-            let mut outcome = AssetVerifyOutcome::answered(verdict);
+            let mut outcome = AssetVerifyOutcome::answered(verdict, &query.blob_hashes);
             if let Some(verified) = &attestation {
                 match keep_attestation(workspace, query.asset_id, &verified.cbor) {
                     Ok(appended) => outcome.attestation_stored = appended,
@@ -450,7 +460,7 @@ pub fn problem_line(outcome: &AssetVerifyOutcome) -> String {
         "asset {} is not durably held (not safely stored: {})",
         outcome.asset_id,
         if missing.is_empty() {
-            "the server reports it not durable".to_owned()
+            "the server's answer does not confirm every declared blob".to_owned()
         } else {
             missing.join(", ")
         }

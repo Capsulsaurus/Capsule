@@ -88,6 +88,9 @@ enum Behaviour {
     ForeignKey,
     /// The request is refused with this status and code.
     Refuses(u16, &'static str),
+    /// Every asset is reported `durable`, but each verdict re-checks only its first `n` declared
+    /// blobs — `0` is a hollow verdict with no blob list at all.
+    DurableOverFirst(usize),
 }
 
 /// A stand-in for the SDK's storage-verify client. It signs real attestations, and checks them
@@ -128,12 +131,17 @@ impl FakeServer {
             .filter(|q| !matches!(self.behaviour, Behaviour::Omits(id) if id == q.asset_id))
             .map(|q| {
                 let held = !matches!(self.behaviour, Behaviour::Lost(id) if id == q.asset_id);
+                let answered = match self.behaviour {
+                    Behaviour::DurableOverFirst(n) => n,
+                    _ => q.blob_hashes.len(),
+                };
                 AttestedAsset {
                     asset_id: q.asset_id.to_string(),
                     durable: held,
                     blobs: q
                         .blob_hashes
                         .iter()
+                        .take(answered)
                         .enumerate()
                         .map(|(i, hash)| AttestedBlob {
                             hash: *hash,
@@ -397,6 +405,37 @@ async fn an_answer_that_omits_an_asset_fails_that_asset() {
         "missing_verdict"
     );
     assert_eq!(summary.outcomes[1].status, AssetVerifyStatus::Durable);
+}
+
+/// A verdict that says `durable` but does not re-check every declared blob — no blob list at
+/// all, or only the original — has not confirmed the asset, so it is not reported durable and
+/// the run exits non-zero. The aggregate alone is never trusted.
+#[tokio::test]
+async fn a_durable_verdict_that_skips_a_declared_blob_is_not_durable() {
+    for answered in [0, 1] {
+        let f = fixture(&format!("hollow-{answered}"), 1);
+        let server = FakeServer::new(Behaviour::DurableOverFirst(answered));
+
+        let summary = verify_assets(&f.workspace, &server, &VerifyOptions::default()).await;
+
+        let outcome = &summary.outcomes[0];
+        assert_eq!(
+            outcome.status,
+            AssetVerifyStatus::NotDurable,
+            "{answered} of 2 declared blobs re-checked: {outcome:?}"
+        );
+        assert_eq!(outcome.blobs.len(), answered);
+        assert_eq!(summary.durable_assets, 0);
+        assert!(failed_run_reason(&summary).is_some());
+        assert_eq!(
+            problem_line(outcome),
+            format!(
+                "asset {} is not durably held (not safely stored: the server's answer does not \
+                 confirm every declared blob)",
+                f.assets[0]
+            )
+        );
+    }
 }
 
 #[tokio::test]
