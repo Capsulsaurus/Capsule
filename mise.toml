@@ -237,26 +237,33 @@ fi
 
 # The cargo-fuzz harness (testing plan, `capsule-core` row): one target per decoder of untrusted
 # bytes, in its own workspace under `capsule-core/fuzz` so libFuzzer never enters a workspace
-# build. `fuzz-check` type-checks every target on stable tooling and runs in CI on every pull
-# request, so a target cannot rot between scheduled runs. `fuzz` runs each target for
-# `FUZZ_SECONDS` (default 60) with cargo-fuzz on the pinned nightly; the scheduled workflow
-# runs it, and a crash is left under `capsule-core/fuzz/artifacts/<target>/`.
+# build, and the server's manifest parser in `capsule-server/fuzz` likewise. `fuzz-check`
+# type-checks every target on stable tooling and runs in CI on every pull request, so a target
+# cannot rot between scheduled runs. `fuzz` runs each target for `FUZZ_SECONDS` (default 60)
+# with cargo-fuzz on the pinned nightly; the scheduled workflow runs it, and a crash is left
+# under `<crate>/fuzz/artifacts/<target>/`.
 [tasks.fuzz-check]
 description = "Type-check every cargo-fuzz target"
-run = "cargo check --manifest-path capsule-core/fuzz/Cargo.toml --bins"
+run = [
+  "cargo check --manifest-path capsule-core/fuzz/Cargo.toml --bins",
+  "cargo check --manifest-path capsule-server/fuzz/Cargo.toml --bins",
+]
 
 [tasks.fuzz]
 description = "Run every cargo-fuzz target for FUZZ_SECONDS each (needs cargo-fuzz)"
 shell = "bash -c"
 run = '''
 set -euo pipefail
-cd capsule-core/fuzz
 # The toolchain's own host triple: a cargo-fuzz binary built for musl would otherwise target musl,
 # where the sanitizer cannot link.
 host=$(rustc -vV | sed -n 's/^host: //p')
-for target in $(cargo fuzz list); do
-  echo "fuzz: $target for ${FUZZ_SECONDS:-60}s"
-  cargo fuzz run --target "$host" "$target" -- -max_total_time="${FUZZ_SECONDS:-60}" -max_len=65536
+for crate in capsule-core capsule-server; do
+  pushd "$crate/fuzz" >/dev/null
+  for target in $(cargo fuzz list); do
+    echo "fuzz: $crate/$target for ${FUZZ_SECONDS:-60}s"
+    cargo fuzz run --target "$host" "$target" -- -max_total_time="${FUZZ_SECONDS:-60}" -max_len=65536
+  done
+  popd >/dev/null
 done
 '''
 

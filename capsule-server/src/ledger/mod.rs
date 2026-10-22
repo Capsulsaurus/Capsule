@@ -78,7 +78,9 @@
 
 pub mod conformance;
 pub mod fs;
+pub mod manifest;
 pub mod memory;
+pub mod replay;
 
 use std::fmt;
 use std::future::Future;
@@ -632,6 +634,40 @@ fn link_one(
         });
     }
     Ok(())
+}
+
+/// Verify `owner`'s scanned ledger as far as it can be without the attestation key: positions,
+/// links, owner, and the decode damage the scan met.
+///
+/// What a maintenance host holding no key material can establish. It finds a removed,
+/// reordered, moved or torn entry, and a dropped head; it cannot find an entry edited by
+/// someone who also re-linked every successor, which only the signatures catch. The report says
+/// nothing about which of the two ran: a caller that has the published keys uses
+/// [`verify_chain`].
+pub fn verify_links(owner: &OwnerId, scan: &LedgerScan) -> ChainReport {
+    let mut head: Option<LedgerHead> = None;
+    let mut verified = 0;
+    let mut fault = None;
+    for entry in &scan.entries {
+        if let Err(found) = link_one(owner, head, entry) {
+            fault = Some(found);
+            break;
+        }
+        head = Some(LedgerHead {
+            seq: entry.core.seq,
+            hash: entry.chain_hash(),
+        });
+        verified += 1;
+    }
+    let fault = fault.or_else(|| scan.damage.clone());
+    if let Some(fault) = &fault {
+        tracing::warn!(%owner, verified, %fault, "an owner ledger's links do not hold to its end");
+    }
+    ChainReport {
+        verified,
+        head,
+        fault,
+    }
 }
 
 /// Verify `owner`'s scanned ledger: structure, links, signatures, and the anchor.

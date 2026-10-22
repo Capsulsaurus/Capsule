@@ -729,3 +729,5 @@ async fn purging_a_tombstone_takes_the_chain_with_it() {
         "a purged asset's chain is collectable like the rest of its bytes"
     );
 }
+
+mod ledger_check;

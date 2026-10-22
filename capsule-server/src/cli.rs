@@ -702,6 +702,13 @@ impl std::fmt::Display for Rendered<'_, ScrubReport> {
                 writeln!(f, "    {finding:?}")?;
             }
         }
+        if report.ledger_links_only {
+            writeln!(
+                f,
+                "  owner ledgers: links and positions checked, signatures not (no \
+                 ATTESTATION_KEY_SEED on this host)"
+            )?;
+        }
         if report.is_clean() {
             writeln!(f, "  the index and the store agree")?;
         }
@@ -945,6 +952,7 @@ mod tests {
             ],
             bytes_hashed: 0,
             budget_exhausted: false,
+            ledger_links_only: false,
         };
         let rendered = render_scrub(&report).to_string();
         assert!(rendered.contains("3 findings"), "{rendered}");
@@ -962,10 +970,22 @@ mod tests {
             findings: Vec::new(),
             bytes_hashed: 1024,
             budget_exhausted: true,
+            ledger_links_only: false,
         };
         let rendered = render_scrub(&report).to_string();
         assert!(rendered.contains("budget exhausted"), "{rendered}");
         assert!(!rendered.contains("agree"), "{rendered}");
+    }
+
+    #[test]
+    fn a_scrub_that_checked_ledger_links_only_says_so() {
+        let report = ScrubReport {
+            ledger_links_only: true,
+            ..ScrubReport::default()
+        };
+        let rendered = render_scrub(&report).to_string();
+        assert!(rendered.contains("signatures not"), "{rendered}");
+        assert!(rendered.contains("agree"), "{rendered}");
     }
 
     #[test]
