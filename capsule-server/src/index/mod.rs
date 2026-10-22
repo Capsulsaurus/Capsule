@@ -321,6 +321,15 @@ pub struct BlobRecord {
     /// computes it over the bytes it just committed, which is what keeps the chain head a fact
     /// the server established rather than one it inferred from a coincidence between two digests.
     pub manifest_sha256: Option<Hash32>,
+    /// The album-key epoch the manifest was written under, for a `provenance` blob — invariant
+    /// 18's subject, mirrored onto the row as [`AssetRow::amk_version`].
+    ///
+    /// `None` for every other role, exactly as [`Self::manifest_sha256`] is. A create's manifest
+    /// is the asset's first accepted manifest, so its epoch lands on the row with its chain head;
+    /// a row left at `0` would disagree with the manifest it publishes — the integrity scrub's
+    /// mirrored-fact check reports exactly that — and would understate the album's high-water
+    /// mark, which is the maximum over its rows.
+    pub amk_version: Option<u64>,
     /// When finalization committed it.
     pub finalized_at: Timestamp,
 }

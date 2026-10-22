@@ -1447,6 +1447,7 @@ async fn adopt_claimed(
                 address: entry.address.clone(),
                 size: entry.size,
                 manifest_sha256: None,
+                amk_version: None,
                 finalized_at: now,
             },
             crate::index::Custody {

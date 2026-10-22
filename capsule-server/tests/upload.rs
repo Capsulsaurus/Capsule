@@ -493,6 +493,57 @@ async fn a_provenance_blob_is_stored_exactly_as_it_arrived() {
 }
 
 #[tokio::test]
+async fn a_created_manifest_lands_its_album_key_epoch_on_the_row() {
+    // #790: the row mirrors the epoch its manifest was sealed under, as a rebuild from the same
+    // manifest would, so the integrity scrub finds nothing to disagree about and the album's
+    // high-water mark counts the create.
+    use capsule_server::index::AssetIndex as _;
+    use capsule_server::store::AssetId;
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, second, whole) = blob();
+    let mut request = create_request(&fixture.clock, &whole, "provenance");
+    request["manifest_envelope"]["amk_version"] = serde_json::json!(4);
+    let id = fixture.open_session_with(&request, &bearer).await;
+
+    let asset = AssetId::new("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e61");
+    let reserved = fixture
+        .index
+        .read(&asset)
+        .await
+        .expect("the index answers")
+        .expect("the session reserved a row when it opened");
+    assert_eq!(
+        reserved.amk_version, 0,
+        "nothing is published before the manifest lands"
+    );
+
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    fixture
+        .chunk(&id, 4096, &second, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    let row = fixture
+        .index
+        .read(&asset)
+        .await
+        .expect("the index answers")
+        .expect("the row survives finalization");
+    assert!(row.chain_head.is_some(), "the manifest landed");
+    assert_eq!(
+        row.amk_version, 4,
+        "the row carries the epoch the manifest was sealed under"
+    );
+}
+
+#[tokio::test]
 async fn identical_bytes_become_one_object() {
     // The same ciphertext legitimately belongs to assets in two albums — one thumbnail shared
     // between a copy in each. Neither is the other's duplicate (a `409` is the client's *merge*

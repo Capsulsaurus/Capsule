@@ -552,12 +552,16 @@ async fn record_in(
 
     // The create's provenance blob is the asset's first accepted manifest, so it is the chain
     // the first lifecycle op must name (invariant 17). Set from the record's own
-    // `manifest_sha256` and never from the content address (`S-C31`).
+    // `manifest_sha256` and never from the content address (`S-C31`). The manifest's album-key
+    // epoch lands with it: invariant 18 reads the album's high-water mark off the rows.
     if blob.role == BlobRole::Provenance
         && row.chain_head.is_none()
         && let Some(manifest_sha256) = blob.manifest_sha256
     {
         row.chain_head = Some(manifest_sha256);
+        if let Some(amk_version) = blob.amk_version {
+            row.amk_version = amk_version;
+        }
     }
 
     let minted = if row.state == AssetState::Tombstoned {

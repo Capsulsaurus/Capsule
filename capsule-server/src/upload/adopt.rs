@@ -158,6 +158,7 @@ pub async fn adopt(
                 address: adoption.address.clone(),
                 size: stat.size,
                 manifest_sha256: None,
+                amk_version: None,
                 finalized_at: context.clock().now(),
             },
             Custody {

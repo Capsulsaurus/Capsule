@@ -135,12 +135,8 @@ only beside the database dump it was taken with.
 4. With `serve` stopped, run `capsule-server rebuild` and read its report. It lists the assets
    uploaded after the dump; `capsule-server rebuild --apply` restores them with the sequence
    numbers they had, so clients' sync cursors stay valid.
-5. Run `capsule-server scrub --deep`. It should report nothing except one known finding: a
-   `mirrored_fact_mismatch` on `amk_version`, with the index holding `0`, for every asset whose
-   row was written by an upload rather than by the rebuild. The server records that field
-   wrongly on upload
-   ([#790](https://github.com/Capsulsaurus/Capsule/issues/790)), and the finding does not mean
-   the backup is damaged. While that finding is reported, the scrub exits non-zero.
+5. Run `capsule-server scrub --deep`. It should report nothing, and it exits non-zero
+   while any finding is reported.
 6. Start `serve`. Everyone signs in again, because their sessions were in Valkey. Clients resume
    syncing where they stopped.
 

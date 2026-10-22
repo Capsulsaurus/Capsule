@@ -1177,6 +1177,7 @@ async fn every_declared_response_is_exercised() {
                     role,
                     address: at.clone(),
                     size: ciphertext.len() as u64,
+                    amk_version: None,
                     finalized_at: jiff::Timestamp::UNIX_EPOCH,
                 },
             )
@@ -2018,6 +2019,7 @@ async fn every_declared_response_is_exercised() {
                     role,
                     address: at,
                     size: 64,
+                    amk_version: None,
                     finalized_at: jiff::Timestamp::UNIX_EPOCH,
                 },
             )

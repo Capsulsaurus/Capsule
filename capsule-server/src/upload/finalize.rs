@@ -562,6 +562,11 @@ async fn record_against_asset(
                 address: address.clone(),
                 size: record.total_size,
                 manifest_sha256,
+                // The epoch of the manifest this blob *is*, so only on the provenance member: the
+                // other members' envelopes mirror the same manifest, but the row's epoch is a fact
+                // of the manifest it publishes, and it lands with that manifest's chain head.
+                amk_version: (record.blob_role == crate::store::BlobRole::Provenance)
+                    .then_some(u64::from(envelope.amk_version)),
                 finalized_at: context.clock().now(),
             },
             custody,
