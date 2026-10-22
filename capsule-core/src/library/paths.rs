@@ -78,6 +78,31 @@ pub fn receipts_path(root: &Path, uuid: &Uuid, capture_utc: Option<i64>) -> Path
     media_dir(root, year, month).join(format!("{}.receipts.cbor", uuid.simple()))
 }
 
+/// `media/{YYYY}/{YYYY-MM}/{uuid}.attestations.cbor` — the client's signed storage-attestation
+/// log for the asset, kept beside its custody receipts (SSoT: Transfer — Durability: Signed
+/// Storage Attestation). Evidence, not a cache: it is included verbatim in the backup artifact.
+pub fn attestations_path(root: &Path, uuid: &Uuid, capture_utc: Option<i64>) -> PathBuf {
+    let (year, month) = date_parts(capture_utc);
+    media_dir(root, year, month).join(format!("{}.attestations.cbor", uuid.simple()))
+}
+
+/// The `.cbor` logs the library keeps beside an asset's sidecar. They share the sidecar's
+/// suffix, so every walk that reads `{uuid}.cbor` sidecars must skip them by name.
+pub(crate) const SIBLING_LOG_SUFFIXES: [&str; 3] =
+    [".provenance.cbor", ".receipts.cbor", ".attestations.cbor"];
+
+/// Whether a file name under `media/` names an asset's sidecar: exactly `{uuid}.cbor`, never one
+/// of the [sibling logs](SIBLING_LOG_SUFFIXES). The one filter `rebuild_index`, `Workspace::open`
+/// and the unsigned-sidecar migration share, so a new sibling cannot be added to one walk and
+/// parsed as a sidecar by another.
+pub(crate) fn is_sidecar_file_name(name: &str) -> bool {
+    // Exact-case on purpose: the library writes every one of these names itself, lowercase.
+    Path::new(name).extension().is_some_and(|ext| ext == "cbor")
+        && !SIBLING_LOG_SUFFIXES
+            .iter()
+            .any(|suffix| name.ends_with(suffix))
+}
+
 /// `index/thumbnails/{size}/{s1}/{s2}/{uuid}.{format}` where format is "jxl" or "webp"
 pub fn thumbnail_path(root: &Path, uuid: &Uuid, size: ThumbnailSize) -> PathBuf {
     let (s1, s2) = shard_dirs(uuid);
@@ -193,6 +218,40 @@ mod tests {
         let path = sidecar_path(root, &uuid, "jpg", Some(1_721_001_600));
         assert_eq!(path.extension(), Some(OsStr::new("cbor")));
         assert!(path.to_str().unwrap().contains("media/2024/2024-07"));
+    }
+
+    #[test]
+    fn test_attestations_path_sits_beside_the_receipts() {
+        let root = Path::new("/lib");
+        let uuid = test_uuid();
+        let ts = Some(1_721_001_600);
+        let attestations = attestations_path(root, &uuid, ts);
+        assert_eq!(
+            attestations.parent(),
+            receipts_path(root, &uuid, ts).parent()
+        );
+        assert!(
+            attestations
+                .to_str()
+                .unwrap()
+                .ends_with(&format!("{}.attestations.cbor", uuid.simple()))
+        );
+    }
+
+    #[test]
+    fn only_the_bare_cbor_file_is_a_sidecar() {
+        let id = test_uuid().simple().to_string();
+        assert!(is_sidecar_file_name(&format!("{id}.cbor")));
+        for sibling in ["provenance", "receipts", "attestations"] {
+            assert!(
+                !is_sidecar_file_name(&format!("{id}.{sibling}.cbor")),
+                "{sibling} is a sibling log, not a sidecar"
+            );
+        }
+        assert!(!is_sidecar_file_name(&format!(
+            "{id}.attestations.cbor.tmp"
+        )));
+        assert!(!is_sidecar_file_name(&format!("{id}.jpg")));
     }
 
     #[test]

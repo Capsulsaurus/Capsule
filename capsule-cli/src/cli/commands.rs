@@ -126,6 +126,32 @@ pub(crate) enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Ask the server whether it durably holds this library's originals, and keep its signed
+    /// answer as evidence
+    Verify {
+        /// Path to the Capsule library
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// Verify only this asset (repeatable); every asset in the library when omitted
+        #[arg(long, value_name = "ASSET_ID")]
+        asset: Vec<Uuid>,
+        /// Ask for the server's signed verdict, check it under the server's attestation key,
+        /// and keep it in the library beside each asset's custody receipts
+        #[arg(long)]
+        signed: bool,
+        /// Have the server re-hash the stored bytes rather than only check they are present;
+        /// spends the account's deep-verify budget
+        #[arg(long)]
+        deep: bool,
+        /// Read the library passphrase from stdin instead of prompting, so the command
+        /// works in scripts and CI where there is no terminal.
+        #[arg(long)]
+        passphrase_stdin: bool,
+        /// Print the run as one JSON document on stdout: the totals and each asset's verdict
+        /// (durable, not durable, or failed with its error)
+        #[arg(long)]
+        json: bool,
+    },
     /// Review a local library: flag assets, filter by flag, sweep rejects to trash
     Cull {
         /// Path to the Capsule library
