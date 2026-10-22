@@ -12,6 +12,7 @@
 //! receipts/{asset_id}     # the asset's custody-receipt log, verbatim (when held)
 //! attestations/{asset_id} # the asset's signed storage-attestation log, verbatim (when held)
 //! authority/{album_id}    # the album's admin-signed epoch ledger (public; canonical CBOR)
+//! library/attestation-keys.cbor # the library's pinned attestation-key history, verbatim (when held)
 //! ```
 //!
 //! The `authority/` entries (format version 2) carry each album's **public** authority — the
@@ -196,6 +197,11 @@ pub struct BackupInput {
     /// Sealed album and stack label records. Each one's `(album_id, amk_version)` AMK must be
     /// in [`amks`](Self::amks); the ledger escrows it.
     pub docs: Vec<BackupDoc>,
+    /// The library's pinned attestation-key history (`.library/attestation-keys.cbor` bytes;
+    /// empty = none). It rides the artifact verbatim so a restored library keeps checking
+    /// receipts under the keys it pinned, instead of trusting whatever a server publishes first
+    /// after the restore.
+    pub attestation_key_pins: Vec<u8>,
     /// The exporting device id.
     pub exporter_device: Uuid,
     /// Source library version string.
@@ -240,6 +246,9 @@ struct AmkLedger {
     entries: Vec<(Uuid, u32, [u8; 32])>,
 }
 
+/// The artifact entry carrying the library's pinned attestation-key history.
+const ATTESTATION_KEY_PINS_ENTRY: &str = "library/attestation-keys.cbor";
+
 fn blob_role_order(role: &str) -> u8 {
     match role {
         "blobs" => 0,
@@ -249,7 +258,8 @@ fn blob_role_order(role: &str) -> u8 {
         "authority" => 4,
         "docs" => 5,
         "attestations" => 6,
-        _ => 7,
+        "library" => 7,
+        _ => 8,
     }
 }
 
@@ -599,6 +609,22 @@ fn export_inner(
         payloads.push((path, Payload::Bytes(Cow::Owned(data))));
     }
 
+    // The library's pinned attestation-key history, verbatim. Public keys, so it rides in the
+    // clear under the MANIFEST's HMAC and exporter signature like every entry. Additive: an
+    // older reader hash-checks it as a manifest entry and otherwise ignores it.
+    if !input.attestation_key_pins.is_empty() {
+        let data = input.attestation_key_pins.as_slice();
+        entries.push(EntryRef {
+            path: ATTESTATION_KEY_PINS_ENTRY.into(),
+            hash: hash::hash_bytes(data),
+            size: data.len() as u64,
+        });
+        payloads.push((
+            ATTESTATION_KEY_PINS_ENTRY.into(),
+            Payload::Bytes(Cow::Borrowed(data)),
+        ));
+    }
+
     for a in &assets {
         let head = a.head()?;
         let ct_path = format!("blobs/{}", head.core.ciphertext_hash.to_hex());
@@ -852,6 +878,7 @@ pub struct BackupArtifact {
     ledger: BTreeMap<(Uuid, u32), [u8; 32]>,
     authorities: BTreeMap<Uuid, SignedEpochLedger>,
     docs: Vec<BackupDoc>,
+    attestation_key_pins: Option<Vec<u8>>,
     core: ManifestCore,
 }
 
@@ -924,11 +951,22 @@ impl BackupArtifact {
         // an AMK the ledger escrows.
         let docs = load_docs(&manifest.core, &files, &ledger)?;
 
+        // (7) The pinned attestation-key history, when the (authenticated) manifest lists one.
+        // Its bytes were hash-checked in (3); the restore decodes them.
+        let attestation_key_pins = manifest
+            .core
+            .entries
+            .iter()
+            .any(|entry| entry.path == ATTESTATION_KEY_PINS_ENTRY)
+            .then(|| files.get(ATTESTATION_KEY_PINS_ENTRY).cloned())
+            .flatten();
+
         Ok(Self {
             files,
             ledger,
             authorities,
             docs,
+            attestation_key_pins,
             core: manifest.core,
         })
     }
@@ -1077,6 +1115,14 @@ impl BackupArtifact {
     /// artifact exported before the records existed.
     pub fn docs(&self) -> &[BackupDoc] {
         &self.docs
+    }
+
+    /// The library's pinned attestation-key history the artifact carries
+    /// (`.library/attestation-keys.cbor` bytes, verbatim), listed in the authenticated manifest.
+    /// `None` for an artifact exported by a library that had pinned nothing, or before the pin
+    /// rode the artifact; such an artifact restores exactly as it did before.
+    pub fn attestation_key_pins(&self) -> Option<&[u8]> {
+        self.attestation_key_pins.as_deref()
     }
 
     /// The escrowed AMK for `(album_id, epoch)`, if the ledger holds it.
@@ -1330,6 +1376,7 @@ mod tests {
                 amks,
                 authorities,
                 docs: Vec::new(),
+                attestation_key_pins: Vec::new(),
                 exporter_device: Uuid::from_u128(0xD1),
                 source_library_version: "1".into(),
                 export_timestamp: "2026-05-31T00:00:00Z".into(),
@@ -1636,6 +1683,103 @@ mod tests {
         assert!(matches!(
             BackupArtifact::open(&tampered, b"pw", &f.device.verifying_key()),
             Err(BackupError::Corrupt(p)) if p == path
+        ));
+    }
+
+    #[test]
+    fn the_attestation_key_pin_rides_the_artifact_verbatim() {
+        let f = Fix::new();
+        let mut input = f.input(vec![f.asset(1, b"pinned")]);
+        input.attestation_key_pins = b"attestation-key-pin-cbor".to_vec();
+        let bytes = export_with_params(&input, b"pw", FAST, &f.device).unwrap();
+
+        let art = BackupArtifact::open(&bytes, b"pw", &f.device.verifying_key()).unwrap();
+
+        assert!(
+            art.core
+                .entries
+                .iter()
+                .any(|e| e.path == ATTESTATION_KEY_PINS_ENTRY),
+            "the pin is a manifest entry"
+        );
+        assert_eq!(
+            art.attestation_key_pins(),
+            Some(&b"attestation-key-pin-cbor"[..])
+        );
+        // The assets restore exactly as they would without it.
+        let report = art.restore(RestoreMode::Commit, &BTreeMap::new()).unwrap();
+        assert_eq!(report.applied.len(), 1);
+    }
+
+    #[test]
+    fn an_artifact_without_a_pin_carries_none() {
+        let f = Fix::new();
+        let bytes = export_with_params(
+            &f.input(vec![f.asset(1, b"unpinned")]),
+            b"pw",
+            FAST,
+            &f.device,
+        )
+        .unwrap();
+
+        let art = BackupArtifact::open(&bytes, b"pw", &f.device.verifying_key()).unwrap();
+
+        assert!(
+            !art.core
+                .entries
+                .iter()
+                .any(|e| e.path == ATTESTATION_KEY_PINS_ENTRY),
+            "no pin → no entry"
+        );
+        assert_eq!(art.attestation_key_pins(), None);
+        let report = art.restore(RestoreMode::Commit, &BTreeMap::new()).unwrap();
+        assert_eq!(report.applied.len(), 1);
+    }
+
+    #[test]
+    fn a_pin_the_manifest_does_not_list_is_ignored() {
+        // Only the authenticated manifest names what the artifact carries: a pin file slipped
+        // into the tar after export is never handed to a restore.
+        let f = Fix::new();
+        let bytes = export_with_params(
+            &f.input(vec![f.asset(1, b"unpinned")]),
+            b"pw",
+            FAST,
+            &f.device,
+        )
+        .unwrap();
+        let mut builder = tar::Builder::new(Vec::new());
+        for (entry, data) in tar_read(&bytes).unwrap() {
+            tar_append(&mut builder, &entry, &data).unwrap();
+        }
+        tar_append(&mut builder, ATTESTATION_KEY_PINS_ENTRY, b"planted").unwrap();
+        let planted = builder.into_inner().unwrap();
+
+        let art = BackupArtifact::open(&planted, b"pw", &f.device.verifying_key()).unwrap();
+
+        assert_eq!(art.attestation_key_pins(), None);
+    }
+
+    #[test]
+    fn a_tampered_pin_fails_the_open() {
+        let f = Fix::new();
+        let mut input = f.input(vec![f.asset(1, b"pinned")]);
+        input.attestation_key_pins = b"attestation-key-pin".to_vec();
+        let bytes = export_with_params(&input, b"pw", FAST, &f.device).unwrap();
+        let mut builder = tar::Builder::new(Vec::new());
+        for (entry, data) in tar_read(&bytes).unwrap() {
+            let data = if entry == ATTESTATION_KEY_PINS_ENTRY {
+                b"attestation-key-piN".to_vec()
+            } else {
+                data
+            };
+            tar_append(&mut builder, &entry, &data).unwrap();
+        }
+        let tampered = builder.into_inner().unwrap();
+
+        assert!(matches!(
+            BackupArtifact::open(&tampered, b"pw", &f.device.verifying_key()),
+            Err(BackupError::Corrupt(p)) if p == ATTESTATION_KEY_PINS_ENTRY
         ));
     }
 

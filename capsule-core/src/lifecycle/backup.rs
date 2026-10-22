@@ -206,11 +206,20 @@ impl Workspace {
 
         let docs = self.backup_docs(&mut amks)?;
 
+        // The pinned attestation-key history of every server this library pushed to. Like the
+        // evidence logs, a pin that exists and cannot be read or decoded fails the export: an
+        // artifact silently without it restores a library that trusts its servers' next
+        // publication on first use again.
+        let attestation_key_pins = crate::library::read_attestation_key_pins(&self.root)
+            .map_err(backup::BackupError::from)?
+            .unwrap_or_default();
+
         Ok(BackupInput {
             assets,
             amks,
             authorities,
             docs,
+            attestation_key_pins,
             exporter_device: self.account.device.device_id,
             source_library_version: "1".into(),
             export_timestamp: now_rfc3339(),
@@ -369,6 +378,16 @@ impl Workspace {
         let bytes = fs::read(archive).map_err(|e| LifecycleError::Io(e.to_string()))?;
         let artifact = BackupArtifact::open(&bytes, passphrase, exporter_pub)?;
         let report = artifact.restore(RestoreMode::Commit, &self.local_heads())?;
+
+        // The pinned attestation-key history first: it is the one step that can refuse on the
+        // library's own state (a pin that diverges from the carried one), and a refusal must
+        // come before anything else is written. Folding it in is a union, so a later failure
+        // leaves a pin that only ever grew by keys this account had already pinned.
+        if let Some(carried) = artifact.attestation_key_pins() {
+            let outcome = crate::library::restore_attestation_key_pins(&self.root, carried)
+                .map_err(backup::BackupError::from)?;
+            tracing::info!(?outcome, "backup: attestation-key pin restored");
+        }
 
         // Fold the artifact's escrowed AMKs into the durable keystore **before** writing any
         // asset: this is the step that makes a keyless library whole again, and an asset on disk
@@ -888,6 +907,177 @@ mod tests {
         let b = Workspace::open(lib_b.path(), b"device b", FAST_PARAMS).unwrap();
         assert_eq!(b.read_plaintext(&asset).unwrap(), original);
         assert!(b.unmigrated_sidecars().is_empty());
+    }
+
+    /// A library with one photo in one album, exported to `archive`, with `pins` pinned first.
+    fn exported_with_pins(
+        lib: &Path,
+        src: &Path,
+        pins: &[(&str, &[HybridVerifyingKey])],
+    ) -> (Workspace, Uuid, std::path::PathBuf) {
+        let mut a = fast_workspace(lib);
+        let album = a.create_album("Trip").unwrap();
+        let photo = src.join("photo.jpg");
+        fs::write(&photo, b"\xFF\xD8\xFF a photo pushed somewhere").unwrap();
+        let asset = a.import_asset(album, &photo).unwrap();
+        for (origin, keys) in pins {
+            crate::library::pin_attestation_keys(lib, origin, keys).unwrap();
+        }
+        let archive = src.join("backup.tar");
+        a.export_backup_with_params(&archive, b"pw", FAST_PARAMS)
+            .unwrap();
+        (a, asset, archive)
+    }
+
+    fn server_key(seed: u8) -> HybridVerifyingKey {
+        HybridSigningKey::from_seed64(&[seed; 64]).verifying_key()
+    }
+
+    const SERVER: &str = "https://capsule.example";
+
+    /// #805: the pin rides the backup byte for byte, and a run after the restore still refuses
+    /// a server that dropped a key pinned before the backup.
+    #[test]
+    fn the_attestation_key_pin_rides_the_backup_byte_for_byte() {
+        let (lib_a, lib_b, src) = (
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+        );
+        let (a, asset, archive) = exported_with_pins(
+            lib_a.path(),
+            src.path(),
+            &[(SERVER, &[server_key(1), server_key(2)])],
+        );
+        let pin = fs::read(crate::library::attestation_key_pins_path(lib_a.path())).unwrap();
+
+        let mut b = same_account_device(&a, lib_b.path());
+        assert_eq!(
+            b.import_backup(&archive, b"pw", &a.exporter_verifying_key())
+                .unwrap(),
+            1
+        );
+
+        assert_eq!(
+            fs::read(crate::library::attestation_key_pins_path(lib_b.path())).unwrap(),
+            pin,
+            "the pin restores byte for byte"
+        );
+        assert!(b.asset(&asset).is_some());
+        let error = crate::library::pin_attestation_keys(lib_b.path(), SERVER, &[server_key(2)])
+            .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                crate::library::KeyPinError::HistoryRewritten { missing: 1, .. }
+            ),
+            "{error:?}"
+        );
+    }
+
+    /// #805: a restore into a library whose pin diverges from the artifact's is refused before
+    /// it writes anything — neither pin, nor any asset or key.
+    #[test]
+    fn a_diverging_pin_refuses_the_restore_and_writes_nothing() {
+        let (lib_a, lib_b, src) = (
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+        );
+        let (a, asset, archive) = exported_with_pins(
+            lib_a.path(),
+            src.path(),
+            &[(SERVER, &[server_key(1), server_key(2)])],
+        );
+        let mut b = same_account_device(&a, lib_b.path());
+        crate::library::pin_attestation_keys(lib_b.path(), SERVER, &[server_key(1), server_key(9)])
+            .unwrap();
+        let pin_before = fs::read(crate::library::attestation_key_pins_path(lib_b.path())).unwrap();
+
+        let error = b
+            .import_backup(&archive, b"pw", &a.exporter_verifying_key())
+            .unwrap_err();
+
+        assert!(
+            matches!(
+                &error,
+                LifecycleError::Backup(backup::BackupError::AttestationKeyPinsDiverge {
+                    origin,
+                    only_carried: 1,
+                    only_local: 1,
+                }) if origin == SERVER
+            ),
+            "{error:?}"
+        );
+        assert_eq!(
+            fs::read(crate::library::attestation_key_pins_path(lib_b.path())).unwrap(),
+            pin_before,
+            "the library's pin is untouched"
+        );
+        assert!(b.asset(&asset).is_none(), "no asset was restored");
+        let album = a.asset(&asset).unwrap().album_id;
+        assert!(b.album(&album).is_err(), "no album key was absorbed");
+    }
+
+    /// An artifact whose pin has a schema newer than this build reads still restores its assets:
+    /// the pin is skipped with a warning, never a reason to refuse the backup.
+    #[test]
+    fn a_pin_of_a_newer_schema_does_not_block_the_restore() {
+        let (lib_a, lib_b, src) = (
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+        );
+        let (a, asset, _) = exported_with_pins(lib_a.path(), src.path(), &[]);
+        #[derive(serde::Serialize)]
+        struct FuturePinFile {
+            version: u8,
+            servers: String,
+        }
+        let mut input = a.backup_input().unwrap();
+        // A pin file as a later build might write it: a newer version, a shape this one lacks.
+        input.attestation_key_pins = crate::cbor::to_canonical_vec(&FuturePinFile {
+            version: u8::MAX,
+            servers: "from the future".to_owned(),
+        })
+        .unwrap();
+        let archive = src.path().join("newer-pin.tar");
+        let bytes =
+            backup::export_with_params(&input, b"pw", FAST_PARAMS, a.device_signer.as_ref())
+                .unwrap();
+        fs::write(&archive, bytes).unwrap();
+        let mut b = same_account_device(&a, lib_b.path());
+
+        assert_eq!(
+            b.import_backup(&archive, b"pw", &a.exporter_verifying_key())
+                .unwrap(),
+            1
+        );
+
+        assert!(b.asset(&asset).is_some());
+        assert!(!crate::library::attestation_key_pins_path(lib_b.path()).exists());
+    }
+
+    /// An artifact from a library that pinned nothing — or from before the pin rode the
+    /// artifact — restores as before and leaves no pin behind.
+    #[test]
+    fn an_artifact_without_a_pin_restores_as_before() {
+        let (lib_a, lib_b, src) = (
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+        );
+        let (a, asset, archive) = exported_with_pins(lib_a.path(), src.path(), &[]);
+        let mut b = same_account_device(&a, lib_b.path());
+
+        assert_eq!(
+            b.import_backup(&archive, b"pw", &a.exporter_verifying_key())
+                .unwrap(),
+            1
+        );
+
+        assert!(b.asset(&asset).is_some());
+        assert!(!crate::library::attestation_key_pins_path(lib_b.path()).exists());
     }
 
     /// A restore never overwrites an evidence log already on disk, and writes none when the
