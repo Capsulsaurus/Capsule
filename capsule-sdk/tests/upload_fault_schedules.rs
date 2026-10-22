@@ -28,6 +28,7 @@
 //! The clock is paused, so the retry engine's backoff costs nothing, and every case runs under a
 //! fixed, printed seed (`PROPTEST_RNG_SEED` overrides it) that a failure replays from.
 
+use std::fmt::Write as _;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
@@ -459,7 +460,7 @@ async fn serve(listener: TcpListener, model: Arc<Mutex<Model>>, kill: Arc<Notify
         let model = model.clone();
         let kill = kill.clone();
         connections.spawn(async move {
-            let Some(req) = read_request(&mut stream).await else {
+            let Some(req) = Box::pin(read_request(&mut stream)).await else {
                 return;
             };
             let answer = model.lock().expect("model lock").handle(&req, &kill);
@@ -473,12 +474,13 @@ async fn serve(listener: TcpListener, model: Arc<Mutex<Model>>, kill: Arc<Notify
             };
             let mut out = format!("HTTP/1.1 {} X\r\n", reply.status);
             for (k, v) in &reply.headers {
-                out.push_str(&format!("{k}: {v}\r\n"));
+                let _ = write!(out, "{k}: {v}\r\n");
             }
-            out.push_str(&format!(
+            let _ = write!(
+                out,
                 "Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
-            ));
+            );
             let _ = stream.write_all(out.as_bytes()).await;
             let _ = stream.flush().await;
         });
