@@ -13,6 +13,10 @@ use std::net::SocketAddr;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use capsule_core::crypto::hash::hash_bytes;
+use capsule_core::crypto::receipts::{
+    BlobRole as ReceiptRole, CustodyReceipt, ReceiptExpectations, verify_receipt,
+};
 use capsule_server::blob::{BlobStore, ContentAddress};
 use capsule_server::index::{AssetIndex, BlobRecord, PendingAsset, Reservation};
 use capsule_server::store::{AssetId, BlobRole, OwnerId};
@@ -936,6 +940,132 @@ async fn an_adoption_onto_an_asset_holding_another_original_is_refused_and_keeps
 
     assert_eq!(problem["code"], "error.drop.adoption_refused");
     assert_drop_kept(&fixture, &bearer).await;
+    assert!(
+        adopted_receipts(&fixture).await.is_empty(),
+        "a refused adoption committed nothing, so it has no receipt"
+    );
+}
+
+/// Every custody receipt the log holds for [`ADOPTED`].
+async fn adopted_receipts(fixture: &Fixture) -> Vec<CustodyReceipt> {
+    use capsule_server::attestation::ReceiptLog as _;
+    fixture
+        .receipts
+        .for_asset(&AssetId::new(ADOPTED))
+        .await
+        .expect("the log answers")
+}
+
+#[tokio::test]
+async fn an_adopted_blob_has_a_receipt_that_verifies_under_the_published_key() {
+    // Invariant 33: adoption is the second path that indexes a blob, so it is the second path
+    // that must write a receipt with it. Read back the way the owner reads it — the durable
+    // chain — and verified the way a client verifies one.
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (drop_id, bytes, manifest) = pending_drop(&fixture, &bearer).await;
+
+    adopt(
+        &fixture,
+        &bearer,
+        &drop_id,
+        &bytes,
+        &manifest["manifest_envelope"],
+        StatusCode::OK,
+    )
+    .await;
+
+    let body: Value = fixture
+        .client
+        .get(&format!("/v1/assets/{ADOPTED}/receipts"))
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    let entries = body["receipts"].as_array().expect("a receipts array");
+    assert_eq!(entries.len(), 1, "one custody event, one receipt");
+    assert_eq!(
+        entries[0]["upload_id"], drop_id,
+        "the receipt is filed under the drop the owner adopted"
+    );
+
+    let cbor = BASE64
+        .decode(entries[0]["receipt_cbor"].as_str().expect("base64 CBOR"))
+        .expect("the CBOR decodes from base64");
+    let receipt = CustodyReceipt::from_canonical_cbor(&cbor).expect("a receipt");
+    assert_eq!(
+        verify_receipt(
+            &receipt,
+            &[fixture.attestation_key.verifying_key()],
+            &ReceiptExpectations {
+                ciphertext_hash: hash_bytes(&bytes),
+                size: bytes.len() as u64,
+                role: ReceiptRole::Original,
+                envelope_hash: None,
+            },
+            receipt
+                .core
+                .received_at
+                .parse::<Timestamp>()
+                .expect("an instant")
+                .as_second(),
+        ),
+        Ok(()),
+    );
+    assert_eq!(receipt.core.asset_id, ADOPTED);
+    assert_eq!(
+        receipt.core.uploaded_by_user,
+        user().as_str(),
+        "an adopted drop's author is the adopter"
+    );
+}
+
+#[tokio::test]
+async fn a_retried_adoption_returns_the_same_receipt() {
+    // The index commits the blob and its receipt, and the answer is lost: the adoption is
+    // refused as unavailable and the drop returns to the inbox. The retry finds the blob
+    // already held, and must get the receipt that committed — never a second one for the same
+    // custody event.
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (drop_id, bytes, manifest) = pending_drop(&fixture, &bearer).await;
+
+    fixture.index_fault.arm_after_commit();
+    adopt(
+        &fixture,
+        &bearer,
+        &drop_id,
+        &bytes,
+        &manifest["manifest_envelope"],
+        StatusCode::INTERNAL_SERVER_ERROR,
+    )
+    .await;
+    assert_eq!(fixture.index_fault.fired(), 1, "the fault fired");
+    assert_drop_kept(&fixture, &bearer).await;
+    let committed = adopted_receipts(&fixture).await;
+    assert_eq!(
+        committed.len(),
+        1,
+        "the lost answer still committed the rows and their receipt together"
+    );
+
+    adopt(
+        &fixture,
+        &bearer,
+        &drop_id,
+        &bytes,
+        &manifest["manifest_envelope"],
+        StatusCode::OK,
+    )
+    .await;
+
+    assert_eq!(
+        adopted_receipts(&fixture).await,
+        committed,
+        "the retry returned the receipt that committed rather than minting another"
+    );
 }
 
 #[tokio::test]
