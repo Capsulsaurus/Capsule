@@ -69,7 +69,10 @@ async fn e2e_case_2_import_upload_finalize_lands_every_blob_at_its_content_addre
 
     // Every blob is on disk at its content address under the blob root, byte for byte.
     let on_disk = |hex: &str| std::fs::read(server.blob_path(hex)).expect("the blob is filed");
-    assert_eq!(on_disk(&bundle.ciphertext_hash.to_hex()), bundle.ciphertext);
+    assert_eq!(
+        on_disk(&bundle.ciphertext_hash.to_hex()),
+        bundle.original.to_vec().unwrap()
+    );
     let metadata_hash = bundle
         .metadata_blob_hash
         .expect("a create binds a metadata blob")

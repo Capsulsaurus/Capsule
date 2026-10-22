@@ -99,7 +99,7 @@ fn fixture(name: &str, count: u8) -> Fixture {
             original_held: true,
             changed_at: "2026-10-21T00:00:00Z".to_owned(),
         });
-        blobs.insert(original_hash, bundle.ciphertext.clone());
+        blobs.insert(original_hash, bundle.original.to_vec().unwrap());
         blobs.insert(metadata_hash, bundle.metadata_blob.clone());
         assets.push(asset);
     }

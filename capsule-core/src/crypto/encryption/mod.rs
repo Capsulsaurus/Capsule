@@ -34,7 +34,8 @@ pub use rekey::{
     seal_metadata_blob_with_nonce,
 };
 pub use stream::{
-    AssetEncryption, CIPHERTEXT_CHUNK, NONCE_PREFIX_LEN, PLAINTEXT_CHUNK, StreamError, TAG_LEN,
-    decrypt_asset, decrypt_asset_vec, decrypt_chunk, encrypt_asset, encrypt_asset_vec,
-    encrypt_asset_vec_full, encrypt_asset_vec_with_prefix, encrypt_asset_with_prefix,
+    AssetEncryption, CIPHERTEXT_CHUNK, CiphertextReader, NONCE_PREFIX_LEN, PLAINTEXT_CHUNK,
+    StreamDecryptor, StreamError, TAG_LEN, chunk_count, ciphertext_len, decrypt_asset,
+    decrypt_asset_vec, decrypt_chunk, encrypt_asset, encrypt_asset_vec, encrypt_asset_vec_full,
+    encrypt_asset_vec_with_prefix, encrypt_asset_with_prefix, encrypt_chunk,
 };
