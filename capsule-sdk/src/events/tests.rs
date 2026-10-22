@@ -228,6 +228,14 @@ enum ChunkFault {
     Rollback,
     /// `session_not_found`: the session expired.
     SessionLost,
+    /// Close the connection without answering: nothing persisted, the client sees a reset.
+    Reset,
+    /// `offset_mismatch` with no offset header, and the session expires before the client's
+    /// `HEAD` asks where to resume, so that `HEAD` answers `404`.
+    MismatchThenGone,
+    /// `rate_limited` with `Retry-After: 0`, and the session expires during the wait, so the
+    /// `HEAD` after it answers `404`.
+    WaitThenGone,
 }
 
 /// The scripted model server: honest except where `script` names a fault for a `PATCH`.
@@ -236,6 +244,8 @@ struct Scripted {
     patches: AtomicUsize,
     sessions: AtomicUsize,
     received: Mutex<u64>,
+    /// The session expired: the next `HEAD` answers `404`.
+    gone: std::sync::atomic::AtomicBool,
 }
 
 impl Scripted {
@@ -245,6 +255,7 @@ impl Scripted {
             patches: AtomicUsize::new(0),
             sessions: AtomicUsize::new(0),
             received: Mutex::new(0),
+            gone: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -259,6 +270,9 @@ impl Scripted {
                     .json_body(format!(
                         r#"{{"id":{id:?},"upload_url":"/{id}","suggested_chunk_size":{CHUNK}}}"#
                     ))
+            }
+            "HEAD" if self.gone.swap(false, Ordering::SeqCst) => {
+                MockResponse::new(404, "Not Found")
             }
             "HEAD" => MockResponse::new(200, "OK")
                 .header(
@@ -317,6 +331,26 @@ impl Scripted {
                 error_codes::UPLOAD_SESSION_NOT_FOUND,
                 "gone",
             ),
+            Some(ChunkFault::Reset) => MockResponse::drop_connection(),
+            Some(ChunkFault::MismatchThenGone) => {
+                self.gone.store(true, Ordering::SeqCst);
+                MockResponse::api_error(
+                    409,
+                    "Conflict",
+                    error_codes::UPLOAD_OFFSET_MISMATCH,
+                    "offset",
+                )
+            }
+            Some(ChunkFault::WaitThenGone) => {
+                self.gone.store(true, Ordering::SeqCst);
+                MockResponse::api_error(
+                    429,
+                    "Too Many Requests",
+                    error_codes::UPLOAD_RATE_LIMITED,
+                    "wait",
+                )
+                .header("Retry-After", "0")
+            }
             None => {
                 let expected = hex::encode(Sha256::digest(&req.body));
                 assert_eq!(req.header("X-Capsule-Checksum"), Some(expected.as_str()));
@@ -372,6 +406,65 @@ async fn an_upload_under_a_scripted_fault_schedule_publishes_a_replayable_sequen
 async fn an_honest_upload_publishes_create_chunks_and_finalize_only() {
     let (_, events) = scripted_upload(Vec::new()).await;
     insta::assert_snapshot!(render(&events));
+}
+
+/// **A transport reset.** The dropped request publishes a `transport_reset` retry for the chunk
+/// it lost, before the same chunk is sent again from the same offset. The clock is paused so
+/// the retry engine's real backoff costs nothing.
+#[tokio::test(start_paused = true)]
+async fn a_dropped_connection_publishes_a_transport_reset_before_the_resend() {
+    let (outcome, first) = scripted_upload(vec![(2, ChunkFault::Reset)]).await;
+    assert!(matches!(outcome, UploadOutcome::Completed { .. }));
+    let reset_at = first
+        .iter()
+        .position(|event| {
+            matches!(
+                event,
+                TransferEvent::ChunkRetried {
+                    reason: RetryReason::TransportReset { .. },
+                    ..
+                }
+            )
+        })
+        .expect("the reset is published");
+    assert!(
+        matches!(
+            &first[reset_at - 1..=reset_at + 1],
+            [
+                TransferEvent::ChunkSent { offset: CHUNK, .. },
+                TransferEvent::ChunkRetried { offset: CHUNK, .. },
+                TransferEvent::ChunkSent { offset: CHUNK, .. },
+            ]
+        ),
+        "sent, reset, re-sent from the same offset: {first:?}"
+    );
+    let (_, replay) = scripted_upload(vec![(2, ChunkFault::Reset)]).await;
+    assert_eq!(render(&first), render(&replay));
+    insta::assert_snapshot!(render(&first));
+}
+
+/// **A session lost while recovering.** An `offset_mismatch` whose `HEAD` finds the session
+/// gone, and a server-asked wait after which `HEAD` finds it gone, each publish `session_lost`
+/// for the refused chunk and then the replacement session, which the transfer drives from zero.
+#[tokio::test]
+async fn a_session_lost_while_recovering_publishes_the_loss_then_the_new_session() {
+    let schedule = || {
+        vec![
+            (2, ChunkFault::MismatchThenGone),
+            (4, ChunkFault::WaitThenGone),
+        ]
+    };
+    let (outcome, first) = scripted_upload(schedule()).await;
+    assert!(
+        matches!(&outcome, UploadOutcome::Completed { session_id } if session_id == "sess-3"),
+        "{outcome:?}"
+    );
+    let (_, replay) = scripted_upload(schedule()).await;
+    assert_eq!(
+        first, replay,
+        "the same schedule publishes the same sequence"
+    );
+    insta::assert_snapshot!(render(&first));
 }
 
 #[tokio::test]
@@ -530,6 +623,42 @@ async fn a_fetch_whose_bytes_do_not_match_publishes_the_rejection() {
 
 #[tokio::test]
 async fn an_unsized_fetch_publishes_its_windows_and_verdict() {
+    let (result, events) = scripted_unsized(Vec::new(), false).await;
+    assert_eq!(result.unwrap().len(), 100);
+    insta::assert_snapshot!(render(&events));
+}
+
+/// **An unsized fetch under black-holed reads.** Each empty read publishes a retry from the same
+/// offset — the second in a row past the stall bound — and the fetch then completes.
+#[tokio::test]
+async fn an_unsized_fetch_under_a_scripted_fault_schedule_publishes_its_retries() {
+    let (result, first) = scripted_unsized(vec![2, 3], false).await;
+    assert_eq!(result.unwrap().len(), 100);
+    let (_, replay) = scripted_unsized(vec![2, 3], false).await;
+    assert_eq!(render(&first), render(&replay));
+    insta::assert_snapshot!(render(&first));
+}
+
+#[tokio::test]
+async fn an_unsized_fetch_whose_bytes_do_not_match_publishes_the_rejection() {
+    let (result, events) = scripted_unsized(Vec::new(), true).await;
+    assert!(matches!(result, Err(FetchError::IntegrityFailed { .. })));
+    assert!(matches!(
+        events.last(),
+        Some(TransferEvent::IntegrityRejected { size: 100, .. })
+    ));
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, TransferEvent::FetchVerified { .. }))
+    );
+}
+
+/// Fetch a 100-byte blob of unlisted size in 64-byte windows from a [`ScriptedSource`].
+async fn scripted_unsized(
+    blackholes: Vec<usize>,
+    corrupt: bool,
+) -> (Result<Vec<u8>, FetchError>, Vec<TransferEvent>) {
     let data: Vec<u8> = (0..100u32).map(|i| i as u8).collect();
     let hash = hex::encode(Sha256::digest(&data));
     let clock = TickClock(Arc::new(Mutex::new(0)));
@@ -537,8 +666,8 @@ async fn an_unsized_fetch_publishes_its_windows_and_verdict() {
         data,
         clock: clock.clone(),
         reads: AtomicUsize::new(0),
-        blackholes: Vec::new(),
-        corrupt: false,
+        blackholes,
+        corrupt,
     };
     let events = TransferEvents::channel(64);
     let mut subscriber = events.subscribe().unwrap();
@@ -550,6 +679,6 @@ async fn an_unsized_fetch_publishes_its_windows_and_verdict() {
         clock,
     )
     .with_events(events);
-    fetcher.fetch_unsized(&source, &hash, 1000).await.unwrap();
-    insta::assert_snapshot!(render(&drain(&mut subscriber)));
+    let result = fetcher.fetch_unsized(&source, &hash, 1000).await;
+    (result, drain(&mut subscriber))
 }
