@@ -168,7 +168,7 @@ pub struct PurgeReport {
     /// the listing — or no longer existed. Nothing was dropped for them.
     ///
     /// Reported rather than only logged, so the report accounts for every row the pass listed:
-    /// a listed asset that is in none of the three would be one the pass lost track of.
+    /// a listed asset that is in none of the four lists would be one the pass lost track of.
     pub skipped: Vec<AssetId>,
     /// Purgeable assets whose purge entry the owner ledger could not take. Nothing was dropped
     /// for them; the next pass tries again.
