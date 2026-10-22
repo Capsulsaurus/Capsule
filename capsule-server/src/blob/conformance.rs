@@ -244,6 +244,49 @@ pub async fn an_append_at_the_wrong_offset_is_refused_and_names_the_resume_point
     );
 }
 
+/// A stage cut back to its session's offset accepts the append that belongs there.
+///
+/// The repair for a stage that ran ahead of its session (transfer/upload.md, Hostile Clients):
+/// it shrinks, it never grows, and the bytes it keeps are the ones that were there.
+pub async fn truncating_a_stage_cuts_it_back_and_never_grows_it(h: &dyn Harness) {
+    let store = h.store();
+    let upload = upload("truncate-stage", "a");
+
+    assert_eq!(
+        ok(store.truncate_staged(&upload, 0).await, "truncate_staged"),
+        None,
+        "nothing is staged, so there is nothing to cut"
+    );
+
+    ok(store.begin(&upload).await, "begin");
+    ok(store.append(&upload, 0, b"0123456789").await, "append");
+
+    assert_eq!(
+        ok(store.truncate_staged(&upload, 64).await, "truncate_staged"),
+        Some(10),
+        "a cut past the end leaves the stage as it was"
+    );
+    assert_eq!(
+        ok(store.truncate_staged(&upload, 4).await, "truncate_staged"),
+        Some(4)
+    );
+    assert_eq!(
+        ok(store.staged_len(&upload).await, "staged_len"),
+        Some(4),
+        "the cut is what the stage now reports"
+    );
+    assert_eq!(
+        ok(store.append(&upload, 4, b"abc").await, "append"),
+        7,
+        "the append at the cut lands"
+    );
+    assert_eq!(
+        ok(store.read_staged_at(&upload, 0, 64).await, "read_staged_at"),
+        Some(b"0123abc".to_vec()),
+        "and the bytes before the cut are the ones that were there"
+    );
+}
+
 /// Appending to an upload nothing opened is absence, named as such.
 pub async fn appending_to_an_upload_that_was_never_begun_is_not_staged(h: &dyn Harness) {
     let store = h.store();
@@ -323,6 +366,10 @@ pub async fn an_upload_id_that_cannot_name_a_file_is_refused_by_every_operation(
         for (operation, result) in [
             ("begin", store.begin(&upload).await),
             ("append", store.append(&upload, 0, b"x").await.map(|_| ())),
+            (
+                "truncate_staged",
+                store.truncate_staged(&upload, 0).await.map(|_| ()),
+            ),
             ("staged_len", store.staged_len(&upload).await.map(|_| ())),
             (
                 "read_staged_at",
@@ -889,6 +936,7 @@ pub async fn quarantining_an_absent_address_holds_nothing(h: &dyn Harness) {
 pub async fn run_all(h: &dyn Harness) {
     staging_appends_only_at_the_end_and_tracks_its_length(h).await;
     an_append_at_the_wrong_offset_is_refused_and_names_the_resume_point(h).await;
+    truncating_a_stage_cuts_it_back_and_never_grows_it(h).await;
     appending_to_an_upload_that_was_never_begun_is_not_staged(h).await;
     abandoning_removes_the_staged_bytes_and_says_whether_there_were_any(h).await;
     the_staged_listing_is_ordered_and_holds_only_open_uploads(h).await;
