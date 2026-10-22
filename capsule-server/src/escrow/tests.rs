@@ -145,7 +145,30 @@ fn a_body_past_the_ceiling_is_refused() {
     assert_eq!(
         admissible(&huge),
         Err(MalformedEscrow::TooLarge {
-            size: MAX_ESCROW_BYTES + 1
+            size: MAX_ESCROW_BYTES + 1,
+            ceiling: MAX_ESCROW_BYTES,
+        })
+    );
+}
+
+/// An album key escrow is held to its own, larger ceiling: past the escrow's and inside its
+/// own is admissible, and one byte past its own is refused naming it.
+#[test]
+fn an_album_key_escrow_is_held_to_its_own_ceiling() {
+    assert_eq!(admissible_album_keys(b""), Err(MalformedEscrow::Empty));
+    assert_eq!(
+        admissible_album_keys(&vec![0_u8; MAX_ESCROW_BYTES + 1]),
+        Ok(())
+    );
+    assert_eq!(
+        admissible_album_keys(&vec![0_u8; MAX_ALBUM_KEY_ESCROW_BYTES]),
+        Ok(())
+    );
+    assert_eq!(
+        admissible_album_keys(&vec![0_u8; MAX_ALBUM_KEY_ESCROW_BYTES + 1]),
+        Err(MalformedEscrow::TooLarge {
+            size: MAX_ALBUM_KEY_ESCROW_BYTES + 1,
+            ceiling: MAX_ALBUM_KEY_ESCROW_BYTES,
         })
     );
 }

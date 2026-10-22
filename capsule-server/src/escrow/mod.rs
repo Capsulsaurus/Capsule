@@ -52,6 +52,21 @@
 //! touches the other, because the escrow is re-wrapped on every recovery-secret rotation and
 //! the identity is not.
 //!
+//! # Album keys ride beside it too, one slot per album (#741)
+//!
+//! The master key and the identity open a recovered library as the account, but its albums'
+//! content keys (AMKs) are random per album and epoch, so a library holding only those two can
+//! open none of the account's assets. Each album's whole key state — every epoch's AMK, its
+//! signing seeds and its authority — is therefore held here as well, sealed by the client under
+//! the master key ([`EscrowStore::store_album_keys`], [`EscrowStore::list_album_keys`]).
+//!
+//! The same argument as the sealed identity's: whoever can open one could open the escrow
+//! already, so this is a wrap reachable from the master key and not a second root. It differs
+//! in one respect: there is one slot **per album**, not per account, because albums are created
+//! and rotated independently and one device rewriting a single blob for every album would drop
+//! the albums another device had escrowed since. Each slot is still replaced by one operation,
+//! never versioned, and opaque; a client re-stores an album's slot whenever its state changes.
+//!
 //! # Adapters
 //!
 //! [`InMemoryEscrow`] is the deterministic double and [`PostgresEscrow`] the durable adapter;
@@ -66,7 +81,7 @@ use std::sync::{Arc, Mutex};
 use jiff::Timestamp;
 
 pub use self::postgres::PostgresEscrow;
-use crate::store::{StoreFuture, UserId};
+use crate::store::{AlbumId, StoreFuture, UserId};
 
 /// The largest escrow blob this server will accept.
 ///
@@ -75,6 +90,20 @@ use crate::store::{StoreFuture, UserId};
 /// costs nothing. Coarse on purpose — a tight bound would be a format check, and the server has
 /// no business knowing the format.
 pub const MAX_ESCROW_BYTES: usize = 64 * 1024;
+
+/// The largest album key escrow this server will accept.
+///
+/// Larger than [`MAX_ESCROW_BYTES`] because an album's escrow grows with its history: each
+/// epoch adds an AMK, a hybrid write-tier key and an admin signature over it, a few KiB in all,
+/// so 512 KiB holds on the order of a hundred epochs. Still coarse — the server does not know
+/// the format — and below the bounded body cap the store route is mounted under, so a breach
+/// is this module's coded `400` rather than the transport's uncoded `413`.
+pub const MAX_ALBUM_KEY_ESCROW_BYTES: usize = 512 * 1024;
+
+const _: () = assert!(
+    (MAX_ALBUM_KEY_ESCROW_BYTES as u64) < crate::limits::MAX_BOUNDED_BODY_BYTES,
+    "an album key escrow at the ceiling must fit under the bounded body cap"
+);
 
 /// One account's escrowed master key, or its sealed user identity key — the two blobs share
 /// one shape, and which one a record is follows from the [`EscrowStore`] method it went through.
@@ -99,10 +128,12 @@ pub enum MalformedEscrow {
     #[error("an escrow blob cannot be empty")]
     Empty,
     /// Past the coarse ceiling.
-    #[error("the escrow blob is {size} bytes, past the {MAX_ESCROW_BYTES}-byte ceiling")]
+    #[error("the escrow blob is {size} bytes, past the {ceiling}-byte ceiling")]
     TooLarge {
         /// How large it was.
         size: usize,
+        /// The ceiling it was held to.
+        ceiling: usize,
     },
 }
 
@@ -112,13 +143,44 @@ pub enum MalformedEscrow {
 ///
 /// Returns [`MalformedEscrow`] for an empty body or one past [`MAX_ESCROW_BYTES`].
 pub fn admissible(blob: &[u8]) -> Result<(), MalformedEscrow> {
+    admissible_under(blob, MAX_ESCROW_BYTES)
+}
+
+/// [`admissible`] for an album key escrow, under [`MAX_ALBUM_KEY_ESCROW_BYTES`].
+///
+/// # Errors
+///
+/// Returns [`MalformedEscrow`] for an empty body or one past [`MAX_ALBUM_KEY_ESCROW_BYTES`].
+pub fn admissible_album_keys(blob: &[u8]) -> Result<(), MalformedEscrow> {
+    admissible_under(blob, MAX_ALBUM_KEY_ESCROW_BYTES)
+}
+
+/// Refuse an empty blob or one past `ceiling`.
+fn admissible_under(blob: &[u8], ceiling: usize) -> Result<(), MalformedEscrow> {
     if blob.is_empty() {
         return Err(MalformedEscrow::Empty);
     }
-    if blob.len() > MAX_ESCROW_BYTES {
-        return Err(MalformedEscrow::TooLarge { size: blob.len() });
+    if blob.len() > ceiling {
+        return Err(MalformedEscrow::TooLarge {
+            size: blob.len(),
+            ceiling,
+        });
     }
     Ok(())
+}
+
+/// One album's key escrow: the album's whole key state, sealed by the client under the
+/// account's master key. Opaque here, like every blob this module holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AlbumKeyRecord {
+    /// The account it belongs to.
+    pub user_id: UserId,
+    /// The album it is the keys of, as a canonical lowercase hyphenated UUID.
+    pub album_id: AlbumId,
+    /// The sealed album keys, exactly as the client sent them.
+    pub blob: Vec<u8>,
+    /// When the server accepted it.
+    pub stored_at: Timestamp,
 }
 
 /// Where escrowed master keys live.
@@ -144,6 +206,17 @@ pub trait EscrowStore: std::fmt::Debug + Send + Sync {
     /// The sealed identity currently held for `user`, or `None`. Independent of whether an
     /// escrow is held.
     fn fetch_identity<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, Option<EscrowRecord>>;
+
+    /// Store `record` as the key escrow of its album, replacing whatever that album's slot held,
+    /// and report whether one was replaced.
+    ///
+    /// The same one-operation replace [`store`](Self::store) owes, in a slot per
+    /// `(user, album)`: it never touches another album's slot, the escrow or the sealed
+    /// identity.
+    fn store_album_keys(&self, record: AlbumKeyRecord) -> StoreFuture<'_, Replaced>;
+
+    /// Every album key escrow held for `user`, sorted by album id; empty when there is none.
+    fn list_album_keys<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, Vec<AlbumKeyRecord>>;
 }
 
 /// Whether storing an escrow displaced an earlier one.
@@ -167,6 +240,7 @@ pub enum Replaced {
 pub struct InMemoryEscrow {
     held: Mutex<BTreeMap<UserId, EscrowRecord>>,
     identities: Mutex<BTreeMap<UserId, EscrowRecord>>,
+    album_keys: Mutex<BTreeMap<(UserId, String), AlbumKeyRecord>>,
 }
 
 impl InMemoryEscrow {
@@ -229,6 +303,35 @@ impl EscrowStore for InMemoryEscrow {
 
     fn fetch_identity<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, Option<EscrowRecord>> {
         Box::pin(async move { Ok(lock(&self.identities).get(user).cloned()) })
+    }
+
+    fn store_album_keys(&self, record: AlbumKeyRecord) -> StoreFuture<'_, Replaced> {
+        Box::pin(async move {
+            let mut album_keys = lock(&self.album_keys);
+            let user = record.user_id.clone();
+            let album = record.album_id.as_str().to_owned();
+            let bytes = record.blob.len();
+            if album_keys
+                .insert((user.clone(), album.clone()), record)
+                .is_some()
+            {
+                tracing::info!(%user, %album, bytes, "an album key escrow was replaced");
+                return Ok(Replaced::Yes);
+            }
+            tracing::info!(%user, %album, bytes, "an album key escrow was stored for the first time");
+            Ok(Replaced::No)
+        })
+    }
+
+    fn list_album_keys<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, Vec<AlbumKeyRecord>> {
+        Box::pin(async move {
+            // Keyed `(user, album)`, so one account's slots are contiguous and in album order.
+            Ok(lock(&self.album_keys)
+                .iter()
+                .filter(|((owner, _), _)| owner == user)
+                .map(|(_, record)| record.clone())
+                .collect())
+        })
     }
 }
 

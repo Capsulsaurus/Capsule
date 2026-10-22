@@ -11,6 +11,9 @@
 //! - **The sealed identity obeys the same rules, in a slot of its own.** Storing or replacing an
 //!   account's sealed identity never touches its escrow, and the other way round: a
 //!   recovery-secret rotation re-wraps the escrow and must leave the identity where it was.
+//! - **Album keys are one slot per album (#741).** A second store for one album replaces it,
+//!   another album's is a slot of its own, the listing is per account in album order, and none
+//!   of it touches the escrow or the sealed identity.
 //! - **The instant reads back as the instant.** `stored_at` is what a client compares its cached
 //!   copy against, so an adapter may drop sub-microsecond precision but must never move it.
 //!
@@ -24,8 +27,8 @@
 
 use jiff::{SignedDuration, Timestamp};
 
-use super::{EscrowRecord, EscrowStore, Replaced};
-use crate::store::{StoreError, UserId};
+use super::{AlbumKeyRecord, EscrowRecord, EscrowStore, Replaced};
+use crate::store::{AlbumId, StoreError, UserId};
 
 /// The store under test.
 pub trait Harness: Send + Sync {
@@ -273,6 +276,123 @@ pub async fn the_sealed_identity_instant_reads_back_at_microsecond_precision(h: 
     );
 }
 
+/// Album `n`, as a canonical UUID so it is one the route would admit.
+fn album(n: u128) -> AlbumId {
+    AlbumId::new(uuid::Uuid::from_u128(n).to_string())
+}
+
+/// `album`'s key escrow for `user`, holding `blob`, stored at `at`.
+fn album_keys(user: &UserId, album: &AlbumId, blob: &[u8], at: Timestamp) -> AlbumKeyRecord {
+    AlbumKeyRecord {
+        user_id: user.clone(),
+        album_id: album.clone(),
+        blob: blob.to_vec(),
+        stored_at: at,
+    }
+}
+
+/// Store `record` as an album key escrow, expecting it to work.
+async fn store_album_keys(h: &dyn Harness, record: AlbumKeyRecord) -> Replaced {
+    ok(
+        h.escrows().store_album_keys(record).await,
+        "store an album key escrow",
+    )
+}
+
+/// Every album key escrow held for `user`.
+async fn list_album_keys(h: &dyn Harness, user: &UserId) -> Vec<AlbumKeyRecord> {
+    ok(
+        h.escrows().list_album_keys(user).await,
+        "list album key escrows",
+    )
+}
+
+/// An account with no album key escrow lists none, whatever else it has stored.
+pub async fn an_account_with_no_album_keys_lists_none(h: &dyn Harness) {
+    let alice = user("no-album-keys", "alice");
+    assert!(list_album_keys(h, &alice).await.is_empty());
+    store(h, escrow(&alice, b"wrap", at(1))).await;
+    store_identity(h, escrow(&alice, b"identity", at(2))).await;
+    assert!(
+        list_album_keys(h, &alice).await.is_empty(),
+        "neither the escrow nor the sealed identity is an album's keys"
+    );
+}
+
+/// One slot per album: a second store for the same album replaces it, a store for another
+/// album is a first, and the listing is sorted by album id and byte for byte.
+pub async fn album_keys_replace_per_album_and_list_in_album_order(h: &dyn Harness) {
+    let alice = user("album-keys", "alice");
+    let (first, second) = (album(0xB), album(0xA));
+    let mut noise: Vec<u8> = (0..=255_u8).collect();
+    noise.extend([0, 0, 0xff]);
+    assert_eq!(
+        store_album_keys(h, album_keys(&alice, &first, &noise, at(1))).await,
+        Replaced::No
+    );
+    let rotated = album_keys(&alice, &first, b"after a rotation", at(2));
+    assert_eq!(store_album_keys(h, rotated.clone()).await, Replaced::Yes);
+    let other = album_keys(
+        &alice,
+        &second,
+        &vec![0x5a; super::MAX_ALBUM_KEY_ESCROW_BYTES],
+        at(3),
+    );
+    assert_eq!(
+        store_album_keys(h, other.clone()).await,
+        Replaced::No,
+        "another album's slot is its own"
+    );
+    assert_eq!(
+        list_album_keys(h, &alice).await,
+        vec![other, rotated],
+        "one record per album, the newest, in album order"
+    );
+}
+
+/// Album key escrows never cross accounts, and never touch the escrow or the sealed identity.
+pub async fn album_keys_do_not_leak_and_leave_the_other_slots_alone(h: &dyn Harness) {
+    let alice = user("album-keys-isolated", "alice");
+    let bob = user("album-keys-isolated", "bob");
+    let shared = album(0xC);
+    let wrap = escrow(&alice, b"wrap", at(1));
+    let identity = escrow(&alice, b"identity", at(2));
+    store(h, wrap.clone()).await;
+    store_identity(h, identity.clone()).await;
+    let bobs = album_keys(&bob, &shared, b"bob's keys", at(3));
+    store_album_keys(h, bobs.clone()).await;
+    assert_eq!(
+        store_album_keys(h, album_keys(&alice, &shared, b"alice's keys", at(4))).await,
+        Replaced::No,
+        "the same album id under another account is another slot"
+    );
+    assert_eq!(list_album_keys(h, &bob).await, vec![bobs]);
+    assert_eq!(fetch(h, &alice).await, Some(wrap));
+    assert_eq!(fetch_identity(h, &alice).await, Some(identity));
+    assert!(
+        list_album_keys(h, &user("album-keys-isolated", "carol"))
+            .await
+            .is_empty()
+    );
+}
+
+/// An album key escrow's `stored_at` reads back at microsecond precision.
+pub async fn the_album_keys_instant_reads_back_at_microsecond_precision(h: &dyn Harness) {
+    let alice = user("album-keys-precise", "alice");
+    let written = Timestamp::from_nanosecond(1_700_000_000_555_444_333).expect("an instant");
+    store_album_keys(h, album_keys(&alice, &album(0xD), b"keys", written)).await;
+    let held = list_album_keys(h, &alice)
+        .await
+        .pop()
+        .expect("held")
+        .stored_at;
+    assert!(held <= written, "{held} is later than {written}");
+    assert!(
+        written.duration_since(held) < SignedDuration::from_micros(1),
+        "{held} lost more than sub-microsecond precision from {written}"
+    );
+}
+
 // ===========================================================================================
 // The whole suite
 // ===========================================================================================
@@ -291,6 +411,10 @@ pub async fn run_all(h: &dyn Harness) {
     sealed_identities_do_not_leak_between_accounts(h).await;
     the_escrow_and_the_sealed_identity_are_independent(h).await;
     the_sealed_identity_instant_reads_back_at_microsecond_precision(h).await;
+    an_account_with_no_album_keys_lists_none(h).await;
+    album_keys_replace_per_album_and_list_in_album_order(h).await;
+    album_keys_do_not_leak_and_leave_the_other_slots_alone(h).await;
+    the_album_keys_instant_reads_back_at_microsecond_precision(h).await;
 }
 
 #[cfg(test)]
@@ -335,6 +459,10 @@ mod tests {
         sealed_identities_do_not_leak_between_accounts,
         the_escrow_and_the_sealed_identity_are_independent,
         the_sealed_identity_instant_reads_back_at_microsecond_precision,
+        an_account_with_no_album_keys_lists_none,
+        album_keys_replace_per_album_and_list_in_album_order,
+        album_keys_do_not_leak_and_leave_the_other_slots_alone,
+        the_album_keys_instant_reads_back_at_microsecond_precision,
     }
 
     /// The whole suite, in one pass on one store — the entry point the container case uses.

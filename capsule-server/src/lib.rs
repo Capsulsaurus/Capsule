@@ -179,6 +179,7 @@ pub fn router() -> ServerRouter {
                     routes::directory::publish_device_directory,
                     routes::escrow::store_escrow,
                     routes::escrow::store_sealed_identity,
+                    routes::escrow::store_album_keys,
                 ])
                 // What an account changes about itself, its second factor, and the other way
                 // a session is opened: through an external identity provider (`S-N1`).
@@ -290,7 +291,10 @@ pub fn router() -> ServerRouter {
                     routes::blob::get_blob,
                     routes::assets::get_asset_receipts,
                     routes::drop::list_inbox,
-                ]),
+                ])
+                // The recovery surface's third read, past the tuple ceiling of the mount above:
+                // the account's album key escrows (#741).
+                .mount(kynos::routes![routes::escrow::list_album_keys]),
         )
         // **The twelve operations the design exempts from the gate**, in a group of their
         // own so neither gated group above covers them (`api-surfaces.md`, "Negotiation Across
