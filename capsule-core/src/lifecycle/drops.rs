@@ -381,6 +381,7 @@ impl crate::drop::DropAdopter for Workspace {
             caption: Default::default(),
             rating: Default::default(),
             stack_membership: Lww::new(),
+            regions: Default::default(),
             cull: Lww::new(),
             hidden: Lww::new(),
             camera_id: None,

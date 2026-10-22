@@ -151,7 +151,9 @@ number of devices converge deterministically, and every change is a signed `meta
   `album_id`) are signed, versioned documents sealed under the album's current AMK, following
   the same rules as the sidecar: version first, unknown keys preserved under the signature,
   CRDT fields only. `AlbumDocV1` also carries the album's name (LWW), so a restored or newly
-  joined device sees it. Every member of a stack belongs to the same container album; moving
+  joined device sees it; the name follows the label rule at creation and at every rename.
+  On the device the records are plaintext at rest like sidecars
+  ([layout](/design/filesystem/client/#desktop-library-layout)). Every member of a stack belongs to the same container album; moving
   one member out removes it from the stack.
 - **Privacy.** Region labels can name people, so regions are stripped by default on export and
   from [share links](/design/share-links/), and kept only when the user opts in for that export
@@ -159,7 +161,17 @@ number of devices converge deterministically, and every change is a signed `meta
 - **Search.** Smart-album `contains` predicates over `tags_user` match a label at any level
   attached to the asset: its own, its regions', its stack's and its album's.
 
-Not yet implemented beyond asset labels; tracked by #667.
+- **Merge.** Asset, stack and album labels merge as OR-sets. A region's register merges as a
+  semilattice: deleting a region is final (its tombstone absorbs any concurrent or later edit;
+  a region id is never reused), and two live writes keep the later shape and the union of their
+  labels. Album names merge by LWW.
+- **Restore.** A backup artifact carries each album's and stack's record sealed under its AMK,
+  so a restored device recovers album names and labels rather than showing `Recovered album`.
+
+Not yet implemented: smart-album search across label levels
+([#722](https://github.com/Capsulsaurus/Capsule/issues/722)), and the label rule (NFC, trim,
+1–256 bytes) on asset labels in `tags_user`, which still accept any string
+([#721](https://github.com/Capsulsaurus/Capsule/issues/721)).
 
 ## Culling
 

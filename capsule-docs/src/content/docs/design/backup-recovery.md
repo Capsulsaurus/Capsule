@@ -30,11 +30,13 @@ backup.tar
     ├── blobs/{hash}           # ciphertext blobs
     ├── meta/{blob_id}         # encrypted metadata blobs
     ├── provenance/{asset_id}  # full per-asset provenance chains
-    └── authority/{album_id}   # admin verifying key + admin-signed epoch ledger (format 2+)
+    ├── authority/{album_id}   # admin verifying key + admin-signed epoch ledger (format 2+)
+    └── docs/{album|stack}/{id} # album/stack label record, sealed under its album's AMK (optional)
 ```
 
 - **Self-sufficient.** The [AMK](/design/cryptography/keys/#album-master-keys-amks) ledger is wrapped under the passphrase-derived backup wrap key, not a device key: the passphrase alone decrypts every included blob, with no server or MLS state.
 - **Authority is public, not a capability.** `authority/` makes restored assets *verifiable*; it carries no write-tier or admin seed, so an album new to the library restores read-only. Restore re-verifies the ledger's admin signature chain, adopts it only for an album with no authority of its own, and never replaces existing authority. Format-1 artifacts restore readable but unverifiable.
+- **Label records ride sealed.** `docs/` carries each exported album's [`AlbumDocV1`](/design/organization/#labels) (its name and labels) and each labelled stack's `StackDocV1`, still sealed under the album's AMK, whose epoch the ledger escrows. Restore merges them, so a recovered album keeps its name. The entries are additive within format 2: an older reader verifies and skips them.
 - **Uncompressed** (ciphertext is incompressible) and **streamable** (no central directory; terabyte exports without seeking — why not ZIP).
 - **Deterministic.** Sorted entries and normalized ustar headers (`mtime`/`uid`/`gid` = 0, empty names, fixed modes, no PAX) — re-exports of the same content are byte-identical.
 - **Manifest first.** `MANIFEST.cbor` follows `VERSION` and precedes every blob, so a streaming reader has the integrity list up front. Both checks MUST pass before restore:

@@ -91,6 +91,60 @@ impl BackupAsset {
     }
 }
 
+/// Which organization record a [`BackupDoc`] carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum BackupDocKind {
+    /// An album's `AlbumDocV1` (its labels and name), keyed by `album_id`.
+    Album,
+    /// A stack's `StackDocV1` (its labels), keyed by `stack_id`.
+    Stack,
+}
+
+impl BackupDocKind {
+    fn path_segment(self) -> &'static str {
+        match self {
+            Self::Album => "album",
+            Self::Stack => "stack",
+        }
+    }
+
+    fn from_path_segment(segment: &str) -> Option<Self> {
+        match segment {
+            "album" => Some(Self::Album),
+            "stack" => Some(Self::Stack),
+            _ => None,
+        }
+    }
+}
+
+/// One sealed organization record riding the artifact: `docs/{kind}/{doc_id}`.
+///
+/// The record stays sealed under its album's AMK exactly as it travels between members; the
+/// artifact escrows that AMK in its ledger like any asset's, so a restore opens it with nothing
+/// but the passphrase. An older reader skips the entries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackupDoc {
+    /// Album or stack record.
+    pub kind: BackupDocKind,
+    /// The record's key: the `album_id` or `stack_id`.
+    pub doc_id: Uuid,
+    /// The album whose AMK seals it.
+    pub album_id: Uuid,
+    /// The epoch of that AMK.
+    pub amk_version: u32,
+    /// The sealed record (metadata-blob wire format).
+    pub sealed: Vec<u8>,
+}
+
+/// The on-wire body of a `docs/` entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct DocEntry {
+    album_id: Uuid,
+    amk_version: u32,
+    #[serde(with = "serde_bytes")]
+    sealed: Vec<u8>,
+}
+
 /// Everything needed to assemble an artifact.
 pub struct BackupInput {
     /// The assets to include.
@@ -102,6 +156,9 @@ pub struct BackupInput {
     /// with no entry here (e.g. one itself recovered from a format-1 artifact) exports without
     /// one, and restores readable but unverifiable.
     pub authorities: BTreeMap<Uuid, SignedEpochLedger>,
+    /// Sealed album and stack label records. Each one's `(album_id, amk_version)` AMK must be
+    /// in [`amks`](Self::amks); the ledger escrows it.
+    pub docs: Vec<BackupDoc>,
     /// The exporting device id.
     pub exporter_device: Uuid,
     /// Source library version string.
@@ -153,7 +210,8 @@ fn blob_role_order(role: &str) -> u8 {
         "provenance" => 2,
         "receipts" => 3,
         "authority" => 4,
-        _ => 5,
+        "docs" => 5,
+        _ => 6,
     }
 }
 
@@ -321,6 +379,9 @@ fn export_inner(
         let head = a.head()?;
         needed.insert((a.album_id, head.core.amk_version.0));
     }
+    for doc in &input.docs {
+        needed.insert((doc.album_id, doc.amk_version));
+    }
     for (album, epoch) in &needed {
         let amk = input
             .amks
@@ -365,6 +426,23 @@ fn export_inner(
         }
         let path = format!("authority/{album}");
         let data = cbor::to_canonical_vec(ledger).expect("authority ledger serializes");
+        entries.push(EntryRef {
+            path: path.clone(),
+            hash: hash::hash_bytes(&data),
+            size: data.len() as u64,
+        });
+        payloads.push((path, data));
+    }
+
+    // Album and stack label records, still sealed under their album's AMK.
+    for doc in &input.docs {
+        let path = format!("docs/{}/{}", doc.kind.path_segment(), doc.doc_id);
+        let data = cbor::to_canonical_vec(&DocEntry {
+            album_id: doc.album_id,
+            amk_version: doc.amk_version,
+            sealed: doc.sealed.clone(),
+        })
+        .expect("doc entry serializes");
         entries.push(EntryRef {
             path: path.clone(),
             hash: hash::hash_bytes(&data),
@@ -543,6 +621,7 @@ pub struct BackupArtifact {
     files: BTreeMap<String, Vec<u8>>,
     ledger: BTreeMap<(Uuid, u32), [u8; 32]>,
     authorities: BTreeMap<Uuid, SignedEpochLedger>,
+    docs: Vec<BackupDoc>,
     core: ManifestCore,
 }
 
@@ -611,10 +690,15 @@ impl BackupArtifact {
         // (5) Decode + re-verify every album authority the (authenticated) manifest lists.
         let authorities = load_authorities(&manifest.core, &files)?;
 
+        // (6) Decode every album/stack label record the manifest lists; each must be sealed under
+        // an AMK the ledger escrows.
+        let docs = load_docs(&manifest.core, &files, &ledger)?;
+
         Ok(Self {
             files,
             ledger,
             authorities,
+            docs,
             core: manifest.core,
         })
     }
@@ -750,6 +834,18 @@ impl BackupArtifact {
         &self.authorities
     }
 
+    /// The sealed album and stack label records the artifact carries, each listed in the
+    /// authenticated manifest and sealed under an AMK [`amk`](Self::amk) returns. Empty for an
+    /// artifact exported before the records existed.
+    pub fn docs(&self) -> &[BackupDoc] {
+        &self.docs
+    }
+
+    /// The escrowed AMK for `(album_id, epoch)`, if the ledger holds it.
+    pub fn amk(&self, album_id: &Uuid, epoch: u32) -> Option<[u8; 32]> {
+        self.ledger.get(&(*album_id, epoch)).copied()
+    }
+
     /// The exporter device id recorded in the manifest (provenance: who exported).
     pub fn exporter_device(&self) -> Uuid {
         self.core.exporter_device
@@ -821,6 +917,45 @@ fn load_authorities(
         );
         out.insert(album_id, ledger);
     }
+    Ok(out)
+}
+
+/// Decode every `docs/{kind}/{doc_id}` entry the (authenticated) manifest lists, refusing one
+/// whose path is malformed or whose sealing AMK the ledger does not escrow.
+fn load_docs(
+    core: &ManifestCore,
+    files: &BTreeMap<String, Vec<u8>>,
+    ledger: &BTreeMap<(Uuid, u32), [u8; 32]>,
+) -> Result<Vec<BackupDoc>, BackupError> {
+    let mut out = Vec::new();
+    for entry in &core.entries {
+        let Some(rest) = entry.path.strip_prefix("docs/") else {
+            continue;
+        };
+        let bad = || BackupError::Format(format!("bad doc entry {}", entry.path));
+        let (kind, id) = rest.split_once('/').ok_or_else(bad)?;
+        let kind = BackupDocKind::from_path_segment(kind).ok_or_else(bad)?;
+        let doc_id = Uuid::parse_str(id).map_err(|_| bad())?;
+        let bytes = files
+            .get(&entry.path)
+            .ok_or_else(|| BackupError::Corrupt(format!("missing entry {}", entry.path)))?;
+        let body: DocEntry =
+            cbor::from_slice(bytes).map_err(|e| BackupError::Format(e.to_string()))?;
+        if !ledger.contains_key(&(body.album_id, body.amk_version)) {
+            return Err(BackupError::AmkIncomplete(format!(
+                "album {} epoch {} (doc {})",
+                body.album_id, body.amk_version, entry.path
+            )));
+        }
+        out.push(BackupDoc {
+            kind,
+            doc_id,
+            album_id: body.album_id,
+            amk_version: body.amk_version,
+            sealed: body.sealed,
+        });
+    }
+    tracing::debug!(docs = out.len(), "backup: label records loaded");
     Ok(out)
 }
 
@@ -958,6 +1093,7 @@ mod tests {
                 assets,
                 amks,
                 authorities,
+                docs: Vec::new(),
                 exporter_device: Uuid::from_u128(0xD1),
                 source_library_version: "1".into(),
                 export_timestamp: "2026-05-31T00:00:00Z".into(),
@@ -998,6 +1134,141 @@ mod tests {
             plaintexts,
             vec![b"hello world".to_vec(), b"second asset".to_vec()]
         );
+    }
+
+    /// #667: a sealed label record rides the artifact under the manifest's authentication and is
+    /// handed back with the escrowed AMK that opens it.
+    #[test]
+    fn label_records_ride_the_artifact_and_open_under_the_escrowed_amk() {
+        let f = Fix::new();
+        let album = Uuid::from_u128(ALBUM);
+        let mut input = f.input(vec![f.asset(1, b"hello")]);
+        let sealed = crate::crypto::encryption::seal_metadata_blob(
+            &Amk::from_bytes(f.amk),
+            &album,
+            b"{album doc}",
+            None,
+        )
+        .unwrap()
+        .0;
+        input.docs.push(BackupDoc {
+            kind: BackupDocKind::Album,
+            doc_id: album,
+            album_id: album,
+            amk_version: 1,
+            sealed: sealed.clone(),
+        });
+        let bytes = export_with_params(&input, b"pw", FAST, &f.device).unwrap();
+
+        let art = BackupArtifact::open(&bytes, b"pw", &f.device.verifying_key()).unwrap();
+        assert_eq!(art.docs(), input.docs.as_slice());
+        let amk = art.amk(&album, 1).expect("the doc's AMK is escrowed");
+        let nonce = crate::crypto::encryption::blob_nonce(&sealed).unwrap();
+        let key = Amk::from_bytes(amk).derive_blob_key(&album, &nonce);
+        assert_eq!(
+            crate::crypto::encryption::open_blob(&key, &sealed).unwrap(),
+            b"{album doc}"
+        );
+    }
+
+    /// A label record sealed under an epoch no asset uses still gets that epoch's AMK escrowed,
+    /// and an artifact without records opens with none.
+    #[test]
+    fn a_label_record_pulls_its_own_epoch_into_the_ledger() {
+        let f = Fix::new();
+        let album = Uuid::from_u128(ALBUM);
+        let mut input = f.input(vec![f.asset(1, b"hello")]);
+        let plain = export_with_params(&input, b"pw", FAST, &f.device).unwrap();
+        let art = BackupArtifact::open(&plain, b"pw", &f.device.verifying_key()).unwrap();
+        assert!(art.docs().is_empty());
+        assert!(art.amk(&album, 2).is_none());
+
+        input.amks.insert((album, 2), [0x66; 32]);
+        input.docs.push(BackupDoc {
+            kind: BackupDocKind::Stack,
+            doc_id: Uuid::from_u128(0x51),
+            album_id: album,
+            amk_version: 2,
+            sealed: vec![0; 40],
+        });
+        let bytes = export_with_params(&input, b"pw", FAST, &f.device).unwrap();
+        let art = BackupArtifact::open(&bytes, b"pw", &f.device.verifying_key()).unwrap();
+        assert_eq!(art.amk(&album, 2), Some([0x66; 32]));
+        assert_eq!(art.docs()[0].kind, BackupDocKind::Stack);
+
+        // A record whose epoch the exporter cannot supply refuses the export.
+        input.amks.remove(&(album, 2));
+        assert!(matches!(
+            export_with_params(&input, b"pw", FAST, &f.device),
+            Err(BackupError::AmkIncomplete(_))
+        ));
+    }
+
+    /// A manifest core listing exactly `paths`, and the files those paths hold, each a doc entry
+    /// sealed (nominally) under `ALBUM`'s epoch `amk_version`.
+    fn doc_listing(paths: &[&str], amk_version: u32) -> (ManifestCore, BTreeMap<String, Vec<u8>>) {
+        let data = cbor::to_canonical_vec(&DocEntry {
+            album_id: Uuid::from_u128(ALBUM),
+            amk_version,
+            sealed: vec![0; 40],
+        })
+        .unwrap();
+        let mut files = BTreeMap::new();
+        let entries = paths
+            .iter()
+            .map(|path| {
+                files.insert((*path).to_string(), data.clone());
+                EntryRef {
+                    path: (*path).to_string(),
+                    hash: hash::hash_bytes(&data),
+                    size: data.len() as u64,
+                }
+            })
+            .collect();
+        let core = ManifestCore {
+            artifact_version: ARTIFACT_FORMAT_VERSION,
+            crypto_suite_id: CRYPTO_SUITE_ID,
+            min_protocol_version: PROTOCOL_VERSION.into(),
+            exporter_device: Uuid::from_u128(0xD1),
+            export_timestamp: "2026-05-31T00:00:00Z".into(),
+            source_library_version: "1".into(),
+            entries,
+            provenance_heads: Vec::new(),
+        };
+        (core, files)
+    }
+
+    /// `load_docs` refuses a listed `docs/` entry whose path does not name a doc id, and one
+    /// sealed under an epoch the ledger does not escrow; a well-formed entry
+    /// under an escrowed epoch loads.
+    #[test]
+    fn load_docs_refuses_malformed_paths_and_unescrowed_amks() {
+        let ledger = BTreeMap::from([((Uuid::from_u128(ALBUM), 1u32), [0x55; 32])]);
+        let good = format!("docs/album/{}", Uuid::from_u128(ALBUM));
+
+        let (core, files) = doc_listing(&[&good], 1);
+        let docs = load_docs(&core, &files, &ledger).unwrap();
+        assert_eq!(docs.len(), 1);
+        assert_eq!(docs[0].kind, BackupDocKind::Album);
+
+        let no_id = "docs/album".to_string();
+        let bad_id = "docs/stack/not-a-uuid".to_string();
+        for path in [no_id, bad_id] {
+            let (core, files) = doc_listing(&[&path], 1);
+            assert!(
+                matches!(
+                    load_docs(&core, &files, &ledger),
+                    Err(BackupError::Format(ref m)) if m.contains(&path)
+                ),
+                "{path} must be refused"
+            );
+        }
+
+        let (core, files) = doc_listing(&[&good], 2);
+        assert!(matches!(
+            load_docs(&core, &files, &ledger),
+            Err(BackupError::AmkIncomplete(_))
+        ));
     }
 
     /// #551: an adopted drop (`key_mode = wrapped`) restores. Its key is not
