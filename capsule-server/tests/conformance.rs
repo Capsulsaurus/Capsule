@@ -159,6 +159,7 @@ async fn every_declared_response_is_exercised() {
         ("GET", "/v1/sync"),
         ("GET", "/v1/blob/deadbeef"),
         ("POST", "/v1/storage/verify"),
+        ("POST", "/v1/sync/reannounce"),
         ("POST", "/v1/auth/devices/directory"),
         ("GET", "/v1/auth/devices/directory/anyone"),
         ("POST", "/v1/albums/anything/ops"),
@@ -1840,6 +1841,78 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::TOO_MANY_REQUESTS);
+
+    // ── POST /v1/sync/reannounce (#781) ────────────────────────────────────────────────────
+    // 401 and 403 are the scheme's; 415 and 422 are the `Json` extractor's.
+    client
+        .post("/v1/sync/reannounce")
+        .json(&json!({ "manifests": [] }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .post("/v1/sync/reannounce")
+        .header(
+            "authorization",
+            &format!("Bearer {}", rotated.refresh_token),
+        )
+        .json(&json!({ "manifests": [] }))
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    client
+        .post("/v1/sync/reannounce")
+        .header("authorization", &bearer)
+        .body("text/plain", "{}")
+        .send()
+        .await
+        .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    client
+        .post("/v1/sync/reannounce")
+        .header("authorization", &bearer)
+        .json(&json!({ "manifests": 42 }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+
+    // 400: no manifests is not a question.
+    client
+        .post("/v1/sync/reannounce")
+        .header("authorization", &bearer)
+        .json(&json!({ "manifests": [] }))
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    // 500: a manifest that reaches the write authority, which could not answer.
+    let reannounced = support::signed_create(
+        &fixture.clock,
+        uuid::Uuid::parse_str("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5ea1").expect("a uuid"),
+        b"reannounce-original",
+        b"reannounce-metadata",
+    );
+    let reannounce_body = json!({
+        "manifests": [base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &reannounced)],
+    });
+    fixture.authority.set_unavailable(true);
+    client
+        .post("/v1/sync/reannounce")
+        .header("authorization", &bearer)
+        .json(&reannounce_body)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.authority.set_unavailable(false);
+
+    // 200: an answer per manifest, here that the store lacks what it names.
+    client
+        .post("/v1/sync/reannounce")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .json(&reannounce_body)
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
 
     // ── /v1/auth/devices/directory ─────────────────────────────────────────────────────────
     // One identity key for the whole block: the account is anchored to the first key it

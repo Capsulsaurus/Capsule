@@ -67,6 +67,36 @@
 //! learns the terminal outcome by listing its sessions. The Salvo server returned
 //! `409 finalize_in_progress` here, which told a client its own accepted chunk had failed.
 //!
+//! # A claim is driven to a terminal state whatever happens to its request
+//!
+//! That answer is only true if a claim always has a finalizer behind it, and two things can
+//! take the finalizer away. Both are closed here rather than left to the 24-hour lifetime cap,
+//! because a claimed session is exempt from eviction and refuses every chunk and cancellation:
+//! nothing else would ever move it.
+//!
+//! - **The request goes away.** A client that disconnects drops the request's future, and a
+//!   finalization running *inside* that future stops at whatever `await` it had reached — after
+//!   the commit and before the index write, typically, which strands the bytes as an orphan and
+//!   the session claimed. So the route never runs finalization inline: [`spawn`] runs it as its
+//!   own task, which the route awaits for its answer but which outlives the route if the route
+//!   is dropped.
+//! - **The process goes away.** The claim lives in the session store and outlives the process
+//!   that took it. [`recover`] drives every claim listed by
+//!   [`claimed`](crate::store::UploadSessionStore::claimed) before the listener accepts a
+//!   request — so every such claim belongs to a process that is gone — through the same steps.
+//!
+//! A re-driven claim may find its stage already committed: the finalizer died between step 4
+//! and step 8. The committed blob is then re-hashed in place of the stage and step 4 is
+//! skipped; every later step is idempotent — the custody entry pairs with whichever index write
+//! lands (ledger replay), and the index answers a blob it already holds as held rather than
+//! twice. A stage and a blob that are both absent stay the inconsistency they were.
+//!
+//! There is no claim lease. A lease would let a second finalizer take over a claim whose holder
+//! is merely slow, and the slow holder's own terminal write — `FailedProcessing` on a refusal —
+//! would then race the taker's `Completed` with nothing to order them. Recovery at boot needs no
+//! lease because a deployment runs one process over its blob root, and the snapshot is taken
+//! before that process has claimed anything.
+//!
 //! # Nothing here produces manifest bytes (`S-C30`)
 //!
 //! Finalization stores what the client sent and nothing else. It does not re-serialize the
@@ -76,10 +106,11 @@
 
 use capsule_core::crypto::hash::{Hash32, Sha256Hasher};
 use capsule_core::crypto::receipts::CustodyReceipt;
+use tracing::Instrument as _;
 
 use super::envelope::{GateContext, GateReject, ManifestEnvelope, check_finalize};
 use super::{AlbumWriteAccess, UploadContext};
-use crate::attestation::{ReceiptDraft, ReceiptLog};
+use crate::attestation::{AttestationContext, ReceiptDraft, ReceiptLog};
 use crate::blob::{BlobError, ContentAddress, Placement};
 use crate::index::{BlobOutcome, BlobRecord, Custody, Receipted};
 use crate::ledger::LedgerEvent;
@@ -203,7 +234,88 @@ pub async fn finalize(
         }
     };
 
-    match run_claimed(context, attestation, upload, &record).await {
+    let placement = drive(context, attestation, &record).await?;
+    Ok(Outcome::Committed { placement, record })
+}
+
+/// Run [`finalize`] as its own task, so it reaches a terminal state even if the caller does not.
+///
+/// The request that completes a session awaits the returned handle for its answer. Dropping
+/// the handle — a disconnected client dropping the request — detaches the task rather than
+/// aborting it, which is the whole point: the claim [`finalize`] takes is a promise that the
+/// session will be driven to a terminal state, and a promise kept only while a client stays
+/// connected is not one (see the module docs).
+///
+/// The task carries the caller's span, so its log lines still read as the request's.
+pub fn spawn(
+    context: UploadContext,
+    attestation: AttestationContext,
+    upload: UploadId,
+) -> tokio::task::JoinHandle<Result<Outcome, FinalizeFailure>> {
+    tokio::spawn(
+        async move { finalize(&context, &attestation, &upload).await }
+            .instrument(tracing::Span::current()),
+    )
+}
+
+/// What [`recover`] did with the claims a dead process left behind.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Recovery {
+    /// The sessions recovery drove to `Completed`.
+    pub completed: Vec<UploadId>,
+    /// The sessions recovery drove to `FailedProcessing`, or could not finish driving.
+    pub failed: Vec<UploadId>,
+}
+
+/// Drive every session in `stranded` — claims whose finalizer is gone — to a terminal state.
+///
+/// `stranded` is what [`claimed`](crate::store::UploadSessionStore::claimed) listed **before**
+/// this process accepted a request, so no live finalizer holds any of them: the process that
+/// claimed them died between the claim and a terminal status. Each is driven through the same
+/// steps a live claim runs, so one whose blob that process had already committed resumes at the
+/// custody ledger rather than being failed for a missing stage (see the module docs).
+///
+/// Sequential, one claim at a time: recovery runs beside a listener that is already serving,
+/// and a boot after a crash is exactly when the stores are least able to absorb a burst.
+#[tracing::instrument(skip_all, fields(stranded = stranded.len()))]
+pub async fn recover(
+    context: &UploadContext,
+    attestation: &AttestationContext,
+    stranded: Vec<UploadSessionRecord>,
+) -> Recovery {
+    let mut recovery = Recovery::default();
+    for record in stranded {
+        let upload = record.upload_id.clone();
+        tracing::info!(
+            %upload,
+            asset_id = %record.asset_id,
+            "re-driving a finalization claim whose finalizer is gone"
+        );
+        match drive(context, attestation, &record).await {
+            Ok(_) => recovery.completed.push(upload),
+            Err(failure) => {
+                tracing::warn!(%upload, %failure, "a recovered finalization did not complete");
+                recovery.failed.push(upload);
+            }
+        }
+    }
+    tracing::info!(
+        completed = recovery.completed.len(),
+        failed = recovery.failed.len(),
+        "recovered the finalization claims a previous process left"
+    );
+    recovery
+}
+
+/// Steps 2–8 for a session whose claim this caller holds: run them, then leave the session
+/// terminal either way.
+async fn drive(
+    context: &UploadContext,
+    attestation: &AttestationContext,
+    record: &UploadSessionRecord,
+) -> Result<Placement, FinalizeFailure> {
+    let upload = &record.upload_id;
+    match run_claimed(context, attestation, upload, record).await {
         Ok((placement, minted)) => {
             complete(context, upload).await?;
             tracing::info!(
@@ -215,7 +327,7 @@ pub async fn finalize(
                 sync_seq = minted,
                 "upload finalized"
             );
-            Ok(Outcome::Committed { placement, record })
+            Ok(placement)
         }
         Err(failure) => {
             // A claimed session is never left claimed: the bytes go and the status is terminal,
@@ -228,6 +340,65 @@ pub async fn finalize(
     }
 }
 
+/// Where the bytes a claimed session finalizes are read from.
+#[derive(Debug, Clone, Copy)]
+enum Source<'a> {
+    /// The session's own stage: the ordinary case.
+    Stage(&'a UploadId),
+    /// The blob at the session's content address: the stage was already committed by a
+    /// finalizer that was lost before the session reached a terminal state.
+    Committed(&'a ContentAddress),
+}
+
+/// Find the bytes a claimed session finalizes: its stage, or — when a lost finalizer already
+/// committed it — the blob at its address.
+///
+/// The stage is the truth the session's counter caches, so a stage of the wrong length is a
+/// server-side inconsistency and never a reason to commit. An absent stage is the same unless the
+/// address already holds exactly the declared number of bytes; whether they are the declared
+/// bytes is step 2's question, asked of them as it would be of the stage.
+async fn locate<'a>(
+    context: &UploadContext,
+    upload: &'a UploadId,
+    record: &UploadSessionRecord,
+    address: &'a ContentAddress,
+) -> Result<Source<'a>, FinalizeFailure> {
+    let staged = context
+        .blobs()
+        .staged_len(upload)
+        .await
+        .map_err(blob_unavailable("measure the staged upload"))?;
+    match staged {
+        Some(length) if length == record.total_size => return Ok(Source::Stage(upload)),
+        Some(length) => {
+            return Err(FinalizeFailure::StorageInconsistent {
+                expected: record.total_size,
+                on_disk: Some(length),
+            });
+        }
+        None => {}
+    }
+    let committed = context
+        .blobs()
+        .stat(address)
+        .await
+        .map_err(blob_unavailable("stat the session's content address"))?;
+    match committed {
+        Some(stat) if stat.size == record.total_size => {
+            tracing::info!(
+                %upload,
+                %address,
+                "the stage was committed before its finalizer was lost; resuming after the commit"
+            );
+            Ok(Source::Committed(address))
+        }
+        _ => Err(FinalizeFailure::StorageInconsistent {
+            expected: record.total_size,
+            on_disk: None,
+        }),
+    }
+}
+
 /// Steps 2–7, for a session this caller has claimed.
 async fn run_claimed(
     context: &UploadContext,
@@ -235,22 +406,16 @@ async fn run_claimed(
     upload: &UploadId,
     record: &UploadSessionRecord,
 ) -> Result<(Placement, Option<u64>), FinalizeFailure> {
-    // The stage is the truth the session's counter caches, so a divergence here is a
-    // server-side inconsistency and never a reason to commit.
-    let staged = context
-        .blobs()
-        .staged_len(upload)
-        .await
-        .map_err(blob_unavailable("measure the staged upload"))?;
-    if staged != Some(record.total_size) {
-        return Err(FinalizeFailure::StorageInconsistent {
-            expected: record.total_size,
-            on_disk: staged,
-        });
-    }
+    let address = ContentAddress::parse(&record.expected_hash).map_err(|error| {
+        // Unreachable while invariant 3 gates creation: a session's hash is 64 lowercase hex
+        // characters or the session was never opened. Kept because "unreachable while an
+        // earlier check holds" is exactly the assumption worth a cheap guard.
+        FinalizeFailure::Unavailable(format!("the session's hash is not an address: {error}"))
+    })?;
+    let source = locate(context, upload, record, &address).await?;
 
     // 2. Invariant 14.
-    let digest = recompute_hash(context, upload, record.total_size).await?;
+    let digest = recompute_hash(context, source, record.total_size).await?;
     if digest.address != record.expected_hash {
         return Err(FinalizeFailure::ContentHashMismatch {
             expected: record.expected_hash.clone(),
@@ -263,18 +428,16 @@ async fn run_claimed(
 
     // 4. The stage becomes a blob. `AlreadyPresent` is a success that wrote nothing: an
     //    identical ciphertext — or an identical signed manifest — is one object, which is the
-    //    deduplication the content address exists for.
-    let address = ContentAddress::parse(&record.expected_hash).map_err(|error| {
-        // Unreachable while invariant 3 gates creation: a session's hash is 64 lowercase hex
-        // characters or the session was never opened. Kept because "unreachable while an
-        // earlier check holds" is exactly the assumption worth a cheap guard.
-        FinalizeFailure::Unavailable(format!("the session's hash is not an address: {error}"))
-    })?;
-    let placement = context
-        .blobs()
-        .commit(upload, &address)
-        .await
-        .map_err(blob_unavailable("commit the staged upload"))?;
+    //    deduplication the content address exists for. A stage a lost finalizer already
+    //    committed is that same answer, reached without a second commit.
+    let placement = match source {
+        Source::Stage(_) => context
+            .blobs()
+            .commit(upload, &address)
+            .await
+            .map_err(blob_unavailable("commit the staged upload"))?,
+        Source::Committed(_) => Placement::AlreadyPresent,
+    };
 
     // The asset's chain position, and only for the blob that *is* the manifest (`S-C31`). It
     // travels as its own value rather than being read back off the content address, because
@@ -810,25 +973,32 @@ struct StagedDigest {
     sha256: Hash32,
 }
 
-/// Recompute the ciphertext hash over the staged bytes, window by window.
+/// Recompute the ciphertext hash over the bytes `source` names, window by window.
 async fn recompute_hash(
     context: &UploadContext,
-    upload: &UploadId,
+    source: Source<'_>,
     expected_len: u64,
 ) -> Result<StagedDigest, FinalizeFailure> {
     let mut hasher = Sha256Hasher::new();
     let mut offset = 0_u64;
 
     loop {
-        let window = context
-            .blobs()
-            .read_staged_at(upload, offset, HASH_WINDOW_BYTES)
-            .await
-            .map_err(blob_unavailable("read the staged upload"))?
-            .ok_or(FinalizeFailure::StorageInconsistent {
-                expected: expected_len,
-                on_disk: None,
-            })?;
+        let window = match source {
+            Source::Stage(upload) => context
+                .blobs()
+                .read_staged_at(upload, offset, HASH_WINDOW_BYTES)
+                .await
+                .map_err(blob_unavailable("read the staged upload"))?,
+            Source::Committed(address) => context
+                .blobs()
+                .read_at(address, offset, HASH_WINDOW_BYTES)
+                .await
+                .map_err(blob_unavailable("read the committed blob"))?,
+        }
+        .ok_or(FinalizeFailure::StorageInconsistent {
+            expected: expected_len,
+            on_disk: None,
+        })?;
         if window.is_empty() {
             break;
         }
@@ -843,7 +1013,7 @@ async fn recompute_hash(
         });
     }
 
-    tracing::debug!(%upload, bytes = offset, "recomputed the ciphertext hash");
+    tracing::debug!(?source, bytes = offset, "recomputed the ciphertext hash");
     let sha256 = hasher.finalize();
     Ok(StagedDigest {
         address: sha256.to_hex(),

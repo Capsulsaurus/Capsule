@@ -2017,6 +2017,7 @@ pub(crate) struct SwitchableUploads {
     inner: InMemoryUploadSessions,
     unavailable: AtomicBool,
     claim_after_progress: AtomicBool,
+    status_writes_refused: AtomicBool,
 }
 
 impl SwitchableUploads {
@@ -2026,7 +2027,17 @@ impl SwitchableUploads {
             inner: InMemoryUploadSessions::with_default_ttl(clock),
             unavailable: AtomicBool::new(false),
             claim_after_progress: AtomicBool::new(false),
+            status_writes_refused: AtomicBool::new(false),
         }
+    }
+
+    /// Refuse every subsequent [`UploadSessionStore::set_status`], or stop.
+    ///
+    /// Only the status write: a finalizer that loses it after its claim can neither complete nor
+    /// fail its session, which is the session a process that died mid-finalize leaves behind —
+    /// claimed, with every step before the terminal write done.
+    pub(crate) fn refuse_status_writes(&self, refused: bool) {
+        self.status_writes_refused.store(refused, Ordering::SeqCst);
     }
 
     /// Make every subsequent operation fail, or stop.
@@ -2187,7 +2198,7 @@ impl UploadSessionStore for SwitchableUploads {
         upload: &'a UploadId,
         status: UploadSessionStatus,
     ) -> StoreFuture<'a, Option<UploadSessionRecord>> {
-        if self.is_down() {
+        if self.is_down() || self.status_writes_refused.load(Ordering::SeqCst) {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.set_status(upload, status)
@@ -2198,6 +2209,13 @@ impl UploadSessionStore for SwitchableUploads {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.claim_finalize(upload)
+    }
+
+    fn claimed(&self) -> StoreFuture<'_, Vec<UploadSessionRecord>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.claimed()
     }
 
     fn discard<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, Option<UploadSessionRecord>> {
@@ -2262,6 +2280,8 @@ pub(crate) struct SwallowingBlobs {
     full_next_begin: AtomicBool,
     /// Park every append until the test lets it go, the way [`Self::hold_puts`] parks a `put`.
     held_appends: Mutex<Option<PutHold>>,
+    /// Park every commit, *after* it has landed, until the test lets it go.
+    held_commits: Mutex<Option<PutHold>>,
     /// Refuse every [`BlobStore::put`], as a full or read-only disk would.
     puts_unavailable: AtomicBool,
     /// Park every [`BlobStore::put`] until the test lets it go.
@@ -2289,6 +2309,7 @@ impl SwallowingBlobs {
             full_next_append: AtomicBool::new(false),
             full_next_begin: AtomicBool::new(false),
             held_appends: Mutex::new(None),
+            held_commits: Mutex::new(None),
             puts_unavailable: AtomicBool::new(false),
             held_puts: Mutex::new(None),
         }
@@ -2330,6 +2351,24 @@ impl SwallowingBlobs {
         };
         *self
             .held_appends
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(hold.clone());
+        hold
+    }
+
+    /// Park every subsequent commit until the returned hold releases it.
+    ///
+    /// The commit has **already landed** when `entered` fires: the bytes are at their content
+    /// address and the stage is gone. That is the window a finalizer lost between its commit and
+    /// its index write leaves behind, which a case reaches by acting on the caller while the
+    /// commit is parked.
+    pub(crate) fn hold_commits(&self) -> PutHold {
+        let hold = PutHold {
+            entered: Arc::new(tokio::sync::Notify::new()),
+            release: Arc::new(tokio::sync::Semaphore::new(0)),
+        };
+        *self
+            .held_commits
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(hold.clone());
         hold
@@ -2473,7 +2512,23 @@ impl BlobStore for SwallowingBlobs {
         upload: &'a UploadId,
         address: &'a ContentAddress,
     ) -> BlobFuture<'a, Placement> {
-        self.inner.commit(upload, address)
+        let hold = self
+            .held_commits
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        Box::pin(async move {
+            let placement = self.inner.commit(upload, address).await?;
+            if let Some(hold) = hold {
+                hold.entered.notify_one();
+                let _permit = hold
+                    .release
+                    .acquire()
+                    .await
+                    .expect("the hold is never closed");
+            }
+            Ok(placement)
+        })
     }
 
     fn put<'a>(
@@ -4322,6 +4377,70 @@ pub(crate) fn create_request(clock: &ManualClock, bytes: &[u8], role: &str) -> s
         request["manifest_envelope"]["derivative_format"] = DERIVATIVE_FORMAT.into();
     }
     request
+}
+
+/// A really signed `create` for `asset` in the seeded album, by the seeded account's seeded
+/// device, committing to `original` and `metadata`, in the provenance record a client stores it
+/// in: what a client re-announces (#781).
+///
+/// The timestamp is the clock's, so the device the fixture published at construction precedes
+/// it, as invariant 7 requires.
+pub(crate) fn signed_create(
+    clock: &ManualClock,
+    asset: Uuid,
+    original: &[u8],
+    metadata: &[u8],
+) -> Vec<u8> {
+    let user = Uuid::parse_str(user().as_str()).expect("the user is a uuid");
+    signed_create_by(clock, user, asset, original, metadata)
+}
+
+/// [`signed_create`], signed as `created_by` rather than the seeded account.
+pub(crate) fn signed_create_by(
+    clock: &ManualClock,
+    created_by: Uuid,
+    asset: Uuid,
+    original: &[u8],
+    metadata: &[u8],
+) -> Vec<u8> {
+    use capsule_core::crypto::hash::hash_bytes;
+    use capsule_core::crypto::keys::{AmkVersion, HybridSigningKey};
+    use capsule_core::crypto::provenance::{
+        ASSET_MANIFEST_VERSION, Action, KeyMode, ManifestCore, ProvenanceRecord,
+    };
+
+    let core = ManifestCore {
+        version: ASSET_MANIFEST_VERSION.to_owned(),
+        crypto_suite_id: capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
+        protocol_version: PROTOCOL_VERSION.to_owned(),
+        file_id: asset,
+        album_id: Uuid::parse_str(album().as_str()).expect("the album is a uuid"),
+        amk_version: AmkVersion(0),
+        ciphertext_hash: hash_bytes(original),
+        plaintext_size: original.len() as u64,
+        chunk_size: 65_536,
+        nonce_prefix: [0; 7],
+        key_mode: KeyMode::Derived,
+        wrapped_file_key: None,
+        metadata_blob_hash: Some(hash_bytes(metadata)),
+        created_by_user: created_by,
+        created_by_device: device(),
+        client_version: "capsule-cli/0.1.0".to_owned(),
+        timestamp: clock.now().to_string(),
+        action: Action::Create,
+        prior_provenance_hash: None,
+        upgraded_from: None,
+        unknown: BTreeMap::new(),
+        retention_until: None,
+    };
+    let signed = core
+        .sign(
+            &HybridSigningKey::from_seed64(&[1; 64]),
+            &HybridSigningKey::from_seed64(&[2; 64]),
+        )
+        .expect("a manifest signs");
+    capsule_core::cbor::to_canonical_vec(&ProvenanceRecord::new(asset, signed, None))
+        .expect("a record encodes")
 }
 
 /// The still format a derivative [`create_request`] declares: the one this build encodes.

@@ -2139,6 +2139,434 @@ async fn finalization_crash_between_rename_and_commit_leaves_no_dangling_referen
 }
 
 // ===========================================================================================
+// A claim outlives its finalizer (#801)
+// ===========================================================================================
+
+/// The asset the suite's default manifests name.
+const DEFAULT_ASSET: &str = "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e61";
+
+/// Wait, boundedly, for `id`'s session to reach a terminal status, and return it.
+///
+/// Finalization is its own task once the request that started it is gone, so a case that dropped
+/// that request has nothing to await but the store.
+async fn terminal_status(fixture: &Fixture, id: &str) -> &'static str {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let record = fixture
+                .uploads
+                .read_for_test(id)
+                .await
+                .expect("the session survives as a receipt");
+            if record.status.is_terminal() {
+                return record.status.as_str();
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("a claimed session reaches a terminal status")
+}
+
+/// The default asset's original is indexed at `whole`'s address, and `/storage/verify` says the
+/// server durably holds it — the two facts a client converging on its upload reads.
+async fn assert_indexed_and_durable(fixture: &Fixture, bearer: &str, whole: &[u8]) {
+    use capsule_server::blob::ContentAddress;
+    use capsule_server::index::AssetIndex as _;
+    use capsule_server::store::{AssetId, BlobRole};
+
+    let address = ContentAddress::parse(&checksum(whole)).expect("the digest is an address");
+    let asset = AssetId::new(DEFAULT_ASSET);
+    let row = fixture
+        .index
+        .read(&asset)
+        .await
+        .expect("the index answers")
+        .expect("the session reserved a row when it opened");
+    assert_eq!(
+        row.address_for(BlobRole::Original),
+        Some(&address),
+        "the original is recorded against its asset"
+    );
+
+    let verdict: serde_json::Value = fixture
+        .client
+        .post("/v1/storage/verify")
+        .header("authorization", bearer)
+        .header("accept", "application/json")
+        .json(&serde_json::json!({
+            "assets": [{ "asset_id": DEFAULT_ASSET, "blob_hashes": [address.as_str()] }],
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    assert_eq!(
+        verdict["verdicts"][0]["durable"], true,
+        "the server durably holds the blob: {verdict}"
+    );
+}
+
+#[tokio::test]
+async fn a_client_that_disconnects_mid_finalize_does_not_strand_its_session() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, second, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    // The last chunk claims finalization; park it after its commit has landed, then drop the
+    // request there — the client went away between the commit and the index write.
+    let hold = fixture.blobs.hold_commits();
+    {
+        let finalizing = fixture.chunk(&id, 4096, &second, &bearer).send();
+        tokio::pin!(finalizing);
+        tokio::select! {
+            response = &mut finalizing => {
+                panic!("the request answered before its commit was parked: {}", response.status());
+            }
+            () = hold.entered.notified() => {}
+        }
+    }
+    assert_eq!(
+        fixture.blobs.staged_len_for_test(&id).await,
+        None,
+        "the commit landed before the request went away"
+    );
+    hold.release.add_permits(1);
+
+    // The finalization the request started finishes without it.
+    assert_eq!(terminal_status(&fixture, &id).await, "completed");
+
+    // And the client's rerun converges: the bytes are finalized, so re-creating them names the
+    // asset that holds them rather than handing back a session nobody is driving.
+    let rerun = fixture
+        .client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .json(&create_request(&fixture.clock, &whole, "original"))
+        .send()
+        .await;
+    rerun.assert_status(StatusCode::CONFLICT);
+    let problem: serde_json::Value = rerun.json();
+    assert_eq!(problem["code"], "error.upload.duplicate_blob");
+    assert_eq!(problem["existing_asset"], DEFAULT_ASSET);
+
+    assert_indexed_and_durable(&fixture, &bearer, &whole).await;
+}
+
+/// Leave `id` the way a process killed mid-finalize leaves it: every byte staged and counted,
+/// the claim taken — and, when `committed`, the stage already on its content address.
+async fn strand(fixture: &Fixture, id: &str, second: &[u8], whole: &[u8], committed: bool) {
+    use capsule_server::blob::{BlobStore as _, ContentAddress};
+    use capsule_server::store::{AcceptedChunk, Clock as _, UploadId, UploadSessionStore as _};
+
+    let upload = UploadId::new(id);
+    fixture
+        .blobs
+        .append(&upload, 4096, second)
+        .await
+        .expect("the stage appends");
+    fixture
+        .uploads
+        .record_progress(
+            &upload,
+            AcceptedChunk {
+                offset: 4096,
+                chunk_hash: checksum(second),
+                next_offset: 8192,
+                accepted_at: fixture.clock.now(),
+            },
+        )
+        .await
+        .expect("the store records progress")
+        .expect("the session is live");
+    fixture.uploads.claim_for_test(id).await;
+    if committed {
+        let address = ContentAddress::parse(&checksum(whole)).expect("the digest is an address");
+        fixture
+            .blobs
+            .commit(&upload, &address)
+            .await
+            .expect("the stage commits");
+    }
+}
+
+/// Run boot recovery over the fixture's stores, as a restarted process would before it binds.
+async fn recover_at_boot(fixture: &Fixture) -> capsule_server::upload::finalize::Recovery {
+    use capsule_server::attestation::AttestationContext;
+    use capsule_server::upload::UploadContext;
+    use kynos::di::Provides as _;
+
+    let app = fixture.app();
+    let upload: UploadContext = app.provide();
+    let attestation: AttestationContext = app.provide();
+    let stranded = upload
+        .sessions()
+        .claimed()
+        .await
+        .expect("the store lists its claims");
+    capsule_server::upload::finalize::recover(&upload, &attestation, stranded).await
+}
+
+#[tokio::test]
+async fn a_claim_whose_process_died_after_its_commit_is_recovered_at_boot() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, second, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    strand(&fixture, &id, &second, &whole, true).await;
+    assert_eq!(fixture.blobs.staged_len_for_test(&id).await, None);
+
+    let recovery = recover_at_boot(&fixture).await;
+    assert_eq!(
+        recovery
+            .completed
+            .iter()
+            .map(capsule_server::store::UploadId::as_str)
+            .collect::<Vec<_>>(),
+        vec![id.as_str()],
+        "the stranded claim is driven to completion: {recovery:?}"
+    );
+    assert!(recovery.failed.is_empty(), "{recovery:?}");
+    assert_eq!(terminal_status(&fixture, &id).await, "completed");
+    assert_indexed_and_durable(&fixture, &bearer, &whole).await;
+
+    // Custody was ledgered and the index write paired with it, as for a live finalization.
+    let ledger = verified_ledger(&fixture).await;
+    assert!(
+        ledger.iter().any(|entry| matches!(
+            &entry.core.event,
+            capsule_server::ledger::LedgerEvent::Indexed { upload_id, .. } if upload_id == &id
+        )),
+        "the recovered write is ledgered"
+    );
+
+    // A second boot finds nothing left to recover.
+    assert_eq!(
+        recover_at_boot(&fixture).await,
+        capsule_server::upload::finalize::Recovery::default()
+    );
+}
+
+#[tokio::test]
+async fn a_claim_whose_process_died_before_its_commit_is_recovered_at_boot() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, second, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    strand(&fixture, &id, &second, &whole, false).await;
+
+    let recovery = recover_at_boot(&fixture).await;
+    assert_eq!(recovery.completed.len(), 1, "{recovery:?}");
+    assert_eq!(terminal_status(&fixture, &id).await, "completed");
+    assert_eq!(fixture.blobs.staged_len_for_test(&id).await, None);
+    assert_indexed_and_durable(&fixture, &bearer, &whole).await;
+}
+
+#[tokio::test]
+async fn a_recovered_claim_with_neither_stage_nor_blob_fails_rather_than_completing() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, _, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    // Claimed with half its bytes staged and nothing committed: no source holds the declared
+    // blob, so recovery must not record one.
+    fixture.uploads.claim_for_test(&id).await;
+
+    let recovery = recover_at_boot(&fixture).await;
+    assert_eq!(recovery.failed.len(), 1, "{recovery:?}");
+    assert_eq!(terminal_status(&fixture, &id).await, "failed_processing");
+}
+
+/// Where in finalization the process dies, for the cases past the commit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiedAfter {
+    /// Step 5: custody ledgered, the index write never committed.
+    Custody,
+    /// Step 6: the index rows and the receipt committed, and the answer was lost — so no
+    /// `indexed` entry follows the custody entry.
+    IndexWrite,
+}
+
+/// Finalize `whole` through the route and kill the process at `died`, leaving the claim.
+///
+/// The index fault loses one finalization write at the chosen point; the refused status write is
+/// the process being gone, so neither `Completed` nor the `FailedProcessing` the finalizer falls
+/// back to ever lands. What is left is the session a dead finalizer leaves: claimed, its blob
+/// committed, its custody ledgered — and, at [`DiedAfter::IndexWrite`], its row written.
+async fn die_mid_finalize(fixture: &Fixture, bearer: &str, died: DiedAfter) -> (String, Vec<u8>) {
+    let (first, second, whole) = blob();
+    let id = fixture.open_session(&whole, "original", bearer).await;
+    fixture
+        .chunk(&id, 0, &first, bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    match died {
+        DiedAfter::Custody => fixture.index_fault.arm(),
+        DiedAfter::IndexWrite => fixture.index_fault.arm_after_commit(),
+    }
+    fixture.uploads.refuse_status_writes(true);
+    fixture
+        .chunk(&id, 4096, &second, bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    fixture.uploads.refuse_status_writes(false);
+    assert_eq!(
+        fixture.index_fault.fired(),
+        1,
+        "the fault never fired, so the case would describe an ordinary upload"
+    );
+    assert_eq!(
+        fixture
+            .uploads
+            .read_for_test(&id)
+            .await
+            .expect("the session is live")
+            .status
+            .as_str(),
+        "waiting_for_processing",
+        "the claim outlived its finalizer"
+    );
+    (id, whole)
+}
+
+/// The custody entries `id` produced, as a rebuild pairs them.
+async fn custody_of(fixture: &Fixture, id: &str) -> Vec<capsule_server::ledger::replay::Custody> {
+    capsule_server::ledger::replay::custody(&verified_ledger(fixture).await)
+        .into_iter()
+        .filter(|custody| custody.upload_id == id)
+        .collect()
+}
+
+/// Recover a claim whose finalizer died at `died`, and assert it converges on success.
+async fn recover_past_the_commit(died: DiedAfter) {
+    use capsule_server::blob::ContentAddress;
+    use capsule_server::index::AssetIndex as _;
+    use capsule_server::ledger::replay::Resolution;
+    use capsule_server::store::AssetId;
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (id, whole) = die_mid_finalize(&fixture, &bearer, died).await;
+    let address = ContentAddress::parse(&checksum(&whole)).expect("the digest is an address");
+    let asset = AssetId::new(DEFAULT_ASSET);
+
+    let before = custody_of(&fixture, &id).await;
+    assert_eq!(
+        before.len(),
+        1,
+        "one custody entry, ledgered before the index"
+    );
+    assert_eq!(
+        before[0].resolution,
+        Resolution::Unresolved,
+        "and nothing resolved it before the process died"
+    );
+    let row_before = fixture
+        .index
+        .read(&asset)
+        .await
+        .expect("the index answers")
+        .expect("the session reserved a row");
+    assert_eq!(
+        row_before
+            .address_for(capsule_server::store::BlobRole::Original)
+            .is_some(),
+        died == DiedAfter::IndexWrite,
+        "the row holds the blob exactly when the index write committed"
+    );
+
+    let recovery = recover_at_boot(&fixture).await;
+    assert_eq!(
+        recovery
+            .completed
+            .iter()
+            .map(capsule_server::store::UploadId::as_str)
+            .collect::<Vec<_>>(),
+        vec![id.as_str()],
+        "the claim completes rather than failing: {recovery:?}"
+    );
+    assert!(recovery.failed.is_empty(), "{recovery:?}");
+    assert_eq!(terminal_status(&fixture, &id).await, "completed");
+    assert_indexed_and_durable(&fixture, &bearer, &whole).await;
+
+    // The index wrote the blob once. Where the dead finalizer's write had committed, the retry
+    // was answered as already held — the position it minted is the one the asset keeps.
+    assert_eq!(
+        fixture
+            .index
+            .reference_count(&address)
+            .await
+            .expect("the index answers"),
+        1,
+        "one reference, however many times the write was attempted"
+    );
+    let row_after = fixture
+        .index
+        .read(&asset)
+        .await
+        .expect("the index answers")
+        .expect("the row is still there");
+    if died == DiedAfter::IndexWrite {
+        assert_eq!(
+            row_after.sync_seq, row_before.sync_seq,
+            "an already-held blob mints no second sequence number"
+        );
+    }
+
+    // The retry ledgered a second custody entry, and the index write that resolved it resolves
+    // the dead finalizer's entry too: a rebuild replays neither as an unproven write.
+    let after = custody_of(&fixture, &id).await;
+    assert_eq!(
+        after.len(),
+        2,
+        "the recovery's custody entry follows the first"
+    );
+    for custody in &after {
+        assert_eq!(
+            custody.resolution,
+            Resolution::Indexed {
+                sync_seq: row_after.sync_seq
+            },
+            "every custody entry for the upload pairs with the index write: {after:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_claim_whose_process_died_after_ledgering_custody_completes_at_boot() {
+    recover_past_the_commit(DiedAfter::Custody).await;
+}
+
+#[tokio::test]
+async fn a_claim_whose_process_died_after_its_index_write_completes_at_boot() {
+    recover_past_the_commit(DiedAfter::IndexWrite).await;
+}
+
+// ===========================================================================================
 // Member writes (`S-C51`)
 // ===========================================================================================
 

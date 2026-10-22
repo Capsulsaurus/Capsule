@@ -1888,6 +1888,10 @@
     <string name="error_sync_album_access_denied">You don\'t have access to that album.</string>
     <string name="error_sync_cursor_invalid">The sync session is out of date. Capsule will resync from the start.</string>
     <string name="error_sync_cursor_stale">Your library was rebuilt on the server. Capsule will resync from the start and keep everything on this device.</string>
+    <string name="error_sync_reannounce_deleted">A deleted photo isn\'t restored on the server. Nothing was changed.</string>
+    <string name="error_sync_reannounce_denied">This photo can\'t be restored to your library on the server.</string>
+    <string name="error_sync_reannounce_invalid">Capsule sent a re-announce request the server couldn\'t read.</string>
+    <string name="error_sync_reannounce_malformed">A photo\'s signed record couldn\'t be read, so it wasn\'t restored on the server.</string>
     <string name="error_sync_unauthenticated">Please sign in again to continue syncing.</string>
     <string name="error_sync_unavailable">Capsule could not reach the server to sync. It will try again.</string>
     <string name="error_unexpected">Something went wrong during this transfer.</string>

@@ -164,3 +164,50 @@ async fn one_owners_append_leaves_anothers_anchor_alone() {
         Some(1)
     );
 }
+
+/// The server and an operator's `purge --apply` (#767): two processes, each with its own anchored
+/// filesystem ledger over one blob root and one index. Alternating appends stay on one chain,
+/// neither process's first append is refused, and the anchor ends at the last entry.
+#[tokio::test]
+async fn two_anchored_writers_on_one_root_keep_one_chain_and_one_anchor() {
+    let root = tempfile::tempdir().expect("a temporary directory");
+    let index = Arc::new(InMemoryAssetIndex::new());
+    let open = || async {
+        AnchoredLedger::new(
+            Arc::new(
+                crate::ledger::FilesystemLedger::open(root.path())
+                    .await
+                    .expect("open"),
+            ),
+            index.clone(),
+        )
+    };
+    let server = open().await;
+    let purge = open().await;
+    let owner = OwnerId::new("owner-1");
+    let signer = signer();
+
+    let mut last = None;
+    for version in 1..=6_u64 {
+        let writer = if version % 2 == 1 { &server } else { &purge };
+        let entry = writer
+            .append(&owner, directory(version), Timestamp::UNIX_EPOCH, &signer)
+            .await
+            .expect("neither writer is refused");
+        assert_eq!(entry.core.seq, version);
+        last = Some(LedgerHead {
+            seq: entry.core.seq,
+            hash: entry.chain_hash(),
+        });
+    }
+
+    let scan = server.scan(&owner).await.expect("scan");
+    let report = verify_links(
+        &owner,
+        &scan,
+        index.ledger_head(&owner).await.expect("read"),
+    );
+    assert_eq!(report.fault, None, "one chain, matching its anchor");
+    assert_eq!(report.verified, 6);
+    assert_eq!(index.ledger_head(&owner).await.expect("read"), last);
+}

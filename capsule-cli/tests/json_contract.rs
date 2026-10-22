@@ -8,9 +8,9 @@
 //! redacted, and stderr stops at color-eyre's `Location:` section, whose line numbers are not
 //! part of the contract.
 //!
-//! The `--json` subcommands today are `import`, `push`, `restore`, `verify`, `cache budget` and
-//! `cache sweep`; each has its
-//! offline cases here, and every `--json` subcommand that lands joins this file the same way.
+//! The `--json` subcommands today are `import`, `push`, `restore`, `verify`, `cache budget`,
+//! `cache sweep` and `sync reannounce`; each has its offline cases here, and every `--json`
+//! subcommand that lands joins this file the same way.
 //! What needs a live server (a push or restore that reaches its assets) is the end-to-end
 //! suites' to cover.
 //!
@@ -26,11 +26,16 @@
 //! - `verify_json_without_a_session_prints_nothing_on_stdout` — a run-level failure, as for
 //!   push: non-zero exit, empty stdout, the reason on stderr, and no attestation stored.
 //! - `verify_json_without_a_library_is_a_usage_error` — the parser's exit status 2.
+//! - `sync_reannounce_json_without_a_session_prints_nothing_on_stdout` — a run-level failure, as
+//!   for push: non-zero exit, empty stdout, the reason on stderr.
+//! - `sync_reannounce_json_without_a_library_is_a_usage_error` — the parser's exit status 2.
 //! - `import_json_reports_every_file_and_its_deferred_derivatives` — exit 0, one JSON document:
 //!   a HEIC, a video, a document and a zero-byte file all imported, with each one's
 //!   derivative status and the run's deferred count.
 //! - `import_json_reports_an_unreadable_source_when_nothing_is_planned` — exit 0, one JSON
 //!   document naming the unreadable source as a failed file and counting it as an error.
+//! - `import_json_under_debug_logging_keeps_stdout_one_document` — under `RUST_LOG=debug`,
+//!   stdout still parses as one JSON document and the debug events are on stderr.
 //! - `import_json_with_push_is_a_usage_error` — the parser's exit status 2.
 //! - `cache_budget_json_reports_the_default_plan` — exit 0, one JSON document: the desktop
 //!   class (`unmetered`) and the 2 GiB default base budget.
@@ -43,7 +48,7 @@
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
 
 use capsule_core::crypto::primitives::Argon2Params;
 use capsule_core::lifecycle::Workspace;
@@ -105,14 +110,14 @@ fn strip_ansi(text: &str) -> String {
     out
 }
 
-/// Run `capsule` with `args` in `scratch`'s home, the passphrase on stdin, and render the run
-/// as the snapshot sees it.
-fn run(scratch: &Scratch, args: &[&str]) -> String {
+/// Run `capsule` with `args` in `scratch`'s home under the `rust_log` filter, the passphrase on
+/// stdin, and return what it exited with and printed.
+fn spawn(scratch: &Scratch, args: &[&str], rust_log: &str) -> Output {
     let home = scratch.home();
     let mut child = Command::new(env!("CARGO_BIN_EXE_capsule"))
         .args(args)
         .env("NO_COLOR", "1")
-        .env("RUST_LOG", "off")
+        .env("RUST_LOG", rust_log)
         .env("RUST_BACKTRACE", "0")
         .env("LC_ALL", "en_US.UTF-8")
         .env("HOME", &home)
@@ -127,13 +132,26 @@ fn run(scratch: &Scratch, args: &[&str]) -> String {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn capsule");
-    child
+    let written = child
         .stdin
         .as_mut()
         .expect("stdin piped")
-        .write_all(format!("{PASSPHRASE}\n").as_bytes())
-        .expect("write passphrase");
-    let out = child.wait_with_output().expect("wait for capsule");
+        .write_all(format!("{PASSPHRASE}\n").as_bytes());
+    // A run that exits before reading stdin (a usage error) closes the pipe first: the write
+    // then fails with a broken pipe, and the exit status is what the case asserts on.
+    if let Err(e) = written {
+        assert_eq!(
+            e.kind(),
+            std::io::ErrorKind::BrokenPipe,
+            "write passphrase: {e}"
+        );
+    }
+    child.wait_with_output().expect("wait for capsule")
+}
+
+/// Run `capsule` with `args` and logging off, and render the run as the snapshot sees it.
+fn run(scratch: &Scratch, args: &[&str]) -> String {
+    let out = spawn(scratch, args, "off");
     let redact = |text: &[u8]| {
         strip_ansi(&String::from_utf8_lossy(text)).replace(path(&scratch.0), "[SCRATCH]")
     };
@@ -228,6 +246,29 @@ fn push_json_without_a_library_is_a_usage_error() {
 }
 
 #[test]
+fn sync_reannounce_json_without_a_session_prints_nothing_on_stdout() {
+    let scratch = Scratch::new();
+    library(&scratch, 1);
+    insta::assert_snapshot!(run(
+        &scratch,
+        &[
+            "sync",
+            "reannounce",
+            "--library",
+            path(&scratch.library()),
+            "--passphrase-stdin",
+            "--json",
+        ],
+    ));
+}
+
+#[test]
+fn sync_reannounce_json_without_a_library_is_a_usage_error() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(&scratch, &["sync", "reannounce", "--json"]));
+}
+
+#[test]
 fn restore_json_without_a_session_prints_nothing_on_stdout() {
     let scratch = Scratch::new();
     library(&scratch, 0);
@@ -309,6 +350,40 @@ fn import_json_reports_an_unreadable_source_when_nothing_is_planned() {
             "--json",
         ],
     ));
+}
+
+/// Logging never reaches the data channel: with every debug event enabled, stdout is still
+/// exactly one JSON document and the log lines are on stderr.
+#[test]
+fn import_json_under_debug_logging_keeps_stdout_one_document() {
+    let scratch = Scratch::new();
+    library(&scratch, 2);
+    let source = scratch.0.join("source");
+    let out = spawn(
+        &scratch,
+        &[
+            "import",
+            path(&source),
+            "--library",
+            path(&scratch.library()),
+            "--passphrase-stdin",
+            "--json",
+        ],
+        "debug",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "import failed: {stderr}");
+    let document: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
+        panic!(
+            "stdout is not one JSON document ({e}):\n{}",
+            String::from_utf8_lossy(&out.stdout)
+        )
+    });
+    assert!(document.is_object(), "stdout is not a report: {document}");
+    assert!(
+        stderr.contains("DEBUG"),
+        "no debug event reached stderr, so the case proved nothing:\n{stderr}"
+    );
 }
 
 #[test]

@@ -111,6 +111,10 @@ accepted it. The **owner ledger** carries those facts:
   against the head at the backup.
 - The ledger is never rewritten. Purge appends a purge entry; the purged blobs go through
   [GC](#deletion-and-garbage-collection) as before.
+- Two processes append to one ledger: the server and an operator's `purge --apply`. An append
+  holds an exclusive file lock on the owner's ledger directory from reading the tail to the
+  fsync, and reads the tail from disk whenever another process has appended since. A scan holds
+  the lock shared.
 - Device-directory versions are in the ledger, so a rebuild verifies signatures against the
   directory as it stood when each manifest was accepted.
 
@@ -166,9 +170,22 @@ After an epoch change, each client **re-announces** the signed manifests it hold
 the server reports missing from the index: manifests only, no bytes. The server verifies each
 like an upload's manifest and restores the row if every named blob is present; otherwise the
 client re-uploads through the normal [transfer protocol](/design/transfer/upload/). A
-re-announced manifest can only restore what its owner's devices signed. Re-announce is not
-implemented yet ([#781](https://github.com/Capsulsaurus/Capsule/issues/781)): until it is, a
-client resyncs and keeps what it holds, and a row the ledger could not replay stays missing.
+re-announced manifest can only restore what its owner's devices signed.
+
+`POST /v1/sync/reannounce` takes a batch of chain-head provenance records and answers each one:
+`restored`, `already_indexed`, `missing_blobs` naming what the store lacks, or `refused` with an
+`error.sync.reannounce_*` code
+([`capsule-server::sync::reannounce`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-server/src/sync/reannounce.rs)).
+A manifest passes the write authority an upload's envelope passes, except the clock-drift
+check: `created_by_user` is the caller, the caller may write to its album and it carries the
+album's pin, and its device is in the caller's directory from before its timestamp. The head is
+walked back through the store to its `create`: every manifest before it becomes the row's
+superseded chain, as the live index retains it, and the newest one naming a metadata blob
+supplies the metadata. A manifest missing from that walk is answered as a missing blob. A deletion is not re-announced, and
+derivatives are not restored: an asset manifest does not name them, so the next push re-attaches
+them. A restore appends the ledger entries a finalization would, before the index is touched,
+so a later rebuild keeps the row. The client side is `capsule sync reannounce`, which
+`capsule sync` runs itself after a stale cursor when it is given the library.
 
 ### What a Rebuild Cannot Recover
 

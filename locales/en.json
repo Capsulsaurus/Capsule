@@ -7591,6 +7591,22 @@
     "message": "Your library was rebuilt on the server. Capsule will resync from the start and keep everything on this device.",
     "context": "HTTP 409 on GET /v1/sync: the cursor is authentic but was minted before the server rebuilt this library's index and moved it to a new sync epoch. The client drops its high-water mark, resyncs from an empty cursor and discards nothing it holds."
   },
+  "error.sync.reannounce_deleted": {
+    "message": "A deleted photo isn't restored on the server. Nothing was changed.",
+    "context": "Per-manifest answer on POST /v1/sync/reannounce (#781): the re-announced chain head is a delete manifest. Re-announce restores live assets only, so the server writes nothing. Not retryable; the client leaves the asset as it is."
+  },
+  "error.sync.reannounce_denied": {
+    "message": "This photo can't be restored to your library on the server.",
+    "context": "Per-manifest answer on POST /v1/sync/reannounce (#781): another account's device signed the manifest, the caller cannot write to its album, its protocol pin is not the album's, its device is not in the caller's published directory, or the asset id is filed under another album or owner. One answer for all of them, like the upload gate's 403. Not retryable."
+  },
+  "error.sync.reannounce_invalid": {
+    "message": "Capsule sent a re-announce request the server couldn't read.",
+    "context": "HTTP 400 on POST /v1/sync/reannounce (#781): the request named no manifests, more than the per-request limit, or a manifest that is not base64. A client bug rather than a user error; nothing was written."
+  },
+  "error.sync.reannounce_malformed": {
+    "message": "A photo's signed record couldn't be read, so it wasn't restored on the server.",
+    "context": "Per-manifest answer on POST /v1/sync/reannounce (#781): the bytes are not a provenance record the server's manifest parser accepts (undecodable, structurally invalid, from a newer client), or its chain does not walk back to a manifest naming a metadata blob. Nothing was written."
+  },
   "error.sync.unauthenticated": {
     "message": "Please sign in again to continue syncing.",
     "context": "HTTP 401 on the sync feed: the request carried no valid access token. Currently unused — the framework renders the 401 and carries no error code on it (slice S-C36)."

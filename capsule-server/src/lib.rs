@@ -209,6 +209,7 @@ pub fn router() -> Router<App, Propagate, ServerInterceptors, impl Sized> {
                     routes::roster::publish_album_roster,
                     routes::upload::cancel_upload,
                     routes::storage::verify_storage,
+                    routes::reannounce::reannounce_manifests,
                 ])
                 // Share links and guest drops: the owner's bounded writes on both.
                 .mount(kynos::routes![

@@ -708,8 +708,9 @@ pub enum CancelRejection {
     /// Finalization is running, or the session is already terminal.
     ///
     /// Finalization is not interruptible: a session in `WaitingForProcessing` is driven to a
-    /// terminal state by the finalizer that claimed it, and a terminal one has nothing left to
-    /// cancel — its bytes are either a blob or already gone.
+    /// terminal state by the finalizer that claimed it — a task that outlives the request that
+    /// started it, or, when the process that claimed it died, the next boot's recovery — and a
+    /// terminal one has nothing left to cancel — its bytes are either a blob or already gone.
     #[error("this session can no longer be cancelled")]
     #[problem(status = 409, title = "Session not active")]
     SessionNotActive {
@@ -1373,11 +1374,26 @@ pub async fn append_chunk(
             complete,
         } => {
             if complete {
-                match finalize::finalize(&upload, &attestation, &id).await {
-                    Ok(Outcome::Committed { .. } | Outcome::AlreadyClaimed) => {}
-                    Ok(Outcome::NotFound) => return Err(ChunkRejection::session_not_found()),
-                    Err(failure) => {
+                // Its own task, awaited here for the answer: a client that disconnects drops
+                // this future, and the finalization must not stop with it — a claim abandoned
+                // between the commit and the index write strands the session and orphans the
+                // bytes (`finalize::spawn`).
+                let finalizing = finalize::spawn(upload.clone(), attestation.clone(), id.clone());
+                match finalizing.await {
+                    Ok(Ok(Outcome::Committed { .. } | Outcome::AlreadyClaimed)) => {}
+                    Ok(Ok(Outcome::NotFound)) => return Err(ChunkRejection::session_not_found()),
+                    Ok(Err(failure)) => {
                         return Err(ChunkRejection::from_failure(failure, upload.clock()));
+                    }
+                    Err(join) => {
+                        // A panic inside finalization. The claim it held is left for the next
+                        // boot's recovery to drive; this client is told to come back.
+                        tracing::error!(
+                            upload_id = %id,
+                            error = %join,
+                            "the finalization task did not finish"
+                        );
+                        return Err(ChunkRejection::unavailable(upload.clock()));
                     }
                 }
             }
