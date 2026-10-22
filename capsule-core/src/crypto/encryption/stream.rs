@@ -368,6 +368,9 @@ impl<W: Write> StreamDecryptor<W> {
 
     /// Feed the next ciphertext bytes.
     pub fn update(&mut self, mut data: &[u8]) -> Result<(), StreamError> {
+        if self.decryptor.is_none() {
+            return Err(StreamError::Auth(self.index));
+        }
         while !data.is_empty() {
             let take = data.len().min(2 * CIPHERTEXT_CHUNK - self.pending.len());
             self.pending.extend_from_slice(&data[..take]);

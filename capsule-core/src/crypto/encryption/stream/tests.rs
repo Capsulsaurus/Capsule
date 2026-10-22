@@ -341,6 +341,7 @@ fn stream_decryptor_stays_failed() {
     let split = CIPHERTEXT_CHUNK + 1;
     assert!(decryptor.update(&ct[..split]).is_err());
     assert!(decryptor.update(&ct[split..]).is_err());
+    assert!(decryptor.update(&[]).is_err(), "even an empty write");
     assert!(decryptor.finish().is_err());
 }
 

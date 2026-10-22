@@ -180,6 +180,7 @@ impl OriginalCiphertext {
 
     /// The ciphertext bytes `[offset, offset + len)`, clamped to the end. Memory is the window
     /// plus one STREAM chunk.
+    #[tracing::instrument(level = "trace", skip(self), fields(path = %self.path.display()))]
     pub fn read_at(&self, offset: u64, len: usize) -> io::Result<Vec<u8>> {
         let file = fs::File::open(&self.path)?;
         CiphertextReader::new(self.file_key, self.nonce_prefix, file, self.plaintext_size)
