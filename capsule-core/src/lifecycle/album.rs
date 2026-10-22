@@ -11,7 +11,9 @@ use uuid::Uuid;
 
 use super::{AlbumKeys, LifecycleError, Result, Workspace, now_rfc3339};
 use crate::crypto::authority::{Authority, ReferenceAuthority};
-use crate::crypto::keys::albumstore::{AlbumStore, PersistedAlbum, PersistedAuthority};
+use crate::crypto::keys::albumstore::{
+    AlbumStore, AlbumStoreError, PersistedAlbum, PersistedAuthority,
+};
 use crate::crypto::keys::{Amk, AmkVersion, HybridSigningKey};
 use crate::metadata::crdt::{AddId, OrSet};
 use crate::sidecar::{ALBUM_DOC_SCHEMA_V1, AlbumDocV1, normalize_label};
@@ -26,6 +28,9 @@ pub struct AdoptedAlbumKeys {
     pub epochs: usize,
     /// Escrowed albums the library already held, left as they were.
     pub already_held: usize,
+    /// Escrows that did not open under this account's master key — sealed under another one —
+    /// and were skipped.
+    pub unopenable: usize,
 }
 
 impl Workspace {
@@ -188,18 +193,25 @@ impl Workspace {
     /// escrowed it held it, so `ensure_album` resolves the derived default album rather than
     /// minting a fresh AMK under an id the account's other devices already wrote under.
     ///
-    /// All or nothing: every escrow is opened and every carried authority re-verified before the
-    /// keystore is written, and any failure refuses the whole adoption with nothing persisted —
-    /// a library that silently lacked one album would mint over it at the next `ensure_album`.
-    /// An album this workspace already holds keeps its own keys and is counted in
-    /// [`AdoptedAlbumKeys::already_held`]: a held content key is never swapped underneath the
-    /// authority that attests it.
+    /// Every escrow is opened and every carried authority re-verified before the keystore is
+    /// written, and an escrow that opens but is inconsistent refuses the whole adoption with
+    /// nothing persisted — a library that silently lacked one album would mint over it at the
+    /// next `ensure_album`. An album this workspace already holds keeps its own keys and is
+    /// counted in [`AdoptedAlbumKeys::already_held`]: a held content key is never swapped
+    /// underneath the authority that attests it.
+    ///
+    /// An escrow that does **not open** under this master key is skipped and counted in
+    /// [`AdoptedAlbumKeys::unopenable`]. It is sealed under another master key — the escrow was
+    /// later replaced from another library of the account — and its albums are that key's, never
+    /// this one's: their ids cannot collide with this master key's derived default album, and
+    /// refusing them would lock the account out of recovery for good, since nothing can remove
+    /// them. Skipping one costs no more than a server omitting it from the listing would.
     ///
     /// # Errors
     ///
-    /// [`LifecycleError::AlbumStore`] when an escrow does not open under this account's master
-    /// key, holds another album than the id it was served under, carries an authority that does
-    /// not re-verify, or the keystore cannot be written.
+    /// [`LifecycleError::AlbumStore`] when an escrow opens but is not an album key escrow, holds
+    /// another album than the id it was served under, or carries an authority that does not
+    /// re-verify, or when the keystore cannot be written.
     #[tracing::instrument(skip_all, fields(escrowed = escrowed.len()))]
     pub fn adopt_album_key_escrows(
         &mut self,
@@ -208,11 +220,24 @@ impl Workspace {
         let mut store = self.album_store_snapshot()?;
         let mut adopted = Vec::new();
         let mut already_held = 0;
+        let mut unopenable = 0;
         for (album_id, blob) in escrowed {
-            let album = PersistedAlbum::open_escrow(blob, &self.account.master, *album_id)
-                .inspect_err(|e| {
-                    tracing::warn!(album_id = %album_id, error = %e, "an album key escrow did not open");
-                })?;
+            let album = match PersistedAlbum::open_escrow(blob, &self.account.master, *album_id) {
+                Ok(album) => album,
+                Err(AlbumStoreError::Crypto(error)) => {
+                    tracing::warn!(
+                        album_id = %album_id,
+                        %error,
+                        "an album key escrow is sealed under another master key; skipped"
+                    );
+                    unopenable += 1;
+                    continue;
+                }
+                Err(error) => {
+                    tracing::warn!(album_id = %album_id, %error, "an album key escrow is inconsistent");
+                    return Err(error.into());
+                }
+            };
             if store.get(album_id).is_some() {
                 tracing::info!(album_id = %album_id, "album already held; its escrow is not adopted");
                 already_held += 1;
@@ -233,9 +258,10 @@ impl Workspace {
             adopted: adopted.len(),
             epochs: adopted.iter().map(|album| album.amks.len()).sum(),
             already_held,
+            unopenable,
         };
         if adopted.is_empty() {
-            tracing::info!(already_held, "no album key escrow to adopt");
+            tracing::info!(already_held, unopenable, "no album key escrow to adopt");
             return Ok(report);
         }
         for album in adopted {
@@ -247,6 +273,7 @@ impl Workspace {
             adopted = report.adopted,
             epochs = report.epochs,
             already_held,
+            unopenable,
             "album key escrows adopted into the keystore"
         );
         Ok(report)
@@ -999,7 +1026,8 @@ mod tests {
             AdoptedAlbumKeys {
                 adopted: 2,
                 epochs: 3,
-                already_held: 0
+                already_held: 0,
+                unopenable: 0,
             }
         );
         assert_eq!(b.albums(), a.albums());
@@ -1033,10 +1061,53 @@ mod tests {
         assert_eq!(b.albums(), a.albums());
     }
 
-    /// #741: one escrow that does not open refuses the whole adoption, and nothing is persisted —
-    /// a library missing one album would mint over it at the next `ensure_album`.
+    /// A library created from `a`'s master key and identity, holding no album yet.
+    fn recovered_from(a: &Workspace, dir: &Path) -> Workspace {
+        Workspace::create_from_master(
+            dir,
+            b"device b",
+            FAST_PARAMS,
+            crate::crypto::keys::MasterKey::from_bytes(*a.account.master.as_bytes()),
+            a.user_id(),
+            &a.sealed_identity(),
+        )
+        .unwrap()
+    }
+
+    /// #741: an escrow that opens but is inconsistent — served under another album's id —
+    /// refuses the whole adoption, and nothing is persisted: a library missing one album would
+    /// mint over it at the next `ensure_album`.
     #[test]
-    fn an_escrow_that_does_not_open_refuses_the_whole_adoption() {
+    fn an_inconsistent_escrow_refuses_the_whole_adoption() {
+        let src = TempDir::new().unwrap();
+        let mut a = fast_workspace(src.path());
+        let default = a.default_album_id();
+        a.ensure_album(default, "Imports").unwrap();
+        let trip = a.create_album("Trip").unwrap();
+
+        let dst = TempDir::new().unwrap();
+        let mut b = recovered_from(&a, dst.path());
+        let escrowed = vec![
+            (default, a.album_key_escrow(&default).unwrap()),
+            (Uuid::now_v7(), a.album_key_escrow(&trip).unwrap()),
+        ];
+        assert!(matches!(
+            b.adopt_album_key_escrows(&escrowed),
+            Err(LifecycleError::AlbumStore(
+                AlbumStoreError::EscrowAlbumMismatch { .. }
+            ))
+        ));
+        assert!(b.albums().is_empty());
+        drop(b);
+        let b = Workspace::open(dst.path(), b"device b", FAST_PARAMS).unwrap();
+        assert!(b.albums().is_empty(), "nothing was persisted");
+    }
+
+    /// #741: an escrow sealed under another master key — left by another library of the account
+    /// whose escrow was replaced — is skipped and counted, and the rest are adopted: refusing it
+    /// would lock the account out of recovery, since nothing removes it.
+    #[test]
+    fn an_escrow_under_another_master_key_is_skipped_not_fatal() {
         let src = TempDir::new().unwrap();
         let mut a = fast_workspace(src.path());
         let trip = a.create_album("Trip").unwrap();
@@ -1045,33 +1116,15 @@ mod tests {
         let theirs = stranger.create_album("Theirs").unwrap();
 
         let dst = TempDir::new().unwrap();
-        let mut b = Workspace::create_from_master(
-            dst.path(),
-            b"device b",
-            FAST_PARAMS,
-            crate::crypto::keys::MasterKey::from_bytes(*a.account.master.as_bytes()),
-            a.user_id(),
-            &a.sealed_identity(),
-        )
-        .unwrap();
+        let mut b = recovered_from(&a, dst.path());
         let escrowed = vec![
             (trip, a.album_key_escrow(&trip).unwrap()),
             (theirs, stranger.album_key_escrow(&theirs).unwrap()),
         ];
-        assert!(matches!(
-            b.adopt_album_key_escrows(&escrowed),
-            Err(LifecycleError::AlbumStore(_))
-        ));
-        // Served under the wrong id: refused as well.
-        assert!(matches!(
-            b.adopt_album_key_escrows(&[(Uuid::now_v7(), a.album_key_escrow(&trip).unwrap())]),
-            Err(LifecycleError::AlbumStore(
-                crate::crypto::keys::AlbumStoreError::EscrowAlbumMismatch { .. }
-            ))
-        ));
-        assert!(b.albums().is_empty());
-        drop(b);
-        let b = Workspace::open(dst.path(), b"device b", FAST_PARAMS).unwrap();
-        assert!(b.albums().is_empty(), "nothing was persisted");
+        let report = b.adopt_album_key_escrows(&escrowed).unwrap();
+        assert_eq!(report.adopted, 1);
+        assert_eq!(report.unopenable, 1);
+        assert_eq!(b.albums(), a.albums());
+        assert!(!b.has_album(&theirs));
     }
 }
