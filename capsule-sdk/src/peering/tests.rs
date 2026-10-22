@@ -574,6 +574,16 @@ fn handshake_limiter_caps_tracked_sources() {
         !limiter.admit(source(1), now),
         "a source that was not evicted keeps the attempts it spent"
     );
+    assert!(
+        limiter.admit(source(0), now),
+        "the least recently active source was the one evicted"
+    );
+    assert!(
+        limiter.admit(source(0), now),
+        "the evicted source regains its full budget"
+    );
+    assert!(!limiter.admit(source(0), now), "and is held to it again");
+    assert_eq!(limiter.tracked(), MAX_TRACKED_SOURCES, "the cap holds");
 
     let later = at(MAX_TRACKED_SOURCES) + Duration::from_secs(11);
     assert!(
