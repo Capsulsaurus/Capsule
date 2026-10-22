@@ -9,9 +9,20 @@
 //! path, so a parser bug can cost a rebuild a row or a scrub a finding, and never an upload.
 //!
 //! Every byte this module reads came from a client, so it is bounded before it is decoded
-//! ([`MAX_MANIFEST_BYTES`]), and it decodes through `capsule_core`'s own
-//! [`AssetManifest`] rather than a shape defined here: a second implementation of what a
-//! manifest says would be a second answer to a question the threat model allows one answer to.
+//! ([`MAX_MANIFEST_BYTES`]), and it decodes through `capsule_core`'s own types rather than a
+//! shape defined here: a second implementation of what a manifest says would be a second answer
+//! to a question the threat model allows one answer to.
+//!
+//! # What a provenance blob holds
+//!
+//! The canonical CBOR of the chain head's [`ProvenanceRecord`]: the signed manifest, the asset
+//! it belongs to and the hash of the record before it (`UploadBundle::provenance_blob`). The
+//! record and not the bare manifest, because a client's next `prior_provenance_hash` is the
+//! record's hash. [`parse`] decodes the record and hands back the manifest inside it, after
+//! checking the two agree about the asset and the link. A bare [`AssetManifest`] is accepted
+//! too, for blobs written before the record wrapped it. A record a newer client wrote is
+//! [`ManifestFault::NewerVersion`]: unreadable here, and never to be moved or rewritten
+//! (versioning invariants 3 and 5).
 //!
 //! # Decoding is not validating
 //!
@@ -26,7 +37,7 @@
 //!
 //! [Server Filesystem § Rebuild]: https://github.com/Capsulsaurus/Capsule/blob/master/capsule-docs/src/content/docs/design/filesystem/server.md#rebuild
 
-use capsule_core::crypto::provenance::AssetManifest;
+use capsule_core::crypto::provenance::{AssetManifest, ProvenanceRecord, RecordDecodeError};
 
 use crate::blob::{BlobError, BlobStore, ContentAddress};
 
@@ -46,9 +57,21 @@ pub enum ManifestFault {
         /// Its length.
         size: u64,
     },
-    /// Not the CBOR encoding of an asset manifest.
-    #[error("the bytes do not decode as an asset manifest")]
+    /// Not the CBOR encoding of a provenance record or an asset manifest.
+    #[error("the bytes do not decode as a provenance record or an asset manifest")]
     Undecodable,
+    /// A provenance record of a version this build does not read: a newer client wrote it.
+    ///
+    /// Not damage. Kept verbatim and never quarantined: it becomes readable when the server is
+    /// updated.
+    #[error("the provenance record is version {found}, newer than this build reads")]
+    NewerVersion {
+        /// The version it declares.
+        found: u64,
+    },
+    /// A record whose manifest names another asset, or another predecessor, than the record.
+    #[error("the provenance record and the manifest inside it disagree")]
+    RecordMismatch,
     /// A manifest whose fields break a presence rule ([`AssetManifest::structural_ok`]).
     #[error("the manifest breaks a structural presence rule")]
     Structural,
@@ -60,6 +83,8 @@ impl ManifestFault {
         match self {
             Self::TooLarge { .. } => "too_large",
             Self::Undecodable => "undecodable",
+            Self::NewerVersion { .. } => "newer_version",
+            Self::RecordMismatch => "record_mismatch",
             Self::Structural => "structural",
         }
     }
@@ -78,10 +103,32 @@ pub fn parse(bytes: &[u8]) -> Result<AssetManifest, ManifestFault> {
         tracing::debug!(size, "a manifest over the ceiling was not decoded");
         return Err(ManifestFault::TooLarge { size });
     }
-    capsule_core::cbor::from_slice::<AssetManifest>(bytes).map_err(|error| {
-        tracing::debug!(size, %error, "bytes did not decode as an asset manifest");
-        ManifestFault::Undecodable
-    })
+    match ProvenanceRecord::decode(bytes) {
+        Ok(record) => {
+            if record.manifest.core.file_id != record.asset_id
+                || record.manifest.core.prior_provenance_hash != record.prior_provenance_hash
+            {
+                tracing::debug!(size, "a provenance record disagrees with its manifest");
+                return Err(ManifestFault::RecordMismatch);
+            }
+            Ok(record.manifest)
+        }
+        Err(RecordDecodeError::UnsupportedVersion { found, .. }) => {
+            tracing::debug!(
+                size,
+                found,
+                "a provenance record is newer than this build reads"
+            );
+            Err(ManifestFault::NewerVersion { found })
+        }
+        // Not a record: a bare manifest, from before the record wrapped it, or nothing at all.
+        Err(RecordDecodeError::Malformed(_)) => {
+            capsule_core::cbor::from_slice::<AssetManifest>(bytes).map_err(|error| {
+                tracing::debug!(size, %error, "bytes did not decode as a record or a manifest");
+                ManifestFault::Undecodable
+            })
+        }
+    }
 }
 
 /// Whether a decoded manifest keeps the key-free presence rules.
