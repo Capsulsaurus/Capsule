@@ -11,8 +11,9 @@
 //! `import_round_trip.rs` explains; nothing here weakens what the spawned processes run.
 //!
 //! **The pre-`S-B16` library** the repair exists for is reproduced by importing under the
-//! fixed parser and then stamping one asset's sidecar with the import clock through the very
-//! API the repair uses (`Workspace::set_capture_timestamp`). That reproduces the half the
+//! fixed parser and then stamping one asset's as-imported capture time with the import clock
+//! through the very API the repair uses (`Workspace::correct_imported_capture_timestamp`).
+//! That reproduces the half the
 //! repair reads — a signed sidecar carrying `now` under a still-EXIF-bearing original — and it
 //! is the only way to produce it from a build whose importer no longer has the bug. It does
 //! **not** reproduce the other half of the old shape: the bug also sharded the bundle into the
@@ -439,7 +440,7 @@ fn repair_reports_by_default_and_corrects_under_apply() {
     let (broken, month_before) = {
         let mut ws = fx.reopen();
         let broken = fx.asset_for(&ws, broken_image);
-        ws.set_capture_timestamp(&broken, jiff::Timestamp::now())
+        ws.correct_imported_capture_timestamp(&broken, jiff::Timestamp::now())
             .expect("reproduce the pre-S-B16 stamp");
         let month = fx.month_dir(&ws, broken);
         (broken, month)
