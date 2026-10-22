@@ -11,7 +11,9 @@
 //! # Allocate, sign and append under one table lock
 //!
 //! [`ReceiptLog::issue`] is one operation because the position and the predecessor are inside
-//! the signed core (see the module docs one level up). Here that is one transaction opened with
+//! the signed core (see the module docs one level up). Here that is `issue_in` inside one
+//! transaction — its own for `issue`, or the asset index's for a finalization, so the receipt
+//! commits with the index rows it attests to. It takes
 //! `LOCK TABLE custody_receipts IN SHARE ROW EXCLUSIVE MODE`: the mode conflicts with itself, so
 //! two issuers take turns, and it does not conflict with plain reads, so `for_upload` and
 //! `for_asset` are never blocked by an issue in flight. Under the lock the retry check, the head
@@ -105,6 +107,86 @@ async fn issued_for<C: ConnectionTrait>(
         .transpose()
 }
 
+/// Allocate, sign and append a receipt inside `transaction`, which the caller commits.
+///
+/// The body of [`ReceiptLog::issue`], and the half of finalization's one transaction that the
+/// asset index runs after writing its rows (`crate::index::postgres`): the receipt and the rows
+/// commit together or not at all. The table lock taken here is held until the caller's commit,
+/// so the chain position allocated here is still the head when it becomes visible.
+///
+/// Idempotent per upload: a retried finalization gets the receipt it already has.
+pub(crate) async fn issue_in(
+    transaction: &DatabaseTransaction,
+    draft: ReceiptDraft,
+    signer: &dyn ReceiptSigner,
+) -> Result<CustodyReceipt, StoreError> {
+    // The critical section starts here and ends with the caller's transaction.
+    transaction
+        .execute_raw(Statement::from_string(
+            DbBackend::Postgres,
+            "LOCK TABLE custody_receipts IN SHARE ROW EXCLUSIVE MODE",
+        ))
+        .await
+        .map_err(PORT.failing("locking the receipt log"))?;
+
+    // A retried finalization gets the receipt it already has, never a second one: two signed
+    // statements about one custody event read as the server double-counting.
+    if let Some(existing) = issued_for(transaction, &draft.upload_id).await? {
+        tracing::debug!(
+            upload_id = %draft.upload_id,
+            receipt_seq = existing.core.receipt_seq,
+            "a receipt was already issued for this upload; returning it"
+        );
+        return Ok(existing);
+    }
+
+    let doing = "reading the receipt chain's head";
+    let head = transaction
+        .query_one_raw(Statement::from_string(
+            DbBackend::Postgres,
+            "SELECT receipt_seq, receipt FROM custody_receipts \
+             ORDER BY receipt_seq DESC LIMIT 1",
+        ))
+        .await
+        .map_err(PORT.failing(doing))?
+        .map(|row| receipt_from(&row, doing))
+        .transpose()?;
+    let receipt_seq = head
+        .as_ref()
+        .map_or(Some(1), |prior| prior.core.receipt_seq.checked_add(1))
+        .ok_or_else(|| PORT.undecodable("the receipt chain is at u64::MAX".to_owned()))?;
+    let column_seq = i64::try_from(receipt_seq).map_err(|_| StoreError::Rejected {
+        store: PORT.store,
+        detail: format!("receipt position {receipt_seq} is past what a BIGINT holds"),
+    })?;
+    let prior_receipt_hash = head.as_ref().map(chain_hash);
+
+    let upload_id = draft.upload_id.clone();
+    let receipt = sign_receipt(draft, signer, receipt_seq, prior_receipt_hash);
+    transaction
+        .execute_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "INSERT INTO custody_receipts (receipt_seq, upload_id, asset_id, receipt) \
+             VALUES ($1, $2, $3, $4)",
+            [
+                Value::from(column_seq),
+                Value::from(upload_id.as_str().to_owned()),
+                Value::from(receipt.core.asset_id.clone()),
+                Value::from(receipt.to_canonical_cbor()),
+            ],
+        ))
+        .await
+        .map_err(PORT.failing("appending a receipt"))?;
+
+    tracing::debug!(
+        upload_id = %upload_id,
+        asset = %receipt.core.asset_id,
+        receipt_seq,
+        "appended a custody receipt; it commits with its transaction"
+    );
+    Ok(receipt)
+}
+
 impl ReceiptLog for PostgresReceipts {
     fn issue<'a>(
         &'a self,
@@ -113,72 +195,16 @@ impl ReceiptLog for PostgresReceipts {
     ) -> StoreFuture<'a, CustodyReceipt> {
         Box::pin(async move {
             let transaction = begin(&self.connection).await?;
-            // The critical section starts here and ends with the transaction.
-            transaction
-                .execute_raw(Statement::from_string(
-                    DbBackend::Postgres,
-                    "LOCK TABLE custody_receipts IN SHARE ROW EXCLUSIVE MODE",
-                ))
-                .await
-                .map_err(PORT.failing("locking the receipt log"))?;
-
-            // A retried finalization gets the receipt it already has, never a second one: two
-            // signed statements about one custody event read as the server double-counting.
-            if let Some(existing) = issued_for(&transaction, &draft.upload_id).await? {
-                tracing::debug!(
-                    upload_id = %draft.upload_id,
-                    receipt_seq = existing.core.receipt_seq,
-                    "a receipt was already issued for this upload; returning it"
-                );
-                return Ok(existing);
-            }
-
-            let doing = "reading the receipt chain's head";
-            let head = transaction
-                .query_one_raw(Statement::from_string(
-                    DbBackend::Postgres,
-                    "SELECT receipt_seq, receipt FROM custody_receipts \
-                     ORDER BY receipt_seq DESC LIMIT 1",
-                ))
-                .await
-                .map_err(PORT.failing(doing))?
-                .map(|row| receipt_from(&row, doing))
-                .transpose()?;
-            let receipt_seq = head
-                .as_ref()
-                .map_or(Some(1), |prior| prior.core.receipt_seq.checked_add(1))
-                .ok_or_else(|| PORT.undecodable("the receipt chain is at u64::MAX".to_owned()))?;
-            let column_seq = i64::try_from(receipt_seq).map_err(|_| StoreError::Rejected {
-                store: PORT.store,
-                detail: format!("receipt position {receipt_seq} is past what a BIGINT holds"),
-            })?;
-            let prior_receipt_hash = head.as_ref().map(chain_hash);
-
-            let upload_id = draft.upload_id.clone();
-            let receipt = sign_receipt(draft, signer, receipt_seq, prior_receipt_hash);
-            transaction
-                .execute_raw(Statement::from_sql_and_values(
-                    DbBackend::Postgres,
-                    "INSERT INTO custody_receipts (receipt_seq, upload_id, asset_id, receipt) \
-                     VALUES ($1, $2, $3, $4)",
-                    [
-                        Value::from(column_seq),
-                        Value::from(upload_id.as_str().to_owned()),
-                        Value::from(receipt.core.asset_id.clone()),
-                        Value::from(receipt.to_canonical_cbor()),
-                    ],
-                ))
-                .await
-                .map_err(PORT.failing("appending a receipt"))?;
+            let receipt = issue_in(&transaction, draft, signer).await?;
             transaction
                 .commit()
                 .await
                 .map_err(PORT.failing("committing a receipt"))?;
 
             tracing::info!(
-                upload_id = %upload_id,
+                upload_id = %receipt.core.upload_id,
                 asset = %receipt.core.asset_id,
-                receipt_seq,
+                receipt_seq = receipt.core.receipt_seq,
                 "issued a custody receipt"
             );
             Ok(receipt)

@@ -43,10 +43,11 @@ use sea_orm::{
 };
 
 use super::{
-    AssetIndex, AssetRow, AssetState, BlobOutcome, BlobRecord, BlobRef, BlobReference, FeedEntry,
-    HoldOutcome, IndexFuture, LifecycleOp, OpAction, OpOutcome, PendingAsset, PurgeOutcome,
-    Reservation, ServingHold, entry_for, is_singular, set_singular,
+    AssetIndex, AssetRow, AssetState, BlobOutcome, BlobRecord, BlobRef, BlobReference, Custody,
+    FeedEntry, HoldOutcome, IndexFuture, LifecycleOp, OpAction, OpOutcome, PendingAsset,
+    PurgeOutcome, Receipted, Reservation, ServingHold, entry_for, is_singular, set_singular,
 };
+use crate::attestation;
 use crate::blob::ContentAddress;
 use crate::postgres::error::Port;
 use crate::postgres::time::{from_micros, stored, to_micros};
@@ -434,8 +435,8 @@ async fn persist(transaction: &DatabaseTransaction, row: &AssetRow) -> Result<()
 ///
 /// The whole idempotency store: a replay needs the number the first application minted, and
 /// everything else in the response is derivable from the manifest itself. Called **twice** by
-/// [`AssetIndex::apply_op`] — once before the row lock and once after — and the second call is
-/// the one that is load-bearing; see the comment there.
+/// [`apply_in`] — once before the row lock and once after — and the second call is the one that
+/// is load-bearing; see the comment there.
 async fn applied_sequence(
     transaction: &DatabaseTransaction,
     op: &LifecycleOp,
@@ -501,6 +502,287 @@ async fn commit(transaction: DatabaseTransaction) -> Result<(), StoreError> {
         .commit()
         .await
         .map_err(PORT.failing("committing a transaction"))
+}
+
+// -------------------------------------------------------------------------------------------
+// The two finalization writes, inside a caller's transaction
+//
+// Each is the whole decision and write of its operation, and neither begins or commits: the
+// caller does, which is what lets a finalization append its custody receipt to the same
+// transaction before committing (#693).
+// -------------------------------------------------------------------------------------------
+
+/// [`AssetIndex::record_blob`]'s decision and write, inside `transaction`.
+async fn record_in(
+    transaction: &DatabaseTransaction,
+    asset: &AssetId,
+    blob: BlobRecord,
+) -> Result<BlobOutcome, StoreError> {
+    let Some(row) = hydrate_locked(transaction, asset).await? else {
+        return Ok(BlobOutcome::NotFound);
+    };
+
+    if row
+        .blobs
+        .iter()
+        .any(|held| held.role == blob.role && held.address == blob.address)
+    {
+        // A retried finalization. Idempotent by address rather than by role, so a genuine
+        // retry is free.
+        return Ok(BlobOutcome::AlreadyHeld(Box::new(row)));
+    }
+    if is_singular(blob.role) && row.blobs.iter().any(|held| held.role == blob.role) {
+        // Refused rather than overwritten: an upload that re-pointed a singular role would swap
+        // bytes under a signature that still verifies against the old ones.
+        return Ok(BlobOutcome::Conflict);
+    }
+
+    let mut row = row;
+    row.blobs.push(BlobRef {
+        role: blob.role,
+        address: blob.address,
+        size: blob.size,
+    });
+    row.blobs.sort();
+    // Through `stored`, because this row is returned to the caller without being read back: a
+    // `BIGINT` of microseconds cannot carry the nanoseconds `Timestamp` does, so the untruncated
+    // value would differ from what the next `read` produces.
+    row.updated_at = stored(blob.finalized_at);
+
+    // The create's provenance blob is the asset's first accepted manifest, so it is the chain
+    // the first lifecycle op must name (invariant 17). Set from the record's own
+    // `manifest_sha256` and never from the content address (`S-C31`).
+    if blob.role == BlobRole::Provenance
+        && row.chain_head.is_none()
+        && let Some(manifest_sha256) = blob.manifest_sha256
+    {
+        row.chain_head = Some(manifest_sha256);
+    }
+
+    let minted = if row.state == AssetState::Tombstoned {
+        // A late blob for a deleted asset is stored — the bytes exist and GC must see the
+        // reference — but publishes nothing.
+        None
+    } else if row.is_publishable() {
+        let seq = mint(transaction, &row.owner_id).await?;
+        row.state = AssetState::Visible;
+        row.sync_seq = Some(seq);
+        row.first_seq = Some(row.first_seq.unwrap_or(seq));
+        Some(seq)
+    } else {
+        None
+    };
+
+    persist(transaction, &row).await?;
+    Ok(BlobOutcome::Recorded {
+        row: Box::new(row),
+        minted,
+    })
+}
+
+/// Say so when a committed `record_blob` published its asset.
+fn log_publication(asset: &AssetId, outcome: &BlobOutcome) {
+    if let BlobOutcome::Recorded {
+        minted: Some(seq), ..
+    } = outcome
+    {
+        tracing::info!(%asset, sync_seq = seq, "an asset became visible on its owner's feed");
+    }
+}
+
+/// Say so when a lifecycle write committed.
+fn log_application(op: &LifecycleOp, sync_seq: u64) {
+    tracing::info!(
+        asset = %op.asset_id,
+        action = op.action.as_str(),
+        sync_seq,
+        "a lifecycle write was applied"
+    );
+}
+
+/// [`AssetIndex::apply_op`]'s decision and write, inside `transaction`.
+///
+/// Only [`OpOutcome::Applied`] leaves anything in the transaction worth committing. Every
+/// other outcome is to be answered with the transaction rolled back: a `Replayed` reached
+/// through the `applied_manifests` conflict has minted a number that must not survive.
+async fn apply_in(
+    transaction: &DatabaseTransaction,
+    op: &LifecycleOp,
+) -> Result<OpOutcome, StoreError> {
+    // Idempotency first, before any invariant: a byte-identical resubmission of an
+    // already-applied op is not a stale chain, it is the same op arriving twice. Checking 17
+    // first would answer `409` to a client whose only fault was losing an acknowledgement.
+    if let Some(sync_seq) = applied_sequence(transaction, op).await? {
+        return Ok(OpOutcome::Replayed { sync_seq });
+    }
+
+    let Some(row) = hydrate_locked(transaction, &op.asset_id).await? else {
+        return Ok(OpOutcome::NotFound);
+    };
+
+    // **And again, now that the asset row is locked.** The first look is an optimisation — it
+    // answers a leisurely retry without taking a lock — and on its own it is a
+    // read-then-decide with a window in it: two identical submissions racing both find
+    // nothing, and the loser then serializes on `FOR UPDATE` behind a winner that has meanwhile
+    // inserted the very row it looked for. Answering that loser from the state it read before
+    // the lock produces the wrong outcome twice over — it would fail invariant 17 against a
+    // chain head the winner has just advanced, and report `StaleChain` to a client whose
+    // manifest *was* applied, by the winner, moments ago.
+    //
+    // The retry inside the critical section is what makes `Replayed` the answer either way,
+    // which is what the port promises: a byte-identical resubmission has the same hash, so it
+    // is the same op however it arrived. The row lock serializes two submissions **to this
+    // asset**; the `applied_manifests` insert below covers the one race the lock cannot, the
+    // same manifest hash arriving on a sibling asset.
+    if let Some(sync_seq) = applied_sequence(transaction, op).await? {
+        return Ok(OpOutcome::Replayed { sync_seq });
+    }
+    // Not this caller's asset, or not in the album the op was addressed to. Both are the same
+    // answer, and neither is distinguishable from an asset that never existed.
+    if row.owner_id != op.owner_id || row.album_id != op.album_id {
+        tracing::info!(
+            asset = %op.asset_id,
+            "a lifecycle write was refused: the asset is not this caller's"
+        );
+        return Ok(OpOutcome::NotFound);
+    }
+    // A row nothing can see yet has no chain to extend.
+    if row.state == AssetState::Pending {
+        return Ok(OpOutcome::NotFound);
+    }
+
+    // Invariant 17, decided under the row lock rather than by the caller: a read-compare-write
+    // above this port has a window in which two ops chain onto the same head, which is the
+    // double-apply the invariant exists to catch.
+    if op.prior_provenance_hash != row.chain_head {
+        tracing::info!(
+            asset = %op.asset_id,
+            action = op.action.as_str(),
+            "a lifecycle write was refused: it does not chain onto the stored head"
+        );
+        return Ok(OpOutcome::StaleChain {
+            head: row.chain_head,
+        });
+    }
+
+    // Invariant 18, over the **album's** high-water mark rather than this row's: an epoch is an
+    // album-wide fact, so an op on a stale asset must not re-admit an epoch the album has
+    // already moved past.
+    //
+    // **Serialized per album before the mark is read.** The row lock above covers this asset
+    // only, and at `READ COMMITTED` the `MAX` below would otherwise see nothing a concurrent op
+    // on a *sibling* asset has not yet committed: an epoch-1 op and an epoch-2 op would both
+    // read the old mark, both pass, and the epoch-1 op could mint — and reach the feed — after
+    // the epoch-2 one. A transaction-scoped advisory lock on the album makes the read, the
+    // decision and the write one critical section per album, which is what the in-memory
+    // double's single mutex gives it. The key is prefixed so it cannot share `membership`'s
+    // lock on the same album id; a 32-bit `hashtext` collision costs serialization, never
+    // correctness, as `membership/postgres.rs` sets out. Each transaction takes exactly one such
+    // lock, always after its one asset-row lock, so two ops cannot wait on each other.
+    transaction
+        .execute_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "SELECT pg_advisory_xact_lock(hashtext('asset_index_album:' || $1))",
+            [Value::from(op.album_id.as_str().to_owned())],
+        ))
+        .await
+        .map_err(PORT.failing("locking an album's epoch"))?;
+    let epoch = transaction
+        .query_one_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "SELECT COALESCE(MAX(amk_version), 0) AS stored FROM assets WHERE album_id = $1",
+            [Value::from(op.album_id.as_str().to_owned())],
+        ))
+        .await
+        .map_err(PORT.failing("reading an album's epoch"))?
+        .ok_or_else(|| StoreError::Rejected {
+            store: PORT.store,
+            detail: "the album epoch query returned no row".to_owned(),
+        })?;
+    let column: i64 = epoch
+        .try_get("", "stored")
+        .map_err(PORT.failing("reading an album's epoch"))?;
+    let album_epoch = sequence_from(column)?;
+    if op.amk_version < album_epoch {
+        tracing::info!(
+            asset = %op.asset_id,
+            stored = album_epoch,
+            submitted = op.amk_version,
+            "a lifecycle write was refused: the album epoch regresses"
+        );
+        return Ok(OpOutcome::AmkRegressed {
+            stored: album_epoch,
+        });
+    }
+
+    let mut row = row;
+    row.state = match op.action {
+        OpAction::Delete => AssetState::Tombstoned,
+        // A restore returns the asset to the live set. Every other action leaves the state
+        // alone — re-uploading the bytes of something you deleted does not undelete it, because
+        // undeleting is what a `trash-restore` is for.
+        OpAction::TrashRestore => AssetState::Visible,
+        OpAction::MetadataUpdate | OpAction::Derivative | OpAction::Replace => row.state,
+    };
+    // The provenance blob is re-pointed on every op: the chain *is* a succession of manifests,
+    // so the newest one is what the feed must serve.
+    set_singular(&mut row, BlobRole::Provenance, &op.provenance);
+    if let Some(metadata) = &op.metadata {
+        set_singular(&mut row, BlobRole::Metadata, metadata);
+    }
+    // A replace's whole point (`S-C43`): the authorized form of the change `record_blob`
+    // refuses, arriving with a manifest that chains onto the one it supersedes.
+    if let Some(original) = &op.original {
+        set_singular(&mut row, BlobRole::Original, original);
+    }
+    row.chain_head = Some(op.manifest_hash);
+    row.amk_version = op.amk_version;
+    row.retention_until = match op.action {
+        OpAction::Delete => op.retention_until.map(stored),
+        // Back in the live set: there is no window left to run out.
+        OpAction::TrashRestore => None,
+        OpAction::MetadataUpdate | OpAction::Derivative | OpAction::Replace => row.retention_until,
+    };
+    row.updated_at = stored(op.at);
+
+    let sync_seq = mint(transaction, &row.owner_id).await?;
+    row.sync_seq = Some(sync_seq);
+    // `ON CONFLICT DO NOTHING` on the manifest hash (#523). The asset-row lock does not cover a
+    // concurrent op carrying the same hash on a *sibling* asset: both pass the look-ups above,
+    // and the loser's insert then waits on the winner's uncommitted row and, without this,
+    // failed with a unique violation the route answered as `503`. Decided by the index instead,
+    // the loser learns the hash is applied, and answers exactly as it would have had it arrived
+    // a moment later — `Replayed` with the winner's number. The caller rolls this transaction
+    // back, and with it the number it minted.
+    let recorded = transaction
+        .execute_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "INSERT INTO applied_manifests (manifest_hash, sync_seq) VALUES ($1, $2) \
+             ON CONFLICT (manifest_hash) DO NOTHING",
+            [
+                Value::from(op.manifest_hash.as_bytes().to_vec()),
+                Value::from(sync_seq as i64),
+            ],
+        ))
+        .await
+        .map_err(PORT.failing("recording an applied manifest"))?;
+    if recorded.rows_affected() == 0 {
+        // `READ COMMITTED`: this statement's snapshot is fresh, so it sees the row the
+        // conflicting insert waited on.
+        let Some(sync_seq) = applied_sequence(transaction, op).await? else {
+            return Err(StoreError::Rejected {
+                store: PORT.store,
+                detail: "a manifest hash conflicted with a row that could not then be read"
+                    .to_owned(),
+            });
+        };
+        return Ok(OpOutcome::Replayed { sync_seq });
+    }
+    persist(transaction, &row).await?;
+    Ok(OpOutcome::Applied {
+        row: Box::new(row),
+        sync_seq,
+    })
 }
 
 impl AssetIndex for PostgresAssetIndex {
@@ -602,69 +884,50 @@ impl AssetIndex for PostgresAssetIndex {
     ) -> IndexFuture<'a, BlobOutcome> {
         Box::pin(async move {
             let transaction = begin(&self.connection).await?;
-            let Some(row) = hydrate_locked(&transaction, asset).await? else {
-                return Ok(BlobOutcome::NotFound);
-            };
-
-            if row
-                .blobs
-                .iter()
-                .any(|held| held.role == blob.role && held.address == blob.address)
-            {
-                // A retried finalization. Idempotent by address rather than by role, so a
-                // genuine retry is free.
-                return Ok(BlobOutcome::AlreadyHeld(Box::new(row)));
-            }
-            if is_singular(blob.role) && row.blobs.iter().any(|held| held.role == blob.role) {
-                // Refused rather than overwritten: an upload that re-pointed a singular role
-                // would swap bytes under a signature that still verifies against the old ones.
-                return Ok(BlobOutcome::Conflict);
-            }
-
-            let mut row = row;
-            row.blobs.push(BlobRef {
-                role: blob.role,
-                address: blob.address,
-                size: blob.size,
-            });
-            row.blobs.sort();
-            // Through `stored`, because this row is returned to the caller without being read
-            // back: a `BIGINT` of microseconds cannot carry the nanoseconds `Timestamp` does, so
-            // the untruncated value would differ from what the next `read` produces.
-            row.updated_at = stored(blob.finalized_at);
-
-            // The create's provenance blob is the asset's first accepted manifest, so it is the
-            // chain the first lifecycle op must name (invariant 17). Set from the record's own
-            // `manifest_sha256` and never from the content address (`S-C31`).
-            if blob.role == BlobRole::Provenance
-                && row.chain_head.is_none()
-                && let Some(manifest_sha256) = blob.manifest_sha256
-            {
-                row.chain_head = Some(manifest_sha256);
-            }
-
-            let minted = if row.state == AssetState::Tombstoned {
-                // A late blob for a deleted asset is stored — the bytes exist and GC must see
-                // the reference — but publishes nothing.
-                None
-            } else if row.is_publishable() {
-                let seq = mint(&transaction, &row.owner_id).await?;
-                row.state = AssetState::Visible;
-                row.sync_seq = Some(seq);
-                row.first_seq = Some(row.first_seq.unwrap_or(seq));
-                Some(seq)
-            } else {
-                None
-            };
-
-            persist(&transaction, &row).await?;
+            let outcome = record_in(&transaction, asset, blob).await?;
+            // Committed whatever the outcome: a refusal wrote nothing, so its commit is the
+            // release of the row lock and nothing more.
             commit(transaction).await?;
-            if let Some(seq) = minted {
-                tracing::info!(%asset, sync_seq = seq, "an asset became visible on its owner's feed");
+            log_publication(asset, &outcome);
+            Ok(outcome)
+        })
+    }
+
+    fn record_blob_with_receipt<'a>(
+        &'a self,
+        asset: &'a AssetId,
+        blob: BlobRecord,
+        custody: Custody<'a>,
+    ) -> IndexFuture<'a, Receipted<BlobOutcome>> {
+        Box::pin(async move {
+            let transaction = begin(&self.connection).await?;
+            let outcome = record_in(&transaction, asset, blob).await?;
+            if !outcome.holds_the_blob() {
+                // Nothing was written; dropping the transaction rolls back nothing but a lock.
+                return Ok(Receipted {
+                    outcome,
+                    receipt: None,
+                });
             }
-            Ok(BlobOutcome::Recorded {
-                row: Box::new(row),
-                minted,
+            // The receipt in the transaction that wrote the rows (#693): an error here drops
+            // the transaction, so the rows are rolled back with it and neither is committed.
+            let receipt = attestation::postgres::issue_in(
+                &transaction,
+                custody.draft.clone(),
+                custody.signer,
+            )
+            .await?;
+            commit(transaction).await?;
+            log_publication(asset, &outcome);
+            tracing::info!(
+                %asset,
+                upload_id = %receipt.core.upload_id,
+                receipt_seq = receipt.core.receipt_seq,
+                "recorded a blob and its custody receipt in one transaction"
+            );
+            Ok(Receipted {
+                outcome,
+                receipt: Some(receipt),
             })
         })
     }
@@ -808,194 +1071,60 @@ impl AssetIndex for PostgresAssetIndex {
     fn apply_op(&self, op: LifecycleOp) -> IndexFuture<'_, OpOutcome> {
         Box::pin(async move {
             let transaction = begin(&self.connection).await?;
+            let outcome = apply_in(&transaction, &op).await?;
+            // Only an application commits. Every other outcome is answered with the
+            // transaction dropped, which rolls back whatever it holds — the number a conflicting
+            // `applied_manifests` insert minted, in particular.
+            if let OpOutcome::Applied { sync_seq, .. } = &outcome {
+                commit(transaction).await?;
+                log_application(&op, *sync_seq);
+            }
+            Ok(outcome)
+        })
+    }
 
-            // Idempotency first, before any invariant: a byte-identical resubmission of an
-            // already-applied op is not a stale chain, it is the same op arriving twice.
-            // Checking 17 first would answer `409` to a client whose only fault was losing an
-            // acknowledgement.
-            if let Some(sync_seq) = applied_sequence(&transaction, &op).await? {
-                return Ok(OpOutcome::Replayed { sync_seq });
-            }
-
-            let Some(row) = hydrate_locked(&transaction, &op.asset_id).await? else {
-                return Ok(OpOutcome::NotFound);
-            };
-
-            // **And again, now that the asset row is locked.** The first look is an optimisation
-            // — it answers a leisurely retry without taking a lock — and on its own it is a
-            // read-then-decide with a window in it: two identical submissions racing both find
-            // nothing, and the loser then serializes on `FOR UPDATE` behind a winner that has
-            // meanwhile inserted the very row it looked for. Answering that loser from the state
-            // it read before the lock produces the wrong outcome twice over — it would fail
-            // invariant 17 against a chain head the winner has just advanced, and report
-            // `StaleChain` to a client whose manifest *was* applied, by the winner, moments ago.
-            //
-            // The retry inside the critical section is what makes `Replayed` the answer either
-            // way, which is what the port promises: a byte-identical resubmission has the same
-            // hash, so it is the same op however it arrived. The row lock serializes two
-            // submissions **to this asset**; the `applied_manifests` insert below covers the
-            // one race the lock cannot, the same manifest hash arriving on a sibling asset.
-            if let Some(sync_seq) = applied_sequence(&transaction, &op).await? {
-                return Ok(OpOutcome::Replayed { sync_seq });
-            }
-            // Not this caller's asset, or not in the album the op was addressed to. Both are
-            // the same answer, and neither is distinguishable from an asset that never existed.
-            if row.owner_id != op.owner_id || row.album_id != op.album_id {
-                tracing::info!(
-                    asset = %op.asset_id,
-                    "a lifecycle write was refused: the asset is not this caller's"
-                );
-                return Ok(OpOutcome::NotFound);
-            }
-            // A row nothing can see yet has no chain to extend.
-            if row.state == AssetState::Pending {
-                return Ok(OpOutcome::NotFound);
-            }
-
-            // Invariant 17, decided under the row lock rather than by the caller: a
-            // read-compare-write above this port has a window in which two ops chain onto the
-            // same head, which is the double-apply the invariant exists to catch.
-            if op.prior_provenance_hash != row.chain_head {
-                tracing::info!(
-                    asset = %op.asset_id,
-                    action = op.action.as_str(),
-                    "a lifecycle write was refused: it does not chain onto the stored head"
-                );
-                return Ok(OpOutcome::StaleChain {
-                    head: row.chain_head,
-                });
-            }
-
-            // Invariant 18, over the **album's** high-water mark rather than this row's: an
-            // epoch is an album-wide fact, so an op on a stale asset must not re-admit an epoch
-            // the album has already moved past.
-            //
-            // **Serialized per album before the mark is read.** The row lock above covers this
-            // asset only, and at `READ COMMITTED` the `MAX` below would otherwise see nothing a
-            // concurrent op on a *sibling* asset has not yet committed: an epoch-1 op and an
-            // epoch-2 op would both read the old mark, both pass, and the epoch-1 op could mint
-            // — and reach the feed — after the epoch-2 one. A transaction-scoped advisory lock on
-            // the album makes the read, the decision and the write one critical section per
-            // album, which is what the in-memory double's single mutex gives it. The key is
-            // prefixed so it cannot share `membership`'s lock on the same album id; a 32-bit
-            // `hashtext` collision costs serialization, never correctness, as
-            // `membership/postgres.rs` sets out. Each transaction takes exactly one such lock,
-            // always after its one asset-row lock, so two ops cannot wait on each other.
-            transaction
-                .execute_raw(Statement::from_sql_and_values(
-                    DbBackend::Postgres,
-                    "SELECT pg_advisory_xact_lock(hashtext('asset_index_album:' || $1))",
-                    [Value::from(op.album_id.as_str().to_owned())],
-                ))
-                .await
-                .map_err(PORT.failing("locking an album's epoch"))?;
-            let epoch = transaction
-                .query_one_raw(Statement::from_sql_and_values(
-                    DbBackend::Postgres,
-                    "SELECT COALESCE(MAX(amk_version), 0) AS stored FROM assets WHERE album_id = $1",
-                    [Value::from(op.album_id.as_str().to_owned())],
-                ))
-                .await
-                .map_err(PORT.failing("reading an album's epoch"))?
-                .ok_or_else(|| StoreError::Rejected {
-                    store: PORT.store,
-                    detail: "the album epoch query returned no row".to_owned(),
-                })?;
-            let column: i64 = epoch
-                .try_get("", "stored")
-                .map_err(PORT.failing("reading an album's epoch"))?;
-            let album_epoch = sequence_from(column)?;
-            if op.amk_version < album_epoch {
-                tracing::info!(
-                    asset = %op.asset_id,
-                    stored = album_epoch,
-                    submitted = op.amk_version,
-                    "a lifecycle write was refused: the album epoch regresses"
-                );
-                return Ok(OpOutcome::AmkRegressed {
-                    stored: album_epoch,
-                });
-            }
-
-            let mut row = row;
-            row.state = match op.action {
-                OpAction::Delete => AssetState::Tombstoned,
-                // A restore returns the asset to the live set. Every other action leaves the
-                // state alone — re-uploading the bytes of something you deleted does not
-                // undelete it, because undeleting is what a `trash-restore` is for.
-                OpAction::TrashRestore => AssetState::Visible,
-                OpAction::MetadataUpdate | OpAction::Derivative | OpAction::Replace => row.state,
-            };
-            // The provenance blob is re-pointed on every op: the chain *is* a succession of
-            // manifests, so the newest one is what the feed must serve.
-            set_singular(&mut row, BlobRole::Provenance, &op.provenance);
-            if let Some(metadata) = &op.metadata {
-                set_singular(&mut row, BlobRole::Metadata, metadata);
-            }
-            // A replace's whole point (`S-C43`): the authorized form of the change
-            // `record_blob` refuses, arriving with a manifest that chains onto the one it
-            // supersedes.
-            if let Some(original) = &op.original {
-                set_singular(&mut row, BlobRole::Original, original);
-            }
-            row.chain_head = Some(op.manifest_hash);
-            row.amk_version = op.amk_version;
-            row.retention_until = match op.action {
-                OpAction::Delete => op.retention_until.map(stored),
-                // Back in the live set: there is no window left to run out.
-                OpAction::TrashRestore => None,
-                OpAction::MetadataUpdate | OpAction::Derivative | OpAction::Replace => {
-                    row.retention_until
+    fn apply_op_with_receipt<'a>(
+        &'a self,
+        op: LifecycleOp,
+        custody: Custody<'a>,
+    ) -> IndexFuture<'a, Receipted<OpOutcome>> {
+        Box::pin(async move {
+            let transaction = begin(&self.connection).await?;
+            let outcome = apply_in(&transaction, &op).await?;
+            let receipt = match &outcome {
+                OpOutcome::Applied { sync_seq, .. } => {
+                    // The receipt in the transaction that applied the op (#693): an error here
+                    // drops the transaction, and the op is rolled back with it.
+                    let receipt = attestation::postgres::issue_in(
+                        &transaction,
+                        custody.draft.clone(),
+                        custody.signer,
+                    )
+                    .await?;
+                    commit(transaction).await?;
+                    log_application(&op, *sync_seq);
+                    Some(receipt)
                 }
+                OpOutcome::Replayed { .. } => {
+                    // The op committed in an earlier transaction, so there is nothing of this
+                    // one's to keep: it is rolled back, and the receipt — the retry's, or the
+                    // one an earlier attempt already holds — commits alone.
+                    drop(transaction);
+                    let receipt = begin(&self.connection).await?;
+                    let issued = attestation::postgres::issue_in(
+                        &receipt,
+                        custody.draft.clone(),
+                        custody.signer,
+                    )
+                    .await?;
+                    commit(receipt).await?;
+                    Some(issued)
+                }
+                OpOutcome::StaleChain { .. }
+                | OpOutcome::AmkRegressed { .. }
+                | OpOutcome::NotFound => None,
             };
-            row.updated_at = stored(op.at);
-
-            let sync_seq = mint(&transaction, &row.owner_id).await?;
-            row.sync_seq = Some(sync_seq);
-            // `ON CONFLICT DO NOTHING` on the manifest hash (#523). The asset-row lock does not
-            // cover a concurrent op carrying the same hash on a *sibling* asset: both pass the
-            // look-ups above, and the loser's insert then waits on the winner's uncommitted row
-            // and, without this, failed with a unique violation the route answered as `503`.
-            // Decided by the index instead, the loser learns the hash is applied, and answers
-            // exactly as it would have had it arrived a moment later — `Replayed` with the
-            // winner's number. Dropping the transaction rolls back the number it minted.
-            let recorded = transaction
-                .execute_raw(Statement::from_sql_and_values(
-                    DbBackend::Postgres,
-                    "INSERT INTO applied_manifests (manifest_hash, sync_seq) VALUES ($1, $2) \
-                     ON CONFLICT (manifest_hash) DO NOTHING",
-                    [
-                        Value::from(op.manifest_hash.as_bytes().to_vec()),
-                        Value::from(sync_seq as i64),
-                    ],
-                ))
-                .await
-                .map_err(PORT.failing("recording an applied manifest"))?;
-            if recorded.rows_affected() == 0 {
-                // `READ COMMITTED`: this statement's snapshot is fresh, so it sees the row the
-                // conflicting insert waited on.
-                let Some(sync_seq) = applied_sequence(&transaction, &op).await? else {
-                    return Err(StoreError::Rejected {
-                        store: PORT.store,
-                        detail: "a manifest hash conflicted with a row that could not then be read"
-                            .to_owned(),
-                    });
-                };
-                return Ok(OpOutcome::Replayed { sync_seq });
-            }
-            persist(&transaction, &row).await?;
-            commit(transaction).await?;
-
-            tracing::info!(
-                asset = %op.asset_id,
-                action = op.action.as_str(),
-                sync_seq,
-                "a lifecycle write was applied"
-            );
-            Ok(OpOutcome::Applied {
-                row: Box::new(row),
-                sync_seq,
-            })
+            Ok(Receipted { outcome, receipt })
         })
     }
 
@@ -1346,6 +1475,98 @@ mod tests {
             };
             let index = PostgresAssetIndex::new(database.connection().clone());
             conformance::run_all(&index).await;
+            // The receipts the index writes land in the table the durable log serves.
+            let receipts = crate::attestation::PostgresReceipts::new(database.connection().clone());
+            conformance::run_custody(&index, &receipts, &conformance::suite_signer()).await;
+        }
+
+        /// A receipt that cannot be written takes the index rows down with it (#693).
+        ///
+        /// The failure is planted below the port, where only the database can put it: a chain
+        /// head that does not decode, so the receipt append inside the finalization transaction
+        /// fails after the rows were written in it. Both must be gone — the blob unrecorded, no
+        /// sequence number minted, and no receipt for the upload.
+        #[tokio::test]
+        async fn a_receipt_that_fails_rolls_the_index_rows_back() {
+            use sea_orm::{ConnectionTrait, DbBackend, Statement, Value};
+
+            use crate::attestation::{PostgresReceipts, ReceiptLog};
+            use crate::index::{AssetIndex, Custody};
+            use crate::store::{BlobRole, OwnerId};
+
+            let Some(database) = testing::start("the Postgres custody rollback").await else {
+                return;
+            };
+            let index = PostgresAssetIndex::new(database.connection().clone());
+            let receipts = PostgresReceipts::new(database.connection().clone());
+            let signer = conformance::suite_signer();
+            let case = "custody-rollback";
+
+            // The index tier minus its metadata blob, so the custody write below is the one that
+            // would publish the asset and mint a number.
+            let row = conformance::pending(case, 1);
+            let asset = row.asset_id.clone();
+            conformance::ok(index.reserve(row).await, "reserve");
+            conformance::ok(
+                index
+                    .record_blob(
+                        &asset,
+                        conformance::blob(BlobRole::Provenance, "rollback-p"),
+                    )
+                    .await,
+                "record the manifest",
+            );
+            let owner = OwnerId::new(format!("{case}-owner"));
+            let before = conformance::ok(index.head_seq(&owner).await, "read the head");
+
+            database
+                .connection()
+                .execute_raw(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "INSERT INTO custody_receipts (receipt_seq, upload_id, asset_id, receipt) \
+                     VALUES (1, 'planted', 'planted', $1)",
+                    [Value::from(b"not a receipt".to_vec())],
+                ))
+                .await
+                .expect("plant an undecodable chain head");
+
+            let metadata = conformance::blob(BlobRole::Metadata, "rollback-m");
+            let draft = conformance::draft(case, 1, "u1", &metadata);
+            let failed = index
+                .record_blob_with_receipt(
+                    &asset,
+                    metadata,
+                    Custody {
+                        draft: &draft,
+                        signer: &signer,
+                    },
+                )
+                .await;
+            assert!(
+                failed.is_err(),
+                "a receipt append over a corrupt chain must fail, and answered {failed:?}"
+            );
+
+            let row = conformance::ok(index.read(&asset).await, "read")
+                .expect("the reserved row survives");
+            assert_eq!(
+                row.address_for(BlobRole::Metadata),
+                None,
+                "the blob row committed without its receipt"
+            );
+            assert_eq!(
+                row.sync_seq, None,
+                "the publication committed without its receipt"
+            );
+            assert_eq!(
+                conformance::ok(index.head_seq(&owner).await, "read the head"),
+                before,
+                "the number minted for it is rolled back with it"
+            );
+            assert_eq!(
+                conformance::ok(receipts.for_upload(&draft.upload_id).await, "read the log"),
+                None,
+            );
         }
 
         /// A manifest hash recorded concurrently through a *sibling* asset is a replay, not a

@@ -773,6 +773,15 @@ impl AssetIndex for RacesTheListing {
         self.inner.record_blob(asset, blob)
     }
 
+    fn record_blob_with_receipt<'a>(
+        &'a self,
+        asset: &'a AssetId,
+        blob: BlobRecord,
+        custody: crate::index::Custody<'a>,
+    ) -> crate::index::IndexFuture<'a, crate::index::Receipted<crate::index::BlobOutcome>> {
+        self.inner.record_blob_with_receipt(asset, blob, custody)
+    }
+
     fn tombstone<'a>(
         &'a self,
         asset: &'a AssetId,
@@ -799,6 +808,14 @@ impl AssetIndex for RacesTheListing {
 
     fn apply_op(&self, op: LifecycleOp) -> crate::index::IndexFuture<'_, OpOutcome> {
         self.inner.apply_op(op)
+    }
+
+    fn apply_op_with_receipt<'a>(
+        &'a self,
+        op: LifecycleOp,
+        custody: crate::index::Custody<'a>,
+    ) -> crate::index::IndexFuture<'a, crate::index::Receipted<OpOutcome>> {
+        self.inner.apply_op_with_receipt(op, custody)
     }
 
     fn set_hold<'a>(

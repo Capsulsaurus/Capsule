@@ -615,6 +615,221 @@ async fn the_chain_answers_500_when_the_index_cannot() {
     assert_eq!(body["code"], "error.storage.unavailable");
 }
 
+// ===========================================================================================
+// Fault injection: custody and its receipt are one commit (#693)
+// ===========================================================================================
+
+/// Where a finalization is made to fail.
+#[derive(Debug, Clone, Copy)]
+enum Fault {
+    /// The session store stops answering as the last chunk arrives — before the claim.
+    SessionStore,
+    /// The last chunk's bytes are lost while the session counts them, so the re-hash over the
+    /// stage cannot match.
+    StagedBytes,
+    /// The uploading device is revoked before the last chunk, so the envelope re-check refuses.
+    Envelope,
+    /// The record-and-receipt transaction never commits.
+    BeforeCommit,
+    /// The record-and-receipt transaction commits and its answer is lost — the state a crash
+    /// between the commit and `Completed` leaves too.
+    AfterCommit,
+}
+
+impl Fault {
+    /// Arm the fault, just before the chunk that finalizes.
+    fn arm(self, fixture: &Fixture) {
+        match self {
+            Self::SessionStore => fixture.uploads.set_unavailable(true),
+            Self::StagedBytes => fixture.blobs.swallow_next_append(),
+            Self::Envelope => fixture
+                .authority
+                .revoke_device(&support::user(), support::device()),
+            Self::BeforeCommit => fixture.index_fault.arm(),
+            Self::AfterCommit => fixture.index_fault.arm_after_commit(),
+        }
+    }
+
+    /// Undo whatever the fault left switched, as recovery would.
+    fn clear(self, fixture: &Fixture) {
+        match self {
+            Self::SessionStore => fixture.uploads.set_unavailable(false),
+            Self::Envelope => {
+                use capsule_server::store::Clock as _;
+                fixture.authority.add_device(
+                    &support::user(),
+                    support::device(),
+                    fixture.clock.now(),
+                );
+            }
+            Self::StagedBytes | Self::BeforeCommit | Self::AfterCommit => {}
+        }
+    }
+}
+
+/// The invariant: the asset holds the blob exactly when a receipt attests to it, and every
+/// receipt attests to bytes the store holds.
+///
+/// Returns how many receipts the asset has, for the retry's idempotency check.
+async fn assert_custody_is_receipted(fixture: &Fixture, whole: &[u8], fault: Fault) -> usize {
+    use capsule_server::blob::ContentAddress;
+    use capsule_server::index::AssetIndex as _;
+    use capsule_server::store::AssetId;
+
+    let address = ContentAddress::parse(&checksum(whole)).expect("the digest is an address");
+    let asset = AssetId::new(UPLOADED_ASSET);
+    let indexed = fixture
+        .index
+        .read(&asset)
+        .await
+        .expect("the index answers")
+        .is_some_and(|row| row.blobs.iter().any(|blob| blob.address == address));
+    let receipts = {
+        use capsule_server::attestation::ReceiptLog as _;
+        fixture
+            .receipts
+            .for_asset(&asset)
+            .await
+            .expect("the log answers")
+    };
+
+    assert_eq!(
+        indexed,
+        !receipts.is_empty(),
+        "after a {fault:?} fault the asset {} the blob and the log holds {} receipt(s) for it",
+        if indexed { "holds" } else { "does not hold" },
+        receipts.len(),
+    );
+    for receipt in &receipts {
+        assert_eq!(
+            receipt.core.ciphertext_hash.to_hex(),
+            address.as_str(),
+            "a receipt attests to bytes other than the ones recorded"
+        );
+        assert_eq!(
+            fixture.blobs.blob_for_test(address.as_str()).await,
+            Some(whole.to_vec()),
+            "a receipt attests to bytes the store does not hold"
+        );
+    }
+    receipts.len()
+}
+
+/// Upload `whole` again in a fresh session, accepting the duplicate answer a committed first
+/// attempt produces.
+async fn retry(fixture: &Fixture, bearer: &str, first: &[u8], second: &[u8], whole: &[u8]) {
+    let created = fixture
+        .client
+        .post("/v1/upload")
+        .header("authorization", bearer)
+        .json(&support::create_request(&fixture.clock, whole, "original"))
+        .send()
+        .await;
+    if created.status() == StatusCode::CONFLICT {
+        let problem: Value = created.json();
+        assert_eq!(
+            problem["code"], "error.upload.duplicate_blob",
+            "the only refusal a retry may meet is that the first attempt already committed"
+        );
+        return;
+    }
+    // `201` for a fresh session, or `200` resuming the one a fault left active: the resumed
+    // session continues from its own offset, as a client resuming from `HEAD` would.
+    let resumed = created.status() == StatusCode::OK;
+    if !resumed {
+        created.assert_status(StatusCode::CREATED);
+    }
+    let body: Value = created.json();
+    let id = body["id"].as_str().expect("a session id").to_owned();
+    let from = fixture
+        .uploads
+        .read_for_test(&id)
+        .await
+        .expect("the session exists")
+        .received_bytes;
+    for (offset, chunk) in [(0_u64, first), (4096, second)] {
+        if offset < from {
+            continue;
+        }
+        fixture
+            .chunk(&id, offset, chunk, bearer)
+            .send()
+            .await
+            .assert_status(StatusCode::NO_CONTENT);
+    }
+}
+
+/// Fail finalization at `fault`, check the invariant, retry, and check it again.
+async fn fault_then_retry(fault: Fault) {
+    let fixture = Fixture::working();
+    let bearer = token(&fixture).await;
+    let (first, second, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    fault.arm(&fixture);
+    let finalizing = fixture.chunk(&id, 4096, &second, &bearer).send().await;
+    assert_ne!(
+        finalizing.status(),
+        StatusCode::NO_CONTENT,
+        "the {fault:?} fault never surfaced, so this case describes an ordinary upload"
+    );
+    if matches!(fault, Fault::BeforeCommit | Fault::AfterCommit) {
+        assert_eq!(
+            fixture.index_fault.fired(),
+            1,
+            "the index fault never fired"
+        );
+    }
+    fault.clear(&fixture);
+
+    let after_fault = assert_custody_is_receipted(&fixture, &whole, fault).await;
+    if matches!(fault, Fault::AfterCommit) {
+        assert_eq!(after_fault, 1, "the committed write carries its receipt");
+    } else {
+        assert_eq!(
+            after_fault, 0,
+            "a write that never committed left a receipt"
+        );
+    }
+
+    retry(&fixture, &bearer, &first, &second, &whole).await;
+    assert_eq!(
+        assert_custody_is_receipted(&fixture, &whole, fault).await,
+        1,
+        "after a {fault:?} fault and a retry the blob is held under exactly one receipt"
+    );
+}
+
+#[tokio::test]
+async fn a_session_store_fault_leaves_no_custody_and_the_retry_is_receipted() {
+    fault_then_retry(Fault::SessionStore).await;
+}
+
+#[tokio::test]
+async fn a_staged_bytes_fault_leaves_no_custody_and_the_retry_is_receipted() {
+    fault_then_retry(Fault::StagedBytes).await;
+}
+
+#[tokio::test]
+async fn an_envelope_fault_leaves_no_custody_and_the_retry_is_receipted() {
+    fault_then_retry(Fault::Envelope).await;
+}
+
+#[tokio::test]
+async fn a_fault_before_the_custody_commit_leaves_neither_row_nor_receipt() {
+    fault_then_retry(Fault::BeforeCommit).await;
+}
+
+#[tokio::test]
+async fn a_fault_after_the_custody_commit_leaves_both_and_the_retry_adds_neither() {
+    fault_then_retry(Fault::AfterCommit).await;
+}
+
 #[tokio::test]
 async fn the_chain_needs_a_credential() {
     let fixture = Fixture::working();

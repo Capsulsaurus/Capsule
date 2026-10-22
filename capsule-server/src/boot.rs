@@ -253,8 +253,9 @@ pub async fn assemble(config: &Config) -> Result<Assembled, BootError> {
     match config.backends {
         Backends::Memory => {
             warn_in_memory();
-            let stores = base.in_memory();
-            let ports = memory_ports(config, &stores.clock)?;
+            let receipts = Arc::new(InMemoryReceipts::new());
+            let stores = base.in_memory(receipts.clone());
+            let ports = memory_ports(config, &stores.clock, receipts)?;
             compose(config, stores, ports, "the in-memory adapters")
         }
         Backends::Durable => {
@@ -324,7 +325,11 @@ pub async fn assemble_maintenance(config: &Config) -> Result<Maintenance, BootEr
     let (stores, adapters) = match config.backends {
         Backends::Memory => {
             warn_in_memory();
-            (base.in_memory(), "the in-memory adapters")
+            // A log of its own: the maintenance workers neither finalize nor serve receipts.
+            (
+                base.in_memory(Arc::new(InMemoryReceipts::new())),
+                "the in-memory adapters",
+            )
         }
         // The same two probes, in the same order, as `serve`'s durable arm — and the same
         // stores, so a `gc` pass reads the index the server writes and the marks the previous
@@ -457,9 +462,12 @@ struct Base {
 
 impl Base {
     /// The shared stores on the deterministic in-crate adapters.
-    fn in_memory(self) -> Stores {
+    ///
+    /// The index appends finalization's custody receipts to `receipts` under its own lock
+    /// (#693), so the attestation context must be built over the same log.
+    fn in_memory(self, receipts: Arc<InMemoryReceipts>) -> Stores {
         Stores {
-            index: Arc::new(InMemoryAssetIndex::new()),
+            index: Arc::new(InMemoryAssetIndex::with_receipts(receipts)),
             uploads: Arc::new(InMemoryUploadSessions::with_default_ttl(self.clock.clone())),
             marks: Arc::new(InMemoryCollection::new()),
             quotas: Arc::new(InMemoryQuota::new()),
@@ -591,7 +599,14 @@ fn credentials() -> Result<Credentials, BootError> {
 }
 
 /// The development profile's ports: every deterministic in-crate adapter.
-fn memory_ports(config: &Config, clock: &Arc<SystemClock>) -> Result<Ports, BootError> {
+///
+/// `receipts` is the log the in-memory index appends to, so the receipt route reads what
+/// finalization wrote.
+fn memory_ports(
+    config: &Config,
+    clock: &Arc<SystemClock>,
+    receipts: Arc<InMemoryReceipts>,
+) -> Result<Ports, BootError> {
     Ok(Ports {
         accounts: AccountPorts::of(Arc::new(InMemoryAccounts::new(
             credentials()?,
@@ -606,7 +621,7 @@ fn memory_ports(config: &Config, clock: &Arc<SystemClock>) -> Result<Ports, Boot
         albums: Arc::new(InMemoryAlbums::new()),
         members: Arc::new(InMemoryMembership::new()),
         directories: Arc::new(InMemoryDeviceDirectory::new()),
-        receipts: Arc::new(InMemoryReceipts::new()),
+        receipts,
         capabilities: Arc::new(InMemoryCapabilities::new(clock.clone())),
         peers: Arc::new(InMemoryPeers::new()),
         escrow: Arc::new(InMemoryEscrow::new()),

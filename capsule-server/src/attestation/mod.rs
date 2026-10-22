@@ -26,23 +26,26 @@
 //! The signer is passed in rather than held by the store: a log is a table, and key material has
 //! no business in one.
 //!
-//! # Atomicity, honestly
+//! # Issued with the index rows, in one transaction
 //!
-//! The contract asks that the receipt and the asset's `uploaded` flip commit **together**.
-//! Across two in-memory ports they cannot: they are two writes, and all that is available is an
-//! order. The order chosen guarantees the direction that matters — **no receipt without
-//! custody**. Custody is recorded first, so a crash between them leaves a finalized blob with no
-//! receipt (visible as `error.upload.receipt_not_available`, and reissuable), never a signed
-//! statement that the server holds bytes it does not.
+//! The contract (threat-model invariant 33, and Transfer — Upload § Finalization) is that the
+//! receipt and the index rows recording the blob commit **together**: there is never an indexed
+//! blob without a receipt, and never a receipt without custody. Both directions matter. A
+//! receipt is evidence a client may keep forever, so one attesting to a write that never landed
+//! cannot be withdrawn from whoever already has it; and an indexed blob with no receipt is a
+//! write the client is never told it may release its local copy for.
 //!
-//! The other direction is the unrecoverable one: a receipt is evidence a client may keep
-//! forever, and one attesting to a write that never landed cannot be withdrawn from whoever
-//! already has it. So this is an ordering with a stated failure mode rather than a guarantee
-//! dressed up as one — and it stays one with the durable adapter.
-//! [`postgres::PostgresReceipts`] makes the log itself durable and its chain allocation one
-//! transaction, but the asset index is a separate port over its own pool, so the receipt and the
-//! `uploaded` flip are still two commits in the order above. Folding them into one transaction
-//! needs a port that spans both, which no adapter here has.
+//! So finalization does not call [`ReceiptLog::issue`] after the index. It hands the draft and
+//! the signer to the index itself — [`crate::index::AssetIndex::record_blob_with_receipt`] and
+//! [`crate::index::AssetIndex::apply_op_with_receipt`] — and each index adapter appends the
+//! receipt inside the critical section that writes its rows: the Postgres index in the same
+//! transaction, through `postgres::issue_in`, over the same `custody_receipts` table this log
+//! reads; the in-memory index under its own lock, through `InMemoryReceipts::append`, into the
+//! log it shares with the [`AttestationContext`].
+//!
+//! [`ReceiptLog::issue`] remains for the one finalization that writes no index row: a member of
+//! a `replace` bundle other than its manifest, whose bytes the manifest applies later. With
+//! nothing else to commit, the receipt is the whole durable write and is atomic on its own.
 //!
 //! # Adapters
 //!
@@ -246,6 +249,43 @@ impl InMemoryReceipts {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Allocate, sign and append in one step, synchronously.
+    ///
+    /// The body of [`ReceiptLog::issue`], exposed so the in-memory asset index can append a
+    /// receipt while it holds its own lock — which is what makes the index rows and the receipt
+    /// one critical section in the double, as one transaction makes them one in Postgres. It
+    /// cannot fail, so there is no state in which the rows landed and the receipt did not.
+    ///
+    /// Idempotent per upload: a retried finalization gets the receipt it already has.
+    pub(crate) fn append(&self, draft: ReceiptDraft, signer: &dyn ReceiptSigner) -> CustodyReceipt {
+        let mut inner = lock(&self.inner);
+
+        // A retried finalization must not mint a second receipt for one custody event: the
+        // chain would then carry two signed statements about the same bytes, which is
+        // indistinguishable from the server double-counting.
+        if let Some(index) = inner.by_upload.get(&draft.upload_id) {
+            return inner.chain[*index].clone();
+        }
+
+        // Position and predecessor, allocated under the lock the append happens under.
+        let receipt_seq = inner.chain.len() as u64 + 1;
+        let prior_receipt_hash = inner.chain.last().map(chain_hash);
+
+        let upload_id = draft.upload_id.clone();
+        let receipt = sign_receipt(draft, signer, receipt_seq, prior_receipt_hash);
+
+        tracing::info!(
+            upload_id = %upload_id,
+            asset = %receipt.core.asset_id,
+            receipt_seq,
+            "issued a custody receipt"
+        );
+        let position = inner.chain.len();
+        inner.by_upload.insert(upload_id, position);
+        inner.chain.push(receipt.clone());
+        receipt
+    }
 }
 
 /// Take the lock, recovering from a poisoned mutex.
@@ -261,34 +301,7 @@ impl ReceiptLog for InMemoryReceipts {
         draft: ReceiptDraft,
         signer: &'a dyn ReceiptSigner,
     ) -> StoreFuture<'a, CustodyReceipt> {
-        Box::pin(async move {
-            let mut inner = lock(&self.inner);
-
-            // A retried finalization must not mint a second receipt for one custody event: the
-            // chain would then carry two signed statements about the same bytes, which is
-            // indistinguishable from the server double-counting.
-            if let Some(index) = inner.by_upload.get(&draft.upload_id) {
-                return Ok(inner.chain[*index].clone());
-            }
-
-            // Position and predecessor, allocated under the lock the append happens under.
-            let receipt_seq = inner.chain.len() as u64 + 1;
-            let prior_receipt_hash = inner.chain.last().map(chain_hash);
-
-            let upload_id = draft.upload_id.clone();
-            let receipt = sign_receipt(draft, signer, receipt_seq, prior_receipt_hash);
-
-            tracing::info!(
-                upload_id = %upload_id,
-                asset = %receipt.core.asset_id,
-                receipt_seq,
-                "issued a custody receipt"
-            );
-            let position = inner.chain.len();
-            inner.by_upload.insert(upload_id, position);
-            inner.chain.push(receipt.clone());
-            Ok(receipt)
-        })
+        Box::pin(async move { Ok(self.append(draft, signer)) })
     }
 
     fn for_upload<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, Option<CustodyReceipt>> {

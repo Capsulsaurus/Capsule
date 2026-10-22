@@ -57,6 +57,33 @@ async fn a_receipt_verifies_under_the_key_it_names() {
     assert!(!verifies(&receipt, &attestation_key().verifying_key()));
 }
 
+/// The synchronous append the in-memory index calls under its own lock (#693) is the same chain
+/// as `issue`: one position sequence, one predecessor link, one receipt per upload.
+#[tokio::test]
+async fn an_append_and_an_issue_extend_one_chain() {
+    let log = InMemoryReceipts::new();
+    let key = attestation_key();
+
+    let appended = log.append(draft("u1", "a1", b"one"), &key);
+    let issued = log
+        .issue(draft("u2", "a2", b"two"), &key)
+        .await
+        .expect("issue");
+    assert_eq!(appended.core.receipt_seq, 1);
+    assert_eq!(issued.core.receipt_seq, 2);
+    assert_eq!(issued.core.prior_receipt_hash, Some(chain_hash(&appended)));
+
+    assert_eq!(
+        log.append(draft("u1", "a1", b"one"), &key),
+        appended,
+        "a retried append returns the receipt it already has"
+    );
+    assert_eq!(
+        log.for_upload(&UploadId::new("u1")).await.expect("read"),
+        Some(appended)
+    );
+}
+
 #[tokio::test]
 async fn the_chain_is_monotonic_and_each_entry_names_its_predecessor() {
     let log = InMemoryReceipts::new();
