@@ -4833,6 +4833,60 @@ async fn drops_block(
         .await
         .assert_status(StatusCode::FORBIDDEN);
 
+    // Chunk 507: the disk is full under a guest's chunk. And chunk 500: a stage that lost a
+    // chunk the server acknowledged, which no resend repairs. Both through the uncapped link.
+    let open_unbounded = |bytes: Vec<u8>| async move {
+        let opened: serde_json::Value = client
+            .post(&format!("/d/{unbounded}"))
+            .header("accept", "application/json")
+            .json(&serde_json::json!({
+                "content_type": "image/jpeg",
+                "size": bytes.len(),
+                "ciphertext_hash": checksum(&bytes),
+                "kem_ct": "AAAA",
+            }))
+            .send()
+            .await
+            .assert_status(StatusCode::CREATED)
+            .json();
+        format!(
+            "/d/{unbounded}/{}",
+            opened["upload_id"].as_str().expect("a session")
+        )
+    };
+    let full = payload(b'f', 4096);
+    let filling = open_unbounded(full.clone()).await;
+    fixture.blobs.fill_disk_on_next_append();
+    client
+        .patch(&filling)
+        .header("x-capsule-offset", "0")
+        .header("x-capsule-checksum", &checksum(&full))
+        .body("application/octet-stream", full.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::INSUFFICIENT_STORAGE);
+    let first = payload(b'g', 4096);
+    let rest = payload(b'h', 4096);
+    let both: Vec<u8> = first.iter().chain(rest.iter()).copied().collect();
+    let diverging = open_unbounded(both).await;
+    fixture.blobs.swallow_next_append();
+    client
+        .patch(&diverging)
+        .header("x-capsule-offset", "0")
+        .header("x-capsule-checksum", &checksum(&first))
+        .body("application/octet-stream", first.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    client
+        .patch(&diverging)
+        .header("x-capsule-offset", "4096")
+        .header("x-capsule-checksum", &checksum(&rest))
+        .body("application/octet-stream", rest.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+
     // 429 on creation: the per-link budget (invariant 31, `S-C32`). Against a link that does
     // not exist, so it spends no cap and disturbs nothing else in this walk.
     let hammered = "abcdef0123456789abcdef01234567cc";
@@ -4850,7 +4904,8 @@ async fn drops_block(
         .await
         .assert_status(StatusCode::TOO_MANY_REQUESTS);
 
-    // 500 on every drop operation: the store cannot answer.
+    // 500 on every drop operation but the chunk, which answers 503 with a wait: the store
+    // cannot answer.
     fixture.dropstore.set_unavailable(true);
     client
         .post("/v1/drops/links")
@@ -4882,7 +4937,7 @@ async fn drops_block(
         .body("application/octet-stream", dropped.clone())
         .send()
         .await
-        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+        .assert_status(StatusCode::SERVICE_UNAVAILABLE);
     client
         .get("/v1/drops")
         .header("authorization", bearer)
