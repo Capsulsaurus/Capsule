@@ -45,8 +45,8 @@
 //! Federation is deferred (#476), and two of these operations do store work for callers this
 //! server has not authenticated: report intake budgets on a claimed origin before any signature
 //! is checked, and minting is unbounded per account. So the whole surface sits behind
-//! `FEDERATION_ENABLED` (#509), **off by default**. Off, each operation extracts [`Federating`]
-//! first and answers `404 error.federation.not_configured` before its credential, its body, a
+//! `FEDERATION_ENABLED` (#509), **off by default**. Off, [`FederationGate`] refuses each operation
+//! with `404 error.federation.not_configured` before its credential, its body, a
 //! budget or a store is touched, and the read primitives honour no capability at all. Every
 //! operation stays mounted and described either way, so the committed contract does not depend
 //! on a runtime setting; the `404` is in it, and so is this rule, in each operation's
@@ -119,12 +119,10 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use capsule_i18n::error_codes;
 use jiff::SignedDuration;
 use kynos::di::Provides;
-use kynos::extract::FromRequestParts;
-use kynos::extract::describe::Describe;
-use kynos::http::Parts;
+use kynos::http::Request;
+use kynos::middleware::{Continued, Interceptor, Next};
 use kynos::prelude::*;
 use kynos::response::status::NoContent;
-use kynos::router::operation::OperationCx;
 use kynos::security::auth::Auth;
 use serde::{Deserialize, Serialize};
 
@@ -147,20 +145,31 @@ use crate::store::{AlbumId, UserId};
 )]
 pub struct FederationTag;
 
-/// Proof that this deployment federates, extracted **first** by every federation operation.
+/// Refuses every federation operation, **before it runs**, on a deployment that does not
+/// federate.
 ///
-/// The gate `FEDERATION_ENABLED` (#509) closes. An extractor rather than a check in each body
-/// for the one property that matters here: extractors run in argument order, so placed first it
-/// answers before the credential is authenticated, before the body is parsed and before any
-/// budget is charged or store is read. A deployment that does not federate does no federated
-/// work for anyone — which is the point, because report intake and minting both did store work
-/// for unauthenticated callers while federation was deferred (#476).
+/// The gate `FEDERATION_ENABLED` (#509) closes. An interceptor on the federation group rather
+/// than a check in each body, for the one property that matters here: it runs before the
+/// operation's own chain, so it answers before the credential is authenticated (a handler's
+/// guard is always its first argument, so no extractor could come before it), before the body
+/// is parsed and before any budget is charged or store is read. A deployment that does not
+/// federate does no federated work for anyone — which is the point, because report intake and
+/// minting both did store work for unauthenticated callers while federation was deferred
+/// (#476).
 ///
 /// The router is the same either way and so is the document: the four operations are mounted
 /// and described, and each declares the `404` this answers. Unmounting them instead would make
 /// the emitted contract depend on a runtime setting, and the contract is committed.
-#[derive(Debug, Clone, Copy)]
-pub struct Federating;
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FederationGate;
+
+impl FederationGate {
+    /// The interceptor.
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+}
 
 /// Why a federation operation was not served: this deployment does not federate.
 #[derive(Debug, thiserror::Error, ApiError)]
@@ -178,31 +187,35 @@ pub enum NotFederating {
     },
 }
 
-impl<C> FromRequestParts<C> for Federating
+/// Reads nothing a consumer sends and adds no header; its one contribution to the description is
+/// the `404` its refusal declares.
+impl<C> Interceptor<C> for FederationGate
 where
-    C: Provides<FederationContext> + Sync,
+    C: Provides<FederationContext> + Sync + 'static,
 {
-    type Rejection = NotFederating;
+    type Reads = ();
+    type Adds = ();
+    type Short = NotFederating;
 
-    async fn from_request_parts(parts: &mut Parts, context: &C) -> Result<Self, Self::Rejection> {
-        if context.provide().is_enabled() {
-            return Ok(Self);
+    async fn intercept(
+        &self,
+        request: Request,
+        (): (),
+        context: &C,
+        next: Next<'_, C>,
+    ) -> Result<Continued<()>, NotFederating> {
+        let federation: FederationContext = context.provide();
+        if federation.is_enabled() {
+            return Ok(next.run(request).await);
         }
         tracing::debug!(
-            method = %parts.method,
-            path = parts.uri.path(),
+            method = %request.method(),
+            path = request.uri().path(),
             "a federation operation was refused: this deployment does not federate"
         );
         Err(NotFederating::Disabled {
             code: error_codes::FEDERATION_NOT_CONFIGURED,
         })
-    }
-}
-
-/// Reads nothing a consumer sends; its one contribution is the `404` its rejection declares.
-impl Describe for Federating {
-    fn describe(operation: &mut OperationCx<'_>) {
-        let _ = operation;
     }
 }
 
@@ -531,7 +544,6 @@ impl From<Refusal> for RefreshRejection {
 )]
 pub async fn issue_capability(
     Auth(credential): Auth<AccessToken>,
-    _: Federating,
     Inject(federation): Inject<FederationContext>,
     Inject(albums): Inject<AlbumContext>,
     Inject(membership): Inject<MembershipContext>,
@@ -709,7 +721,6 @@ pub enum MintReply {
 )]
 pub async fn revoke_capability(
     Auth(credential): Auth<AccessToken>,
-    _: Federating,
     Inject(federation): Inject<FederationContext>,
     Inject(albums): Inject<AlbumContext>,
     Path(path): Path<CapabilityPath>,
@@ -776,7 +787,6 @@ pub async fn revoke_capability(
 )]
 pub async fn refresh_capability(
     Auth(principal): Auth<ReadBearer>,
-    _: Federating,
     Inject(federation): Inject<FederationContext>,
     Inject(membership): Inject<MembershipContext>,
     Inject(counters): Inject<CounterContext>,
@@ -1149,7 +1159,6 @@ impl ReportRejection {
     tag = FederationTag
 )]
 pub async fn submit_federated_report(
-    _: Federating,
     Inject(federation): Inject<FederationContext>,
     Inject(moderation): Inject<ModerationContext>,
     Inject(auth): Inject<crate::auth::AuthContext>,

@@ -255,8 +255,13 @@ pub fn router() -> Router<App, Propagate, ServerInterceptors, impl Sized> {
         // **tighter body cap** than the rest of the writes — no body here is anywhere near an
         // upload chunk, and `submit_federated_report` is the server's only unauthenticated write.
         // See [`crate::limits::MAX_FEDERATION_BODY_BYTES`].
+        //
+        // The `FEDERATION_ENABLED` gate is the group's **first** interceptor, so a deployment that
+        // does not federate answers `404` before the body cap, the handshake or the operation's
+        // credential is looked at (#509). See [`routes::federation::FederationGate`].
         .group(
             Group::<App>::new("/")
+                .intercept(routes::federation::FederationGate::new())
                 .intercept(limits::federation_body_size())
                 .intercept(negotiation::ProtocolGate::new())
                 .mount(kynos::routes![
