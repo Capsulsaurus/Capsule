@@ -264,6 +264,7 @@ mod tests {
             prior_provenance_hash: None,
             retention_until: None,
             upgraded_from: None,
+            unknown: Default::default(),
         }
     }
 
