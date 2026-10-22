@@ -40,6 +40,11 @@ use crate::crypto::{CryptoError, kdf, rng};
 /// label record, sealed under its album's AMK (#667). Additive, so no bump: an older format-2
 /// reader verifies them as manifest entries and otherwise ignores them, restoring the album as
 /// `Recovered album` exactly as before.
+///
+/// Format 2 likewise carries an optional `attestations/{asset_id}` entry per asset: its signed
+/// storage-attestation log, verbatim, as `receipts/{asset_id}` carries its receipt log (#747).
+/// Additive for the same reason: an older reader hash-checks it as a manifest entry and
+/// restores the asset without it.
 pub const ARTIFACT_FORMAT_VERSION: u16 = 2;
 
 /// Errors from backup export/restore and recovery.

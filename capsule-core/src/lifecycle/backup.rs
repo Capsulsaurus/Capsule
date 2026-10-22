@@ -144,13 +144,21 @@ impl Workspace {
                 (asset.album_id, bundle.amk_version),
                 album.amks[&bundle.amk_version],
             );
-            // The asset's custody-receipt log, if the client has persisted one beside the chain.
-            let receipts = fs::read(crate::library::receipts_path(
+            // The asset's evidence logs — custody receipts and signed storage attestations — if
+            // the client has persisted them beside the chain. A log that exists and cannot be
+            // read fails the export: an artifact silently missing its evidence is the loss the
+            // artifact exists to prevent.
+            let capture_utc = Some(asset.capture_utc);
+            let receipts = read_evidence_log(&crate::library::receipts_path(
                 &self.root,
                 &asset.asset_id,
-                Some(asset.capture_utc),
-            ))
-            .unwrap_or_default();
+                capture_utc,
+            ))?;
+            let attestations = read_evidence_log(&crate::library::attestations_path(
+                &self.root,
+                &asset.asset_id,
+                capture_utc,
+            ))?;
             assets.push(BackupAsset {
                 album_id: asset.album_id,
                 asset_id: asset.asset_id,
@@ -160,6 +168,7 @@ impl Workspace {
                 ciphertext: bundle.ciphertext,
                 provenance: asset.chain.records().to_vec(),
                 receipts,
+                attestations,
             });
         }
 
@@ -406,6 +415,19 @@ impl Workspace {
                 stack: None,
             };
             self.write_asset_files(&asset, &restored.plaintext)?;
+            // The evidence logs the artifact carried go back beside the chain, byte for byte.
+            restore_evidence_log(
+                &crate::library::receipts_path(&self.root, &restored.asset_id, Some(capture_utc)),
+                &restored.receipts,
+            )?;
+            restore_evidence_log(
+                &crate::library::attestations_path(
+                    &self.root,
+                    &restored.asset_id,
+                    Some(capture_utc),
+                ),
+                &restored.attestations,
+            )?;
             self.index_asset_row(&asset)?;
             self.index_original_representation(&asset, restored.plaintext.len())?;
             self.assets.insert(restored.asset_id, asset);
@@ -541,6 +563,43 @@ fn merge_album(
     Ok((added, adopted))
 }
 
+/// An evidence log's bytes for the artifact: empty when the asset has none, an error when one
+/// exists and cannot be read.
+fn read_evidence_log(path: &Path) -> Result<Vec<u8>> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(bytes),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(LifecycleError::Io(format!(
+            "evidence log {}: {e}",
+            path.display()
+        ))),
+    }
+}
+
+/// Write an evidence log a restore carried back to `path`, verbatim.
+///
+/// Nothing is written when the artifact carried none. A log already on disk is kept, not
+/// overwritten: a restore only adds assets absent locally, so one there is a stray, but it is
+/// still evidence, and the artifact's copy stays in the artifact.
+fn restore_evidence_log(path: &Path, bytes: &[u8]) -> Result<()> {
+    if bytes.is_empty() {
+        return Ok(());
+    }
+    if path.exists() {
+        tracing::warn!(
+            log = %path.display(),
+            "backup: an evidence log is already on disk; keeping it over the artifact's copy"
+        );
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| LifecycleError::Io(e.to_string()))?;
+    }
+    fs::write(path, bytes).map_err(|e| LifecycleError::Io(e.to_string()))?;
+    tracing::debug!(log = %path.display(), bytes = bytes.len(), "backup: evidence log restored");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -674,6 +733,136 @@ mod tests {
             b.album_doc(&album).unwrap().current_name(),
             Some("Lisbon 2026")
         );
+    }
+
+    /// #747: the evidence logs a library keeps beside an asset — custody receipts and signed
+    /// storage attestations — ride the backup and come back byte for byte on a restored device,
+    /// where a reopen still finds the asset's original rather than mistaking a log for it.
+    #[test]
+    fn evidence_logs_ride_the_backup_and_restore_byte_for_byte() {
+        use crate::crypto::keys::HybridSigningKey;
+        use crate::crypto::storage_attestation::{
+            AttestedAsset, STORAGE_ATTESTATION_VERSION, StorageAttestation, StorageAttestationCore,
+        };
+
+        let (lib_a, lib_b, src) = (
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+        );
+        let mut a = fast_workspace(lib_a.path());
+        let album = a.create_album("Trip").unwrap();
+        let photo = src.path().join("photo.jpg");
+        let original = b"\xFF\xD8\xFF a photo with evidence".to_vec();
+        fs::write(&photo, &original).unwrap();
+        let asset = a.import_asset(album, &photo).unwrap();
+        let capture = Some(a.asset(&asset).unwrap().capture_utc);
+
+        let server = HybridSigningKey::from_seed64(&[3; 64]);
+        let core = StorageAttestationCore {
+            version: STORAGE_ATTESTATION_VERSION.to_owned(),
+            server_id: "capsule.example".to_owned(),
+            server_key_id: Hash32([0x11; 32]),
+            account: a.user_id().to_string(),
+            nonce: [4; 32],
+            checked_at: "2026-10-21T00:00:00Z".to_owned(),
+            verdicts: vec![AttestedAsset {
+                asset_id: asset.to_string(),
+                durable: true,
+                blobs: Vec::new(),
+            }],
+        };
+        let attestation = StorageAttestation {
+            server_sig: server.sign(&core.signing_bytes()),
+            core,
+        }
+        .to_canonical_cbor();
+        crate::library::append_attestation(lib_a.path(), &asset, capture, &attestation).unwrap();
+        // The receipt log is carried verbatim, so any bytes stand in for it here.
+        fs::write(
+            crate::library::receipts_path(lib_a.path(), &asset, capture),
+            b"receipt log",
+        )
+        .unwrap();
+        let attestation_log = fs::read(crate::library::attestations_path(
+            lib_a.path(),
+            &asset,
+            capture,
+        ))
+        .unwrap();
+
+        let archive = src.path().join("backup.tar");
+        a.export_backup_with_params(&archive, b"pw", FAST_PARAMS)
+            .unwrap();
+        let mut b = same_account_device(&a, lib_b.path());
+        b.import_backup(&archive, b"pw", &a.exporter_verifying_key())
+            .unwrap();
+
+        let restored_capture = Some(b.asset(&asset).unwrap().capture_utc);
+        assert_eq!(
+            fs::read(crate::library::attestations_path(
+                lib_b.path(),
+                &asset,
+                restored_capture
+            ))
+            .unwrap(),
+            attestation_log,
+            "the attestation log restores byte for byte"
+        );
+        assert_eq!(
+            fs::read(crate::library::receipts_path(
+                lib_b.path(),
+                &asset,
+                restored_capture
+            ))
+            .unwrap(),
+            b"receipt log",
+            "the receipt log restores byte for byte"
+        );
+        let decoded =
+            crate::library::load_attestations(lib_b.path(), &asset, restored_capture).unwrap();
+        assert_eq!(decoded.len(), 1);
+        assert!(decoded[0].verify_under(&server.verifying_key()));
+
+        // A reopen walks the media directory: the logs are neither sidecars nor the original.
+        drop(b);
+        let b = Workspace::open(lib_b.path(), b"device b", FAST_PARAMS).unwrap();
+        assert_eq!(b.read_plaintext(&asset).unwrap(), original);
+        assert!(b.unmigrated_sidecars().is_empty());
+    }
+
+    /// A restore never overwrites an evidence log already on disk, and writes none when the
+    /// artifact carried none.
+    #[test]
+    fn restoring_an_evidence_log_keeps_one_already_on_disk() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("media").join("x.attestations.cbor");
+
+        restore_evidence_log(&path, &[]).unwrap();
+        assert!(!path.exists(), "nothing carried, nothing written");
+
+        restore_evidence_log(&path, b"from the artifact").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"from the artifact");
+
+        restore_evidence_log(&path, b"a different copy").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"from the artifact");
+    }
+
+    /// An evidence log that is absent reads as empty; one that cannot be read fails the export
+    /// rather than leaving the artifact silently without it.
+    #[test]
+    fn an_unreadable_evidence_log_fails_rather_than_vanishing() {
+        let dir = TempDir::new().unwrap();
+        assert!(
+            read_evidence_log(&dir.path().join("absent.cbor"))
+                .unwrap()
+                .is_empty()
+        );
+        // A directory where the log should be is a read error that is not "not found".
+        assert!(matches!(
+            read_evidence_log(dir.path()),
+            Err(LifecycleError::Io(_))
+        ));
     }
 
     /// A second device of `a`'s account in `dir`, holding none of its albums.

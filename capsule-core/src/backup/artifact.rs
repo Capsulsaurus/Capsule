@@ -9,6 +9,8 @@
 //! blobs/{ciphertext_hash} # encrypted asset ciphertext
 //! meta/{asset_id}         # encrypted metadata blob
 //! provenance/{asset_id}   # the full per-asset provenance chain (canonical CBOR)
+//! receipts/{asset_id}     # the asset's custody-receipt log, verbatim (when held)
+//! attestations/{asset_id} # the asset's signed storage-attestation log, verbatim (when held)
 //! authority/{album_id}    # the album's admin-signed epoch ledger (public; canonical CBOR)
 //! ```
 //!
@@ -80,6 +82,10 @@ pub struct BackupAsset {
     /// not a cache — a server destroying the record of its own liability is the adversary — so
     /// it rides the artifact verbatim (S-D4).
     pub receipts: Vec<u8>,
+    /// The asset's signed storage-attestation log (`{uuid}.attestations.cbor` bytes; empty =
+    /// none). Evidence for the same reason as `receipts` — a signed attestation is how a client
+    /// later proves the server reported a blob lost — so it rides the artifact verbatim.
+    pub attestations: Vec<u8>,
 }
 
 impl BackupAsset {
@@ -211,7 +217,8 @@ fn blob_role_order(role: &str) -> u8 {
         "receipts" => 3,
         "authority" => 4,
         "docs" => 5,
-        _ => 6,
+        "attestations" => 6,
+        _ => 7,
     }
 }
 
@@ -467,6 +474,13 @@ fn export_inner(
         if !a.receipts.is_empty() {
             asset_entries.push((format!("receipts/{}", a.asset_id), a.receipts.clone()));
         }
+        // So does the signed storage-attestation log.
+        if !a.attestations.is_empty() {
+            asset_entries.push((
+                format!("attestations/{}", a.asset_id),
+                a.attestations.clone(),
+            ));
+        }
         for (path, data) in asset_entries {
             entries.push(EntryRef {
                 path: path.clone(),
@@ -599,6 +613,9 @@ pub struct RestoredAsset {
     /// The asset's custody-receipt log (`{uuid}.receipts.cbor` bytes; empty if the artifact
     /// carried none) — written back beside the provenance chain on commit (S-D4).
     pub receipts: Vec<u8>,
+    /// The asset's signed storage-attestation log (`{uuid}.attestations.cbor` bytes; empty if
+    /// the artifact carried none) — written back beside the receipts on commit.
+    pub attestations: Vec<u8>,
 }
 
 /// The outcome of a restore (chain-reconciliation; newer local state always wins).
@@ -794,6 +811,13 @@ impl BackupArtifact {
             .get(&format!("receipts/{asset_id}"))
             .cloned()
             .unwrap_or_default();
+        // And the signed storage-attestation log, likewise. An artifact from before the log
+        // existed carries none, which restores as an empty log.
+        let attestations = self
+            .files
+            .get(&format!("attestations/{asset_id}"))
+            .cloned()
+            .unwrap_or_default();
 
         Ok(RestoredAsset {
             album_id: head.core.album_id,
@@ -802,6 +826,7 @@ impl BackupArtifact {
             metadata_blob,
             provenance,
             receipts,
+            attestations,
         })
     }
 
@@ -1044,6 +1069,7 @@ mod tests {
                 .0,
                 provenance: vec![record],
                 receipts: Vec::new(),
+                attestations: Vec::new(),
             }
         }
 
@@ -1341,6 +1367,63 @@ mod tests {
             .find(|a| a.asset_id == Uuid::from_u128(2))
             .unwrap();
         assert!(a2.receipts.is_empty(), "no receipt log → no entry");
+    }
+
+    #[test]
+    fn storage_attestations_ride_the_artifact_and_restore_verbatim() {
+        // The attestation log is evidence like the receipt log: carried as its own manifest
+        // entry, hash-checked on open, and returned byte for byte on restore.
+        let f = Fix::new();
+        let mut with_log = f.asset(1, b"has attestations");
+        with_log.attestations = b"attestation-log-cbor-bytes".to_vec();
+        let plain = f.asset(2, b"no attestations");
+        let bytes =
+            export_with_params(&f.input(vec![with_log, plain]), b"pw", FAST, &f.device).unwrap();
+
+        let art = BackupArtifact::open(&bytes, b"pw", &f.device.verifying_key()).unwrap();
+        let paths: Vec<&str> = art.core.entries.iter().map(|e| e.path.as_str()).collect();
+        assert!(paths.contains(&format!("attestations/{}", Uuid::from_u128(1)).as_str()));
+        assert!(
+            !paths.contains(&format!("attestations/{}", Uuid::from_u128(2)).as_str()),
+            "no attestation log → no entry"
+        );
+
+        let report = art.restore(RestoreMode::Commit, &BTreeMap::new()).unwrap();
+        let restored = |id: u128| {
+            report
+                .applied
+                .iter()
+                .find(|a| a.asset_id == Uuid::from_u128(id))
+                .unwrap()
+        };
+        assert_eq!(restored(1).attestations, b"attestation-log-cbor-bytes");
+        assert!(restored(2).attestations.is_empty());
+    }
+
+    #[test]
+    fn a_tampered_attestation_log_fails_the_open() {
+        // The log is a manifest entry, so a byte changed in transit is caught by its hash
+        // before anything is restored.
+        let f = Fix::new();
+        let mut asset = f.asset(1, b"evidence");
+        asset.attestations = b"attestation-log".to_vec();
+        let bytes = export_with_params(&f.input(vec![asset]), b"pw", FAST, &f.device).unwrap();
+        let path = format!("attestations/{}", Uuid::from_u128(1));
+        let mut builder = tar::Builder::new(Vec::new());
+        for (entry, data) in tar_read(&bytes).unwrap() {
+            let data = if entry == path {
+                b"attestation-loG".to_vec()
+            } else {
+                data
+            };
+            tar_append(&mut builder, &entry, &data);
+        }
+        let tampered = builder.into_inner().unwrap();
+
+        assert!(matches!(
+            BackupArtifact::open(&tampered, b"pw", &f.device.verifying_key()),
+            Err(BackupError::Corrupt(p)) if p == path
+        ));
     }
 
     #[test]
