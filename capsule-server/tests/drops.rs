@@ -2065,6 +2065,45 @@ async fn a_drop_deposit_whose_process_died_is_recovered_at_boot_and_never_finali
     }
 }
 
+/// A deposit that filed its drop and then lost the status write is not failed: the drop landed.
+/// The claim is left for boot recovery, which finds the drop filed and completes the session
+/// without filing it twice.
+#[tokio::test]
+async fn a_filed_drop_whose_status_write_was_lost_is_completed_at_boot_not_failed() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let bytes = payload(b'w', 4096);
+    let (id, upload_id) = open_drop(&fixture, &bearer, 65, &bytes).await;
+
+    fixture.uploads.refuse_status_writes(true);
+    chunk_at(&fixture, &id, &upload_id, 0, &bytes)
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.uploads.refuse_status_writes(false);
+    assert_eq!(
+        fixture
+            .uploads
+            .read_for_test(&upload_id)
+            .await
+            .expect("the session is live")
+            .status
+            .as_str(),
+        "waiting_for_processing",
+        "the claim outlived its depositor"
+    );
+    assert_one_drop(&fixture, &bearer, &bytes).await;
+
+    let (albums, deposits) = recover_at_boot(&fixture).await;
+    assert_eq!(
+        albums,
+        capsule_server::upload::finalize::Recovery::default()
+    );
+    assert_eq!(deposits.completed.len(), 1, "{deposits:?}");
+    assert!(deposits.failed.is_empty(), "{deposits:?}");
+    assert_eq!(terminal_status(&fixture, &upload_id).await, "completed");
+    assert_one_drop(&fixture, &bearer, &bytes).await;
+}
+
 /// The link owner holds a drop's session as its uploader, but the album surface is not where a
 /// drop finishes: a chunk sent there is answered as an unknown session, writes nothing, and the
 /// guest's own chunk still deposits the drop.
