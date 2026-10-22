@@ -73,3 +73,18 @@ test-group = 'containers'
 [[profile.ci.overrides]]
 filter = 'package(capsule-server) and binary(valkey)'
 test-group = 'containers'
+
+# The kill-anywhere suite (`capsule-e2e/tests/kill_anywhere.rs`, #678) starts its own Postgres
+# and Valkey, so it joins the one-thread group too. It is one test that walks every seed it is
+# given, and a seed is a fresh account and every pipeline phase run twice, so it gets a longer
+# leash than the 180 s the profiles allow a unit test: 30 minutes, which the nightly soak's
+# seed count is sized under. It skips itself without `CAPSULE_TEST_KILL_ANYWHERE=1`.
+[[profile.default.overrides]]
+filter = 'package(capsule-e2e) and binary(kill_anywhere)'
+test-group = 'containers'
+slow-timeout = { period = "120s", terminate-after = 15 }
+
+[[profile.ci.overrides]]
+filter = 'package(capsule-e2e) and binary(kill_anywhere)'
+test-group = 'containers'
+slow-timeout = { period = "120s", terminate-after = 15 }

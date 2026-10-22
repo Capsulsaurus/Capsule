@@ -172,6 +172,75 @@
       ]
     },
     {
+      "about": "Keep a library's cache within the budget the current connection class allows",
+      "name": "cache",
+      "subcommands": [
+        {
+          "about": "Show the cache budget for the current connection class, or change the base budget every class scales from (2 GiB unless set)",
+          "args": [
+            {
+              "help": "Store this many bytes as the base budget",
+              "id": "set",
+              "long": "set",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "BYTES"
+              ]
+            },
+            {
+              "help": "Clear the stored base budget, returning to the 2 GiB default",
+              "id": "reset",
+              "long": "reset",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Print the plan as one JSON document on stdout",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "budget"
+        },
+        {
+          "about": "Evict cached thumbnails, previews and fetched originals, least recently viewed first, until the cache fits the budget the current connection class allows. Pinned representations, device-owned originals and the library's own media are never evicted",
+          "args": [
+            {
+              "help": "Path to the Capsule library",
+              "id": "library",
+              "long": "library",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            },
+            {
+              "help": "Print the run as one JSON document on stdout: the plan it ran under and each evicted representation",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "sweep"
+        }
+      ]
+    },
+    {
       "about": "Review a local library: flag assets, filter by flag, sweep rejects to trash",
       "args": [
         {

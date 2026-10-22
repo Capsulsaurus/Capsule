@@ -96,8 +96,9 @@ fn sweep_max_add_counter(root: &Path, device: &Uuid) -> Option<u64> {
             continue;
         }
         // The signed sidecar is exactly `{uuid}.cbor`; the sibling `{uuid}.provenance.cbor`,
-        // `{uuid}.receipts.cbor` and `{uuid}.attestations.cbor` logs carry no OR-sets and must
-        // not be parsed as sidecars.
+        // `{uuid}.receipts.cbor` and `{uuid}.attestations.cbor` logs and the
+        // `derivatives/{uuid}.derivatives.cbor` bundle carry no OR-sets and must not be parsed
+        // as sidecars.
         let name = path.file_name().unwrap_or_default().to_string_lossy();
         if !crate::library::paths::is_sidecar_file_name(&name) {
             continue;

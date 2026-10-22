@@ -42,7 +42,8 @@ pub(crate) fn is_xmp(ext: &str) -> bool {
 /// RAW-only (no primary) → standalone (no stack_hint).
 /// Primary-only → standalone.
 /// Video → always standalone, even beside a same-stem still.
-/// XMP → paired with same-stem RAW or primary; standalone if no match.
+/// XMP → paired with the same-stem RAW+primary stack, or, among unpaired same-stem stills,
+/// with the first in path order only; standalone if no still shares its stem.
 /// Ungrouped extensions → standalone Sidecar.
 ///
 /// Every input file lands in exactly one candidate.
@@ -120,29 +121,22 @@ pub fn group_by_stem(files: &[PathBuf]) -> Vec<ImportCandidate> {
                 detection_key: Some(stem.clone()),
                 members,
             });
-        } else if !raws.is_empty() {
-            // RAW-only (with optional same-stem XMP)
-            for raw in &raws {
-                let mut members = vec![(raw.clone(), MemberRole::Primary)];
-                for xmp in &xmps {
-                    members.push((xmp.clone(), MemberRole::Sidecar));
-                }
-                let source_paths = members.iter().map(|(p, _)| p.clone()).collect();
-                candidates.push(ImportCandidate {
-                    source_paths,
-                    detected_type: AssetType::Photo,
-                    stack_type: None,
-                    detection_method: None,
-                    detection_key: None,
-                    members,
-                });
-            }
-        } else if !primaries.is_empty() {
-            // Primary-only (with optional same-stem XMP)
-            for primary in &primaries {
-                let mut members = vec![(primary.clone(), MemberRole::Primary)];
-                for xmp in &xmps {
-                    members.push((xmp.clone(), MemberRole::Sidecar));
+        } else if !raws.is_empty() || !primaries.is_empty() {
+            // RAW-only or primary-only: each still is its own standalone candidate. The
+            // same-stem XMPs ride with the first still in path order only, so one XMP never
+            // lands in two candidates whatever order the scan listed the files in (issue #788).
+            let mut stills = if raws.is_empty() {
+                primaries.clone()
+            } else {
+                raws.clone()
+            };
+            stills.sort();
+            for (index, still) in stills.iter().enumerate() {
+                let mut members = vec![(still.clone(), MemberRole::Primary)];
+                if index == 0 {
+                    for xmp in &xmps {
+                        members.push((xmp.clone(), MemberRole::Sidecar));
+                    }
                 }
                 let source_paths = members.iter().map(|(p, _)| p.clone()).collect();
                 candidates.push(ImportCandidate {
@@ -361,5 +355,51 @@ mod tests {
         assert!(candidates.iter().any(
             |c| c.detected_type == AssetType::Sidecar && c.primary_path().ends_with("clip.xmp")
         ));
+    }
+
+    /// Issue #788: an XMP beside several unpaired same-stem stills lands in exactly one
+    /// candidate, the first still in path order, whatever order the files were listed in.
+    #[test]
+    fn an_xmp_beside_several_stills_rides_with_the_first_only() {
+        for (names, owner) in [
+            (
+                &["/p/IMG.jpg", "/p/IMG.heic", "/p/IMG.xmp"][..],
+                "/p/IMG.heic",
+            ),
+            (
+                &["/p/IMG.xmp", "/p/IMG.heic", "/p/IMG.jpg"][..],
+                "/p/IMG.heic",
+            ),
+            (
+                &["/p/IMG.NEF", "/p/IMG.CR2", "/p/IMG.xmp"][..],
+                "/p/IMG.CR2",
+            ),
+        ] {
+            let files = paths(names);
+            let candidates = group_by_stem(&files);
+            let mut expected = files.clone();
+            expected.sort();
+            assert_eq!(
+                grouped_paths(&candidates),
+                expected,
+                "each file exactly once, for {names:?}"
+            );
+            let carrying: Vec<&ImportCandidate> = candidates
+                .iter()
+                .filter(|c| c.source_paths.iter().any(|p| p.ends_with("IMG.xmp")))
+                .collect();
+            assert_eq!(carrying.len(), 1, "one carrier, for {names:?}");
+            assert_eq!(
+                carrying[0].primary_path(),
+                PathBuf::from(owner).as_path(),
+                "for {names:?}"
+            );
+            assert!(
+                carrying[0]
+                    .members
+                    .iter()
+                    .any(|(p, r)| p.ends_with("IMG.xmp") && *r == MemberRole::Sidecar)
+            );
+        }
     }
 }

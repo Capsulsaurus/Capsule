@@ -1,0 +1,14 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "run(&scratch, &[\"cache\", \"budget\", \"--json\"])"
+---
+status: 0
+--- stdout ---
+{
+  "connection_class": "unmetered",
+  "base_budget_bytes": 1048576,
+  "base_budget_source": "setting",
+  "budget_bytes": 1048576,
+  "defer_bulk": false
+}
+--- stderr ---

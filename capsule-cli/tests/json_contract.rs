@@ -8,9 +8,9 @@
 //! redacted, and stderr stops at color-eyre's `Location:` section, whose line numbers are not
 //! part of the contract.
 //!
-//! The `--json` subcommands today are `import`, `push`, `restore`, `verify` and
-//! `sync reannounce`; each has its offline cases here, and every `--json` subcommand that lands
-//! joins this file the same way.
+//! The `--json` subcommands today are `import`, `push`, `restore`, `verify`, `cache budget`,
+//! `cache sweep` and `sync reannounce`; each has its offline cases here, and every `--json`
+//! subcommand that lands joins this file the same way.
 //! What needs a live server (a push or restore that reaches its assets) is the end-to-end
 //! suites' to cover.
 //!
@@ -35,6 +35,14 @@
 //! - `import_json_reports_an_unreadable_source_when_nothing_is_planned` — exit 0, one JSON
 //!   document naming the unreadable source as a failed file and counting it as an error.
 //! - `import_json_with_push_is_a_usage_error` — the parser's exit status 2.
+//! - `cache_budget_json_reports_the_default_plan` — exit 0, one JSON document: the desktop
+//!   class (`unmetered`) and the 2 GiB default base budget.
+//! - `cache_budget_json_reports_a_stored_setting` — a `--set` base budget persists into a later
+//!   run's plan.
+//! - `cache_budget_set_and_reset_is_a_usage_error` — the parser's exit status 2.
+//! - `cache_sweep_json_on_an_empty_library_evicts_nothing` — exit 0, one JSON document: the plan
+//!   and an empty eviction list.
+//! - `cache_sweep_json_without_a_library_is_a_usage_error` — the parser's exit status 2.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -396,4 +404,50 @@ fn verify_json_without_a_session_prints_nothing_on_stdout() {
 fn verify_json_without_a_library_is_a_usage_error() {
     let scratch = Scratch::new();
     insta::assert_snapshot!(run(&scratch, &["verify", "--signed", "--json"]));
+}
+
+#[test]
+fn cache_budget_json_reports_the_default_plan() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(&scratch, &["cache", "budget", "--json"]));
+}
+
+/// The setting is persisted: a later run that does not pass `--set` still reports it.
+#[test]
+fn cache_budget_json_reports_a_stored_setting() {
+    let scratch = Scratch::new();
+    let set = run(&scratch, &["cache", "budget", "--set", "1048576"]);
+    assert!(set.starts_with("status: 0"), "{set}");
+    insta::assert_snapshot!(run(&scratch, &["cache", "budget", "--json"]));
+}
+
+#[test]
+fn cache_budget_set_and_reset_is_a_usage_error() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(
+        &scratch,
+        &["cache", "budget", "--set", "1", "--reset", "--json"]
+    ));
+}
+
+#[test]
+fn cache_sweep_json_on_an_empty_library_evicts_nothing() {
+    let scratch = Scratch::new();
+    library(&scratch, 0);
+    insta::assert_snapshot!(run(
+        &scratch,
+        &[
+            "cache",
+            "sweep",
+            "--library",
+            path(&scratch.library()),
+            "--json"
+        ],
+    ));
+}
+
+#[test]
+fn cache_sweep_json_without_a_library_is_a_usage_error() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(&scratch, &["cache", "sweep", "--json"]));
 }

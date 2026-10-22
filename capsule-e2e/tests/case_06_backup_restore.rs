@@ -25,6 +25,10 @@
 //!   the adopted directory lists A's device, so `verify` accepts. The recovered album stays
 //!   read-only. The export names [`FAST_KDF`] explicitly, and the import needs no such argument:
 //!   the artifact records the cost it was wrapped under.
+//!
+//! The crash half of the restore leg — `capsule restore` or its server `SIGKILL`ed mid-fetch, then
+//! rerun until the originals on disk are the imported files byte for byte — is
+//! `tests/kill_anywhere.rs`.
 
 use capsule_cli::remote::{self, RemoteConfig, RemoteError};
 use capsule_cli::session::SessionStore;
