@@ -112,9 +112,12 @@ accepted it. The **owner ledger** carries those facts:
 - The ledger is never rewritten. Purge appends a purge entry; the purged blobs go through
   [GC](#deletion-and-garbage-collection) as before.
 - Two processes append to one ledger: the server and an operator's `purge --apply`. An append
-  holds an exclusive file lock on the owner's ledger directory from reading the tail to the
-  fsync, and reads the tail from disk whenever another process has appended since. A scan holds
-  the lock shared.
+  holds an exclusive file lock on `.lock`, an empty file in the owner's ledger directory opened
+  for writing, from reading the tail to the fsync, and reads the tail from disk whenever another
+  process has appended since. A scan holds the lock shared. The lock file is not a segment, so
+  rebuild and the scrub never read it. It is a file rather than the directory because a
+  directory opens read-only, and where `flock` is emulated with byte-range locks (Linux on NFS)
+  an exclusive lock on a read-only descriptor is refused.
 - Device-directory versions are in the ledger, so a rebuild verifies signatures against the
   directory as it stood when each manifest was accepted.
 
