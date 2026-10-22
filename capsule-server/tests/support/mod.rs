@@ -1358,6 +1358,18 @@ impl DropStore for SwitchableDrops {
         self.inner.deposit(entry)
     }
 
+    fn file<'a>(
+        &'a self,
+        upload: &'a UploadId,
+        address: &'a ContentAddress,
+        received_at: Timestamp,
+    ) -> StoreFuture<'a, Option<InboxEntry>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.file(upload, address, received_at)
+    }
+
     fn inbox<'a>(&'a self, owner: &'a UserId) -> StoreFuture<'a, Vec<InboxEntry>> {
         if self.is_down() {
             return Box::pin(async { Self::refuse() });

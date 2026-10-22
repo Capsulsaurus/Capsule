@@ -296,6 +296,22 @@ pub trait DropStore: std::fmt::Debug + Send + Sync {
     /// File a finished drop in its owner's inbox.
     fn deposit(&self, entry: InboxEntry) -> StoreFuture<'_, ()>;
 
+    /// Move `upload`'s held declaration into its owner's inbox, as the drop whose committed bytes
+    /// are at `address`, received at `received_at`. Returns the entry filed, or `None` when no
+    /// declaration is held — it was already filed (or never made), and nothing is written.
+    ///
+    /// **One operation, not a take and a deposit.** The declaration carries `kem_ct`, which
+    /// exists nowhere else: a deposit that took it and was then lost before filing it — a
+    /// process that died between the two — would leave committed bytes the owner can never
+    /// decrypt and a session nothing can finish. Moved atomically, a re-driven deposit either
+    /// finds the declaration still held and files it, or finds it gone because it was filed.
+    fn file<'a>(
+        &'a self,
+        upload: &'a UploadId,
+        address: &'a ContentAddress,
+        received_at: Timestamp,
+    ) -> StoreFuture<'a, Option<InboxEntry>>;
+
     /// Everything waiting for `owner`, oldest first.
     fn inbox<'a>(&'a self, owner: &'a UserId) -> StoreFuture<'a, Vec<InboxEntry>>;
 
@@ -485,6 +501,47 @@ impl DropStore for InMemoryDrops {
             );
             lock(&self.inner).inbox.insert(entry.drop_id.clone(), entry);
             Ok(())
+        })
+    }
+
+    fn file<'a>(
+        &'a self,
+        upload: &'a UploadId,
+        address: &'a ContentAddress,
+        received_at: Timestamp,
+    ) -> StoreFuture<'a, Option<InboxEntry>> {
+        Box::pin(async move {
+            let mut inner = lock(&self.inner);
+            let Some(pending) = inner.pending.remove(upload) else {
+                tracing::debug!(%upload, "no drop declaration is held; nothing to file");
+                return Ok(None);
+            };
+            // A row already filed under this drop id is the drop, filed: the declaration goes
+            // either way, and the row is kept rather than replaced — the Postgres adapter's
+            // `ON CONFLICT DO NOTHING`.
+            if inner.inbox.contains_key(&pending.drop_id) {
+                tracing::debug!(%upload, "the drop was already filed");
+                return Ok(None);
+            }
+            let entry = InboxEntry {
+                drop_id: pending.drop_id,
+                owner_id: pending.owner_id,
+                opaque_id: pending.opaque_id,
+                address: address.clone(),
+                size: pending.size,
+                content_type: pending.content_type,
+                kem_ct: pending.kem_ct,
+                suggested_filename: pending.suggested_filename,
+                received_at,
+                adopting: false,
+            };
+            inner.inbox.insert(entry.drop_id.clone(), entry.clone());
+            tracing::info!(
+                owner = %entry.owner_id,
+                size = entry.size,
+                "a drop landed in an inbox"
+            );
+            Ok(Some(entry))
         })
     }
 
