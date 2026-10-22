@@ -1,0 +1,532 @@
+//! The rebuild's contract: drop the index, rebuild, and the rows come back; a ledger that cannot
+//! prove its sequence moves the owner's epoch; damage stops only its own owner; a dry run writes
+//! nothing; a row the index holds is compared, never overwritten.
+
+use capsule_core::crypto::hash::hash_bytes;
+use capsule_core::crypto::keys::{AmkVersion, HybridSigningKey};
+use capsule_core::crypto::provenance::{ASSET_MANIFEST_VERSION, KeyMode, ManifestCore};
+
+use super::*;
+use crate::attestation::{LocalAttestationKey, PublishedKey, ReceiptSigner as _};
+use crate::blob::InMemoryBlobStore;
+use crate::index::memory::InMemoryAssetIndex;
+use crate::index::{BlobOutcome, BlobRecord, PendingAsset};
+use crate::ledger::{InMemoryLedger, LedgerEvent};
+use crate::quota::InMemoryQuota;
+use crate::store::memory::ManualClock;
+
+/// The album every fixture files under.
+const ALBUM: &str = "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e70";
+
+/// The instant every fixture write happens at, so a rebuilt row's times equal the original's.
+fn at() -> Timestamp {
+    Timestamp::from_second(1_767_225_600).expect("a valid instant")
+}
+
+/// A stable UUID asset id for a fixture name: a manifest's `file_id` is a UUID.
+fn asset(name: &str) -> AssetId {
+    let id = uuid::Uuid::from_u128(u128::from_be_bytes(
+        hash_bytes(name.as_bytes()).0[..16]
+            .try_into()
+            .expect("sixteen bytes"),
+    ));
+    AssetId::new(id.to_string())
+}
+
+/// A really signed `create` manifest for `asset`, committing to `metadata`, in the provenance
+/// record a client stores it in.
+fn manifest(asset: &AssetId, metadata: &ContentAddress) -> Vec<u8> {
+    let core = ManifestCore {
+        version: ASSET_MANIFEST_VERSION.to_owned(),
+        crypto_suite_id: 1,
+        protocol_version: "2026-01-01".to_owned(),
+        file_id: uuid::Uuid::parse_str(asset.as_str()).expect("a uuid"),
+        album_id: uuid::Uuid::parse_str(ALBUM).expect("a uuid"),
+        amk_version: AmkVersion(0),
+        ciphertext_hash: hash_bytes(b"original"),
+        plaintext_size: 1024,
+        chunk_size: 65_536,
+        nonce_prefix: [0; 7],
+        key_mode: KeyMode::Derived,
+        wrapped_file_key: None,
+        metadata_blob_hash: Some(Hash32::from_hex(metadata.as_str()).expect("a digest")),
+        created_by_user: uuid::Uuid::from_u128(7),
+        created_by_device: uuid::Uuid::from_u128(8),
+        client_version: "capsule-cli/0.1.0".to_owned(),
+        timestamp: "2026-01-01T00:00:00Z".to_owned(),
+        action: Action::Create,
+        prior_provenance_hash: None,
+        upgraded_from: None,
+        unknown: Default::default(),
+        retention_until: None,
+    };
+    let device = HybridSigningKey::from_seed64(&[1; 64]);
+    let write_tier = HybridSigningKey::from_seed64(&[2; 64]);
+    let signed = core.sign(&device, &write_tier).expect("a manifest signs");
+    // What a client stores as the provenance blob: the chain head's record, not the bare
+    // manifest (`UploadBundle::provenance_blob`).
+    let record = capsule_core::crypto::provenance::ProvenanceRecord::new(
+        uuid::Uuid::parse_str(asset.as_str()).expect("a uuid"),
+        signed,
+        None,
+    );
+    capsule_core::cbor::to_canonical_vec(&record).expect("a record encodes")
+}
+
+/// The stores a server writes to, and a rebuild reads from.
+struct Server {
+    index: Arc<InMemoryAssetIndex>,
+    blobs: Arc<InMemoryBlobStore>,
+    ledger: Arc<InMemoryLedger>,
+    quotas: Arc<InMemoryQuota>,
+    signer: LocalAttestationKey,
+    clock: Arc<ManualClock>,
+}
+
+impl Server {
+    fn new() -> Self {
+        Self {
+            index: Arc::new(InMemoryAssetIndex::new()),
+            blobs: Arc::new(InMemoryBlobStore::new()),
+            ledger: Arc::new(InMemoryLedger::new()),
+            quotas: Arc::new(InMemoryQuota::new()),
+            signer: LocalAttestationKey::new(
+                "server.test",
+                HybridSigningKey::from_seed64(&[9; 64]),
+            ),
+            clock: Arc::new(ManualClock::new(at())),
+        }
+    }
+
+    fn keys(&self) -> LedgerKeys {
+        LedgerKeys::new(vec![PublishedKey {
+            key_id: self.signer.key_id(),
+            public: self.signer.verifying_key(),
+            active_from: Timestamp::UNIX_EPOCH,
+            active_to: None,
+        }])
+    }
+
+    /// A rebuild over these stores, into `index`.
+    fn rebuild_into(&self, index: Arc<InMemoryAssetIndex>) -> RebuildContext {
+        RebuildContext::new(
+            index,
+            self.blobs.clone(),
+            self.ledger.clone(),
+            self.quotas.clone(),
+            self.keys(),
+            self.clock.clone(),
+        )
+    }
+
+    async fn append(&self, owner: &OwnerId, event: LedgerEvent) {
+        self.ledger
+            .append(owner, event, at(), &self.signer)
+            .await
+            .expect("an append lands");
+    }
+
+    async fn store(&self, bytes: &[u8]) -> ContentAddress {
+        let address = ContentAddress::parse(&hash_bytes(bytes).to_hex()).expect("an address");
+        self.blobs.put(&address, bytes).await.expect("stored");
+        address
+    }
+
+    /// Finalize one blob the way `upload::finalize` orders it: custody, the index write, then
+    /// the indexed entry — or, with `crash`, stop after the index write.
+    async fn finalize(
+        &self,
+        owner: &OwnerId,
+        asset: &AssetId,
+        role: BlobRole,
+        bytes: &[u8],
+        crash: bool,
+    ) -> ContentAddress {
+        let address = self.store(bytes).await;
+        let manifest_sha256 = (role == BlobRole::Provenance).then(|| hash_bytes(bytes));
+        let upload = format!("{asset}-{}", role.as_str());
+        self.append(
+            owner,
+            LedgerEvent::Custody {
+                upload_id: upload.clone(),
+                asset_id: asset.as_str().to_owned(),
+                blob_role: role.as_str().to_owned(),
+                content_hash: hash_bytes(bytes),
+                size: bytes.len() as u64,
+                manifest_sha256,
+                upload_user_id: owner.as_str().to_owned(),
+                uploader_device: None,
+                received_at: at().to_string(),
+            },
+        )
+        .await;
+        let outcome = self
+            .index
+            .record_blob(
+                asset,
+                BlobRecord {
+                    role,
+                    address: address.clone(),
+                    size: bytes.len() as u64,
+                    manifest_sha256,
+                    finalized_at: at(),
+                },
+            )
+            .await
+            .expect("the index records");
+        let BlobOutcome::Recorded { minted, .. } = outcome else {
+            panic!("recording answered {outcome:?}");
+        };
+        if !crash {
+            self.append(
+                owner,
+                LedgerEvent::Indexed {
+                    upload_id: upload,
+                    asset_id: asset.as_str().to_owned(),
+                    sync_seq: minted,
+                    receipt: None,
+                },
+            )
+            .await;
+        }
+        address
+    }
+
+    /// Reserve and publish `name` under `owner`; with `crash`, the last indexed entry is lost.
+    async fn publish(&self, owner: &OwnerId, name: &str, crash: bool) -> AssetId {
+        let id = asset(name);
+        self.index
+            .reserve(PendingAsset {
+                asset_id: id.clone(),
+                owner_id: owner.clone(),
+                album_id: AlbumId::new(ALBUM),
+                protocol_version: "2026-01-01".to_owned(),
+                crypto_suite_id: 1,
+                created_at: at(),
+            })
+            .await
+            .expect("the index reserves");
+        let metadata_bytes = format!("{name}-metadata").into_bytes();
+        let metadata =
+            ContentAddress::parse(&hash_bytes(&metadata_bytes).to_hex()).expect("an address");
+        self.finalize(
+            owner,
+            &id,
+            BlobRole::Provenance,
+            &manifest(&id, &metadata),
+            false,
+        )
+        .await;
+        self.finalize(owner, &id, BlobRole::Metadata, &metadata_bytes, crash)
+            .await;
+        id
+    }
+}
+
+async fn rows(index: &InMemoryAssetIndex) -> Vec<AssetRow> {
+    index.rows(None, 1000).await.expect("rows")
+}
+
+fn owner(name: &str) -> OwnerId {
+    OwnerId::new(name)
+}
+
+#[tokio::test]
+async fn dropping_the_index_and_rebuilding_matches_the_original_and_a_rerun_changes_nothing() {
+    let server = Server::new();
+    let alice = owner("alice");
+    server.publish(&alice, "one", false).await;
+    server.publish(&alice, "two", false).await;
+    let original = rows(&server.index).await;
+
+    let empty = Arc::new(InMemoryAssetIndex::new());
+    let context = server.rebuild_into(empty.clone());
+    let report = rebuild(&context, Mode::Apply).await.expect("a pass");
+
+    assert_eq!(
+        rows(&empty).await,
+        original,
+        "the rebuilt index is not the original"
+    );
+    assert_eq!(
+        empty.head_seq(&alice).await.expect("head"),
+        server.index.head_seq(&alice).await.expect("head")
+    );
+    let alice_report = &report.owners[0];
+    assert_eq!(alice_report.restored.len(), 2);
+    assert!(
+        !alice_report.epoch_bump_needed,
+        "a complete ledger proves its sequence"
+    );
+    assert_eq!(empty.sync_epoch(&alice).await.expect("epoch"), 0);
+    assert!(!report.has_faults());
+    assert!(report.orphans.is_empty());
+    // Quota is recomputed for the restored blobs.
+    assert!(
+        server
+            .quotas
+            .usage(&UserId::new("alice"))
+            .await
+            .expect("usage")
+            .used
+            > 0
+    );
+
+    let again = rebuild(&context, Mode::Apply).await.expect("a second pass");
+    assert!(
+        again.owners[0].restored.is_empty(),
+        "a rerun restored something"
+    );
+    assert_eq!(again.owners[0].agreed.len(), 2);
+    assert_eq!(rows(&empty).await, original);
+}
+
+#[tokio::test]
+async fn a_dry_run_reports_and_writes_nothing() {
+    let server = Server::new();
+    server.publish(&owner("alice"), "dry", false).await;
+
+    let empty = Arc::new(InMemoryAssetIndex::new());
+    let report = rebuild(&server.rebuild_into(empty.clone()), Mode::DryRun)
+        .await
+        .expect("a pass");
+    assert!(!report.applied);
+    assert_eq!(report.owners[0].restored.len(), 1);
+    assert!(rows(&empty).await.is_empty(), "a dry run wrote a row");
+    assert_eq!(
+        server
+            .quotas
+            .usage(&UserId::new("alice"))
+            .await
+            .expect("usage")
+            .used,
+        0,
+        "a dry run charged quota"
+    );
+}
+
+#[tokio::test]
+async fn a_lost_ledger_tail_bumps_the_epoch_and_numbers_the_row_above_the_head() {
+    let server = Server::new();
+    let alice = owner("alice");
+    server.publish(&alice, "proven", false).await;
+    // The process stopped after the index write and before the indexed entry.
+    let lost = server.publish(&alice, "unproven", true).await;
+
+    let empty = Arc::new(InMemoryAssetIndex::new());
+    let report = rebuild(&server.rebuild_into(empty.clone()), Mode::Apply)
+        .await
+        .expect("a pass");
+
+    let alice_report = &report.owners[0];
+    assert_eq!(alice_report.unprovable, vec![lost.clone()]);
+    assert!(alice_report.epoch_bump_needed);
+    assert_eq!(alice_report.epoch, Some(1));
+    assert_eq!(empty.sync_epoch(&alice).await.expect("epoch"), 1);
+    let restored = empty.read(&lost).await.expect("read").expect("restored");
+    assert_eq!(
+        restored.sync_seq,
+        Some(2),
+        "an unprovable row is numbered above every number the owner has used"
+    );
+}
+
+#[tokio::test]
+async fn a_tampered_ledger_stops_only_its_own_owner() {
+    let server = Server::new();
+    let alice = owner("alice");
+    let bob = owner("bob");
+    server.publish(&alice, "alice-one", false).await;
+    let bobs_first = server.publish(&bob, "bob-one", false).await;
+    let bobs_second = server.publish(&bob, "bob-two", false).await;
+
+    // Re-sign bob's ledger from its fifth entry on under a key this server never published.
+    let forger = LocalAttestationKey::new("server.test", HybridSigningKey::from_seed64(&[3; 64]));
+    let scan = server.ledger.scan(&bob).await.expect("a scan");
+    let forged = InMemoryLedger::new();
+    for (at_entry, entry) in scan.entries.iter().enumerate() {
+        let signer: &dyn crate::attestation::ReceiptSigner = if at_entry < 4 {
+            &server.signer
+        } else {
+            &forger
+        };
+        forged
+            .append(&bob, entry.core.event.clone(), at(), signer)
+            .await
+            .expect("an append lands");
+    }
+    server.ledger.replace_raw(&bob, forged.raw(&bob));
+
+    let empty = Arc::new(InMemoryAssetIndex::new());
+    let report = rebuild(&server.rebuild_into(empty.clone()), Mode::Apply)
+        .await
+        .expect("a pass");
+
+    let alice_report = report
+        .owners
+        .iter()
+        .find(|owner| owner.owner == alice)
+        .expect("alice is reported");
+    assert!(alice_report.chain_fault.is_none());
+    assert_eq!(alice_report.restored.len(), 1);
+
+    let bob_report = report
+        .owners
+        .iter()
+        .find(|owner| owner.owner == bob)
+        .expect("bob is reported");
+    assert_eq!(bob_report.verified, 4);
+    assert_eq!(
+        bob_report.chain_fault,
+        Some(ChainFault::UnknownKey { seq: 5 })
+    );
+    assert_eq!(bob_report.restored, vec![bobs_first]);
+    assert!(
+        empty.read(&bobs_second).await.expect("read").is_none(),
+        "a row past the break was replayed"
+    );
+    assert_eq!(bob_report.epoch, Some(1), "a break moves the owner's epoch");
+    assert_eq!(empty.sync_epoch(&alice).await.expect("epoch"), 0);
+}
+
+#[tokio::test]
+async fn a_row_the_index_holds_is_compared_and_never_overwritten() {
+    let server = Server::new();
+    let alice = owner("alice");
+    let id = server.publish(&alice, "held", false).await;
+
+    // A restored backup whose row for the asset names another album.
+    let backup = Arc::new(InMemoryAssetIndex::new());
+    let mut rival = server.index.read(&id).await.expect("read").expect("a row");
+    rival.album_id = AlbumId::new("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5eff");
+    backup.restore(rival.clone()).await.expect("seeded");
+
+    let report = rebuild(&server.rebuild_into(backup.clone()), Mode::Apply)
+        .await
+        .expect("a pass");
+    assert_eq!(
+        report.owners[0].differs,
+        vec![RowDifference {
+            asset: id.clone(),
+            facts: vec!["album_id"],
+        }]
+    );
+    assert!(report.has_faults());
+    assert_eq!(backup.read(&id).await.expect("read"), Some(rival));
+}
+
+#[tokio::test]
+async fn a_malformed_manifest_is_quarantined_with_its_reason_and_its_entry_is_not_replayed() {
+    let server = Server::new();
+    let alice = owner("alice");
+    let id = asset("garbled");
+    server
+        .index
+        .reserve(PendingAsset {
+            asset_id: id.clone(),
+            owner_id: alice.clone(),
+            album_id: AlbumId::new(ALBUM),
+            protocol_version: "2026-01-01".to_owned(),
+            crypto_suite_id: 1,
+            created_at: at(),
+        })
+        .await
+        .expect("the index reserves");
+    let garbage = server
+        .finalize(&alice, &id, BlobRole::Provenance, b"not a manifest", false)
+        .await;
+
+    let empty = Arc::new(InMemoryAssetIndex::new());
+    let report = rebuild(&server.rebuild_into(empty.clone()), Mode::Apply)
+        .await
+        .expect("a pass");
+    assert_eq!(
+        report.owners[0].unusable_manifests,
+        vec![(id.clone(), garbage.clone(), ManifestFault::Undecodable)]
+    );
+    assert_eq!(report.owners[0].incomplete, vec![id]);
+    let held = server.blobs.quarantined().await.expect("the hold lists");
+    assert_eq!(held.len(), 1);
+    assert_eq!(held[0].address, garbage);
+    assert_eq!(held[0].reason.code, error_codes::UPLOAD_ENVELOPE_REJECTED);
+}
+
+#[tokio::test]
+async fn an_entry_naming_a_missing_blob_is_dangling_and_an_unnamed_blob_is_an_orphan() {
+    let server = Server::new();
+    let alice = owner("alice");
+    let id = server.publish(&alice, "gone", false).await;
+    let metadata = server
+        .index
+        .read(&id)
+        .await
+        .expect("read")
+        .expect("a row")
+        .address_for(BlobRole::Metadata)
+        .cloned()
+        .expect("a metadata blob");
+    server.blobs.remove(&metadata).await.expect("removed");
+    let stray = server.store(b"nobody names me").await;
+
+    let empty = Arc::new(InMemoryAssetIndex::new());
+    let report = rebuild(&server.rebuild_into(empty), Mode::DryRun)
+        .await
+        .expect("a pass");
+    assert_eq!(report.owners[0].dangling, vec![(id.clone(), metadata)]);
+    assert_eq!(report.owners[0].incomplete, vec![id]);
+    assert_eq!(report.orphans, vec![stray]);
+}
+
+#[tokio::test]
+async fn without_keys_a_rebuild_verifies_links_and_says_so() {
+    let server = Server::new();
+    server.publish(&owner("alice"), "linked", false).await;
+    let context = RebuildContext::new(
+        Arc::new(InMemoryAssetIndex::new()),
+        server.blobs.clone(),
+        server.ledger.clone(),
+        server.quotas.clone(),
+        LedgerKeys::default(),
+        server.clock.clone(),
+    );
+    let report = rebuild(&context, Mode::DryRun).await.expect("a pass");
+    assert!(report.links_only);
+    assert_eq!(report.owners[0].restored.len(), 1);
+}
+
+#[test]
+fn only_facts_a_rebuild_can_reconstruct_are_compared() {
+    let row = AssetRow {
+        asset_id: AssetId::new("a"),
+        owner_id: OwnerId::new("o"),
+        album_id: AlbumId::new("al"),
+        protocol_version: "2026-01-01".to_owned(),
+        crypto_suite_id: 1,
+        state: AssetState::Visible,
+        blobs: Vec::new(),
+        first_seq: Some(1),
+        sync_seq: Some(1),
+        chain_head: None,
+        amk_version: 0,
+        superseded: Vec::new(),
+        hold: None,
+        retention_until: None,
+        created_at: Timestamp::UNIX_EPOCH,
+        updated_at: Timestamp::UNIX_EPOCH,
+    };
+    // A hold, a later number from an unledgered lifecycle write, and a retention floor are the
+    // backup's alone.
+    let mut held = row.clone();
+    held.hold = Some(crate::index::ServingHold::Takedown);
+    held.sync_seq = Some(9);
+    held.retention_until = Some(Timestamp::UNIX_EPOCH);
+    assert!(differences(&held, &row).is_empty());
+
+    let mut other = row.clone();
+    other.owner_id = OwnerId::new("p");
+    other.crypto_suite_id = 2;
+    assert_eq!(
+        differences(&other, &row),
+        vec!["owner_id", "crypto_suite_id"]
+    );
+}

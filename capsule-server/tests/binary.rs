@@ -627,6 +627,17 @@ fn a_deep_scrub_re_hashes_the_bytes_it_reads() {
     assert!(!stdout.contains("0 bytes hashed"), "{stdout}");
 }
 
+#[test]
+fn a_rebuild_is_a_dry_run_by_default_and_says_so() {
+    // Over a root with no owner ledgers there is nothing to replay; the posture line is what an
+    // operator reads before trusting the rest.
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let (code, stdout, stderr) = run(&mut operator("rebuild", root.path(), &[]));
+    assert_eq!(code, Some(0), "stdout: {stdout}\nstderr: {stderr}");
+    assert!(stdout.contains("index rebuild (dry run"), "{stdout}");
+    assert!(stdout.contains("no owner ledgers"), "{stdout}");
+}
+
 /// `quota <act> <user>` over `root`, in the development profile.
 fn quota_act(act: &str, user: &str, root: &std::path::Path) -> Command {
     let root = root.display().to_string();
@@ -675,7 +686,7 @@ fn the_operator_commands_need_no_key_material() {
     // would be a reason to put the key on a maintenance host. `operator` removes it, so every
     // case above already asserts this — this one says so on purpose.
     let root = tempfile::tempdir().expect("a scratch directory");
-    for subcommand in ["gc", "purge", "scrub"] {
+    for subcommand in ["gc", "purge", "scrub", "rebuild"] {
         let (code, stdout, stderr) = run(&mut operator(subcommand, root.path(), &[]));
         assert_eq!(code, Some(0), "{subcommand}: {stdout}{stderr}");
         assert!(
@@ -692,7 +703,7 @@ fn an_operator_command_without_memory_is_told_about_the_database_first() {
     // configuration refusal (#520), `DATABASE_URL` before `VALKEY_URL`, which is the order the
     // workers open them in.
     let root = tempfile::tempdir().expect("a scratch directory");
-    for subcommand in ["gc", "purge", "scrub"] {
+    for subcommand in ["gc", "purge", "scrub", "rebuild"] {
         let (code, _, stderr) = run(&mut server(&[
             subcommand,
             "--blob-root",

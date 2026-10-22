@@ -80,6 +80,7 @@ pub mod conformance;
 pub mod fs;
 pub mod manifest;
 pub mod memory;
+pub mod rebuild;
 pub mod replay;
 
 use std::fmt;

@@ -1007,6 +1007,74 @@ async fn a_pushed_asset_reaches_the_feed_and_the_entry_decodes_and_verifies() {
         facts.sidecar.is_some(),
         "a create carries its decrypted sidecar, which means the metadata blob really opened"
     );
+
+    // ── Drop the index: the ledger the real ladder wrote rebuilds the row (#697) ───────────
+    rebuild_matches(&fixture, &library_user, &asset_id.to_string()).await;
+}
+
+/// Rebuild the fixture's ledger and blobs into an empty index and compare `asset`'s row with
+/// the one the server built while the ladder ran.
+///
+/// The ledger here was written by the real finalization path, so this is what proves the
+/// entries a server writes are the entries a rebuild can replay: the role tokens, the instants,
+/// the sequence numbers and the manifest the provenance entry names.
+async fn rebuild_matches(fixture: &Fixture, owner: &capsule_server::store::UserId, asset: &str) {
+    use capsule_server::attestation::{PublishedKey, ReceiptSigner as _};
+    use capsule_server::gc::Mode;
+    use capsule_server::index::memory::InMemoryAssetIndex;
+    use capsule_server::ledger::rebuild::{RebuildContext, rebuild};
+    use capsule_server::ledger::replay::LedgerKeys;
+
+    let empty = std::sync::Arc::new(InMemoryAssetIndex::new());
+    let keys = LedgerKeys::new(vec![PublishedKey {
+        key_id: fixture.attestation_key.key_id(),
+        public: fixture.attestation_key.verifying_key(),
+        active_from: Timestamp::UNIX_EPOCH,
+        active_to: None,
+    }]);
+    let context = RebuildContext::new(
+        empty.clone(),
+        fixture.blobs.clone(),
+        fixture.ledger.clone(),
+        std::sync::Arc::new(capsule_server::quota::InMemoryQuota::new()),
+        keys,
+        fixture.clock.clone(),
+    );
+    let report = rebuild(&context, Mode::Apply)
+        .await
+        .expect("a rebuild pass");
+    let owner = capsule_server::store::OwnerId::new(owner.as_str());
+    let owner_report = report
+        .owners
+        .iter()
+        .find(|report| report.owner == owner)
+        .expect("the owner's ledger was replayed");
+    assert_eq!(owner_report.chain_fault, None);
+    assert!(
+        !owner_report.epoch_bump_needed,
+        "a ledger the real path wrote proves its sequence: {owner_report:?}"
+    );
+
+    let asset = AssetId::new(asset);
+    let original = fixture
+        .index
+        .read(&asset)
+        .await
+        .expect("the index answers")
+        .expect("the pushed row");
+    let rebuilt = empty
+        .read(&asset)
+        .await
+        .expect("the index answers")
+        .unwrap_or_else(|| panic!("the rebuild restored the row: {owner_report:?}"));
+    assert_eq!(rebuilt.blobs, original.blobs);
+    assert_eq!(
+        (rebuilt.sync_seq, rebuilt.first_seq),
+        (original.sync_seq, original.first_seq)
+    );
+    assert_eq!(rebuilt.album_id, original.album_id);
+    assert_eq!(rebuilt.chain_head, original.chain_head);
+    assert_eq!(rebuilt.state, original.state);
 }
 
 /// E2E case 4 (server half, SDK client): a peer pulls a shared album over a socket.

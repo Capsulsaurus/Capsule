@@ -36,6 +36,7 @@ use tracing_subscriber::{EnvFilter, fmt as log_fmt};
 use crate::boot::{self, Assembled, Maintenance};
 use crate::config::{Config, Demands, Environment, LogFormat, Overrides, ProcessEnvironment};
 use crate::gc::{CollectionReport, Mode, PurgeReport};
+use crate::ledger::rebuild::RebuildReport;
 use crate::scrub::{Depth, ScrubReport};
 use crate::store::UserId;
 
@@ -178,6 +179,24 @@ pub enum Command {
         backend: BackendArgs,
     },
 
+    /// Rebuild the asset index from the owner ledgers and the blobs.
+    ///
+    /// Dry run by default: reports the rows it would restore, the rows that disagree with the
+    /// index, and the owners whose sequence it cannot prove, and writes nothing. With `--apply`
+    /// it restores the rows the index lacks (never overwriting one it holds) with the sequence
+    /// numbers the ledger proved, recomputes their quota attribution, quarantines manifests that
+    /// fail structural validation, and moves an owner whose sequence it cannot prove to a new
+    /// sync epoch. Exits non-zero when it found something an operator must look at.
+    Rebuild {
+        /// Carry it out. Without this nothing is written.
+        #[arg(long)]
+        apply: bool,
+
+        /// Where state lives.
+        #[command(flatten)]
+        backend: BackendArgs,
+    },
+
     /// Suspend an account's storage quota, or lift the suspension.
     ///
     /// An administrative or billing act (design/quota.md): while suspended, the account's growth
@@ -246,9 +265,11 @@ impl Command {
             Self::Serve { .. } => Demands::Serve,
             // No key material. A maintenance host that had to hold the production
             // token-signing key to sweep a directory would be a reason to put the key there.
-            Self::Gc { .. } | Self::Purge { .. } | Self::Scrub { .. } | Self::Quota { .. } => {
-                Demands::Maintenance
-            }
+            Self::Gc { .. }
+            | Self::Purge { .. }
+            | Self::Scrub { .. }
+            | Self::Rebuild { .. }
+            | Self::Quota { .. } => Demands::Maintenance,
             Self::GenOpenapi { .. } => Demands::Nothing,
         }
     }
@@ -274,7 +295,9 @@ impl Command {
                 overrides.blob_root.clone_from(&backend.blob_root);
                 overrides.memory = backend.memory;
             }
-            Self::Purge { backend, .. } | Self::Scrub { backend, .. } => {
+            Self::Purge { backend, .. }
+            | Self::Scrub { backend, .. }
+            | Self::Rebuild { backend, .. } => {
                 overrides.blob_root.clone_from(&backend.blob_root);
                 overrides.memory = backend.memory;
             }
@@ -327,6 +350,7 @@ pub async fn run() -> Result<ExitCode> {
             };
             scrub(&config, depth).await
         }
+        Command::Rebuild { apply, .. } => rebuild(&config, mode(apply)).await,
         Command::Quota { action } => quota(&config, &action).await,
         // The document is a property of the router's types, so the configuration is loaded only
         // to refuse `--config` and is deliberately not logged: `mise run openapi-check-kynos` is
@@ -518,6 +542,24 @@ async fn scrub(config: &Config, depth: Depth) -> Result<ExitCode> {
     })
 }
 
+/// Rebuild the asset index from the owner ledgers and the blobs (#697).
+///
+/// Exits [`EXIT_FINDINGS`] when the report holds a fault — a broken ledger, a row that disagrees
+/// with the index, a dangling entry, a quarantined manifest — and zero when the only news is rows
+/// to restore, which is what a rebuild is for.
+async fn rebuild(config: &Config, mode: Mode) -> Result<ExitCode> {
+    let maintenance = maintenance(config).await?;
+    let report = crate::ledger::rebuild::rebuild(&maintenance.rebuild, mode)
+        .await
+        .map_err(|error| eyre!("the index rebuild could not finish: {error}"))?;
+    print!("{}", render_rebuild(&report, mode));
+    Ok(if report.has_faults() {
+        ExitCode::from(EXIT_FINDINGS)
+    } else {
+        ExitCode::SUCCESS
+    })
+}
+
 /// Suspend an account's quota, or lift the suspension (#705).
 ///
 /// Exits zero whether or not the act changed anything, and says which on stdout: suspending a
@@ -665,6 +707,105 @@ impl std::fmt::Display for Rendered<'_, PurgeReport> {
     }
 }
 
+/// Render an index rebuild.
+///
+/// Rows that agree are counted, not listed: they are the expected answer, and a rebuild beside a
+/// healthy backup would otherwise print every asset the server holds.
+fn render_rebuild(report: &RebuildReport, mode: Mode) -> Rendered<'_, RebuildReport> {
+    Rendered(report, mode)
+}
+
+impl std::fmt::Display for Rendered<'_, RebuildReport> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self(report, mode) = *self;
+        writeln!(f, "index rebuild ({})", posture(mode))?;
+        if report.links_only {
+            writeln!(
+                f,
+                "  owner ledgers: links and positions checked, signatures not (no \
+                 ATTESTATION_KEY_SEED on this host)"
+            )?;
+        }
+        for owner in &report.owners {
+            writeln!(
+                f,
+                "  owner {} ({} entries verified, {} rows agree)",
+                owner.owner,
+                owner.verified,
+                owner.agreed.len()
+            )?;
+            if let Some(fault) = &owner.chain_fault {
+                writeln!(f, "    ledger broken: {fault}; replay stopped there")?;
+            }
+            let restored = match mode {
+                Mode::Apply => "restored",
+                Mode::DryRun => "would restore",
+            };
+            for (class, assets) in [
+                (restored, &owner.restored),
+                ("unprovable sequence", &owner.unprovable),
+                ("incomplete bundle", &owner.incomplete),
+            ] {
+                if assets.is_empty() {
+                    continue;
+                }
+                writeln!(f, "    {class} ({})", assets.len())?;
+                for asset in assets {
+                    writeln!(f, "      {asset}")?;
+                }
+            }
+            if !owner.differs.is_empty() {
+                writeln!(f, "    differs from the index ({})", owner.differs.len())?;
+                for difference in &owner.differs {
+                    writeln!(
+                        f,
+                        "      {}: {}",
+                        difference.asset,
+                        difference.facts.join(", ")
+                    )?;
+                }
+            }
+            for (class, pairs) in [
+                ("dangling", &owner.dangling),
+                ("manifest names another asset", &owner.foreign_manifests),
+            ] {
+                if pairs.is_empty() {
+                    continue;
+                }
+                writeln!(f, "    {class} ({})", pairs.len())?;
+                for (asset, address) in pairs {
+                    writeln!(f, "      {asset} {address}")?;
+                }
+            }
+            if !owner.unusable_manifests.is_empty() {
+                writeln!(
+                    f,
+                    "    malformed manifest ({})",
+                    owner.unusable_manifests.len()
+                )?;
+                for (asset, address, fault) in &owner.unusable_manifests {
+                    writeln!(f, "      {asset} {address} ({fault})")?;
+                }
+            }
+            match (owner.epoch, owner.epoch_bump_needed) {
+                (Some(epoch), _) => writeln!(f, "    moved to sync epoch {epoch}")?,
+                (None, true) => writeln!(f, "    needs a new sync epoch")?,
+                (None, false) => {}
+            }
+        }
+        if !report.orphans.is_empty() {
+            writeln!(f, "  orphans, left to gc ({})", report.orphans.len())?;
+            for address in &report.orphans {
+                writeln!(f, "    {address}")?;
+            }
+        }
+        if report.owners.is_empty() {
+            writeln!(f, "  no owner ledgers under this blob root")?;
+        }
+        Ok(())
+    }
+}
+
 /// Render an integrity scrub.
 ///
 /// A scrub never writes, so it has no posture; the mode is carried and ignored.
@@ -763,8 +904,8 @@ mod tests {
     use clap::{CommandFactory as _, Parser as _};
 
     use super::{
-        Cli, CollectionReport, Command, Mode, PurgeReport, QuotaAction, ScrubReport, mode,
-        render_collection, render_purge, render_scrub,
+        Cli, CollectionReport, Command, Mode, PurgeReport, QuotaAction, RebuildReport, ScrubReport,
+        mode, render_collection, render_purge, render_rebuild, render_scrub,
     };
 
     #[test]
@@ -986,6 +1127,69 @@ mod tests {
         let rendered = render_scrub(&report).to_string();
         assert!(rendered.contains("signatures not"), "{rendered}");
         assert!(rendered.contains("agree"), "{rendered}");
+    }
+
+    #[test]
+    fn a_rebuild_is_a_dry_run_unless_applied() {
+        let dry = Cli::parse_from(["capsule-server", "rebuild"]).command;
+        assert!(matches!(dry, Command::Rebuild { apply: false, .. }));
+        let applied = Cli::parse_from(["capsule-server", "rebuild", "--apply"]).command;
+        assert!(matches!(applied, Command::Rebuild { apply: true, .. }));
+    }
+
+    #[test]
+    fn a_rebuild_report_names_what_it_restored_and_what_it_found() {
+        use crate::ledger::ChainFault;
+        use crate::ledger::rebuild::{OwnerReport, RowDifference};
+        use crate::store::{AssetId, OwnerId};
+
+        let owner = OwnerReport {
+            owner: OwnerId::new("owner-1"),
+            verified: 4,
+            chain_fault: Some(ChainFault::BadSignature { seq: 5 }),
+            restored: vec![AssetId::new("asset-restored")],
+            agreed: vec![AssetId::new("asset-agreed")],
+            differs: vec![RowDifference {
+                asset: AssetId::new("asset-differs"),
+                facts: vec!["album_id"],
+            }],
+            unprovable: vec![AssetId::new("asset-unprovable")],
+            incomplete: Vec::new(),
+            dangling: vec![(AssetId::new("asset-dangling"), address(0xCC))],
+            unusable_manifests: Vec::new(),
+            foreign_manifests: Vec::new(),
+            epoch_bump_needed: true,
+            epoch: None,
+        };
+        let report = RebuildReport {
+            applied: false,
+            links_only: true,
+            owners: vec![owner],
+            orphans: vec![address(0xDD)],
+        };
+        let rendered = render_rebuild(&report, Mode::DryRun).to_string();
+        for expected in [
+            "index rebuild (dry run",
+            "signatures not",
+            "owner owner-1 (4 entries verified, 1 rows agree)",
+            "ledger broken",
+            "would restore (1)",
+            "asset-restored",
+            "asset-differs: album_id",
+            "unprovable sequence (1)",
+            "dangling (1)",
+            "needs a new sync epoch",
+            "orphans, left to gc (1)",
+        ] {
+            assert!(
+                rendered.contains(expected),
+                "missing {expected:?} in {rendered}"
+            );
+        }
+        assert!(
+            !rendered.contains("asset-agreed"),
+            "agreeing rows are counted, not listed"
+        );
     }
 
     #[test]

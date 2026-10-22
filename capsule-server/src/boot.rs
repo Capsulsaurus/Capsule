@@ -94,6 +94,7 @@ use crate::index::AssetIndex;
 use crate::index::memory::InMemoryAssetIndex;
 use crate::index::postgres::PostgresAssetIndex;
 use crate::ledger::FilesystemLedger;
+use crate::ledger::rebuild::RebuildContext;
 use crate::ledger::replay::LedgerKeys;
 use crate::membership::{
     InMemoryMembership, MembershipContext, MembershipStore, PostgresMembership,
@@ -217,6 +218,9 @@ pub struct Maintenance {
     pub collection: CollectionContext,
     /// The integrity scrub's collaborators (`scrub`).
     pub scrub: ScrubContext,
+    /// The index rebuild's collaborators (`rebuild`): the same index, blobs, owner ledgers and
+    /// quota ledger the server writes.
+    pub rebuild: RebuildContext,
     /// The quota ledger, for the operator's suspension (`quota suspend`, `quota unsuspend`).
     ///
     /// The same ledger the server charges. Its limits are the unlimited default because a
@@ -460,7 +464,15 @@ impl Stores {
                 self.shares.clone(),
                 self.clock.clone(),
             )
-            .with_ledger(self.ledger.clone(), keys),
+            .with_ledger(self.ledger.clone(), keys.clone()),
+            rebuild: RebuildContext::new(
+                self.index.clone(),
+                self.blobs.clone(),
+                self.ledger.clone(),
+                self.quotas.clone(),
+                keys,
+                self.clock.clone(),
+            ),
             quota: QuotaContext::new(
                 self.quotas.clone(),
                 self.clock.clone(),
