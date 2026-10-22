@@ -1318,6 +1318,7 @@ dependencies = [
  "capsule-wasm",
  "jiff",
  "kynos",
+ "reqwest",
  "sea-orm",
  "serde",
  "serde_json",

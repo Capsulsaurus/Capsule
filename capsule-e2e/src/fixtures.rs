@@ -1,4 +1,5 @@
-//! Byte-built fixtures, so the repository carries no binary test asset.
+//! Byte-built fixtures, so the repository carries no binary test asset, and the committed
+//! golden wire fixtures ([`golden`]), which are text for the same reason.
 
 /// A real 8×8 grayscale baseline JPEG carrying an EXIF APP1 segment, built byte by byte.
 ///
@@ -176,4 +177,199 @@ pub fn synthetic_jpeg_sized(width: u16, height: u16) -> Vec<u8> {
 
     jpeg.extend_from_slice(&[0xFF, 0xD9]); // EOI
     jpeg
+}
+
+/// Golden wire fixtures, one directory per protocol version ([Versioning — Validation],
+/// invariants 2, 3 and 9).
+///
+/// `capsule-e2e/tests/fixtures/golden/<protocol_version>/` holds what a build speaking that
+/// protocol version put on the wire, recorded once from the real server composition root and
+/// the real library by `tests/golden_wire.rs`'s recorder:
+///
+/// - [`golden::TRANSCRIPT_FILE`]: a [`golden::Transcript`] — every request and response of one
+///   scripted session, in order, as JSON;
+/// - [`golden::RECORDS_FILE`]: [`golden::Records`] — signed records as canonical CBOR, hex.
+///
+/// Every later build must still read every directory: the server must answer each replayable
+/// request as it did, the generated client must decode each response, and core must decode,
+/// verify and re-emit each record byte for byte. A directory is never edited once a release
+/// has spoken its version; a new protocol version gets a new directory beside it.
+///
+/// Text rather than binary for the reason the JPEG above is built byte by byte: the repository
+/// carries no binary test asset, and a fixture a reviewer can read in a diff is one whose
+/// change a reviewer notices.
+///
+/// [Versioning — Validation]: https://docs/design/versioning/#validation
+pub mod golden {
+    use std::path::{Path, PathBuf};
+
+    use serde::{Deserialize, Serialize};
+    use serde_json::Value;
+
+    /// The recorded session, inside a version directory.
+    pub const TRANSCRIPT_FILE: &str = "transcript.json";
+
+    /// The recorded signed records, inside a version directory.
+    pub const RECORDS_FILE: &str = "records.json";
+
+    /// What every bearer and refresh token is replaced with before a transcript is written. A
+    /// token is a credential whatever server minted it, and its value is no part of the wire
+    /// contract: a client reads it as an opaque string, which the placeholder still is.
+    pub const REDACTED: &str = "<redacted>";
+
+    /// One request and the response it drew.
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct Exchange {
+        /// A stable name for the step, unique within its transcript.
+        pub name: String,
+        /// The HTTP method.
+        pub method: String,
+        /// The path and query, relative to the API root.
+        pub path: String,
+        /// The `X-Capsule-Protocol` the request carried, where it was not the transcript's own
+        /// version (a request recorded from outside the server's window).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub protocol: Option<String>,
+        /// Whether the request carried the session's bearer token.
+        pub authenticated: bool,
+        /// Whether a later server can be handed this request on a fresh account and must answer
+        /// it with the same status. `false` for a step that reads state the recording built
+        /// through the SDK (a pushed asset), whose ids a replay cannot reproduce.
+        pub replay: bool,
+        /// The JSON request body, if the request had one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub request: Option<Value>,
+        /// The response status.
+        pub status: u16,
+        /// The OpenAPI component the response body is an instance of.
+        pub schema: String,
+        /// The JSON response body, tokens [redacted](REDACTED).
+        pub response: Value,
+    }
+
+    /// One recorded session against the server, in order.
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct Transcript {
+        /// The protocol version every request carried unless its [`Exchange::protocol`] says
+        /// otherwise; the same as the directory's name.
+        pub protocol_version: String,
+        /// The exchanges, in the order they were made.
+        pub exchanges: Vec<Exchange>,
+    }
+
+    impl Transcript {
+        /// The exchange named `name`.
+        #[must_use]
+        pub fn exchange(&self, name: &str) -> Option<&Exchange> {
+            self.exchanges.iter().find(|e| e.name == name)
+        }
+    }
+
+    /// Signed records as a build of this version wrote them: canonical CBOR, lowercase hex.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct Records {
+        /// The account's device directory, exactly as `GET /v1/auth/devices/directory/{id}`
+        /// served it.
+        pub device_directory: String,
+        /// The user identity key the directory is signed under (`classical ‖ ML-DSA-65`).
+        pub user_ik_public: String,
+        /// The head provenance record of the asset the recording pushed: a `create` whose
+        /// manifest is signed by a device the directory lists.
+        pub provenance_record: String,
+    }
+
+    /// `capsule-e2e/tests/fixtures/golden`.
+    #[must_use]
+    pub fn root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden")
+    }
+
+    /// Every recorded protocol version and its directory, oldest first.
+    #[must_use]
+    pub fn versions() -> Vec<(String, PathBuf)> {
+        let mut found: Vec<(String, PathBuf)> = std::fs::read_dir(root())
+            .expect("the golden fixture root exists")
+            .map(|entry| entry.expect("a directory entry").path())
+            .filter(|path| path.is_dir())
+            .map(|path| {
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .expect("a UTF-8 directory name")
+                    .to_owned();
+                (name, path)
+            })
+            .collect();
+        found.sort();
+        found
+    }
+
+    /// Read `dir`'s transcript.
+    #[must_use]
+    pub fn load_transcript(dir: &Path) -> Transcript {
+        read_json(&dir.join(TRANSCRIPT_FILE))
+    }
+
+    /// Read `dir`'s records.
+    #[must_use]
+    pub fn load_records(dir: &Path) -> Records {
+        read_json(&dir.join(RECORDS_FILE))
+    }
+
+    fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> T {
+        let bytes = std::fs::read(path)
+            .unwrap_or_else(|e| panic!("golden fixture {} reads: {e}", path.display()));
+        serde_json::from_slice(&bytes)
+            .unwrap_or_else(|e| panic!("golden fixture {} parses: {e}", path.display()))
+    }
+
+    /// Write `value` to `path` as pretty JSON with a trailing newline, object keys sorted, so a
+    /// re-recording diffs line by line.
+    pub fn write_json<T: Serialize>(path: &Path, value: &T) {
+        let mut text = serde_json::to_string_pretty(value).expect("a fixture serializes");
+        text.push('\n');
+        std::fs::write(path, text)
+            .unwrap_or_else(|e| panic!("golden fixture {} writes: {e}", path.display()));
+    }
+
+    /// Replace the value of every `access_token` and `refresh_token` key, at any depth, with
+    /// [`REDACTED`].
+    pub fn redact_tokens(value: &mut Value) {
+        match value {
+            Value::Object(map) => {
+                for (key, inner) in map.iter_mut() {
+                    if key == "access_token" || key == "refresh_token" {
+                        *inner = Value::String(REDACTED.to_owned());
+                    } else {
+                        redact_tokens(inner);
+                    }
+                }
+            }
+            Value::Array(items) => items.iter_mut().for_each(redact_tokens),
+            _ => {}
+        }
+    }
+
+    /// Lowercase hex.
+    #[must_use]
+    pub fn to_hex(bytes: &[u8]) -> String {
+        use std::fmt::Write as _;
+        bytes
+            .iter()
+            .fold(String::with_capacity(bytes.len() * 2), |mut out, b| {
+                let _ = write!(out, "{b:02x}");
+                out
+            })
+    }
+
+    /// The bytes `hex` spells. Panics on anything but an even run of hex digits: a fixture that
+    /// does not parse is a broken fixture, not an input to tolerate.
+    #[must_use]
+    pub fn from_hex(hex: &str) -> Vec<u8> {
+        assert!(hex.len().is_multiple_of(2), "an even number of hex digits");
+        (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("hex digits"))
+            .collect()
+    }
 }
