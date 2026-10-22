@@ -511,6 +511,75 @@ fn library_rebuild_reconstructs_the_index_in_a_new_process() {
 /// reads the CLI's own database under the user's data directory. A locally imported asset is
 /// therefore invisible to it, which is why the round trip above reads back through `capsule
 /// cull`. Pinned here so the gap is a stated fact rather than a surprise.
+/// Invariant 7 at the command line (#671): without a server, `import --move` imports, keeps
+/// the source, and says so. The library copy is not custody.
+#[test]
+fn import_move_without_a_server_keeps_the_source_and_says_so() {
+    let fx = fixture();
+    let out = fx.run(
+        &[
+            "import",
+            path(&fx.source),
+            "--library",
+            path(&fx.library),
+            "--passphrase-stdin",
+            "--move",
+        ],
+        true,
+    );
+
+    assert!(
+        out.contains("Done: 1 imported, 0 duplicate(s), 0 error(s)."),
+        "stdout:\n{out}"
+    );
+    assert!(
+        out.contains("Kept 1 source files: --move deletes a source only once the server holds it."),
+        "stdout:\n{out}"
+    );
+    assert_eq!(
+        std::fs::read(fx.source.join("photo.jpg")).expect("the source is still there"),
+        fx.image
+    );
+    let (_, asset_id) = sole_asset_on_disk(&fx.library);
+    let ws = Workspace::open(&fx.library, PASSPHRASE.as_bytes(), FAST_KDF).expect("open");
+    assert_eq!(
+        ws.read_plaintext(&asset_id).expect("the library copy"),
+        fx.image
+    );
+}
+
+/// `--move --push` with no session: neither the push nor the release can reach custody, so the
+/// command fails, every source is kept, and the output says so. A re-run once signed in finds
+/// the source as a duplicate and releases it then.
+#[test]
+fn import_move_push_without_a_session_fails_and_keeps_the_source() {
+    let fx = fixture();
+    let out = spawn(
+        &fx.home,
+        &[
+            "import",
+            path(&fx.source),
+            "--library",
+            path(&fx.library),
+            "--passphrase-stdin",
+            "--move",
+            "--push",
+        ],
+        true,
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    assert!(!out.status.success(), "stdout:\n{stdout}");
+    assert!(
+        stdout.contains("Kept 1 source files: the server's custody could not be checked"),
+        "stdout:\n{stdout}"
+    );
+    assert_eq!(
+        std::fs::read(fx.source.join("photo.jpg")).expect("the source is still there"),
+        fx.image
+    );
+}
+
 #[test]
 fn capsule_list_reports_the_sync_feed_not_the_library() {
     let fx = fixture();

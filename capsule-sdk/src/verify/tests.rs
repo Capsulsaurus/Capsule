@@ -940,3 +940,305 @@ async fn the_coordinator_draws_a_fresh_nonce_per_attestation() {
     assert_eq!(sent_nonce(&bodies[0]), Some(first.attestation.core.nonce));
     assert_eq!(sent_nonce(&bodies[1]), Some(second.attestation.core.nonce));
 }
+
+// ─── The production release-gate verifier (#671) ─────────────────────────────
+
+/// The release `HeldRelease::for_original` would build for the fixture asset: its one original.
+fn held_release() -> HeldRelease {
+    HeldRelease {
+        asset_id: asset_id(),
+        blobs: vec![expectations()],
+    }
+}
+
+/// The asset receipt log JSON (`GET /assets/{id}/receipts`) holding `receipts`.
+fn receipt_log_json(receipts: &[Vec<u8>]) -> String {
+    let entries: Vec<String> = receipts
+        .iter()
+        .enumerate()
+        .map(|(seq, cbor)| {
+            format!(
+                r#"{{"receipt_seq":{},"receipt_cbor":{:?}}}"#,
+                seq + 1,
+                base64::engine::general_purpose::STANDARD.encode(cbor)
+            )
+        })
+        .collect();
+    format!(
+        r#"{{"asset_id":{:?},"receipts":[{}]}}"#,
+        asset_id().to_string(),
+        entries.join(",")
+    )
+}
+
+/// A mock server answering the verdict with `durable` and the receipt log with `log`, counting
+/// receipt-log fetches.
+async fn custody_server(
+    durable: bool,
+    log: Option<Vec<Vec<u8>>>,
+    log_hits: Arc<AtomicUsize>,
+) -> MockServer {
+    MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/storage/verify") => MockResponse::json(200, "OK", durable_verdict_json(durable)),
+        ("GET", p) if p == format!("/assets/{}/receipts", asset_id()) => {
+            log_hits.fetch_add(1, Ordering::SeqCst);
+            match &log {
+                Some(receipts) => MockResponse::json(200, "OK", receipt_log_json(receipts)),
+                None => MockResponse::json(503, "Service Unavailable", "{}"),
+            }
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await
+}
+
+fn coordinator(server: &MockServer, key: HybridVerifyingKey) -> ReleaseCoordinator<TestClock> {
+    ReleaseCoordinator::with_clock(
+        server.client(),
+        vec![key],
+        DEFAULT_REVERIFY_WINDOW_SECS,
+        TestClock::at(now_base()),
+    )
+}
+
+/// The gate decision the resolved verifier yields for the fixture asset's declared blobs.
+fn gate(verifier: &CustodyVerifier) -> ReleaseDecision {
+    capsule_core::library::ReleaseGate::new(verifier).may_release(asset_id(), &[ct_hash()], true)
+}
+
+/// A durable verdict and a verifying receipt in the asset log release.
+#[tokio::test]
+async fn resolved_custody_releases_on_a_durable_verdict_and_a_logged_receipt() {
+    let (key, receipt) = signed_receipt();
+    let server = custody_server(true, Some(vec![receipt]), Arc::default()).await;
+
+    let verifier = coordinator(&server, key)
+        .resolve_custody(&[held_release()])
+        .await;
+
+    assert_eq!(gate(&verifier), ReleaseDecision::Release);
+}
+
+/// The issue's case through the production verifier: a non-durable verdict keeps the bytes,
+/// and the receipt log is not even fetched.
+#[tokio::test]
+async fn resolved_custody_retains_on_a_non_durable_verdict() {
+    let (key, receipt) = signed_receipt();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let server = custody_server(false, Some(vec![receipt]), hits.clone()).await;
+
+    let verifier = coordinator(&server, key)
+        .resolve_custody(&[held_release()])
+        .await;
+
+    assert_eq!(
+        gate(&verifier),
+        ReleaseDecision::Retain(RetainReason::NotDurable)
+    );
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+}
+
+/// A log whose receipt names a different size than the client sent covers nothing.
+#[tokio::test]
+async fn resolved_custody_retains_when_no_logged_receipt_matches() {
+    let (key, receipt) = signed_receipt();
+    let server = custody_server(true, Some(vec![receipt]), Arc::default()).await;
+    let mut release = held_release();
+    release.blobs[0].size += 1;
+
+    let verifier = coordinator(&server, key).resolve_custody(&[release]).await;
+
+    assert_eq!(
+        gate(&verifier),
+        ReleaseDecision::Retain(RetainReason::ReceiptMissing)
+    );
+}
+
+/// A receipt signed by a key the client did not pin covers nothing.
+#[tokio::test]
+async fn resolved_custody_retains_on_an_unpinned_receipt_key() {
+    let (_key, receipt) = signed_receipt();
+    let server = custody_server(true, Some(vec![receipt]), Arc::default()).await;
+    let wrong = HybridSigningKey::from_seed64(&[3u8; 64]).verifying_key();
+
+    let verifier = coordinator(&server, wrong)
+        .resolve_custody(&[held_release()])
+        .await;
+
+    assert_eq!(
+        gate(&verifier),
+        ReleaseDecision::Retain(RetainReason::ReceiptMissing)
+    );
+}
+
+#[tokio::test]
+async fn resolved_custody_retains_when_the_receipt_log_is_unavailable() {
+    let (key, _receipt) = signed_receipt();
+    let server = custody_server(true, None, Arc::default()).await;
+
+    let verifier = coordinator(&server, key)
+        .resolve_custody(&[held_release()])
+        .await;
+
+    assert_eq!(
+        gate(&verifier),
+        ReleaseDecision::Retain(RetainReason::ReceiptUnavailable)
+    );
+}
+
+#[tokio::test]
+async fn resolved_custody_retains_when_the_verdict_fetch_fails() {
+    let (key, _receipt) = signed_receipt();
+    let server = MockServer::start(|req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/storage/verify") => MockResponse::json(500, "Internal Server Error", "{}"),
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let verifier = coordinator(&server, key)
+        .resolve_custody(&[held_release()])
+        .await;
+
+    assert_eq!(
+        gate(&verifier),
+        ReleaseDecision::Retain(RetainReason::VerifyUnavailable)
+    );
+}
+
+/// The verifier answers only the question it resolved: another asset, or the same asset over
+/// another blob set, is unavailable rather than borrowed from a different verdict.
+#[tokio::test]
+async fn resolved_custody_answers_only_what_it_resolved() {
+    let (key, receipt) = signed_receipt();
+    let server = custody_server(true, Some(vec![receipt]), Arc::default()).await;
+    let verifier = coordinator(&server, key)
+        .resolve_custody(&[held_release()])
+        .await;
+
+    let gate = capsule_core::library::ReleaseGate::new(&verifier);
+    assert_eq!(
+        gate.may_release(Uuid::now_v7(), &[ct_hash()], true),
+        ReleaseDecision::Retain(RetainReason::VerifyUnavailable)
+    );
+    assert_eq!(
+        gate.may_release(asset_id(), &[ct_hash(), Hash32::from_bytes([1; 32])], true),
+        ReleaseDecision::Retain(RetainReason::VerifyUnavailable)
+    );
+}
+
+/// A receipt for `asset` signed by `key` over exactly what `expected` says the client sent.
+fn receipt_for(key: &HybridSigningKey, asset: Uuid, expected: &ReceiptExpectations) -> Vec<u8> {
+    let core = CustodyReceiptCore {
+        version: "custody-receipt/v1".into(),
+        crypto_suite_id: 1,
+        protocol_version: "2026-07-10".into(),
+        server_id: "capsule.example".into(),
+        server_key_id: Hash32::from_bytes([0x11; 32]),
+        receipt_seq: 1,
+        prior_receipt_hash: None,
+        upload_id: Uuid::now_v7().to_string(),
+        asset_id: asset.to_string(),
+        blob_role: match expected.role {
+            BlobRole::Metadata => "metadata",
+            _ => "original",
+        }
+        .into(),
+        ciphertext_hash: expected.ciphertext_hash,
+        size: expected.size,
+        envelope_hash: None,
+        uploaded_by_user: Uuid::from_u128(7).to_string(),
+        uploaded_by_device: None,
+        received_at: RECEIVED_AT.into(),
+    };
+    let server_sig = key.sign(&core.signing_bytes());
+    CustodyReceipt { core, server_sig }.to_canonical_cbor()
+}
+
+/// End to end over a real library: a Move-imported asset's `HeldRelease::for_original` asks the
+/// server about exactly the blobs `Workspace::release_move_source` declares, so a server holding
+/// them — durable, with a verified receipt for each — releases the source, and the library copy
+/// stays.
+#[tokio::test]
+async fn a_real_move_import_releases_its_source_through_the_resolved_verifier() {
+    use capsule_core::crypto::primitives::Argon2Params;
+    use capsule_core::lifecycle::{SignedImportOptions, Workspace};
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let lib = dir.path().join("library");
+    std::fs::create_dir_all(&lib).unwrap();
+    let src = dir.path().join("photo.jpg");
+    let bytes = b"\xFF\xD8\xFF moved bytes held by the server".to_vec();
+    std::fs::write(&src, &bytes).unwrap();
+    let mut ws = Workspace::create_with_params(
+        &lib,
+        b"passphrase",
+        Argon2Params {
+            mem_kib: 64,
+            t_cost: 1,
+            p_cost: 1,
+        },
+    )
+    .unwrap();
+    let album = ws.default_album_id();
+    ws.ensure_album(album, "Imports").unwrap();
+    let opts = SignedImportOptions {
+        move_source: true,
+        defer_source_release: true,
+        stack: None,
+        enrichment: None,
+    };
+    let asset = ws.import_asset_with(album, &src, &opts).unwrap().asset_id;
+    let release = HeldRelease::for_original(&ws.upload_bundle(&asset).unwrap());
+    assert_eq!(release.blobs.len(), 2, "the original and its metadata blob");
+    assert_eq!(release.blobs[1].role, BlobRole::Metadata);
+
+    let signer = HybridSigningKey::from_seed64(&[9u8; 64]);
+    let receipts: Vec<Vec<u8>> = release
+        .blobs
+        .iter()
+        .map(|expected| receipt_for(&signer, asset, expected))
+        .collect();
+    let blobs: Vec<String> = release
+        .blobs
+        .iter()
+        .map(|b| {
+            format!(
+                r#"{{"hash":{:?},"role":"original","stored":true,"indexed":true,"retrievable":true}}"#,
+                b.ciphertext_hash.to_hex()
+            )
+        })
+        .collect();
+    let verdict = format!(
+        r#"{{"verdicts":[{{"asset_id":{:?},"durable":true,"blobs":[{}],"checked_at":{RECEIVED_AT:?}}}]}}"#,
+        asset.to_string(),
+        blobs.join(",")
+    );
+    let log = {
+        let entries: Vec<String> = receipts
+            .iter()
+            .map(|cbor| {
+                format!(
+                    r#"{{"receipt_seq":1,"receipt_cbor":{:?}}}"#,
+                    base64::engine::general_purpose::STANDARD.encode(cbor)
+                )
+            })
+            .collect();
+        format!(r#"{{"receipts":[{}]}}"#, entries.join(","))
+    };
+    let log_path = format!("/assets/{asset}/receipts");
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/storage/verify") => MockResponse::json(200, "OK", verdict.clone()),
+        ("GET", p) if p == log_path => MockResponse::json(200, "OK", log.clone()),
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let verifier = coordinator(&server, signer.verifying_key())
+        .resolve_custody(&[release])
+        .await;
+    let decision = ws.release_move_source(&verifier, asset, &src).unwrap();
+
+    assert_eq!(decision, ReleaseDecision::Release);
+    assert!(!src.exists(), "the source is released on custody");
+    assert_eq!(ws.read_plaintext(&asset).unwrap(), bytes);
+}

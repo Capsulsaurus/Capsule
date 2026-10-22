@@ -328,9 +328,11 @@ pub struct SignedImportOptions {
     pub move_source: bool,
     /// Defer Move-mode source deletion to the caller's verify-before-destroy gate
     /// (`S-D4` [`release_move_source`](crate::library::release_move_source)) instead of
-    /// releasing on the local durable commit. Set by online/streaming import (`S-B3`), where
-    /// the source is the only copy until the *server* durably holds it; left `false` for a
-    /// plain offline import, which releases after the self-verified local commit.
+    /// releasing on the local durable commit. Set by every import of a user's file — the
+    /// executor and streaming import (`S-B3`) — because the source is the only other copy until
+    /// the *server* durably holds it (invariant 7); the caller releases it through
+    /// [`Workspace::release_move_source`]. Left `false` only where the source is scratch the
+    /// library made itself ([`Workspace::import_bytes`]).
     pub defer_source_release: bool,
     /// Signed stack membership for a multi-file candidate member (`S-B15`). Written into the
     /// sidecar's `stack_membership` LWW register — the same durable write

@@ -17,6 +17,7 @@ use super::{
 use crate::cbor;
 use crate::crypto::encryption::{blob_ciphertext_hash, encrypt_asset_rekey, seal_metadata_blob};
 use crate::crypto::hash;
+use crate::crypto::hash::Hash32;
 use crate::crypto::keys::{Amk, AmkVersion};
 use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
 use crate::crypto::provenance::{
@@ -27,12 +28,13 @@ use crate::crypto::verify_asset::{
 };
 use crate::db::{AssetRow, CachedRepresentationRow};
 use crate::exif::{extract_exif, resolve_timezone};
+use crate::library::{ReleaseDecision, RetainReason, StorageVerifier, release_move_source};
 use crate::metadata::crdt::{Lww, OrSet};
 use crate::sidecar::normalize_label;
 use crate::sidecar::sidecar_v1::{
     Gps, GpsSource, SIDECAR_SCHEMA_V1, SidecarV1, StackMembership, StackRole,
 };
-use crate::utils::paths::tmp_path;
+use crate::utils::paths::{sync_dir, tmp_path};
 
 /// A rename in [`Workspace::write_signed_artifacts`] a test can make fail after its `.tmp`
 /// write — the crash the temp-then-rename writes exist to survive (maintenance doc, Atomic
@@ -114,15 +116,43 @@ impl Staged {
     }
 }
 
-/// Write `bytes` to `{target}.tmp` without touching `target`.
+/// Write `bytes` to `{target}.tmp` and fsync it, without touching `target`. The data is on disk
+/// before the rename can publish it, so a crash after the rename never exposes an empty file.
 fn stage(target: &Path, bytes: &[u8]) -> Result<Staged> {
     let tmp = tmp_path(target);
-    fs::write(&tmp, bytes)
+    write_synced(&tmp, bytes)
         .map_err(|e| LifecycleError::Io(format!("stage {}: {e}", tmp.display())))?;
     Ok(Staged {
         tmp,
         target: target.to_path_buf(),
     })
+}
+
+/// Write `bytes` to `path` and fsync the file before returning.
+fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let mut file = fs::File::create(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
+}
+
+/// Create `dir` and every missing ancestor, fsyncing each new directory's entry in its parent,
+/// so a crash after an import cannot lose the shard directory its files were written into.
+fn create_dir_durable(dir: &Path) -> Result<()> {
+    let missing: Vec<&Path> = dir.ancestors().take_while(|p| !p.is_dir()).collect();
+    fs::create_dir_all(dir)
+        .map_err(|e| LifecycleError::Io(format!("create {}: {e}", dir.display())))?;
+    for created in missing {
+        if let Some(parent) = created.parent() {
+            sync_dir_entries(parent)?;
+        }
+    }
+    Ok(())
+}
+
+/// Fsync `dir`, making the entries just written or renamed into it durable.
+fn sync_dir_entries(dir: &Path) -> Result<()> {
+    sync_dir(dir).map_err(|e| LifecycleError::Io(format!("fsync {}: {e}", dir.display())))
 }
 
 /// Render a Unix-second capture time as the sidecar's RFC 3339 `capture_timestamp`.
@@ -354,7 +384,7 @@ impl Workspace {
     /// media path does not exist, so it never meets that case.
     pub(super) fn write_asset_files(&self, asset: &AssetState, plaintext: &[u8]) -> Result<()> {
         let dir = media_dir(&self.root, asset.capture_utc);
-        fs::create_dir_all(&dir).map_err(|e| LifecycleError::Io(e.to_string()))?;
+        create_dir_durable(&dir)?;
         let media_path = self.media_path(asset);
         let already_correct = fs::metadata(&media_path)
             .is_ok_and(|m| m.is_file() && m.len() == plaintext.len() as u64)
@@ -365,7 +395,11 @@ impl Workspace {
                 "original already on disk with the signed hash; not rewriting it"
             );
         } else {
-            fs::write(&media_path, plaintext).map_err(|e| LifecycleError::Io(e.to_string()))?;
+            // Fsynced here, and its directory entry with the signed artifacts' below: the
+            // library copy is what a Move source is checked against before it is deleted, so
+            // it must be on disk rather than in the page cache.
+            write_synced(&media_path, plaintext)
+                .map_err(|e| LifecycleError::Io(format!("write {}: {e}", media_path.display())))?;
         }
         self.write_signed_artifacts(asset)
     }
@@ -387,7 +421,7 @@ impl Workspace {
     /// remains its own slice.
     pub(super) fn write_signed_artifacts(&self, asset: &AssetState) -> Result<()> {
         let dir = media_dir(&self.root, asset.capture_utc);
-        fs::create_dir_all(&dir).map_err(|e| LifecycleError::Io(e.to_string()))?;
+        create_dir_durable(&dir)?;
         let prov = cbor::to_canonical_vec(&asset.chain.records().to_vec())
             .map_err(|e| LifecycleError::Cbor(e.to_string()))?;
         let sidecar = stage(&self.sidecar_path(asset), &asset.sidecar.to_canonical_vec())?;
@@ -414,9 +448,12 @@ impl Workspace {
         #[cfg(test)]
         inject_write_fault(WriteFault::ChainRename)?;
         chain.commit()?;
+        // One directory fsync makes every rename above durable, and with them an original
+        // `write_asset_files` wrote into the same directory.
+        sync_dir_entries(&dir)?;
         tracing::trace!(
             asset_id = %asset.asset_id,
-            "signed artifacts renamed into place: sidecar, blob, chain"
+            "signed artifacts renamed into place and fsynced: sidecar, blob, chain"
         );
         Ok(())
     }
@@ -854,29 +891,107 @@ impl Workspace {
             .assets
             .get(&asset_id)
             .expect("asset just inserted by import_asset_with");
-        let head = &asset
-            .chain
-            .records()
-            .last()
-            .expect("provenance chain is never empty")
-            .manifest
-            .core;
-        // The always-present required blobs: original ciphertext + sealed metadata blob.
-        let mut blob_hashes = vec![head.ciphertext_hash];
-        if let Some(h) = head.metadata_blob_hash {
-            blob_hashes.push(h);
-        }
         Ok(StreamedImport {
             asset_id,
-            blob_hashes,
+            blob_hashes: release_blob_hashes(asset),
             local_original: self.media_path(asset),
             move_source: move_source.then(|| src.to_path_buf()),
         })
     }
+
+    /// Delete a Move-mode `src` that the library holds as `asset_id` — only on server custody
+    /// (invariant 7), and only when both copies still read back as the signed original.
+    ///
+    /// In order, and every step before the delete is a reason to keep the source:
+    ///
+    /// 1. **Read-back.** The library's copy and `src` are each read back and hashed; both must
+    ///    equal the hash the signed sidecar commits to. A library copy that is torn or missing,
+    ///    or a source edited since it was imported, is [`RetainReason::ReadBackMismatch`] —
+    ///    whatever the server says, deleting `src` could lose bytes nothing else holds.
+    /// 2. **The gate.** [`release_move_source`](crate::library::release_move_source) over
+    ///    `verifier` for the asset's required blobs (original ciphertext and sealed metadata
+    ///    blob), with a fresh `verify_asset` as the crypto half: a `durable` verdict and a
+    ///    verified custody receipt, or the source stays.
+    ///
+    /// `src` that resolves to the asset's own media file is never deleted.
+    ///
+    /// # Errors
+    ///
+    /// [`LifecycleError::NotFound`] when the workspace does not hold `asset_id`.
+    #[tracing::instrument(skip(self, verifier), fields(%asset_id, src = %src.display()))]
+    pub fn release_move_source<V: StorageVerifier + ?Sized>(
+        &self,
+        verifier: &V,
+        asset_id: Uuid,
+        src: &Path,
+    ) -> Result<ReleaseDecision> {
+        let asset = self
+            .assets
+            .get(&asset_id)
+            .ok_or_else(|| LifecycleError::NotFound(format!("asset {asset_id}")))?;
+        let media_path = self.media_path(asset);
+        if is_same_file(src, &media_path) {
+            tracing::warn!("move release: the source is the library copy itself; keeping it");
+            return Ok(ReleaseDecision::Retain(RetainReason::ReadBackMismatch));
+        }
+        let signed = asset.sidecar.hash;
+        let reads_back = |path: &Path| fs::read(path).is_ok_and(|b| hash::hash_bytes(&b) == signed);
+        if !reads_back(&media_path) {
+            tracing::warn!(
+                media = %media_path.display(),
+                "move release: the library copy does not read back as the signed original; keeping the source"
+            );
+            return Ok(ReleaseDecision::Retain(RetainReason::ReadBackMismatch));
+        }
+        if !reads_back(src) {
+            tracing::warn!(
+                "move release: the source no longer hashes to the signed original; keeping it"
+            );
+            return Ok(ReleaseDecision::Retain(RetainReason::ReadBackMismatch));
+        }
+        let verify_asset_accepted = self
+            .verify(&asset_id)
+            .is_ok_and(|outcome| outcome == VerifyOutcome::Accept);
+        let decision = release_move_source(
+            verifier,
+            asset_id,
+            src,
+            &release_blob_hashes(asset),
+            verify_asset_accepted,
+        );
+        match &decision {
+            ReleaseDecision::Release => {
+                tracing::info!("move release: source deleted on server custody");
+            }
+            ReleaseDecision::Retain(reason) => {
+                tracing::info!(?reason, "move release: source kept");
+            }
+        }
+        Ok(decision)
+    }
+}
+
+/// The blobs a release of `asset`'s original waits on — the original ciphertext and, when the
+/// head binds one, the sealed metadata blob — from the provenance chain head.
+fn release_blob_hashes(asset: &AssetState) -> Vec<Hash32> {
+    let head = &asset
+        .chain
+        .records()
+        .last()
+        .expect("provenance chain is never empty")
+        .manifest
+        .core;
+    let mut blob_hashes = vec![head.ciphertext_hash];
+    if let Some(h) = head.metadata_blob_hash {
+        blob_hashes.push(h);
+    }
+    blob_hashes
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use tempfile::TempDir;
 
     use super::super::{FAST_PARAMS, fast_workspace};
@@ -971,6 +1086,193 @@ mod tests {
         let staging = lib.path().join(".library").join("staging");
         let leftovers = std::fs::read_dir(&staging).map_or(0, std::iter::Iterator::count);
         assert_eq!(leftovers, 0, "the staged plaintext copy must not survive");
+    }
+
+    // ── Move-source release (#671) ──────────────────────────────────────────
+
+    /// A canned server: a verdict that is or is not durable for exactly the blobs it is asked
+    /// about, a receipt that does or does not verify, and a count of how often it was asked.
+    struct CannedServer {
+        durable: bool,
+        receipt: bool,
+        asked: std::cell::Cell<u32>,
+    }
+
+    impl CannedServer {
+        fn new(durable: bool, receipt: bool) -> Self {
+            Self {
+                durable,
+                receipt,
+                asked: std::cell::Cell::new(0),
+            }
+        }
+    }
+
+    impl StorageVerifier for CannedServer {
+        fn verify(
+            &self,
+            asset_id: Uuid,
+            blob_hashes: &[Hash32],
+        ) -> std::result::Result<crate::library::StorageVerdict, crate::library::VerifierError>
+        {
+            self.asked.set(self.asked.get() + 1);
+            Ok(crate::library::StorageVerdict {
+                asset_id,
+                durable: self.durable,
+                blobs: blob_hashes
+                    .iter()
+                    .map(|hash| crate::library::BlobVerdict {
+                        hash: *hash,
+                        role: crate::library::BlobRole::Original,
+                        stored: self.durable,
+                        indexed: self.durable,
+                        retrievable: self.durable,
+                    })
+                    .collect(),
+                checked_at: "2026-10-22T00:00:00Z".into(),
+            })
+        }
+
+        fn receipt_verified(
+            &self,
+            _asset_id: Uuid,
+            _blob_hashes: &[Hash32],
+        ) -> std::result::Result<bool, crate::library::VerifierError> {
+            Ok(self.receipt)
+        }
+    }
+
+    /// A workspace holding one asset imported in Move mode from `src_dir/name`, its source
+    /// left in place as every user-file import now leaves it.
+    fn moved_asset(lib: &Path, src_dir: &Path, bytes: &[u8]) -> (Workspace, Uuid, PathBuf) {
+        let mut ws = fast_workspace(lib);
+        let album = ws.create_album("Moves").unwrap();
+        let src = src_dir.join("moved.jpg");
+        fs::write(&src, bytes).unwrap();
+        let opts = SignedImportOptions {
+            move_source: true,
+            defer_source_release: true,
+            stack: None,
+            enrichment: None,
+        };
+        let asset = ws.import_asset_with(album, &src, &opts).unwrap().asset_id;
+        assert!(src.exists(), "a deferred release leaves the source");
+        (ws, asset, src)
+    }
+
+    #[test]
+    fn a_durable_verdict_with_a_verified_receipt_releases_the_source() {
+        let (lib, src_dir) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let (ws, asset, src) = moved_asset(lib.path(), src_dir.path(), b"held by the server");
+
+        let decision = ws
+            .release_move_source(&CannedServer::new(true, true), asset, &src)
+            .unwrap();
+
+        assert_eq!(decision, ReleaseDecision::Release);
+        assert!(!src.exists(), "the source is deleted on custody");
+        assert_eq!(ws.read_plaintext(&asset).unwrap(), b"held by the server");
+    }
+
+    /// The issue's second case: a non-durable verdict keeps the source.
+    #[test]
+    fn a_non_durable_verdict_keeps_the_source() {
+        let (lib, src_dir) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let (ws, asset, src) = moved_asset(lib.path(), src_dir.path(), b"not yet durable");
+
+        let decision = ws
+            .release_move_source(&CannedServer::new(false, true), asset, &src)
+            .unwrap();
+
+        assert_eq!(decision, ReleaseDecision::Retain(RetainReason::NotDurable));
+        assert_eq!(fs::read(&src).unwrap(), b"not yet durable");
+    }
+
+    #[test]
+    fn a_missing_receipt_keeps_the_source() {
+        let (lib, src_dir) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let (ws, asset, src) = moved_asset(lib.path(), src_dir.path(), b"no receipt yet");
+
+        let decision = ws
+            .release_move_source(&CannedServer::new(true, false), asset, &src)
+            .unwrap();
+
+        assert_eq!(
+            decision,
+            ReleaseDecision::Retain(RetainReason::ReceiptMissing)
+        );
+        assert!(src.exists());
+    }
+
+    /// A source edited after import no longer is what the server holds: deleting it would
+    /// lose the edit, so it is kept even on full custody, and the server is not asked.
+    #[test]
+    fn a_source_edited_since_import_is_kept_on_custody() {
+        let (lib, src_dir) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let (ws, asset, src) = moved_asset(lib.path(), src_dir.path(), b"as imported");
+        fs::write(&src, b"edited after").unwrap();
+        let server = CannedServer::new(true, true);
+
+        let decision = ws.release_move_source(&server, asset, &src).unwrap();
+
+        assert_eq!(
+            decision,
+            ReleaseDecision::Retain(RetainReason::ReadBackMismatch)
+        );
+        assert_eq!(fs::read(&src).unwrap(), b"edited after");
+        assert_eq!(
+            server.asked.get(),
+            0,
+            "read-back fails before any server check"
+        );
+    }
+
+    /// A library copy that no longer reads back (torn, truncated, deleted) means the source may
+    /// be the only good copy on this device: it is kept even on full custody.
+    #[test]
+    fn a_library_copy_that_does_not_read_back_keeps_the_source() {
+        let (lib, src_dir) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let (ws, asset, src) = moved_asset(lib.path(), src_dir.path(), b"library copy torn");
+        let media = ws.media_path(ws.asset(&asset).unwrap());
+        fs::write(&media, b"library copy t").unwrap();
+
+        let decision = ws
+            .release_move_source(&CannedServer::new(true, true), asset, &src)
+            .unwrap();
+
+        assert_eq!(
+            decision,
+            ReleaseDecision::Retain(RetainReason::ReadBackMismatch)
+        );
+        assert_eq!(fs::read(&src).unwrap(), b"library copy torn");
+    }
+
+    #[test]
+    fn the_library_copy_itself_is_never_released_as_a_source() {
+        let (lib, src_dir) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let (ws, asset, _src) = moved_asset(lib.path(), src_dir.path(), b"one file");
+        let media = ws.media_path(ws.asset(&asset).unwrap());
+
+        let decision = ws
+            .release_move_source(&CannedServer::new(true, true), asset, &media)
+            .unwrap();
+
+        assert_eq!(
+            decision,
+            ReleaseDecision::Retain(RetainReason::ReadBackMismatch)
+        );
+        assert!(media.exists());
+    }
+
+    #[test]
+    fn an_unknown_asset_is_an_error_and_deletes_nothing() {
+        let (lib, src_dir) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let (ws, _asset, src) = moved_asset(lib.path(), src_dir.path(), b"kept");
+
+        let result = ws.release_move_source(&CannedServer::new(true, true), Uuid::now_v7(), &src);
+
+        assert!(matches!(result, Err(LifecycleError::NotFound(_))));
+        assert!(src.exists());
     }
 
     /// A name with no extension still imports — the extension degrades to `bin` rather than
