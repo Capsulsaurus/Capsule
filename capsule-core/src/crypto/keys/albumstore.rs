@@ -65,6 +65,35 @@ pub(crate) const ALBUM_STORE_VERSION: u16 = 1;
 /// The store's filename beneath `{root}/.library/`.
 pub(crate) const ALBUM_STORE_FILE: &str = "albums.cbor";
 
+/// The domain separator an album's server-side key escrow carries ahead of its canonical CBOR,
+/// inside the master-key seal. It keeps an escrowed album from ever opening as any other blob the
+/// master key seals (the keystore file, the sealed identity), and names the format version.
+const ALBUM_KEY_ESCROW_DOMAIN: &[u8] = b"capsule-album-key-escrow/v1\0";
+
+/// How an album key escrow the server holds stands against the album a device holds
+/// ([`PersistedAlbum::escrow_coverage`]). Only [`Superseded`](Self::Superseded) is a state the
+/// device may overwrite: every other one either needs nothing or would lose an epoch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EscrowCoverage {
+    /// The escrow is this album's state exactly.
+    Current,
+    /// The escrow holds every epoch this album holds, with the same keys, and more: another
+    /// device rotated further. Every local epoch is covered; replacing it would drop the newer
+    /// epochs, so it is left alone.
+    Behind,
+    /// This album holds every epoch the escrow holds, with the same keys, and more (or the same
+    /// epochs with other details changed): replacing the escrow only adds to it.
+    Superseded,
+    /// The two disagree: a shared epoch under different keys, or each holds an epoch the other
+    /// lacks. Neither may replace the other without losing an epoch, so it is left alone and
+    /// this album's own epochs stay uncovered.
+    Divergent,
+    /// The escrow does not open under this master key as this album — sealed under another
+    /// master key, or not an escrow of it. Left alone: replacing what cannot be read could
+    /// destroy epochs this device cannot see.
+    Unreadable,
+}
+
 /// One escrowed album content key: `(album_id, epoch, amk)`.
 ///
 /// Identical to the row shape of the backup artifact's AMK ledger, so moving keys between the
@@ -106,6 +135,19 @@ pub enum AlbumStoreError {
     /// A persisted signing seed was not the expected 64 bytes.
     #[error("album {0}: persisted signing seed has the wrong length")]
     MalformedSeed(Uuid),
+    /// An album key escrow opened under the master key but is not one: it lacks the escrow's
+    /// domain separator, so it is some other blob the master key seals.
+    #[error("the blob is not an album key escrow")]
+    NotAnAlbumKeyEscrow,
+    /// An album key escrow was served under one album id and holds another — a server that
+    /// swapped two of an account's escrows. Refused rather than filed under either id.
+    #[error("the album key escrow served for album {expected} holds album {found}")]
+    EscrowAlbumMismatch {
+        /// The album id the escrow was served under.
+        expected: Uuid,
+        /// The album id the escrow holds.
+        found: Uuid,
+    },
 }
 
 type Result<T> = std::result::Result<T, AlbumStoreError>;
@@ -242,6 +284,109 @@ impl PersistedAlbum {
             Ok(HybridSigningKey::from_seed64(&seed64))
         })
         .transpose()
+    }
+
+    /// This album's **server-side key escrow**: its canonical CBOR behind
+    /// a versioned domain separator, sealed under the account master key with
+    /// [`MasterKey::seal`].
+    ///
+    /// Everything the album holds travels — every epoch's AMK, the write-tier and admin seeds,
+    /// and the authority — so a device recovered from the master key alone holds the album as
+    /// the device that escrowed it did. It adds no root: only the master key opens it, and the
+    /// master key already opens the keystore file this is a slice of. The seal draws a fresh
+    /// nonce, so two escrows of one state differ in their bytes;
+    /// [`escrow_matches`](Self::escrow_matches) compares what they open to.
+    ///
+    /// # Errors
+    ///
+    /// [`AlbumStoreError::Cbor`] when the album does not encode.
+    pub fn seal_escrow(&self, master: &MasterKey) -> Result<Vec<u8>> {
+        Ok(master.seal(&self.escrow_plaintext()?))
+    }
+
+    /// Open an album key escrow [`seal_escrow`](Self::seal_escrow) produced, served under
+    /// `album_id`.
+    ///
+    /// # Errors
+    ///
+    /// [`AlbumStoreError::Crypto`] when the master key does not open it (another account's, or
+    /// tampered), [`AlbumStoreError::NotAnAlbumKeyEscrow`] when it opens but is another kind of
+    /// sealed blob, [`AlbumStoreError::Cbor`] when it does not decode, and
+    /// [`AlbumStoreError::EscrowAlbumMismatch`] when it holds an album other than `album_id`.
+    pub fn open_escrow(blob: &[u8], master: &MasterKey, album_id: Uuid) -> Result<Self> {
+        let plaintext = master.open(blob)?;
+        let body = plaintext
+            .strip_prefix(ALBUM_KEY_ESCROW_DOMAIN)
+            .ok_or(AlbumStoreError::NotAnAlbumKeyEscrow)?;
+        let mut album: Self =
+            cbor::from_slice(body).map_err(|e| AlbumStoreError::Cbor(e.to_string()))?;
+        if album.album_id != album_id {
+            return Err(AlbumStoreError::EscrowAlbumMismatch {
+                expected: album_id,
+                found: album.album_id,
+            });
+        }
+        album.normalize();
+        Ok(album)
+    }
+
+    /// Whether `blob` is an escrow of exactly this album's current state: it opens under
+    /// `master` as this album, and what it holds encodes to the same canonical bytes. Any
+    /// failure to open is `false`.
+    pub fn escrow_matches(&self, blob: &[u8], master: &MasterKey) -> bool {
+        self.escrow_coverage(blob, master) == EscrowCoverage::Current
+    }
+
+    /// How the escrow `blob` the server holds for this album stands against this album's
+    /// state — and so whether replacing it with this album's escrow can only add to it.
+    ///
+    /// The comparison is per epoch: an escrow is never replaced by one that lacks an epoch it
+    /// holds, or that holds a different key for an epoch they share, because a recovery from the
+    /// replacement would lose that epoch's assets. See [`EscrowCoverage`].
+    pub fn escrow_coverage(&self, blob: &[u8], master: &MasterKey) -> EscrowCoverage {
+        let Ok(escrowed) = Self::open_escrow(blob, master, self.album_id) else {
+            return EscrowCoverage::Unreadable;
+        };
+        let local: std::collections::BTreeMap<u32, [u8; 32]> = self
+            .amks
+            .iter()
+            .map(|(_, epoch, amk)| (*epoch, *amk))
+            .collect();
+        let held: std::collections::BTreeMap<u32, [u8; 32]> = escrowed
+            .amks
+            .iter()
+            .map(|(_, epoch, amk)| (*epoch, *amk))
+            .collect();
+        if local
+            .iter()
+            .any(|(epoch, amk)| held.get(epoch).is_some_and(|other| other != amk))
+        {
+            return EscrowCoverage::Divergent;
+        }
+        let local_only = local.keys().any(|epoch| !held.contains_key(epoch));
+        let held_only = held.keys().any(|epoch| !local.contains_key(epoch));
+        match (local_only, held_only) {
+            (true, true) => EscrowCoverage::Divergent,
+            (false, true) => EscrowCoverage::Behind,
+            (true, false) => EscrowCoverage::Superseded,
+            (false, false) => match (escrowed.escrow_plaintext(), self.escrow_plaintext()) {
+                (Ok(escrowed), Ok(local)) if escrowed == local => EscrowCoverage::Current,
+                _ => EscrowCoverage::Superseded,
+            },
+        }
+    }
+
+    /// The bytes [`seal_escrow`](Self::seal_escrow) seals: the domain separator, then the
+    /// album's canonical CBOR in its normalized form.
+    fn escrow_plaintext(&self) -> Result<Vec<u8>> {
+        let mut album = self.clone();
+        album.normalize();
+        let body =
+            cbor::to_canonical_vec(&album).map_err(|e| AlbumStoreError::Cbor(e.to_string()))?;
+        let mut plaintext = Vec::with_capacity(ALBUM_KEY_ESCROW_DOMAIN.len() + body.len());
+        plaintext.extend_from_slice(ALBUM_KEY_ESCROW_DOMAIN);
+        plaintext.extend_from_slice(&body);
+        Ok(plaintext)
     }
 
     /// Sort the AMK rows by epoch and re-derive `current_epoch` as their maximum, so the encoded
@@ -773,5 +918,82 @@ mod tests {
             AlbumStore::load(dir.path(), &master).unwrap_err(),
             AlbumStoreError::UnsupportedVersion(v) if v == ALBUM_STORE_VERSION + 1
         ));
+    }
+
+    /// An album's escrow opens under the master key to the whole album: every epoch, both
+    /// signing seeds and an authority that re-verifies.
+    #[test]
+    fn an_album_key_escrow_round_trips_the_whole_album_under_the_master_key() {
+        let master = MasterKey::generate();
+        let (store, writable, _) = fixture();
+        let album = store.get(&writable).unwrap();
+        let blob = album.seal_escrow(&master).unwrap();
+        assert!(
+            !blob.windows(32).any(|w| w == [7u8; 32]),
+            "a raw AMK must never appear in an escrow"
+        );
+
+        let back = PersistedAlbum::open_escrow(&blob, &master, writable).unwrap();
+        assert_eq!(back.amks, album.amks);
+        assert_eq!(back.current_epoch, album.current_epoch);
+        assert_eq!(back.write_tier_seed64, album.write_tier_seed64);
+        assert_eq!(back.admin_seed64, album.admin_seed64);
+        let authority = back
+            .authority
+            .as_ref()
+            .unwrap()
+            .restore(writable, &back.held_epochs())
+            .unwrap();
+        assert!(authority.admin_chain_verifies());
+        assert!(back.escrow_matches(&blob, &master));
+    }
+
+    /// A blob under another master key, another kind of master-sealed blob, and an escrow served
+    /// under the wrong album id are each refused with their own error.
+    #[test]
+    fn an_album_key_escrow_refuses_the_wrong_key_the_wrong_kind_and_the_wrong_album() {
+        let master = MasterKey::generate();
+        let (store, writable, recovered) = fixture();
+        let blob = store.get(&writable).unwrap().seal_escrow(&master).unwrap();
+
+        assert!(matches!(
+            PersistedAlbum::open_escrow(&blob, &MasterKey::generate(), writable),
+            Err(AlbumStoreError::Crypto(_))
+        ));
+        let keystore_shaped = master.seal(&cbor::to_canonical_vec(&store).unwrap());
+        assert!(matches!(
+            PersistedAlbum::open_escrow(&keystore_shaped, &master, writable),
+            Err(AlbumStoreError::NotAnAlbumKeyEscrow)
+        ));
+        assert!(matches!(
+            PersistedAlbum::open_escrow(&blob, &master, recovered),
+            Err(AlbumStoreError::EscrowAlbumMismatch { expected, found })
+                if expected == recovered && found == writable
+        ));
+    }
+
+    /// An escrow matches the state it was sealed from and nothing else: a new epoch, another
+    /// album, or bytes that do not open all read as stale.
+    #[test]
+    fn an_album_key_escrow_matches_only_the_state_it_was_sealed_from() {
+        let master = MasterKey::generate();
+        let (mut store, writable, recovered) = fixture();
+        let before = store.get(&recovered).unwrap().clone();
+        let blob = before.seal_escrow(&master).unwrap();
+        assert!(before.escrow_matches(&blob, &master));
+        assert!(
+            before.escrow_matches(&before.seal_escrow(&master).unwrap(), &master),
+            "a second seal of one state differs in bytes and still matches"
+        );
+
+        store.merge_amks(recovered, "Restored", [(recovered, 3, [5; 32])], None);
+        let after = store.get(&recovered).unwrap();
+        assert!(
+            !after.escrow_matches(&blob, &master),
+            "a new epoch is stale"
+        );
+        assert!(!store.get(&writable).unwrap().escrow_matches(&blob, &master));
+        assert!(!before.escrow_matches(b"not an escrow", &master));
+        assert!(!before.escrow_matches(&blob, &MasterKey::generate()));
     }
 }

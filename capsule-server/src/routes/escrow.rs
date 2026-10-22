@@ -8,6 +8,13 @@
 //! media type, the same scoping, the same ceiling and the same refusals, except that a missing
 //! one is `error.escrow.identity_not_stored` — a different remedy from a missing escrow.
 //!
+//! A third pair holds the account's **album keys** (#741): `PUT /v1/auth/escrow/albums/{album_id}`
+//! stores one album's whole key state, sealed by the client under the master key, in a slot of
+//! that album's own, and `GET /v1/auth/escrow/albums` lists every one the account holds, each
+//! blob standard-base64 in a JSON listing. The listing is never a `404`: an account with no
+//! albums escrowed is an empty list, which is what a recovery of an account that never created
+//! an album has to read.
+//!
 //! [`crate::escrow`] owns the port, the single-active-escrow rule and the reason replacement is
 //! one store operation. This module is the wire shape and its refusals.
 //!
@@ -35,6 +42,10 @@
 //! | store `415` | the body is not `application/octet-stream`; [`crate::body`] replaces the framework's uncoded rejection |
 //! | fetch `404 error.escrow.not_stored` | this account has escrowed nothing |
 //! | identity fetch `404 error.escrow.identity_not_stored` | this account has stored no sealed identity |
+//! | album keys store `400 error.album.invalid_id` | the path's album id is not a canonical UUID |
+//! | album keys store `400 error.escrow.malformed` | empty, or past the album keys' own ceiling |
+//! | album keys store `409 error.escrow.album_keys_full` | the account's album key escrows are at their slot or byte bound |
+//! | album keys list `200` | every album escrowed, possibly none |
 //! | `401` / `403` | the framework's, through `Auth` |
 //! | `500 error.escrow.unavailable` | the store could not answer |
 //!
@@ -42,16 +53,22 @@
 //! conflict, and answering `409` would make a client's guided re-wrap fail on the one path it
 //! exists for.
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use capsule_i18n::error_codes;
 use kynos::extract::body::binary::Binary;
 use kynos::extract::media::MediaType;
 use kynos::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::album::is_canonical_album_id;
 use crate::auth::AccessToken;
 use crate::body::{CodedMedia, OpaqueBody};
-use crate::escrow::{EscrowContext, EscrowRecord, MalformedEscrow, Replaced, admissible};
-use crate::store::UserId;
+use crate::escrow::{
+    AlbumKeyRecord, AlbumKeysStored, EscrowContext, EscrowRecord, MalformedEscrow, Replaced,
+    admissible, admissible_album_keys,
+};
+use crate::store::{AlbumId, UserId};
 
 /// The recovery surface: the one blob a server holds that can reconstruct a library.
 #[derive(Tag)]
@@ -345,4 +362,206 @@ impl StoreEscrowRejection {
             code: error_codes::ESCROW_MALFORMED,
         }
     }
+}
+
+/// The album whose keys an album key escrow is.
+#[derive(PathParams, Schema)]
+pub struct AlbumKeysPath {
+    /// The album's id, as a canonical lowercase hyphenated UUID.
+    pub album_id: String,
+}
+
+/// What storing an album key escrow did.
+#[derive(Schema, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct StoreAlbumKeysResponse {
+    /// The album, echoed.
+    pub album_id: String,
+    /// When the server accepted it, RFC 3339.
+    pub stored_at: String,
+    /// Whether this displaced an earlier escrow of this album's keys — the album changed since
+    /// (an epoch was rotated in), rather than this being its first.
+    pub replaced: bool,
+}
+
+/// Why an album key escrow was not stored.
+#[derive(Debug, thiserror::Error, ApiError)]
+pub enum StoreAlbumKeysRejection {
+    /// The path names no album: its id is not a canonical lowercase hyphenated UUID.
+    #[error("album_id must be a canonical lowercase hyphenated UUID")]
+    #[problem(status = 400, title = "Malformed escrow")]
+    InvalidAlbumId {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// The body cannot be an album key escrow at any version.
+    #[error("{detail}")]
+    #[problem(status = 400, title = "Malformed escrow")]
+    Malformed {
+        /// What was wrong, in English.
+        detail: String,
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// The account's album key escrows are at their bound: storing this one would pass the slot
+    /// count or the total bytes an account may hold. Nothing was written.
+    #[error("this account's album key escrows are full")]
+    #[problem(status = 409, title = "Album key escrows full")]
+    Full {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// The store could not answer.
+    #[error("the album key escrow could not be stored")]
+    #[problem(status = 500, title = "Internal server error")]
+    Unavailable {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+}
+
+/// One album key escrow, as the listing carries it.
+#[derive(Schema, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct EscrowedAlbumKeys {
+    /// The album the keys are of.
+    pub album_id: String,
+    /// The sealed keys, standard base64 — exactly the bytes the client stored.
+    pub blob: String,
+    /// When the server accepted them, RFC 3339.
+    pub stored_at: String,
+}
+
+/// Every album key escrow the caller holds.
+#[derive(Schema, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct AlbumKeysListing {
+    /// One entry per escrowed album, in album id order. Empty when none is held: an account
+    /// with no albums is a state, not a missing resource.
+    pub albums: Vec<EscrowedAlbumKeys>,
+}
+
+/// Why the album key escrows were not listed.
+#[derive(Debug, thiserror::Error, ApiError)]
+pub enum ListAlbumKeysRejection {
+    /// The store could not answer.
+    #[error("the album key escrows could not be read")]
+    #[problem(status = 500, title = "Internal server error")]
+    Unavailable {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+}
+
+/// Store the caller's key escrow for one album, replacing whatever that album's slot held.
+///
+/// The album's whole key state — every epoch's content key, its signing seeds and its
+/// authority — sealed by the client under the account master key, so a device recovered from the
+/// escrow can open the album (#741). Opaque here: one slot per album, replaced in one operation,
+/// never versioned, and refused only empty, past its coarse ceiling, or past the account's bound
+/// on escrowed albums (`409 error.escrow.album_keys_full`, [`crate::escrow::album_keys_fit`]):
+/// slots are never deleted, so without a bound an account could grow them, and the listing
+/// every push reads, without limit. The album id is the
+/// slot's name and nothing more; the server does not check the album exists, because a client
+/// escrows an album's keys **before** the album's first asset reaches the server.
+#[kynos::put(
+    "/v1/auth/escrow/albums/{album_id}",
+    operation_id = "store_album_keys",
+    tag = EscrowTag
+)]
+pub async fn store_album_keys(
+    Inject(escrow): Inject<EscrowContext>,
+    Auth(credential): Auth<AccessToken>,
+    Path(path): Path<AlbumKeysPath>,
+    body: EscrowBody,
+) -> Result<Json<StoreAlbumKeysResponse>, StoreAlbumKeysRejection> {
+    let user = UserId::new(credential.user.as_str());
+    if !is_canonical_album_id(&path.album_id) {
+        tracing::info!(%user, album = %path.album_id, "an album key escrow named no album");
+        return Err(StoreAlbumKeysRejection::InvalidAlbumId {
+            code: error_codes::ALBUM_INVALID_ID,
+        });
+    }
+    let album = AlbumId::new(&path.album_id);
+    let blob = body.into_vec();
+    admissible_album_keys(&blob).map_err(|error| {
+        tracing::info!(%user, %album, %error, "an album key escrow was refused");
+        StoreAlbumKeysRejection::Malformed {
+            detail: error.to_string(),
+            code: error_codes::ESCROW_MALFORMED,
+        }
+    })?;
+
+    // Truncated to the microsecond for the escrow's reason: the instant echoed is the instant
+    // every adapter keeps.
+    let stored_at = crate::postgres::time::stored(escrow.clock().now());
+    let stored = escrow
+        .escrows()
+        .store_album_keys(AlbumKeyRecord {
+            user_id: user.clone(),
+            album_id: album.clone(),
+            blob,
+            stored_at,
+        })
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %user, %album, "the escrow store could not store album keys");
+            StoreAlbumKeysRejection::Unavailable {
+                code: error_codes::ESCROW_UNAVAILABLE,
+            }
+        })?;
+    let AlbumKeysStored::Stored(replaced) = stored else {
+        return Err(StoreAlbumKeysRejection::Full {
+            code: error_codes::ESCROW_ALBUM_KEYS_FULL,
+        });
+    };
+
+    Ok(Json(StoreAlbumKeysResponse {
+        album_id: album.as_str().to_owned(),
+        stored_at: stored_at.to_string(),
+        replaced: replaced == Replaced::Yes,
+    }))
+}
+
+/// List every album key escrow the caller holds, each blob verbatim.
+///
+/// What `capsule auth recover` reads to give a library created from the master key the
+/// account's albums before anything creates one, and what a push compares its albums against
+/// to re-escrow only the ones that changed.
+#[kynos::get(
+    "/v1/auth/escrow/albums",
+    operation_id = "list_album_keys",
+    tag = EscrowTag
+)]
+pub async fn list_album_keys(
+    Inject(escrow): Inject<EscrowContext>,
+    Auth(credential): Auth<AccessToken>,
+) -> Result<Json<AlbumKeysListing>, ListAlbumKeysRejection> {
+    let user = UserId::new(credential.user.as_str());
+    let held = escrow
+        .escrows()
+        .list_album_keys(&user)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %user, "the escrow store could not list album keys");
+            ListAlbumKeysRejection::Unavailable {
+                code: error_codes::ESCROW_UNAVAILABLE,
+            }
+        })?;
+    tracing::debug!(%user, albums = held.len(), "serving the album key escrows");
+    Ok(Json(AlbumKeysListing {
+        albums: held
+            .into_iter()
+            .map(|record| EscrowedAlbumKeys {
+                album_id: record.album_id.as_str().to_owned(),
+                blob: STANDARD.encode(&record.blob),
+                stored_at: record.stored_at.to_string(),
+            })
+            .collect(),
+    }))
 }

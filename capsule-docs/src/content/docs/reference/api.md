@@ -20,6 +20,14 @@ client before it is sent, and the sync feed returns opaque envelopes.** The serv
 addresses, and serves ciphertext, and authorizes who may do so. It cannot read an asset, and no
 endpoint accepts a plaintext one.
 
+The recovery routes under `/v1/auth/escrow` follow the same rule. The server holds the
+account's wrapped master key (`/v1/auth/escrow`), its user identity key sealed under the master
+key (`/v1/auth/escrow/identity`), and each album's keys sealed under the master key
+(`PUT /v1/auth/escrow/albums/{album_id}`, listed by `GET /v1/auth/escrow/albums` with each blob
+in standard base64). Every slot is opaque, held for the caller's own account only, and replaced
+in one operation; nothing deletes one. An account that has escrowed no album lists an empty
+array, not a `404`. See [Backup and Recovery](/design/backup-recovery/#master-key-escrow).
+
 That is also why this reference has no try-it panel. A playground could exercise the version
 handshake, the auth flows, and blob fetch; everything else would either return ciphertext or
 reject an unsealed body, and a reader who succeeded at it would leave believing the API accepts

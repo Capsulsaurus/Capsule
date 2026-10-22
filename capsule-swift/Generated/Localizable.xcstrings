@@ -37713,6 +37713,16 @@
         }
       }
     },
+    "error.escrow.album_keys_full": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This account's recovery backup has no room for another album's keys."
+          }
+        }
+      }
+    },
     "error.escrow.identity_not_stored": {
       "localizations": {
         "en": {

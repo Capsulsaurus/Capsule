@@ -186,6 +186,8 @@ async fn every_declared_response_is_exercised() {
         ("GET", "/v1/auth/escrow"),
         ("PUT", "/v1/auth/escrow/identity"),
         ("GET", "/v1/auth/escrow/identity"),
+        ("PUT", "/v1/auth/escrow/albums/anything"),
+        ("GET", "/v1/auth/escrow/albums"),
         ("GET", "/v1/auth/profile"),
         ("PATCH", "/v1/auth/profile"),
         ("POST", "/v1/auth/password"),
@@ -3213,6 +3215,9 @@ async fn every_declared_response_is_exercised() {
     // ── The sealed identity beside the escrow (#544) ───────────────────────────────────────
     sealed_identity_block(client, &fixture, &bearer, &rotated.refresh_token).await;
 
+    // ── The album key escrows beside it (#741) ─────────────────────────────────────────────
+    album_keys_block(client, &fixture, &bearer, &rotated.refresh_token).await;
+
     // ── The profile surface (`S-C54`) ──────────────────────────────────────────────────────
     profile_block(client, &fixture).await;
 
@@ -4047,6 +4052,125 @@ async fn sealed_identity_block(
         .send()
         .await
         .assert_status(StatusCode::OK);
+}
+
+/// Every declared answer of `PUT /v1/auth/escrow/albums/{album_id}` and
+/// `GET /v1/auth/escrow/albums`, in the escrow block's order.
+async fn album_keys_block(
+    client: &support::Client,
+    fixture: &Fixture,
+    bearer: &str,
+    refresh_token: &str,
+) {
+    const ALBUM: &str = "/v1/auth/escrow/albums/0198f3c2-9c4a-7b3d-8f21-4d7c9a1b2e35";
+    const LIST: &str = "/v1/auth/escrow/albums";
+    let refresh = format!("Bearer {refresh_token}");
+
+    // 401 without a credential; 403 with a refresh token where an access token belongs.
+    client
+        .put(ALBUM)
+        .body("application/octet-stream", vec![5_u8; 96])
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .get(LIST)
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .put(ALBUM)
+        .header("authorization", &refresh)
+        .body("application/octet-stream", vec![5_u8; 96])
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    client
+        .get(LIST)
+        .header("authorization", &refresh)
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    // 415: not octet-stream. 400 twice: an empty body, and a path naming no album.
+    client
+        .put(ALBUM)
+        .header("authorization", bearer)
+        .body("application/json", "{}")
+        .send()
+        .await
+        .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    client
+        .put(ALBUM)
+        .header("authorization", bearer)
+        .body("application/octet-stream", Vec::<u8>::new())
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    client
+        .put("/v1/auth/escrow/albums/not-an-album")
+        .header("authorization", bearer)
+        .body("application/octet-stream", vec![5_u8; 96])
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    // 500 on both.
+    fixture.escrows.set_unavailable(true);
+    client
+        .put(ALBUM)
+        .header("authorization", bearer)
+        .body("application/octet-stream", vec![5_u8; 96])
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    client
+        .get(LIST)
+        .header("authorization", bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.escrows.set_unavailable(false);
+
+    // 200 on both.
+    client
+        .put(ALBUM)
+        .header("authorization", bearer)
+        .header("accept", "application/json")
+        .body("application/octet-stream", vec![5_u8; 96])
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    client
+        .get(LIST)
+        .header("authorization", bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+
+    // 409: the account's album key escrows at their byte bound, filled with ceiling-sized slots
+    // under album ids of their own; the next new slot is refused.
+    let largest = vec![6_u8; capsule_server::escrow::MAX_ALBUM_KEY_ESCROW_BYTES];
+    let fill = capsule_server::escrow::MAX_ALBUM_KEY_ESCROW_TOTAL_BYTES
+        / capsule_server::escrow::MAX_ALBUM_KEY_ESCROW_BYTES;
+    for n in 0..=fill {
+        let path = format!("/v1/auth/escrow/albums/0198f3c2-0000-7000-8000-{n:012x}");
+        let response = client
+            .put(&path)
+            .header("authorization", bearer)
+            .header("accept", "application/json")
+            .body("application/octet-stream", largest.clone())
+            .send()
+            .await;
+        if n < fill - 1 {
+            response.assert_status(StatusCode::OK);
+        } else if n == fill {
+            response.assert_status(StatusCode::CONFLICT);
+            let problem: serde_json::Value = response.json();
+            assert_eq!(problem["code"], "error.escrow.album_keys_full");
+        }
+    }
 }
 
 async fn totp_block(client: &support::Client, fixture: &Fixture) {

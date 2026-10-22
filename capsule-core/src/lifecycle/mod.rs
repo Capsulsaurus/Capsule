@@ -48,6 +48,7 @@ use jiff::Timestamp;
 use thiserror::Error;
 use uuid::Uuid;
 
+pub use self::album::{AdoptedAlbumKeys, AlbumKeyEscrowPlan};
 use self::drops::{InboxEntry, IssuedLink};
 pub use self::enrollment::{
     ENROLLMENT_NONCE_LEN, ENROLLMENT_PAYLOAD_VERSION, EnrolleeKeys, EnrollmentPayload,
