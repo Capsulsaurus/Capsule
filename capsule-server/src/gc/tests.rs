@@ -156,6 +156,7 @@ impl Harness {
                     address: address.clone(),
                     size: 16,
                     manifest_sha256: None,
+                    amk_version: None,
                     finalized_at: Timestamp::UNIX_EPOCH,
                 },
             )
@@ -908,6 +909,33 @@ impl AssetIndex for RacesTheListing {
 
     fn bump_sync_epoch<'a>(&'a self, owner: &'a OwnerId) -> crate::index::IndexFuture<'a, u64> {
         self.inner.bump_sync_epoch(owner)
+    }
+
+    fn ledger_head<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+    ) -> crate::index::IndexFuture<'a, Option<crate::ledger::LedgerHead>> {
+        self.inner.ledger_head(owner)
+    }
+
+    fn anchored_owners(&self) -> crate::index::IndexFuture<'_, Vec<OwnerId>> {
+        self.inner.anchored_owners()
+    }
+
+    fn record_ledger_head<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        head: crate::ledger::LedgerHead,
+    ) -> crate::index::IndexFuture<'a, ()> {
+        self.inner.record_ledger_head(owner, head)
+    }
+
+    fn reset_ledger_head<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        head: Option<crate::ledger::LedgerHead>,
+    ) -> crate::index::IndexFuture<'a, ()> {
+        self.inner.reset_ledger_head(owner, head)
     }
 
     fn restore(

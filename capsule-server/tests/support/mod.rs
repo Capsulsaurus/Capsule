@@ -79,7 +79,8 @@ use capsule_server::index::{
     LifecycleOp, OpOutcome, PendingAsset, PurgeOutcome, Receipted, Reservation, ServingHold,
 };
 use capsule_server::ledger::{
-    InMemoryLedger, LedgerEntry, LedgerError, LedgerEvent, LedgerFuture, LedgerScan, OwnerLedger,
+    InMemoryLedger, LedgerEntry, LedgerError, LedgerEvent, LedgerFuture, LedgerHead, LedgerScan,
+    OwnerLedger,
 };
 use capsule_server::membership::{
     InMemoryMembership, MemberRole, Membership, MembershipContext, MembershipStore, RosterOutcome,
@@ -3438,6 +3439,42 @@ impl AssetIndex for SwitchableIndex {
         self.inner.bump_sync_epoch(owner)
     }
 
+    fn ledger_head<'a>(&'a self, owner: &'a OwnerId) -> IndexFuture<'a, Option<LedgerHead>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.ledger_head(owner)
+    }
+
+    fn anchored_owners(&self) -> IndexFuture<'_, Vec<OwnerId>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.anchored_owners()
+    }
+
+    fn record_ledger_head<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        head: LedgerHead,
+    ) -> IndexFuture<'a, ()> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.record_ledger_head(owner, head)
+    }
+
+    fn reset_ledger_head<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        head: Option<LedgerHead>,
+    ) -> IndexFuture<'a, ()> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.reset_ledger_head(owner, head)
+    }
+
     fn restore(
         &self,
         row: capsule_server::index::AssetRow,
@@ -3784,7 +3821,11 @@ impl Fixture {
                 attestation_key.clone(),
                 Timestamp::UNIX_EPOCH,
             )
-            .with_ledger(ledger.clone()),
+            // Anchored over the index, as `boot` wires it, so every producer's head is recorded.
+            .with_ledger(Arc::new(capsule_server::ledger::AnchoredLedger::new(
+                ledger.clone(),
+                index.clone(),
+            ))),
             discovery: DiscoveryContext::new(Arc::new(server_info(&tokens)), revocations.clone()),
             escrow: EscrowContext::new(escrows.clone(), clock.clone()),
             // On unless the case asked otherwise ([`Fixture::without_federation`]).

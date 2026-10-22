@@ -35,6 +35,7 @@ use std::time::Duration;
 use capsule_i18n::error_codes;
 use serde::{Deserialize, Serialize};
 
+use crate::events::{RetryReason, TransferEvent, TransferEvents, millis};
 use crate::net::{
     ConnectionClass, RetryClass, RetryDecision, RetryEngine, Sleeper, TokioSleeper, negotiation,
 };
@@ -850,6 +851,8 @@ pub struct UploadClient {
     /// The backoff sleeper for the shared retry engine's transient-reset retries.
     /// Real in production; kept as a seam for determinism.
     sleeper: TokioSleeper,
+    /// Where each transfer step is published ([`crate::events`]); disabled by default.
+    events: TransferEvents,
 }
 
 impl UploadClient {
@@ -859,7 +862,22 @@ impl UploadClient {
             transport,
             connection: ConnectionClass::Unmetered,
             sleeper: TokioSleeper,
+            events: TransferEvents::disabled(),
         }
+    }
+
+    /// Publish every transfer this client drives to `events` (session, chunk, retry,
+    /// checksum-reject, finalize and merge steps). Without a subscriber it costs nothing.
+    #[must_use]
+    pub fn with_events(mut self, events: TransferEvents) -> Self {
+        self.events = events;
+        self
+    }
+
+    /// The event handle this client publishes to.
+    #[must_use]
+    pub fn events(&self) -> &TransferEvents {
+        &self.events
     }
 
     /// Set the detected connection class (S-D10 chunk-size floor coupling). On an
@@ -1194,9 +1212,11 @@ impl UploadClient {
                     resume_offset,
                 } => (response.id, response.suggested_chunk_size, resume_offset),
                 CreateOutcome::AlreadyStored { asset_ref } => {
+                    self.emit_merged(request, &asset_ref);
                     return Ok(UploadOutcome::AlreadyStored { asset_ref });
                 }
             };
+        self.emit_created(request, &session, start_offset);
 
         let mut strategy = AdaptiveChunkSizeStrategy::for_file_size(request.size)
             .seeded_from_suggested(suggested)
@@ -1228,6 +1248,11 @@ impl UploadClient {
             let mut strategy = AdaptiveChunkSizeStrategy::for_file_size(request.size)
                 .with_connection_class(self.connection);
             tracing::debug!(offset = info.offset, "resuming from authoritative offset");
+            self.events.emit(|| TransferEvent::SessionResumed {
+                blob: request.hash.clone(),
+                session_id: session_id.to_string(),
+                offset: info.offset,
+            });
             self.drive(
                 session_id.to_string(),
                 request,
@@ -1278,6 +1303,12 @@ impl UploadClient {
             }
 
             let attempt_start = std::time::Instant::now();
+            self.events.emit(|| TransferEvent::ChunkSent {
+                blob: request.hash.clone(),
+                session_id: session_id.clone(),
+                offset,
+                len: want,
+            });
             let ack = match self.send_patch(&session_id, &chunk, offset).await {
                 Ok(ack) => ack,
                 // A mid-transfer connection reset / silent black-hole: back off
@@ -1293,6 +1324,15 @@ impl UploadClient {
                     }
                     RetryDecision::Retry { after } => {
                         tracing::debug!(offset, ?after, %reason, "mid-transfer reset — backing off and resuming");
+                        self.emit_retried(
+                            request,
+                            &session_id,
+                            offset,
+                            want,
+                            RetryReason::TransportReset {
+                                wait_ms: millis(after),
+                            },
+                        );
                         self.sleeper.sleep(after).await;
                         continue;
                     }
@@ -1304,23 +1344,50 @@ impl UploadClient {
                     strategy.record_chunk(want, attempt_start.elapsed());
                     // Real progress resets the transient-reset backoff budget.
                     recovery.engine.reset();
+                    self.events.emit(|| TransferEvent::ChunkAcked {
+                        blob: request.hash.clone(),
+                        session_id: session_id.clone(),
+                        offset,
+                        len: want,
+                        acked_offset: new_offset,
+                    });
                     offset = new_offset;
                 }
                 ChunkAck::Realign(authoritative) => {
                     recovery.charge("offset re-align")?;
-                    offset = if let Some(o) = authoritative {
-                        o
-                    } else if let Some(info) = self.head_waiting(&session_id, recovery).await? {
-                        info.offset
+                    let realigned = match authoritative {
+                        Some(o) => Some(o),
+                        None => self
+                            .head_waiting(&session_id, recovery)
+                            .await?
+                            .map(|info| info.offset),
+                    };
+                    if let Some(to) = realigned {
+                        self.emit_retried(
+                            request,
+                            &session_id,
+                            offset,
+                            want,
+                            RetryReason::OffsetRealign { to },
+                        );
+                        offset = to;
                     } else {
                         // Vanished mid-realign → recreate from zero.
+                        self.emit_retried(
+                            request,
+                            &session_id,
+                            offset,
+                            want,
+                            RetryReason::SessionLost,
+                        );
                         session_id = self.recreate(request, recovery).await?;
                         *strategy = AdaptiveChunkSizeStrategy::for_file_size(size);
-                        0
-                    };
+                        offset = 0;
+                    }
                 }
                 ChunkAck::Recreate => {
                     recovery.charge("session re-create")?;
+                    self.emit_retried(request, &session_id, offset, want, RetryReason::SessionLost);
                     match self.create_waiting(request, recovery).await? {
                         CreateOutcome::Created {
                             response,
@@ -1330,15 +1397,23 @@ impl UploadClient {
                             *strategy = AdaptiveChunkSizeStrategy::for_file_size(size)
                                 .seeded_from_suggested(response.suggested_chunk_size);
                             offset = resume_offset;
+                            self.emit_created(request, &session_id, offset);
                         }
                         // A blob that finalized between our attempts → merge.
                         CreateOutcome::AlreadyStored { asset_ref } => {
+                            self.emit_merged(request, &asset_ref);
                             return Ok(UploadOutcome::AlreadyStored { asset_ref });
                         }
                     }
                 }
                 ChunkAck::Resend => {
                     recovery.charge("chunk re-send")?;
+                    self.events.emit(|| TransferEvent::ChecksumRejected {
+                        blob: request.hash.clone(),
+                        session_id: session_id.clone(),
+                        offset,
+                        len: want,
+                    });
                     // Offset unchanged; the loop re-sends the same chunk.
                 }
                 ChunkAck::Backoff(asked) => {
@@ -1348,6 +1423,15 @@ impl UploadClient {
                         ?wait,
                         "waiting as the server asked, then resuming from HEAD"
                     );
+                    self.emit_retried(
+                        request,
+                        &session_id,
+                        offset,
+                        want,
+                        RetryReason::ServerWait {
+                            wait_ms: millis(wait),
+                        },
+                    );
                     self.sleeper.sleep(wait).await;
                     // The refused chunk left nothing behind, but anything may have moved
                     // while we waited: the authoritative offset is HEAD's. A HEAD that
@@ -1356,6 +1440,13 @@ impl UploadClient {
                     offset = if let Some(info) = self.head_waiting(&session_id, recovery).await? {
                         info.offset
                     } else {
+                        self.emit_retried(
+                            request,
+                            &session_id,
+                            offset,
+                            want,
+                            RetryReason::SessionLost,
+                        );
                         session_id = self.recreate(request, recovery).await?;
                         *strategy = AdaptiveChunkSizeStrategy::for_file_size(size);
                         0
@@ -1365,7 +1456,45 @@ impl UploadClient {
         }
 
         tracing::info!(%session_id, size, "upload complete — server finalizing");
+        self.events.emit(|| TransferEvent::Finalize {
+            blob: request.hash.clone(),
+            session_id: session_id.clone(),
+            size,
+        });
         Ok(UploadOutcome::Completed { session_id })
+    }
+
+    fn emit_created(&self, request: &CreateUploadRequest, session_id: &str, resume_offset: u64) {
+        self.events.emit(|| TransferEvent::SessionCreated {
+            blob: request.hash.clone(),
+            session_id: session_id.to_string(),
+            size: request.size,
+            resume_offset,
+        });
+    }
+
+    fn emit_merged(&self, request: &CreateUploadRequest, asset_ref: &str) {
+        self.events.emit(|| TransferEvent::Merged {
+            blob: request.hash.clone(),
+            asset_ref: asset_ref.to_string(),
+        });
+    }
+
+    fn emit_retried(
+        &self,
+        request: &CreateUploadRequest,
+        session_id: &str,
+        offset: u64,
+        len: u64,
+        reason: RetryReason,
+    ) {
+        self.events.emit(|| TransferEvent::ChunkRetried {
+            blob: request.hash.clone(),
+            session_id: session_id.to_string(),
+            offset,
+            len,
+            reason,
+        });
     }
 
     /// Re-create a session and return its id, mapping a racing `duplicate_blob`
@@ -1377,7 +1506,11 @@ impl UploadClient {
         recovery: &mut Recovery,
     ) -> Result<String, UploadError> {
         match self.create_waiting(request, recovery).await? {
-            CreateOutcome::Created { response, .. } => Ok(response.id),
+            // The caller drives a re-created session from zero, so that is where it starts.
+            CreateOutcome::Created { response, .. } => {
+                self.emit_created(request, &response.id, 0);
+                Ok(response.id)
+            }
             CreateOutcome::AlreadyStored { asset_ref } => Err(UploadError::Rejected {
                 status: 409,
                 code: Some(error_codes::UPLOAD_DUPLICATE_BLOB.to_string()),

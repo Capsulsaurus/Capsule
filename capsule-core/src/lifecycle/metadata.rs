@@ -11,9 +11,10 @@ use uuid::Uuid;
 use super::{LifecycleError, Result, Workspace, now_rfc3339};
 use crate::crypto::provenance::Action;
 use crate::db::DatabaseDriver;
+use crate::domain::GpsDatum;
 use crate::metadata::crdt::AddId;
 use crate::ml::{AiTagSink, AssetSource, ModelId, Registry};
-use crate::sidecar::{AiTag, normalize_label};
+use crate::sidecar::{AiTag, Gps, GpsSource, normalize_label};
 
 impl Workspace {
     /// Add a user tag (OR-set) and emit a `metadata-update` provenance record.
@@ -40,23 +41,65 @@ impl Workspace {
         })
     }
 
-    /// Correct the asset's signed `capture_timestamp` to `capture`, as a new signed revision:
-    /// one `metadata-update` record, with the sidecar re-signed and its sealed blob re-sealed
-    /// under a fresh nonce, exactly as any other metadata edit lands (slice `S-B17`).
+    /// Record the user's capture time for the asset, as a new signed revision: one
+    /// `metadata-update` record, with the sidecar re-signed and its sealed blob re-sealed under a
+    /// fresh nonce, exactly as any other metadata edit lands.
     ///
-    /// The **media bundle is not relocated.** `capture_timestamp` is authoritative for the
-    /// asset's date; the `media/{YYYY}/{YYYY-MM}` directory is only the shard fixed at import
-    /// (`AssetState::capture_utc`), and the design treats bucket-vs-timestamp drift after a
-    /// capture correction as expected rather than as a fault (Maintenance — Structural
-    /// Validation). Moving the bundle here would orphan the old directory for every writer
-    /// that still resolves it, so the shard stays and every path keeps resolving; the index
-    /// row follows the sidecar (`asset_row_from_state`), so the timeline shows the corrected
-    /// instant immediately rather than after a rebuild.
+    /// The correction is written to the `capture_timestamp_user` LWW register, stamped with this
+    /// device id and now, so concurrent corrections from two devices converge under the
+    /// `(ts, device_id)` rule. The as-imported `capture_timestamp` is **never overwritten**: it
+    /// stays what the original said, and the effective instant
+    /// ([`SidecarV1::effective_capture_timestamp`](crate::sidecar::SidecarV1::effective_capture_timestamp))
+    /// is the correction.
+    ///
+    /// The **media bundle is not relocated.** The `media/{YYYY}/{YYYY-MM}` directory is the
+    /// shard fixed at import (`AssetState::capture_utc`) from the as-imported value, and the
+    /// design treats bucket-vs-timestamp drift after a correction as expected rather than as a
+    /// fault (Maintenance — Structural Validation). The index row follows the effective instant
+    /// (`asset_row_from_state`), so the timeline shows the correction immediately rather than
+    /// after a rebuild.
     ///
     /// Takes a [`Timestamp`] rather than raw seconds so an out-of-range instant is
     /// unrepresentable at the call site instead of being clamped to the epoch here.
     #[tracing::instrument(skip(self), fields(asset_id = %asset_id, capture = %capture))]
     pub fn set_capture_timestamp(&mut self, asset_id: &Uuid, capture: Timestamp) -> Result<()> {
+        let recorded = self
+            .assets
+            .get(asset_id)
+            .ok_or_else(|| LifecycleError::NotFound(format!("asset {asset_id}")))?
+            .sidecar
+            .effective_capture_timestamp()
+            .to_owned();
+        let corrected = capture.to_string();
+        let device = self.account.device.device_id;
+        let ts = now_rfc3339();
+        self.append_lifecycle(asset_id, Action::MetadataUpdate, None, move |s, _add_id| {
+            s.capture_timestamp_user.set(corrected, ts, device);
+        })?;
+        let head = self.assets[asset_id].chain.head();
+        tracing::info!(
+            asset_id = %asset_id,
+            recorded = %recorded,
+            corrected = %capture,
+            chain_head = ?head,
+            "capture timestamp corrected as a signed metadata-update"
+        );
+        Ok(())
+    }
+
+    /// Re-record the asset's **as-imported** capture time, leaving any user correction alone.
+    ///
+    /// Reserved for re-deriving what the import should have recorded from the original's own
+    /// metadata — the `capsule repair capture-time` pass, for libraries imported while the EXIF
+    /// parser could not read `DateTimeOriginal`. It is not a user edit: a user's correction goes
+    /// through [`set_capture_timestamp`](Self::set_capture_timestamp), which this never
+    /// displaces. One signed `metadata-update`; the bundle is not relocated.
+    #[tracing::instrument(skip(self), fields(asset_id = %asset_id, capture = %capture))]
+    pub fn correct_imported_capture_timestamp(
+        &mut self,
+        asset_id: &Uuid,
+        capture: Timestamp,
+    ) -> Result<()> {
         let recorded = self
             .assets
             .get(asset_id)
@@ -68,13 +111,75 @@ impl Workspace {
         self.append_lifecycle(asset_id, Action::MetadataUpdate, None, move |s, _add_id| {
             s.capture_timestamp = corrected;
         })?;
-        let head = self.assets[asset_id].chain.head();
         tracing::info!(
             asset_id = %asset_id,
             recorded = %recorded,
             corrected = %capture,
-            chain_head = ?head,
-            "capture timestamp corrected as a signed metadata-update"
+            chain_head = ?self.assets[asset_id].chain.head(),
+            "as-imported capture timestamp re-derived as a signed metadata-update"
+        );
+        Ok(())
+    }
+
+    /// Record the user's location for the asset: a [`GpsSource::Manual`] fix in `datum`, written
+    /// to the `gps_user` LWW register as one signed `metadata-update`, stamped with this device
+    /// id and now so concurrent edits converge under the `(ts, device_id)` rule.
+    ///
+    /// The as-imported `gps` is never overwritten; the effective location
+    /// ([`SidecarV1::effective_gps`](crate::sidecar::SidecarV1::effective_gps)) is this edit.
+    /// The coordinate is stored verbatim in `datum`, never converted. A latitude outside
+    /// `[-90, 90]`, a longitude outside `[-180, 180]`, or a non-finite value is
+    /// [`LifecycleError::InvalidLocation`] and nothing is appended.
+    #[tracing::instrument(skip(self), fields(asset_id = %asset_id, ?datum))]
+    pub fn set_location(
+        &mut self,
+        asset_id: &Uuid,
+        lat: f64,
+        lon: f64,
+        datum: GpsDatum,
+    ) -> Result<()> {
+        let valid = lat.is_finite()
+            && lon.is_finite()
+            && (-90.0..=90.0).contains(&lat)
+            && (-180.0..=180.0).contains(&lon);
+        if !valid {
+            tracing::debug!(asset_id = %asset_id, "location edit refused: out of range");
+            return Err(LifecycleError::InvalidLocation { lat, lon });
+        }
+        self.write_location(
+            asset_id,
+            Some(Gps {
+                lat,
+                lon,
+                source: GpsSource::Manual,
+                datum,
+            }),
+        )
+    }
+
+    /// Record that the asset has **no** location, as the user's edit: a stamped `None` in the
+    /// `gps_user` register. The as-imported `gps` stays in the sidecar, hidden from the
+    /// effective view, so a later edit can restore it.
+    #[tracing::instrument(skip(self), fields(asset_id = %asset_id))]
+    pub fn clear_location(&mut self, asset_id: &Uuid) -> Result<()> {
+        self.write_location(asset_id, None)
+    }
+
+    fn write_location(&mut self, asset_id: &Uuid, location: Option<Gps>) -> Result<()> {
+        if !self.assets.contains_key(asset_id) {
+            return Err(LifecycleError::NotFound(format!("asset {asset_id}")));
+        }
+        let set = location.is_some();
+        let device = self.account.device.device_id;
+        let ts = now_rfc3339();
+        self.append_lifecycle(asset_id, Action::MetadataUpdate, None, move |s, _add_id| {
+            s.gps_user.set(location, ts, device);
+        })?;
+        tracing::info!(
+            asset_id = %asset_id,
+            set,
+            chain_head = ?self.assets[asset_id].chain.head(),
+            "location edited as a signed metadata-update"
         );
         Ok(())
     }
@@ -380,9 +485,13 @@ mod tests {
         ws.set_capture_timestamp(&id, corrected).unwrap();
 
         // A new signed revision: one more record, a `metadata-update`, and the asset verifies.
+        // The correction is the effective instant; the as-imported value is kept beside it.
         let after = ws.asset(&id).unwrap();
-        assert_eq!(after.sidecar.capture_timestamp, "2001-09-09T01:46:40Z");
-        assert_ne!(after.sidecar.capture_timestamp, recorded);
+        assert_eq!(
+            after.sidecar.effective_capture_timestamp(),
+            "2001-09-09T01:46:40Z"
+        );
+        assert_eq!(after.sidecar.capture_timestamp, recorded);
         assert_eq!(after.chain.records().len(), 2);
         assert_eq!(
             after.chain.records().last().unwrap().manifest.core.action,
@@ -420,9 +529,13 @@ mod tests {
         )
         .unwrap();
         let reopened = ws.asset(&id).unwrap();
-        assert_eq!(reopened.sidecar.capture_timestamp, "2001-09-09T01:46:40Z");
-        // `open` reconciles a sidecar that no longer names its directory by taking the shard
-        // from the directory itself (the month's first instant), which is the same directory.
+        assert_eq!(
+            reopened.sidecar.effective_capture_timestamp(),
+            "2001-09-09T01:46:40Z"
+        );
+        assert_eq!(reopened.sidecar.capture_timestamp, recorded);
+        // `open` derives the shard from the as-imported value, which still names the directory.
+        assert_eq!(reopened.capture_utc, shard);
         assert_ne!(
             reopened.capture_utc, 1_000_000_000,
             "the shard is not the corrected instant"
@@ -469,6 +582,119 @@ mod tests {
             .set_capture_timestamp(&Uuid::now_v7(), Timestamp::UNIX_EPOCH)
             .unwrap_err();
         assert!(matches!(err, LifecycleError::NotFound(_)), "{err:?}");
+    }
+
+    /// Re-deriving the as-imported capture time (the repair pass) leaves a user's correction as
+    /// the effective instant, and a user's correction leaves the re-derived value in place.
+    #[test]
+    fn re_deriving_the_imported_capture_time_never_displaces_a_user_correction() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let (mut ws, id) = workspace_with(&lib, &src, b"\xFF\xD8\xFF imported vs user bytes");
+
+        let user = Timestamp::from_second(1_500_000_000).unwrap();
+        let exif = Timestamp::from_second(1_000_000_000).unwrap();
+        ws.set_capture_timestamp(&id, user).unwrap();
+        ws.correct_imported_capture_timestamp(&id, exif).unwrap();
+
+        let sidecar = &ws.asset(&id).unwrap().sidecar;
+        assert_eq!(sidecar.capture_timestamp, exif.to_string());
+        assert_eq!(sidecar.effective_capture_timestamp(), user.to_string());
+        assert_eq!(chain_len(&ws, &id), 3);
+        assert_eq!(ws.verify(&id).unwrap(), VerifyOutcome::Accept);
+        let row = ws.db().find_by_uuid(&id.to_string()).unwrap().unwrap();
+        assert_eq!(
+            row.capture_timestamp, 1_500_000_000,
+            "the user's value dates it"
+        );
+
+        let err = ws
+            .correct_imported_capture_timestamp(&Uuid::now_v7(), exif)
+            .unwrap_err();
+        assert!(matches!(err, LifecycleError::NotFound(_)), "{err:?}");
+    }
+
+    /// A location edit is a signed `metadata-update` into the `gps_user` register: a manual fix,
+    /// stored verbatim in its datum, beside an as-imported `gps` it never overwrites. Clearing is
+    /// a stamped `None`, so the effective view has no location while the import's value stays.
+    #[test]
+    fn set_location_records_a_manual_fix_beside_the_imported_one() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let (mut ws, id) = workspace_with(&lib, &src, b"\xFF\xD8\xFF location edit bytes");
+        // Give the asset an as-imported fix, as an EXIF-bearing import would have.
+        let imported = Gps {
+            lat: 10.0,
+            lon: 20.0,
+            source: GpsSource::Exif,
+            datum: GpsDatum::Wgs84,
+        };
+        ws.assets.get_mut(&id).unwrap().sidecar.gps = Some(imported.clone());
+        let before = chain_len(&ws, &id);
+
+        ws.set_location(&id, 39.90869, 116.39745, GpsDatum::Gcj02)
+            .unwrap();
+        let sidecar = &ws.asset(&id).unwrap().sidecar;
+        assert_eq!(
+            sidecar.gps.as_ref(),
+            Some(&imported),
+            "the import's fix stays"
+        );
+        let effective = sidecar.effective_gps().expect("the edit is effective");
+        assert_eq!(effective.source, GpsSource::Manual);
+        assert_eq!(effective.datum, GpsDatum::Gcj02);
+        assert_eq!(effective.lat.to_bits(), 39.90869_f64.to_bits());
+        assert_eq!(effective.lon.to_bits(), 116.39745_f64.to_bits());
+        assert_eq!(chain_len(&ws, &id), before + 1);
+        assert_eq!(
+            ws.asset(&id)
+                .unwrap()
+                .chain
+                .records()
+                .last()
+                .unwrap()
+                .manifest
+                .core
+                .action,
+            Action::MetadataUpdate
+        );
+        assert_eq!(ws.verify(&id).unwrap(), VerifyOutcome::Accept);
+
+        ws.clear_location(&id).unwrap();
+        let sidecar = &ws.asset(&id).unwrap().sidecar;
+        assert_eq!(sidecar.effective_gps(), None);
+        assert_eq!(sidecar.gps.as_ref(), Some(&imported));
+        assert_eq!(chain_len(&ws, &id), before + 2);
+
+        // Out-of-range or non-finite coordinates are refused before any record.
+        for (lat, lon) in [
+            (90.5, 0.0),
+            (0.0, -180.5),
+            (f64::NAN, 0.0),
+            (0.0, f64::INFINITY),
+        ] {
+            assert!(matches!(
+                ws.set_location(&id, lat, lon, GpsDatum::Wgs84),
+                Err(LifecycleError::InvalidLocation { .. })
+            ));
+        }
+        assert_eq!(
+            chain_len(&ws, &id),
+            before + 2,
+            "a refused edit emits no record"
+        );
+        // The inclusive bounds are accepted.
+        ws.set_location(&id, -90.0, 180.0, GpsDatum::Wgs84).unwrap();
+
+        let unknown = Uuid::now_v7();
+        assert!(matches!(
+            ws.set_location(&unknown, 1.0, 2.0, GpsDatum::Wgs84),
+            Err(LifecycleError::NotFound(_))
+        ));
+        assert!(matches!(
+            ws.clear_location(&unknown),
+            Err(LifecycleError::NotFound(_))
+        ));
     }
 
     // ── The inference seam (`ml::AiTagSink` / `ml::AssetSource`) ─────────────────────────────

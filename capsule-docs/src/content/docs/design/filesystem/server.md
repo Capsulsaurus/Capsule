@@ -88,12 +88,27 @@ accepted it. The **owner ledger** carries those facts:
 - Each entry carries its owner, its position (`seq`, from 1, contiguous) and the hash of its
   predecessor inside the signed core. Edits, removals, a dropped head and a torn tail are
   detected from the chain alone. A tail cut exactly at an entry boundary is detected only
-  against a head recorded outside the ledger; no store records one yet
-  ([#757](https://github.com/Capsulsaurus/Capsule/issues/757)), and until then the check is an
-  owner row whose `sync_seq` is above every indexed entry's. A segment is a sequence of
+  against a head recorded outside the ledger (the **anchor**, below). A segment is a sequence of
   length-prefixed canonical-CBOR frames; the only bytes ever cut are those after the last whole
   entry when no complete entry starts anywhere after it (a short frame, or zeroes a crash left),
   which were never acknowledged. Damage followed by an entry refuses further appends.
+- The **anchor** is each owner's ledger head, `(seq, entry hash)`, recorded in PostgreSQL
+  (`owner_ledger_heads`) after every append is durable. It only rises, so it never names an
+  entry the ledger did not hold; recording it is best-effort, so a lost record leaves it behind
+  the ledger, which weakens the check and never fakes a fault. Rebuild and the scrub verify each
+  ledger against it: a ledger that ends below it lost its tail (`BehindAnchor`), and one holding
+  a different entry at its position was rewritten (`AnchorMismatch`). The server checks the
+  same before its first append per owner after a start, and refuses that owner's writes while
+  the ledger disagrees with its anchor, so a loss is never buried under new entries. Rebuild
+  and the scrub walk every owner the index anchored as well as every owner with a ledger, so an
+  owner whose ledger lost every entry is reported too. The way out is a rebuild under
+  `--apply`: it clears a cut by re-anchoring at the head that is left, and a caught rewrite
+  only when the operator adds `--accept-rewrites` after reading the report (below). It lives in the index
+  rather than beside the ledger because a cut that took `BLOB_ROOT`'s tail would take a head
+  file with it, and rather than in the custody receipt because receipts are client-held signed
+  evidence with a frozen format. The anchor survives exactly when the index does: a rebuild
+  into an empty schema checks the chain alone, and one alongside a restored backup checks
+  against the head at the backup.
 - The ledger is never rewritten. Purge appends a purge entry; the purged blobs go through
   [GC](#deletion-and-garbage-collection) as before.
 - Device-directory versions are in the ledger, so a rebuild verifies signatures against the
@@ -107,8 +122,15 @@ when it finds a fault ([`capsule-server::ledger::rebuild`](https://github.com/Ca
 
 1. Verify each owner's ledger chain: signatures under the attestation key's published half when
    the host holds `ATTESTATION_KEY_SEED`, links and positions otherwise, and the report says
-   which. A break stops that owner's replay at the last good entry and is reported; other
-   owners continue.
+   which, against the owner's anchor. The owners are those with a ledger and those with an
+   anchor. A break stops that owner's replay at the last good entry and is reported; other
+   owners continue. Under `--apply` the anchor is raised to the verified head, or, after a
+   reported tail cut that moved the owner's epoch, lowered to it (cleared when nothing is left),
+   so the loss is reported once and the server writes to the owner again. A caught rewrite
+   keeps its anchor, and the server keeps refusing that owner's writes, since the mismatch is
+   the only evidence of the rewrite. The operator recovers it by reading the report and running
+   `rebuild --apply --accept-rewrites`, which re-anchors at the last entry before the mismatch
+   and accepts the ledger as it stands; the next pass verifies and replays it.
 2. Replay entries in ledger order: uploads and drop adoptions (custody entries the index did
    not refuse) and lifecycle ops, including retention purges. Decode each named manifest and
    write the rows they imply, the way the index's own writes would. An op with no recorded
@@ -204,6 +226,7 @@ The server attests key-free whether a blob is stored (`stat` in `blobs/`), index
 - **Shard enumeration (unit).** Scrub, GC and rebuild walks recover the same blob set across a partially populated shard tree.
 - **Rebuild idempotency (smoke).** Drop the index, rebuild, compare to the expected set; re-run yields no changes.
 - **Ledger crash window (unit).** A crash after the ledger append and before the row commit is replayed by rebuild; a tampered or truncated segment is reported and stops only that owner.
+- **Ledger anchor (unit).** A ledger cut at an entry boundary is reported as behind its anchor by rebuild and the scrub when the index survived, with and without the attestation key, including a ledger that lost every entry; `--apply` re-anchors after the cut and the next pass is clean; a caught rewrite keeps its anchor unless `--accept-rewrites` is given.
 - **Epoch (integration).** A rebuild with a lost ledger tail bumps the epoch; an old cursor is refused, the client resyncs and re-announces, and the index matches the pre-loss one.
 - **Quarantine on malformed envelope (unit).** The object moves to `quarantine/` with a `.reason.json` naming the failed check.
 - **GC safety (unit).** Swept only after the grace window; a re-reference during it cancels.

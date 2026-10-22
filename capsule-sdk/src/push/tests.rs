@@ -518,6 +518,8 @@ struct Faults {
 struct CustodyRun {
     pushed: Result<AssetPushReport, PushError>,
     custody: Option<Result<VerifiedCustody, PushError>>,
+    /// Every transfer event the push and the custody check published, in order.
+    events: Vec<TransferEvent>,
 }
 
 /// Every receipt the mock server would issue for `bundle`, keyed by content address.
@@ -661,7 +663,11 @@ async fn custody_run(faults: Faults) -> (tempfile::TempDir, UploadBundle, Custod
     });
     let server = MockServer::start(move |req: &MockRequest| state.answer(req)).await;
 
-    let uploads = server.client(&bundle.protocol_version);
+    let events = TransferEvents::channel(4096);
+    let mut subscriber = events.subscribe().unwrap();
+    let uploads = server
+        .client(&bundle.protocol_version)
+        .with_events(events.clone());
     let verify = StorageVerifyClient::new(VerifyTransport::with_static_token(
         reqwest::Client::new(),
         server.base_url(),
@@ -674,18 +680,31 @@ async fn custody_run(faults: Faults) -> (tempfile::TempDir, UploadBundle, Custod
     let pushed = push_bundle(&uploads, &scheduler, &bundle, &HashSet::new(), false).await;
     let custody = match &pushed {
         Ok(report) => Some(
-            verify_custody(
+            verify_custody_with_events(
                 &verify,
                 &[attestation_key().verifying_key()],
                 &bundle,
                 report,
                 now(),
+                &events,
             )
             .await,
         ),
         Err(_) => None,
     };
-    (dir, bundle, CustodyRun { pushed, custody })
+    let mut published = Vec::new();
+    while let Ok(event) = subscriber.try_recv() {
+        published.push(event);
+    }
+    (
+        dir,
+        bundle,
+        CustodyRun {
+            pushed,
+            custody,
+            events: published,
+        },
+    )
 }
 
 /// **The honest path.** A pushed asset is confirmed durable and comes back with one verified
@@ -717,6 +736,105 @@ async fn custody_is_verified_with_one_receipt_per_blob() {
         custody.receipts[1..]
             .iter()
             .all(|r| r.core.envelope_hash.is_none())
+    );
+}
+
+/// **The event stream of a push.** Each blob, in ladder order, opens a session and ends in a
+/// finalize; then the custody check publishes its verdict and one receipt per blob, in the same
+/// order. A progress UI can therefore follow a push to custody from the stream alone.
+#[tokio::test]
+async fn a_push_publishes_each_blob_then_its_custody() {
+    let (_dir, bundle, run) = custody_run(Faults::default()).await;
+    run.custody.unwrap().expect("custody verifies");
+    let hashes: Vec<String> = bundle_blobs(&bundle).into_iter().map(|(_, h)| h).collect();
+    let asset_id = bundle.asset_id.to_string();
+
+    let created: Vec<&str> = run
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            TransferEvent::SessionCreated { blob, .. } => Some(blob.as_str()),
+            _ => None,
+        })
+        .collect();
+    let finalized: Vec<&str> = run
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            TransferEvent::Finalize { blob, .. } => Some(blob.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(created, hashes, "one session per blob, in ladder order");
+    assert_eq!(finalized, hashes, "every blob finalizes, in ladder order");
+
+    let verify_at = run
+        .events
+        .iter()
+        .position(|event| matches!(event, TransferEvent::Verify { .. }))
+        .expect("the verdict is published");
+    assert_eq!(
+        run.events[verify_at],
+        TransferEvent::Verify {
+            asset_id: asset_id.clone(),
+            durable: true,
+            blobs: hashes.len() as u64,
+            not_durable: 0,
+        }
+    );
+    let last_finalize = run
+        .events
+        .iter()
+        .rposition(|event| matches!(event, TransferEvent::Finalize { .. }))
+        .unwrap();
+    assert!(
+        last_finalize < verify_at,
+        "custody is asked after the transfer"
+    );
+    let receipts: Vec<(String, String, u64)> = run.events[verify_at + 1..]
+        .iter()
+        .map(|event| match event {
+            TransferEvent::Receipt {
+                asset_id,
+                blob,
+                receipt_seq,
+            } => (asset_id.clone(), blob.clone(), *receipt_seq),
+            other => panic!("only receipts follow the verdict, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        receipts,
+        hashes
+            .iter()
+            .enumerate()
+            .map(|(seq, hash)| (asset_id.clone(), hash.clone(), seq as u64 + 1))
+            .collect::<Vec<_>>(),
+        "one verified receipt per blob, in ladder order"
+    );
+}
+
+/// **A refused verdict is published, and no receipt follows it.**
+#[tokio::test]
+async fn a_non_durable_verdict_is_published_without_receipts() {
+    let (_dir, bundle, run) = custody_run(Faults {
+        not_durable: true,
+        ..Faults::default()
+    })
+    .await;
+    let blobs = bundle_blobs(&bundle).len() as u64;
+    let tail: Vec<&TransferEvent> = run
+        .events
+        .iter()
+        .skip_while(|event| !matches!(event, TransferEvent::Verify { .. }))
+        .collect();
+    assert_eq!(
+        tail,
+        [&TransferEvent::Verify {
+            asset_id: bundle.asset_id.to_string(),
+            durable: false,
+            blobs,
+            not_durable: blobs,
+        }]
     );
 }
 

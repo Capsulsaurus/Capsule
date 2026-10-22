@@ -8,9 +8,9 @@
 //! port around and the one a single-process conformance suite cannot prove. Every mutating
 //! operation here is one `BEGIN … COMMIT` that takes `SELECT … FOR UPDATE` on the asset row
 //! first, mints from `owner_sequences` inside it, and commits both together. A lifecycle op
-//! additionally takes a transaction-scoped advisory lock on its **album** before it reads the
-//! album's epoch (invariant 18), because that mark is a fact about sibling rows the asset lock
-//! does not cover.
+//! and a create's manifest landing additionally take a transaction-scoped advisory lock on the
+//! **album** before reading its epoch (invariant 18), because that mark is a fact about sibling
+//! rows the asset lock does not cover.
 //!
 //! `owner_sequences` is a **counter row**, never a Postgres `SEQUENCE` or a `bigserial`.
 //! `nextval` is deliberately non-transactional: it hands 5 and 6 to two concurrent
@@ -45,11 +45,12 @@ use sea_orm::{
 use super::{
     AssetIndex, AssetRow, AssetState, BlobOutcome, BlobRecord, BlobRef, BlobReference, Custody,
     FeedEntry, HoldOutcome, IndexFuture, LifecycleOp, OpAction, OpOutcome, PendingAsset,
-    PurgeOutcome, Receipted, Reservation, RestoreOutcome, ServingHold, entry_for, is_singular,
-    set_singular,
+    PurgeOutcome, Receipted, Reservation, RestoreOutcome, ServingHold, create_epoch, entry_for,
+    is_singular, set_singular,
 };
 use crate::attestation;
 use crate::blob::ContentAddress;
+use crate::ledger::LedgerHead;
 use crate::postgres::error::Port;
 use crate::postgres::time::{from_micros, stored, to_micros};
 use crate::store::{AlbumId, AssetId, BlobRole, OwnerId, StoreError};
@@ -151,6 +152,14 @@ fn hash_from(bytes: Option<Vec<u8>>) -> Result<Option<Hash32>, StoreError> {
 /// than a number to clamp.
 fn sequence_from(value: i64) -> Result<u64, StoreError> {
     u64::try_from(value).map_err(|_| PORT.undecodable(format!("{value} is not a sequence number")))
+}
+
+/// A ledger position as the column holds it.
+fn sequence_to(seq: u64) -> Result<i64, StoreError> {
+    i64::try_from(seq).map_err(|_| StoreError::Rejected {
+        store: PORT.store,
+        detail: format!("ledger position {seq} is past what a BIGINT column holds"),
+    })
 }
 
 /// A byte count as the column holds it.
@@ -537,6 +546,20 @@ async fn record_in(
         // bytes under a signature that still verifies against the old ones.
         return Ok(BlobOutcome::Conflict);
     }
+    // Invariant 18 for a create: the manifest landing here publishes its epoch, so it is checked
+    // against the album's high-water mark in the critical section `apply_op` reads it in.
+    if let Some(submitted) = create_epoch(&row, &blob) {
+        let stored = album_epoch_locked(transaction, &row.album_id).await?;
+        if submitted < stored {
+            tracing::info!(
+                %asset,
+                stored,
+                submitted,
+                "a create was refused: its manifest's album epoch regresses"
+            );
+            return Ok(BlobOutcome::AmkRegressed { stored });
+        }
+    }
 
     let mut row = row;
     row.blobs.push(BlobRef {
@@ -552,12 +575,16 @@ async fn record_in(
 
     // The create's provenance blob is the asset's first accepted manifest, so it is the chain
     // the first lifecycle op must name (invariant 17). Set from the record's own
-    // `manifest_sha256` and never from the content address (`S-C31`).
+    // `manifest_sha256` and never from the content address (`S-C31`). The manifest's album-key
+    // epoch lands with it: invariant 18 reads the album's high-water mark off the rows.
     if blob.role == BlobRole::Provenance
         && row.chain_head.is_none()
         && let Some(manifest_sha256) = blob.manifest_sha256
     {
         row.chain_head = Some(manifest_sha256);
+        if let Some(amk_version) = blob.amk_version {
+            row.amk_version = amk_version;
+        }
     }
 
     let minted = if row.state == AssetState::Tombstoned {
@@ -599,6 +626,51 @@ fn log_application(op: &LifecycleOp, sync_seq: u64) {
         sync_seq,
         "a lifecycle write was applied"
     );
+}
+
+/// The album's invariant-18 high-water mark, read inside the album's critical section.
+///
+/// **Serialized per album before the mark is read.** The caller's row lock covers one asset
+/// only, and at `READ COMMITTED` the `MAX` below would otherwise see nothing a concurrent write
+/// on a *sibling* asset has not yet committed: an epoch-1 write and an epoch-2 write would both
+/// read the old mark, both pass, and the epoch-1 write could mint — and reach the feed — after
+/// the epoch-2 one. A transaction-scoped advisory lock on the album makes the read, the decision
+/// and the write one critical section per album, which is what the in-memory double's single
+/// mutex gives it. Both writes that publish an epoch take it — a lifecycle op and a create's
+/// manifest landing — so they are ordered against each other as well as among themselves.
+///
+/// The key is prefixed so it cannot share `membership`'s lock on the same album id; a 32-bit
+/// `hashtext` collision costs serialization, never correctness, as `membership/postgres.rs` sets
+/// out. Each transaction takes exactly one such lock, always after its one asset-row lock, so
+/// two writers cannot wait on each other.
+async fn album_epoch_locked(
+    transaction: &DatabaseTransaction,
+    album: &AlbumId,
+) -> Result<u64, StoreError> {
+    transaction
+        .execute_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "SELECT pg_advisory_xact_lock(hashtext('asset_index_album:' || $1))",
+            [Value::from(album.as_str().to_owned())],
+        ))
+        .await
+        .map_err(PORT.failing("locking an album's epoch"))?;
+    let epoch = transaction
+        .query_one_raw(Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "SELECT COALESCE(MAX(amk_version), 0) AS stored FROM assets WHERE album_id = $1",
+            [Value::from(album.as_str().to_owned())],
+        ))
+        .await
+        .map_err(PORT.failing("reading an album's epoch"))?
+        .ok_or_else(|| StoreError::Rejected {
+            store: PORT.store,
+            detail: "the album epoch query returned no row".to_owned(),
+        })?;
+    let column: i64 = epoch
+        .try_get("", "stored")
+        .map_err(PORT.failing("reading an album's epoch"))?;
+    sequence_from(column)
 }
 
 /// [`AssetIndex::apply_op`]'s decision and write, inside `transaction`.
@@ -668,42 +740,8 @@ async fn apply_in(
 
     // Invariant 18, over the **album's** high-water mark rather than this row's: an epoch is an
     // album-wide fact, so an op on a stale asset must not re-admit an epoch the album has
-    // already moved past.
-    //
-    // **Serialized per album before the mark is read.** The row lock above covers this asset
-    // only, and at `READ COMMITTED` the `MAX` below would otherwise see nothing a concurrent op
-    // on a *sibling* asset has not yet committed: an epoch-1 op and an epoch-2 op would both
-    // read the old mark, both pass, and the epoch-1 op could mint — and reach the feed — after
-    // the epoch-2 one. A transaction-scoped advisory lock on the album makes the read, the
-    // decision and the write one critical section per album, which is what the in-memory
-    // double's single mutex gives it. The key is prefixed so it cannot share `membership`'s
-    // lock on the same album id; a 32-bit `hashtext` collision costs serialization, never
-    // correctness, as `membership/postgres.rs` sets out. Each transaction takes exactly one such
-    // lock, always after its one asset-row lock, so two ops cannot wait on each other.
-    transaction
-        .execute_raw(Statement::from_sql_and_values(
-            DbBackend::Postgres,
-            "SELECT pg_advisory_xact_lock(hashtext('asset_index_album:' || $1))",
-            [Value::from(op.album_id.as_str().to_owned())],
-        ))
-        .await
-        .map_err(PORT.failing("locking an album's epoch"))?;
-    let epoch = transaction
-        .query_one_raw(Statement::from_sql_and_values(
-            DbBackend::Postgres,
-            "SELECT COALESCE(MAX(amk_version), 0) AS stored FROM assets WHERE album_id = $1",
-            [Value::from(op.album_id.as_str().to_owned())],
-        ))
-        .await
-        .map_err(PORT.failing("reading an album's epoch"))?
-        .ok_or_else(|| StoreError::Rejected {
-            store: PORT.store,
-            detail: "the album epoch query returned no row".to_owned(),
-        })?;
-    let column: i64 = epoch
-        .try_get("", "stored")
-        .map_err(PORT.failing("reading an album's epoch"))?;
-    let album_epoch = sequence_from(column)?;
+    // already moved past. Read under the album's lock, which `album_epoch_locked` explains.
+    let album_epoch = album_epoch_locked(transaction, &op.album_id).await?;
     if op.amk_version < album_epoch {
         tracing::info!(
             asset = %op.asset_id,
@@ -1428,6 +1466,120 @@ impl AssetIndex for PostgresAssetIndex {
             let epoch = sequence_from(epoch)?;
             tracing::info!(%owner, epoch, "an owner moved to a new sync epoch");
             Ok(epoch)
+        })
+    }
+
+    fn ledger_head<'a>(&'a self, owner: &'a OwnerId) -> IndexFuture<'a, Option<LedgerHead>> {
+        Box::pin(async move {
+            let found = self
+                .connection
+                .query_one_raw(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "SELECT ledger_seq, ledger_hash FROM owner_ledger_heads WHERE owner_id = $1",
+                    [Value::from(owner.as_str().to_owned())],
+                ))
+                .await
+                .map_err(PORT.failing("reading an owner's ledger head"))?;
+            let Some(found) = found else { return Ok(None) };
+            let seq: i64 = found
+                .try_get("", "ledger_seq")
+                .map_err(PORT.failing("reading an owner's ledger head"))?;
+            let hash: Vec<u8> = found
+                .try_get("", "ledger_hash")
+                .map_err(PORT.failing("reading an owner's ledger head"))?;
+            let hash = hash_from(Some(hash))?
+                .ok_or_else(|| PORT.undecodable("a stored ledger head has no hash".to_owned()))?;
+            Ok(Some(LedgerHead {
+                seq: sequence_from(seq)?,
+                hash,
+            }))
+        })
+    }
+
+    fn anchored_owners(&self) -> IndexFuture<'_, Vec<OwnerId>> {
+        Box::pin(async move {
+            // `COLLATE "C"`: byte order, which is the order the in-memory adapter and the ledger's
+            // own listing use.
+            let found = self
+                .connection
+                .query_all_raw(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "SELECT owner_id FROM owner_ledger_heads ORDER BY owner_id COLLATE \"C\"",
+                    [],
+                ))
+                .await
+                .map_err(PORT.failing("listing the owners with a ledger head"))?;
+            let column = PORT.failing("reading an anchored owner");
+            found
+                .iter()
+                .map(|row| {
+                    row.try_get::<String>("", "owner_id")
+                        .map(OwnerId::new)
+                        .map_err(&column)
+                })
+                .collect()
+        })
+    }
+
+    fn record_ledger_head<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        head: LedgerHead,
+    ) -> IndexFuture<'a, ()> {
+        Box::pin(async move {
+            // One conditional upsert: the comparison and the write are one statement, so two
+            // appends recording out of order cannot pull the head back.
+            self.connection
+                .execute_raw(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "INSERT INTO owner_ledger_heads (owner_id, ledger_seq, ledger_hash) \
+                     VALUES ($1, $2, $3) \
+                     ON CONFLICT (owner_id) DO UPDATE \
+                     SET ledger_seq = EXCLUDED.ledger_seq, ledger_hash = EXCLUDED.ledger_hash \
+                     WHERE owner_ledger_heads.ledger_seq < EXCLUDED.ledger_seq",
+                    [
+                        Value::from(owner.as_str().to_owned()),
+                        Value::from(sequence_to(head.seq)?),
+                        Value::from(head.hash.as_bytes().to_vec()),
+                    ],
+                ))
+                .await
+                .map_err(PORT.failing("recording an owner's ledger head"))?;
+            Ok(())
+        })
+    }
+
+    fn reset_ledger_head<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        head: Option<LedgerHead>,
+    ) -> IndexFuture<'a, ()> {
+        Box::pin(async move {
+            let statement = match head {
+                Some(head) => Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "INSERT INTO owner_ledger_heads (owner_id, ledger_seq, ledger_hash) \
+                     VALUES ($1, $2, $3) \
+                     ON CONFLICT (owner_id) DO UPDATE \
+                     SET ledger_seq = EXCLUDED.ledger_seq, ledger_hash = EXCLUDED.ledger_hash",
+                    [
+                        Value::from(owner.as_str().to_owned()),
+                        Value::from(sequence_to(head.seq)?),
+                        Value::from(head.hash.as_bytes().to_vec()),
+                    ],
+                ),
+                None => Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "DELETE FROM owner_ledger_heads WHERE owner_id = $1",
+                    [Value::from(owner.as_str().to_owned())],
+                ),
+            };
+            self.connection
+                .execute_raw(statement)
+                .await
+                .map_err(PORT.failing("resetting an owner's ledger head"))?;
+            tracing::info!(%owner, ledger_seq = ?head.map(|head| head.seq), "re-anchored an owner ledger");
+            Ok(())
         })
     }
 
