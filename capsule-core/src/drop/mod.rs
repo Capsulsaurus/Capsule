@@ -551,6 +551,7 @@ mod tests {
             action: Action::Create,
             prior_provenance_hash: None,
             upgraded_from: None,
+            unknown: Default::default(),
             retention_until: None,
         };
         let manifest = core.sign(&f.device, &f.write).unwrap();

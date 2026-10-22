@@ -267,6 +267,7 @@ mod tests {
             action,
             prior_provenance_hash: prior,
             upgraded_from: None,
+            unknown: Default::default(),
             retention_until: None,
         };
         let _ = c.clone().sign(&dev, &wt); // ensure it's a well-formed signable core

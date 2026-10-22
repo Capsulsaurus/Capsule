@@ -753,17 +753,14 @@ impl Workspace {
             action: Action::Create,
             prior_provenance_hash: None,
             upgraded_from: None,
+            unknown: Default::default(),
             retention_until: None,
         };
         let manifest = core.sign(self.device_signer.as_ref(), album.write_tier_signer()?)?;
 
         let mut chain = ProvenanceChain::new();
         chain
-            .append(ProvenanceRecord {
-                asset_id,
-                manifest: manifest.clone(),
-                prior_provenance_hash: None,
-            })
+            .append(ProvenanceRecord::new(asset_id, manifest.clone(), None))
             .map_err(|e| LifecycleError::Cbor(format!("chain: {e}")))?;
 
         // Self-check: the asset must verify through the one chokepoint, and the sealed metadata
