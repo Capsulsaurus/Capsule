@@ -26,6 +26,7 @@
 //!
 //! [Versioning — Validation]: https://docs/design/versioning/#validation
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use base64::Engine as _;
@@ -44,7 +45,7 @@ use capsule_e2e::push::push_asset;
 use capsule_e2e::{Device, PASSWORD, PROTOCOL_VERSION, Server};
 use capsule_sdk::auth::Session;
 use capsule_sdk::rest::types as wire;
-use serde::de::DeserializeOwned;
+use serde::de::{DeserializeOwned, IgnoredAny};
 use serde_json::{Value, json};
 
 /// The account the replayable half of the script registers. A fresh server per replay, so the
@@ -454,10 +455,10 @@ fn golden_records_decode_verify_and_round_trip_byte_identically() {
     for (version, dir) in golden::versions() {
         let records = golden::load_records(&dir);
 
-        let directory_bytes = golden::from_hex(&records.device_directory);
+        let directory_bytes = from_hex(&records.device_directory);
         let directory: DeviceDirectory = cbor::from_slice(&directory_bytes)
             .unwrap_or_else(|e| panic!("{version}: the directory decodes: {e}"));
-        let user_ik = HybridVerifyingKey::from_bytes(&golden::from_hex(&records.user_ik_public))
+        let user_ik = HybridVerifyingKey::from_bytes(&from_hex(&records.user_ik_public))
             .unwrap_or_else(|e| panic!("{version}: the identity key decodes: {e}"));
         assert!(
             directory.verify(&user_ik),
@@ -469,30 +470,95 @@ fn golden_records_decode_verify_and_round_trip_byte_identically() {
             "{version}: the directory re-emits byte for byte"
         );
 
-        let record_bytes = golden::from_hex(&records.provenance_record);
-        let record = ProvenanceRecord::decode(&record_bytes)
-            .unwrap_or_else(|e| panic!("{version}: the provenance record decodes: {e}"));
-        assert_eq!(
-            cbor::to_canonical_vec(&record).expect("re-encodes"),
-            record_bytes,
-            "{version}: the record re-emits byte for byte"
-        );
-        assert_eq!(
-            record.record_hash(),
-            hash_bytes(&record_bytes),
-            "{version}: the chain hash is the digest of the bytes served"
-        );
-        let signer = directory
-            .device(&record.manifest.core.created_by_device)
-            .unwrap_or_else(|| panic!("{version}: the directory lists the signing device"));
+        let record = check_record(&version, &directory, &records.provenance_record);
         assert!(
-            signer.dsk_public.verify(
-                &record.manifest.signing_bytes(),
-                &record.manifest.device_sig
-            ),
-            "{version}: the manifest's device signature verifies"
+            record.manifest.core.unknown.is_empty(),
+            "{version}: this version's own writer emits no key it does not define"
+        );
+
+        // Invariant 2: a newer writer's keys survive the read, the re-emit and the signature,
+        // and dropping them fails verification.
+        let at = format!("{version} (unknown fields)");
+        let future = check_record(
+            &at,
+            &directory,
+            &records.provenance_record_with_unknown_fields,
+        );
+        assert!(
+            !future.manifest.core.unknown.is_empty(),
+            "{at}: the record carries keys this build does not define"
+        );
+        let mut stripped = future.manifest.clone();
+        stripped.core.unknown.clear();
+        let signer = directory
+            .device(&stripped.core.created_by_device)
+            .expect("checked above");
+        assert!(
+            !signer
+                .dsk_public
+                .verify(&stripped.signing_bytes(), &stripped.device_sig),
+            "{at}: stripping the unknown keys fails verification"
         );
     }
+}
+
+/// Decode the hex-encoded provenance record `hex`, and assert it re-emits byte for byte, its
+/// chain hash is the digest of those bytes, and its manifest's device signature verifies under
+/// the device `directory` lists for it.
+fn check_record(at: &str, directory: &DeviceDirectory, hex: &str) -> ProvenanceRecord {
+    let bytes = from_hex(hex);
+    let record = ProvenanceRecord::decode(&bytes)
+        .unwrap_or_else(|e| panic!("{at}: the provenance record decodes: {e}"));
+    assert_eq!(
+        cbor::to_canonical_vec(&record).expect("re-encodes"),
+        bytes,
+        "{at}: the record re-emits byte for byte"
+    );
+    assert_eq!(
+        record.record_hash(),
+        hash_bytes(&bytes),
+        "{at}: the chain hash is the digest of the bytes served"
+    );
+    let signer = directory
+        .device(&record.manifest.core.created_by_device)
+        .unwrap_or_else(|| panic!("{at}: the directory lists the signing device"));
+    assert!(
+        signer.dsk_public.verify(
+            &record.manifest.signing_bytes(),
+            &record.manifest.device_sig
+        ),
+        "{at}: the manifest's device signature verifies"
+    );
+    record
+}
+
+/// The bytes a fixture's hex spells; a fixture that does not parse is a broken fixture.
+fn from_hex(hex: &str) -> Vec<u8> {
+    hex::decode(hex).expect("a golden record is hex")
+}
+
+/// The length of the canonical CBOR map header at the start of `bytes`, if it is one that
+/// declares exactly `entries` entries (RFC 8949 §3: major type 5, shortest-form argument).
+fn map_header_len(bytes: &[u8], entries: usize) -> Option<usize> {
+    let first = *bytes.first()?;
+    if first >> 5 != 5 {
+        return None;
+    }
+    let (len, count) = match first & 0x1F {
+        info @ 0..=23 => (1, u64::from(info)),
+        24 => (2, u64::from(*bytes.get(1)?)),
+        25 => (
+            3,
+            u64::from(u16::from_be_bytes(bytes.get(1..3)?.try_into().ok()?)),
+        ),
+        26 => (
+            5,
+            u64::from(u32::from_be_bytes(bytes.get(1..5)?.try_into().ok()?)),
+        ),
+        27 => (9, u64::from_be_bytes(bytes.get(1..9)?.try_into().ok()?)),
+        _ => return None,
+    };
+    (count == entries as u64).then_some(len)
 }
 
 /// Records, the older-reader direction (invariant 3): the golden record leads with its
@@ -504,16 +570,25 @@ fn a_golden_record_from_a_newer_writer_is_refused_not_misread() {
     const VERSION_KEY: &[u8] = b"\x67version";
     let newer = u64::from(PROVENANCE_RECORD_VERSION) + 1;
     for (version, dir) in golden::versions() {
-        let bytes = golden::from_hex(&golden::load_records(&dir).provenance_record);
+        let bytes = from_hex(&golden::load_records(&dir).provenance_record);
         let record = ProvenanceRecord::decode(&bytes).expect("the golden record decodes");
 
-        // A map of four entries is one header byte; the first key after it is `version`.
-        assert_eq!(bytes[0], 0xA4, "{version}: a four-entry map");
+        // The record is a map; the first key after its header is `version`, however many
+        // entries a later version adds. Only the keys are counted, so the values are skipped.
+        #[expect(
+            clippy::zero_sized_map_values,
+            reason = "counts keys; values are skipped"
+        )]
+        let entries = cbor::from_slice::<BTreeMap<String, IgnoredAny>>(&bytes)
+            .expect("a record is a text-keyed map")
+            .len();
+        let header = map_header_len(&bytes, entries)
+            .unwrap_or_else(|| panic!("{version}: a canonical {entries}-entry map header"));
         assert!(
-            bytes[1..].starts_with(VERSION_KEY),
+            bytes[header..].starts_with(VERSION_KEY),
             "{version}: the record leads with its version (invariant 2)"
         );
-        let at = 1 + VERSION_KEY.len();
+        let at = header + VERSION_KEY.len();
         let old = cbor::to_canonical_vec(&u64::from(record.version)).expect("encodes");
         assert!(
             bytes[at..].starts_with(&old),
@@ -677,7 +752,9 @@ async fn record_golden_fixtures() {
     .await;
     assert_eq!(served.status().as_u16(), 200, "the directory is served");
     let directory = served.bytes().await.expect("the directory reads").to_vec();
-    let record = cbor::to_canonical_vec(&device.head_record(&asset)).expect("encodes");
+    let head = device.head_record(&asset);
+    let record = cbor::to_canonical_vec(&head).expect("encodes");
+    let future = cbor::to_canonical_vec(&with_unknown_fields(&device, &head)).expect("encodes");
 
     write(
         &dir,
@@ -686,11 +763,39 @@ async fn record_golden_fixtures() {
             exchanges,
         },
         &Records {
-            device_directory: golden::to_hex(&directory),
-            user_ik_public: golden::to_hex(&device.workspace.user_ik_public().to_bytes()),
-            provenance_record: golden::to_hex(&record),
+            device_directory: hex::encode(&directory),
+            user_ik_public: hex::encode(device.workspace.user_ik_public().to_bytes()),
+            provenance_record: hex::encode(&record),
+            provenance_record_with_unknown_fields: hex::encode(&future),
         },
     );
+}
+
+/// `head` as a newer writer would emit it: its manifest core gains keys no version has
+/// defined — a nested map holding a float and an array, and an array of a full-width integer
+/// and text — and is
+/// re-signed over them by the harness's proposer device, which the published directory lists.
+///
+/// The library keeps its own device key private, so the proposer signs both slots; the golden
+/// suite checks the device signature, the one the directory binds.
+fn with_unknown_fields(device: &Device, head: &ProvenanceRecord) -> ProvenanceRecord {
+    /// A value of whatever CBOR type `value` serializes to, as the manifest's unknown map holds
+    /// it.
+    fn cbor_value<T: serde::Serialize, V: DeserializeOwned>(value: &T) -> V {
+        cbor::from_slice(&cbor::to_canonical_vec(value).expect("encodes")).expect("decodes")
+    }
+
+    let mut core = head.manifest.core.clone();
+    core.created_by_device = device.proposer_id;
+    let nested: BTreeMap<&str, (f64, Vec<i64>)> = BTreeMap::from([("weights", (0.5, vec![-3]))]);
+    core.unknown
+        .insert("x_future_field".to_owned(), cbor_value(&nested));
+    core.unknown
+        .insert("z".to_owned(), cbor_value(&(u64::MAX, "newer")));
+    let manifest = core
+        .sign(&device.proposer, &device.proposer)
+        .expect("the core signs");
+    ProvenanceRecord::new(head.asset_id, manifest, head.prior_provenance_hash)
 }
 
 fn exchange(step: &Step, status: u16, mut response: Value, replay: bool) -> Exchange {

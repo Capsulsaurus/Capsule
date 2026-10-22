@@ -1316,6 +1316,7 @@ dependencies = [
  "capsule-sdk",
  "capsule-server",
  "capsule-wasm",
+ "hex",
  "jiff",
  "kynos",
  "reqwest",

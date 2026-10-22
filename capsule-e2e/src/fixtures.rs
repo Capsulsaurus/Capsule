@@ -276,6 +276,11 @@ pub mod golden {
         /// The head provenance record of the asset the recording pushed: a `create` whose
         /// manifest is signed by a device the directory lists.
         pub provenance_record: String,
+        /// The same asset's record as a newer writer would emit it: its manifest core carries
+        /// keys this version has never defined, and the whole is signed over them by another
+        /// device the directory lists. The record a reader must keep verbatim, re-emit byte for
+        /// byte and still verify (invariant 2).
+        pub provenance_record_with_unknown_fields: String,
     }
 
     /// `capsule-e2e/tests/fixtures/golden`.
@@ -348,28 +353,5 @@ pub mod golden {
             Value::Array(items) => items.iter_mut().for_each(redact_tokens),
             _ => {}
         }
-    }
-
-    /// Lowercase hex.
-    #[must_use]
-    pub fn to_hex(bytes: &[u8]) -> String {
-        use std::fmt::Write as _;
-        bytes
-            .iter()
-            .fold(String::with_capacity(bytes.len() * 2), |mut out, b| {
-                let _ = write!(out, "{b:02x}");
-                out
-            })
-    }
-
-    /// The bytes `hex` spells. Panics on anything but an even run of hex digits: a fixture that
-    /// does not parse is a broken fixture, not an input to tolerate.
-    #[must_use]
-    pub fn from_hex(hex: &str) -> Vec<u8> {
-        assert!(hex.len().is_multiple_of(2), "an even number of hex digits");
-        (0..hex.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("hex digits"))
-            .collect()
     }
 }
