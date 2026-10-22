@@ -70,6 +70,7 @@ function classifyFailure(status: number, code: string | null): DropFailureCode {
             return 'rate_limited';
         case 'error.quota.exceeded':
         case 'error.quota.grace_locked':
+        case 'error.quota.suspended':
             return 'quota';
         case 'error.drop.file_too_large':
         case 'error.upload.file_too_large':
