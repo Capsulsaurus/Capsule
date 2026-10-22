@@ -416,6 +416,9 @@ pub mod error_codes {
     /// `error.sync.cursor_invalid`
     pub const SYNC_CURSOR_INVALID: &str = "error.sync.cursor_invalid";
 
+    /// `error.sync.cursor_stale`
+    pub const SYNC_CURSOR_STALE: &str = "error.sync.cursor_stale";
+
     /// `error.sync.unauthenticated`
     pub const SYNC_UNAUTHENTICATED: &str = "error.sync.unauthenticated";
 

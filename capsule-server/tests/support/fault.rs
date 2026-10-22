@@ -234,4 +234,19 @@ impl AssetIndex for CrashBeforeCommit {
     ) -> IndexFuture<'a, u64> {
         self.inner.album_head_seq(owner, album)
     }
+
+    fn sync_epoch<'a>(&'a self, owner: &'a OwnerId) -> IndexFuture<'a, u64> {
+        self.inner.sync_epoch(owner)
+    }
+
+    fn bump_sync_epoch<'a>(&'a self, owner: &'a OwnerId) -> IndexFuture<'a, u64> {
+        self.inner.bump_sync_epoch(owner)
+    }
+
+    fn restore(
+        &self,
+        row: capsule_server::index::AssetRow,
+    ) -> IndexFuture<'_, capsule_server::index::RestoreOutcome> {
+        self.inner.restore(row)
+    }
 }

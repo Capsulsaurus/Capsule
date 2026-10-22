@@ -881,6 +881,49 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
     /// album's last entry is caught up whatever the owner has minted in other albums since.
     fn album_head_seq<'a>(&'a self, owner: &'a OwnerId, album: &'a AlbumId)
     -> IndexFuture<'a, u64>;
+
+    /// `owner`'s sync epoch: `0` until an index rebuild could not prove the owner's sequence
+    /// complete ([Server Filesystem § Sync Epoch]).
+    ///
+    /// Bound into every cursor the feed mints, so a cursor from before a bump is refused with a
+    /// typed error rather than resumed against numbers that may have been re-issued.
+    ///
+    /// [Server Filesystem § Sync Epoch]: https://github.com/Capsulsaurus/Capsule/blob/master/capsule-docs/src/content/docs/design/filesystem/server.md#sync-epoch-and-client-re-announce
+    fn sync_epoch<'a>(&'a self, owner: &'a OwnerId) -> IndexFuture<'a, u64>;
+
+    /// Move `owner` to its next sync epoch and return it.
+    ///
+    /// Only an index rebuild calls this, when an owner's ledger breaks or loses its tail. It
+    /// never goes backwards: an epoch a client has seen must never be reachable again, or a
+    /// cursor from it would be accepted against numbers it never saw.
+    fn bump_sync_epoch<'a>(&'a self, owner: &'a OwnerId) -> IndexFuture<'a, u64>;
+
+    /// Insert `row`, reconstructed by an index rebuild, unless a row for its asset exists.
+    ///
+    /// **Never overwrites.** A row the index already holds is returned for the caller to
+    /// compare ([`RestoreOutcome::Present`]): a rebuild run alongside a restored backup reports
+    /// a disagreement and leaves the row as it is, because the ledger and the backup are two
+    /// witnesses and the rebuild does not adjudicate between them.
+    ///
+    /// The row keeps the `sync_seq` it carries, so clients' cursors stay valid, and the owner's
+    /// allocator is raised to at least that number in the same operation, so the next
+    /// publication cannot re-issue it.
+    ///
+    /// A row that is not pending and carries **no** `sync_seq` — one whose number the ledger
+    /// could not prove — is numbered by the owner's allocator in the same critical section, as
+    /// a publication is, and its `first_seq` with it. A number read from the head beforehand
+    /// and written later could be minted again by a server still accepting writes between the
+    /// two; the allocator cannot.
+    fn restore(&self, row: AssetRow) -> IndexFuture<'_, RestoreOutcome>;
+}
+
+/// What restoring a rebuilt row did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RestoreOutcome {
+    /// There was no row for the asset; the rebuilt one is now held.
+    Restored,
+    /// A row for the asset already exists, unchanged. Here for the caller to compare.
+    Present(Box<AssetRow>),
 }
 
 /// The roles an asset may hold exactly one of.

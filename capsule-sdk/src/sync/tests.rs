@@ -316,6 +316,53 @@ fn an_entry_without_derivative_manifests_decodes_to_none() {
     assert!(decoded.derivative_manifests.is_empty());
 }
 
+// ─── Sync epoch (#697) ───────────────────────────────────────────────────────
+
+/// A stale cursor is recognised by its code, and nothing else is.
+#[test]
+fn a_stale_cursor_is_recognised_by_its_code() {
+    let stale = SyncError::Rejected {
+        code: Some(error_codes::SYNC_CURSOR_STALE.to_owned()),
+        message: String::new(),
+    };
+    assert!(stale.is_stale_cursor());
+    let invalid = SyncError::Rejected {
+        code: Some(error_codes::SYNC_CURSOR_INVALID.to_owned()),
+        message: String::new(),
+    };
+    assert!(!invalid.is_stale_cursor());
+    assert!(!SyncError::Transport("down".to_owned()).is_stale_cursor());
+}
+
+/// After an epoch change the client starts from zero with no floor, so the rebuilt numbering —
+/// which may sit below the marks it held — applies rather than reading as a rewind.
+#[test]
+fn a_resync_after_an_epoch_change_drops_the_cursor_and_the_marks() {
+    let a = album(11);
+    let mut state = SyncState::new(MAX_KNOWN);
+    state
+        .apply_page(&page(vec![entry(&a, 9, "2026-05-31")], 0x40))
+        .unwrap();
+    assert_eq!(state.high_water(&a), Some(9));
+
+    state.reset_for_resync();
+    assert!(state.cursor().is_start());
+    assert_eq!(state.high_water(&a), None);
+
+    // The rebuilt library numbers the same asset lower; it applies and becomes the new floor.
+    state
+        .apply_page(&page(vec![entry(&a, 4, "2026-05-31")], 0x41))
+        .unwrap();
+    assert_eq!(state.high_water(&a), Some(4));
+    let err = state
+        .apply_page(&page(vec![entry(&a, 3, "2026-05-31")], 0x42))
+        .unwrap_err();
+    assert!(
+        matches!(err, SyncError::Rewind { high_water: 4, .. }),
+        "the anti-rewind layer is re-established from the new epoch's first page"
+    );
+}
+
 /// A manifest that is not base64 is a server that cannot be talked to, as for `manifest_cbor`.
 #[test]
 fn a_derivative_manifest_that_is_not_base64_is_malformed() {

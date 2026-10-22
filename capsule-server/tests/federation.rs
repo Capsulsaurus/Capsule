@@ -273,7 +273,10 @@ async fn a_peer_pulls_the_albums_page_with_a_capability() {
             &CursorScope::peer(&PeerId::new(PEER), &album()),
             Some(&cursor)
         ),
-        Ok(expected[1])
+        Ok(Some(capsule_server::sync::CursorPosition {
+            epoch: 0,
+            position: expected[1]
+        }))
     );
     let resumed = page(
         &fixture,

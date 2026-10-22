@@ -1894,6 +1894,7 @@
   "error.storage.unavailable": "Capsule couldn't check whether your photos are safely stored. Please try again.",
   "error.sync.album_access_denied": "You don't have access to that album.",
   "error.sync.cursor_invalid": "The sync session is out of date. Capsule will resync from the start.",
+  "error.sync.cursor_stale": "Your library was rebuilt on the server. Capsule will resync from the start and keep everything on this device.",
   "error.sync.unauthenticated": "Please sign in again to continue syncing.",
   "error.sync.unavailable": "Capsule could not reach the server to sync. It will try again.",
   "error.unexpected": "Something went wrong during this transfer.",

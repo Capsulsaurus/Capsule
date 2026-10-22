@@ -1,0 +1,33 @@
+# cargo-fuzz targets for the server's decoders of client-written bytes: the one manifest parser
+# (design/filesystem/server.md, "Rebuild").
+#
+# Its own workspace, excluded from the root one, for the reason `capsule-core/fuzz` is: it links
+# libFuzzer, which no shipped artefact may, and it is built only by `cargo fuzz` (`mise run fuzz`)
+# or type-checked by `mise run fuzz-check`. The parser's unit tests run a seeded slice of the same
+# search on every test run; this is the open-ended, coverage-guided one.
+[package]
+name = "capsule-server-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "AGPL-3.0-only"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+capsule-core = { path = "../../capsule-core", default-features = false }
+capsule-server = { path = ".." }
+libfuzzer-sys = "0.4.13"
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "manifest_parser"
+path = "fuzz_targets/manifest_parser.rs"
+test = false
+doc = false
+bench = false

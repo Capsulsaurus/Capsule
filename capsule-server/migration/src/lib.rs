@@ -16,7 +16,8 @@
 //! - `000017` (#524): the checksum ledger's backfill (below);
 //! - `000018` (#544): the sealed user identity key beside the escrow;
 //! - `000019` (#659): an index on `share_serves (address)`, for the collector's live-link check;
-//! - `000020` (#705): `quota_usage.suspended_since`, the quota ledger's suspended state.
+//! - `000020` (#705): `quota_usage.suspended_since`, the quota ledger's suspended state;
+//! - `000021` (#697): `owner_sync_epochs`, the per-owner sync epoch a rebuild bumps.
 //!
 //! # Every instant is a `BIGINT` of microseconds since the Unix epoch
 //!
@@ -100,6 +101,7 @@ migrations![
     m20260902_000018_sealed_identities,
     m20260902_000019_share_serves_address_index,
     m20260902_000020_quota_suspended,
+    m20260902_000021_owner_sync_epochs,
 ];
 
 /// The content checksum of one migration's source: lowercase hex SHA-256.

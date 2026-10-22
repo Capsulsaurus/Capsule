@@ -94,6 +94,8 @@ use crate::index::AssetIndex;
 use crate::index::memory::InMemoryAssetIndex;
 use crate::index::postgres::PostgresAssetIndex;
 use crate::ledger::FilesystemLedger;
+use crate::ledger::rebuild::RebuildContext;
+use crate::ledger::replay::LedgerKeys;
 use crate::membership::{
     InMemoryMembership, MembershipContext, MembershipStore, PostgresMembership,
 };
@@ -205,7 +207,8 @@ pub enum BootError {
 /// `gc`/`purge`/`scrub` need none structural rather than a promise: there is no signing key in
 /// scope here to accidentally require. A maintenance host that had to hold the production
 /// token-signing key to sweep a directory would be a reason to put the key on a maintenance
-/// host.
+/// host. The one key-derived value here is the attestation key's **public** half, which the
+/// scrub verifies owner ledgers under (`ledger_keys`); the signing half is never kept.
 ///
 /// None of them has a wire surface, so none is reachable through the router — which is why
 /// they are a separate assembly rather than fields on [`App`].
@@ -215,6 +218,9 @@ pub struct Maintenance {
     pub collection: CollectionContext,
     /// The integrity scrub's collaborators (`scrub`).
     pub scrub: ScrubContext,
+    /// The index rebuild's collaborators (`rebuild`): the same index, blobs, owner ledgers and
+    /// quota ledger the server writes.
+    pub rebuild: RebuildContext,
     /// The quota ledger, for the operator's suspension (`quota suspend`, `quota unsuspend`).
     ///
     /// The same ledger the server charges. Its limits are the unlimited default because a
@@ -356,7 +362,7 @@ pub async fn assemble_maintenance(config: &Config) -> Result<Maintenance, BootEr
             )
         }
     };
-    let maintenance = stores.maintenance(config.grace_window);
+    let maintenance = stores.maintenance(config.grace_window, ledger_keys(config));
     tracing::info!(
         blob_root = %stores.root.display(),
         grace_window = %config.grace_window,
@@ -433,7 +439,7 @@ struct Stores {
 
 impl Stores {
     /// The operator workers over these stores.
-    fn maintenance(&self, grace_window: jiff::SignedDuration) -> Maintenance {
+    fn maintenance(&self, grace_window: jiff::SignedDuration, keys: LedgerKeys) -> Maintenance {
         Maintenance {
             collection: CollectionContext::new(
                 self.index.clone(),
@@ -449,11 +455,22 @@ impl Stores {
             .with_progress_sweep(Arc::new(self.uploads.clone())),
             // The same share store as the collector's, so a record the collector keeps for a
             // live link is not one the scrub reports as an orphan (#653).
+            //
+            // Check 6 reads the owner ledgers under the same blob root the server appends to.
             scrub: ScrubContext::new(
                 self.index.clone(),
                 self.blobs.clone(),
                 self.uploads.clone(),
                 self.shares.clone(),
+                self.clock.clone(),
+            )
+            .with_ledger(self.ledger.clone(), keys.clone()),
+            rebuild: RebuildContext::new(
+                self.index.clone(),
+                self.blobs.clone(),
+                self.ledger.clone(),
+                self.quotas.clone(),
+                keys,
                 self.clock.clone(),
             ),
             quota: QuotaContext::new(
@@ -463,6 +480,29 @@ impl Stores {
             ),
         }
     }
+}
+
+/// The published attestation key the operator workers verify owner ledgers under.
+///
+/// Derived from `ATTESTATION_KEY_SEED` when the host was given one, and only the **public** half
+/// leaves this function: the signing key is built to compute it and dropped, so the maintenance
+/// assembly still holds nothing that signs. A host given no seed verifies ledger links and
+/// positions only, and its scrub report says so.
+fn ledger_keys(config: &Config) -> LedgerKeys {
+    config
+        .attestation_key_seed
+        .map_or_else(LedgerKeys::default, |seed| {
+            let key = LocalAttestationKey::new(
+                config.server_domain.clone(),
+                capsule_core::crypto::keys::HybridSigningKey::from_seed64(&seed),
+            );
+            LedgerKeys::new(vec![crate::attestation::PublishedKey {
+                key_id: crate::attestation::ReceiptSigner::key_id(&key),
+                public: key.verifying_key(),
+                active_from: jiff::Timestamp::UNIX_EPOCH,
+                active_to: None,
+            }])
+        })
 }
 
 /// The half of [`Stores`] that is the same on both arms: the blob root and the clock.
@@ -963,7 +1003,7 @@ fn compose(
         app,
         // The same stores, so "upload it, then let the collector see it" is a property of the
         // server rather than of two disconnected assemblies.
-        maintenance: stores.maintenance(config.grace_window),
+        maintenance: stores.maintenance(config.grace_window, ledger_keys(config)),
     })
 }
 

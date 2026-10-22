@@ -1064,6 +1064,10 @@
     "message": "La session de synchronisation est obsolète. Capsule va resynchroniser depuis le début.",
     "context": "Machine-translated seed pending human review."
   },
+  "error.sync.cursor_stale": {
+    "message": "Votre bibliothèque a été reconstruite sur le serveur. Capsule va resynchroniser depuis le début et conserver tout ce qui se trouve sur cet appareil.",
+    "context": "Machine-translated seed pending human review."
+  },
   "error.sync.unauthenticated": {
     "message": "Veuillez vous reconnecter pour continuer la synchronisation.",
     "context": "Machine-translated seed pending human review."

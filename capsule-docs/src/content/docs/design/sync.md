@@ -23,6 +23,7 @@ Never original or derivative bytes. The client decrypts metadata, then decides w
 ### Cursor Authenticity and Anti-Rewind
 
 - The cursor is **MAC'd by the server** under a server-only key, bound to the caller and, for an album page, the album (`capsule-server::sync::cursor`). A forged, mutated or foreign cursor is refused; the client re-syncs from zero.
+- The cursor carries the owner's **sync epoch**. After an [index rebuild](/design/filesystem/server/#sync-epoch-and-client-re-announce) moves the epoch, an older cursor is refused with `409 error.sync.cursor_stale`; the client drops its cursor and its high-water marks, resyncs from zero, and keeps everything it holds.
 - Every entry carries the album's `protocol_version` and a per-album, strictly increasing `sync_seq`. The client MUST refuse an entry above its maximum known version, and MUST surface — never apply — a page whose `sync_seq` regresses against its high-water mark.
 - The two layers are independent: the MAC stops forgery, but only the client's high-water mark stops a server replaying its own older, valid cursor ([sync-cursor rewind class](/design/threat-model/scenarios/#damage-scenario--invariant-map)).
 - A feed manifest is verified with [`verify_asset`](/design/cryptography/keys/#write-authorization) over the bytes as received. Bytes that do not decode as a provenance record are quarantined as malformed.

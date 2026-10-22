@@ -1064,6 +1064,10 @@
     "message": "同期セッションが最新ではありません。Capsule は最初から再同期します。",
     "context": "Machine-translated seed pending human review."
   },
+  "error.sync.cursor_stale": {
+    "message": "サーバー上でライブラリが再構築されました。Capsule は最初から再同期し、このデバイス上のものはすべて保持します。",
+    "context": "Machine-translated seed pending human review."
+  },
   "error.sync.unauthenticated": {
     "message": "同期を続けるには、もう一度サインインしてください。",
     "context": "Machine-translated seed pending human review."
