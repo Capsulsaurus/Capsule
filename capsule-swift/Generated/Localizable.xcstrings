@@ -31235,6 +31235,76 @@
         }
       }
     },
+    "cli.help.restore.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download originals from the server and verify them byte for byte"
+          }
+        }
+      }
+    },
+    "cli.help.restore.arg.album": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restore only the assets of this album"
+          }
+        }
+      }
+    },
+    "cli.help.restore.arg.asset": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restore only this asset"
+          }
+        }
+      }
+    },
+    "cli.help.restore.arg.json": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Print the run as one JSON document on stdout: the totals and each asset's outcome (restored, already present, or failed with its error)"
+          }
+        }
+      }
+    },
+    "cli.help.restore.arg.library": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Path to the Capsule library whose album keys open the originals"
+          }
+        }
+      }
+    },
+    "cli.help.restore.arg.out": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Directory the originals are written to, one file per asset named by its id; an interrupted run resumes from what it left there"
+          }
+        }
+      }
+    },
+    "cli.help.restore.arg.passphrase_stdin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read the library passphrase from stdin instead of prompting, so restores work in scripts and CI where there is no terminal"
+          }
+        }
+      }
+    },
     "cli.help.root.about": {
       "localizations": {
         "en": {
@@ -41411,6 +41481,16 @@
         }
       }
     },
+    "error.drop.chunk_unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule couldn't reach the upload service. The upload will resume shortly."
+          }
+        }
+      }
+    },
     "error.drop.file_too_large": {
       "localizations": {
         "en": {
@@ -41765,6 +41845,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "嘗試次數過多。請稍候再試。"
+          }
+        }
+      }
+    },
+    "error.drop.storage_full": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The server is out of storage space. Uploading will resume once space is freed."
           }
         }
       }

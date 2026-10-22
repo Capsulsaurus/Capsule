@@ -42,6 +42,7 @@ pub mod migrate;
 pub mod oidc;
 pub mod remote;
 pub mod repair;
+pub mod restore;
 pub mod session;
 pub mod share;
 pub mod show;
@@ -564,6 +565,32 @@ async fn dispatch(cli: Cli) -> Result<()> {
         } => {
             let ws = open_workspace(&library, passphrase_stdin)?;
             push_workspace(&ws, push_options(dry_run, force, staged), json).await?;
+        }
+
+        // ── Restore ───────────────────────────────────────────────────────
+        Commands::Restore {
+            library,
+            out,
+            album,
+            asset,
+            passphrase_stdin,
+            json,
+        } => {
+            let ws = open_workspace(&library, passphrase_stdin)?;
+            let scope = match (album, asset) {
+                (Some(album), _) => restore::RestoreScope::Album(album),
+                (None, Some(asset)) => restore::RestoreScope::Asset(asset),
+                (None, None) => restore::RestoreScope::Library,
+            };
+            let options = restore::RestoreOptions {
+                scope,
+                out,
+                // As for push: the CLI has no link-quality probe, so it reports the class a
+                // desktop or server run is on.
+                connection: ConnectionClass::Unmetered,
+                range_window: restore::RESTORE_RANGE_WINDOW,
+            };
+            restore_workspace(&ws, &options, json).await?;
         }
 
         // ── Cull ──────────────────────────────────────────────────────────
@@ -1628,6 +1655,51 @@ fn push_failures(bundle: &capsule_i18n::Bundle, summary: &remote::PushSummary) -
             "{}",
             bundle.format(keys::PUSH_FAILED, &[("reason", Value::Str(&reason))])
         )),
+        None => Ok(()),
+    }
+}
+
+/// `capsule restore`: restore the originals in `options.scope` and report the run.
+///
+/// With `json`, the whole run is one JSON document on stdout. Either way every failed asset is
+/// reported and the command exits non-zero when any asset was not restored.
+async fn restore_workspace(
+    workspace: &Workspace,
+    options: &restore::RestoreOptions,
+    json: bool,
+) -> Result<()> {
+    let bundle = i18n::cli_bundle();
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    if !json {
+        println!(
+            "{}",
+            format!(
+                "Restoring from {} into {}...",
+                remote.sync_endpoint,
+                options.out.display()
+            )
+            .green()
+        );
+    }
+    let summary = remote::restore(&remote, &store, workspace, options)
+        .await
+        .map_err(|error| {
+            if matches!(error, remote::RemoteError::NotAuthenticated) {
+                return eyre!("{}", bundle.format(keys::AUTH_NOT_AUTHENTICATED, &[]));
+            }
+            eyre!("restore failed: {}", describe_remote_error(&bundle, &error))
+        })?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+    } else {
+        println!("{}", restore::summary_line(&summary).cyan());
+        for failed in summary.failures() {
+            eprintln!("{}", restore::failure_line(failed).red());
+        }
+    }
+    match restore::failed_run_reason(&summary) {
+        Some(reason) => Err(eyre!("restore failed: {reason}")),
         None => Ok(()),
     }
 }

@@ -773,14 +773,16 @@ impl SessionRejection {
 /// How long a client is told to wait after a collaborator could not answer.
 ///
 /// Short, because an outage the server noticed is usually a reconnect away from over, and the
-/// client resumes from `HEAD` rather than re-sending anything.
-const UNAVAILABLE_RETRY: jiff::SignedDuration = jiff::SignedDuration::from_secs(30);
+/// client resumes from `HEAD` rather than re-sending anything. The guest drop path tells its
+/// guests the same.
+pub(crate) const UNAVAILABLE_RETRY: jiff::SignedDuration = jiff::SignedDuration::from_secs(30);
 
 /// How long a client is told to wait after the disk filled.
 ///
 /// Longer than an outage's: space comes back when an operator or the collector frees it, not when
-/// a connection recovers, and a client polling every few seconds would only fill the log.
-const STORAGE_FULL_RETRY: jiff::SignedDuration = jiff::SignedDuration::from_mins(5);
+/// a connection recovers, and a client polling every few seconds would only fill the log. The
+/// guest drop path tells its guests the same.
+pub(crate) const STORAGE_FULL_RETRY: jiff::SignedDuration = jiff::SignedDuration::from_mins(5);
 
 /// How long a client at the live-session cap is told to wait.
 ///
@@ -789,7 +791,7 @@ const STORAGE_FULL_RETRY: jiff::SignedDuration = jiff::SignedDuration::from_mins
 const SESSION_CAP_RETRY: jiff::SignedDuration = jiff::SignedDuration::from_mins(1);
 
 /// `after` from now, as the Unix seconds a `retry_after` member carries.
-fn retry_at(clock: &dyn Clock, after: jiff::SignedDuration) -> u64 {
+pub(crate) fn retry_at(clock: &dyn Clock, after: jiff::SignedDuration) -> u64 {
     unix_seconds(crate::store::deadline(clock.now(), after))
 }
 

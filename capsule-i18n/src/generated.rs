@@ -221,6 +221,9 @@ pub mod error_codes {
     /// `error.drop.chunk_refused`
     pub const DROP_CHUNK_REFUSED: &str = "error.drop.chunk_refused";
 
+    /// `error.drop.chunk_unavailable`
+    pub const DROP_CHUNK_UNAVAILABLE: &str = "error.drop.chunk_unavailable";
+
     /// `error.drop.file_too_large`
     pub const DROP_FILE_TOO_LARGE: &str = "error.drop.file_too_large";
 
@@ -241,6 +244,9 @@ pub mod error_codes {
 
     /// `error.drop.rate_limited`
     pub const DROP_RATE_LIMITED: &str = "error.drop.rate_limited";
+
+    /// `error.drop.storage_full`
+    pub const DROP_STORAGE_FULL: &str = "error.drop.storage_full";
 
     /// `error.drop.unavailable`
     pub const DROP_UNAVAILABLE: &str = "error.drop.unavailable";

@@ -7,7 +7,11 @@
 //! (a device never issues the same `add_id` twice), and a device never writes two different
 //! values under one stamp.
 //!
+//! The suite runs under [`support::seeded`]: a fixed, printed seed that a failure replays from.
+//!
 //! [Metadata — Grouping Convergence]: https://docs/design/metadata/#grouping-convergence-requirement
+
+mod support;
 
 use std::collections::BTreeMap;
 
@@ -175,6 +179,8 @@ fn stack_state(doc: &StackDocV1) -> (OrSet<String>, BTreeMap<String, Value>) {
 }
 
 proptest! {
+    #![proptest_config(support::seeded(256))]
+
     #[test]
     fn or_set_merge_is_commutative_associative_idempotent(
         a in or_set(), b in or_set(), c in or_set()
