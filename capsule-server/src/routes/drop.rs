@@ -48,6 +48,7 @@ use kynos::prelude::*;
 use kynos::response::status::NoContent;
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq as _;
+use tracing::Instrument as _;
 use uuid::Uuid;
 
 use crate::auth::AccessToken;
@@ -55,7 +56,7 @@ use crate::blob::ContentAddress;
 use crate::client_addr::ClientAddr;
 use crate::counter::{Budget, CounterContext, CounterKey, Verdict, budgets, unix_seconds};
 use crate::drop::{
-    Admission, DropContext, InboxEntry, LinkCaps, LinkProvisionOutcome, UploadLinkRecord,
+    Admission, DropContext, InboxEntry, LinkCaps, LinkProvisionOutcome, UploadLinkRecord, deposit,
     is_opaque_id,
 };
 use crate::routes::upload::{STORAGE_FULL_RETRY, UNAVAILABLE_RETRY, retry_at};
@@ -1039,8 +1040,12 @@ pub async fn append_drop_chunk(
         DropChunkRejection::unavailable(drops.clock())
     })?;
     // The session must belong to *this* link's owner, or a guest holding one link could append
-    // to another's session by guessing its id.
-    let Some(record) = record.filter(|record| record.upload_user_id == link.owner_id) else {
+    // to another's session by guessing its id — and it must be a drop: the owner's own album
+    // uploads share the session store, and one finished through here would be deposited rather
+    // than finalized.
+    let Some(record) =
+        record.filter(|record| record.upload_user_id == link.owner_id && record.is_guest_drop())
+    else {
         return Err(DropChunkRejection::NotFound);
     };
     if !record.status.is_active() || record.status == UploadSessionStatus::WaitingForProcessing {
@@ -1072,32 +1077,42 @@ pub async fn append_drop_chunk(
         return Err(DropChunkRejection::refused("the chunk is not its checksum"));
     }
 
-    let accepted = chunk::append(
-        drops.sessions(),
-        drops.blobs(),
-        drops.clock(),
-        &record,
-        offset,
-        bytes,
-        &received_hash,
+    // The append and the deposit it triggers are one task, awaited here for the answer: a guest
+    // who disconnects drops this future, and neither may stop with it — a drop whose last chunk
+    // was recorded and never deposited is a full session nobody finishes, and one stopped after
+    // its commit is bytes with no inbox row (#818).
+    let landed = tokio::spawn(
+        append_and_deposit(drops.clone(), record, offset, body, received_hash)
+            .instrument(tracing::Span::current()),
     )
     .await
+    .map_err(|join| {
+        // A panic inside the append or the deposit. A claim it held is left for the next boot's
+        // recovery; a full session it left unclaimed is deposited by the guest's replay.
+        tracing::error!(error = %join, "the drop chunk task did not finish");
+        DropChunkRejection::internal()
+    })?
     .map_err(|error| {
         tracing::error!(%error, "a drop chunk could not be appended");
         DropChunkRejection::unavailable(drops.clock())
     })?;
 
-    let next_offset = match accepted {
-        chunk::Accepted::Advanced {
-            next_offset,
-            complete,
-        } => {
-            if complete {
-                deposit(&drops, &link, &record).await?;
+    if let Some(deposited) = landed.deposited {
+        match deposited {
+            Ok(deposit::Outcome::Filed | deposit::Outcome::AlreadyClaimed) => {}
+            Ok(deposit::Outcome::NotFound) => return Err(DropChunkRejection::NotFound),
+            // Every failure is a `500`, never the chunk path's `503`: the session is terminal,
+            // so a resend of the same chunk could not finish it.
+            Err(failure) => {
+                tracing::error!(%failure, "a finished drop could not be deposited");
+                return Err(DropChunkRejection::internal());
             }
-            next_offset
         }
-        chunk::Accepted::Replayed { next_offset } => next_offset,
+    }
+
+    let next_offset = match landed.accepted {
+        chunk::Accepted::Advanced { next_offset, .. }
+        | chunk::Accepted::Replayed { next_offset, .. } => next_offset,
         chunk::Accepted::Conflict => {
             return Err(DropChunkRejection::refused(
                 "that offset already holds different bytes",
@@ -1691,82 +1706,56 @@ pub async fn discard_drop(
     Ok(NoContent)
 }
 
-/// File a finished drop in its owner's inbox.
+/// What one drop chunk did, with the deposit it started.
+struct Landed {
+    /// What the append did.
+    accepted: chunk::Accepted,
+    /// The deposit the chunk ran — present when it completed the session, or replayed a chunk of
+    /// a full session nobody had deposited.
+    deposited: Option<Result<deposit::Outcome, deposit::DepositFailure>>,
+}
+
+/// Append one chunk to a drop and, when the session then holds every byte and nobody has
+/// claimed its deposit, deposit it.
 ///
-/// Every failure here is a `500`, never the chunk path's `503`: the last chunk is already
-/// recorded, so the guest's retry of it is answered as a replay and would not reach this
-/// function again.
-async fn deposit(
-    drops: &DropContext,
-    link: &UploadLinkRecord,
-    record: &UploadSessionRecord,
-) -> Result<(), DropChunkRejection> {
-    let address =
-        ContentAddress::parse(&record.expected_hash).map_err(|_| DropChunkRejection::internal())?;
-
-    // The staged bytes are what the guest declared, or nothing is committed. Same check the
-    // album path's finalization runs, and for the same reason: the hash is the only thing that
-    // makes a content address an address.
-    let staged = drops
-        .blobs()
-        .staged_len(&record.upload_id)
-        .await
-        .map_err(|_| DropChunkRejection::internal())?;
-    if staged != Some(record.total_size) {
-        return Err(DropChunkRejection::internal());
-    }
-
-    drops
-        .blobs()
-        .commit(&record.upload_id, &address)
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, "a drop could not be committed");
-            DropChunkRejection::internal()
-        })?;
-
-    let pending = drops
-        .drops()
-        .take_reservation(&record.upload_id)
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, "a drop declaration could not be read back");
-            DropChunkRejection::internal()
-        })?
-        // A finished session with no held declaration is a server-side inconsistency, never a
-        // guest's fault — and filing an inbox row with an empty `kem_ct` would hand the owner a
-        // drop they can never decrypt.
-        .ok_or_else(DropChunkRejection::internal)?;
-
-    drops
-        .drops()
-        .deposit(InboxEntry {
-            drop_id: pending.drop_id,
-            owner_id: link.owner_id.clone(),
-            opaque_id: link.opaque_id.clone(),
-            address,
-            size: record.total_size,
-            content_type: pending.content_type,
-            kem_ct: pending.kem_ct,
-            suggested_filename: pending.suggested_filename,
-            received_at: drops.clock().now(),
-            adopting: false,
-        })
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, "a drop could not be filed in an inbox");
-            DropChunkRejection::internal()
-        })?;
-
-    drops
-        .sessions()
-        .set_status(&record.upload_id, UploadSessionStatus::Completed)
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, "a finished drop's session could not be closed");
-            DropChunkRejection::internal()
-        })?;
-    Ok(())
+/// Run as its own task by [`append_drop_chunk`], so it reaches its end whether or not the
+/// guest's request does. Depositing on a replay is what finishes a drop whose completing
+/// request was lost before it claimed the deposit: the guest's resend is the one request left,
+/// and [`deposit::deposit`]'s claim makes a resend that races the original stand down.
+async fn append_and_deposit(
+    drops: DropContext,
+    record: UploadSessionRecord,
+    offset: u64,
+    body: ChunkBody,
+    received_hash: String,
+) -> Result<Landed, crate::store::StoreError> {
+    let accepted = chunk::append(
+        drops.sessions(),
+        drops.blobs(),
+        drops.clock(),
+        &record,
+        offset,
+        body.bytes(),
+        &received_hash,
+    )
+    .await?;
+    let finishes = matches!(
+        accepted,
+        chunk::Accepted::Advanced { complete: true, .. }
+            | chunk::Accepted::Replayed {
+                unfinished: true,
+                ..
+            }
+    );
+    let deposited = if finishes {
+        Some(deposit::deposit(&drops, &record.upload_id).await)
+    } else {
+        None
+    };
+    Ok(Landed {
+        accepted,
+        deposited,
+    })
 }
 
 /// Put a reservation back, logging rather than failing: the caller is already refusing.

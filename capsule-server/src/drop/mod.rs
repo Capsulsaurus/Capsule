@@ -55,6 +55,7 @@
 //! which each adapter runs under its own lock.
 
 pub mod conformance;
+pub mod deposit;
 pub mod postgres;
 
 use std::collections::BTreeMap;

@@ -1827,3 +1827,336 @@ async fn a_refused_adoption_resolves_its_custody_entry() {
         "a rebuild must not replay a write the server refused"
     );
 }
+
+// ===========================================================================================
+// A full drop reaches the inbox whatever happens to its request (#818)
+// ===========================================================================================
+
+/// Wait, boundedly, for `upload_id`'s session to reach a terminal status, and return it.
+///
+/// The deposit is its own task once the request that started it is gone, so a case that dropped
+/// that request has nothing to await but the store.
+async fn terminal_status(fixture: &Fixture, upload_id: &str) -> &'static str {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let record = fixture
+                .uploads
+                .read_for_test(upload_id)
+                .await
+                .expect("the session survives as a receipt");
+            if record.status.is_terminal() {
+                return record.status.as_str();
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("a full drop session reaches a terminal status")
+}
+
+/// The owner's inbox holds exactly one drop: `bytes`, at their address, with the guest's
+/// encapsulated key.
+async fn assert_one_drop(fixture: &Fixture, bearer: &str, bytes: &[u8]) {
+    let body = inbox(fixture, bearer).await;
+    let drops = body["drops"].as_array().expect("drops");
+    assert_eq!(drops.len(), 1, "exactly one drop is filed: {body}");
+    assert_eq!(drops[0]["ciphertext_hash"], checksum(bytes));
+    assert_eq!(drops[0]["size"], bytes.len());
+    assert_eq!(drops[0]["kem_ct"], BASE64.encode([9_u8; 64]));
+    let address = ContentAddress::parse(&checksum(bytes)).expect("an address");
+    assert!(
+        fixture.blobs.stat(&address).await.expect("stat").is_some(),
+        "the drop's bytes are committed at their address"
+    );
+}
+
+/// Record `last` at `offset` the way the completing request does, and then lose the request
+/// before it claims the deposit: the bytes staged and counted, the session full and unclaimed.
+async fn record_without_depositing(fixture: &Fixture, upload_id: &str, offset: u64, last: &[u8]) {
+    use capsule_server::store::{AcceptedChunk, Clock as _, UploadId, UploadSessionStore as _};
+
+    let upload = UploadId::new(upload_id);
+    fixture
+        .blobs
+        .append(&upload, offset, last)
+        .await
+        .expect("the stage appends");
+    let recorded = fixture
+        .uploads
+        .record_progress(
+            &upload,
+            AcceptedChunk {
+                offset,
+                chunk_hash: checksum(last),
+                next_offset: offset + last.len() as u64,
+                accepted_at: fixture.clock.now(),
+            },
+        )
+        .await
+        .expect("the store records progress")
+        .expect("the session is live");
+    assert_eq!(
+        recorded.received_bytes, recorded.total_size,
+        "the session is full"
+    );
+    assert_eq!(
+        recorded.status.as_str(),
+        "uploading",
+        "and nobody has claimed it"
+    );
+}
+
+/// Run boot recovery over the fixture's stores, as a restarted process would before it binds:
+/// the album recovery and the drop recovery, over the one listing of claims.
+async fn recover_at_boot(
+    fixture: &Fixture,
+) -> (
+    capsule_server::upload::finalize::Recovery,
+    capsule_server::upload::finalize::Recovery,
+) {
+    use capsule_server::attestation::AttestationContext;
+    use capsule_server::drop::DropContext;
+    use capsule_server::upload::UploadContext;
+    use kynos::di::Provides as _;
+
+    let app = fixture.app();
+    let upload: UploadContext = app.provide();
+    let attestation: AttestationContext = app.provide();
+    let drops: DropContext = app.provide();
+    let stranded = upload
+        .sessions()
+        .claimed()
+        .await
+        .expect("the store lists its claims");
+    let albums =
+        capsule_server::upload::finalize::recover(&upload, &attestation, stranded.clone()).await;
+    let deposits = capsule_server::drop::deposit::recover(&drops, stranded).await;
+    (albums, deposits)
+}
+
+#[tokio::test]
+async fn a_guest_who_disconnects_after_the_commit_still_has_their_drop_filed() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let bytes = payload(b'd', 4096);
+    let (id, upload_id) = open_drop(&fixture, &bearer, 60, &bytes).await;
+
+    // The only chunk completes the drop and claims its deposit; park the deposit after its
+    // commit has landed, then drop the request there — the guest's browser went away between
+    // the commit and the inbox row.
+    let hold = fixture.blobs.hold_commits();
+    {
+        let completing = chunk_at(&fixture, &id, &upload_id, 0, &bytes);
+        tokio::pin!(completing);
+        tokio::select! {
+            response = &mut completing => {
+                panic!("the chunk answered before its commit was parked: {}", response.status());
+            }
+            () = hold.entered.notified() => {}
+        }
+    }
+    assert_eq!(
+        fixture.blobs.staged_len_for_test(&upload_id).await,
+        None,
+        "the commit landed before the request went away"
+    );
+    hold.release.add_permits(1);
+
+    // The deposit the request started finishes without it.
+    assert_eq!(terminal_status(&fixture, &upload_id).await, "completed");
+    assert_one_drop(&fixture, &bearer, &bytes).await;
+
+    // The guest's resend finds a finished drop and files nothing twice.
+    chunk_at(&fixture, &id, &upload_id, 0, &bytes)
+        .await
+        .assert_status(StatusCode::CONFLICT);
+    assert_one_drop(&fixture, &bearer, &bytes).await;
+}
+
+#[tokio::test]
+async fn a_full_drop_nobody_deposited_is_deposited_by_the_replay_of_its_last_chunk() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let first = payload(b'r', 4096);
+    let last = payload(b's', 4096);
+    let both: Vec<u8> = first.iter().chain(last.iter()).copied().collect();
+    let (id, upload_id) = open_drop(&fixture, &bearer, 61, &both).await;
+    chunk_at(&fixture, &id, &upload_id, 0, &first)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    record_without_depositing(&fixture, &upload_id, 4096, &last).await;
+    assert!(
+        inbox(&fixture, &bearer).await["drops"]
+            .as_array()
+            .expect("drops")
+            .is_empty(),
+        "nothing filed the drop"
+    );
+
+    let replay = chunk_at(&fixture, &id, &upload_id, 4096, &last).await;
+    replay.assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(
+        replay.header("x-capsule-offset"),
+        Some("8192"),
+        "the replay is answered with the offset its chunk reached"
+    );
+    assert_eq!(terminal_status(&fixture, &upload_id).await, "completed");
+    assert_one_drop(&fixture, &bearer, &both).await;
+}
+
+#[tokio::test]
+async fn a_drop_deposit_whose_process_died_is_recovered_at_boot_and_never_finalized_as_an_album_upload()
+ {
+    use capsule_server::blob::BlobStore as _;
+    use capsule_server::store::UploadId;
+
+    for committed in [false, true] {
+        let fixture = Fixture::working();
+        let bearer = fixture.bearer().await;
+        let first = payload(b'b', 4096);
+        let last = payload(b'c', 4096);
+        let both: Vec<u8> = first.iter().chain(last.iter()).copied().collect();
+        let (id, upload_id) = open_drop(&fixture, &bearer, 62, &both).await;
+        chunk_at(&fixture, &id, &upload_id, 0, &first)
+            .await
+            .assert_status(StatusCode::NO_CONTENT);
+        // Full and claimed, and — when `committed` — already at its address: the session a
+        // process that died mid-deposit leaves.
+        record_without_depositing(&fixture, &upload_id, 4096, &last).await;
+        fixture.uploads.claim_for_test(&upload_id).await;
+        if committed {
+            let address = ContentAddress::parse(&checksum(&both)).expect("an address");
+            fixture
+                .blobs
+                .commit(&UploadId::new(&upload_id), &address)
+                .await
+                .expect("the stage commits");
+        }
+
+        let (albums, deposits) = recover_at_boot(&fixture).await;
+        assert_eq!(
+            albums,
+            capsule_server::upload::finalize::Recovery::default(),
+            "the album recovery leaves a drop's claim alone (committed: {committed})"
+        );
+        assert_eq!(
+            deposits
+                .completed
+                .iter()
+                .map(UploadId::as_str)
+                .collect::<Vec<_>>(),
+            vec![upload_id.as_str()],
+            "the drop recovery files it (committed: {committed}): {deposits:?}"
+        );
+        assert!(deposits.failed.is_empty(), "{deposits:?}");
+        assert_eq!(terminal_status(&fixture, &upload_id).await, "completed");
+        assert_one_drop(&fixture, &bearer, &both).await;
+
+        // A second boot finds nothing left to recover.
+        let (albums, deposits) = recover_at_boot(&fixture).await;
+        assert_eq!(
+            albums,
+            capsule_server::upload::finalize::Recovery::default()
+        );
+        assert_eq!(
+            deposits,
+            capsule_server::upload::finalize::Recovery::default()
+        );
+    }
+}
+
+/// The link owner holds a drop's session as its uploader, but the album surface is not where a
+/// drop finishes: a chunk sent there is answered as an unknown session, writes nothing, and the
+/// guest's own chunk still deposits the drop.
+#[tokio::test]
+async fn a_drop_session_is_unknown_to_the_album_chunk_path() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let bytes = payload(b'a', 4096);
+    let (id, upload_id) = open_drop(&fixture, &bearer, 64, &bytes).await;
+
+    let refused = fixture.chunk(&upload_id, 0, &bytes, &bearer).send().await;
+    refused.assert_status(StatusCode::NOT_FOUND);
+    assert_eq!(
+        refused.json::<Value>()["code"],
+        "error.upload.session_not_found"
+    );
+    assert_eq!(
+        fixture.blobs.staged_len_for_test(&upload_id).await,
+        Some(0),
+        "nothing landed on the drop's stage"
+    );
+
+    chunk_at(&fixture, &id, &upload_id, 0, &bytes)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(terminal_status(&fixture, &upload_id).await, "completed");
+    assert_one_drop(&fixture, &bearer, &bytes).await;
+}
+
+#[tokio::test]
+async fn a_drop_whose_bytes_are_not_its_declared_hash_is_refused_and_gives_the_link_back() {
+    use capsule_server::drop::DropStore as _;
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let declared = payload(b'h', 4096);
+    let sent = payload(b'x', 4096);
+    let (id, upload_id) = open_drop(&fixture, &bearer, 63, &declared).await;
+    let charged = fixture
+        .dropstore
+        .resolve(&id)
+        .await
+        .expect("the drop store answers")
+        .expect("the link is provisioned");
+    assert_eq!(charged.used_files, 1, "opening the drop reserved a file");
+
+    // Each chunk is its own checksum, so the chunk lands; the whole is not the declared blob.
+    chunk_at(&fixture, &id, &upload_id, 0, &sent)
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        terminal_status(&fixture, &upload_id).await,
+        "failed_processing"
+    );
+
+    let declared_address = ContentAddress::parse(&checksum(&declared)).expect("an address");
+    let sent_address = ContentAddress::parse(&checksum(&sent)).expect("an address");
+    assert!(
+        fixture
+            .blobs
+            .stat(&declared_address)
+            .await
+            .expect("stat")
+            .is_none(),
+        "nothing was placed at the address the guest declared"
+    );
+    assert!(
+        fixture
+            .blobs
+            .stat(&sent_address)
+            .await
+            .expect("stat")
+            .is_none(),
+        "nor anywhere else"
+    );
+    assert_eq!(fixture.blobs.staged_len_for_test(&upload_id).await, None);
+    assert!(
+        inbox(&fixture, &bearer).await["drops"]
+            .as_array()
+            .expect("drops")
+            .is_empty(),
+        "a refused drop files nothing"
+    );
+    let refunded = fixture
+        .dropstore
+        .resolve(&id)
+        .await
+        .expect("the drop store answers")
+        .expect("the link is provisioned");
+    assert_eq!(
+        (refunded.used_files, refunded.used_bytes),
+        (0, 0),
+        "a drop that never landed does not spend the link"
+    );
+}

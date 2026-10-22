@@ -2263,6 +2263,25 @@ async fn a_client_that_disconnects_mid_finalize_does_not_strand_its_session() {
 /// the claim taken — and, when `committed`, the stage already on its content address.
 async fn strand(fixture: &Fixture, id: &str, second: &[u8], whole: &[u8], committed: bool) {
     use capsule_server::blob::{BlobStore as _, ContentAddress};
+    use capsule_server::store::UploadId;
+
+    let upload = UploadId::new(id);
+    record_last_chunk(fixture, id, second).await;
+    fixture.uploads.claim_for_test(id).await;
+    if committed {
+        let address = ContentAddress::parse(&checksum(whole)).expect("the digest is an address");
+        fixture
+            .blobs
+            .commit(&upload, &address)
+            .await
+            .expect("the stage commits");
+    }
+}
+
+/// Stage and record `second` at offset 4096 the way the completing chunk does, and nothing more:
+/// the session is left full and unclaimed, as a request lost before its claim leaves it.
+async fn record_last_chunk(fixture: &Fixture, id: &str, second: &[u8]) {
+    use capsule_server::blob::BlobStore as _;
     use capsule_server::store::{AcceptedChunk, Clock as _, UploadId, UploadSessionStore as _};
 
     let upload = UploadId::new(id);
@@ -2285,15 +2304,65 @@ async fn strand(fixture: &Fixture, id: &str, second: &[u8], whole: &[u8], commit
         .await
         .expect("the store records progress")
         .expect("the session is live");
-    fixture.uploads.claim_for_test(id).await;
-    if committed {
-        let address = ContentAddress::parse(&checksum(whole)).expect("the digest is an address");
+}
+
+#[tokio::test]
+async fn a_full_session_nobody_finalized_is_finalized_by_the_replay_of_its_last_chunk() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, second, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    record_last_chunk(&fixture, &id, &second).await;
+    let stranded = fixture
+        .uploads
+        .read_for_test(&id)
+        .await
+        .expect("the session is live");
+    assert_eq!(
+        (stranded.received_bytes, stranded.status.as_str()),
+        (8192, "uploading"),
+        "full, and nobody has claimed its finalization"
+    );
+
+    let replay = fixture.chunk(&id, 4096, &second, &bearer).send().await;
+    replay.assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(
+        replay.header("x-capsule-offset"),
+        Some("8192"),
+        "the replay is answered with the offset its chunk reached"
+    );
+    assert_eq!(terminal_status(&fixture, &id).await, "completed");
+    assert_indexed_and_durable(&fixture, &bearer, &whole).await;
+}
+
+#[tokio::test]
+async fn a_replay_on_a_session_still_short_of_its_size_finalizes_nothing() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, _, whole) = blob();
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+    for _ in 0..2 {
         fixture
-            .blobs
-            .commit(&upload, &address)
+            .chunk(&id, 0, &first, &bearer)
+            .send()
             .await
-            .expect("the stage commits");
+            .assert_status(StatusCode::NO_CONTENT);
     }
+    let record = fixture
+        .uploads
+        .read_for_test(&id)
+        .await
+        .expect("the session is live");
+    assert_eq!(
+        (record.received_bytes, record.status.as_str()),
+        (4096, "uploading"),
+        "a replay mid-upload claims nothing"
+    );
 }
 
 /// Run boot recovery over the fixture's stores, as a restarted process would before it binds.
