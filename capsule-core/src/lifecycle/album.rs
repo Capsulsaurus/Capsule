@@ -668,6 +668,42 @@ mod tests {
         assert_eq!(a.album_doc(&album).unwrap().current_name(), Some("Trip"));
     }
 
+    /// A persisted album record that was altered after signing, or filed under another album's
+    /// id, is refused when read rather than trusted; one that does not decode is a document
+    /// error.
+    #[test]
+    fn a_tampered_persisted_album_record_is_refused() {
+        let lib = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Trip").unwrap();
+        let other = ws.create_album("Other").unwrap();
+        let path = album_doc_path(lib.path(), &album);
+
+        let mut doc = ws.album_doc(&album).unwrap();
+        doc.name.set(
+            "Hijacked".into(),
+            now_rfc3339(),
+            ws.account.device.device_id,
+        );
+        fs::write(&path, doc.to_canonical_vec()).unwrap();
+        assert!(matches!(
+            ws.album_doc(&album),
+            Err(LifecycleError::UnverifiedDocument(id)) if id == album
+        ));
+
+        fs::copy(album_doc_path(lib.path(), &other), &path).unwrap();
+        assert!(matches!(
+            ws.album_doc(&album),
+            Err(LifecycleError::UnverifiedDocument(id)) if id == album
+        ));
+
+        fs::write(&path, b"not a record").unwrap();
+        assert!(matches!(
+            ws.album_doc(&album),
+            Err(LifecycleError::Document(_))
+        ));
+    }
+
     #[test]
     fn epoch_rotation_keeps_old_assets_verifiable_and_backs_up() {
         let lib = TempDir::new().unwrap();

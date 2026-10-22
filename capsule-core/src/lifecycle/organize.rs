@@ -1105,4 +1105,100 @@ mod tests {
         );
         assert!(ws.apply_remote_stack_doc(stack, elsewhere, &wire).is_err());
     }
+
+    /// A stack in `album` holding one member, labelled `hdr`.
+    fn labelled_stack(ws: &mut Workspace, album: Uuid, src: &Path) -> Uuid {
+        let [member, _, _] = import_trio(ws, album, src);
+        let stack = Uuid::now_v7();
+        ws.set_stack_membership(&member, burst(stack)).unwrap();
+        ws.add_stack_label(stack, "hdr").unwrap();
+        stack
+    }
+
+    /// A remote stack record that opens under the album's AMK is still refused when another
+    /// account's identity key signed it, or when it places the stack in another album; nothing
+    /// is merged.
+    #[test]
+    fn a_remote_stack_record_another_account_signed_is_refused() {
+        use crate::crypto::keys::HybridSigningKey;
+        use crate::metadata::crdt::AddId;
+
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Burst").unwrap();
+        let elsewhere = ws.create_album("Elsewhere").unwrap();
+        let stack = labelled_stack(&mut ws, album, src.path());
+        let keys = ws.album(&album).unwrap();
+        let amk = Amk::from_bytes(keys.amks[&keys.current_epoch]);
+        let forge = |album_id: Uuid, signer: &HybridSigningKey| {
+            let mut doc = StackDocV1::new(stack, album_id);
+            doc.labels.add(
+                "forged".into(),
+                AddId {
+                    device: Uuid::from_u128(0xC),
+                    counter: 0,
+                },
+            );
+            doc.sign(signer);
+            doc.seal(&amk).unwrap()
+        };
+
+        let foreign = forge(album, &HybridSigningKey::generate());
+        assert!(matches!(
+            ws.apply_remote_stack_doc(stack, album, &foreign),
+            Err(LifecycleError::UnverifiedDocument(id)) if id == stack
+        ));
+        let misplaced = forge(elsewhere, &ws.account.user_ik);
+        assert!(matches!(
+            ws.apply_remote_stack_doc(stack, album, &misplaced),
+            Err(LifecycleError::UnverifiedDocument(id)) if id == stack
+        ));
+        assert_eq!(
+            ws.stack_labels(stack).unwrap(),
+            std::collections::BTreeSet::from(["hdr".to_string()])
+        );
+    }
+
+    /// A persisted stack record that was altered after signing, or filed under another stack's
+    /// id, is refused when read rather than trusted.
+    #[test]
+    fn a_tampered_persisted_stack_record_is_refused() {
+        use crate::metadata::crdt::AddId;
+
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Burst").unwrap();
+        let stack = labelled_stack(&mut ws, album, src.path());
+        let path = stack_doc_path(lib.path(), &stack);
+
+        let mut doc = ws.stack_doc(stack).unwrap();
+        doc.labels.add(
+            "injected".into(),
+            AddId {
+                device: Uuid::from_u128(0xC),
+                counter: 0,
+            },
+        );
+        fs::write(&path, doc.to_canonical_vec()).unwrap();
+        assert!(matches!(
+            ws.stack_doc(stack),
+            Err(LifecycleError::UnverifiedDocument(id)) if id == stack
+        ));
+
+        let mut other = StackDocV1::new(Uuid::now_v7(), album);
+        other.sign(&ws.account.user_ik);
+        fs::write(&path, other.to_canonical_vec()).unwrap();
+        assert!(matches!(
+            ws.stack_doc(stack),
+            Err(LifecycleError::UnverifiedDocument(id)) if id == stack
+        ));
+
+        fs::write(&path, b"not a record").unwrap();
+        assert!(matches!(
+            ws.stack_doc(stack),
+            Err(LifecycleError::Document(_))
+        ));
+    }
 }
