@@ -630,6 +630,304 @@ async fn ffi_sync_apply_quarantines_a_newer_record_version() {
     }
 }
 
+// ─── Bounded-memory push and fetch of originals ─────────────────────────────
+
+/// One chunk the mock upload server received: the session it belongs to, the offset it
+/// declared, and its body.
+type ReceivedChunk = (String, u64, Vec<u8>);
+
+/// An upload mock that opens a distinct session per `POST /upload` and records every chunk,
+/// so a test can reassemble one blob and measure the largest window the client sent.
+async fn recording_upload_server(chunks: Arc<std::sync::Mutex<Vec<ReceivedChunk>>>) -> MockServer {
+    let sessions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    MockServer::start(
+        move |req: &MockRequest| match (req.method.as_str(), req.path.as_str()) {
+            ("POST", "/auth/login") => MockResponse::new(200, "OK").json_body(token_json()),
+            ("POST", "/upload") => {
+                let id = format!(
+                    "sess-{}",
+                    sessions.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                );
+                MockResponse::new(201, "Created")
+                    .header("X-Capsule-Offset", "0")
+                    .json_body(
+                        serde_json::json!({
+                            "id": id,
+                            "upload_url": format!("/upload/{id}"),
+                            "suggested_chunk_size": 262_144,
+                        })
+                        .to_string(),
+                    )
+            }
+            ("PATCH", path) if path.starts_with("/upload/sess-") => {
+                let offset = req
+                    .header("X-Capsule-Offset")
+                    .and_then(|o| o.parse().ok())
+                    .unwrap_or(u64::MAX);
+                let session = path.trim_start_matches("/upload/").to_string();
+                if let Ok(mut chunks) = chunks.lock() {
+                    chunks.push((session, offset, req.body.clone()));
+                }
+                MockResponse::new(200, "OK")
+            }
+            _ => MockResponse::new(404, "Not Found").json_body(r#"{"error":"no route"}"#),
+        },
+    )
+    .await
+}
+
+async fn login(server: &MockServer) -> Arc<FfiSession> {
+    FfiCapsuleClient::new(
+        format!("{}/auth", server.base_url()),
+        format!("{}/upload", server.base_url()),
+        PROTOCOL.to_string(),
+        None,
+    )
+    .unwrap()
+    .login("a@example.com".into(), "pw".into())
+    .await
+    .map(finished)
+    .unwrap()
+}
+
+/// A JPEG-tagged plaintext of `len` bytes no codec decodes, so the bundle is the index tier
+/// and the original alone.
+fn original_plaintext(len: usize) -> Vec<u8> {
+    let mut bytes: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+    bytes[..3].copy_from_slice(b"\xFF\xD8\xFF");
+    bytes
+}
+
+/// **The bounded-memory push.** `push_asset` drives a sealed asset's whole ladder inside the
+/// SDK, and the original reaches the wire in windows: every chunk the server receives is at
+/// most the upload strategy's 1 MiB ceiling for an original of this size class, the same
+/// ceiling for a 2 MiB and a 6 MiB original, and each original is several times larger than
+/// the largest chunk. The reassembled chunks hash to the original's content address, so the
+/// windows are the signed ciphertext, in order, with nothing missing.
+#[tokio::test]
+async fn ffi_push_asset_streams_the_original_in_bounded_windows() {
+    const WINDOW_CEILING: usize = 1024 * 1024;
+
+    let lib = tempfile::TempDir::new().unwrap();
+    let workspace = enroll(lib.path());
+    let album = workspace
+        .ensure_album(workspace.default_album_id().unwrap(), "Camera Roll".into())
+        .unwrap();
+    let chunks = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let server = recording_upload_server(chunks.clone()).await;
+    let session = login(&server).await;
+
+    for len in [2 * 1024 * 1024, 6 * 1024 * 1024] {
+        let asset = workspace
+            .seal_asset(
+                album.clone(),
+                "IMG_0042.JPG".into(),
+                original_plaintext(len),
+            )
+            .unwrap();
+        chunks.lock().unwrap().clear();
+
+        let report = session
+            .push_asset(workspace.clone(), asset.clone())
+            .await
+            .unwrap();
+        assert_eq!(report.asset_id, asset);
+        assert_eq!(
+            report
+                .pushed
+                .iter()
+                .map(|b| b.tier.as_str())
+                .collect::<Vec<_>>(),
+            vec!["index", "index", "original"],
+            "the ladder is provenance and metadata, then the original"
+        );
+        let original = &report.pushed[2];
+        let FfiUploadOutcome::Completed { session_id } = &original.outcome else {
+            panic!("the original transferred rather than merged");
+        };
+
+        let received = chunks.lock().unwrap().clone();
+        let original_chunks: Vec<&ReceivedChunk> = received
+            .iter()
+            .filter(|(s, _, _)| s == session_id)
+            .collect();
+        let mut reassembled = Vec::new();
+        for (_, offset, body) in &original_chunks {
+            assert_eq!(*offset, reassembled.len() as u64, "chunks arrive in order");
+            reassembled.extend_from_slice(body);
+        }
+        let largest = original_chunks
+            .iter()
+            .map(|(_, _, body)| body.len())
+            .max()
+            .unwrap();
+        assert!(
+            reassembled.len() >= len,
+            "the ciphertext covers the plaintext"
+        );
+        assert_eq!(
+            capsule_core::crypto::hash::hash_bytes(&reassembled).to_hex(),
+            original.hash,
+            "the windows reassemble to the signed ciphertext"
+        );
+        assert!(
+            largest <= WINDOW_CEILING,
+            "a {len}-byte original went out in a {largest}-byte chunk"
+        );
+        assert!(
+            reassembled.len() > 2 * largest,
+            "the original ({} bytes) is several times its largest chunk ({largest})",
+            reassembled.len()
+        );
+        assert!(report.bytes >= reassembled.len() as u64);
+    }
+}
+
+/// An unknown asset is refused before any request, and a malformed id is the caller's.
+#[tokio::test]
+async fn ffi_push_asset_refuses_an_unknown_asset() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let workspace = enroll(lib.path());
+    let chunks = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let server = recording_upload_server(chunks.clone()).await;
+    let session = login(&server).await;
+
+    match session
+        .push_asset(workspace.clone(), "not-a-uuid".into())
+        .await
+    {
+        Err(FfiError::InvalidArgument { .. }) => {}
+        other => panic!("expected InvalidArgument, got {:?}", other.err()),
+    }
+    match session
+        .push_asset(workspace, uuid::Uuid::now_v7().to_string())
+        .await
+    {
+        Err(FfiError::Workspace { .. }) => {}
+        other => panic!("expected a workspace error, got {:?}", other.err()),
+    }
+    assert!(
+        chunks.lock().unwrap().is_empty(),
+        "nothing reached the wire"
+    );
+}
+
+/// A blob mock serving `blob` at `/v1/blob/{hash}` by `Range`, recording each requested
+/// window's length (`None` for an open-ended range).
+async fn blob_server(
+    blob: Vec<u8>,
+    hash: String,
+    ranges: Arc<std::sync::Mutex<Vec<Option<u64>>>>,
+) -> MockServer {
+    MockServer::start(
+        move |req: &MockRequest| match (req.method.as_str(), req.path.as_str()) {
+            ("POST", "/auth/login") => MockResponse::new(200, "OK").json_body(token_json()),
+            ("GET", path) if path == format!("/v1/blob/{hash}") => {
+                let range = req
+                    .header("Range")
+                    .and_then(|r| r.strip_prefix("bytes="))
+                    .and_then(|r| r.split_once('-'))
+                    .unwrap_or(("0", ""));
+                let start: usize = range.0.parse().unwrap_or(0);
+                let end: Option<usize> = range.1.parse().ok();
+                if let Ok(mut ranges) = ranges.lock() {
+                    ranges.push(end.map(|e| (e + 1 - start) as u64));
+                }
+                let end = end.map_or(blob.len(), |e| (e + 1).min(blob.len()));
+                let mut response = MockResponse::new(206, "Partial Content")
+                    .header("Content-Type", "application/octet-stream");
+                response.body = blob[start..end].to_vec();
+                response
+            }
+            _ => MockResponse::new(404, "Not Found").json_body(r#"{"error":"no route"}"#),
+        },
+    )
+    .await
+}
+
+/// **The bounded-memory receive.** `fetch_blob_to_path` lands a blob on disk in `Range`
+/// windows no larger than the streamed-fetch window, and the file holds exactly the bytes
+/// whose content address was asked for.
+#[tokio::test]
+async fn ffi_fetch_blob_to_path_streams_a_verified_blob_to_disk() {
+    let blob = original_plaintext(3 * 1024 * 1024);
+    let hash = capsule_core::crypto::hash::hash_bytes(&blob).to_hex();
+    let ranges = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let server = blob_server(blob.clone(), hash.clone(), ranges.clone()).await;
+    let session = login(&server).await;
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("original.bin");
+
+    session
+        .fetch_blob_to_path(
+            format!("{}/v1", server.base_url()),
+            hash,
+            blob.len() as u64,
+            path.to_string_lossy().into_owned(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(std::fs::read(&path).unwrap(), blob);
+    let ranges = ranges.lock().unwrap().clone();
+    assert!(!ranges.is_empty());
+    assert!(
+        ranges
+            .iter()
+            .all(|len| len.is_some_and(|l| l <= crate::fetch::SINK_WINDOW)),
+        "every request is a bounded window: {ranges:?}"
+    );
+}
+
+/// Bytes that do not hash to the requested address are refused and leave no file behind;
+/// a missing blob likewise; a malformed hash never reaches the network.
+#[tokio::test]
+async fn ffi_fetch_blob_to_path_leaves_nothing_on_failure() {
+    let blob = original_plaintext(64 * 1024);
+    // Served under this address, but holding other bytes.
+    let claimed = capsule_core::crypto::hash::hash_bytes(b"something else").to_hex();
+    let ranges = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let server = blob_server(blob.clone(), claimed.clone(), ranges.clone()).await;
+    let session = login(&server).await;
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("original.bin");
+    let base = format!("{}/v1", server.base_url());
+    let target = path.to_string_lossy().into_owned();
+
+    match session
+        .fetch_blob_to_path(base.clone(), claimed, blob.len() as u64, target.clone())
+        .await
+    {
+        Err(FfiError::Fetch { message, .. }) => assert!(message.contains("integrity")),
+        other => panic!("expected an integrity failure, got {other:?}"),
+    }
+    assert!(!path.exists(), "an unverified blob is not left on disk");
+
+    let absent = capsule_core::crypto::hash::hash_bytes(b"absent").to_hex();
+    match session
+        .fetch_blob_to_path(base.clone(), absent, 10, target.clone())
+        .await
+    {
+        Err(FfiError::Fetch { .. }) => {}
+        other => panic!("expected a fetch failure, got {other:?}"),
+    }
+    assert!(!path.exists());
+
+    let requests = ranges.lock().unwrap().len();
+    match session
+        .fetch_blob_to_path(base, "../../etc/passwd".into(), 10, target)
+        .await
+    {
+        Err(FfiError::InvalidArgument { .. }) => {}
+        other => panic!("expected InvalidArgument, got {other:?}"),
+    }
+    assert_eq!(
+        ranges.lock().unwrap().len(),
+        requests,
+        "nothing was requested"
+    );
+}
+
 /// Escrow put/get and device-directory publish, through the session handle. The
 /// workspace mints both documents (the master key and the identity key never cross the
 /// boundary); the session only ever carries opaque bytes.
