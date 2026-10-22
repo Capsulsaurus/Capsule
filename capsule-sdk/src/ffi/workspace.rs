@@ -513,6 +513,12 @@ impl From<SyncApplyOutcome> for FfiSyncApplyOutcome {
                     QuarantineReason::MalformedManifest(detail) => {
                         ("MalformedManifest".to_string(), Some(detail))
                     }
+                    QuarantineReason::UnsupportedRecordVersion { found, max_known } => (
+                        "UnsupportedRecordVersion".to_string(),
+                        Some(format!(
+                            "record version {found} is newer than this build reads ({max_known})"
+                        )),
+                    ),
                     QuarantineReason::UnknownAlbum(album) => {
                         ("UnknownAlbum".to_string(), Some(album.to_string()))
                     }

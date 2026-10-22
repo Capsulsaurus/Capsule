@@ -16,9 +16,24 @@ use super::manifest::AssetManifest;
 use crate::cbor;
 use crate::crypto::hash::{self, Hash32};
 
+/// The provenance-record version this build writes, and the newest it reads.
+pub const PROVENANCE_RECORD_VERSION: u16 = 1;
+
 /// One link in an asset's provenance chain.
+///
+/// The record leads with its [`version`](Self::version) ([Versioning — invariant 2]): the key
+/// sorts first in canonical CBOR, and [`decode`](Self::decode) reads it before anything else,
+/// so a record from a newer writer is recognised as such rather than misread as this version.
+/// Every other decode path refuses it too, because the field's own decoder rejects a version
+/// this build does not implement.
+///
+/// [Versioning — invariant 2]: https://docs/design/versioning/#system-invariants
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProvenanceRecord {
+    /// The record schema version; [`PROVENANCE_RECORD_VERSION`] on every record this build
+    /// writes.
+    #[serde(deserialize_with = "known_record_version")]
+    pub version: u16,
     /// The asset this chain belongs to.
     pub asset_id: Uuid,
     /// The signed manifest for this transition.
@@ -28,7 +43,79 @@ pub struct ProvenanceRecord {
     pub prior_provenance_hash: Option<Hash32>,
 }
 
+/// Why a provenance record's bytes could not be decoded.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum RecordDecodeError {
+    /// The record declares a version newer than this build implements. It must be stored
+    /// verbatim and quarantined, never applied, modified or re-encoded (versioning invariants
+    /// 3 and 5); it becomes readable once the user updates.
+    #[error("provenance record version {found} is newer than this build reads ({max_known})")]
+    UnsupportedVersion {
+        /// The version the record declares.
+        found: u64,
+        /// The newest version this build reads ([`PROVENANCE_RECORD_VERSION`]).
+        max_known: u16,
+    },
+    /// The bytes are not a well-formed record of a version this build reads.
+    #[error("malformed provenance record: {0}")]
+    Malformed(String),
+}
+
+/// The `version` field's decoder: a version this build does not read is a decode error on
+/// every path, so no caller can mistake a newer record for a current one.
+fn known_record_version<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u16, D::Error> {
+    let version = u16::deserialize(d)?;
+    if version == 0 || version > PROVENANCE_RECORD_VERSION {
+        return Err(serde::de::Error::custom(format!(
+            "unsupported provenance record version {version}; this build reads 1..={PROVENANCE_RECORD_VERSION}"
+        )));
+    }
+    Ok(version)
+}
+
 impl ProvenanceRecord {
+    /// A current-version record linking `manifest` into `asset_id`'s chain behind `prior`.
+    pub fn new(asset_id: Uuid, manifest: AssetManifest, prior: Option<Hash32>) -> Self {
+        Self {
+            version: PROVENANCE_RECORD_VERSION,
+            asset_id,
+            manifest,
+            prior_provenance_hash: prior,
+        }
+    }
+
+    /// Decode one record, reading its leading `version` before anything else.
+    ///
+    /// # Errors
+    ///
+    /// [`RecordDecodeError::UnsupportedVersion`] for a record a newer writer produced — the
+    /// caller quarantines it — and [`RecordDecodeError::Malformed`] for anything else that does
+    /// not decode, including a missing or non-integer version.
+    pub fn decode(bytes: &[u8]) -> Result<Self, RecordDecodeError> {
+        let value: ciborium::Value =
+            cbor::from_slice(bytes).map_err(|e| RecordDecodeError::Malformed(e.to_string()))?;
+        let version = value
+            .as_map()
+            .and_then(|map| map.iter().find(|(k, _)| k.as_text() == Some("version")))
+            .and_then(|(_, v)| v.as_integer())
+            .ok_or_else(|| {
+                RecordDecodeError::Malformed("missing or non-integer record version".into())
+            })?;
+        let version = i128::from(version);
+        if version > i128::from(PROVENANCE_RECORD_VERSION) {
+            tracing::warn!(
+                version = %version,
+                max_known = PROVENANCE_RECORD_VERSION,
+                "provenance record: version newer than this build reads"
+            );
+            return Err(RecordDecodeError::UnsupportedVersion {
+                found: u64::try_from(version).unwrap_or(u64::MAX),
+                max_known: PROVENANCE_RECORD_VERSION,
+            });
+        }
+        cbor::from_slice(bytes).map_err(|e| RecordDecodeError::Malformed(e.to_string()))
+    }
+
     /// The content hash of this record (SHA-256 over its canonical CBOR, signatures
     /// included), used as the next record's `prior_provenance_hash`.
     pub fn record_hash(&self) -> Hash32 {
@@ -179,11 +266,65 @@ mod tests {
             prior_provenance_hash: prior,
             upgraded_from: None,
             retention_until: None,
+            unknown: Default::default(),
         };
-        ProvenanceRecord {
-            asset_id: Uuid::from_u128(ASSET),
-            manifest: core.sign(&dev(), &wt()).unwrap(),
-            prior_provenance_hash: prior,
+        ProvenanceRecord::new(
+            Uuid::from_u128(ASSET),
+            core.sign(&dev(), &wt()).unwrap(),
+            prior,
+        )
+    }
+
+    #[test]
+    fn the_version_leads_the_canonical_encoding() {
+        let bytes = cbor::to_canonical_vec(&record(Action::Create, None)).unwrap();
+        let value: ciborium::Value = cbor::from_slice(&bytes).unwrap();
+        let first = value.as_map().unwrap().first().unwrap();
+        assert_eq!(first.0.as_text(), Some("version"));
+        assert_eq!(
+            ProvenanceRecord::decode(&bytes).unwrap(),
+            record(Action::Create, None)
+        );
+    }
+
+    /// Re-encode `rec` with its `version` replaced by `version` (or removed for `None`).
+    fn with_version(rec: &ProvenanceRecord, version: Option<ciborium::Value>) -> Vec<u8> {
+        let value: ciborium::Value =
+            cbor::from_slice(&cbor::to_canonical_vec(rec).unwrap()).unwrap();
+        let mut entries: Vec<_> = value
+            .into_map()
+            .unwrap()
+            .into_iter()
+            .filter(|(k, _)| k.as_text() != Some("version"))
+            .collect();
+        if let Some(v) = version {
+            entries.push(("version".into(), v));
+        }
+        cbor::value_to_canonical_vec(&ciborium::Value::Map(entries))
+    }
+
+    #[test]
+    fn a_newer_version_is_unsupported_on_every_decode_path() {
+        let bytes = with_version(&record(Action::Create, None), Some(2.into()));
+        assert_eq!(
+            ProvenanceRecord::decode(&bytes),
+            Err(RecordDecodeError::UnsupportedVersion {
+                found: 2,
+                max_known: PROVENANCE_RECORD_VERSION
+            })
+        );
+        // The plain serde path (backup restore, rebuild, open) refuses it too.
+        assert!(cbor::from_slice::<ProvenanceRecord>(&bytes).is_err());
+    }
+
+    #[test]
+    fn a_missing_or_zero_version_is_malformed() {
+        let rec = record(Action::Create, None);
+        for bytes in [with_version(&rec, None), with_version(&rec, Some(0.into()))] {
+            assert!(matches!(
+                ProvenanceRecord::decode(&bytes),
+                Err(RecordDecodeError::Malformed(_))
+            ));
         }
     }
 

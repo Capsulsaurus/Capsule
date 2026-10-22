@@ -19,4 +19,6 @@ pub use manifest::{
     ASSET_MANIFEST_VERSION, AssetManifest, DERIVATIVE_MANIFEST_VERSION, DerivativeCore,
     DerivativeManifest, KeyMode, ManifestCore, WrappedFileKey,
 };
-pub use record::{ChainError, ProvenanceChain, ProvenanceRecord};
+pub use record::{
+    ChainError, PROVENANCE_RECORD_VERSION, ProvenanceChain, ProvenanceRecord, RecordDecodeError,
+};

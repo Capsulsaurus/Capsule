@@ -650,6 +650,7 @@ fn build_manifest_core(envelope: &ManifestEnvelope) -> Result<ManifestCore, Gate
         action,
         prior_provenance_hash,
         upgraded_from: None,
+        unknown: Default::default(),
         retention_until: envelope.retention_until.clone(),
     })
 }

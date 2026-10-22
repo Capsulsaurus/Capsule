@@ -572,6 +572,64 @@ async fn ffi_sync_apply_quarantines_a_tampered_entry() {
     }
 }
 
+/// A record from a newer writer reaches the app as the stable `UnsupportedRecordVersion`
+/// code with both versions in the detail, never as `MalformedManifest` and never applied.
+#[tokio::test]
+async fn ffi_sync_apply_quarantines_a_newer_record_version() {
+    let lib = tempfile::TempDir::new().unwrap();
+    let workspace = enroll(lib.path());
+    let album = workspace.create_album("Trip".into()).unwrap();
+    let asset = workspace
+        .seal_asset(
+            album.clone(),
+            "shot.jpg".into(),
+            b"\xFF\xD8\xFF bytes".to_vec(),
+        )
+        .unwrap();
+    let blobs = workspace.upload_blobs(asset.clone()).unwrap();
+
+    // Canonical CBOR sorts `version` first, so the record's leading key is the text
+    // `version` followed by its current value; bump that one byte to the next version.
+    let current = u8::try_from(capsule_core::crypto::provenance::PROVENANCE_RECORD_VERSION)
+        .expect("the current record version fits a one-byte CBOR integer");
+    let mut leading = vec![0x67];
+    leading.extend_from_slice(b"version");
+    leading.push(current);
+    let mut manifest_cbor = workspace.provenance_head(asset).unwrap();
+    let at = manifest_cbor
+        .windows(leading.len())
+        .position(|w| w == leading.as_slice())
+        .expect("the record carries a leading version key");
+    assert_eq!(at, 1, "version is the record's first key");
+    manifest_cbor[at + leading.len() - 1] = current + 1;
+
+    let outcome = workspace
+        .apply_sync_entry(FfiSyncEntry {
+            album_id: uuid::Uuid::parse_str(&album).unwrap().as_bytes().to_vec(),
+            manifest_cbor,
+            metadata_blob: blobs[0].bytes.clone(),
+            original_ciphertext: blobs[1].bytes.clone(),
+            local_chain_head: None,
+        })
+        .unwrap();
+    match outcome {
+        FfiSyncApplyOutcome::Quarantined { reason, detail } => {
+            assert_eq!(reason, "UnsupportedRecordVersion");
+            assert_eq!(
+                detail.as_deref(),
+                Some(
+                    format!(
+                        "record version {} is newer than this build reads ({current})",
+                        current + 1
+                    )
+                    .as_str()
+                )
+            );
+        }
+        other => panic!("expected an unsupported-version quarantine, got {other:?}"),
+    }
+}
+
 /// Escrow put/get and device-directory publish, through the session handle. The
 /// workspace mints both documents (the master key and the identity key never cross the
 /// boundary); the session only ever carries opaque bytes.

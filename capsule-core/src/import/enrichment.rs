@@ -30,7 +30,8 @@
 //! - **Album membership.** An asset belongs to exactly one [container album], which the plan
 //!   resolves once for the whole import; the sidecar has no per-asset album field, and
 //!   [Organization — The Default Album] forbids an automated import from inventing destinations.
-//!   So the exporter's album titles are preserved verbatim as `tags_user` entries — the only
+//!   So the exporter's album titles are preserved as `tags_user` entries, normalized by the
+//!   label rule at the write site (a title the rule refuses is dropped) — the only
 //!   multi-valued user-content set in the sidecar, and a [smart-album] queryable field, so a
 //!   Google Photos album can be reconstructed later as a view over `tags_user contains "…"`
 //!   without re-encrypting or moving anything.
