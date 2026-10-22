@@ -40,7 +40,7 @@
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::db::{DatabaseDriver, EmbeddingInsert, KnnHit, VectorIndexError};
+use crate::ml::index::{EmbeddingInsert, KnnHit, VectorIndex, VectorIndexError};
 use crate::ml::{Embedding, Frame, ModelId, ModelRunner, Registry, RunnerError, TaskKind};
 use crate::sidecar::AiTag;
 
@@ -57,8 +57,11 @@ pub trait AssetSource {
     /// The decoded-asset plaintext bytes inference runs over.
     fn read_plaintext(&self, asset_id: &Uuid) -> Result<Vec<u8>, Self::Error>;
 
+    /// The vector index this store's embeddings live in.
+    type Index: VectorIndex;
+
     /// The catalog holding this store's vector index.
-    fn vector_index(&self) -> &DatabaseDriver;
+    fn vector_index(&self) -> &Self::Index;
 }
 
 /// The write side: an asset store that accepts AI tags for an asset.
@@ -352,6 +355,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
+    use crate::db::DatabaseDriver;
     use crate::ml::{FixtureRunner, ModelVersion};
 
     const PLATFORM: &str = "cpu-reference";
@@ -400,6 +404,8 @@ mod tests {
                 .cloned()
                 .ok_or(MissingAsset(*asset_id))
         }
+
+        type Index = DatabaseDriver;
 
         fn vector_index(&self) -> &DatabaseDriver {
             &self.db

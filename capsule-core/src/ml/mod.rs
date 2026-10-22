@@ -42,11 +42,16 @@
 //!
 //! [AI/ML Integrations]: https://docs/design/ai/
 
+mod index;
 mod orchestrator;
 mod regen;
 mod registry;
 mod runner;
 
+pub use index::{
+    EmbeddingInsert, EmbeddingProvenance, EmbeddingRecord, KnnHit, VectorIndex, VectorIndexError,
+    VectorTableSpec,
+};
 pub use orchestrator::{
     AiTagSink, AssetSource, BatchMode, CANONICAL_PARTITION, KnownAnswer, MICRO_BATCH_SIZES,
     OrchestratorError, StoreError, auto_tag, choose_batch_mode, embed_and_store, micro_batch_size,

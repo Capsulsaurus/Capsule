@@ -26,7 +26,7 @@
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::db::{DatabaseDriver, EmbeddingInsert, VectorIndexError};
+use crate::ml::index::{EmbeddingInsert, VectorIndex, VectorIndexError};
 use crate::ml::{AssetSource, Frame, ModelId, ModelRunner, ModelVersion, Registry, TaskKind};
 
 /// The embedder seam the regeneration loop drives: "produce the canonical embedding for an asset
@@ -116,7 +116,7 @@ impl RegenReport {
 }
 
 /// Regenerate stale embeddings for `task` in `embedder`'s platform partition, re-deriving the
-/// work-list from [`stale_embedding_assets`](DatabaseDriver::stale_embedding_assets) on each call.
+/// work-list from [`stale_embedding_assets`](VectorIndex::stale_embedding_assets) on each call.
 ///
 /// `budget` bounds the invocation: `Some(n)` rebuilds up to `n` assets (the background chunk;
 /// call again until [`RegenReport::is_complete`]); `None` drains the whole partition. Assets are
@@ -126,8 +126,8 @@ impl RegenReport {
 ///
 /// Refuses a `NonCanonicalEmbedder` (an embedder not producing the current canonical tuple) before
 /// touching the index.
-pub fn regenerate_stale<E: Embedder>(
-    db: &DatabaseDriver,
+pub fn regenerate_stale<I: VectorIndex, E: Embedder>(
+    db: &I,
     registry: &Registry,
     embedder: &E,
     task: TaskKind,
@@ -155,9 +155,7 @@ pub fn regenerate_stale<E: Embedder>(
     }
 
     let platform = embedder.platform().to_string();
-    let worklist = db
-        .stale_embedding_assets(registry, task, &platform)
-        .map_err(|e| RegenError::Vector(e.into()))?;
+    let worklist = db.stale_embedding_assets(registry, task, &platform)?;
     let total = worklist.len();
     let take = budget.unwrap_or(total);
     tracing::info!(
@@ -246,7 +244,7 @@ impl<'a, R: ModelRunner, S: AssetSource> RunnerEmbedder<'a, R, S> {
 
     /// The catalog holding the vector index these embeddings are regenerated into — pass it to
     /// [`regenerate_stale`] so the work-list and the writes address one index.
-    pub fn index(&self) -> &'a DatabaseDriver {
+    pub fn index(&self) -> &'a S::Index {
         self.source.vector_index()
     }
 }
@@ -412,6 +410,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
+    use crate::db::DatabaseDriver;
     use crate::ml::{CANONICAL_PARTITION, FixtureRunner};
 
     const PLATFORM: &str = "cpu-reference";
@@ -692,6 +691,8 @@ mod tests {
                 .cloned()
                 .ok_or(MissingAsset(*asset_id))
         }
+
+        type Index = DatabaseDriver;
 
         fn vector_index(&self) -> &DatabaseDriver {
             &self.db

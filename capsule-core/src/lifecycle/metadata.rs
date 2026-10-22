@@ -306,6 +306,7 @@ impl Workspace {
 /// indirection exists to reverse a module edge, not to change behaviour.
 impl AssetSource for Workspace {
     type Error = LifecycleError;
+    type Index = DatabaseDriver;
 
     fn read_plaintext(&self, asset_id: &Uuid) -> Result<Vec<u8>> {
         Workspace::read_plaintext(self, asset_id)

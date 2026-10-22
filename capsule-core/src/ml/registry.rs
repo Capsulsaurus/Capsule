@@ -25,13 +25,13 @@
 //! [AI/ML — Models and Algorithms]: https://docs/design/ai/#models-and-algorithms
 //! [AI/ML — Embedding Provenance]: https://docs/design/ai/#embedding-provenance
 
-use crate::db::vector::{EmbeddingProvenance, VectorTableSpec};
 // The identity vocabulary these rows are written in lives in the `domain` leaf — `db` names its
 // `vec0` columns with the same types, and importing them from `ml` closed a `db -> ml -> db`
 // cycle. Re-exported so `crate::ml::TaskKind` (and every other spelling) still resolves.
 pub use crate::domain::model_identity::{
     DistanceMetric, EmbeddingDim, ModelId, ModelVersion, RegistryError, TaskKind,
 };
+use crate::ml::index::{EmbeddingProvenance, VectorTableSpec};
 
 /// What a task produces: a stored embedding vector, or detections that feed downstream stages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

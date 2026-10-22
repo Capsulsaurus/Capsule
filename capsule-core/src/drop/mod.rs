@@ -157,7 +157,7 @@ pub struct AdoptedDrop {
     /// Native-only: the pipeline lives in `lifecycle`, which the WASM sealing build omits,
     /// and only a native client adopts.
     #[cfg(feature = "native")]
-    pub derivatives: crate::lifecycle::DerivativeStatus,
+    pub derivatives: crate::derivative_format::DerivativeStatus,
     /// How many `(tier, format)` pairs the tier table commits to and this build cannot
     /// encode; zero when the still did not decode, because nothing was attempted.
     #[cfg(feature = "native")]

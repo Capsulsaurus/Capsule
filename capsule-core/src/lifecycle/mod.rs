@@ -81,6 +81,7 @@ use crate::crypto::primitives::Argon2Params;
 use crate::crypto::provenance::{Action, ProvenanceChain};
 use crate::crypto::verify_asset::{MetadataBinding, VerifyOutcome};
 use crate::db::DatabaseDriver;
+pub use crate::derivative_format::DerivativeStatus;
 use crate::drop::{DropId, UploadLinkId};
 use crate::federation::AlbumGroupAssertion;
 use crate::library::{Library, LibraryError};
@@ -369,58 +370,6 @@ pub struct SignedImportOptions {
     /// from a [source adapter](crate::import::SourceAdapter). `None` — a plain filesystem
     /// import — leaves every enriched field exactly as it was before the slice.
     pub enrichment: Option<SidecarEnrichment>,
-}
-
-/// Whether an imported asset got thumbnail/preview derivatives — and if not, **why**
-/// (slice `S-B13`).
-///
-/// Capsule is a backup tool, so this never gates admission: the original is imported as a
-/// signed, encrypted, verifiable asset in every case below. What varies is only whether a
-/// thumbnail/preview and an LQIP could be produced alongside it. The point of the enum is to
-/// keep the two "no derivative" reasons apart, because one is expected and one is a bug:
-/// a missing codec is a known, deferred gap, while a *supported* format that fails to decode
-/// is a real problem someone should look at.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum DerivativeStatus {
-    /// The still decoded: `dimensions` and `lqip` came from real pixels, and the derivatives
-    /// this build can encode were generated and signed. **Independent of how many *formats*
-    /// deferred** — a decoded still whose AVIF and WebP variants have no encoder here is still
-    /// `Decoded`, because it has a renderable JXL thumbnail. The per-format gap is counted
-    /// separately by
-    /// [`ImportExecutionSummary::deferred_format_count`](crate::import::ImportExecutionSummary::deferred_format_count).
-    Decoded,
-    /// **Expected deferral.** This build links no codec for the asset's format — see
-    /// [`SUPPORTED_STILL_FORMATS`](crate::media::SUPPORTED_STILL_FORMATS) for what it does
-    /// link, and [`StillFormat`](crate::media::StillFormat) for what it recognises. The
-    /// original is safely backed up; dimensions fall back to EXIF and there is no LQIP or
-    /// thumbnail until the codec lands, at which point derivatives can be backfilled from the
-    /// stored original. Counted by
-    /// [`ImportExecutionSummary::deferred_derivative_count`](crate::import::ImportExecutionSummary::deferred_derivative_count).
-    ///
-    /// What reaches here today: HEIC, AVIF and the RAW families, each needing a system library
-    /// (libheif, libdav1d) or an assembler the cross and cargo-ndk builds do not carry, and
-    /// every video, whose derivatives no build generates yet.
-    DeferredNoCodec,
-    /// **A real problem.** The format *is* one this build can decode, but these particular
-    /// bytes did not decode — truncation, corruption, or a decoder bug. The original is still
-    /// imported (the bytes are backed up verbatim, whatever they are), but this is worth
-    /// investigating rather than shrugging at.
-    DecodeFailed,
-    /// Nothing to decode: neither the bytes' header nor the extension names a still image
-    /// Capsule models and there is no derivative to make — an XMP sidecar, an SVG, a document,
-    /// or an unknown suffix. Distinct from [`DeferredNoCodec`](Self::DeferredNoCodec), which is
-    /// a still whose codec is merely absent and whose derivatives are therefore backfillable.
-    /// A **video** is not this: its derivatives are committed to by the tier table and deferred
-    /// until their codec lands, so a video import reports `DeferredNoCodec`.
-    NotAKnownStill,
-}
-
-impl DerivativeStatus {
-    /// Whether the asset was imported *without* thumbnail/preview derivatives because no codec
-    /// exists for it — the deferred-gap count, excluding genuine decode failures and non-stills.
-    pub const fn is_deferred_for_missing_codec(self) -> bool {
-        matches!(self, Self::DeferredNoCodec)
-    }
 }
 
 /// What one signed import produced: the asset's id plus whether derivatives could be generated

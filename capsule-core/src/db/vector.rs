@@ -13,11 +13,12 @@
 //! The index is **derived state**: if lost it is rebuilt by re-running inference over the
 //! originals (recovery-first), so it is never restored from a backup.
 //!
-//! This module knows **nothing about the ML layer**. The inventory that decides which models are
-//! known, and at which version, reaches it through the [`EmbeddingProvenance`] seam — implemented
-//! by the ML registry, and by a test double here. That inversion is what turned the former
-//! `db -> ml -> db` cycle into the DAG `domain <- db <- ml`; the identity vocabulary both sides
-//! speak lives in the [`domain::model_identity`](crate::domain::model_identity) leaf.
+//! This module is the SQLite adapter of the ML layer's [`VectorIndex`] port: the port, its value
+//! types and the [`EmbeddingProvenance`] gate are declared in `ml::index`, which names no storage
+//! engine. The inventory that decides which models are known, and at which version, reaches the
+//! index only through that gate — implemented by the ML registry, and by a test double here. The
+//! identity vocabulary both sides speak lives in the
+//! [`domain::model_identity`](crate::domain::model_identity) leaf.
 //!
 //! [AI/ML — Database Indexing]: https://docs/design/ai/#database-indexing-and-view-generation
 //! [AI/ML — Embedding Provenance]: https://docs/design/ai/#embedding-provenance
@@ -26,126 +27,19 @@ use std::os::raw::{c_char, c_int};
 use std::sync::Once;
 
 use rusqlite::{Connection, params};
-use thiserror::Error;
 
 use crate::db::driver::DatabaseDriver;
 use crate::domain::model_identity::{
     DistanceMetric, EmbeddingDim, ModelId, ModelVersion, RegistryError, TaskKind,
 };
+pub use crate::ml::{
+    EmbeddingInsert, EmbeddingProvenance, EmbeddingRecord, KnnHit, VectorIndex, VectorIndexError,
+    VectorTableSpec,
+};
 
-/// A provenanced embedding to insert into the index: the subject asset, the producing model
-/// `(task, model_id, model_version)`, the `platform` partition discriminator, and the vector.
-#[derive(Debug, Clone, Copy)]
-pub struct EmbeddingInsert<'a> {
-    /// The asset the embedding was produced from.
-    pub asset_id: &'a str,
-    /// The task that produced it.
-    pub task: TaskKind,
-    /// The producing model id.
-    pub model_id: &'a ModelId,
-    /// The producing model version.
-    pub model_version: &'a ModelVersion,
-    /// The platform partition (incomparable across platforms; see the E2EE fallback in `ai.md`).
-    pub platform: &'a str,
-    /// The embedding vector (length must equal the task's registry-declared dimension).
-    pub vector: &'a [f32],
-}
-
-/// A single nearest-neighbour hit.
-#[derive(Debug, Clone, PartialEq)]
-pub struct KnnHit {
-    /// The matched asset id.
-    pub asset_id: String,
-    /// Distance under the task's metric (smaller = nearer; cosine over normalized vectors).
-    pub distance: f64,
-}
-
-/// A stored embedding's provenance (from the companion table; the vector itself stays in `vec0`).
-#[derive(Debug, Clone, PartialEq)]
-pub struct EmbeddingRecord {
-    /// Asset the embedding was produced from.
-    pub asset_id: String,
-    /// Task that produced it.
-    pub task: TaskKind,
-    /// Platform partition discriminator.
-    pub platform: String,
-    /// Producing model.
-    pub model_id: ModelId,
-    /// Producing model version.
-    pub model_version: ModelVersion,
-}
-
-/// Failures from the vector index.
-#[derive(Debug, Error)]
-pub enum VectorIndexError {
-    /// The embedding-provenance invariant rejected the insert (an unknown model or a
-    /// non-embedding task).
-    #[error(transparent)]
-    Registry(#[from] RegistryError),
-    /// The vector's length does not match the task's registry-declared dimension.
-    #[error("embedding dimension mismatch for {task:?}: expected {expected}, got {got}")]
-    DimMismatch {
-        /// The task.
-        task: TaskKind,
-        /// Registry-declared dimension.
-        expected: usize,
-        /// The supplied vector length.
-        got: usize,
-    },
-    /// A SQLite error.
-    #[error(transparent)]
-    Sqlite(#[from] rusqlite::Error),
-}
-
-/// The shape of one task's `vec0` partition table: which task it serves, and the `(dim, metric)`
-/// its vectors are sized and ranked by.
-///
-/// A vector table cannot be created before something declares that shape, and the shape is a
-/// property of the *model* that writes into it — so the index takes it from the writer rather than
-/// guessing at open time. That is why [`DatabaseDriver::open`] creates no vector tables: a caller
-/// with an inventory in hand can materialize them all up front with
-/// [`create_vector_tables`](DatabaseDriver::create_vector_tables), and otherwise each table is
-/// created on first use by the insert/query that knows its shape.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct VectorTableSpec {
-    /// The task whose partition table this describes.
-    pub task: TaskKind,
-    /// Vector dimensionality (the `vec0` `float[N]` column width).
-    pub dim: EmbeddingDim,
-    /// The metric the partition ranks by.
-    pub metric: DistanceMetric,
-}
-
-/// The embedding-provenance gate the vector index calls before it stores or ranks anything —
-/// the seam through which the model inventory reaches `db` **without `db` depending on `ml`**.
-///
-/// Implemented by the ML layer's `Registry`, which owns the canonical rows and the version-bump
-/// swap primitive. The index only ever asks the three questions below, so the rest of the
-/// inventory (display names, fallbacks, swap history) stays out of this layer entirely.
-pub trait EmbeddingProvenance {
-    /// The gate on every insert: accept any version of a **known** model for an embedding task,
-    /// returning the `(dim, metric)` its vectors must match. An **unknown** model or a
-    /// non-embedding task is refused; a *superseded-but-known* version is **not** refused — it is
-    /// admitted and lands as a stale-flagged row.
-    fn check_insert(
-        &self,
-        task: TaskKind,
-        model_id: &ModelId,
-        version: &ModelVersion,
-    ) -> Result<(EmbeddingDim, DistanceMetric), RegistryError>;
-
-    /// The `(dim, metric)` of `task`'s vector space, or `None` if `task` stores no embeddings.
-    fn embedding_spec(&self, task: TaskKind) -> Option<(EmbeddingDim, DistanceMetric)>;
-
-    /// The **current** canonical `model_version` for `task` — the partition queries are answered
-    /// from — or `None` if the task has no canonical model.
-    fn canonical_version(&self, task: TaskKind) -> Option<ModelVersion>;
-
-    /// The partition table shape for `task`, if it stores embeddings.
-    fn vector_table(&self, task: TaskKind) -> Option<VectorTableSpec> {
-        let (dim, metric) = self.embedding_spec(task)?;
-        Some(VectorTableSpec { task, dim, metric })
-    }
+/// Type-erase a SQLite failure into the index port's [`VectorIndexError::Store`].
+fn store(e: rusqlite::Error) -> VectorIndexError {
+    VectorIndexError::Store(Box::new(e))
 }
 
 static VEC_EXTENSION: Once = Once::new();
@@ -263,6 +157,17 @@ impl DatabaseDriver {
                 got: e.vector.len(),
             });
         }
+        self.insert_checked(e, dim, metric).map_err(store)
+    }
+
+    /// The SQL half of [`insert_embedding`](Self::insert_embedding), once the provenance gate and
+    /// the dimension check have admitted `e` at `(dim, metric)`.
+    fn insert_checked(
+        &self,
+        e: EmbeddingInsert<'_>,
+        dim: EmbeddingDim,
+        metric: DistanceMetric,
+    ) -> rusqlite::Result<()> {
         self.ensure_vector_table(VectorTableSpec {
             task: e.task,
             dim,
@@ -345,6 +250,23 @@ impl DatabaseDriver {
                 got: query.len(),
             });
         }
+        self.knn_checked(task, query, k, platform, &canonical_version, dim, metric)
+            .map_err(store)
+    }
+
+    /// The SQL half of [`knn`](Self::knn), once the registry has named the canonical version and
+    /// the query's dimension has been checked.
+    #[allow(clippy::too_many_arguments)]
+    fn knn_checked(
+        &self,
+        task: TaskKind,
+        query: &[f32],
+        k: usize,
+        platform: &str,
+        canonical_version: &ModelVersion,
+        dim: EmbeddingDim,
+        metric: DistanceMetric,
+    ) -> rusqlite::Result<Vec<KnnHit>> {
         self.ensure_vector_table(VectorTableSpec { task, dim, metric })?;
         let table = vec_table(task);
         let mut stmt = self.conn.prepare(&format!(
@@ -469,6 +391,38 @@ impl DatabaseDriver {
                 rusqlite::Error::QueryReturnedNoRows => Ok(None),
                 other => Err(other),
             })
+    }
+}
+
+/// The catalog is the production [`VectorIndex`]: each port method is the inherent method of the
+/// same name, with a SQLite failure type-erased into [`VectorIndexError::Store`].
+impl VectorIndex for DatabaseDriver {
+    fn insert_embedding<P: EmbeddingProvenance>(
+        &self,
+        registry: &P,
+        e: EmbeddingInsert<'_>,
+    ) -> Result<(), VectorIndexError> {
+        DatabaseDriver::insert_embedding(self, registry, e)
+    }
+
+    fn knn<P: EmbeddingProvenance>(
+        &self,
+        registry: &P,
+        task: TaskKind,
+        query: &[f32],
+        k: usize,
+        platform: &str,
+    ) -> Result<Vec<KnnHit>, VectorIndexError> {
+        DatabaseDriver::knn(self, registry, task, query, k, platform)
+    }
+
+    fn stale_embedding_assets<P: EmbeddingProvenance>(
+        &self,
+        registry: &P,
+        task: TaskKind,
+        platform: &str,
+    ) -> Result<Vec<String>, VectorIndexError> {
+        DatabaseDriver::stale_embedding_assets(self, registry, task, platform).map_err(store)
     }
 }
 
