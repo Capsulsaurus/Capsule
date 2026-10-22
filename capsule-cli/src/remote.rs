@@ -18,11 +18,12 @@ use capsule_sdk::albums::{AlbumClient, AlbumTransport};
 use capsule_sdk::auth::{AuthClient, AuthError, LoginOutcome, Session};
 use capsule_sdk::client::AuthenticatedClient;
 use capsule_sdk::directory::{DirectoryClient, DirectoryError};
+use capsule_sdk::fetch::HttpBlobSource;
 use capsule_sdk::net::ConnectionClass;
 use capsule_sdk::push::{self, PushError};
 use capsule_sdk::recovery::{MintedSecret, RecoveryClient, RecoveryError};
 use capsule_sdk::staged::{StagedScheduler, TierSessionOutcome, held_from_feed};
-use capsule_sdk::sync::{SyncConsumer, SyncCursor, SyncError, SyncState};
+use capsule_sdk::sync::{FeedEntry, SyncConsumer, SyncCursor, SyncError, SyncState};
 use capsule_sdk::upload::{UploadClient, UploadTransport};
 use capsule_sdk::verify::{StorageVerifyClient, VerifyError, VerifyTransport};
 use sea_orm::{ConnectionTrait, TransactionTrait};
@@ -32,6 +33,7 @@ use thiserror::Error;
 use tracing::instrument;
 use uuid::Uuid;
 
+use crate::restore::{self, RestoreOptions, RestoreSummary};
 use crate::session::{SessionError, SessionStore};
 use crate::syncstore::{self, SyncStoreError, SyncedAssetView};
 
@@ -165,6 +167,9 @@ pub enum RemoteError {
     /// The user did not type the minted recovery secret back, so nothing was stored.
     #[error("the recovery secret was not confirmed")]
     RecoverySecretNotConfirmed,
+    /// `capsule restore` could not prepare its output directory.
+    #[error("the restore output directory could not be prepared: {0}")]
+    RestoreOutput(#[source] std::io::Error),
 }
 
 impl RemoteError {
@@ -1058,28 +1063,88 @@ pub async fn held_blobs(
     session: Session,
     page_size: u32,
 ) -> Result<HashSet<String>, RemoteError> {
-    let consumer = SyncConsumer::with_session(&remote.sync_endpoint, session)?;
-    // A scratch state: start cursor, no high-water marks. Nothing is persisted from it.
-    let mut state = SyncState::restore(&remote.protocol_version, SyncCursor::start(), Vec::new());
-
+    let entries = drain_feed(remote, session, page_size).await?;
     let mut held = HashSet::new();
-    let mut entries = 0usize;
+    for entry in &entries {
+        held.extend(held_from_feed(entry));
+    }
+    tracing::info!(
+        entries = entries.len(),
+        blobs = held.len(),
+        "push: server truth read off the sync feed"
+    );
+    Ok(held)
+}
+
+/// Every entry of a **fresh** feed drain, in feed order, through a scratch [`SyncState`]: start
+/// cursor, no high-water marks, nothing persisted. Reading the server's truth must neither
+/// advance nor depend on the cursor `capsule sync` owns.
+async fn drain_feed(
+    remote: &RemoteConfig,
+    session: Session,
+    page_size: u32,
+) -> Result<Vec<FeedEntry>, RemoteError> {
+    let consumer = SyncConsumer::with_session(&remote.sync_endpoint, session)?;
+    let mut state = SyncState::restore(&remote.protocol_version, SyncCursor::start(), Vec::new());
+    let mut entries = Vec::new();
     loop {
         let page = consumer.pull_into(&mut state, page_size).await?;
         if page.entries.is_empty() {
             break;
         }
-        for entry in &page.entries {
-            entries += 1;
-            held.extend(held_from_feed(entry));
-        }
+        entries.extend(page.entries);
     }
-    tracing::info!(
-        entries,
-        blobs = held.len(),
-        "push: server truth read off the sync feed"
+    Ok(entries)
+}
+
+// ─── Restore (#673) ──────────────────────────────────────────────────────────
+
+/// `capsule restore`: download the originals in `options.scope` into `options.out` and verify
+/// each byte for byte.
+///
+/// The feed is drained fresh, as a push reads it, and each live asset's head is restored by
+/// [`restore::restore_entries`] over the SDK's
+/// [`HttpBlobSource`] at `GET /v1/blob/{hash}`: a resumable ranged fetch, the library's
+/// `verify_asset` chokepoint, decryption under the library's album keys, a check of the
+/// plaintext against the signed sidecar's digest, and an atomic write.
+///
+/// What fails the whole run is what every asset needs: the session, the feed read, and the
+/// output directory. One asset's failure is recorded in its outcome and the run moves on.
+///
+/// # Errors
+///
+/// [`RemoteError::NotAuthenticated`] with no stored session; [`RemoteError::Sync`] when the feed
+/// cannot be read; [`RemoteError::RestoreOutput`] when the output directory cannot be prepared.
+#[instrument(skip(store, workspace), fields(out = %options.out.display()))]
+pub async fn restore(
+    remote: &RemoteConfig,
+    store: &SessionStore,
+    workspace: &Workspace,
+    options: &RestoreOptions,
+) -> Result<RestoreSummary, RemoteError> {
+    let session = resume_session(remote, store).await?;
+    let outcome = restore_with(remote, workspace, session.clone(), options).await;
+    checkpoint(store, &session).await;
+    outcome
+}
+
+/// The restore itself, over a session somebody else is responsible for persisting.
+async fn restore_with(
+    remote: &RemoteConfig,
+    workspace: &Workspace,
+    session: Session,
+    options: &RestoreOptions,
+) -> Result<RestoreSummary, RemoteError> {
+    let entries = drain_feed(remote, session.clone(), DEFAULT_SYNC_PAGE_SIZE).await?;
+    tracing::info!(entries = entries.len(), "restore: the feed is drained");
+    // `sync_endpoint` is the bare server origin; the blob route hangs off `/v1`.
+    let source = HttpBlobSource::new(
+        session,
+        format!("{}/v1", remote.sync_endpoint.trim_end_matches('/')),
     );
-    Ok(held)
+    restore::restore_entries(workspace, &source, entries, options)
+        .await
+        .map_err(RemoteError::RestoreOutput)
 }
 
 /// Push every managed asset of `workspace` to the server.

@@ -7355,6 +7355,34 @@
     "message": "Reset data directory",
     "context": "clap --help: help for the `--data` flag of `capsule reset`."
   },
+  "cli.help.restore.about": {
+    "message": "Download originals from the server and verify them byte for byte",
+    "context": "clap --help: the one-line description of `capsule restore`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.restore.arg.album": {
+    "message": "Restore only the assets of this album",
+    "context": "clap --help: help for the `--album <ALBUM_ID>` option of `capsule restore`."
+  },
+  "cli.help.restore.arg.asset": {
+    "message": "Restore only this asset",
+    "context": "clap --help: help for the `--asset <ASSET_ID>` option of `capsule restore`."
+  },
+  "cli.help.restore.arg.json": {
+    "message": "Print the run as one JSON document on stdout: the totals and each asset's outcome (restored, already present, or failed with its error)",
+    "context": "clap --help: help for the `--json` flag of `capsule restore`."
+  },
+  "cli.help.restore.arg.library": {
+    "message": "Path to the Capsule library whose album keys open the originals",
+    "context": "clap --help: help for the `--library <PATH>` option of `capsule restore`."
+  },
+  "cli.help.restore.arg.out": {
+    "message": "Directory the originals are written to, one file per asset named by its id; an interrupted run resumes from what it left there",
+    "context": "clap --help: help for the `--out <DIR>` option of `capsule restore`."
+  },
+  "cli.help.restore.arg.passphrase_stdin": {
+    "message": "Read the library passphrase from stdin instead of prompting, so restores work in scripts and CI where there is no terminal",
+    "context": "clap --help: help for the `--passphrase-stdin` flag of `capsule restore`."
+  },
   "cli.help.root.about": {
     "message": "A command line interface for Capsule - the photo management platform",
     "context": "clap --help: the one-line description of `capsule` (the root command). Shown in the parent's command list and at the top of its own --help."
