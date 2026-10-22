@@ -312,7 +312,9 @@ pub struct SidecarEnrichment {
     /// The exporter's favorite/star flag, already mapped onto the sidecar's star scale.
     pub rating: Option<u8>,
     /// Exporter-authoritative user tags (Takeout's album membership); each becomes one
-    /// `tags_user` OR-set add with its own `add_id`.
+    /// `tags_user` OR-set add with its own `add_id`, after the label rule
+    /// ([`normalize_label`](crate::sidecar::normalize_label)); a tag the rule refuses is
+    /// dropped and the import proceeds.
     pub tags: Vec<String>,
 }
 
