@@ -19,7 +19,7 @@ use jiff::Timestamp;
 use super::{
     AssetIndex, AssetRow, AssetState, BlobOutcome, BlobRecord, BlobRef, Custody, FeedEntry,
     HoldOutcome, IndexFuture, LifecycleOp, OpAction, OpOutcome, PendingAsset, PurgeOutcome,
-    Receipted, Reservation, ServingHold, entry_for, is_singular, set_singular,
+    Receipted, Reservation, RestoreOutcome, ServingHold, entry_for, is_singular, set_singular,
 };
 use crate::attestation::InMemoryReceipts;
 use crate::blob::ContentAddress;
@@ -45,6 +45,8 @@ struct Inner {
     applied: BTreeMap<Hash32, u64>,
     /// The highest sequence number each owner has minted. Absent means none.
     minted: BTreeMap<OwnerId, u64>,
+    /// Each owner's sync epoch. Absent means 0.
+    epochs: BTreeMap<OwnerId, u64>,
 }
 
 impl Inner {
@@ -605,6 +607,43 @@ impl AssetIndex for InMemoryAssetIndex {
 
     fn head_seq<'a>(&'a self, owner: &'a OwnerId) -> IndexFuture<'a, u64> {
         Box::pin(async move { Ok(lock(&self.inner).minted.get(owner).copied().unwrap_or(0)) })
+    }
+
+    fn sync_epoch<'a>(&'a self, owner: &'a OwnerId) -> IndexFuture<'a, u64> {
+        Box::pin(async move { Ok(lock(&self.inner).epochs.get(owner).copied().unwrap_or(0)) })
+    }
+
+    fn bump_sync_epoch<'a>(&'a self, owner: &'a OwnerId) -> IndexFuture<'a, u64> {
+        Box::pin(async move {
+            let mut inner = lock(&self.inner);
+            let epoch = inner.epochs.entry(owner.clone()).or_insert(0);
+            *epoch = epoch.saturating_add(1);
+            tracing::info!(%owner, epoch = *epoch, "an owner moved to a new sync epoch");
+            Ok(*epoch)
+        })
+    }
+
+    fn restore(&self, row: AssetRow) -> IndexFuture<'_, RestoreOutcome> {
+        Box::pin(async move {
+            let mut inner = lock(&self.inner);
+            if let Some(existing) = inner.rows.get(&row.asset_id) {
+                return Ok(RestoreOutcome::Present(Box::new(existing.clone())));
+            }
+            let mut row = row;
+            if let Some(seq) = row.sync_seq {
+                let minted = inner.minted.entry(row.owner_id.clone()).or_insert(0);
+                *minted = (*minted).max(seq);
+            } else if row.state != AssetState::Pending {
+                // Unprovable: numbered by the allocator, under the same lock every publication
+                // mints under, so no concurrent write can be handed the same number.
+                let seq = inner.mint(&row.owner_id);
+                row.sync_seq = Some(seq);
+                row.first_seq = Some(seq);
+            }
+            tracing::debug!(asset = %row.asset_id, sync_seq = ?row.sync_seq, "restored a rebuilt row");
+            inner.rows.insert(row.asset_id.clone(), row);
+            Ok(RestoreOutcome::Restored)
+        })
     }
 
     fn album_feed_page<'a>(

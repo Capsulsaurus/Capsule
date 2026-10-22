@@ -273,6 +273,7 @@
   "error.storage.invalid_request": "A solicitação de verificação de armazenamento está malformada.",
   "error.storage.unavailable": "O Capsule não conseguiu verificar se suas fotos estão armazenadas com segurança. Tente novamente.",
   "error.sync.cursor_invalid": "A sessão de sincronização está desatualizada. O Capsule vai sincronizar novamente do início.",
+  "error.sync.cursor_stale": "Sua biblioteca foi reconstruída no servidor. O Capsule vai sincronizar novamente do início e manter tudo neste dispositivo.",
   "error.sync.unauthenticated": "Faça login novamente para continuar a sincronização.",
   "error.sync.unavailable": "Capsule could not reach the server to sync. It will try again.",
   "error.upload.album_access_denied": "Você não tem permissão para adicionar fotos a este álbum.",

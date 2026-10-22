@@ -36,7 +36,7 @@ pub mod cursor;
 
 use std::sync::Arc;
 
-pub use self::cursor::{CURSOR_KEY_LEN, CursorCodec, CursorError, CursorScope};
+pub use self::cursor::{CURSOR_KEY_LEN, CursorCodec, CursorError, CursorPosition, CursorScope};
 use crate::blob::BlobStore;
 use crate::index::AssetIndex;
 

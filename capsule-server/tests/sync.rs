@@ -459,6 +459,7 @@ async fn another_owners_cursor_is_refused_even_under_the_right_key() {
             "01937b7c-0000-7000-8000-0000000000ff",
         )),
         0,
+        0,
     );
 
     let body = page(
@@ -479,11 +480,73 @@ async fn another_servers_cursor_is_refused() {
     publish(&fixture, "keyed").await;
 
     let elsewhere =
-        CursorCodec::new(&[0x11; CURSOR_KEY_LEN]).encode(&CursorScope::feed(&owner()), 0);
+        CursorCodec::new(&[0x11; CURSOR_KEY_LEN]).encode(&CursorScope::feed(&owner()), 0, 0);
     let body = page(
         &fixture,
         &bearer,
         &format!("cursor={elsewhere}"),
+        StatusCode::BAD_REQUEST,
+    )
+    .await;
+    assert_eq!(body["code"], "error.sync.cursor_invalid");
+}
+
+/// A cursor from before a rebuild moved the owner's sync epoch is refused with its own code, and
+/// an empty cursor resyncs from zero in the new epoch (#697).
+///
+/// The old cursor is authentic, so `cursor_invalid` would be the wrong answer: the client's
+/// recovery differs (it drops its high-water marks as well), and only a distinct code lets it.
+#[tokio::test]
+async fn a_cursor_from_before_an_epoch_bump_is_stale_and_an_empty_cursor_resyncs() {
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+    publish(&fixture, "before-rebuild").await;
+
+    let first = page(&fixture, &bearer, "", StatusCode::OK).await;
+    let old = first["next_cursor"].as_str().expect("a cursor").to_owned();
+
+    let epoch = fixture
+        .index
+        .bump_sync_epoch(&owner())
+        .await
+        .expect("the index bumps");
+    assert_eq!(epoch, 1);
+
+    let body = page(
+        &fixture,
+        &bearer,
+        &format!("cursor={old}"),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    assert_eq!(body["code"], "error.sync.cursor_stale");
+
+    // From zero, in the new epoch: the whole library again, and a cursor that resumes.
+    let again = page(&fixture, &bearer, "", StatusCode::OK).await;
+    assert_eq!(again["entries"].as_array().expect("an array").len(), 1);
+    let resumed = again["next_cursor"].as_str().expect("a cursor");
+    let next = page(
+        &fixture,
+        &bearer,
+        &format!("cursor={resumed}"),
+        StatusCode::OK,
+    )
+    .await;
+    assert_eq!(next["entries"].as_array().expect("an array").len(), 0);
+}
+
+/// A cursor naming an epoch the owner has not reached was never minted here: invalid, not stale.
+#[tokio::test]
+async fn a_cursor_from_an_epoch_not_yet_reached_is_invalid() {
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+    publish(&fixture, "future-epoch").await;
+
+    let ahead = CursorCodec::new(&CURSOR_KEY).encode(&CursorScope::feed(&owner()), 5, 1);
+    let body = page(
+        &fixture,
+        &bearer,
+        &format!("cursor={ahead}"),
         StatusCode::BAD_REQUEST,
     )
     .await;
@@ -773,7 +836,10 @@ async fn a_member_reads_the_albums_page_over_the_owners_sequence() {
             &CursorScope::album(&OwnerId::new(BOB), &album()),
             Some(cursor)
         ),
-        Ok(third)
+        Ok(Some(capsule_server::sync::CursorPosition {
+            epoch: 0,
+            position: third
+        }))
     );
 
     // Bob's own feed is still empty: the member's read did not move anything into his library.

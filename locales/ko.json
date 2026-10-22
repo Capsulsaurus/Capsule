@@ -1064,6 +1064,10 @@
     "message": "동기화 세션이 오래되었습니다. Capsule이 처음부터 다시 동기화합니다.",
     "context": "Machine-translated seed pending human review."
   },
+  "error.sync.cursor_stale": {
+    "message": "서버에서 라이브러리가 다시 구성되었습니다. Capsule이 처음부터 다시 동기화하며 이 기기의 모든 항목은 그대로 유지됩니다.",
+    "context": "Machine-translated seed pending human review."
+  },
   "error.sync.unauthenticated": {
     "message": "동기화를 계속하려면 다시 로그인해 주세요.",
     "context": "Machine-translated seed pending human review."

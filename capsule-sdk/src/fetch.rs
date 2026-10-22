@@ -520,6 +520,13 @@ pub enum FetchError {
     /// The bounded resume budget was spent without completing the transfer.
     #[error("fetch gave up after exhausting the resume budget: {0}")]
     Exhausted(String),
+    /// A blob fetched without a known size ([`RangedFetcher::fetch_unsized`]) kept going past
+    /// the caller's limit; the bytes held are discarded rather than grown without bound.
+    #[error("blob exceeds the {limit}-byte limit for a blob of unlisted size")]
+    TooLarge {
+        /// The limit the caller set, in bytes.
+        limit: u64,
+    },
     /// The destination of a streamed fetch ([`RangedFetcher::fetch_into`]) refused bytes: a
     /// local write failed, or a decrypting sink rejected a chunk. Whatever the sink holds is
     /// unverified and must be discarded.
@@ -692,6 +699,88 @@ impl<S: Sleeper, C: MonotonicClock> RangedFetcher<S, C> {
             .await
     }
 
+    /// Fetch a whole blob whose size nobody listed, e.g. a metadata blob the sync feed names by
+    /// address only, verifying it against its content address.
+    ///
+    /// Each request asks for a bounded window ([`UNSIZED_WINDOW`], or the class's smaller one).
+    /// The blob ends at the first window that comes back short, or at a `416` for a range that
+    /// starts exactly at its end. No-progress reads back off through the same `bulk-transfer`
+    /// retry engine and status classification as [`fetch`](Self::fetch). The blob may not grow
+    /// past `limit` bytes: a source that keeps answering full windows gets
+    /// [`FetchError::TooLarge`], never an unbounded buffer.
+    #[instrument(skip(self, source), fields(class = ?self.class))]
+    pub async fn fetch_unsized<B: BlobSource>(
+        &self,
+        source: &B,
+        hash: &str,
+        limit: u64,
+    ) -> Result<Vec<u8>, FetchError> {
+        let window = self
+            .window()
+            .map_or(UNSIZED_WINDOW, |w| w.min(UNSIZED_WINDOW))
+            .max(1);
+        let mut bytes: Vec<u8> = Vec::new();
+        let mut engine: RetryEngine = RetryClass::BulkTransfer.engine();
+        let mut stall = StallDetector::new(self.stall, self.clock.now_millis());
+        loop {
+            let start = bytes.len() as u64;
+            let outcome = source.get_range(hash, start, Some(window)).await;
+            let now = self.clock.now_millis();
+            match outcome {
+                RangeOutcome::Complete { bytes: landed } if !landed.is_empty() || start > 0 => {
+                    let short = (landed.len() as u64) < window;
+                    bytes.extend_from_slice(&landed);
+                    if bytes.len() as u64 > limit {
+                        return Err(FetchError::TooLarge { limit });
+                    }
+                    if short {
+                        break;
+                    }
+                    stall.on_progress(now);
+                    engine.reset();
+                }
+                RangeOutcome::Partial { bytes: landed } if !landed.is_empty() => {
+                    bytes.extend_from_slice(&landed);
+                    if bytes.len() as u64 > limit {
+                        return Err(FetchError::TooLarge { limit });
+                    }
+                    stall.on_progress(now);
+                    engine.reset();
+                }
+                RangeOutcome::Complete { .. } | RangeOutcome::Partial { .. } => {
+                    if stall.is_stalled(now) {
+                        tracing::debug!(offset = start, "unsized fetch stalled; resuming");
+                    }
+                    match engine.next_backoff(None) {
+                        RetryDecision::GiveUp => {
+                            return Err(FetchError::Exhausted(format!(
+                                "no progress fetching {hash} after {} retries",
+                                engine.policy().max_retries
+                            )));
+                        }
+                        RetryDecision::Retry { after } => self.sleeper.sleep(after).await,
+                    }
+                }
+                RangeOutcome::Status { status: 416, .. } if start > 0 => break,
+                RangeOutcome::Status { status, code } => {
+                    return Err(classify_status(status, code));
+                }
+                RangeOutcome::Unauthenticated { code, message } => {
+                    tracing::warn!(hash, ?code, %message, "blob fetch unauthenticated; not retrying");
+                    return Err(FetchError::Unauthenticated { code, message });
+                }
+            }
+        }
+        if hash_hex(&bytes) != hash {
+            tracing::warn!(hash, "unsized blob content-hash mismatch; discarding");
+            return Err(FetchError::IntegrityFailed {
+                expected: hash.to_string(),
+            });
+        }
+        tracing::debug!(hash, bytes = bytes.len(), "unsized blob fetched");
+        Ok(bytes)
+    }
+
     async fn run<B: BlobSource>(
         &self,
         source: &B,
@@ -794,6 +883,10 @@ impl<S: Sleeper, C: MonotonicClock> RangedFetcher<S, C> {
         Ok(signals)
     }
 }
+
+/// The `Range` window [`RangedFetcher::fetch_unsized`] asks for (64 KiB). A sealed sidecar is a
+/// few KiB, so one window is the usual whole fetch.
+pub const UNSIZED_WINDOW: u64 = 64 * 1024;
 
 /// The largest `Range` window [`RangedFetcher::fetch_into`] asks for: the memory a streamed
 /// fetch holds is one of these, whatever the blob's size. It is the upload protocol's largest

@@ -368,9 +368,7 @@ where
                     }
                 }
             }
-            ImportDecision::SkipDuplicate { .. }
-            | ImportDecision::SkipUnsupported
-            | ImportDecision::SkipError(_) => {
+            ImportDecision::SkipDuplicate { .. } | ImportDecision::SkipError(_) => {
                 report.outcomes.push(StreamedOutcome {
                     asset_id: None,
                     source_path: candidate.primary_path().clone(),

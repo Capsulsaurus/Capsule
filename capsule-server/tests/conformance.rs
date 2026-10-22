@@ -1066,13 +1066,30 @@ async fn every_declared_response_is_exercised() {
         .expect("the counter answers");
 
     // 200, on an empty library: a client with nothing to sync still gets a cursor.
-    client
+    let cursor = client
         .get("/v1/sync")
         .header("authorization", &bearer)
         .header("accept", "application/json")
         .send()
         .await
-        .assert_status(StatusCode::OK);
+        .assert_status(StatusCode::OK)
+        .json::<serde_json::Value>()["next_cursor"]
+        .as_str()
+        .expect("a cursor")
+        .to_owned();
+
+    // 409: that cursor, after a rebuild moved the library to a new sync epoch (#697).
+    fixture
+        .index
+        .bump_sync_epoch(&support::owner())
+        .await
+        .expect("the index bumps");
+    client
+        .get(&format!("/v1/sync?cursor={cursor}"))
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::CONFLICT);
 
     // ── GET /v1/blob/{hash} ────────────────────────────────────────────────────────────────
     // 401 and 403 are the scheme's, exactly as on the feed.

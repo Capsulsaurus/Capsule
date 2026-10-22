@@ -94,11 +94,9 @@ fn fixture_sized(name: &str, count: u8, len: usize) -> Fixture {
                     role: "original".to_owned(),
                     size: bundle.ciphertext_size(),
                 }),
-                derivatives: vec![BlobRef {
-                    ciphertext_hash: metadata_hash.clone(),
-                    role: "metadata".to_owned(),
-                    size: bundle.metadata_blob.len() as u64,
-                }],
+                // As the server's feed lists them: the original and the derivatives. The
+                // metadata blob is named by `metadata_blob` alone, with no size.
+                derivatives: Vec::new(),
             },
             derivative_manifests: bundle.derivative_manifests.clone(),
             original_held: true,
