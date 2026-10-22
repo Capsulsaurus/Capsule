@@ -111,6 +111,8 @@ struct Server {
     clock: Arc<ManualClock>,
     upload: UploadContext,
     attestation: AttestationContext,
+    /// Whether Alice's directory is in her ledger yet.
+    directory_ledgered: std::sync::atomic::AtomicBool,
 }
 
 impl Server {
@@ -152,6 +154,7 @@ impl Server {
             clock,
             upload,
             attestation,
+            directory_ledgered: std::sync::atomic::AtomicBool::new(false),
         };
         server.writable(alice(), ALBUM);
         server.publish_device(alice(), device(), Timestamp::UNIX_EPOCH);
@@ -174,6 +177,35 @@ impl Server {
             .insert((user.to_string(), device), added_at);
     }
 
+    /// Ledger Alice's published directory once, before anything of hers, as her publish did: a
+    /// rebuild verifies each manifest against the directory version in force at its entry.
+    async fn ledger_alices_directory(&self) {
+        if self
+            .directory_ledgered
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            return;
+        }
+        let ik = HybridSigningKey::from_seed64(&[3; 64]);
+        let devices = vec![crate::ledger::directory::tests::device(
+            device(),
+            &HybridSigningKey::from_seed64(&[1; 64]),
+            "2025-12-01T00:00:00Z",
+            None,
+        )];
+        let document = crate::ledger::directory::tests::document(&ik, alice(), 1, devices);
+        crate::ledger::directory::tests::publish(
+            self.ledger.as_ref(),
+            self.signer.as_ref(),
+            &ik,
+            alice(),
+            1,
+            document,
+            at(),
+        )
+        .await;
+    }
+
     fn context(&self) -> Reannounce<'_> {
         Reannounce {
             upload: &self.upload,
@@ -183,6 +215,7 @@ impl Server {
     }
 
     async fn reannounce(&self, caller: Uuid, bytes: &[u8]) -> Answer {
+        self.ledger_alices_directory().await;
         reannounce(self.context(), &UserId::new(caller.to_string()), bytes)
             .await
             .expect("decided")
@@ -202,6 +235,8 @@ impl Server {
             .entries
             .into_iter()
             .map(|entry| entry.core.event)
+            // The fixture's own directory publish is not what these cases are about.
+            .filter(|event| !matches!(event, LedgerEvent::Directory { .. }))
             .collect()
     }
 

@@ -11,6 +11,7 @@
 //! - **A torn tail is cut before the next append; any other damage refuses appends.** An intact
 //!   entry this server cannot read is never a torn tail, so it refuses appends and is not cut.
 //! - **An owner identifier that cannot name a ledger is refused** by every operation.
+//! - **An attachment reads back as kept**, per owner and key, and never disturbs the chain.
 //!
 //! Tampering goes through [`Harness::raw`] and [`Harness::replace_raw`], the two things a suite
 //! cannot do through the port. Both adapters keep the same frames, so a case means the same
@@ -521,7 +522,90 @@ pub async fn a_malformed_owner_is_refused(harness: &dyn Harness) {
             harness.ledger().scan(&owner).await,
             Err(LedgerError::MalformedOwner { .. })
         ));
+        assert!(matches!(
+            harness
+                .ledger()
+                .attach(&owner, Hash32::from_bytes([1; 32]), vec![1])
+                .await,
+            Err(LedgerError::MalformedOwner { .. })
+        ));
+        assert!(matches!(
+            harness
+                .ledger()
+                .attachment(&owner, &Hash32::from_bytes([1; 32]))
+                .await,
+            Err(LedgerError::MalformedOwner { .. })
+        ));
     }
+}
+
+/// An attachment reads back as kept, per owner and key; a second one under a key replaces the
+/// first; and attachments neither list an owner nor disturb its chain.
+pub async fn attachments_read_back_beside_the_chain(harness: &dyn Harness) {
+    let signer = key();
+    let (alice, bob) = (owner("attach", "alice"), owner("attach", "bob"));
+    let ledger = harness.ledger();
+    let (first, second) = (Hash32::from_bytes([1; 32]), Hash32::from_bytes([2; 32]));
+
+    ok(
+        ledger.attach(&alice, first, b"one".to_vec()).await,
+        "attach",
+    );
+    assert_eq!(
+        ok(ledger.owners().await, "list owners")
+            .iter()
+            .filter(|listed| **listed == alice)
+            .count(),
+        0,
+        "an attachment alone does not make a ledger"
+    );
+    fill(harness, &alice, &signer, 2).await;
+    ok(
+        ledger.attach(&alice, second, b"two".to_vec()).await,
+        "attach",
+    );
+    ok(
+        ledger.attach(&alice, first, b"uno".to_vec()).await,
+        "attach",
+    );
+
+    assert_eq!(
+        ok(ledger.attachment(&alice, &first).await, "read").as_deref(),
+        Some(b"uno".as_slice())
+    );
+    assert_eq!(
+        ok(ledger.attachment(&alice, &second).await, "read").as_deref(),
+        Some(b"two".as_slice())
+    );
+    assert_eq!(ok(ledger.attachment(&bob, &first).await, "read"), None);
+    assert_eq!(
+        ok(
+            ledger
+                .attachment(&alice, &Hash32::from_bytes([3; 32]))
+                .await,
+            "read"
+        ),
+        None
+    );
+
+    let scan = ok(ledger.scan(&alice).await, "scan");
+    assert_eq!(scan.entries.len(), 2);
+    assert_eq!(scan.damage, None, "an attachment disturbed the chain");
+    ok(
+        ledger
+            .append(&alice, custody(9), Timestamp::UNIX_EPOCH, &signer)
+            .await,
+        "append after attaching",
+    );
+    assert!(
+        matches!(
+            ledger
+                .attach(&alice, first, vec![0; super::MAX_ATTACHMENT_BYTES + 1])
+                .await,
+            Err(LedgerError::AttachmentTooLarge { .. })
+        ),
+        "an attachment past the ceiling was kept"
+    );
 }
 
 /// Every case, in one pass on one harness.
@@ -540,4 +624,5 @@ pub async fn run_all(harness: &dyn Harness) {
     an_unpublished_key_is_detected(harness).await;
     a_damaged_ledger_refuses_appends(harness).await;
     a_malformed_owner_is_refused(harness).await;
+    attachments_read_back_beside_the_chain(harness).await;
 }

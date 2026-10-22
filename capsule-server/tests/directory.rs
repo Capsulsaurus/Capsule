@@ -458,6 +458,34 @@ async fn a_publish_is_ledgered_with_its_version_and_document_hash() {
     );
 }
 
+/// A publish keeps the document and the identity key beside the ledger under the hash its entry
+/// records, so a rebuild verifies manifests against it from the blob root alone (#782).
+#[tokio::test]
+async fn a_publish_attaches_its_document_and_identity_key_under_the_ledgered_hash() {
+    use capsule_server::ledger::OwnerLedger as _;
+    use capsule_server::ledger::directory::DirectoryCopy;
+
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+    let ik = ik();
+    let document = signed_by(&ik, account(), 1);
+    publish(&fixture, &bearer, &ik, document.clone(), StatusCode::OK).await;
+
+    let kept = fixture
+        .ledger
+        .attachment(&owner(), &capsule_core::crypto::hash::hash_bytes(&document))
+        .await
+        .expect("the ledger answers")
+        .expect("the copy is kept");
+    assert_eq!(
+        DirectoryCopy::decode(&kept),
+        Ok(DirectoryCopy {
+            identity_key: ik.verifying_key().to_bytes(),
+            document,
+        })
+    );
+}
+
 /// A ledger that cannot append refuses the publish, and nothing is stored.
 #[tokio::test]
 async fn a_ledger_that_cannot_append_refuses_the_publish() {

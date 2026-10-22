@@ -2776,6 +2776,33 @@ impl OwnerLedger for SwitchableLedger {
     fn owners(&self) -> LedgerFuture<'_, Vec<OwnerId>> {
         self.inner.owners()
     }
+
+    /// Refused while the switch is on, as an append is: a ledger that cannot write cannot keep
+    /// an attachment either.
+    fn attach<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        key: capsule_core::crypto::hash::Hash32,
+        bytes: Vec<u8>,
+    ) -> LedgerFuture<'a, ()> {
+        if self.unavailable.load(Ordering::SeqCst) {
+            return Box::pin(async {
+                Err(LedgerError::Backend {
+                    operation: "attach",
+                    detail: REFUSAL.to_owned(),
+                })
+            });
+        }
+        self.inner.attach(owner, key, bytes)
+    }
+
+    fn attachment<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        key: &'a capsule_core::crypto::hash::Hash32,
+    ) -> LedgerFuture<'a, Option<Vec<u8>>> {
+        self.inner.attachment(owner, key)
+    }
 }
 
 /// A quota ledger that can be made to fail on demand.
