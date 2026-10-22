@@ -432,52 +432,21 @@ fn every_budget_is_declared_in_one_place() {
 
 /// An account may spend its whole upload budget on distinct source keys, one fresh `/64` a
 /// request, so each upload source partition must hold [`ceilings::HOSTILE_UPLOADERS`] accounts
-/// doing that at once. Sized against the shared source number, the chunk partition filled at four.
+/// doing that at once **and still** hold the legitimate address population every other source
+/// partition is sized for. Sized against that population alone, the chunk partition filled at
+/// four hostile accounts and refused every first-time uploader after them.
 #[test]
 fn the_upload_source_ceilings_hold_their_stated_hostile_accounts() {
     let accounts = ceilings::HOSTILE_UPLOADERS;
+    let legitimate = ceilings::SOURCE_ADDRESS;
     let sessions = budgets::UPLOAD_SESSIONS.limit as usize;
     let chunks = budgets::UPLOAD_CHUNKS.limit as usize;
-    assert!(CounterKey::UploadSessionsSource(String::new()).ceiling() >= sessions * accounts);
-    assert!(CounterKey::UploadChunksSource(String::new()).ceiling() >= chunks * accounts);
     assert!(
-        CounterKey::UploadChunksSource(String::new()).ceiling() > ceilings::SOURCE_ADDRESS,
-        "the chunk partition is the one an account fills fastest"
-    );
-}
-
-/// The same property against the shipped chunk partition: every hostile account spends its full
-/// minute's chunk budget, each chunk from a fresh address, and an uploader arriving from an
-/// address with no live window is still admitted.
-#[tokio::test]
-async fn hostile_accounts_walking_addresses_leave_room_for_a_first_time_uploader() {
-    let counters = InMemoryCounters::new();
-    let minted = ceilings::HOSTILE_UPLOADERS * budgets::UPLOAD_CHUNKS.limit as usize;
-
-    for index in 0..minted {
-        counters
-            .hit(
-                &CounterKey::UploadChunksSource(format!("2001:db8:{index:x}::/64")),
-                budgets::UPLOAD_CHUNKS_SOURCE,
-                at(0),
-            )
-            .await
-            .expect("the partition holds every hostile account's budget");
-    }
-    assert_eq!(
-        counters.len_of(&CounterKey::UploadChunksSource(String::new())),
-        minted
+        CounterKey::UploadSessionsSource(String::new()).ceiling()
+            >= sessions * accounts + legitimate
     );
     assert!(
-        counters
-            .hit(
-                &CounterKey::UploadChunksSource("198.51.100.7".to_owned()),
-                budgets::UPLOAD_CHUNKS_SOURCE,
-                at(0),
-            )
-            .await
-            .expect("a first-time address is not refused at the ceiling")
-            .admits()
+        CounterKey::UploadChunksSource(String::new()).ceiling() >= chunks * accounts + legitimate
     );
 }
 

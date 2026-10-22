@@ -346,10 +346,10 @@ impl CounterKey {
             Self::EnrollmentRedemptionMalformed => ceilings::ENROLLMENT_REDEMPTION_MALFORMED,
             Self::ShareLink(_) => ceilings::SHARE_LINK,
             Self::DropLink(_) => ceilings::DROP_LINK,
-            Self::ShareSource(_)
-            | Self::DropSource(_)
-            | Self::UploadSessionsSource(_)
-            | Self::RegistrationSource(_) => ceilings::SOURCE_ADDRESS,
+            Self::ShareSource(_) | Self::DropSource(_) | Self::RegistrationSource(_) => {
+                ceilings::SOURCE_ADDRESS
+            }
+            Self::UploadSessionsSource(_) => ceilings::UPLOAD_SESSIONS_SOURCE,
             Self::UploadChunksSource(_) => ceilings::UPLOAD_CHUNKS_SOURCE,
             Self::DeepVerify(_) => ceilings::DEEP_VERIFY,
             Self::UploadSessions(_) | Self::UploadChunks(_) => ceilings::UPLOADING_ACCOUNT,
@@ -546,25 +546,18 @@ pub mod ceilings {
     /// is its own partition at this size.
     pub const UPLOADING_ACCOUNT: usize = 10_000;
 
-    /// Four of the five source-address keys — 1-minute and 1-hour windows, keyed on a client
-    /// address. [`UPLOAD_CHUNKS_SOURCE`] is the fifth.
+    /// The share, drop and registration source-address keys — 1-minute and 1-hour windows, keyed
+    /// on a client address. The two upload source keys are sized below.
     ///
-    /// Charged by the share and drop paths (#704) and upload session creation (#718);
-    /// registration's is not yet charged. Sized for distinct addresses in the window, which for a
-    /// self-hosted deployment is thousands, not millions — an IPv6 client counts once per `/64`,
-    /// so walking a prefix within one `/64` does not grow it. Each variant is its own partition
-    /// at this size.
-    ///
-    /// The upload session key is reached only by an authenticated request, and only once its
-    /// account's own budget admitted it, so an account mints at most
-    /// [`budgets::UPLOAD_SESSIONS`](super::budgets::UPLOAD_SESSIONS) — 300 — keys a minute, even
-    /// walking a fresh `/64` on every request. Ten thousand holds [`HOSTILE_UPLOADERS`] such
-    /// accounts with room to spare (300 × 16 = 4 800; the partition fills at 34).
+    /// Charged by the share and drop paths (#704); registration's is not yet charged. Sized for
+    /// distinct addresses in the window, which for a self-hosted deployment is thousands, not
+    /// millions — an IPv6 client counts once per `/64`, so walking a prefix within one `/64` does
+    /// not grow it. Each variant is its own partition at this size.
     pub const SOURCE_ADDRESS: usize = 10_000;
 
     /// How many accounts the two upload source partitions absorb at once, each walking a fresh
-    /// source address on every request at its full per-account budget, before a legitimate
-    /// uploader's first request from an address with no live window meets the ceiling.
+    /// source address on every request at its full per-account budget, while still holding
+    /// [`SOURCE_ADDRESS`] first-time addresses for everybody else.
     ///
     /// The upload source keys are the one source partition an authenticated caller can grow
     /// faster than addresses arrive: the account budget is charged first, so an account mints at
@@ -579,15 +572,25 @@ pub mod ceilings {
     /// nothing; a client waits out the `Retry-After` and resumes.
     pub const HOSTILE_UPLOADERS: usize = 16;
 
+    /// [`CounterKey::UploadSessionsSource`](super::CounterKey::UploadSessionsSource) — 1-minute
+    /// window, keyed on a client address.
+    ///
+    /// [`budgets::UPLOAD_SESSIONS`](super::budgets::UPLOAD_SESSIONS) × [`HOSTILE_UPLOADERS`] +
+    /// [`SOURCE_ADDRESS`] = 300 × 16 + 10 000 = 14 800: the hostile accounts' worth of fresh
+    /// addresses on top of the legitimate address population every other source key is sized
+    /// for. Derived rather than written, so raising the per-account budget raises this with it.
+    // A `u32` widened into `usize`, which is at least 32 bits on every target this server builds.
+    pub const UPLOAD_SESSIONS_SOURCE: usize =
+        super::budgets::UPLOAD_SESSIONS.limit as usize * HOSTILE_UPLOADERS + SOURCE_ADDRESS;
+
     /// [`CounterKey::UploadChunksSource`](super::CounterKey::UploadChunksSource) — 1-minute
     /// window, keyed on a client address.
     ///
-    /// [`budgets::UPLOAD_CHUNKS`](super::budgets::UPLOAD_CHUNKS) × [`HOSTILE_UPLOADERS`] =
-    /// 3 000 × 16 = 48 000, derived rather than written so that raising the per-account chunk
-    /// budget raises this with it. [`SOURCE_ADDRESS`] would fill at four such accounts.
-    // A `u32` widened into `usize`, which is at least 32 bits on every target this server builds.
+    /// [`budgets::UPLOAD_CHUNKS`](super::budgets::UPLOAD_CHUNKS) × [`HOSTILE_UPLOADERS`] +
+    /// [`SOURCE_ADDRESS`] = 3 000 × 16 + 10 000 = 58 000, as [`UPLOAD_SESSIONS_SOURCE`] is
+    /// derived. Under [`SOURCE_ADDRESS`] alone this partition filled at four such accounts.
     pub const UPLOAD_CHUNKS_SOURCE: usize =
-        super::budgets::UPLOAD_CHUNKS.limit as usize * HOSTILE_UPLOADERS;
+        super::budgets::UPLOAD_CHUNKS.limit as usize * HOSTILE_UPLOADERS + SOURCE_ADDRESS;
 
     /// [`CounterKey::OidcAuthorize`](super::CounterKey::OidcAuthorize) — 1-minute window, keyed
     /// on an **admitted** redirect host.
