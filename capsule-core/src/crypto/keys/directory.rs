@@ -28,12 +28,16 @@
 //!
 //! [Cryptography — Keys § Device Directory]: https://docs/design/cryptography/keys/#device-directory
 
+use std::collections::BTreeMap;
+
+use ciborium::value::Value;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::hybrid_sig::{HybridSignature, HybridSigningKey, HybridVerifyingKey};
 use super::kem::{DEK_PUBLIC_LEN, encapsulate_to_public};
 use super::kem_p256::{DEK_P256_PUBLIC_LEN, encapsulate_to_p256_public};
+use crate::cbor::OpenMap;
 use crate::crypto::CryptoError;
 
 /// A device's published **DEK** public encapsulation key: the bytes a peer wraps a key to so
@@ -131,7 +135,7 @@ impl<'de> Deserialize<'de> for DekPublic {
 
 /// One device's published entry. A revoked device's entry is **retained** (marked with
 /// `revoked_at`), never deleted, so manifests it signed before revocation stay verifiable.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DeviceEntry {
     /// Stable device id.
     pub device_id: Uuid,
@@ -148,6 +152,32 @@ pub struct DeviceEntry {
     pub added_at: String,
     /// RFC3339 revocation time, if revoked.
     pub revoked_at: Option<String>,
+    /// Keys a newer writer added that this build does not know, preserved verbatim and signed
+    /// over as part of the core. Empty (and so wire-absent) on everything this build writes.
+    ///
+    /// A key here must never collide with a known field name: the decoder only ever places the
+    /// keys it did not recognise here, and a caller building an entry by hand must do the same.
+    #[serde(flatten)]
+    pub unknown: BTreeMap<String, Value>,
+}
+
+// `Value` holds floats, so it is only `PartialEq`; see `ManifestCore` for why `Eq` stays.
+impl Eq for DeviceEntry {}
+
+impl<'de> Deserialize<'de> for DeviceEntry {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let mut m = OpenMap::deserialize("device entry", d)?;
+        Ok(Self {
+            device_id: m.take("device_id")?,
+            dsk_public: m.take("dsk_public")?,
+            dek_public: m.take_opt("dek_public")?,
+            added_at: m.take("added_at")?,
+            // Legacy present-`null`: an absent key and a `null` both read as `None`, exactly as
+            // the derived decoder did, and `None` re-emits as `null`.
+            revoked_at: m.take_opt("revoked_at")?,
+            unknown: m.into_unknown(),
+        })
+    }
 }
 
 impl DeviceEntry {
@@ -171,7 +201,13 @@ impl DeviceEntry {
 }
 
 /// The unsigned core of a directory — exactly the bytes the master signature covers.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// **Unknown keys survive under the signature** ([Versioning — invariant 2]), here and in every
+/// [`DeviceEntry`]: a directory from a newer writer that only adds a key decodes, re-emits that
+/// key canonically, and so still verifies; stripping it fails verification.
+///
+/// [Versioning — invariant 2]: https://docs/design/versioning/#system-invariants
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DirectoryCore {
     /// Account owner.
     pub user_id: Uuid,
@@ -181,6 +217,29 @@ pub struct DirectoryCore {
     pub updated_at: String,
     /// The user's devices.
     pub devices: Vec<DeviceEntry>,
+    /// Keys a newer writer added that this build does not know, preserved verbatim and signed
+    /// over. Empty (and so wire-absent) on everything this build writes.
+    ///
+    /// A key here must never collide with a known field name: the decoder only ever places the
+    /// keys it did not recognise here, and a caller building a core by hand must do the same.
+    #[serde(flatten)]
+    pub unknown: BTreeMap<String, Value>,
+}
+
+// `Value` holds floats, so it is only `PartialEq`; see `ManifestCore` for why `Eq` stays.
+impl Eq for DirectoryCore {}
+
+impl<'de> Deserialize<'de> for DirectoryCore {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let mut m = OpenMap::deserialize("directory core", d)?;
+        Ok(Self {
+            user_id: m.take("user_id")?,
+            directory_version: m.take("directory_version")?,
+            updated_at: m.take("updated_at")?,
+            devices: m.take("devices")?,
+            unknown: m.into_unknown(),
+        })
+    }
 }
 
 /// Why a device could not be cross-signed into a directory.
@@ -302,6 +361,7 @@ mod tests {
             dek_public,
             added_at: "2026-05-30T00:00:00Z".into(),
             revoked_at: None,
+            unknown: Default::default(),
         }
     }
 
@@ -315,6 +375,7 @@ mod tests {
             directory_version: version,
             updated_at: "2026-05-31T00:00:00Z".into(),
             devices: vec![entry(device, None)],
+            unknown: Default::default(),
         }
     }
 
@@ -394,6 +455,7 @@ mod tests {
             dek_public: Some(DekPublic(DekKeypair::generate().public_bytes())),
             added_at: "2026-06-01T00:00:00Z".into(),
             revoked_at: None,
+            unknown: Default::default(),
         }
     }
 
@@ -594,6 +656,130 @@ mod tests {
         assert!(
             !d.verify(&ik.verifying_key()),
             "a substituted dek_public must break the IK signature"
+        );
+    }
+
+    // ── Unknown keys from a newer writer (versioning invariant 2) ───────────────
+
+    /// A value no build has defined: a tag, a full-width integer and a nested map with a float.
+    fn future_value() -> ciborium::Value {
+        use ciborium::Value;
+        Value::Map(vec![
+            (
+                Value::Text("captured".into()),
+                Value::Tag(1, Box::new(Value::from(1_790_000_000u64))),
+            ),
+            (
+                Value::Text("weights".into()),
+                Value::Array(vec![Value::Float(0.5), Value::from(u64::MAX)]),
+            ),
+        ])
+    }
+
+    /// Splice `extra` into the CBOR map `value` (which must be one).
+    fn with_keys(value: ciborium::Value, extra: &[(&str, ciborium::Value)]) -> ciborium::Value {
+        let ciborium::Value::Map(mut entries) = value else {
+            panic!("a CBOR map")
+        };
+        for (k, v) in extra {
+            entries.push((ciborium::Value::Text((*k).to_owned()), v.clone()));
+        }
+        ciborium::Value::Map(entries)
+    }
+
+    /// A "future" writer that does not use these types: it adds keys this build has never
+    /// heard of to the directory core and to a device entry, and signs the canonical core it
+    /// built. This build decodes it, keeps every key, re-emits the core byte for byte, and so
+    /// verifies; dropping either set of keys fails verification.
+    #[test]
+    fn a_directory_from_a_newer_writer_keeps_its_unknown_keys_under_the_signature() {
+        let (ik, dev) = (ik(), dev());
+        let current: ciborium::Value =
+            crate::cbor::from_slice(&core(4, &dev).signing_bytes()).unwrap();
+        let ciborium::Value::Map(entries) = current else {
+            panic!("a core is a map")
+        };
+        let entries = entries
+            .into_iter()
+            .map(|(k, v)| {
+                if k.as_text() == Some("devices") {
+                    let devices = v
+                        .into_array()
+                        .unwrap()
+                        .into_iter()
+                        .map(|d| with_keys(d, &[("x_attested_by", future_value())]))
+                        .collect();
+                    (k, ciborium::Value::Array(devices))
+                } else {
+                    (k, v)
+                }
+            })
+            .collect();
+        let future_core = with_keys(
+            ciborium::Value::Map(entries),
+            &[
+                ("x_recovery_policy", future_value()),
+                ("z", ciborium::Value::Bytes(vec![0xFF; 4])),
+            ],
+        );
+        let signed_bytes = crate::cbor::value_to_canonical_vec(&future_core);
+        let wire = crate::cbor::value_to_canonical_vec(&ciborium::Value::Map(vec![
+            (ciborium::Value::Text("core".into()), future_core.clone()),
+            (
+                ciborium::Value::Text("signature".into()),
+                crate::cbor::from_slice(
+                    &crate::cbor::to_canonical_vec(&ik.sign(&signed_bytes)).unwrap(),
+                )
+                .unwrap(),
+            ),
+        ]));
+
+        let directory: DeviceDirectory = crate::cbor::from_slice(&wire).unwrap();
+        assert_eq!(
+            directory.core.unknown.keys().collect::<Vec<_>>(),
+            ["x_recovery_policy", "z"]
+        );
+        assert_eq!(
+            directory.core.devices[0].unknown.keys().collect::<Vec<_>>(),
+            ["x_attested_by"]
+        );
+        assert_eq!(directory.core.signing_bytes(), signed_bytes);
+        assert!(directory.verify(&ik.verifying_key()));
+        assert_eq!(crate::cbor::to_canonical_vec(&directory).unwrap(), wire);
+
+        let mut stripped_core = directory.clone();
+        stripped_core.core.unknown.clear();
+        assert!(
+            !stripped_core.verify(&ik.verifying_key()),
+            "dropping a core key must fail verification"
+        );
+        let mut stripped_entry = directory;
+        stripped_entry.core.devices[0].unknown.clear();
+        assert!(
+            !stripped_entry.verify(&ik.verifying_key()),
+            "dropping a device-entry key must fail verification"
+        );
+    }
+
+    /// Everything this build writes has empty unknown maps, and an empty map is wire-absent: the
+    /// core encodes exactly the four keys it always had.
+    #[test]
+    fn an_empty_unknown_map_is_wire_absent() {
+        let c = core(1, &dev());
+        let value: ciborium::Value = crate::cbor::from_slice(&c.signing_bytes()).unwrap();
+        let keys: Vec<_> = value
+            .as_map()
+            .unwrap()
+            .iter()
+            .filter_map(|(k, _)| k.as_text())
+            .collect();
+        assert_eq!(
+            keys,
+            ["devices", "user_id", "updated_at", "directory_version"]
+        );
+        assert_eq!(
+            entry_keys(&c),
+            ["added_at", "device_id", "dsk_public", "revoked_at"]
         );
     }
 

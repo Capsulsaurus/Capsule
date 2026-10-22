@@ -118,6 +118,7 @@ mod tests {
             uploaded_by_user: Uuid::from_u128(7).to_string(),
             uploaded_by_device: None,
             received_at: "2026-07-10T00:00:00Z".into(),
+            unknown: Default::default(),
         }
     }
 
@@ -220,6 +221,81 @@ mod tests {
         assert_eq!(log.len(), 2, "idempotent: no duplicate");
         assert_eq!(log[0].core.receipt_seq, 1, "chain order");
         assert_eq!(log[1].core.receipt_seq, 2);
+    }
+
+    /// A receipt from a newer server that adds fields this build has never heard of — built as
+    /// raw CBOR, as a writer that does not share these types would — still verifies here, so
+    /// an older client does not mistake it for a withheld receipt and refuse to release. The
+    /// fields survive the persisted log byte for byte, and dropping them fails verification.
+    #[test]
+    fn a_receipt_from_a_newer_server_verifies_and_keeps_its_unknown_fields() {
+        use ciborium::Value;
+
+        let key = signing_key(1);
+        let ct = Hash32([0xAB; 32]);
+        let asset = Uuid::from_u128(101);
+        let mut known = core(1, ct, 4096);
+        known.asset_id = asset.to_string();
+        let Value::Map(mut entries) = cbor::from_slice::<Value>(&known.signing_bytes()).unwrap()
+        else {
+            panic!("a receipt core is a map")
+        };
+        entries.push((
+            Value::Text("x_replica_count".into()),
+            Value::Tag(2, Box::new(Value::Bytes(vec![0x01; 17]))),
+        ));
+        entries.push((
+            Value::Text("x_region".into()),
+            Value::Map(vec![(Value::Text("weight".into()), Value::Float(0.5))]),
+        ));
+        let future_core = Value::Map(entries);
+        let signed_bytes = cbor::value_to_canonical_vec(&future_core);
+        let server_sig: Value =
+            cbor::from_slice(&cbor::to_canonical_vec(&key.sign(&signed_bytes)).unwrap()).unwrap();
+        let wire = cbor::value_to_canonical_vec(&Value::Map(vec![
+            (Value::Text("core".into()), future_core),
+            (Value::Text("server_sig".into()), server_sig),
+        ]));
+
+        let receipt = CustodyReceipt::from_canonical_cbor(&wire).unwrap();
+        assert_eq!(
+            receipt.core.unknown.keys().collect::<Vec<_>>(),
+            ["x_region", "x_replica_count"]
+        );
+        assert_eq!(receipt.core.signing_bytes(), signed_bytes);
+        assert_eq!(receipt.to_canonical_cbor(), wire);
+        assert!(verify_receipt(&receipt, &[key.verifying_key()], &expect(ct, 4096), NOW).is_ok());
+
+        let dir = TempDir::new().unwrap();
+        append_receipt(dir.path(), None, &receipt).unwrap();
+        let log = load_receipts(dir.path(), &asset, None).unwrap();
+        assert_eq!(log, std::slice::from_ref(&receipt));
+        assert_eq!(log[0].to_canonical_cbor(), wire);
+        assert!(verify_receipt(&log[0], &[key.verifying_key()], &expect(ct, 4096), NOW).is_ok());
+
+        let mut stripped = receipt;
+        stripped.core.unknown.clear();
+        assert_eq!(
+            verify_receipt(&stripped, &[key.verifying_key()], &expect(ct, 4096), NOW),
+            Err(ReceiptRejection::Signature),
+            "dropping an unknown field must fail verification"
+        );
+    }
+
+    /// Everything this build issues has an empty unknown map, and an empty map is wire-absent,
+    /// so no receipt signed before the map existed changes its signing bytes.
+    #[test]
+    fn an_empty_unknown_map_is_wire_absent() {
+        let value: ciborium::Value =
+            cbor::from_slice(&core(1, Hash32([1; 32]), 1).signing_bytes()).unwrap();
+        let keys: Vec<_> = value
+            .as_map()
+            .unwrap()
+            .iter()
+            .filter_map(|(k, _)| k.as_text())
+            .collect();
+        assert_eq!(keys.len(), 13, "{keys:?}");
+        assert!(!keys.contains(&"unknown"), "{keys:?}");
     }
 
     #[test]

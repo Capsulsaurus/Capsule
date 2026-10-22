@@ -201,80 +201,31 @@ impl Eq for ManifestCore {}
 
 impl<'de> Deserialize<'de> for ManifestCore {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        use serde::de::Error;
-
-        fn take<T: serde::de::DeserializeOwned, E: Error>(
-            fields: &mut BTreeMap<String, Value>,
-            key: &'static str,
-        ) -> Result<T, E> {
-            let value = fields.remove(key).ok_or_else(|| E::missing_field(key))?;
-            value
-                .deserialized()
-                .map_err(|e| E::custom(format!("manifest field {key}: {e}")))
-        }
-        fn take_opt<T: serde::de::DeserializeOwned, E: Error>(
-            fields: &mut BTreeMap<String, Value>,
-            key: &'static str,
-        ) -> Result<Option<T>, E> {
-            match fields.remove(key) {
-                None | Some(Value::Null) => Ok(None),
-                Some(value) => value
-                    .deserialized()
-                    .map(Some)
-                    .map_err(|e| E::custom(format!("manifest field {key}: {e}"))),
-            }
-        }
-
-        let Value::Map(entries) = Value::deserialize(d)? else {
-            return Err(D::Error::custom("an asset manifest core must be a map"));
-        };
-        let mut fields = BTreeMap::new();
-        for (key, value) in entries {
-            let Value::Text(key) = key else {
-                return Err(D::Error::custom(
-                    "an asset manifest core has only text keys",
-                ));
-            };
-            if fields.contains_key(&key) {
-                return Err(D::Error::custom(format!("duplicate manifest field {key}")));
-            }
-            fields.insert(key, value);
-        }
-
+        let mut m = cbor::OpenMap::deserialize("asset manifest core", d)?;
         // Struct-literal fields evaluate in order, so `version` is decoded first.
-        let core = Self {
-            version: take(&mut fields, "version")?,
-            crypto_suite_id: take(&mut fields, "crypto_suite_id")?,
-            protocol_version: take(&mut fields, "protocol_version")?,
-            file_id: take(&mut fields, "file_id")?,
-            album_id: take(&mut fields, "album_id")?,
-            amk_version: take(&mut fields, "amk_version")?,
-            ciphertext_hash: take(&mut fields, "ciphertext_hash")?,
-            plaintext_size: take(&mut fields, "plaintext_size")?,
-            chunk_size: take(&mut fields, "chunk_size")?,
-            nonce_prefix: take(&mut fields, "nonce_prefix")?,
-            key_mode: take_opt(&mut fields, "key_mode")?.unwrap_or_default(),
-            wrapped_file_key: take_opt(&mut fields, "wrapped_file_key")?,
-            metadata_blob_hash: take_opt(&mut fields, "metadata_blob_hash")?,
-            created_by_user: take(&mut fields, "created_by_user")?,
-            created_by_device: take(&mut fields, "created_by_device")?,
-            client_version: take(&mut fields, "client_version")?,
-            timestamp: take(&mut fields, "timestamp")?,
-            action: take(&mut fields, "action")?,
-            prior_provenance_hash: take_opt(&mut fields, "prior_provenance_hash")?,
-            retention_until: take_opt(&mut fields, "retention_until")?,
-            upgraded_from: take_opt(&mut fields, "upgraded_from")?,
-            unknown: BTreeMap::new(),
-        };
-        if !fields.is_empty() {
-            tracing::debug!(
-                unknown_keys = ?fields.keys().collect::<Vec<_>>(),
-                "manifest core: preserving keys this build does not know"
-            );
-        }
         Ok(Self {
-            unknown: fields,
-            ..core
+            version: m.take("version")?,
+            crypto_suite_id: m.take("crypto_suite_id")?,
+            protocol_version: m.take("protocol_version")?,
+            file_id: m.take("file_id")?,
+            album_id: m.take("album_id")?,
+            amk_version: m.take("amk_version")?,
+            ciphertext_hash: m.take("ciphertext_hash")?,
+            plaintext_size: m.take("plaintext_size")?,
+            chunk_size: m.take("chunk_size")?,
+            nonce_prefix: m.take("nonce_prefix")?,
+            key_mode: m.take_opt("key_mode")?.unwrap_or_default(),
+            wrapped_file_key: m.take_opt("wrapped_file_key")?,
+            metadata_blob_hash: m.take_opt("metadata_blob_hash")?,
+            created_by_user: m.take("created_by_user")?,
+            created_by_device: m.take("created_by_device")?,
+            client_version: m.take("client_version")?,
+            timestamp: m.take("timestamp")?,
+            action: m.take("action")?,
+            prior_provenance_hash: m.take_opt("prior_provenance_hash")?,
+            retention_until: m.take_opt("retention_until")?,
+            upgraded_from: m.take_opt("upgraded_from")?,
+            unknown: m.into_unknown(),
         })
     }
 }

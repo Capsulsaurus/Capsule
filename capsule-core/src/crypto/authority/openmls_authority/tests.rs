@@ -59,7 +59,9 @@ impl Device {
                 dek_public: None,
                 added_at: "2026-05-30T00:00:00Z".into(),
                 revoked_at: None,
+                unknown: Default::default(),
             }],
+            unknown: Default::default(),
         }
         .sign(&ik)
     }
@@ -103,7 +105,9 @@ fn directory_for(user: Uuid, device_id: Uuid, device: &HybridSigningKey) -> Devi
             dek_public: None,
             added_at: "2026-05-30T00:00:00Z".into(),
             revoked_at: None,
+            unknown: Default::default(),
         }],
+        unknown: Default::default(),
     }
     .sign(&ik)
 }
@@ -627,7 +631,9 @@ fn leaf_binding_is_enforced_against_the_device_directory() {
             dek_public: None,
             added_at: "2026-05-30T00:00:00Z".into(),
             revoked_at: None,
+            unknown: Default::default(),
         }],
+        unknown: Default::default(),
     }
     .sign(&HybridSigningKey::from_seed_bytes(&[7; 32], &[7; 32]));
     let rejected = admin.add_member(kp, &tampered_dir);
@@ -1184,7 +1190,9 @@ fn upgrade_intent_signature_and_single_flight_are_enforced() {
             dek_public: None,
             added_at: "2026-05-30T00:00:00Z".into(),
             revoked_at: None,
+            unknown: Default::default(),
         }],
+        unknown: Default::default(),
     }
     .sign(&HybridSigningKey::from_seed_bytes(&[7; 32], &[7; 32]));
     assert!(matches!(
