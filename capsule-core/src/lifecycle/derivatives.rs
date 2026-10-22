@@ -53,7 +53,9 @@ use crate::sidecar::sidecar_v1::{Dimensions, Lqip as SidecarLqip};
 /// hidden that the signature had grown two *kinds* of input (the file, and the crypto identity
 /// it commits under) without saying so.
 pub(super) struct StillSource<'a> {
-    /// The file's bytes.
+    /// The file's bytes — or, for a file the import knows from its head is no still this build
+    /// decodes, only that head: the decoder's gate reads no further before refusing, so the
+    /// derivative status is the same, and an original of any size is never held to learn it.
     pub(super) plaintext: &'a [u8],
     /// Its lowercase extension without the dot, `""` when it has none.
     pub(super) ext: &'a str,

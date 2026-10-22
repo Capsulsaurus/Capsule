@@ -1132,3 +1132,140 @@ fn four_gib_original_pushes_and_restores_in_bounded_memory() {
         "peak heap {peak} B exceeds the {CEILING} B ceiling"
     );
 }
+
+/// A fresh library with its default album ready to import into.
+fn empty_library(lib: &TempDir) -> (Workspace, Uuid) {
+    let mut ws = Workspace::create_with_params(lib.path(), b"passphrase", FAST).unwrap();
+    let album = ws.default_album_id();
+    ws.ensure_album(album, "Imports").unwrap();
+    (ws, album)
+}
+
+/// Import a sparse `size`-byte original named `name` and return the peak heap the import alone
+/// took, after checking that what it committed is the file. The source costs no disk; the
+/// library copy the import writes does.
+fn import_peak(name: &str, size: u64) -> usize {
+    let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let path = src.path().join(name);
+    fs::File::create(&path).unwrap().set_len(size).unwrap();
+    let (mut ws, album) = empty_library(&lib);
+    let (asset_id, peak) = crate::test_heap::peak_during(|| ws.import_asset(album, &path).unwrap());
+
+    // The signed size and hash, a library copy that reads back as them, and a ciphertext
+    // re-derived from that copy at the manifest's address.
+    let asset = ws.asset(&asset_id).unwrap();
+    let head = &asset.chain.records().last().unwrap().manifest.core;
+    assert_eq!(head.plaintext_size, size);
+    let library_copy = ws.original_path(&asset_id).unwrap();
+    let mut copied = crate::crypto::hash::Sha256Hasher::new();
+    let mut reader = fs::File::open(&library_copy).unwrap();
+    let mut buf = vec![0u8; 1 << 20];
+    let mut copied_len = 0u64;
+    loop {
+        let n = std::io::Read::read(&mut reader, &mut buf).unwrap();
+        if n == 0 {
+            break;
+        }
+        copied.update(&buf[..n]);
+        copied_len += n as u64;
+    }
+    assert_eq!(copied_len, size);
+    assert_eq!(
+        copied.finalize(),
+        asset.sidecar.hash,
+        "the library copy is the signed original"
+    );
+    let bundle = ws.upload_bundle(&asset_id).unwrap();
+    assert_eq!(
+        bundle.original.write_to(std::io::sink()).unwrap(),
+        head.ciphertext_hash,
+        "the manifest addresses the ciphertext the library copy re-derives"
+    );
+    peak
+}
+
+/// The import's memory ceiling is a property of the STREAM chunk, not the file: a 32 MiB
+/// original is hashed, encrypted, copied and signed without being held.
+#[test]
+fn import_holds_a_chunk_not_the_file() {
+    const CEILING: usize = 4 << 20;
+    let peak = import_peak("clip.mp4", 32 << 20);
+    assert!(
+        peak < CEILING,
+        "peak heap {peak} B exceeds the {CEILING} B ceiling"
+    );
+}
+
+/// The acceptance case: a 4 GiB original — the largest the server accepts — imports within the
+/// same fixed ceiling. Ignored by default because it encrypts 4 GiB and writes a 4 GiB library
+/// copy; run it with `cargo test -p capsule-core --lib --release -- --ignored four_gib`.
+#[test]
+#[ignore = "encrypts 4 GiB and writes a 4 GiB library copy; run with --release -- --ignored"]
+fn four_gib_original_imports_in_bounded_memory() {
+    const CEILING: usize = 4 << 20;
+    let peak = import_peak("clip.mp4", 4 << 30);
+    assert!(
+        peak < CEILING,
+        "peak heap {peak} B exceeds the {CEILING} B ceiling"
+    );
+}
+
+/// Every `.tmp` file under `dir`.
+fn tmp_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut found = Vec::new();
+    for entry in fs::read_dir(dir).unwrap().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(tmp_files(&path));
+        } else if path.extension().is_some_and(|e| e == "tmp") {
+            found.push(path);
+        }
+    }
+    found
+}
+
+/// Streaming changes how the original is read, never what is signed: the manifest's content
+/// fields and the sidecar's `hash` are exactly what the buffered writer produces for the same
+/// bytes under the prefix the import drew — for a multi-chunk file that is no still (streamed
+/// from disk) and for one that is a still by its header (streamed from the decoder's buffer).
+#[test]
+fn a_streamed_import_signs_what_the_buffered_writer_would() {
+    use crate::crypto::encryption::encrypt_asset_rekey_with_prefix;
+    use crate::crypto::keys::Amk;
+
+    let mut still = b"\xFF\xD8\xFF a still by its header, not a decodable frame".to_vec();
+    still.resize(70_000, 0xA5);
+    let clip: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+    for (name, bytes) in [("photo.jpg", still), ("clip.mp4", clip)] {
+        let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let path = src.path().join(name);
+        fs::write(&path, &bytes).unwrap();
+        let (mut ws, album) = empty_library(&lib);
+        let asset_id = ws.import_asset(album, &path).unwrap();
+
+        let asset = ws.asset(&asset_id).unwrap();
+        let head = &asset.chain.records().last().unwrap().manifest.core;
+        let amk = Amk::from_bytes(ws.album(&album).unwrap().amks[&head.amk_version.0]);
+        let (buffered, _, _) =
+            encrypt_asset_rekey_with_prefix(&amk, &asset_id, &bytes, head.nonce_prefix, None)
+                .unwrap();
+        assert_eq!(head.ciphertext_hash, buffered.ciphertext_hash, "{name}");
+        assert_eq!(head.plaintext_size, buffered.plaintext_size, "{name}");
+        assert_eq!(head.chunk_size, buffered.chunk_size, "{name}");
+        assert_eq!(
+            asset.sidecar.hash,
+            crate::crypto::hash::hash_bytes(&bytes),
+            "{name}"
+        );
+        assert_eq!(
+            fs::read(ws.original_path(&asset_id).unwrap()).unwrap(),
+            bytes,
+            "{name}"
+        );
+        let leftovers = tmp_files(lib.path());
+        assert!(
+            leftovers.is_empty(),
+            "{name}: staged copies left behind: {leftovers:?}"
+        );
+    }
+}
