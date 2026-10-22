@@ -636,9 +636,9 @@ fn check_receipt(
 /// The durable log rather than the per-session fetch, because a blob this run did not
 /// transfer — one the feed said was held, or one a retry of this same asset found finalized as
 /// `duplicate_blob` — has no session to ask about, and its custody needs the same evidence as a
-/// fresh one. A `duplicate_blob` naming a *different* asset is not covered: until the server
-/// records cross-asset shared blobs (#672) it neither indexes that blob under this asset nor
-/// receipts it, so this asset fails custody on every run.
+/// fresh one. A `duplicate_blob` naming a *different* asset is covered the same way: the server
+/// adopts that blob onto this asset before refusing (#672), indexing it under this asset and
+/// receipting it in this asset's log.
 ///
 /// `now_unix` is the client's clock, injected for the receipt's drift bound.
 #[instrument(skip_all, fields(asset_id = %bundle.asset_id, blobs = report.custody_hashes.len()))]
