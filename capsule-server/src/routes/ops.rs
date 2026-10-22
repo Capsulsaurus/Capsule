@@ -470,6 +470,12 @@ pub async fn apply_op(
     let manifest_hash = hash_bytes(&manifest);
     let provenance = parse_address(&manifest_hash.to_hex())?;
 
+    // The last two envelope fields the index needs, parsed before anything is stored or
+    // ledgered: a malformed one is the client's `400`, and refusing it after the ledger append
+    // would leave an entry for an op that never reached the index's checks.
+    let prior_provenance_hash = prior_hash(&request.manifest_envelope)?;
+    let retention_until = retention_floor(&request.manifest_envelope)?;
+
     // The bundle's bytes land before the op is applied, and the ordering is deliberate.
     //
     // The authorization doc says a rejection "writes nothing". Read literally that would forbid
@@ -515,12 +521,12 @@ pub async fn apply_op(
             album_id: album,
             action: op_action,
             manifest_hash,
-            prior_provenance_hash: prior_hash(&request.manifest_envelope)?,
+            prior_provenance_hash,
             amk_version: u64::from(request.manifest_envelope.amk_version),
             provenance,
             original: None,
             metadata: metadata_address,
-            retention_until: retention_floor(&request.manifest_envelope)?,
+            retention_until,
             at: now,
         })
         .await

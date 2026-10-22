@@ -1041,6 +1041,29 @@ async fn a_refused_op_leaves_only_the_entry_written_before_the_index() {
     );
 }
 
+/// A malformed predecessor or retention floor is the client's `400`, refused before the ledger:
+/// an op that never reached the index's checks leaves no entry for a rebuild to replay.
+#[tokio::test]
+async fn a_malformed_envelope_field_is_refused_before_the_ledger() {
+    let fixture = Fixture::working();
+    let bearer = token(&fixture).await;
+    publish(&fixture).await;
+
+    let mut bad_prior = bundle(&fixture, "delete", "d1", Some(&created_head()), None);
+    bad_prior["manifest_envelope"]["prior_provenance_hash"] = "not a digest".into();
+    let mut bad_retention = bundle(&fixture, "delete", "d2", Some(&created_head()), None);
+    bad_retention["manifest_envelope"]["retention_until"] = "not an instant".into();
+
+    for body in [bad_prior, bad_retention] {
+        let problem = apply(&fixture, &bearer, &body, StatusCode::BAD_REQUEST).await;
+        assert_eq!(problem["code"], "error.upload.envelope_mismatch");
+    }
+    assert!(
+        fixture.verified_ledger(&owner()).await.is_empty(),
+        "a refusal before the index call ledgers nothing"
+    );
+}
+
 /// The chain verifies across every producer: a finalization, a directory publish and ops.
 #[tokio::test]
 async fn the_chain_verifies_after_finalizations_directory_publishes_and_ops() {
