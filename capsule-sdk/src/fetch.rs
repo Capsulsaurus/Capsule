@@ -767,9 +767,10 @@ impl<S: Sleeper, C: MonotonicClock> RangedFetcher<S, C> {
 }
 
 /// The largest `Range` window [`RangedFetcher::fetch_into`] asks for: the memory a streamed
-/// fetch holds is one of these, whatever the blob's size. 16 MiB matches the upload
-/// protocol's largest chunk, so a transfer holds the same bound in either direction.
-pub const SINK_WINDOW: u64 = 16 * 1024 * 1024;
+/// fetch holds is one of these, whatever the blob's size. It is the upload protocol's largest
+/// chunk ([`PROTOCOL_MAX_CHUNK`](crate::upload::PROTOCOL_MAX_CHUNK), 16 MiB), so a transfer
+/// holds the same bound in either direction.
+pub const SINK_WINDOW: u64 = crate::upload::PROTOCOL_MAX_CHUNK;
 
 /// Fetch a whole blob into `sink` with bounded `Range` windows, verifying it against its
 /// content address — the unmetered convenience over [`RangedFetcher::fetch_into`], and the
