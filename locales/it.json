@@ -1064,6 +1064,10 @@
     "message": "La sessione di sincronizzazione non è aggiornata. Capsule risincronizzerà dall'inizio.",
     "context": "Machine-translated seed pending human review."
   },
+  "error.sync.cursor_stale": {
+    "message": "La tua libreria è stata ricostruita sul server. Capsule risincronizzerà dall'inizio e manterrà tutto ciò che si trova su questo dispositivo.",
+    "context": "Machine-translated seed pending human review."
+  },
   "error.sync.unauthenticated": {
     "message": "Accedi di nuovo per continuare la sincronizzazione.",
     "context": "Machine-translated seed pending human review."

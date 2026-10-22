@@ -1064,6 +1064,10 @@
     "message": "सिंक सत्र पुराना है। Capsule शुरू से फिर से सिंक करेगा।",
     "context": "Machine-translated seed pending human review."
   },
+  "error.sync.cursor_stale": {
+    "message": "सर्वर पर आपकी लाइब्रेरी फिर से बनाई गई। Capsule शुरू से फिर से सिंक करेगा और इस डिवाइस पर सब कुछ रखेगा।",
+    "context": "Machine-translated seed pending human review."
+  },
   "error.sync.unauthenticated": {
     "message": "सिंक जारी रखने के लिए कृपया फिर से साइन इन करें।",
     "context": "Machine-translated seed pending human review."

@@ -17,22 +17,18 @@
 //!
 //! | Check | Status |
 //! | --- | --- |
-//! | Row → blob presence, with the `awaiting-original` carve-out | done |
-//! | Blob → row presence (orphans) | done |
-//! | Byte integrity, re-hashing under [`Depth::Deep`] | done |
-//! | Chain head resolves to a stored provenance blob | **partial** — see below |
-//! | Envelope chain ⇄ index agreement | not possible; see below |
-//! | Mirrored-fact agreement | not possible; see below |
-//! | Debris and quarantine inventory | done |
+//! | 1. Row → blob presence, with the `awaiting-original` carve-out | done |
+//! | 2. Blob → row presence (orphans) | done |
+//! | 3. Byte integrity, re-hashing under [`Depth::Deep`] | done |
+//! | 4. Chain ⇄ index: the chain walks back to a `create` | done |
+//! | 5. Mirrored-fact agreement | done |
+//! | 6. Ledger ⇄ index: each owner ledger verifies, and each entry has its row | done |
+//! | 7. Debris and quarantine inventory | done |
 //!
-//! The last three all founder on the same thing, and it is not an oversight: **this server does
-//! not parse signed CBOR.** The full chain walk and the mirrored-fact comparison both require
-//! reading the manifest inside the provenance blob and comparing it against the projection the
-//! index holds, and a key-free server that started decoding signed structures to check itself
-//! would have taken on exactly the parsing surface `S-C30` exists to avoid. What *is* checkable
-//! without decoding anything is that the chain head names a provenance blob the store actually
-//! holds — a strictly weaker claim, reported as its own class so nobody mistakes it for the
-//! agreement check. The rest is `S-C45`.
+//! Checks 4 and 5 decode manifests, and they do it through [`crate::ledger::manifest`], the
+//! server's one manifest parser, shared with the index rebuild and fuzzed. The write path never
+//! decodes one. Check 6 reads the owner ledgers through [`crate::ledger::replay`], the pairing
+//! rebuild replays from, so the two agree about which writes a ledger records.
 //!
 //! # The report is the product
 //!
@@ -47,8 +43,11 @@ use capsule_core::crypto::hash::Sha256Hasher;
 
 use crate::blob::{BlobStore, ContentAddress};
 use crate::index::{AssetIndex, AssetState};
+use crate::ledger::manifest::ManifestFault;
+use crate::ledger::replay::{self, LedgerKeys, Resolution};
+use crate::ledger::{ChainFault, OwnerLedger};
 use crate::share::ShareStore;
-use crate::store::{AssetId, BlobRole, Clock, StoreError, UploadSessionStore};
+use crate::store::{AssetId, BlobRole, Clock, OwnerId, StoreError, UploadSessionStore};
 
 /// How many bytes to hash at a time when re-hashing a blob.
 const HASH_WINDOW: usize = 1024 * 1024;
@@ -167,6 +166,31 @@ pub enum Finding {
         /// What the signed manifest says.
         manifest: String,
     },
+    /// An owner ledger whose chain does not verify to its end (check 6).
+    ///
+    /// Everything after `verified` entries is untrusted however well it decodes, which is why
+    /// the entry check below reads only the verified prefix. A rebuild stops this owner's replay
+    /// at the same place and bumps the owner's sync epoch.
+    LedgerBroken {
+        /// The owner whose ledger it is.
+        owner: OwnerId,
+        /// How many entries, from the first, verify.
+        verified: usize,
+        /// Why verification stopped.
+        fault: ChainFault,
+    },
+    /// A write the owner ledger records and the index has no row for (check 6).
+    ///
+    /// The custody entry is not refused, so the server took custody of a blob for this asset;
+    /// a missing row is what a rebuild replays. Reported once per asset, at its first entry.
+    LedgerEntryUnindexed {
+        /// The owner whose ledger records it.
+        owner: OwnerId,
+        /// The custody entry's position in that ledger.
+        ledger_seq: u64,
+        /// The asset the entry names.
+        asset: AssetId,
+    },
     /// A staged upload with no live session behind it.
     StaleStage {
         /// The upload the stage belongs to.
@@ -187,6 +211,8 @@ impl Finding {
             Self::ChainBroken { .. } => "chain_broken",
             Self::Debris { .. } => "debris",
             Self::Quarantined { .. } => "quarantined",
+            Self::LedgerBroken { .. } => "ledger_broken",
+            Self::LedgerEntryUnindexed { .. } => "ledger_entry_unindexed",
             Self::StaleStage { .. } => "stale_stage",
         }
     }
@@ -204,6 +230,12 @@ pub struct ScrubReport {
     /// Reported rather than silent: a clean report from a truncated pass is not a clean store,
     /// and an operator alerting on the finding count needs to know the difference.
     pub budget_exhausted: bool,
+    /// Whether check 6 verified the ledgers' links without their signatures.
+    ///
+    /// True on a host given no attestation key: links and positions catch a removed, reordered
+    /// or torn entry, and only the signatures catch an edit re-linked behind it. Reported so a
+    /// clean pass is not read as more than it checked.
+    pub ledger_links_only: bool,
 }
 
 impl ScrubReport {
@@ -249,6 +281,8 @@ pub struct ScrubContext {
     shares: Arc<dyn ShareStore>,
     /// What "live" is judged against.
     clock: Arc<dyn Clock>,
+    /// The owner ledgers and the keys they verify under, for check 6. `None` skips the check.
+    ledger: Option<(Arc<dyn OwnerLedger>, LedgerKeys)>,
 }
 
 impl ScrubContext {
@@ -269,7 +303,18 @@ impl ScrubContext {
             uploads,
             shares,
             clock,
+            ledger: None,
         }
+    }
+
+    /// Also run check 6 over `ledger`, verifying under `keys`.
+    ///
+    /// The same ledger finalization appends to, under the same blob root. `keys` may be empty,
+    /// in which case the check verifies links only and the report says so.
+    #[must_use]
+    pub fn with_ledger(mut self, ledger: Arc<dyn OwnerLedger>, keys: LedgerKeys) -> Self {
+        self.ledger = Some((ledger, keys));
+        self
     }
 }
 
@@ -289,6 +334,7 @@ pub async fn scrub(context: &ScrubContext, depth: Depth) -> Result<ScrubReport, 
     rows_resolve_to_blobs(context, &mut report).await?;
     mirrored_facts_agree(context, &mut report).await?;
     blobs_are_referenced(context, depth, &mut report).await?;
+    ledger_agrees(context, &mut report).await?;
     inventory(context, &mut report).await?;
 
     for (class, count) in report.counts() {
@@ -436,24 +482,11 @@ async fn mirrored_facts_agree(
                 // Already reported as an unresolvable chain head by check 1's other half.
                 continue;
             };
-            let Some(stat) = context.blobs.stat(&address).await.map_err(blob_failure)? else {
+            let Some(read) = read_manifest(context, &address).await? else {
                 // Likewise: a missing provenance blob is a dangling reference, reported there.
                 continue;
             };
-            // A manifest is small by construction — it is signed CBOR carrying hashes, never
-            // bytes — so it is read whole rather than windowed like the deep re-hash.
-            let span = usize::try_from(stat.size).unwrap_or(usize::MAX);
-            let Some(bytes) = context
-                .blobs
-                .read_at(&address, 0, span)
-                .await
-                .map_err(blob_failure)?
-            else {
-                continue;
-            };
-            let Ok(manifest) = capsule_core::cbor::from_slice::<
-                capsule_core::crypto::provenance::AssetManifest,
-            >(&bytes) else {
+            let Ok(manifest) = read else {
                 report.findings.push(Finding::ManifestUnreadable {
                     asset: row.asset_id.clone(),
                     address,
@@ -494,8 +527,6 @@ async fn chain_walks_back(
     head: &capsule_core::crypto::provenance::ManifestCore,
     report: &mut ScrubReport,
 ) -> Result<(), StoreError> {
-    use capsule_core::crypto::provenance::AssetManifest;
-
     let mut at = row
         .address_for(BlobRole::Provenance)
         .cloned()
@@ -528,24 +559,12 @@ async fn chain_walks_back(
         // hold: a manifest from another asset's chain resolving here would make a fork look
         // intact.
         let retained = row.superseded.contains(&address);
-        let bytes = if retained {
-            let stat = context.blobs.stat(&address).await.map_err(blob_failure)?;
-            match stat {
-                Some(stat) => context
-                    .blobs
-                    .read_at(
-                        &address,
-                        0,
-                        usize::try_from(stat.size).unwrap_or(usize::MAX),
-                    )
-                    .await
-                    .map_err(blob_failure)?,
-                None => None,
-            }
+        let read = if retained {
+            read_manifest(context, &address).await?
         } else {
             None
         };
-        let Some(bytes) = bytes else {
+        let Some(read) = read else {
             report.findings.push(Finding::ChainBroken {
                 asset: row.asset_id.clone(),
                 broken_at: at,
@@ -553,7 +572,7 @@ async fn chain_walks_back(
             });
             return Ok(());
         };
-        let Ok(manifest) = capsule_core::cbor::from_slice::<AssetManifest>(&bytes) else {
+        let Ok(manifest) = read else {
             report.findings.push(Finding::ManifestUnreadable {
                 asset: row.asset_id.clone(),
                 address,
@@ -736,7 +755,45 @@ async fn rehash(
     Ok((found != address.as_str()).then_some(found))
 }
 
-/// Check 6: what is held for an operator, and what is staged with nothing behind it.
+/// Check 6: every owner ledger verifies, and every write it records has its row.
+///
+/// Reads only each ledger's verified prefix: an entry after a break is untrusted, and reporting
+/// its missing row would report a consequence as a cause. A custody entry the index refused is
+/// not a row the index owes.
+async fn ledger_agrees(context: &ScrubContext, report: &mut ScrubReport) -> Result<(), StoreError> {
+    let Some((ledger, keys)) = &context.ledger else {
+        return Ok(());
+    };
+    report.ledger_links_only = !keys.checks_signatures();
+    for owner in ledger.owners().await.map_err(ledger_failure)? {
+        let scan = ledger.scan(&owner).await.map_err(ledger_failure)?;
+        let chain = keys.verify(&owner, &scan);
+        if let Some(fault) = chain.fault {
+            report.findings.push(Finding::LedgerBroken {
+                owner: owner.clone(),
+                verified: chain.verified,
+                fault,
+            });
+        }
+        let mut seen = BTreeSet::new();
+        for record in replay::custody(&scan.entries[..chain.verified]) {
+            if record.resolution == Resolution::Refused || !seen.insert(record.asset_id.clone()) {
+                continue;
+            }
+            let asset = AssetId::new(record.asset_id.as_str());
+            if context.index.read(&asset).await?.is_none() {
+                report.findings.push(Finding::LedgerEntryUnindexed {
+                    owner: owner.clone(),
+                    ledger_seq: record.ledger_seq,
+                    asset,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Check 7: what is held for an operator, and what is staged with nothing behind it.
 async fn inventory(context: &ScrubContext, report: &mut ScrubReport) -> Result<(), StoreError> {
     for held in context.blobs.quarantined().await.map_err(blob_failure)? {
         report.findings.push(Finding::Quarantined {
@@ -751,6 +808,28 @@ async fn inventory(context: &ScrubContext, report: &mut ScrubReport) -> Result<(
         }
     }
     Ok(())
+}
+
+/// Read and decode the manifest at `address` through the server's one parser
+/// ([`crate::ledger::manifest`]). `None` when the store does not hold it.
+async fn read_manifest(
+    context: &ScrubContext,
+    address: &ContentAddress,
+) -> Result<
+    Option<Result<capsule_core::crypto::provenance::AssetManifest, ManifestFault>>,
+    StoreError,
+> {
+    crate::ledger::manifest::read(context.blobs.as_ref(), address)
+        .await
+        .map_err(blob_failure)
+}
+
+/// Map a ledger failure into the store error the scrub propagates.
+fn ledger_failure(error: crate::ledger::LedgerError) -> StoreError {
+    StoreError::Unavailable {
+        store: "ledger",
+        detail: error.to_string(),
+    }
 }
 
 /// Map a blob-store failure into the store error the scrub propagates.

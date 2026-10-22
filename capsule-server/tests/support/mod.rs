@@ -3344,6 +3344,30 @@ impl AssetIndex for SwitchableIndex {
         }
         self.inner.album_head_seq(owner, album)
     }
+
+    fn sync_epoch<'a>(&'a self, owner: &'a OwnerId) -> IndexFuture<'a, u64> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.sync_epoch(owner)
+    }
+
+    fn bump_sync_epoch<'a>(&'a self, owner: &'a OwnerId) -> IndexFuture<'a, u64> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.bump_sync_epoch(owner)
+    }
+
+    fn restore(
+        &self,
+        row: capsule_server::index::AssetRow,
+    ) -> IndexFuture<'_, capsule_server::index::RestoreOutcome> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.restore(row)
+    }
 }
 
 /// The fixture's client: Kynos's in-process `TestClient`, sending the protocol handshake.

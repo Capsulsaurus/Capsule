@@ -39931,6 +39931,88 @@
         }
       }
     },
+    "error.sync.cursor_stale": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "أُعيد بناء مكتبتك على الخادم. سيعيد Capsule المزامنة من البداية ويحتفظ بكل ما على هذا الجهاز."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deine Mediathek wurde auf dem Server neu aufgebaut. Capsule synchronisiert von vorne und behält alles auf diesem Gerät."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your library was rebuilt on the server. Capsule will resync from the start and keep everything on this device."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tu biblioteca se reconstruyó en el servidor. Capsule volverá a sincronizar desde el principio y conservará todo lo que hay en este dispositivo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Votre bibliothèque a été reconstruite sur le serveur. Capsule va resynchroniser depuis le début et conserver tout ce qui se trouve sur cet appareil."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "सर्वर पर आपकी लाइब्रेरी फिर से बनाई गई। Capsule शुरू से फिर से सिंक करेगा और इस डिवाइस पर सब कुछ रखेगा।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La tua libreria è stata ricostruita sul server. Capsule risincronizzerà dall'inizio e manterrà tutto ciò che si trova su questo dispositivo."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "サーバー上でライブラリが再構築されました。Capsule は最初から再同期し、このデバイス上のものはすべて保持します。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "서버에서 라이브러리가 다시 구성되었습니다. Capsule이 처음부터 다시 동기화하며 이 기기의 모든 항목은 그대로 유지됩니다."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sua biblioteca foi reconstruída no servidor. O Capsule vai sincronizar novamente do início e manter tudo neste dispositivo."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ваша медиатека была перестроена на сервере. Capsule повторно синхронизируется с самого начала и сохранит всё на этом устройстве."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你的资料库已在服务器上重建。Capsule 将从头重新同步，并保留此设备上的所有内容。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你的資料庫已在伺服器上重建。Capsule 會從頭重新同步，並保留此裝置上的所有內容。"
+          }
+        }
+      }
+    },
     "error.sync.unauthenticated": {
       "localizations": {
         "ar": {
