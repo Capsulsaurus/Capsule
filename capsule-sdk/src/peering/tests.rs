@@ -181,6 +181,7 @@ fn asset_from(chain: &[ProvenanceRecord], ct: &[u8], meta: &[u8]) -> BackupAsset
         metadata_blob: meta.to_vec(),
         provenance: chain.to_vec(),
         receipts: Vec::new(),
+        attestations: Vec::new(),
     }
 }
 

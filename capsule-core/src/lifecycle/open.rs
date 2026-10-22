@@ -95,13 +95,11 @@ fn sweep_max_add_counter(root: &Path, device: &Uuid) -> Option<u64> {
         if !path.is_file() {
             continue;
         }
-        // The signed sidecar is exactly `{uuid}.cbor`; the sibling `{uuid}.provenance.cbor` and
-        // `{uuid}.receipts.cbor` logs carry no OR-sets and must not be parsed as sidecars.
+        // The signed sidecar is exactly `{uuid}.cbor`; the sibling `{uuid}.provenance.cbor`,
+        // `{uuid}.receipts.cbor` and `{uuid}.attestations.cbor` logs carry no OR-sets and must
+        // not be parsed as sidecars.
         let name = path.file_name().unwrap_or_default().to_string_lossy();
-        if !name.ends_with(".cbor")
-            || name.ends_with(".provenance.cbor")
-            || name.ends_with(".receipts.cbor")
-        {
+        if !crate::library::paths::is_sidecar_file_name(&name) {
             continue;
         }
         let bytes = match fs::read(path) {
@@ -133,8 +131,8 @@ fn sweep_max_add_counter(root: &Path, device: &Uuid) -> Option<u64> {
 }
 
 /// The extension of an asset's **original** media file in `dir`: the sibling named
-/// `{uuid}.{ext}` that is not one of the sidecar / provenance / receipts / metadata-blob
-/// artifacts the lifecycle writes beside it.
+/// `{uuid}.{ext}` that is not one of the sidecar / provenance / receipts / attestations /
+/// metadata-blob artifacts the lifecycle writes beside it.
 pub(super) fn original_extension(dir: &Path, asset_id: &Uuid) -> Option<String> {
     let prefix = format!("{}.", asset_id.simple());
     let entries = fs::read_dir(dir).ok()?;
@@ -145,7 +143,7 @@ pub(super) fn original_extension(dir: &Path, asset_id: &Uuid) -> Option<String> 
         };
         if matches!(
             ext,
-            "cbor" | "provenance.cbor" | "receipts.cbor" | "metadata.bin"
+            "cbor" | "provenance.cbor" | "receipts.cbor" | "attestations.cbor" | "metadata.bin"
         ) || std::path::Path::new(ext)
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("tmp"))
