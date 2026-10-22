@@ -30,6 +30,7 @@ pub mod pwkdf;
 pub mod receipts;
 pub mod revoke;
 pub mod rng;
+pub mod storage_attestation;
 pub mod upgrade;
 pub mod verify_asset;
 pub mod verify_derivative;

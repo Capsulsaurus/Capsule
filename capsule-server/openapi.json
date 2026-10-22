@@ -13369,6 +13369,50 @@
               }
             }
           },
+          "429": {
+            "description": "Too many requests",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait before retrying (RFC 9110 delta-seconds): the problem's `retry_after` instant, measured from the server's clock.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0.0,
+                  "format": "uint64"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageVerifyRateLimitedProblem"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Internal server error",
             "headers": {
@@ -24770,6 +24814,13 @@
           "deep": {
             "type": "boolean",
             "description": "Also re-read and re-hash the bytes (`S-C41`).\n\nAbsent or `false` is the structural check: ask the index and the store whether the bytes\nare there. `true` additionally re-hashes them, which is the only way to catch silent\ncorruption — `stored` is a question about the filesystem, and a corrupt blob is still\nstored.\n\n**Rate-limited per account**, because a deep scan reads and hashes every declared blob\nand an unbounded one is an I/O-amplification attack costing the caller one small JSON\nbody. Past the budget the *structural* verdict still comes back and each blob's `deep`\nreads `rate_limited`: throwing away a good structural answer because the optional half\nwas throttled would make the limiter cost more than it saves."
+          },
+          "attestation_nonce": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Ask for the **signed** verdict, bound to this nonce: 32 bytes the client drew fresh for\nthis request, as 64 lowercase hex characters.\n\nWhen present the response carries `attestation`, the same verdicts signed under the\nserver attestation key with this nonce inside the signature, so the client can keep the\nanswer as evidence and a replayed answer to an earlier request is refused.\n\n**Rate-limited per account from the same budget as `deep`.** Unlike `deep`, a throttled\nsigned request is refused whole with `429`: a client that asked for evidence and silently\ngot an unsigned answer would hold nothing it could later show anyone."
           }
         },
         "type": "object",
@@ -24857,6 +24908,13 @@
             },
             "type": "array",
             "description": "One verdict per requested asset, in request order."
+          },
+          "attestation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The signed verdict, present exactly when the request carried `attestation_nonce`: base64\nof the canonical-CBOR `StorageAttestation` (`capsule_core::crypto::storage_attestation`).\n\nThe signed bytes are the evidence; `verdicts` is a reading of the same answer for a client\nthat does not need to keep it. A client verifies the signature under the pinned\nattestation key, checks the nonce is the one it sent and that the verdicts answer the\nassets and hashes it asked about, then keeps the bytes as they arrived."
           }
         },
         "type": "object",
@@ -27085,6 +27143,46 @@
           "code"
         ],
         "title": "ShareSecretRateLimitedProblem",
+        "description": "An RFC 9457 problem detail."
+      },
+      "StorageVerifyRateLimitedProblem": {
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "maximum": 65535.0,
+            "minimum": 0.0,
+            "format": "uint16"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "description": "The stable `error.*` catalog code. The client localizes this; `detail` stays English. Present on every problem this server renders."
+          },
+          "retry_after": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "When the caller may retry, as Unix seconds. From the limiter's own window when a budget is spent, and an upper bound of one window when the limiter is at capacity (slice `S-C32`)."
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "type",
+          "status",
+          "code"
+        ],
+        "title": "StorageVerifyRateLimitedProblem",
         "description": "An RFC 9457 problem detail."
       },
       "ShareBlobRateLimitedProblem": {

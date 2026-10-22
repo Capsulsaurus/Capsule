@@ -23,15 +23,20 @@
 //! | `200` | kept. A non-durable asset is still `200` — the verdict carries it, and a refusal would make "not durable" and "could not check" the same thing to a client that switches on status |
 //! | `400 error.storage.invalid_request` | kept, and now also covers the empty declaration above |
 //! | `401` | kept, and now the framework's |
-//! | `429 error.storage.deep_rate_limited` | **deleted as unreachable.** It priced `deep`, and `deep` is not on this surface — see `S-C41` |
+//! | `429 error.storage.deep_rate_limited` | **reinstated for the signed verdict only.** A throttled `deep` still answers `200` with `deep: rate_limited`; a throttled `attestation_nonce` request is refused whole, because a client that asked for evidence must not silently receive none |
 //! | `500` | kept, with `error.storage.unavailable` |
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use capsule_core::crypto::storage_attestation::{ATTESTATION_NONCE_LEN, AttestationNonce};
 use capsule_i18n::error_codes;
 use kynos::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::attestation::{AttestationContext, sign_storage_attestation};
 use crate::auth::AccessToken;
 use crate::blob::ContentAddress;
+use crate::counter::{CounterKey, Verdict, unix_seconds};
 use crate::store::{AssetId, OwnerId};
 use crate::verify::{AssetQuery, MAX_ASSETS_PER_REQUEST, MAX_BLOBS_PER_ASSET, VerifyContext};
 
@@ -76,6 +81,18 @@ pub struct StorageVerifyRequest {
     /// was throttled would make the limiter cost more than it saves.
     #[serde(default)]
     pub deep: bool,
+    /// Ask for the **signed** verdict, bound to this nonce: 32 bytes the client drew fresh for
+    /// this request, as 64 lowercase hex characters.
+    ///
+    /// When present the response carries `attestation`, the same verdicts signed under the
+    /// server attestation key with this nonce inside the signature, so the client can keep the
+    /// answer as evidence and a replayed answer to an earlier request is refused.
+    ///
+    /// **Rate-limited per account from the same budget as `deep`.** Unlike `deep`, a throttled
+    /// signed request is refused whole with `429`: a client that asked for evidence and silently
+    /// got an unsigned answer would hold nothing it could later show anyone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attestation_nonce: Option<String>,
 }
 
 /// One declared blob's verdict.
@@ -119,6 +136,15 @@ pub struct StorageVerdictResponse {
 pub struct StorageVerifyResponse {
     /// One verdict per requested asset, in request order.
     pub verdicts: Vec<StorageVerdictResponse>,
+    /// The signed verdict, present exactly when the request carried `attestation_nonce`: base64
+    /// of the canonical-CBOR `StorageAttestation` (`capsule_core::crypto::storage_attestation`).
+    ///
+    /// The signed bytes are the evidence; `verdicts` is a reading of the same answer for a client
+    /// that does not need to keep it. A client verifies the signature under the pinned
+    /// attestation key, checks the nonce is the one it sent and that the verdicts answer the
+    /// assets and hashes it asked about, then keeps the bytes as they arrived.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attestation: Option<String>,
 }
 
 // ===========================================================================================
@@ -137,6 +163,22 @@ pub enum VerifyRejection {
         /// The stable catalog code.
         #[problem(extension)]
         code: &'static str,
+    },
+
+    /// A signed verdict was asked for and the account's budget is spent.
+    ///
+    /// Shares the deep scan's budget and code: signing is priced like a deep scan, and the two
+    /// are one allowance of expensive verification per account. `retry_after` repeats the
+    /// `Retry-After` instant in the body as Unix seconds.
+    #[error("too many signed or deep storage checks")]
+    #[problem(status = 429, title = "Too many requests")]
+    RateLimited {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+        /// When the caller may retry, as Unix seconds.
+        #[problem(extension)]
+        retry_after: u64,
     },
 
     /// A collaborator could not answer, so nothing was decided.
@@ -187,26 +229,33 @@ impl VerifyRejection {
 pub async fn verify_storage(
     Inject(verify): Inject<VerifyContext>,
     Inject(counters): Inject<crate::counter::CounterContext>,
+    Inject(attestation): Inject<AttestationContext>,
     Auth(credential): Auth<AccessToken>,
     Json(request): Json<StorageVerifyRequest>,
 ) -> Result<Json<StorageVerifyResponse>, VerifyRejection> {
     let queries = parse(&request)?;
+    let nonce = request
+        .attestation_nonce
+        .as_deref()
+        .map(parse_nonce)
+        .transpose()?;
     // The caller files under itself, exactly as the feed does. There is no on-behalf read here:
     // a verdict about another account's asset is disclosure about another account.
     let owner = OwnerId::new(credential.user.as_str());
 
     // The limiter is half the feature, not a refinement of it (`S-C41`): a deep scan reads and
     // re-hashes every declared blob, so an unbounded one lets one authenticated account make
-    // the server walk its whole store, repeatedly, for the price of a small JSON body.
+    // the server walk its whole store, repeatedly, for the price of a small JSON body. A signed
+    // verdict is priced the same way (transfer/durability.md, Signed Storage Attestation): each
+    // one is a hybrid signature the server computes on demand.
     //
-    // Charged only when a deep scan is *asked for*. A structural check is cheap and unlimited,
-    // and spending the deep budget on one would throttle the operation clients actually run.
-    let depth = if request.deep {
-        let admitted = counters
+    // Charged once per request that asks for either, from one budget. A structural check is
+    // cheap and unlimited, and spending the budget on one would throttle the operation clients
+    // actually run.
+    let limited_until = if request.deep || nonce.is_some() {
+        match counters
             .hit(
-                &crate::counter::CounterKey::DeepVerify(crate::store::UserId::new(
-                    credential.user.as_str(),
-                )),
+                &CounterKey::DeepVerify(crate::store::UserId::new(credential.user.as_str())),
                 crate::counter::budgets::DEEP_VERIFY,
             )
             .await
@@ -215,11 +264,30 @@ pub async fn verify_storage(
                 // loading the counter store is not a limiter.
                 tracing::error!(%error, %owner, "the deep-verify limiter could not be reached");
                 VerifyRejection::unavailable()
-            })?
-            .admits();
-        if admitted {
-            crate::verify::Depth::Deep
-        } else {
+            })? {
+            Verdict::Admitted { .. } => None,
+            Verdict::Limited { retry_after } => Some(retry_after),
+        }
+    } else {
+        None
+    };
+
+    if nonce.is_some()
+        && let Some(retry_after) = limited_until
+    {
+        // The whole request, unlike `deep`: a client that asked for evidence and got an
+        // unsigned answer would hold nothing it could later show anyone, and would not know it.
+        tracing::info!(%owner, %retry_after, "a signed verify was throttled");
+        return Err(VerifyRejection::RateLimited {
+            code: error_codes::STORAGE_DEEP_RATE_LIMITED,
+            retry_after: unix_seconds(retry_after),
+        });
+    }
+
+    let depth = match (request.deep, limited_until) {
+        (false, _) => crate::verify::Depth::Structural,
+        (true, None) => crate::verify::Depth::Deep,
+        (true, Some(_)) => {
             // Deliberately **not** a `429` for the whole request. A deep scan is an addition to
             // a structural verdict; refusing the structural half because the optional half was
             // throttled would make the limiter cost a client more than it saves them, and a
@@ -227,8 +295,6 @@ pub async fn verify_storage(
             tracing::info!(%owner, "a deep verify was throttled to a structural one");
             crate::verify::Depth::RateLimited
         }
-    } else {
-        crate::verify::Depth::Structural
     };
 
     let verdicts = crate::verify::verify(&verify, &owner, &queries, depth)
@@ -238,7 +304,31 @@ pub async fn verify_storage(
             VerifyRejection::unavailable()
         })?;
 
+    let signed = match nonce {
+        None => None,
+        Some(nonce) => {
+            let attested = crate::verify::attested(&verdicts).map_err(|error| {
+                tracing::error!(%error, %owner, "a storage verdict could not be attested");
+                VerifyRejection::unavailable()
+            })?;
+            // Every verdict of one request carries the one instant the engine read its clock at.
+            let checked_at = verdicts
+                .first()
+                .map_or_else(|| verify.clock().now(), |verdict| verdict.checked_at);
+            let signed = sign_storage_attestation(
+                attestation.signer(),
+                owner.as_str(),
+                nonce,
+                checked_at.to_string(),
+                attested,
+            );
+            tracing::info!(%owner, assets = verdicts.len(), "issued a storage attestation");
+            Some(BASE64.encode(signed.to_canonical_cbor()))
+        }
+    };
+
     Ok(Json(StorageVerifyResponse {
+        attestation: signed,
         verdicts: verdicts
             .into_iter()
             .map(|verdict| StorageVerdictResponse {
@@ -262,6 +352,25 @@ pub async fn verify_storage(
             })
             .collect(),
     }))
+}
+
+/// Read an attestation nonce: exactly 32 bytes as 64 lowercase hex characters.
+///
+/// Lowercase only, as a content address is: two spellings of one nonce would be two requests a
+/// client could not tell apart from the signed bytes.
+fn parse_nonce(nonce: &str) -> Result<AttestationNonce, VerifyRejection> {
+    let well_formed = nonce.len() == 2 * ATTESTATION_NONCE_LEN
+        && nonce
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+    if !well_formed {
+        return Err(VerifyRejection::invalid(format!(
+            "an attestation nonce is {ATTESTATION_NONCE_LEN} bytes as lowercase hex"
+        )));
+    }
+    let hash = capsule_core::crypto::hash::Hash32::from_hex(nonce)
+        .map_err(|_| VerifyRejection::invalid("an attestation nonce is not hex"))?;
+    Ok(hash.0)
 }
 
 /// Structurally validate the request and convert it into the engine's query shape.
