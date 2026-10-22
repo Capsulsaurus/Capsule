@@ -8,8 +8,9 @@
 //! redacted, and stderr stops at color-eyre's `Location:` section, whose line numbers are not
 //! part of the contract.
 //!
-//! `push --json` is the surface that exists today. Every `--json` subcommand that lands joins
-//! this file with its offline cases.
+//! The `--json` subcommands today are `push` and `restore`; each has its offline cases here, and
+//! every `--json` subcommand that lands joins this file the same way. What needs a live server
+//! (a push or restore that reaches its assets) is the end-to-end suites' to cover.
 //!
 //! ## Test list
 //!
@@ -17,6 +18,9 @@
 //! - `push_json_without_a_session_prints_nothing_on_stdout` — a run-level failure: non-zero
 //!   exit, empty stdout, the reason on stderr.
 //! - `push_json_without_a_library_is_a_usage_error` — the parser's exit status 2.
+//! - `restore_json_without_a_session_prints_nothing_on_stdout` — a run-level failure, as for
+//!   push: non-zero exit, empty stdout, the reason on stderr, and nothing written to `--out`.
+//! - `restore_json_without_an_out_directory_is_a_usage_error` — the parser's exit status 2.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -202,4 +206,34 @@ fn push_json_without_a_session_prints_nothing_on_stdout() {
 fn push_json_without_a_library_is_a_usage_error() {
     let scratch = Scratch::new();
     insta::assert_snapshot!(run(&scratch, &["push", "--json"]));
+}
+
+#[test]
+fn restore_json_without_a_session_prints_nothing_on_stdout() {
+    let scratch = Scratch::new();
+    library(&scratch, 0);
+    let out = scratch.0.join("restored");
+    insta::assert_snapshot!(run(
+        &scratch,
+        &[
+            "restore",
+            "--library",
+            path(&scratch.library()),
+            "--out",
+            path(&out),
+            "--passphrase-stdin",
+            "--json",
+        ],
+    ));
+    let written = std::fs::read_dir(&out).map_or(0, Iterator::count);
+    assert_eq!(written, 0, "a restore that never ran wrote into --out");
+}
+
+#[test]
+fn restore_json_without_an_out_directory_is_a_usage_error() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(
+        &scratch,
+        &["restore", "--library", path(&scratch.library()), "--json"],
+    ));
 }

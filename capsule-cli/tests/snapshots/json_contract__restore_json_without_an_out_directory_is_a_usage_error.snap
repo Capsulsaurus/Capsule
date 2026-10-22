@@ -1,0 +1,14 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "run(&scratch, &[\"restore\", \"--library\", path(&scratch.library()), \"--json\"],)"
+---
+status: 2
+--- stdout ---
+
+--- stderr ---
+error: the following required arguments were not provided:
+  --out <DIR>
+
+Usage: capsule restore --library <PATH> --out <DIR> --json
+
+For more information, try '--help'.
