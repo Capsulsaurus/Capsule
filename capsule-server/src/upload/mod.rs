@@ -40,10 +40,15 @@
 //!
 //! # What this port still does not carry
 //!
-//! Quota (`S-C6`) and custody receipts (`S-C15`) are absent and owned elsewhere, and so is the
-//! **adoption path** cross-asset deduplication needs — see [`crate::routes::upload`]'s note on
-//! `409 duplicate_blob`. Each is reported as a gap rather than approximated.
+//! Quota (`S-C6`) and custody receipts (`S-C15`) are owned elsewhere and consumed here.
+//!
+//! # A duplicate is adopted, not merely refused
+//!
+//! The **adoption path** cross-asset deduplication needs is [`adopt`]: a create refused as
+//! `409 duplicate_blob` because another asset of the same owner and album holds the bytes first
+//! records the blob against the requesting asset, so the collector counts both holders (#672).
 
+pub mod adopt;
 pub mod authority;
 pub mod body;
 pub mod chunk;

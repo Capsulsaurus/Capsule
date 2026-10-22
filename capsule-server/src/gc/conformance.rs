@@ -224,6 +224,206 @@ pub async fn the_listing_is_in_address_order(h: &dyn Harness) {
 }
 
 // ===========================================================================================
+// Shared references (#672)
+// ===========================================================================================
+
+/// A clock the shared-blob case moves past the grace window.
+#[derive(Debug)]
+struct SteppedClock(std::sync::Mutex<Timestamp>);
+
+impl crate::store::Clock for SteppedClock {
+    fn now(&self) -> Timestamp {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+impl SteppedClock {
+    fn advance(&self, by: SignedDuration) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) += by;
+    }
+}
+
+/// Two assets hold one blob; purging one and collecting past the window leaves the other's
+/// bytes in the store, byte-equal.
+///
+/// The whole pipeline rather than one port, because the property is a conjunction: the
+/// **index** must count both rows that name the address and drop only the purged one's, and the
+/// **collector** must ask that count before it marks and again before it sweeps. An index
+/// adapter whose reference count missed a second holder, or a mark store that kept a mark the
+/// collector should have cancelled, each sweeps the survivor's bytes — which is the data loss
+/// #672 names. Run against an index adapter and a mark store adapter of the same backend, with
+/// the in-memory blob store, quota and share doubles around them.
+///
+/// The asset ids are fixed, so a harness runs this on a store no other case has written.
+pub async fn a_shared_blob_survives_purging_one_holder(
+    index: std::sync::Arc<dyn crate::index::AssetIndex>,
+    marks: std::sync::Arc<dyn CollectionStore>,
+) {
+    use std::sync::Arc;
+
+    use crate::blob::{BlobStore, InMemoryBlobStore};
+    use crate::index::{BlobRecord, LifecycleOp, OpAction, OpOutcome, PendingAsset, Reservation};
+    use crate::store::{AlbumId, AssetId, BlobRole, OwnerId};
+
+    let blobs = Arc::new(InMemoryBlobStore::new());
+    let clock = Arc::new(SteppedClock(std::sync::Mutex::new(at(0))));
+    let context = super::CollectionContext::new(
+        index.clone(),
+        blobs.clone(),
+        marks,
+        Arc::new(crate::quota::InMemoryQuota::new()),
+        Arc::new(crate::share::InMemoryShares::new()),
+        clock.clone(),
+        super::DEFAULT_GRACE_WINDOW,
+    );
+    let owner = OwnerId::new("gc-shared-owner");
+    let album = AlbumId::new("gc-shared-album");
+    let store = |bytes: Vec<u8>| {
+        let blobs = blobs.clone();
+        async move {
+            let address = ContentAddress::parse(&hash_bytes(&bytes).to_hex())
+                .expect("a digest is an address");
+            blobs
+                .put(&address, &bytes)
+                .await
+                .expect("the blob store stores");
+            address
+        }
+    };
+
+    let shared_bytes = b"gc-shared/one ciphertext, two assets".to_vec();
+    let shared = store(shared_bytes.clone()).await;
+    let first = AssetId::new("gc-shared-first");
+    let second = AssetId::new("gc-shared-second");
+    let mut first_own = Vec::new();
+    for asset in [&first, &second] {
+        let reserved = ok(
+            index
+                .reserve(PendingAsset {
+                    asset_id: asset.clone(),
+                    owner_id: owner.clone(),
+                    album_id: album.clone(),
+                    protocol_version: "2026-01-01".to_owned(),
+                    crypto_suite_id: 1,
+                    created_at: at(0),
+                })
+                .await,
+            "reserve an asset",
+        );
+        assert!(matches!(reserved, Reservation::Created(_)));
+        for (role, address) in [
+            (
+                BlobRole::Provenance,
+                store(format!("{asset}/provenance").into_bytes()).await,
+            ),
+            (
+                BlobRole::Metadata,
+                store(format!("{asset}/metadata").into_bytes()).await,
+            ),
+            (BlobRole::Original, shared.clone()),
+        ] {
+            if asset == &first && role != BlobRole::Original {
+                first_own.push(address.clone());
+            }
+            ok(
+                index
+                    .record_blob(
+                        asset,
+                        BlobRecord {
+                            role,
+                            address,
+                            size: 16,
+                            manifest_sha256: None,
+                            finalized_at: at(0),
+                        },
+                    )
+                    .await,
+                "record a blob",
+            );
+        }
+    }
+    assert_eq!(
+        ok(index.reference_count(&shared).await, "count references"),
+        2,
+        "both holders are references"
+    );
+
+    // Delete the first asset under a retention floor that has already passed, then purge it.
+    let delete_manifest = store(b"gc-shared/delete manifest".to_vec()).await;
+    let prior = ok(index.read(&first).await, "read the first asset")
+        .expect("the first asset exists")
+        .chain_head;
+    let deleted = ok(
+        index
+            .apply_op(LifecycleOp {
+                asset_id: first.clone(),
+                owner_id: owner.clone(),
+                album_id: album.clone(),
+                action: OpAction::Delete,
+                manifest_hash: capsule_core::crypto::hash::Hash32([0x72; 32]),
+                prior_provenance_hash: prior,
+                amk_version: 1,
+                provenance: delete_manifest.clone(),
+                original: None,
+                metadata: None,
+                retention_until: Some(at(1)),
+                at: at(1),
+            })
+            .await,
+        "delete the first asset",
+    );
+    assert!(matches!(deleted, OpOutcome::Applied { .. }), "{deleted:?}");
+    clock.advance(SignedDuration::from_secs(10));
+    let purged = ok(
+        super::purge_expired(&context, super::Mode::Apply, 64).await,
+        "purge",
+    );
+    assert!(purged.purged.contains(&first), "{purged:?}");
+    assert_eq!(
+        ok(index.reference_count(&shared).await, "count references"),
+        1,
+        "the purge drops only the purged holder's reference"
+    );
+
+    // Two passes, the second past the window: the purged asset's own blobs are swept, which is
+    // what shows the collector ran; the shared blob is neither marked nor swept.
+    let report = ok(
+        super::collect(&context, super::Mode::Apply).await,
+        "collect",
+    );
+    assert!(!report.marked.contains(&shared), "{report:?}");
+    clock.advance(super::DEFAULT_GRACE_WINDOW + SignedDuration::from_secs(1));
+    let report = ok(
+        super::collect(&context, super::Mode::Apply).await,
+        "collect past the window",
+    );
+    assert!(
+        first_own.iter().all(|own| report.swept.contains(own)),
+        "the purged asset's own blobs are collectable: {report:?}"
+    );
+    assert!(!report.swept.contains(&shared), "{report:?}");
+
+    // The survivor restores: its row still names the address, and the store hands back the
+    // bytes it was given.
+    let survivor = ok(index.read(&second).await, "read the survivor").expect("the survivor exists");
+    let address = survivor
+        .address_for(BlobRole::Original)
+        .expect("the survivor still names its original");
+    let restored = blobs
+        .read_at(address, 0, shared_bytes.len() + 1)
+        .await
+        .expect("the blob store answers")
+        .expect("the survivor's original is still held");
+    assert_eq!(restored, shared_bytes, "the survivor restores byte-equal");
+}
+
+// ===========================================================================================
 // The whole suite
 // ===========================================================================================
 
@@ -286,5 +486,16 @@ mod tests {
     #[tokio::test]
     async fn the_in_memory_store_conforms() {
         run_all(&MemoryHarness::default()).await;
+    }
+
+    /// #672 over the in-memory index and mark store. The Postgres pair runs in
+    /// `index::postgres`'s container case.
+    #[tokio::test]
+    async fn a_shared_blob_survives_purging_one_holder() {
+        super::a_shared_blob_survives_purging_one_holder(
+            std::sync::Arc::new(crate::index::memory::InMemoryAssetIndex::new()),
+            std::sync::Arc::new(InMemoryCollection::default()),
+        )
+        .await;
     }
 }

@@ -83,7 +83,9 @@ use crate::attestation::{ReceiptDraft, ReceiptLog};
 use crate::blob::{BlobError, ContentAddress, Placement};
 use crate::index::{BlobOutcome, BlobRecord, Custody, Receipted};
 use crate::ledger::LedgerEvent;
-use crate::store::{FinalizeClaim, StoreError, UploadId, UploadSessionRecord, UploadSessionStatus};
+use crate::store::{
+    FinalizeClaim, OwnerId, StoreError, UploadId, UploadSessionRecord, UploadSessionStatus,
+};
 
 /// How many bytes of the stage are read and hashed at a time.
 ///
@@ -283,7 +285,7 @@ async fn run_claimed(
 
     // 5. The custody entry, durable before the index is touched: a row never exists without one.
     let draft = receipt_draft(context, record, &address, manifest_sha256)?;
-    ledger_custody(context, attestation, record, &draft).await?;
+    ledger_custody(context, attestation, &record.owner_id, &draft).await?;
 
     // 6. Record and receipt: the durable half and the signed half, in one transaction. Nothing
     //    before this point is observable to another device.
@@ -303,14 +305,29 @@ async fn run_claimed(
             // server refused. An outage is not a refusal — whether it committed is unknown — and
             // is left unresolved, which is the crash case.
             if !matches!(failure, FinalizeFailure::Unavailable(_)) {
-                ledger_refused(context, attestation, record, &failure).await;
+                ledger_refused(
+                    context,
+                    attestation,
+                    &record.owner_id,
+                    &draft,
+                    failure.to_string(),
+                )
+                .await;
             }
             return Err(failure);
         }
     };
 
     // 7. What the transaction minted, for the rebuild that has to reproduce it.
-    ledger_indexed(context, attestation, record, minted, receipt).await;
+    ledger_indexed(
+        context,
+        attestation,
+        &record.owner_id,
+        &draft,
+        minted,
+        receipt,
+    )
+    .await;
 
     Ok((placement, minted))
 }
@@ -319,37 +336,33 @@ async fn run_claimed(
 ///
 /// Best-effort, as [`ledger_indexed`] is: the finalization has already failed, and a replay of
 /// an unresolved custody entry re-runs the checks that refused it.
-async fn ledger_refused(
+pub(super) async fn ledger_refused(
     context: &UploadContext,
     attestation: &crate::attestation::AttestationContext,
-    record: &UploadSessionRecord,
-    failure: &FinalizeFailure,
+    owner: &OwnerId,
+    draft: &ReceiptDraft,
+    reason: String,
 ) {
     let event = LedgerEvent::Refused {
-        upload_id: record.upload_id.as_str().to_owned(),
-        asset_id: record.asset_id.as_str().to_owned(),
-        reason: failure.to_string(),
+        upload_id: draft.upload_id.as_str().to_owned(),
+        asset_id: draft.asset_id.as_str().to_owned(),
+        reason,
     };
     match attestation
         .ledger()
-        .append(
-            &record.owner_id,
-            event,
-            context.clock().now(),
-            attestation.signer(),
-        )
+        .append(owner, event, context.clock().now(), attestation.signer())
         .await
     {
         Ok(entry) => tracing::debug!(
-            owner = %record.owner_id,
-            upload = %record.upload_id,
+            %owner,
+            upload = %draft.upload_id,
             ledger_seq = entry.core.seq,
             "ledgered a refused write"
         ),
         Err(error) => tracing::error!(
             %error,
-            owner = %record.owner_id,
-            upload = %record.upload_id,
+            %owner,
+            upload = %draft.upload_id,
             "the owner ledger could not record a refused write; \
              a rebuild will re-run the checks that refused it"
         ),
@@ -360,10 +373,10 @@ async fn ledger_refused(
 ///
 /// A failure fails the finalization: the bytes are committed but nothing references them, which
 /// is the orphan GC collects, rather than an index row the ledger cannot account for.
-async fn ledger_custody(
+pub(super) async fn ledger_custody(
     context: &UploadContext,
     attestation: &crate::attestation::AttestationContext,
-    record: &UploadSessionRecord,
+    owner: &OwnerId,
     draft: &ReceiptDraft,
 ) -> Result<(), FinalizeFailure> {
     let event = LedgerEvent::Custody {
@@ -379,25 +392,20 @@ async fn ledger_custody(
     };
     let entry = attestation
         .ledger()
-        .append(
-            &record.owner_id,
-            event,
-            context.clock().now(),
-            attestation.signer(),
-        )
+        .append(owner, event, context.clock().now(), attestation.signer())
         .await
         .map_err(|error| {
             tracing::error!(
                 %error,
-                owner = %record.owner_id,
-                upload = %record.upload_id,
+                %owner,
+                upload = %draft.upload_id,
                 "the owner ledger could not record custody; nothing was indexed"
             );
             FinalizeFailure::Unavailable("could not record custody in the owner ledger".to_owned())
         })?;
     tracing::debug!(
-        owner = %record.owner_id,
-        upload = %record.upload_id,
+        %owner,
+        upload = %draft.upload_id,
         ledger_seq = entry.core.seq,
         "ledgered custody before indexing"
     );
@@ -406,40 +414,36 @@ async fn ledger_custody(
 
 /// Step 7: append what the index transaction minted. Never fails the finalization; see the
 /// module docs.
-async fn ledger_indexed(
+pub(super) async fn ledger_indexed(
     context: &UploadContext,
     attestation: &crate::attestation::AttestationContext,
-    record: &UploadSessionRecord,
+    owner: &OwnerId,
+    draft: &ReceiptDraft,
     sync_seq: Option<u64>,
     receipt: Option<CustodyReceipt>,
 ) {
     let event = LedgerEvent::Indexed {
-        upload_id: record.upload_id.as_str().to_owned(),
-        asset_id: record.asset_id.as_str().to_owned(),
+        upload_id: draft.upload_id.as_str().to_owned(),
+        asset_id: draft.asset_id.as_str().to_owned(),
         sync_seq,
         receipt: receipt.map(Box::new),
     };
     match attestation
         .ledger()
-        .append(
-            &record.owner_id,
-            event,
-            context.clock().now(),
-            attestation.signer(),
-        )
+        .append(owner, event, context.clock().now(), attestation.signer())
         .await
     {
         Ok(entry) => tracing::debug!(
-            owner = %record.owner_id,
-            upload = %record.upload_id,
+            %owner,
+            upload = %draft.upload_id,
             ledger_seq = entry.core.seq,
             sync_seq,
             "ledgered the index write"
         ),
         Err(error) => tracing::error!(
             %error,
-            owner = %record.owner_id,
-            upload = %record.upload_id,
+            %owner,
+            upload = %draft.upload_id,
             sync_seq,
             "the owner ledger could not record an index write that committed; \
              a rebuild will not be able to prove this owner's sequence"

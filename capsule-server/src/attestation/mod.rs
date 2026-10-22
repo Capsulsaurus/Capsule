@@ -412,8 +412,8 @@ pub(crate) fn chain_hash(receipt: &CustodyReceipt) -> Hash32 {
 /// The attestation module's collaborators.
 ///
 /// The [owner ledger](crate::ledger) rides here because the attestation key signs its entries
-/// exactly as it signs receipts, and finalization — its one writer so far — already holds this
-/// context.
+/// exactly as it signs receipts, and every writer — finalization, a drop adoption, a lifecycle
+/// op, a directory publish — already holds this context.
 #[derive(Debug, Clone)]
 pub struct AttestationContext {
     receipts: Arc<dyn ReceiptLog>,
@@ -457,9 +457,29 @@ impl AttestationContext {
         self
     }
 
-    /// The owner ledger finalization appends to.
+    /// The owner ledger every index and directory write appends to.
     pub fn ledger(&self) -> &dyn crate::ledger::OwnerLedger {
         self.ledger.as_ref()
+    }
+
+    /// Append `event` to `owner`'s ledger, signed by this context's attestation key.
+    ///
+    /// The one call every producer makes, so no producer can sign an entry under a key other
+    /// than the one its receipts name. Durable before it returns, as
+    /// [`OwnerLedger::append`](crate::ledger::OwnerLedger::append) is.
+    pub async fn append_to_ledger(
+        &self,
+        owner: &crate::store::OwnerId,
+        event: crate::ledger::LedgerEvent,
+        recorded_at: Timestamp,
+    ) -> Result<crate::ledger::LedgerEntry, crate::ledger::LedgerError> {
+        let kind = event.kind();
+        let entry = self
+            .ledger
+            .append(owner, event, recorded_at, self.signer.as_ref())
+            .await?;
+        tracing::debug!(%owner, kind, ledger_seq = entry.core.seq, "appended an owner-ledger entry");
+        Ok(entry)
     }
 
     /// The same, with keys this server has retired.

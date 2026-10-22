@@ -571,6 +571,248 @@ async fn the_same_bytes_in_the_same_album_are_refused_as_a_duplicate() {
     );
 }
 
+/// The asset every adoption case asks on behalf of: same owner and album as the default
+/// fixture asset, a different id.
+const ADOPTER: &str = "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e62";
+
+/// Upload `whole` as the default asset's original, through a session, to completion.
+async fn finalize_original(fixture: &Fixture, bearer: &str, first: &[u8], second: &[u8]) {
+    let whole: Vec<u8> = first.iter().chain(second.iter()).copied().collect();
+    let id = fixture.open_session(&whole, "original", bearer).await;
+    for (offset, chunk) in [(0_u64, first), (4096, second)] {
+        fixture
+            .chunk(&id, offset, chunk, bearer)
+            .send()
+            .await
+            .assert_status(StatusCode::NO_CONTENT);
+    }
+}
+
+/// `POST /v1/upload` for `whole` in `role`, on behalf of [`ADOPTER`].
+async fn create_for_adopter(
+    fixture: &Fixture,
+    bearer: &str,
+    whole: &[u8],
+    role: &str,
+) -> kynos::test::TestResponse {
+    let mut request = create_request(&fixture.clock, whole, role);
+    request["manifest_envelope"]["file_id"] = ADOPTER.into();
+    fixture
+        .client
+        .post("/v1/upload")
+        .header("authorization", bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .json(&request)
+        .send()
+        .await
+}
+
+#[tokio::test]
+async fn a_second_asset_refused_as_a_duplicate_adopts_the_blob() {
+    // #672: the client resolves the `409` as a merge and never uploads these bytes, so the
+    // requesting asset must come to name the blob — with a receipt, as any indexed blob has —
+    // or the collector counts one holder where two depend on the bytes.
+    use capsule_server::attestation::ReceiptLog as _;
+    use capsule_server::blob::ContentAddress;
+    use capsule_server::index::AssetIndex as _;
+    use capsule_server::store::{AssetId, BlobRole};
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, second, whole) = blob();
+    finalize_original(&fixture, &bearer, &first, &second).await;
+    let address = ContentAddress::parse(&checksum(&whole)).expect("an address");
+
+    let refusal = create_for_adopter(&fixture, &bearer, &whole, "original").await;
+    refusal.assert_status(StatusCode::CONFLICT);
+    let problem: serde_json::Value = refusal.json();
+    assert_eq!(code(&problem), "error.upload.duplicate_blob");
+    assert_eq!(
+        problem["existing_asset"], "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e61",
+        "the wire answer is the one the merge path already handles"
+    );
+
+    let adopter = AssetId::new(ADOPTER);
+    let row = fixture
+        .index
+        .read(&adopter)
+        .await
+        .expect("the index answers")
+        .expect("the adopting asset was reserved");
+    assert_eq!(
+        row.address_for(BlobRole::Original),
+        Some(&address),
+        "the requesting asset names the blob it was refused"
+    );
+    assert_eq!(
+        row.blobs
+            .iter()
+            .find(|blob| blob.address == address)
+            .map(|blob| blob.size),
+        Some(whole.len() as u64),
+        "the adopted size is the store's"
+    );
+    assert_eq!(
+        fixture
+            .index
+            .reference_count(&address)
+            .await
+            .expect("the index answers"),
+        2,
+        "both holders count, so purging one leaves the other's reference"
+    );
+    let receipts = fixture
+        .receipts
+        .for_asset(&adopter)
+        .await
+        .expect("the log answers");
+    assert_eq!(receipts.len(), 1, "an adopted blob is receipted once");
+    assert_eq!(receipts[0].core.ciphertext_hash.to_hex(), address.as_str());
+
+    // A retried create adopts nothing more: the same answer, no second receipt.
+    create_for_adopter(&fixture, &bearer, &whole, "original")
+        .await
+        .assert_status(StatusCode::CONFLICT);
+    assert_eq!(
+        fixture
+            .receipts
+            .for_asset(&adopter)
+            .await
+            .expect("the log answers")
+            .len(),
+        1,
+        "a retry must not receipt the same reference twice"
+    );
+    assert_eq!(
+        fixture.blobs.blob_count_for_test().await,
+        1,
+        "adoption stores nothing"
+    );
+}
+
+#[tokio::test]
+async fn an_adoption_the_ledger_cannot_record_is_unavailable_and_records_nothing() {
+    use capsule_server::blob::ContentAddress;
+    use capsule_server::index::AssetIndex as _;
+    use capsule_server::store::{AssetId, BlobRole};
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, second, whole) = blob();
+    finalize_original(&fixture, &bearer, &first, &second).await;
+
+    fixture.ledger.set_unavailable(true);
+    let refusal = create_for_adopter(&fixture, &bearer, &whole, "original").await;
+    refusal.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(code(&refusal.json()), "error.upload.unavailable");
+
+    let row = fixture
+        .index
+        .read(&AssetId::new(ADOPTER))
+        .await
+        .expect("the index answers")
+        .expect("the adopting asset was reserved");
+    assert_eq!(
+        row.address_for(BlobRole::Original),
+        None,
+        "no row is indexed without its custody entry"
+    );
+    assert_eq!(
+        fixture
+            .index
+            .reference_count(&ContentAddress::parse(&checksum(&whole)).expect("an address"))
+            .await
+            .expect("the index answers"),
+        1
+    );
+
+    // Once the ledger is back, the retry the `503` invited adopts.
+    fixture.ledger.set_unavailable(false);
+    create_for_adopter(&fixture, &bearer, &whole, "original")
+        .await
+        .assert_status(StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn an_adoption_contradicting_a_held_original_is_an_envelope_mismatch() {
+    // The adopting asset already holds other bytes as its original. Answering `409` would tell
+    // the client its asset now names these bytes, which it cannot: a singular role is named by
+    // the signed manifest, and finalization refuses the same re-point.
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, second, whole) = blob();
+    finalize_original(&fixture, &bearer, &first, &second).await;
+
+    let other = payload(b'z', CHUNK);
+    let mut request = create_request(&fixture.clock, &other, "original");
+    request["manifest_envelope"]["file_id"] = ADOPTER.into();
+    let id = fixture.open_session_with(&request, &bearer).await;
+    fixture
+        .chunk(&id, 0, &other, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    let refusal = create_for_adopter(&fixture, &bearer, &whole, "original").await;
+    refusal.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(code(&refusal.json()), "error.upload.envelope_mismatch");
+}
+
+#[tokio::test]
+async fn a_duplicate_whose_bytes_are_gone_opens_a_session_instead_of_adopting() {
+    // A dangling reference — a row naming bytes the store lacks — is never adopted: that would
+    // receipt custody the server does not have. An ordinary session lets the bytes come back.
+    use capsule_server::blob::{BlobStore as _, ContentAddress};
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, second, whole) = blob();
+    finalize_original(&fixture, &bearer, &first, &second).await;
+    let address = ContentAddress::parse(&checksum(&whole)).expect("an address");
+    assert!(
+        fixture
+            .blobs
+            .remove(&address)
+            .await
+            .expect("the store answers")
+    );
+
+    create_for_adopter(&fixture, &bearer, &whole, "original")
+        .await
+        .assert_status(StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn a_manifest_is_never_adopted_across_assets() {
+    // A signed manifest names its own asset, so two assets cannot share one; the plain `409`
+    // stands and nothing is recorded.
+    use capsule_server::index::AssetIndex as _;
+    use capsule_server::store::{AssetId, BlobRole};
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, second, whole) = blob();
+    let id = fixture.open_session(&whole, "provenance", &bearer).await;
+    for (offset, chunk) in [(0_u64, &first), (4096, &second)] {
+        fixture
+            .chunk(&id, offset, chunk, &bearer)
+            .send()
+            .await
+            .assert_status(StatusCode::NO_CONTENT);
+    }
+
+    create_for_adopter(&fixture, &bearer, &whole, "provenance")
+        .await
+        .assert_status(StatusCode::CONFLICT);
+    let row = fixture
+        .index
+        .read(&AssetId::new(ADOPTER))
+        .await
+        .expect("the index answers")
+        .expect("the adopting asset was reserved");
+    assert_eq!(row.address_for(BlobRole::Provenance), None);
+}
+
 #[tokio::test]
 async fn a_replayed_chunk_is_a_no_op_that_answers_the_same_offset() {
     let fixture = Fixture::working();

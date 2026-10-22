@@ -1684,3 +1684,144 @@ async fn drop_session_creation_is_rate_limited_per_source_independently_of_the_l
         "the link's own budget is untouched, so a guest elsewhere still deposits"
     );
 }
+
+// ===========================================================================================
+// The owner ledger (#753)
+// ===========================================================================================
+
+/// An adoption ledgers its custody before the index write, and the receipt it issued after, as
+/// a finalization does — under the drop id.
+#[tokio::test]
+async fn an_adoption_ledgers_custody_then_the_index_write() {
+    use capsule_server::ledger::LedgerEvent;
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (drop_id, bytes, manifest) = pending_drop(&fixture, &bearer).await;
+    assert!(
+        fixture.verified_ledger(&owner()).await.is_empty(),
+        "a deposit indexes nothing, so it ledgers nothing"
+    );
+
+    adopt(
+        &fixture,
+        &bearer,
+        &drop_id,
+        &bytes,
+        &manifest["manifest_envelope"],
+        StatusCode::OK,
+    )
+    .await;
+
+    let entries = fixture.verified_ledger(&owner()).await;
+    let [custody, indexed] = entries.as_slice() else {
+        panic!("one custody and one indexed entry, got {entries:?}");
+    };
+    let LedgerEvent::Custody {
+        upload_id,
+        asset_id,
+        content_hash,
+        size,
+        upload_user_id,
+        ..
+    } = &custody.core.event
+    else {
+        panic!("the first entry is the custody: {custody:?}");
+    };
+    assert_eq!(upload_id, &drop_id);
+    assert_eq!(asset_id, ADOPTED);
+    assert_eq!(content_hash, &hash_bytes(&bytes));
+    assert_eq!(*size, bytes.len() as u64);
+    assert_eq!(upload_user_id, user().as_str());
+
+    let LedgerEvent::Indexed {
+        upload_id, receipt, ..
+    } = &indexed.core.event
+    else {
+        panic!("the second entry is the index write: {indexed:?}");
+    };
+    assert_eq!(upload_id, &drop_id);
+    assert_eq!(
+        receipt.as_deref().map(|receipt| vec![receipt.clone()]),
+        Some(adopted_receipts(&fixture).await),
+        "the ledger holds the receipt the index issued"
+    );
+}
+
+/// A ledger that cannot append refuses the adoption before the index, and keeps the drop.
+#[tokio::test]
+async fn a_ledger_that_cannot_append_refuses_the_adoption_and_keeps_the_drop() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (drop_id, bytes, manifest) = pending_drop(&fixture, &bearer).await;
+    fixture.ledger.set_unavailable(true);
+
+    let problem = adopt(
+        &fixture,
+        &bearer,
+        &drop_id,
+        &bytes,
+        &manifest["manifest_envelope"],
+        StatusCode::INTERNAL_SERVER_ERROR,
+    )
+    .await;
+    assert_eq!(problem["code"], "error.drop.unavailable");
+    assert_drop_kept(&fixture, &bearer).await;
+    assert!(
+        adopted_receipts(&fixture).await.is_empty(),
+        "nothing was indexed, so nothing was receipted"
+    );
+    let row = fixture
+        .index
+        .read(&AssetId::new(ADOPTED))
+        .await
+        .expect("the index answers")
+        .expect("the adoption reserved a row");
+    assert!(row.blobs.is_empty(), "no row without a ledger entry");
+}
+
+/// An adoption the index refuses resolves its custody entry with a refused one.
+#[tokio::test]
+async fn a_refused_adoption_resolves_its_custody_entry() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (drop_id, bytes, manifest) = pending_drop(&fixture, &bearer).await;
+    reserve_adopted(&fixture, owner()).await;
+    let elsewhere = payload(b'o', 4096);
+    fixture
+        .index
+        .record_blob(
+            &AssetId::new(ADOPTED),
+            BlobRecord {
+                role: BlobRole::Original,
+                address: ContentAddress::parse(&checksum(&elsewhere)).expect("a content address"),
+                size: elsewhere.len() as u64,
+                manifest_sha256: None,
+                finalized_at: Timestamp::UNIX_EPOCH,
+            },
+        )
+        .await
+        .expect("the index records");
+
+    adopt(
+        &fixture,
+        &bearer,
+        &drop_id,
+        &bytes,
+        &manifest["manifest_envelope"],
+        StatusCode::BAD_REQUEST,
+    )
+    .await;
+
+    let kinds: Vec<_> = fixture
+        .verified_ledger(&owner())
+        .await
+        .iter()
+        .map(|entry| entry.core.event.kind())
+        .collect();
+    assert_eq!(
+        kinds,
+        ["custody", "refused"],
+        "a rebuild must not replay a write the server refused"
+    );
+}
