@@ -13,9 +13,9 @@ use capitalize::Capitalize;
 use capsule_core::crypto::primitives::DeviceTier;
 use capsule_core::domain::ImportMode;
 use capsule_core::import::{
-    CancellationToken, DefaultAlbumContext, ImportConfig, ImportExecutionSummary, ImportOutcome,
-    ImportProgressEvent, ScanResult, SourceAdapter, SourceMetadataIndex, TakeoutAdapter,
-    UploadPolicy, execute_with_source_metadata, plan, scan_paths as scan_files,
+    CancellationToken, DefaultAlbumContext, ImportConfig, ImportOutcome, ImportProgressEvent,
+    ScanResult, SourceAdapter, SourceMetadataIndex, TakeoutAdapter, UploadPolicy,
+    execute_with_source_metadata, plan, scan_paths as scan_files,
 };
 use capsule_core::library::{Library, LibraryError, init_library, open_library, rebuild_index};
 use capsule_core::lifecycle::{DerivativeStatus, Workspace, unmigrated_sidecars};
@@ -403,15 +403,17 @@ async fn dispatch(cli: Cli) -> Result<()> {
             // A Move run goes on to execute even with nothing new to import: its duplicates are
             // sources the library already holds, which the release below may now delete.
             if plan_result.counts.to_import == 0 && !r#move {
+                // Nothing executes, so the plan's own skips are the run's outcomes: a source
+                // that could not be read is reported, never an empty success.
+                let skipped = import_report::skipped_by_plan(&plan_result);
                 if json {
-                    let report = import_report::ImportReport::new(
-                        candidates,
-                        files,
-                        counts,
-                        &ImportExecutionSummary::default(),
-                    );
+                    let report =
+                        import_report::ImportReport::new(candidates, files, counts, &skipped);
                     println!("{}", serde_json::to_string_pretty(&report)?);
                     return Ok(());
+                }
+                for (path, outcome) in &skipped.outcomes {
+                    println!("{}", progress_line(path, outcome));
                 }
                 println!("{}", "Nothing to import.".yellow());
                 // `--push` is still honored: an unchanged library is exactly the

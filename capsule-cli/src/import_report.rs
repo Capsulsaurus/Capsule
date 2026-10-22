@@ -9,7 +9,9 @@
 
 use std::path::Path;
 
-use capsule_core::import::{ImportExecutionSummary, ImportOutcome, PlanCounts};
+use capsule_core::import::{
+    ImportActionPlan, ImportDecision, ImportExecutionSummary, ImportOutcome, PlanCounts,
+};
 use capsule_core::lifecycle::DerivativeStatus;
 use serde::Serialize;
 
@@ -170,6 +172,33 @@ fn file_outcome(path: &Path, outcome: &ImportOutcome) -> FileImportOutcome {
         }
     }
     line
+}
+
+/// The outcomes a plan decided without executing anything: each duplicate and each file it
+/// could not read, exactly as the executor would have reported them. A run with nothing to
+/// import reports from this, so an all-unreadable source still names every file it lost.
+#[must_use]
+pub fn skipped_by_plan(plan: &ImportActionPlan) -> ImportExecutionSummary {
+    let outcomes = plan
+        .actions
+        .iter()
+        .filter_map(|(candidate, decision)| {
+            let path = candidate.primary_path().clone();
+            match decision {
+                ImportDecision::Import => None,
+                ImportDecision::SkipDuplicate { existing_uuid } => Some((
+                    path,
+                    ImportOutcome::DuplicateSkipped {
+                        existing_uuid: existing_uuid.clone(),
+                    },
+                )),
+                ImportDecision::SkipError(reason) => {
+                    Some((path, ImportOutcome::CorruptUnreadable(reason.clone())))
+                }
+            }
+        })
+        .collect();
+    ImportExecutionSummary { outcomes }
 }
 
 /// The closing line of a human-readable run: what was imported, and every reason an imported

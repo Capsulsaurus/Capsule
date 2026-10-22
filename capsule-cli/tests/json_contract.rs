@@ -28,6 +28,8 @@
 //! - `import_json_reports_every_file_and_its_deferred_derivatives` — exit 0, one JSON document:
 //!   a HEIC, a video, a document and a zero-byte file all imported, with each one's
 //!   derivative status and the run's deferred count.
+//! - `import_json_reports_an_unreadable_source_when_nothing_is_planned` — exit 0, one JSON
+//!   document naming the unreadable source as a failed file and counting it as an error.
 //! - `import_json_with_push_is_a_usage_error` — the parser's exit status 2.
 
 use std::io::Write as _;
@@ -278,6 +280,26 @@ fn import_json_reports_every_file_and_its_deferred_derivatives() {
             "--json",
         ],
     )));
+}
+
+/// A source that cannot be read plans nothing, and the report still names it as a failed file
+/// and counts it as an error rather than claiming an empty success.
+#[test]
+fn import_json_reports_an_unreadable_source_when_nothing_is_planned() {
+    let scratch = Scratch::new();
+    library(&scratch, 0);
+    let missing = scratch.0.join("not-there");
+    insta::assert_snapshot!(run(
+        &scratch,
+        &[
+            "import",
+            path(&missing),
+            "--library",
+            path(&scratch.library()),
+            "--passphrase-stdin",
+            "--json",
+        ],
+    ));
 }
 
 #[test]
