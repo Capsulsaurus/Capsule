@@ -100,3 +100,43 @@ Durable state is PostgreSQL plus `BLOB_ROOT` (blobs and `ledger/`); back up both
 in-flight uploads, so losing it signs users out and restarts uploads but loses no library data.
 Keep the key variables above in your secret store as well: they are not in the database, and
 the server's signing and attestation identity depends on them.
+
+Take the two in this order, the database first:
+
+```sh
+pg_dump --format=custom --file=capsule.dump "$DATABASE_URL"
+rsync -a "$BLOB_ROOT"/ backup/blob-root/
+```
+
+`serve` may keep running. A blob is on disk, and its ledger entry appended, before the index row
+that names it commits, so a blob copy taken after the dump holds every blob the dump references.
+It can also hold writes the dump missed; the rebuild below restores those rows. Do not run
+`gc --apply` or `purge --apply` while the backup runs: either can remove a blob the dump still
+references.
+
+Valkey needs no backup. If you keep one anyway (its `appendonly` files under `/data`), restore it
+only beside the database dump it was taken with.
+
+### Restoring onto a new host
+
+1. Start an empty PostgreSQL and an empty Valkey, and set the same `JWT_ED25519_DER` and
+   `ATTESTATION_KEY_SEED` as the old host.
+2. Restore the database. The dump carries the schema and its migration record, so do not run
+   `capsule-server-migration up` first:
+   `pg_restore --no-owner --exit-on-error --dbname "$DATABASE_URL" capsule.dump`.
+3. Copy the blob directory back to `BLOB_ROOT`, on one filesystem.
+4. With `serve` stopped, run `capsule-server rebuild` and read its report. It lists the rows
+   written after the dump; `capsule-server rebuild --apply` restores them with the sequence
+   numbers they had, so clients' sync cursors stay valid.
+5. Run `capsule-server scrub --deep`. It should exit zero.
+6. Start `serve`. Everyone signs in again, because their sessions were in Valkey. Clients resume
+   syncing where they stopped.
+
+If the database is lost and there is no dump, migrate an empty database and run
+`capsule-server rebuild --apply` over the blob directory. It restores every asset row from the
+owner ledgers. Accounts, published device directories, album membership and share links are in
+the database only, and a rebuild does not restore them.
+
+Rehearse this before you trust real data to it. One way is to check with `capsule restore` that
+every original comes back byte for byte. `capsule-e2e/tests/backup_restore_drill.rs` runs the
+same steps against containers (`mise run test-rust-containers`).
