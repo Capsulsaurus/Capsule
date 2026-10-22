@@ -26,8 +26,10 @@
 //!
 //! [Backup — Backup Artifact]: https://docs/design/backup-recovery/#backup-artifact
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Read;
+use std::io::{self, Read, Write};
+use std::sync::Arc;
 
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
@@ -65,6 +67,33 @@ pub const WRAP_PARAMS: Argon2Params = Argon2Params {
     p_cost: 1,
 };
 
+/// Where an asset's STREAM ciphertext comes from when it is written into an artifact.
+///
+/// A **source**, not a buffer: the export streams each original straight into the artifact's
+/// writer, so exporting holds one STREAM chunk of it rather than the whole library's ciphertext.
+/// The library's sources re-derive the ciphertext from the plaintext on disk
+/// ([`OriginalCiphertext`](crate::lifecycle::OriginalCiphertext)); an in-memory `Vec<u8>` is a
+/// source too, for callers that already hold the bytes.
+pub trait CiphertextSource: std::fmt::Debug + Send + Sync {
+    /// The ciphertext's exact length in bytes — what the artifact's tar header declares before
+    /// a byte of the body is written.
+    fn size(&self) -> u64;
+
+    /// Stream the whole ciphertext into `writer` and return its SHA-256 content address.
+    fn write_to(&self, writer: &mut dyn Write) -> io::Result<Hash32>;
+}
+
+impl CiphertextSource for Vec<u8> {
+    fn size(&self) -> u64 {
+        self.len() as u64
+    }
+
+    fn write_to(&self, writer: &mut dyn Write) -> io::Result<Hash32> {
+        writer.write_all(self)?;
+        Ok(hash::hash_bytes(self))
+    }
+}
+
 /// One asset to back up: its ciphertext, metadata blob, and full provenance chain.
 #[derive(Debug, Clone)]
 pub struct BackupAsset {
@@ -72,8 +101,10 @@ pub struct BackupAsset {
     pub album_id: Uuid,
     /// The asset id.
     pub asset_id: Uuid,
-    /// STREAM ciphertext blob.
-    pub ciphertext: Vec<u8>,
+    /// The STREAM ciphertext blob, as a source the export streams from. Its bytes must hash to
+    /// the head manifest's `ciphertext_hash`: the MANIFEST commits to that address before the
+    /// body is written, and an export whose source yields anything else fails.
+    pub ciphertext: Arc<dyn CiphertextSource>,
     /// Encrypted metadata blob (wire format).
     pub metadata_blob: Vec<u8>,
     /// The asset's provenance chain (oldest first).
@@ -224,17 +255,105 @@ fn blob_role_order(role: &str) -> u8 {
 
 // ── tar I/O (deterministic) ─────────────────────────────────────────────────
 
-fn tar_append(builder: &mut tar::Builder<Vec<u8>>, path: &str, data: &[u8]) {
+/// The tar block size: every entry body is zero-padded to a multiple of it.
+const TAR_BLOCK: u64 = 512;
+
+fn tar_io(e: &io::Error) -> BackupError {
+    BackupError::Format(format!("writing the artifact: {e}"))
+}
+
+/// The deterministic header every entry carries: a regular file, mode 0644, owned by 0:0 at
+/// the epoch, declaring `size` body bytes.
+fn tar_header(size: u64) -> tar::Header {
     let mut h = tar::Header::new_gnu();
-    h.set_size(data.len() as u64);
+    h.set_size(size);
     h.set_mode(0o644);
     h.set_mtime(0);
     h.set_uid(0);
     h.set_gid(0);
     h.set_entry_type(tar::EntryType::Regular);
+    h
+}
+
+fn tar_append<W: Write>(
+    builder: &mut tar::Builder<W>,
+    path: &str,
+    data: &[u8],
+) -> Result<(), BackupError> {
+    let mut h = tar_header(data.len() as u64);
     builder
         .append_data(&mut h, path, data)
-        .expect("tar append is infallible for an in-memory writer");
+        .map_err(|e| tar_io(&e))
+}
+
+/// Append an entry whose body is streamed from `source` rather than held, byte-identical to
+/// [`tar_append`] over the same bytes.
+///
+/// `tar` takes an entry body only as a [`Read`], and a [`CiphertextSource`] pushes into a
+/// writer, so the entry is written in two halves: `tar` writes the header — with the same path
+/// encoding [`tar_append`] gets — over an empty body (zero bytes copied, so no padding), and the
+/// body and its padding then go straight into the builder's writer. The body must be exactly
+/// the `size` the header declared and hash to `expected`, the address the MANIFEST already
+/// committed to; anything else fails the export, whose output must then be discarded.
+fn tar_append_stream<W: Write>(
+    builder: &mut tar::Builder<W>,
+    path: &str,
+    source: &dyn CiphertextSource,
+    expected: Hash32,
+) -> Result<(), BackupError> {
+    let size = source.size();
+    let mut h = tar_header(size);
+    builder
+        .append_data(&mut h, path, io::empty())
+        .map_err(|e| tar_io(&e))?;
+    let mut body = CountingWriter::new(builder.get_mut());
+    let written_hash = source.write_to(&mut body).map_err(|e| tar_io(&e))?;
+    let written = body.written;
+    if written != size || written_hash != expected {
+        tracing::error!(
+            path,
+            declared_size = size,
+            written,
+            expected = %expected.to_hex(),
+            actual = %written_hash.to_hex(),
+            "backup: a ciphertext source disagrees with its manifest"
+        );
+        return Err(BackupError::Corrupt(format!(
+            "{path}: the source yielded {written} bytes hashing to {}, not the {size} bytes \
+             hashing to {} the manifest commits to",
+            written_hash.to_hex(),
+            expected.to_hex()
+        )));
+    }
+    let padding = (TAR_BLOCK - size % TAR_BLOCK) % TAR_BLOCK;
+    builder
+        .get_mut()
+        .write_all(&[0; TAR_BLOCK as usize][..padding as usize])
+        .map_err(|e| tar_io(&e))
+}
+
+/// A writer that counts what passes through it to `inner`.
+struct CountingWriter<W> {
+    inner: W,
+    written: u64,
+}
+
+impl<W> CountingWriter<W> {
+    fn new(inner: W) -> Self {
+        Self { inner, written: 0 }
+    }
+}
+
+impl<W: Write> Write for CountingWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let n = self.inner.write(buf)?;
+        self.written += n as u64;
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
 }
 
 fn tar_read(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, BackupError> {
@@ -337,7 +456,9 @@ pub fn export_with_salt(
     salt: [u8; 32],
     exporter: &dyn Signer,
 ) -> Result<Vec<u8>, BackupError> {
-    export_inner(input, passphrase, salt, WRAP_PARAMS, exporter)
+    let mut out = Vec::new();
+    export_inner(input, passphrase, salt, WRAP_PARAMS, exporter, &mut out)?;
+    Ok(out)
 }
 
 /// Assemble a backup artifact with an explicit wrap salt **and** an explicit Argon2id cost.
@@ -365,18 +486,38 @@ pub fn export_with_salt_and_params(
     params: Argon2Params,
     exporter: &dyn Signer,
 ) -> Result<Vec<u8>, BackupError> {
-    export_inner(input, passphrase, salt, params, exporter)
+    let mut out = Vec::new();
+    export_inner(input, passphrase, salt, params, exporter, &mut out)?;
+    Ok(out)
+}
+
+/// One entry body awaiting its place in the tar: bytes assembled (or borrowed) up front, or a
+/// ciphertext streamed from its source only when the entry is written.
+enum Payload<'a> {
+    Bytes(Cow<'a, [u8]>),
+    Ciphertext {
+        source: &'a dyn CiphertextSource,
+        hash: Hash32,
+    },
 }
 
 /// The one implementation every export entry point delegates to. Private, so the only way to
 /// reach it with a caller-chosen cost is through the gated entry points above.
+///
+/// Writes the artifact into `out` and returns its length. Each original's ciphertext is
+/// streamed from its [`CiphertextSource`] as its entry is written, so the export holds one
+/// STREAM chunk of an original at a time, never the library's ciphertext. Its MANIFEST entry
+/// is the head manifest's `ciphertext_hash` and the source's declared size, known before the
+/// body is read; the write then checks the body against both. On an error `out` holds a
+/// partial artifact the caller must discard.
 fn export_inner(
     input: &BackupInput,
     passphrase: &[u8],
     salt: [u8; 32],
     params: Argon2Params,
     exporter: &dyn Signer,
-) -> Result<Vec<u8>, BackupError> {
+    out: &mut dyn Write,
+) -> Result<u64, BackupError> {
     let wrap_key = pwkdf::derive_wrap_key(passphrase, &salt, params)?;
 
     // Build the AMK ledger, asserting completeness for every referenced epoch.
@@ -405,7 +546,7 @@ fn export_inner(
 
     // Collect entries (sorted by album, asset, then blob role) and provenance heads.
     let mut entries: Vec<EntryRef> = Vec::new();
-    let mut payloads: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut payloads: Vec<(String, Payload<'_>)> = Vec::new();
     let mut provenance_heads: Vec<(Uuid, Hash32)> = Vec::new();
 
     entries.push(EntryRef {
@@ -438,7 +579,7 @@ fn export_inner(
             hash: hash::hash_bytes(&data),
             size: data.len() as u64,
         });
-        payloads.push((path, data));
+        payloads.push((path, Payload::Bytes(Cow::Owned(data))));
     }
 
     // Album and stack label records, still sealed under their album's AMK.
@@ -455,7 +596,7 @@ fn export_inner(
             hash: hash::hash_bytes(&data),
             size: data.len() as u64,
         });
-        payloads.push((path, data));
+        payloads.push((path, Payload::Bytes(Cow::Owned(data))));
     }
 
     for a in &assets {
@@ -465,20 +606,38 @@ fn export_inner(
         let prov_bytes = cbor::to_canonical_vec(&a.provenance).expect("provenance serializes");
         let prov_path = format!("provenance/{}", a.asset_id);
 
-        let mut asset_entries = vec![
-            (ct_path, a.ciphertext.clone()),
-            (meta_path, a.metadata_blob.clone()),
-            (prov_path, prov_bytes),
+        // The original's entry is committed to from what is known without reading it: the
+        // address its signed manifest names and the size its source declares. Its bytes are
+        // read once, when the entry is written, and checked against both there.
+        entries.push(EntryRef {
+            path: ct_path.clone(),
+            hash: head.core.ciphertext_hash,
+            size: a.ciphertext.size(),
+        });
+        payloads.push((
+            ct_path,
+            Payload::Ciphertext {
+                source: a.ciphertext.as_ref(),
+                hash: head.core.ciphertext_hash,
+            },
+        ));
+
+        let mut asset_entries: Vec<(String, Cow<'_, [u8]>)> = vec![
+            (meta_path, Cow::Borrowed(&a.metadata_blob)),
+            (prov_path, Cow::Owned(prov_bytes)),
         ];
         // The custody-receipt log rides the artifact only when present (absent = no key).
         if !a.receipts.is_empty() {
-            asset_entries.push((format!("receipts/{}", a.asset_id), a.receipts.clone()));
+            asset_entries.push((
+                format!("receipts/{}", a.asset_id),
+                Cow::Borrowed(&a.receipts),
+            ));
         }
         // So does the signed storage-attestation log.
         if !a.attestations.is_empty() {
             asset_entries.push((
                 format!("attestations/{}", a.asset_id),
-                a.attestations.clone(),
+                Cow::Borrowed(&a.attestations),
             ));
         }
         for (path, data) in asset_entries {
@@ -487,7 +646,7 @@ fn export_inner(
                 hash: hash::hash_bytes(&data),
                 size: data.len() as u64,
             });
-            payloads.push((path, data));
+            payloads.push((path, Payload::Bytes(data)));
         }
         let head_rec = a
             .provenance
@@ -532,10 +691,10 @@ fn export_inner(
     let manifest_bytes = cbor::to_canonical_vec(&manifest).expect("manifest serializes");
 
     // Write the tar: VERSION, MANIFEST, ledger, then sorted payloads.
-    let mut builder = tar::Builder::new(Vec::new());
-    tar_append(&mut builder, "VERSION", &version_blob(&salt, params));
-    tar_append(&mut builder, "MANIFEST.cbor", &manifest_bytes);
-    tar_append(&mut builder, "keys/amk-ledger.cbor", &sealed_ledger);
+    let mut builder = tar::Builder::new(CountingWriter::new(out));
+    tar_append(&mut builder, "VERSION", &version_blob(&salt, params))?;
+    tar_append(&mut builder, "MANIFEST.cbor", &manifest_bytes)?;
+    tar_append(&mut builder, "keys/amk-ledger.cbor", &sealed_ledger)?;
     // Re-sort payloads to match the manifest entry order.
     payloads.sort_by(|x, y| {
         x.0.split('/')
@@ -543,25 +702,62 @@ fn export_inner(
             .cmp(&y.0.split('/').next())
             .then(x.0.cmp(&y.0))
     });
-    for (path, data) in &payloads {
-        tar_append(&mut builder, path, data);
+    for (path, payload) in &payloads {
+        match payload {
+            Payload::Bytes(data) => tar_append(&mut builder, path, data)?,
+            Payload::Ciphertext { source, hash } => {
+                tar_append_stream(&mut builder, path, *source, *hash)?;
+            }
+        }
     }
-    builder
-        .into_inner()
-        .map_err(|e| BackupError::Format(e.to_string()))
+    let mut counted = builder.into_inner().map_err(|e| tar_io(&e))?;
+    counted.flush().map_err(|e| tar_io(&e))?;
+    tracing::debug!(
+        assets = assets.len(),
+        entries = payloads.len() + 3,
+        bytes = counted.written,
+        "backup: artifact written"
+    );
+    Ok(counted.written)
 }
 
-/// Assemble a backup artifact, drawing a fresh random wrap salt, at the production
-/// [`WRAP_PARAMS`] cost (production path).
+/// Assemble a backup artifact in memory, drawing a fresh random wrap salt, at the production
+/// [`WRAP_PARAMS`] cost.
 ///
-/// This is the entry point [`Workspace::export_backup`](crate::lifecycle::Workspace::export_backup)
-/// runs, and it takes no cost argument, so no caller of it can produce a weak artifact.
+/// The whole artifact is returned as one buffer, so this suits a caller that needs the bytes
+/// themselves (a peer delta it content-addresses). Exporting a library goes through
+/// [`export_to`], which streams.
 pub fn export(
     input: &BackupInput,
     passphrase: &[u8],
     exporter: &dyn Signer,
 ) -> Result<Vec<u8>, BackupError> {
     export_with_salt(input, passphrase, rng::random_array::<32>(), exporter)
+}
+
+/// Write a backup artifact into `out`, drawing a fresh random wrap salt, at the production
+/// [`WRAP_PARAMS`] cost (production path), and return its length in bytes.
+///
+/// Each asset's ciphertext is streamed from its [`CiphertextSource`] as its entry is written,
+/// so memory stays at one STREAM chunk of an original whatever the library's size. On an error
+/// `out` holds a partial artifact, which the caller must discard.
+///
+/// This is the entry point [`Workspace::export_backup`](crate::lifecycle::Workspace::export_backup)
+/// runs, and it takes no cost argument, so no caller of it can produce a weak artifact.
+pub fn export_to(
+    input: &BackupInput,
+    passphrase: &[u8],
+    exporter: &dyn Signer,
+    out: &mut dyn Write,
+) -> Result<u64, BackupError> {
+    export_inner(
+        input,
+        passphrase,
+        rng::random_array::<32>(),
+        WRAP_PARAMS,
+        exporter,
+        out,
+    )
 }
 
 /// As [`export`] but with an explicit Argon2id cost for the wrap key — the entry point a test
@@ -575,12 +771,29 @@ pub fn export_with_params(
     params: Argon2Params,
     exporter: &dyn Signer,
 ) -> Result<Vec<u8>, BackupError> {
+    let mut out = Vec::new();
+    export_with_params_to(input, passphrase, params, exporter, &mut out)?;
+    Ok(out)
+}
+
+/// As [`export_to`] but with an explicit Argon2id cost for the wrap key.
+///
+/// **Not in a production build**, for the reason given on [`export_with_salt_and_params`].
+#[cfg(any(test, feature = "test-support"))]
+pub fn export_with_params_to(
+    input: &BackupInput,
+    passphrase: &[u8],
+    params: Argon2Params,
+    exporter: &dyn Signer,
+    out: &mut dyn Write,
+) -> Result<u64, BackupError> {
     export_inner(
         input,
         passphrase,
         rng::random_array::<32>(),
         params,
         exporter,
+        out,
     )
 }
 
@@ -1058,7 +1271,7 @@ mod tests {
             BackupAsset {
                 album_id: Uuid::from_u128(ALBUM),
                 asset_id: file_id,
-                ciphertext: ct,
+                ciphertext: Arc::new(ct),
                 metadata_blob: crate::crypto::encryption::seal_metadata_blob(
                     &amk,
                     &file_id,
@@ -1094,7 +1307,7 @@ mod tests {
             core.wrapped_file_key = Some(crate::crypto::provenance::WrappedFileKey(
                 crate::crypto::encryption::seal_file_key(&amk, &core.file_id, &guest_key),
             ));
-            asset.ciphertext = ct;
+            asset.ciphertext = Arc::new(ct);
             asset.provenance[0].manifest = core.sign(&self.device, &self.write).unwrap();
             asset
         }
@@ -1416,7 +1629,7 @@ mod tests {
             } else {
                 data
             };
-            tar_append(&mut builder, &entry, &data);
+            tar_append(&mut builder, &entry, &data).unwrap();
         }
         let tampered = builder.into_inner().unwrap();
 
@@ -1581,9 +1794,10 @@ mod tests {
                     &mut builder,
                     path,
                     &cbor::to_canonical_vec(&manifest).unwrap(),
-                );
+                )
+                .unwrap();
             } else {
-                tar_append(&mut builder, path, data);
+                tar_append(&mut builder, path, data).unwrap();
             }
         }
         builder.into_inner().unwrap()
@@ -1669,5 +1883,143 @@ mod tests {
         // DryRun verifies (decrypts) but returns nothing to write.
         assert_eq!(r.verified, 1);
         assert!(r.applied.is_empty());
+    }
+
+    /// A source that pushes its bytes in small pieces and may declare a size it does not hold —
+    /// the shape of a streamed original, with the faults a source can have.
+    #[derive(Debug)]
+    struct Trickle {
+        bytes: Vec<u8>,
+        declared: u64,
+    }
+
+    impl Trickle {
+        fn honest(bytes: &[u8]) -> Self {
+            Self {
+                bytes: bytes.to_vec(),
+                declared: bytes.len() as u64,
+            }
+        }
+    }
+
+    impl CiphertextSource for Trickle {
+        fn size(&self) -> u64 {
+            self.declared
+        }
+
+        fn write_to(&self, writer: &mut dyn Write) -> io::Result<Hash32> {
+            for piece in self.bytes.chunks(7) {
+                writer.write_all(piece)?;
+            }
+            Ok(hash::hash_bytes(&self.bytes))
+        }
+    }
+
+    /// The artifact's bytes do not depend on whether an entry body was held or streamed: a
+    /// streamed entry is the buffered entry, header, body and padding, at every padding
+    /// boundary.
+    #[test]
+    fn a_streamed_entry_is_byte_identical_to_a_buffered_one() {
+        for len in [0, 1, 511, 512, 513, 1024, 70_000] {
+            let data: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+            let path = format!("blobs/{}", hash::hash_bytes(&data).to_hex());
+
+            let mut buffered = tar::Builder::new(Vec::new());
+            tar_append(&mut buffered, &path, &data).unwrap();
+            tar_append(&mut buffered, "meta/next", b"after").unwrap();
+
+            let mut streamed = tar::Builder::new(Vec::new());
+            tar_append_stream(
+                &mut streamed,
+                &path,
+                &Trickle::honest(&data),
+                hash::hash_bytes(&data),
+            )
+            .unwrap();
+            tar_append(&mut streamed, "meta/next", b"after").unwrap();
+
+            assert_eq!(
+                streamed.into_inner().unwrap(),
+                buffered.into_inner().unwrap(),
+                "entry of {len} bytes"
+            );
+        }
+    }
+
+    /// Exporting from a streamed source writes the same artifact as exporting the same bytes
+    /// from memory, and it opens and restores.
+    #[test]
+    fn an_artifact_streamed_from_its_sources_matches_one_exported_from_memory() {
+        let f = Fix::new();
+        let held = vec![f.asset(1, b"alpha"), f.asset(2, &[0x5A; 200_000])];
+        let streamed: Vec<BackupAsset> = held
+            .iter()
+            .map(|a| {
+                let mut bytes = Vec::new();
+                a.ciphertext.write_to(&mut bytes).unwrap();
+                BackupAsset {
+                    ciphertext: Arc::new(Trickle::honest(&bytes)),
+                    ..a.clone()
+                }
+            })
+            .collect();
+        let salt = [9; 32];
+        let from_memory =
+            export_with_salt_and_params(&f.input(held), b"pw", salt, FAST, &f.device).unwrap();
+        let mut from_sources = Vec::new();
+        let written = export_inner(
+            &f.input(streamed),
+            b"pw",
+            salt,
+            FAST,
+            &f.device,
+            &mut from_sources,
+        )
+        .unwrap();
+
+        assert_eq!(written, from_sources.len() as u64);
+        // The exporter signature is hybrid and may be randomized, so compare everything it does
+        // not cover byte for byte, and require both to open.
+        let tar_entries = |bytes: &[u8]| {
+            tar_read(bytes)
+                .unwrap()
+                .into_iter()
+                .filter(|(path, _)| path != "MANIFEST.cbor")
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(tar_entries(&from_sources), tar_entries(&from_memory));
+        let art = BackupArtifact::open(&from_sources, b"pw", &f.device.verifying_key()).unwrap();
+        let r = art.restore(RestoreMode::Commit, &BTreeMap::new()).unwrap();
+        assert_eq!(r.applied.len(), 2);
+    }
+
+    /// A source whose bytes are not the ones its manifest commits to fails the export, rather
+    /// than writing an artifact whose MANIFEST names an address its blob does not have.
+    #[test]
+    fn a_source_that_disagrees_with_its_manifest_fails_the_export() {
+        let f = Fix::new();
+        let good = f.asset(1, b"alpha");
+        let mut bytes = Vec::new();
+        good.ciphertext.write_to(&mut bytes).unwrap();
+
+        let mut flipped = bytes.clone();
+        flipped[0] ^= 1;
+        let short = Trickle {
+            bytes: bytes[..bytes.len() - 1].to_vec(),
+            declared: bytes.len() as u64,
+        };
+        for source in [
+            Arc::new(Trickle::honest(&flipped)) as Arc<dyn CiphertextSource>,
+            Arc::new(short),
+        ] {
+            let asset = BackupAsset {
+                ciphertext: source,
+                ..good.clone()
+            };
+            assert!(matches!(
+                export_with_params(&f.input(vec![asset]), b"pw", FAST, &f.device),
+                Err(BackupError::Corrupt(_))
+            ));
+        }
     }
 }

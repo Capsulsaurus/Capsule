@@ -92,3 +92,6 @@ pub mod utils;
 // `rusqlite`, `sqlite-vec`, OpenMLS and libcrux in order to call the refuse-by-default invariants
 // it exists to enforce.
 pub mod validation;
+
+#[cfg(test)]
+mod test_heap;

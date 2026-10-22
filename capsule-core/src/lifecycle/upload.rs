@@ -225,6 +225,18 @@ impl OriginalCiphertext {
     }
 }
 
+/// A backup export streams the original into the artifact through [`OriginalCiphertext::write_to`],
+/// one STREAM chunk at a time, exactly as a push reads it.
+impl crate::backup::CiphertextSource for OriginalCiphertext {
+    fn size(&self) -> u64 {
+        OriginalCiphertext::size(self)
+    }
+
+    fn write_to(&self, writer: &mut dyn Write) -> io::Result<hash::Hash32> {
+        OriginalCiphertext::write_to(self, writer)
+    }
+}
+
 impl Workspace {
     /// Build the [`UploadBundle`] for one managed asset.
     ///
