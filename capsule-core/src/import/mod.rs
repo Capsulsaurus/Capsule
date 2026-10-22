@@ -19,7 +19,7 @@ pub use default_album::{
 pub use enrichment::{CAPTION_MAX_BYTES, FAVORITE_RATING, SourceMetadataIndex, sidecar_enrichment};
 pub use executor::{execute, execute_with_source_metadata};
 pub use executor_cancellation::CancellationToken;
-pub use group::{PRIMARY_EXTS, RAW_EXTS, VIDEO_EXTS, group_by_stem, is_supported_extension};
+pub use group::{PRIMARY_EXTS, RAW_EXTS, VIDEO_EXTS, group_by_stem};
 pub use importers::takeout::TakeoutAdapter;
 pub use importers::{
     AdapterError, ExtractedImport, ExtractedMetadata, FoldSource, GeoPoint, ImportProvider,

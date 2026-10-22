@@ -77,6 +77,11 @@ pub(crate) enum Commands {
         /// original tiers on the connection class.
         #[arg(long)]
         staged: bool,
+        /// Print the run as one JSON document on stdout: the totals, including how many
+        /// originals arrived without derivatives and why, and each file's outcome. Not combined
+        /// with `--push`; run `capsule push --json` for the push report
+        #[arg(long, conflicts_with = "push")]
+        json: bool,
     },
     /// Upload a local Capsule library to the server
     Push {

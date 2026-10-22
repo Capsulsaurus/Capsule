@@ -60,8 +60,12 @@ pub enum ShareError {
         /// The server's stable `error.*` code.
         code: Option<String>,
     },
-    /// The server answered with a status this client does not model, such as the protocol
-    /// gate's `426` or the transport backstop's `413`.
+    /// The server will not take this client's writes: the protocol gate's `426`, or a window
+    /// it advertised that already refuses this build, so the write never left (issue #674).
+    #[error(transparent)]
+    UpgradeRequired(Box<crate::net::negotiation::UpgradeRequired>),
+    /// The server answered with a status this client does not model, such as the transport
+    /// backstop's `413`.
     #[error("the share request was answered {status}")]
     Unexpected {
         /// The HTTP status.
@@ -91,6 +95,7 @@ impl ShareError {
             | Self::Unauthorized { code }
             | Self::Unavailable { code }
             | Self::Unexpected { code, .. } => code.as_deref(),
+            Self::UpgradeRequired(refusal) => Some(refusal.error_code()),
             Self::InvalidBaseUrl { .. } | Self::WrongEcho { .. } | Self::Transport(_) => None,
         }
     }
@@ -236,6 +241,11 @@ fn refusal<E>(error: rest::Error<E>, declared: fn(u16, E) -> ShareError) -> Shar
 where
     E: std::error::Error + 'static,
 {
+    // The gate's `426`, or the typed transport's local one (issue #674).
+    if let Some(refusal) = crate::client::upgrade_required_of(&error) {
+        tracing::warn!("share request refused: {refusal}");
+        return ShareError::UpgradeRequired(Box::new(refusal));
+    }
     match error {
         rest::Error::Api(response) => {
             let status = response.status().as_u16();
@@ -274,6 +284,7 @@ fn issue_refusal(status: u16, error: rest::IssueShareError) -> ShareError {
         Refusal::Status500(problem) => ShareError::Unavailable {
             code: Some(problem.code.clone()),
         },
+        // Unreachable: `refusal` takes every `426` as `UpgradeRequired` first.
         Refusal::Status426(problem) => ShareError::Unexpected {
             status,
             code: Some(problem.code.clone()),
@@ -295,6 +306,7 @@ fn revoke_refusal(status: u16, error: rest::RevokeShareError) -> ShareError {
         Refusal::Status500(problem) => ShareError::Unavailable {
             code: Some(problem.code.clone()),
         },
+        // Unreachable: `refusal` takes every `426` as `UpgradeRequired` first.
         Refusal::Status426(problem) => ShareError::Unexpected {
             status,
             code: Some(problem.code.clone()),

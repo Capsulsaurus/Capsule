@@ -34,10 +34,6 @@ pub(crate) fn is_xmp(ext: &str) -> bool {
     ext.to_lowercase() == XMP_EXT
 }
 
-pub fn is_supported_extension(ext: &str) -> bool {
-    is_raw(ext) || is_primary(ext) || is_video(ext) || is_xmp(ext)
-}
-
 // ── Grouping ─────────────────────────────────────────────────────────────────
 
 /// Group a flat list of files by directory+stem, assigning member roles.
@@ -45,8 +41,11 @@ pub fn is_supported_extension(ext: &str) -> bool {
 /// RAW+primary pairs → `RawJpeg` stack.
 /// RAW-only (no primary) → standalone (no stack_hint).
 /// Primary-only → standalone.
+/// Video → always standalone, even beside a same-stem still.
 /// XMP → paired with same-stem RAW or primary; standalone if no match.
 /// Ungrouped extensions → standalone Sidecar.
+///
+/// Every input file lands in exactly one candidate.
 ///
 /// Files in different parent directories are never grouped together.
 pub fn group_by_stem(files: &[PathBuf]) -> Vec<ImportCandidate> {
@@ -155,20 +154,26 @@ pub fn group_by_stem(files: &[PathBuf]) -> Vec<ImportCandidate> {
                     members,
                 });
             }
-        } else if !videos.is_empty() {
-            // Video-only (standalone)
-            for video in &videos {
-                candidates.push(ImportCandidate {
-                    source_paths: vec![video.clone()],
-                    detected_type: AssetType::Video,
-                    stack_type: None,
-                    detection_method: None,
-                    detection_key: None,
-                    members: vec![(video.clone(), MemberRole::Primary)],
-                });
-            }
-        } else if !xmps.is_empty() {
-            // XMP-only (no matching RAW or primary)
+        }
+
+        // Every video is its own standalone candidate, whether or not a still shares its stem:
+        // an unpaired `IMG_0001.JPG` + `IMG_0001.MOV` is two originals, and neither may be
+        // dropped (issue #695). Live Photo pairs were matched by content identifier before
+        // this grouping ran.
+        for video in &videos {
+            candidates.push(ImportCandidate {
+                source_paths: vec![video.clone()],
+                detected_type: AssetType::Video,
+                stack_type: None,
+                detection_method: None,
+                detection_key: None,
+                members: vec![(video.clone(), MemberRole::Primary)],
+            });
+        }
+
+        // An XMP rides with a same-stem still above; with no still to ride with (alone, or
+        // beside a video only) it is kept as its own candidate.
+        if raws.is_empty() && primaries.is_empty() {
             for xmp in &xmps {
                 candidates.push(ImportCandidate {
                     source_paths: vec![xmp.clone()],
@@ -181,7 +186,8 @@ pub fn group_by_stem(files: &[PathBuf]) -> Vec<ImportCandidate> {
             }
         }
 
-        // Unsupported extensions → each becomes a standalone Sidecar
+        // Unrecognised extensions → each is kept as its own standalone candidate. The
+        // extension lists above decide grouping only, never whether a file is backed up.
         for other in &others {
             candidates.push(ImportCandidate {
                 source_paths: vec![other.clone()],
@@ -308,5 +314,52 @@ mod tests {
         let candidates = group_by_stem(&files);
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].detected_type, AssetType::Video);
+    }
+
+    /// Every input path appears in exactly one candidate, sorted for comparison.
+    fn grouped_paths(candidates: &[ImportCandidate]) -> Vec<PathBuf> {
+        let mut all: Vec<PathBuf> = candidates
+            .iter()
+            .flat_map(|c| c.source_paths.iter().cloned())
+            .collect();
+        all.sort();
+        all
+    }
+
+    /// Issue #695: an unpaired same-stem still and video are two originals. Neither is dropped,
+    /// whichever still kind (JPEG, RAW, RAW+JPEG) shares the video's stem.
+    #[test]
+    fn a_video_beside_a_same_stem_still_is_its_own_candidate() {
+        for names in [
+            &["/p/IMG_0001.JPG", "/p/IMG_0001.MOV"][..],
+            &["/p/IMG_0002.ARW", "/p/IMG_0002.MP4"][..],
+            &["/p/IMG_0003.jpg", "/p/IMG_0003.ARW", "/p/IMG_0003.mov"][..],
+        ] {
+            let files = paths(names);
+            let candidates = group_by_stem(&files);
+            let mut expected = files.clone();
+            expected.sort();
+            assert_eq!(grouped_paths(&candidates), expected, "for {names:?}");
+            let video = candidates
+                .iter()
+                .find(|c| c.detected_type == AssetType::Video)
+                .expect("the video is a candidate");
+            assert_eq!(video.source_paths.len(), 1, "standalone, for {names:?}");
+        }
+    }
+
+    /// Issue #695: an XMP beside a lone video has no still to ride with, so it is kept as its
+    /// own candidate rather than dropped.
+    #[test]
+    fn an_xmp_beside_a_lone_video_is_its_own_candidate() {
+        let files = paths(&["/p/clip.MOV", "/p/clip.xmp"]);
+        let candidates = group_by_stem(&files);
+        assert_eq!(candidates.len(), 2);
+        let mut expected = files.clone();
+        expected.sort();
+        assert_eq!(grouped_paths(&candidates), expected);
+        assert!(candidates.iter().any(
+            |c| c.detected_type == AssetType::Sidecar && c.primary_path().ends_with("clip.xmp")
+        ));
     }
 }

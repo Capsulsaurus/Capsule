@@ -91,6 +91,7 @@ impl MockServer {
         F: Fn(&MockRequest) -> MockResponse + Send + Sync + 'static,
     {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        crate::net::negotiation::forget_addr(listener.local_addr().unwrap());
         let addr = listener.local_addr().unwrap();
         let handler = Arc::new(handler);
         let handle = tokio::spawn(async move {

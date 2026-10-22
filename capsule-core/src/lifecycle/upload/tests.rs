@@ -83,6 +83,49 @@ fn upload_bundle_ciphertext_matches_the_manifest_hash() {
     assert_eq!(Some(blob_hash), bundle.metadata_blob_hash);
 }
 
+/// An original is never refused for its type (issue #695): one the protocol's closed
+/// `content_type` enum names declares itself, any other declares the opaque type, and the
+/// sidecar keeps the true one either way.
+#[test]
+fn an_original_outside_the_closed_enum_declares_the_opaque_type() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let mut ws = Workspace::create_with_params(lib.path(), b"passphrase", FAST).unwrap();
+    let album = ws.default_album_id();
+    ws.ensure_album(album, "Imports").unwrap();
+    for (name, sidecar_type, wire_type) in [
+        ("clip.mp4", "video/mp4", "video/mp4"),
+        ("clip.mkv", "video/x-matroska", OPAQUE_CONTENT_TYPE),
+        ("clip.avi", "video/x-msvideo", OPAQUE_CONTENT_TYPE),
+        ("scan.pdf", OPAQUE_CONTENT_TYPE, OPAQUE_CONTENT_TYPE),
+    ] {
+        let path = src.path().join(name);
+        fs::write(&path, format!("{name} bytes")).unwrap();
+        let asset_id = ws.import_asset(album, &path).unwrap();
+        assert_eq!(
+            ws.asset(&asset_id).unwrap().sidecar.content_type,
+            sidecar_type
+        );
+        let bundle = ws.upload_bundle(&asset_id).expect("bundle");
+        assert_eq!(bundle.content_type, wire_type, "for {name}");
+    }
+}
+
+#[test]
+fn wire_content_type_passes_the_closed_enum_and_masks_the_rest() {
+    for kind in WIRE_ORIGINAL_CONTENT_TYPES {
+        assert_eq!(wire_content_type(kind), *kind);
+    }
+    for kind in [
+        "image/x-sony-arw",
+        "video/x-matroska",
+        "application/pdf",
+        "",
+    ] {
+        assert_eq!(wire_content_type(kind), OPAQUE_CONTENT_TYPE);
+    }
+}
+
 /// **The `S-A10` interaction.** A bundle built after closing and reopening the library is
 /// byte-identical to one built before the close: album keys, authorities, the asset's chain and
 /// its exact sealed metadata blob all survive, so a push is re-runnable across processes. Before
