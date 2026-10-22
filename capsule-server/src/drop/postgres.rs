@@ -480,6 +480,55 @@ impl DropStore for PostgresDrops {
         })
     }
 
+    fn file<'a>(
+        &'a self,
+        upload: &'a UploadId,
+        address: &'a ContentAddress,
+        received_at: Timestamp,
+    ) -> StoreFuture<'a, Option<InboxEntry>> {
+        Box::pin(async move {
+            // One statement, so the declaration leaves `drop_pending` exactly when its row lands
+            // in `drop_inbox`. A row already holding the drop id is the drop, filed: the
+            // declaration goes and nothing is returned.
+            let row = self
+                .connection
+                .query_one_raw(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    format!(
+                        "WITH taken AS ( \
+                           DELETE FROM drop_pending WHERE upload_id = $1 \
+                           RETURNING drop_id, opaque_id, owner_id, kem_ct, content_type, \
+                                     suggested_filename, size \
+                         ) \
+                         INSERT INTO drop_inbox ({INBOX_COLUMNS}) \
+                         SELECT drop_id, owner_id, opaque_id, $2, size, content_type, kem_ct, \
+                                suggested_filename, $3, FALSE \
+                         FROM taken \
+                         ON CONFLICT (drop_id) DO NOTHING \
+                         RETURNING {INBOX_COLUMNS}"
+                    ),
+                    [
+                        Value::from(upload.as_str().to_owned()),
+                        Value::from(address.as_str().to_owned()),
+                        Value::from(to_micros(received_at)),
+                    ],
+                ))
+                .await
+                .map_err(PORT.failing("filing a drop declaration in an inbox"))?;
+            let Some(row) = row else {
+                tracing::debug!(%upload, "no drop declaration is held; nothing to file");
+                return Ok(None);
+            };
+            let entry = entry_from(&row, "filing a drop declaration in an inbox")?;
+            tracing::info!(
+                owner = %entry.owner_id,
+                size = entry.size,
+                "a drop landed in an inbox"
+            );
+            Ok(Some(entry))
+        })
+    }
+
     fn inbox<'a>(&'a self, owner: &'a UserId) -> StoreFuture<'a, Vec<InboxEntry>> {
         Box::pin(async move {
             // Oldest first, ties broken by the id's own bytes so the order is total and is the

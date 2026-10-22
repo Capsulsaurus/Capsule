@@ -454,7 +454,8 @@ async fn serve(config: &Config) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// Re-drive the finalization claims a previous process died holding.
+/// Re-drive the finalization claims a previous process died holding — album finalizations and
+/// guest-drop deposits alike, each by its own finisher.
 ///
 /// The claims are listed **here**, before this process has accepted a request and so before it
 /// has claimed anything, which is what makes every one of them a claim no live finalizer holds
@@ -469,6 +470,7 @@ async fn recover_stranded_claims(app: &crate::App) {
 
     let upload: crate::upload::UploadContext = app.provide();
     let attestation: crate::attestation::AttestationContext = app.provide();
+    let drops: crate::drop::DropContext = app.provide();
     let stranded = match upload.sessions().claimed().await {
         Ok(stranded) => stranded,
         Err(error) => {
@@ -487,8 +489,11 @@ async fn recover_stranded_claims(app: &crate::App) {
         stranded = stranded.len(),
         "recovering finalization claims a previous process left"
     );
+    // One listing, two finishers: an album claim is a finalization, a guest drop's is a deposit,
+    // and each recovery drives only its own.
     tokio::spawn(async move {
-        crate::upload::finalize::recover(&upload, &attestation, stranded).await;
+        crate::upload::finalize::recover(&upload, &attestation, stranded.clone()).await;
+        crate::drop::deposit::recover(&drops, stranded).await;
     });
 }
 
