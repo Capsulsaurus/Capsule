@@ -1044,6 +1044,7 @@ pub struct AdoptRequest {
 pub async fn adopt_drop(
     Inject(drops): Inject<DropContext>,
     Inject(upload): Inject<crate::upload::UploadContext>,
+    Inject(attestation): Inject<crate::attestation::AttestationContext>,
     Auth(credential): Auth<AccessToken>,
     Path(path): Path<DropPath>,
     Json(request): Json<AdoptRequest>,
@@ -1083,7 +1084,7 @@ pub async fn adopt_drop(
         return Err(AdoptRejection::not_found());
     };
 
-    match adopt_claimed(&drops, &upload, &owner, &entry, &request).await {
+    match adopt_claimed(&drops, &upload, &attestation, &owner, &entry, &request).await {
         Ok(asset_id) => {
             drops
                 .drops()
@@ -1118,6 +1119,7 @@ pub async fn adopt_drop(
 async fn adopt_claimed(
     drops: &DropContext,
     upload: &crate::upload::UploadContext,
+    attestation: &crate::attestation::AttestationContext,
     owner: &UserId,
     entry: &InboxEntry,
     request: &AdoptRequest,
@@ -1247,10 +1249,13 @@ async fn adopt_claimed(
 
     // The bytes are already committed — that is what makes adoption an in-place promotion
     // rather than a re-upload — so this records the blob the guest deposited against the asset
-    // the owner just signed for.
-    match upload
+    // the owner just signed for, with its custody receipt in the same critical section
+    // (invariant 33): an adoption is the second path by which a blob becomes indexed, and it
+    // must not be the one that leaves an indexed blob without a receipt.
+    let draft = adoption_receipt(entry, request, owner, &asset_id, now)?;
+    let crate::index::Receipted { outcome, receipt } = upload
         .index()
-        .record_blob(
+        .record_blob_with_receipt(
             &asset_id,
             crate::index::BlobRecord {
                 role: crate::store::BlobRole::Original,
@@ -1259,12 +1264,30 @@ async fn adopt_claimed(
                 manifest_sha256: None,
                 finalized_at: now,
             },
+            crate::index::Custody {
+                draft: &draft,
+                signer: attestation.signer(),
+            },
         )
         .await
         .map_err(|error| {
-            tracing::error!(%error, "an adoption could not record its blob");
+            tracing::error!(
+                %error,
+                drop_id = %entry.drop_id,
+                %asset_id,
+                "an adoption could not record its blob and receipt; neither committed"
+            );
             AdoptRejection::unavailable()
-        })? {
+        })?;
+    if let Some(receipt) = &receipt {
+        tracing::info!(
+            drop_id = %entry.drop_id,
+            %asset_id,
+            receipt_seq = receipt.core.receipt_seq,
+            "custody receipt committed with the adoption"
+        );
+    }
+    match outcome {
         // Recorded, or already held at this exact address: a retried adoption.
         crate::index::BlobOutcome::Recorded { .. } | crate::index::BlobOutcome::AlreadyHeld(_) => {}
         // The asset already holds a different original. Re-pointing it would swap the bytes
@@ -1284,6 +1307,47 @@ async fn adopt_claimed(
     }
 
     Ok(asset_id)
+}
+
+/// The custody receipt an adoption commits with its index rows.
+///
+/// The facts are the server's, as finalization's are: the address and size the drop's own
+/// commit established (the request restates them and was checked against them), and the
+/// adopting owner as the uploader, since an adopted drop's author is the adopter
+/// (design/web-upload.md).
+///
+/// `upload_id` is the **drop id**. A deposit has no session of the owner's — the guest's
+/// session id was never shown to them — while the drop id is the identifier the owner adopted
+/// by, and it is stable across a retried adoption, which is what keeps the log's per-upload
+/// idempotency returning the one receipt rather than minting a second. The owner reads it back
+/// through `GET /v1/assets/{asset_id}/receipts`.
+fn adoption_receipt(
+    entry: &InboxEntry,
+    request: &AdoptRequest,
+    owner: &UserId,
+    asset_id: &crate::store::AssetId,
+    now: jiff::Timestamp,
+) -> Result<crate::attestation::ReceiptDraft, AdoptRejection> {
+    let ciphertext_hash = capsule_core::crypto::hash::Hash32::from_hex(entry.address.as_str())
+        .map_err(|_| {
+            // Unreachable while a content address is a digest: the drop's commit parsed it as
+            // one. Guarded because an index write must not go ahead without its receipt.
+            tracing::error!(drop_id = %entry.drop_id, "a drop's address is not a digest");
+            AdoptRejection::unavailable()
+        })?;
+    Ok(crate::attestation::ReceiptDraft {
+        crypto_suite_id: request.crypto_suite_id,
+        protocol_version: request.protocol_version.clone(),
+        upload_id: UploadId::new(&entry.drop_id),
+        asset_id: asset_id.clone(),
+        blob_role: crate::store::BlobRole::Original.as_str().to_owned(),
+        ciphertext_hash,
+        size: entry.size,
+        envelope_hash: None,
+        uploaded_by_user: owner.as_str().to_owned(),
+        uploaded_by_device: None,
+        received_at: now.to_string(),
+    })
 }
 
 /// The caller's pending drops.
