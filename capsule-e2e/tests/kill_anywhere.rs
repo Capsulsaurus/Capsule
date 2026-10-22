@@ -47,7 +47,8 @@
 //! `CAPSULE_KILL_SEEDS` how many to try; every seed's schedule is printed, so a nightly failure
 //! replays with `CAPSULE_KILL_SEED=<seed> CAPSULE_KILL_SEEDS=1`. Rootless podman needs
 //! `DOCKER_HOST` at its socket and `CAPSULE_TEST_CONTAINER_USERNS=keep-id`, as the server's
-//! container tiers do.
+//! container tiers do. `CAPSULE_KILL_LOG_DIR` keeps every process's output after the run, and
+//! `CAPSULE_E2E_SERVER_LOG` / `CAPSULE_E2E_CLI_LOG` set the processes' `RUST_LOG`.
 
 #![cfg(unix)]
 
