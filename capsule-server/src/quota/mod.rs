@@ -27,11 +27,25 @@
 //! | [`QuotaState::Ok`], [`QuotaState::SoftWarning`] | admitted | admitted | admitted |
 //! | [`QuotaState::HardExceeded`] | refused | admitted | admitted |
 //! | [`QuotaState::GraceExpired`] | refused | refused | **admitted** |
+//! | [`QuotaState::Suspended`] | refused | refused | **admitted** |
 //!
-//! That last cell is the one the design is emphatic about: the provenance and metadata writes a
+//! That last column is the one the design is emphatic about: the provenance and metadata writes a
 //! `delete`, a `trash-restore` or a trash-empty produces are *always* admitted, because a user
 //! must be able to delete their way back under quota. A quota that could lock someone out of
 //! freeing space would be a trap rather than a limit.
+//!
+//! # Suspension is an operator's act, and it outranks the thresholds
+//!
+//! [`QuotaState::Suspended`] is not reached by bytes. An operator sets it (`capsule-server quota
+//! suspend`) for an administrative or billing reason, and only an operator clears it. While it is
+//! set it is the state [`classify`] reports whatever the account's usage, and it refuses exactly
+//! what [`QuotaState::GraceExpired`] refuses: every growth write, never a read and never a
+//! lifecycle write. It is a quota state and not a moderation standing — a moderation suspension
+//! (`crate::moderation`) removes the ability to write at all, which is a different act with a
+//! different refusal code.
+//!
+//! The instant it was set is stored rather than a flag, so an operator reading the ledger after
+//! an incident can say when, and so suspending an account twice keeps the first instant.
 //!
 //! # How an account reaches [`QuotaState::HardExceeded`] at all
 //!
@@ -116,6 +130,11 @@ pub enum QuotaState {
     HardExceeded,
     /// Over the hard limit for longer than the grace window. Metadata growth is refused too.
     GraceExpired,
+    /// Suspended by an operator (an administrative or billing act), whatever the usage.
+    ///
+    /// Refuses every growth write, as [`Self::GraceExpired`] does; reads and lifecycle writes are
+    /// still admitted.
+    Suspended,
 }
 
 impl QuotaState {
@@ -126,6 +145,7 @@ impl QuotaState {
             Self::SoftWarning => "soft_warning",
             Self::HardExceeded => "hard_exceeded",
             Self::GraceExpired => "grace_expired",
+            Self::Suspended => "suspended",
         }
     }
 }
@@ -154,6 +174,11 @@ pub struct StoredUsage {
     /// Kept by the store rather than derived, because "how long have you been over" cannot be
     /// computed from a current total.
     pub over_since: Option<Timestamp>,
+    /// When an operator suspended the account, if it is suspended now.
+    ///
+    /// Independent of the usage: no charge or release sets or clears it, only
+    /// [`QuotaStore::suspend`] and [`QuotaStore::unsuspend`].
+    pub suspended_since: Option<Timestamp>,
 }
 
 /// What charging an address did.
@@ -216,6 +241,19 @@ pub trait QuotaStore: std::fmt::Debug + Send + Sync {
         &'a self,
         address: &'a ContentAddress,
     ) -> StoreFuture<'a, Option<(UserId, u64)>>;
+
+    /// Suspend `user`'s quota as of `at`.
+    ///
+    /// `true` when this call suspended the account; `false` when it was already suspended, in
+    /// which case the earlier instant is kept, so the record says when the suspension began
+    /// rather than when it was last repeated. An account the ledger has never charged may be
+    /// suspended too: suspension does not wait for the first upload.
+    fn suspend<'a>(&'a self, user: &'a UserId, at: Timestamp) -> StoreFuture<'a, bool>;
+
+    /// Lift a suspension of `user`'s quota.
+    ///
+    /// `true` when this call lifted one; `false` when the account was not suspended.
+    fn unsuspend<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, bool>;
 }
 
 /// The state `used` puts a user in, given how long they have been over.
@@ -243,6 +281,17 @@ pub fn state_of(
     }
 }
 
+/// The state an account is in, given everything the ledger holds for it.
+///
+/// A suspension outranks the thresholds: a suspended account is [`QuotaState::Suspended`]
+/// whatever it uses. Otherwise this is [`state_of`] over the usage and the crossing.
+pub fn classify(usage: StoredUsage, now: Timestamp, limits: QuotaLimits) -> QuotaState {
+    if usage.suspended_since.is_some() {
+        return QuotaState::Suspended;
+    }
+    state_of(usage.used, usage.over_since, now, limits)
+}
+
 /// Whether a write of `class` costing `additional` bytes may proceed.
 ///
 /// The single decision every enforcement point makes, so "where is quota checked" has one
@@ -257,7 +306,11 @@ pub fn admits(
     match class {
         // A user must always be able to delete their way back under quota.
         WriteClass::Lifecycle => true,
-        WriteClass::MetadataGrowth => state != QuotaState::GraceExpired,
+        WriteClass::MetadataGrowth => {
+            !matches!(state, QuotaState::GraceExpired | QuotaState::Suspended)
+        }
+        // A suspension refuses an upload whatever it would cost.
+        WriteClass::Upload if state == QuotaState::Suspended => false,
         // Checked against the projected total, not the current one: the point of enforcing at
         // session creation is that the declared size becomes the cap for the whole transfer.
         WriteClass::Upload => used.saturating_add(additional) < limits.hard_limit,
@@ -387,6 +440,29 @@ impl QuotaStore for InMemoryQuota {
             Ok(Some((owner, size)))
         })
     }
+
+    fn suspend<'a>(&'a self, user: &'a UserId, at: Timestamp) -> StoreFuture<'a, bool> {
+        Box::pin(async move {
+            let mut inner = lock(&self.inner);
+            let entry = inner.usage.entry(user.clone()).or_default();
+            if entry.suspended_since.is_some() {
+                return Ok(false);
+            }
+            entry.suspended_since = Some(at);
+            Ok(true)
+        })
+    }
+
+    fn unsuspend<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, bool> {
+        Box::pin(async move {
+            let mut inner = lock(&self.inner);
+            Ok(inner
+                .usage
+                .get_mut(user)
+                .and_then(|entry| entry.suspended_since.take())
+                .is_some())
+        })
+    }
 }
 
 /// The quota module's collaborators.
@@ -437,6 +513,13 @@ impl QuotaContext {
 /// limit is released again. The store's charge is atomic, so the compensating release is
 /// undoing this caller's own debit and nobody else's.
 ///
+/// # Suspension is checked first
+///
+/// A suspended account is refused before anything is charged, so a suspension refuses even an
+/// upload that would have merged. The read is not atomic with the charge: an operator's
+/// suspension takes effect for the sessions opened after it is recorded, and a session already
+/// opening as it lands may still open, exactly as a session already open may finish.
+///
 /// # Errors
 ///
 /// Propagates the ledger's failure. Nothing is charged when it does.
@@ -447,6 +530,16 @@ pub async fn charge_upload(
     size: u64,
 ) -> Result<UploadCharge, crate::store::StoreError> {
     let limits = context.limits();
+    if context
+        .quotas()
+        .usage(user)
+        .await?
+        .suspended_since
+        .is_some()
+    {
+        tracing::info!(%user, size, "an upload was refused: the account's quota is suspended");
+        return Ok(UploadCharge::Suspended);
+    }
     let outcome = context
         .quotas()
         .charge(user, address, size, context.clock().now(), limits)
@@ -481,6 +574,8 @@ pub enum UploadCharge {
     AlreadyAttributed,
     /// It would cross the hard limit. Nothing is charged — the debit was released.
     Refused,
+    /// The account's quota is suspended. Nothing was charged.
+    Suspended,
 }
 
 /// The state `user` is in right now.
@@ -493,12 +588,7 @@ pub async fn current_state(
     user: &UserId,
 ) -> Result<QuotaState, crate::store::StoreError> {
     let usage = context.quotas().usage(user).await?;
-    Ok(state_of(
-        usage.used,
-        usage.over_since,
-        context.clock().now(),
-        context.limits(),
-    ))
+    Ok(classify(usage, context.clock().now(), context.limits()))
 }
 
 pub mod conformance;

@@ -627,6 +627,48 @@ fn a_deep_scrub_re_hashes_the_bytes_it_reads() {
     assert!(!stdout.contains("0 bytes hashed"), "{stdout}");
 }
 
+/// `quota <act> <user>` over `root`, in the development profile.
+fn quota_act(act: &str, user: &str, root: &std::path::Path) -> Command {
+    let root = root.display().to_string();
+    let mut command = server(&["quota", act, user, "--memory", "--blob-root", &root]);
+    command.env_remove("JWT_ED25519_DER");
+    command
+}
+
+#[test]
+fn an_operator_suspends_and_unsuspends_an_accounts_quota() {
+    // In this profile the ledger does not outlive the process, so each invocation starts from an
+    // account that is not suspended: suspending changes it, and lifting a suspension finds none.
+    // The durable ledger keeps it across processes, which `quota::postgres` asserts.
+    let root = tempfile::tempdir().expect("a scratch directory");
+
+    let (code, stdout, stderr) = run(&mut quota_act("suspend", "user-1", root.path()));
+    assert_eq!(code, Some(0), "stdout: {stdout}\nstderr: {stderr}");
+    assert_eq!(stdout.trim(), "quota suspended: user-1");
+    assert!(
+        !stderr.contains("JWT_ED25519_DER"),
+        "an operator's quota act needs no key material: {stderr}"
+    );
+
+    let (code, stdout, stderr) = run(&mut quota_act("unsuspend", "user-1", root.path()));
+    assert_eq!(code, Some(0), "stdout: {stdout}\nstderr: {stderr}");
+    assert_eq!(stdout.trim(), "quota was not suspended: user-1");
+}
+
+#[test]
+fn a_quota_act_without_memory_is_told_about_the_database() {
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let (code, _, stderr) = run(&mut server(&[
+        "quota",
+        "suspend",
+        "user-1",
+        "--blob-root",
+        &root.path().display().to_string(),
+    ]));
+    assert_eq!(code, Some(2), "{stderr}");
+    assert!(stderr.contains("DATABASE_URL"), "{stderr}");
+}
+
 #[test]
 fn the_operator_commands_need_no_key_material() {
     // A maintenance host that had to hold the production token-signing key to sweep a directory

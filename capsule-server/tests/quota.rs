@@ -5,6 +5,10 @@
 //! delete is admitted whatever the state — because a user who cannot delete cannot get back
 //! under the limit, and a quota that could lock someone out of freeing space would be a trap
 //! rather than a limit.
+//!
+//! The suspended state (#705) is held to the same rule at every enforcement point: each growth
+//! write is refused while the operator has suspended the account and admitted after unsuspend,
+//! and reads, cancellations and deletes are never refused.
 
 mod support;
 
@@ -183,48 +187,7 @@ async fn the_grace_window_stops_metadata_growth_but_never_a_delete() {
     let bearer = token(&fixture).await;
 
     // Publish an asset to operate on, and put the account over the hard limit.
-    let asset = AssetId::new("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e61");
-    fixture
-        .index
-        .reserve(PendingAsset {
-            asset_id: asset.clone(),
-            owner_id: owner(),
-            album_id: album(),
-            protocol_version: PROTOCOL_VERSION.to_owned(),
-            crypto_suite_id: capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
-            created_at: Timestamp::UNIX_EPOCH,
-        })
-        .await
-        .expect("the index reserves");
-    let provenance = payload(b'p', 64);
-    let created_head = checksum(&provenance);
-    for (role, bytes) in [
-        (BlobRole::Provenance, provenance.clone()),
-        (BlobRole::Metadata, payload(b'm', 64)),
-    ] {
-        let address = capsule_server::blob::ContentAddress::parse(&checksum(&bytes))
-            .expect("a content address");
-        fixture
-            .blobs
-            .put(&address, &bytes)
-            .await
-            .expect("the store accepts");
-        fixture
-            .index
-            .record_blob(
-                &asset,
-                BlobRecord {
-                    manifest_sha256: (role == BlobRole::Provenance)
-                        .then(|| Hash32::from_hex(address.as_str()).expect("a digest")),
-                    role,
-                    address,
-                    size: bytes.len() as u64,
-                    finalized_at: Timestamp::UNIX_EPOCH,
-                },
-            )
-            .await
-            .expect("the index records");
-    }
+    let created_head = publish_asset(&fixture).await;
     // Put the account over the limit through the ledger rather than through an upload, because
     // an upload cannot get there: the enforcement point refuses on the *projected* total, so
     // `hard_exceeded` is reached by a lowered limit or by growth the session check did not
@@ -293,8 +256,269 @@ async fn the_snapshot_requires_a_credential() {
 }
 
 // ===========================================================================================
+// Suspension (#705)
+// ===========================================================================================
+
+/// The seeded account, as the ledger names it.
+fn account() -> capsule_server::store::UserId {
+    capsule_server::store::UserId::new(user().as_str())
+}
+
+/// Suspend the seeded account's quota, as the operator command does.
+async fn suspend(fixture: &Fixture) {
+    assert!(
+        fixture
+            .quotas
+            .suspend(&account(), fixture.clock.now())
+            .await
+            .expect("the ledger suspends"),
+        "the account was not suspended before"
+    );
+}
+
+/// Lift the seeded account's suspension, as the operator command does.
+async fn unsuspend(fixture: &Fixture) {
+    assert!(
+        fixture
+            .quotas
+            .unsuspend(&account())
+            .await
+            .expect("the ledger unsuspends"),
+        "the account was suspended"
+    );
+}
+
+/// Upload session creation refuses a suspended account, and admits it again after unsuspend.
+///
+/// On an unlimited deployment, because a suspension is not reached by bytes: the default
+/// self-hosted server must enforce it too.
+#[tokio::test]
+async fn a_suspended_account_cannot_open_an_upload_until_it_is_unsuspended() {
+    let fixture = Fixture::working();
+    let bearer = token(&fixture).await;
+    // A session opened before the suspension, to cancel during it.
+    let opened = open(&fixture, &bearer, &payload(b's', 512), StatusCode::CREATED).await;
+
+    suspend(&fixture).await;
+    let snapshot_while_suspended = snapshot(&fixture, &bearer).await;
+    assert_eq!(
+        snapshot_while_suspended["state"], "suspended",
+        "a read is never refused, and it reports the state"
+    );
+    let problem = open(
+        &fixture,
+        &bearer,
+        &payload(b't', 512),
+        StatusCode::FORBIDDEN,
+    )
+    .await;
+    assert_eq!(problem["code"], "error.quota.suspended");
+    assert_eq!(
+        snapshot(&fixture, &bearer).await["used"],
+        snapshot_while_suspended["used"],
+        "a refused upload is not charged"
+    );
+
+    // Cancelling frees space, so it is a lifecycle write and admitted.
+    let id = opened["id"].as_str().expect("a session id");
+    fixture
+        .client
+        .delete(&format!("/v1/upload/{id}"))
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    unsuspend(&fixture).await;
+    assert_eq!(snapshot(&fixture, &bearer).await["state"], "ok");
+    open(&fixture, &bearer, &payload(b't', 512), StatusCode::CREATED).await;
+}
+
+/// A lifecycle op that grows metadata is refused while suspended; a delete never is.
+#[tokio::test]
+async fn a_suspension_stops_metadata_growth_but_never_a_delete() {
+    let fixture = Fixture::working();
+    let bearer = token(&fixture).await;
+    let created_head = publish_asset(&fixture).await;
+
+    suspend(&fixture).await;
+    let refused = apply(
+        &fixture,
+        &bearer,
+        &bundle(&fixture, "metadata-update", "s1", &created_head, true),
+        StatusCode::FORBIDDEN,
+    )
+    .await;
+    assert_eq!(refused["code"], "error.quota.suspended");
+
+    unsuspend(&fixture).await;
+    apply(
+        &fixture,
+        &bearer,
+        &bundle(&fixture, "metadata-update", "s1", &created_head, true),
+        StatusCode::OK,
+    )
+    .await;
+
+    // Suspended again, a delete is still admitted: a user must be able to delete their way back.
+    suspend(&fixture).await;
+    apply(
+        &fixture,
+        &bearer,
+        &bundle(&fixture, "delete", "s2", &manifest_hash("s1"), false),
+        StatusCode::OK,
+    )
+    .await;
+}
+
+/// Issue a share link over the wire.
+async fn issue_share(fixture: &Fixture, bearer: &str, tag: u8, expect: StatusCode) -> Value {
+    let record = payload(tag, 64);
+    let metadata = checksum(&record);
+    fixture
+        .client
+        .post("/v1/shares")
+        .header("authorization", bearer)
+        .header("accept", "application/json")
+        .json(&json!({
+            "opaque_id": format!("{:032x}", u128::from(tag) | 0xabcd_ef01_2345_6789_abcd_ef01_2345_0000),
+            "metadata_hash": metadata,
+            "serves": [metadata],
+            "metadata_blob": BASE64.encode(&record),
+        }))
+        .send()
+        .await
+        .assert_status(expect)
+        .json()
+}
+
+/// A share link is metadata growth: refused while suspended, admitted after.
+#[tokio::test]
+async fn a_suspended_account_cannot_issue_a_share_link_until_it_is_unsuspended() {
+    let fixture = Fixture::working();
+    let bearer = token(&fixture).await;
+
+    suspend(&fixture).await;
+    let problem = issue_share(&fixture, &bearer, 1, StatusCode::FORBIDDEN).await;
+    assert_eq!(problem["code"], "error.quota.suspended");
+    let record = capsule_server::blob::ContentAddress::parse(&checksum(&payload(1, 64)))
+        .expect("a content address");
+    assert!(
+        fixture
+            .blobs
+            .stat(&record)
+            .await
+            .expect("the store answers")
+            .is_none(),
+        "a refused link stores nothing"
+    );
+
+    unsuspend(&fixture).await;
+    issue_share(&fixture, &bearer, 1, StatusCode::CREATED).await;
+}
+
+/// A guest drop is charged to the link owner, so the owner's suspension refuses it.
+#[tokio::test]
+async fn a_drop_to_a_suspended_owners_link_is_refused_until_the_owner_is_unsuspended() {
+    let fixture = Fixture::working();
+    let bearer = token(&fixture).await;
+    let id = format!("{:032x}", 0xabcd_ef01_2345_6789_abcd_ef01_2345_0001_u128);
+    fixture
+        .client
+        .post("/v1/drops/links")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .json(&json!({
+            "opaque_id": id,
+            "drop_pubkey": BASE64.encode([7_u8; 32]),
+            "crypto_suite_id": capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
+            // One slot: the refused drop must refund it, or the admitted one below has none.
+            "max_file_count": 1,
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::CREATED);
+    let drop = |expect| {
+        let bytes = payload(b'g', 512);
+        let client = &fixture.client;
+        let path = format!("/d/{id}");
+        async move {
+            client
+                .post(&path)
+                .header("accept", "application/json")
+                .json(&json!({
+                    "content_type": "image/jpeg",
+                    "size": bytes.len(),
+                    "ciphertext_hash": checksum(&bytes),
+                    "kem_ct": BASE64.encode([9_u8; 64]),
+                    "suggested_filename": "from-a-guest.jpg",
+                }))
+                .send()
+                .await
+                .assert_status(expect)
+                .json::<Value>()
+        }
+    };
+
+    suspend(&fixture).await;
+    let problem = drop(StatusCode::FORBIDDEN).await;
+    assert_eq!(problem["code"], "error.quota.suspended");
+
+    unsuspend(&fixture).await;
+    drop(StatusCode::CREATED).await;
+}
+
+// ===========================================================================================
 // Lifecycle-bundle helpers
 // ===========================================================================================
+
+/// Publish the asset the bundles below operate on, returning its chain head.
+async fn publish_asset(fixture: &Fixture) -> String {
+    let asset = AssetId::new("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e61");
+    fixture
+        .index
+        .reserve(PendingAsset {
+            asset_id: asset.clone(),
+            owner_id: owner(),
+            album_id: album(),
+            protocol_version: PROTOCOL_VERSION.to_owned(),
+            crypto_suite_id: capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
+            created_at: Timestamp::UNIX_EPOCH,
+        })
+        .await
+        .expect("the index reserves");
+    let provenance = payload(b'p', 64);
+    let created_head = checksum(&provenance);
+    for (role, bytes) in [
+        (BlobRole::Provenance, provenance.clone()),
+        (BlobRole::Metadata, payload(b'm', 64)),
+    ] {
+        let address = capsule_server::blob::ContentAddress::parse(&checksum(&bytes))
+            .expect("a content address");
+        fixture
+            .blobs
+            .put(&address, &bytes)
+            .await
+            .expect("the store accepts");
+        fixture
+            .index
+            .record_blob(
+                &asset,
+                BlobRecord {
+                    manifest_sha256: (role == BlobRole::Provenance)
+                        .then(|| Hash32::from_hex(address.as_str()).expect("a digest")),
+                    role,
+                    address,
+                    size: bytes.len() as u64,
+                    finalized_at: Timestamp::UNIX_EPOCH,
+                },
+            )
+            .await
+            .expect("the index records");
+    }
+    created_head
+}
 
 /// The manifest bytes an op seeded with `seed` carries.
 fn manifest(seed: &str) -> Vec<u8> {

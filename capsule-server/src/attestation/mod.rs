@@ -1,4 +1,6 @@
-//! Custody receipts (`S-C15`) — the server's signed admission of what it accepted.
+//! Custody receipts (`S-C15`) — the server's signed admission of what it accepted — and the
+//! signed storage attestation ([`sign_storage_attestation`]) the same key puts on a durability
+//! verdict when a client asks for one.
 //!
 //! # What a receipt is for
 //!
@@ -59,6 +61,10 @@ use std::sync::{Arc, Mutex};
 use capsule_core::crypto::hash::{Hash32, hash_bytes};
 use capsule_core::crypto::keys::{HybridSignature, HybridSigningKey};
 use capsule_core::crypto::receipts::{CustodyReceipt, CustodyReceiptCore};
+use capsule_core::crypto::storage_attestation::{
+    AttestationNonce, AttestedAsset, STORAGE_ATTESTATION_VERSION, StorageAttestation,
+    StorageAttestationCore,
+};
 use jiff::Timestamp;
 
 use crate::store::{AssetId, StoreFuture, UploadId};
@@ -357,6 +363,42 @@ pub(crate) fn sign_receipt(
         received_at: draft.received_at,
     };
     CustodyReceipt {
+        server_sig: signer.sign(&core.signing_bytes()),
+        core,
+    }
+}
+
+/// Sign a durability verdict as a [`StorageAttestation`] for `account`, echoing `nonce`.
+///
+/// Under the same attestation key as a receipt, and for the same reason: the attestation is
+/// evidence a client keeps, and only the key whose history the server publishes append-only
+/// makes it verifiable for as long as the client keeps it. The two signed shapes cannot be
+/// confused — the core's `version` and field set differ, so neither decodes as the other.
+///
+/// Not logged in the chain: a verdict is a point-in-time read, not a custody event, and a log
+/// entry per audit would make the receipt log's length a function of how often clients ask.
+pub fn sign_storage_attestation(
+    signer: &dyn ReceiptSigner,
+    account: &str,
+    nonce: AttestationNonce,
+    checked_at: String,
+    verdicts: Vec<AttestedAsset>,
+) -> StorageAttestation {
+    let core = StorageAttestationCore {
+        version: STORAGE_ATTESTATION_VERSION.to_owned(),
+        server_id: signer.server_id().to_owned(),
+        server_key_id: signer.key_id(),
+        account: account.to_owned(),
+        nonce,
+        checked_at,
+        verdicts,
+    };
+    tracing::debug!(
+        %account,
+        assets = core.verdicts.len(),
+        "signed a storage attestation"
+    );
+    StorageAttestation {
         server_sig: signer.sign(&core.signing_bytes()),
         core,
     }

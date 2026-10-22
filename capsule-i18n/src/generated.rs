@@ -347,6 +347,9 @@ pub mod error_codes {
     /// `error.quota.peer_budget_exceeded`
     pub const QUOTA_PEER_BUDGET_EXCEEDED: &str = "error.quota.peer_budget_exceeded";
 
+    /// `error.quota.suspended`
+    pub const QUOTA_SUSPENDED: &str = "error.quota.suspended";
+
     /// `error.quota.unavailable`
     pub const QUOTA_UNAVAILABLE: &str = "error.quota.unavailable";
 

@@ -36,6 +36,8 @@ use super::*;
 struct MockRequest {
     method: String,
     path: String,
+    /// The request body, so a mock can answer what the client actually sent.
+    body: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -176,7 +178,7 @@ where
         }
     }
 
-    let resp = handler(&MockRequest { method, path });
+    let resp = handler(&MockRequest { method, path, body });
     let mut out = format!("HTTP/1.1 {} {}\r\n", resp.status, resp.reason).into_bytes();
     out.extend_from_slice(
         format!(
@@ -645,4 +647,296 @@ fn well_known_url_replaces_the_api_path_with_the_record_path() {
     );
     let err = well_known_url("not a url", ATTESTATION_KEYS_PATH).unwrap_err();
     assert!(matches!(err, VerifyError::Transport(_)), "got {err:?}");
+}
+
+// ─── Signed storage attestation ─────────────────────────────────────────────
+
+use capsule_core::crypto::storage_attestation::{
+    AttestedAsset, AttestedBlob, STORAGE_ATTESTATION_VERSION, StorageAttestationCore,
+};
+
+fn attestation_key() -> HybridSigningKey {
+    HybridSigningKey::from_seed64(&[5u8; 64])
+}
+
+fn query() -> AssetQuery {
+    AssetQuery {
+        asset_id: asset_id(),
+        blob_hashes: vec![ct_hash()],
+    }
+}
+
+/// The attestation the server would sign for `query()` under `nonce`.
+fn signed_attestation(key: &HybridSigningKey, nonce: AttestationNonce, durable: bool) -> Vec<u8> {
+    let core = StorageAttestationCore {
+        version: STORAGE_ATTESTATION_VERSION.to_owned(),
+        server_id: "capsule.example".to_owned(),
+        server_key_id: Hash32::from_bytes([0x11; 32]),
+        account: Uuid::from_u128(7).to_string(),
+        nonce,
+        checked_at: RECEIVED_AT.to_owned(),
+        verdicts: vec![AttestedAsset {
+            asset_id: asset_id().to_string(),
+            durable,
+            blobs: vec![AttestedBlob {
+                hash: ct_hash(),
+                role: "original".to_owned(),
+                stored: durable,
+                indexed: true,
+                retrievable: durable,
+                deep: None,
+            }],
+        }],
+    };
+    StorageAttestation {
+        server_sig: key.sign(&core.signing_bytes()),
+        core,
+    }
+    .to_canonical_cbor()
+}
+
+/// A verify response carrying `attestation` (and, for realism, the unsigned projection).
+fn signed_response(cbor: &[u8]) -> MockResponse {
+    let mut body: serde_json::Value =
+        serde_json::from_str(&durable_verdict_json(true)).expect("json");
+    body["attestation"] = base64::engine::general_purpose::STANDARD
+        .encode(cbor)
+        .into();
+    MockResponse::json(200, "OK", body.to_string())
+}
+
+/// The nonce a request body carried, if any.
+fn sent_nonce(body: &[u8]) -> Option<AttestationNonce> {
+    let value: serde_json::Value = serde_json::from_slice(body).expect("a JSON body");
+    value
+        .get("attestation_nonce")
+        .and_then(serde_json::Value::as_str)
+        .map(|hex| Hash32::from_hex(hex).expect("a 32-byte hex nonce").0)
+}
+
+/// A mock `POST /storage/verify` that signs over whatever nonce the client sent — the honest
+/// server — and records each body.
+async fn honest_server(
+    key: HybridSigningKey,
+    durable: bool,
+) -> (MockServer, Arc<std::sync::Mutex<Vec<Vec<u8>>>>) {
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = bodies.clone();
+    let server = MockServer::start(move |req| {
+        assert_eq!(
+            (req.method.as_str(), req.path.as_str()),
+            ("POST", "/storage/verify")
+        );
+        seen.lock().unwrap().push(req.body.clone());
+        match sent_nonce(&req.body) {
+            Some(nonce) => signed_response(&signed_attestation(&key, nonce, durable)),
+            None => MockResponse::json(200, "OK", durable_verdict_json(durable)),
+        }
+    })
+    .await;
+    (server, bodies)
+}
+
+#[tokio::test]
+async fn a_signed_verdict_verifies_under_the_pinned_key_and_binds_the_nonce() {
+    let key = attestation_key();
+    let (server, bodies) = honest_server(attestation_key(), false).await;
+    let nonce = [0x42; ATTESTATION_NONCE_LEN];
+
+    let verified = server
+        .client()
+        .verify_signed(&[query()], false, &nonce, &[key.verifying_key()])
+        .await
+        .expect("an honest attestation verifies");
+
+    assert_eq!(verified.attestation.core.nonce, nonce);
+    assert_eq!(
+        StorageAttestation::from_canonical_cbor(&verified.cbor).unwrap(),
+        verified.attestation,
+        "the kept bytes are the attestation that verified"
+    );
+    // The verdict comes out of the signature: a self-reported loss, as evidence.
+    assert_eq!(verified.verdicts.len(), 1);
+    assert_eq!(verified.verdicts[0].asset_id, asset_id());
+    assert!(!verified.verdicts[0].durable);
+    assert!(!verified.verdicts[0].blobs[0].stored);
+    // And the request carried the nonce, as lowercase hex.
+    assert_eq!(
+        sent_nonce(&bodies.lock().unwrap()[0]),
+        Some(nonce),
+        "the nonce rides the request"
+    );
+}
+
+#[tokio::test]
+async fn an_unsigned_verify_sends_no_nonce() {
+    let (server, bodies) = honest_server(attestation_key(), true).await;
+    server.client().verify(&[query()], false).await.unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bodies.lock().unwrap()[0]).unwrap();
+    assert!(body.get("attestation_nonce").is_none());
+}
+
+#[tokio::test]
+async fn a_replayed_attestation_is_rejected() {
+    // A validly signed answer to an earlier request, served again.
+    let key = attestation_key();
+    let earlier = signed_attestation(&key, [0x01; ATTESTATION_NONCE_LEN], true);
+    let server = MockServer::start(move |_| signed_response(&earlier)).await;
+
+    let err = server
+        .client()
+        .verify_signed(
+            &[query()],
+            false,
+            &[0x02; ATTESTATION_NONCE_LEN],
+            &[key.verifying_key()],
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, VerifyError::Attestation(AttestationRejection::Nonce)),
+        "got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_tampered_or_foreign_attestation_is_rejected() {
+    let key = attestation_key();
+    let nonce = [0x03; ATTESTATION_NONCE_LEN];
+
+    // Signed as not durable, then rewritten to durable in transit.
+    let mut tampered =
+        StorageAttestation::from_canonical_cbor(&signed_attestation(&key, nonce, false)).unwrap();
+    tampered.core.verdicts[0].durable = true;
+    tampered.core.verdicts[0].blobs[0].stored = true;
+    tampered.core.verdicts[0].blobs[0].retrievable = true;
+    let bytes = tampered.to_canonical_cbor();
+    let server = MockServer::start(move |_| signed_response(&bytes)).await;
+    let err = server
+        .client()
+        .verify_signed(&[query()], false, &nonce, &[key.verifying_key()])
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            VerifyError::Attestation(AttestationRejection::Signature)
+        ),
+        "got {err:?}"
+    );
+
+    // Honestly signed, under a key this client never pinned.
+    let foreign = signed_attestation(&HybridSigningKey::from_seed64(&[6u8; 64]), nonce, true);
+    let server = MockServer::start(move |_| signed_response(&foreign)).await;
+    let err = server
+        .client()
+        .verify_signed(&[query()], false, &nonce, &[key.verifying_key()])
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            VerifyError::Attestation(AttestationRejection::Signature)
+        ),
+        "got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_attestation_for_other_assets_is_rejected() {
+    let key = attestation_key();
+    let nonce = [0x04; ATTESTATION_NONCE_LEN];
+    let served = signed_attestation(&key, nonce, true);
+    let server = MockServer::start(move |_| signed_response(&served)).await;
+    let other = AssetQuery {
+        asset_id: Uuid::from_u128(1),
+        blob_hashes: vec![ct_hash()],
+    };
+    let err = server
+        .client()
+        .verify_signed(&[other], false, &nonce, &[key.verifying_key()])
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            VerifyError::Attestation(AttestationRejection::Mismatch("asset_id"))
+        ),
+        "got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_signed_request_answered_without_a_signature_is_malformed() {
+    let server =
+        MockServer::start(|_| MockResponse::json(200, "OK", durable_verdict_json(true))).await;
+    let err = server
+        .client()
+        .verify_signed(
+            &[query()],
+            false,
+            &[0x05; ATTESTATION_NONCE_LEN],
+            &[attestation_key().verifying_key()],
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, VerifyError::Malformed(_)), "got {err:?}");
+}
+
+#[tokio::test]
+async fn a_throttled_signed_request_surfaces_the_429_and_its_code() {
+    let server = MockServer::start(|_| {
+        MockResponse::json(
+            429,
+            "Too Many Requests",
+            r#"{"type":"about:blank","status":429,"code":"error.storage.deep_rate_limited","retry_after":1}"#,
+        )
+    })
+    .await;
+    let err = server
+        .client()
+        .verify_signed(
+            &[query()],
+            false,
+            &[0x06; ATTESTATION_NONCE_LEN],
+            &[attestation_key().verifying_key()],
+        )
+        .await
+        .unwrap_err();
+    match err {
+        VerifyError::Status { status, code } => {
+            assert_eq!(status, 429);
+            assert_eq!(code.as_deref(), Some("error.storage.deep_rate_limited"));
+        }
+        other => panic!("got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn the_coordinator_draws_a_fresh_nonce_per_attestation() {
+    let key = attestation_key();
+    let (server, bodies) = honest_server(attestation_key(), true).await;
+    let coord = ReleaseCoordinator::with_clock(
+        server.client(),
+        vec![key.verifying_key()],
+        DEFAULT_REVERIFY_WINDOW_SECS,
+        TestClock::at(now_base()),
+    );
+
+    let first = coord
+        .fetch_verified_attestation(&[query()], false)
+        .await
+        .expect("verifies");
+    let second = coord
+        .fetch_verified_attestation(&[query()], false)
+        .await
+        .expect("verifies");
+    assert!(first.verdicts[0].durable);
+    assert_ne!(
+        first.attestation.core.nonce, second.attestation.core.nonce,
+        "a reused nonce would let an old answer pass for a new one"
+    );
+    let bodies = bodies.lock().unwrap();
+    assert_eq!(sent_nonce(&bodies[0]), Some(first.attestation.core.nonce));
+    assert_eq!(sent_nonce(&bodies[1]), Some(second.attestation.core.nonce));
 }

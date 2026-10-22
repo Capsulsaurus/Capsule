@@ -132,6 +132,10 @@ pub const EXPECTED_MIGRATIONS: &[ExpectedMigration] = &[
         name: "m20260902_000019_share_serves_address_index",
         checksum: "b811a0fe63b0b4cb56fde0fddfc02deeb83282fb48adc262d05fe2aea5fbdf2e",
     },
+    ExpectedMigration {
+        name: "m20260902_000020_quota_suspended",
+        checksum: "ab053248a4e16b8c8077be11cea28861d726c1d4d6f07b7fa5566cdff6156020",
+    },
 ];
 
 /// The command an operator runs to apply them.
@@ -713,9 +717,19 @@ mod tests {
                 "a migrated database indexes share_serves by address"
             );
 
-            server_migration::Migrator::down(connection, Some(1))
+            // Every ordinal after `000019` rolls back with it, so the step count is derived from
+            // the list rather than written down, and a new ordinal cannot leave `000019` applied.
+            let index = EXPECTED_MIGRATIONS
+                .iter()
+                .position(|migration| {
+                    migration.name == "m20260902_000019_share_serves_address_index"
+                })
+                .expect("`000019` is an expected migration");
+            let steps = u32::try_from(EXPECTED_MIGRATIONS.len() - index)
+                .expect("the migration count fits a u32");
+            server_migration::Migrator::down(connection, Some(steps))
                 .await
-                .expect("`000019` rolls back");
+                .expect("`000019` and every later ordinal roll back");
             assert!(
                 !has_address_index(connection).await,
                 "rolling back `000019` drops the index"

@@ -22,7 +22,7 @@
 //! | create `413` | kept — the declared size past the deployment ceiling |
 //! | create `426` | kept — the manifest envelope's `protocol_version` pin, refused by the envelope gate. The *header* handshake is no longer this surface's: [`crate::negotiation::ProtocolGate`] answers it before the handler runs, and the accepted window rides `X-Capsule-Protocol-Min`/`-Max` on every response |
 //! | create `500` | **now `503`** — a collaborator that could not answer, with `error.upload.unavailable` and a retry instant (transfer/upload.md, Hostile Clients) |
-//! | create `429` / `507` | **added** — the account's session budget or live-session cap (`error.upload.rate_limited`), and a full disk (`error.upload.storage_full`); both carry a retry instant |
+//! | create `429` / `507` | **added** — the account's or its source address's session budget, or the live-session cap (`error.upload.rate_limited`), and a full disk (`error.upload.storage_full`); both carry a retry instant |
 //! | chunk `204` | kept — with the authoritative `X-Capsule-Offset` |
 //! | chunk `400` | kept, and now *coded*: missing offset, missing checksum, checksum mismatch, empty chunk, misalignment, size exceeded, and the two finalization failures each carry their own `error.upload.*` |
 //! | chunk `403` | **folded into the `404`.** Only the uploader may append, and anyone else is told what a caller naming an unknown session is told — "foreign is unknown" (transfer/upload.md, Hostile Clients). The `403` that remains declared is the bearer scheme's |
@@ -32,7 +32,7 @@
 //! | chunk `415` | kept, and it keeps its code. Kynos's own `Binary` rejection declares `400`, `415` *and* a `422` a raw-bytes body cannot produce, and carries no `error.*` code; [`ChunkBody`] delegates the enforcement to `Binary` and replaces only the rejection, so the `415` is `error.upload.unsupported_media_type` and the phantom `422` is gone |
 //! | chunk `409 finalize_in_progress` | **deleted.** Losing the finalize claim is a normal race and the chunk that triggered it was still accepted, so it answers `204`. Telling a client its accepted chunk failed was the Salvo behaviour and it was wrong |
 //! | chunk `500` | kept, narrowed — only a stage **shorter** than its counter, the one inconsistency the server cannot repair. A stage that ran ahead is cut back ([`chunk::append`]) and a collaborator failure is a `503` |
-//! | chunk `429` / `503` / `507` | **added** — the account's chunk budget, a collaborator that could not answer, and a full disk. Each carries a retry instant, on the body and on `Retry-After` ([`crate::problem::RetryAfter`]) |
+//! | chunk `429` / `503` / `507` | **added** — the account's or its source address's chunk budget, a collaborator that could not answer, and a full disk. Each carries a retry instant, on the body and on `Retry-After` ([`crate::problem::RetryAfter`]) |
 //! | head `200` | kept — [`HeadReply::Progress`], carrying offset, declared length and state on headers, with `Cache-Control: no-store`. A `Reply` rather than a `NoContent`, because `200 with headers` and `204` are different answers |
 //! | head `400` / `401` / `403` / `404` / `500` | kept, except that a session neither the caller's upload nor filed under the caller is the `404`, not a `403` of this surface's own, and the `500` is a `503` with a retry instant. The `403` left is the bearer scheme's. The `400` is the handshake's, declared by the read gate rather than by this surface; the `426` is gone from `HEAD`, because a read is admitted at any protocol date (issue #404) |
 //! | head `409` | **deleted as unreachable.** `HEAD` reports a state, it does not require one. It would have been declared for free by sharing a rejection type with `DELETE`, which is why they are two types |
@@ -88,6 +88,7 @@ use uuid::Uuid;
 
 use crate::auth::AccessToken;
 use crate::blob::{BlobError, ContentAddress};
+use crate::client_addr::ClientAddr;
 use crate::counter::{Budget, CounterContext, CounterKey, Verdict, budgets, unix_seconds};
 use crate::store::{
     AlbumId, AssetId, BlobRole, Clock, OwnerId, StoreError, UploadId, UploadSessionRecord,
@@ -445,6 +446,19 @@ pub enum CreateRejection {
         code: &'static str,
     },
 
+    /// The account's quota is suspended by the server's operator (#705).
+    ///
+    /// Distinct from [`Self::QuotaExceeded`], which freeing space lifts, and from
+    /// [`Self::AccountSuspended`], a moderation act: only the operator lifts this one, and the
+    /// account may still read, delete and restore.
+    #[error("this account's storage is suspended")]
+    #[problem(status = 403, title = "Quota suspended")]
+    QuotaSuspended {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
     /// The account opened sessions faster than its budget allows, or already holds as many live
     /// sessions as the server keeps for one account.
     ///
@@ -789,23 +803,36 @@ fn retry_at(clock: &dyn Clock, after: jiff::SignedDuration) -> u64 {
 /// consistency family — **before** anything is written, then stages the session's file and
 /// records the session. A request whose `(owner, hash, album)` tuple already has an active
 /// session gets that session back rather than a second one.
+///
+/// The quota is checked here and nowhere later: a declared size that would cross the hard limit
+/// is `403 error.quota.exceeded`, and an account whose quota the operator suspended is
+/// `403 error.quota.suspended`, both before anything is charged or staged.
 #[kynos::post("/v1/upload", operation_id = "create_upload", tag = UploadTag)]
 pub async fn create_upload(
     Inject(upload): Inject<UploadContext>,
     Inject(quota): Inject<crate::quota::QuotaContext>,
     Inject(moderation): Inject<crate::moderation::ModerationContext>,
     Inject(counters): Inject<CounterContext>,
+    client: ClientAddr,
     Auth(credential): Auth<AccessToken>,
     Json(request): Json<CreateUploadRequest>,
 ) -> Result<WithHeaders<CreateReply, CreateHeaders>, CreateRejection> {
     let uploader = credential.user.clone();
 
-    // The account's session budget, charged before anything is read on its behalf, so a flood
-    // of creations costs the flooder rather than the stores behind this check.
-    charge(
+    // The account's session budget, then its source address's (#718), both charged before
+    // anything is read on its behalf, so a flood of creations costs the flooder rather than the
+    // stores behind this check. The account goes first so a request its own budget refuses
+    // spends nothing of the address's, which other accounts behind it share.
+    charge_both(
         &counters,
-        &CounterKey::UploadSessions(uploader.clone()),
-        budgets::UPLOAD_SESSIONS,
+        (
+            &CounterKey::UploadSessions(uploader.clone()),
+            budgets::UPLOAD_SESSIONS,
+        ),
+        (
+            &CounterKey::UploadSessionsSource(client.source_key()),
+            budgets::UPLOAD_SESSIONS_SOURCE,
+        ),
     )
     .await
     .map_err(|throttled| match throttled {
@@ -1075,6 +1102,11 @@ pub async fn create_upload(
             crate::quota::UploadCharge::Admitted | crate::quota::UploadCharge::AlreadyAttributed,
         ) => {}
         Ok(crate::quota::UploadCharge::Refused) => return Err(CreateRejection::quota_exceeded()),
+        Ok(crate::quota::UploadCharge::Suspended) => {
+            return Err(CreateRejection::QuotaSuspended {
+                code: error_codes::QUOTA_SUSPENDED,
+            });
+        }
         Err(error) => {
             store_unavailable(&error, "charge an upload against its quota");
             return Err(CreateRejection::unavailable(upload.clock()));
@@ -1161,6 +1193,10 @@ pub async fn create_upload(
 /// checked before a byte is written, and the checksum is verified against the received bytes
 /// *first*, so a chunk corrupted in transit persists nothing.
 #[kynos::patch("/v1/upload/{id}", operation_id = "append_chunk", tag = UploadTag)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one extractor per argument; Kynos resolves each one, and bundling them would hide which the contract declares"
+)]
 pub async fn append_chunk(
     Inject(upload): Inject<UploadContext>,
     Inject(attestation): Inject<crate::attestation::AttestationContext>,
@@ -1168,16 +1204,24 @@ pub async fn append_chunk(
     Path(path): Path<UploadPath>,
     Headers(headers): Headers<ChunkHeaders>,
     Inject(counters): Inject<CounterContext>,
+    client: ClientAddr,
     body: ChunkBody,
 ) -> Result<WithHeaders<NoContent, OffsetHeader>, ChunkRejection> {
     let id = UploadId::new(path.id);
 
-    // The account's chunk budget, before the session is read: a client hammering the head of a
-    // session it does not hold pays for that as much as one hammering its own.
-    charge(
+    // The account's chunk budget, then its source address's (#718), before the session is
+    // read: a client hammering the head of a session it does not hold pays for that as much as
+    // one hammering its own. Ordered as the create's are, for the same reason.
+    charge_both(
         &counters,
-        &CounterKey::UploadChunks(credential.user.clone()),
-        budgets::UPLOAD_CHUNKS,
+        (
+            &CounterKey::UploadChunks(credential.user.clone()),
+            budgets::UPLOAD_CHUNKS,
+        ),
+        (
+            &CounterKey::UploadChunksSource(client.source_key()),
+            budgets::UPLOAD_CHUNKS_SOURCE,
+        ),
     )
     .await
     .map_err(|throttled| match throttled {
@@ -1466,6 +1510,20 @@ enum Throttled {
     Unavailable,
 }
 
+/// Charge the account's budget and then the source address's, stopping at the first refusal.
+///
+/// Ordered, never concurrent: a request the account's own budget refuses must not spend the
+/// address's, or one account flooding from a shared address would lock every other account
+/// behind it out (transfer/upload.md, Hostile Clients).
+async fn charge_both(
+    counters: &CounterContext,
+    account: (&CounterKey, Budget),
+    source: (&CounterKey, Budget),
+) -> Result<(), Throttled> {
+    charge(counters, account.0, account.1).await?;
+    charge(counters, source.0, source.1).await
+}
+
 /// Charge one hit against `key`'s budget.
 ///
 /// Fail-closed, as every limiter on this server is: a limiter that cannot answer refuses. A full
@@ -1490,7 +1548,7 @@ async fn charge(
         Verdict::Limited { retry_after } => {
             tracing::info!(
                 counter = key.as_str(),
-                account = key.scope(),
+                scope = key.scope(),
                 %retry_after,
                 code = error_codes::UPLOAD_RATE_LIMITED,
                 "an upload request was throttled"

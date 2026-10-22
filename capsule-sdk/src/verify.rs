@@ -18,6 +18,10 @@
 //! 3. **Crypto validity.** `verify_asset` (the caller's offline check) must have accepted the
 //!    asset — passed in as `verify_asset_accepted`.
 //!
+//! Beside the gate, [`StorageVerifyClient::verify_signed`] asks for the verdict in its **signed**
+//! form, bound to a client nonce and verified under the same pinned attestation keys, so a
+//! client can keep the server's own statement of what it holds — or has lost — as evidence.
+//!
 //! [`ReleaseCoordinator`] composes the three and enforces the **60-second re-verify window**:
 //! the verdict is a point-in-time fact, so a verdict older than the window is re-fetched before
 //! release. The result is a [`capsule_core::library::ReleaseDecision`]; a non-`Release` outcome
@@ -32,6 +36,10 @@ use std::sync::Mutex;
 use base64::Engine as _;
 use capsule_core::crypto::hash::Hash32;
 use capsule_core::crypto::keys::HybridVerifyingKey;
+use capsule_core::crypto::storage_attestation::{
+    ATTESTATION_NONCE_LEN, AttestationNonce, AttestationRejection, DeclaredAsset,
+    StorageAttestation, verify_storage_attestation,
+};
 use capsule_core::library::{
     BlobRole, BlobVerdict, CustodyReceipt, ReceiptExpectations, ReleaseDecision, RetainReason,
     StorageVerdict, release_is_safe, verify_receipt,
@@ -60,6 +68,11 @@ pub enum VerifyError {
     /// The response body was missing a field or otherwise unparsable.
     #[error("malformed storage-verify response: {0}")]
     Malformed(String),
+    /// A signed verdict came back and is not evidence for this request: a signature that does
+    /// not verify under a pinned attestation key, another request's nonce, or verdicts that
+    /// answer a different question.
+    #[error("storage attestation rejected: {0}")]
+    Attestation(AttestationRejection),
 }
 
 impl From<crate::auth::AuthError> for VerifyError {
@@ -161,6 +174,9 @@ struct AssetVerifyRequestWire {
 struct StorageVerifyRequestWire {
     assets: Vec<AssetVerifyRequestWire>,
     deep: bool,
+    /// Present only on a signed request, so an unsigned one is byte-identical to before.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attestation_nonce: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -183,6 +199,9 @@ struct StorageVerdictWire {
 #[derive(Deserialize)]
 struct StorageVerifyResponseWire {
     verdicts: Vec<StorageVerdictWire>,
+    /// Base64 of the canonical-CBOR [`StorageAttestation`], on a signed request only.
+    #[serde(default)]
+    attestation: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -229,6 +248,50 @@ impl StorageVerdictWire {
             checked_at: self.checked_at,
         })
     }
+}
+
+/// A signed verdict that verified for the request it answers.
+///
+/// `cbor` is the attestation exactly as the server signed it — the bytes a client keeps as
+/// evidence, beside its custody receipts. `verdicts` is read from the **signed** core, never from
+/// the unsigned JSON projection beside it, so nothing a caller acts on was outside the signature.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedAttestation {
+    /// The decoded, verified attestation.
+    pub attestation: StorageAttestation,
+    /// Its canonical-CBOR bytes, as received.
+    pub cbor: Vec<u8>,
+    /// The signed verdicts, one per asset asked about, in request order.
+    pub verdicts: Vec<StorageVerdict>,
+}
+
+/// Read the verdicts out of a verified attestation's signed core.
+fn signed_verdicts(attestation: &StorageAttestation) -> Result<Vec<StorageVerdict>, VerifyError> {
+    attestation
+        .core
+        .verdicts
+        .iter()
+        .map(|asset| {
+            let asset_id = Uuid::parse_str(&asset.asset_id)
+                .map_err(|e| VerifyError::Malformed(format!("attested asset_id: {e}")))?;
+            Ok(StorageVerdict {
+                asset_id,
+                durable: asset.durable,
+                blobs: asset
+                    .blobs
+                    .iter()
+                    .map(|blob| BlobVerdict {
+                        hash: blob.hash,
+                        role: role_from_str(&blob.role),
+                        stored: blob.stored,
+                        indexed: blob.indexed,
+                        retrievable: blob.retrievable,
+                    })
+                    .collect(),
+                checked_at: attestation.core.checked_at.clone(),
+            })
+        })
+        .collect()
 }
 
 /// One entry of the `GET /assets/{id}/receipts` chain: `receipt_cbor` is base64 of the full
@@ -279,6 +342,75 @@ impl StorageVerifyClient {
         assets: &[AssetQuery],
         deep: bool,
     ) -> Result<Vec<StorageVerdict>, VerifyError> {
+        let wire = self.post_verify(assets, deep, None).await?;
+        wire.verdicts
+            .into_iter()
+            .map(StorageVerdictWire::into_core)
+            .collect()
+    }
+
+    /// `POST /storage/verify` for the **signed** verdict, bound to `nonce`, verified under
+    /// `pinned_keys` (the published attestation-key history).
+    ///
+    /// Returns the attestation only when its signature verifies, it carries `nonce`, and its
+    /// verdicts answer exactly `assets` — the same assets and declared hashes, in order. Anything
+    /// else is [`VerifyError::Attestation`]; a response with no attestation at all is
+    /// [`VerifyError::Malformed`]. The server prices a signed request like `deep`, so a spent
+    /// budget is [`VerifyError::Status`] with `429` and `error.storage.deep_rate_limited`.
+    ///
+    /// `nonce` must be fresh per request — [`ReleaseCoordinator::fetch_verified_attestation`]
+    /// draws one — or a replayed answer to an earlier request would verify.
+    #[instrument(skip_all, fields(assets = assets.len(), deep))]
+    pub async fn verify_signed(
+        &self,
+        assets: &[AssetQuery],
+        deep: bool,
+        nonce: &AttestationNonce,
+        pinned_keys: &[HybridVerifyingKey],
+    ) -> Result<VerifiedAttestation, VerifyError> {
+        let wire = self.post_verify(assets, deep, Some(nonce)).await?;
+        let encoded = wire.attestation.ok_or_else(|| {
+            VerifyError::Malformed("a signed verdict was asked for and none came back".into())
+        })?;
+        let cbor = base64::engine::general_purpose::STANDARD
+            .decode(encoded.as_bytes())
+            .map_err(|e| VerifyError::Malformed(format!("attestation base64: {e}")))?;
+        let attestation = StorageAttestation::from_canonical_cbor(&cbor)
+            .map_err(|e| VerifyError::Malformed(format!("attestation cbor: {e}")))?;
+
+        let declared: Vec<DeclaredAsset> = assets
+            .iter()
+            .map(|asset| DeclaredAsset {
+                asset_id: asset.asset_id.to_string(),
+                blob_hashes: asset.blob_hashes.clone(),
+            })
+            .collect();
+        verify_storage_attestation(&attestation, pinned_keys, nonce, &declared).map_err(
+            |rejection| {
+                warn!(%rejection, "a storage attestation did not verify");
+                VerifyError::Attestation(rejection)
+            },
+        )?;
+        let verdicts = signed_verdicts(&attestation)?;
+        debug!(
+            key_id = %attestation.core.server_key_id,
+            checked_at = %attestation.core.checked_at,
+            "storage attestation verified"
+        );
+        Ok(VerifiedAttestation {
+            attestation,
+            cbor,
+            verdicts,
+        })
+    }
+
+    /// The one `POST /storage/verify` both forms send.
+    async fn post_verify(
+        &self,
+        assets: &[AssetQuery],
+        deep: bool,
+        nonce: Option<&AttestationNonce>,
+    ) -> Result<StorageVerifyResponseWire, VerifyError> {
         let body = StorageVerifyRequestWire {
             assets: assets
                 .iter()
@@ -288,6 +420,7 @@ impl StorageVerifyClient {
                 })
                 .collect(),
             deep,
+            attestation_nonce: nonce.map(|nonce| Hash32::from_bytes(*nonce).to_hex()),
         };
         let url = format!("{}/storage/verify", self.transport.base_url);
         let response = self
@@ -295,14 +428,10 @@ impl StorageVerifyClient {
             .send(|http| http.post(&url).json(&body))
             .await?;
         let response = check_status(response).await?;
-        let wire: StorageVerifyResponseWire = response
+        response
             .json()
             .await
-            .map_err(|e| VerifyError::Malformed(e.to_string()))?;
-        wire.verdicts
-            .into_iter()
-            .map(StorageVerdictWire::into_core)
-            .collect()
+            .map_err(|e| VerifyError::Malformed(e.to_string()))
     }
 
     /// `GET /upload/{id}/receipt`: the session-window custody-receipt fetch (pairs with lost-ACK
@@ -598,6 +727,25 @@ impl<C: ReleaseClock> ReleaseCoordinator<C> {
         )
         .map_err(|r| VerifyError::Malformed(format!("receipt rejected: {r:?}")))?;
         Ok(receipt)
+    }
+
+    /// A signed durability verdict for `assets`, under a nonce drawn fresh from the OS CSPRNG
+    /// and verified under the pinned attestation keys — the evidence form of the verdict
+    /// (transfer/durability.md, Signed Storage Attestation). The caller keeps
+    /// [`VerifiedAttestation::cbor`] beside the asset's custody receipts.
+    ///
+    /// Not part of [`evaluate`](Self::evaluate): the release gate needs a fresh `durable`, not
+    /// evidence, and a signed request spends the account's deep budget.
+    #[instrument(skip_all, fields(assets = assets.len(), deep))]
+    pub async fn fetch_verified_attestation(
+        &self,
+        assets: &[AssetQuery],
+        deep: bool,
+    ) -> Result<VerifiedAttestation, VerifyError> {
+        let nonce = capsule_core::crypto::rng::random_array::<ATTESTATION_NONCE_LEN>();
+        self.client
+            .verify_signed(assets, deep, &nonce, &self.attestation_keys)
+            .await
     }
 }
 

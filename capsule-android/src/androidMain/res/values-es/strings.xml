@@ -279,6 +279,7 @@
     <string name="error_quota_exceeded">Tu almacenamiento está lleno.</string>
     <string name="error_quota_grace_locked">Tu almacenamiento ha estado lleno más allá del período de gracia, por lo que las ediciones están en pausa hasta que liberes espacio.</string>
     <string name="error_quota_peer_budget_exceeded">Esta fuente ha alcanzado su límite de almacenamiento en caché en tu cuenta.</string>
+    <string name="error_quota_suspended">Tu almacenamiento está suspendido, así que no se puede añadir nada nuevo. Aún puedes ver y eliminar lo que tienes.</string>
     <string name="error_quota_unavailable">Capsule no pudo comprobar tu uso de almacenamiento. Inténtalo de nuevo.</string>
     <string name="error_share_rate_limited">Demasiados intentos. Espera e inténtalo de nuevo.</string>
     <string name="error_storage_asset_not_found">That item was not found.</string>
