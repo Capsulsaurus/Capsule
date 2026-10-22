@@ -359,7 +359,7 @@
           ]
         },
         {
-          "help": "Move files instead of copying them",
+          "help": "Move files: delete each source once the server holds it, which needs `--push`. Without it every source is kept",
           "id": "move",
           "long": "move",
           "positional": false,

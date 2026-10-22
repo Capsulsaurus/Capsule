@@ -93,6 +93,7 @@ use crate::gc::{CollectionContext, CollectionStore};
 use crate::index::AssetIndex;
 use crate::index::memory::InMemoryAssetIndex;
 use crate::index::postgres::PostgresAssetIndex;
+use crate::ledger::FilesystemLedger;
 use crate::membership::{
     InMemoryMembership, MembershipContext, MembershipStore, PostgresMembership,
 };
@@ -419,6 +420,8 @@ struct Stores {
     root: std::path::PathBuf,
     clock: Arc<SystemClock>,
     blobs: Arc<FilesystemBlobStore>,
+    /// The owner ledgers under the blob root, on both backends.
+    ledger: Arc<FilesystemLedger>,
     index: Arc<dyn AssetIndex>,
     uploads: Arc<dyn UploadSessionStore>,
     marks: Arc<dyn CollectionStore>,
@@ -468,6 +471,7 @@ struct Base {
     root: std::path::PathBuf,
     clock: Arc<SystemClock>,
     blobs: Arc<FilesystemBlobStore>,
+    ledger: Arc<FilesystemLedger>,
 }
 
 impl Base {
@@ -485,6 +489,7 @@ impl Base {
             root: self.root,
             clock: self.clock,
             blobs: self.blobs,
+            ledger: self.ledger,
         }
     }
 
@@ -499,6 +504,7 @@ impl Base {
             root: self.root,
             clock: self.clock,
             blobs: self.blobs,
+            ledger: self.ledger,
         }
     }
 }
@@ -523,10 +529,23 @@ async fn base(config: &Config) -> Result<Base, BootError> {
                     detail: error.to_string(),
                 })?,
         );
+    // The owner ledger lives under the blob root, beside the blobs it accounts for, on both
+    // backends: it is what makes the index rebuildable, so a deployment without it would be one
+    // whose backup of `BLOB_ROOT` is not enough. Refused like the blob root itself.
+    let ledger =
+        Arc::new(
+            FilesystemLedger::open(&root)
+                .await
+                .map_err(|error| BootError::BlobRoot {
+                    root: root.display().to_string(),
+                    detail: error.to_string(),
+                })?,
+        );
     Ok(Base {
         root,
         clock: Arc::new(SystemClock),
         blobs,
+        ledger,
     })
 }
 
@@ -715,6 +734,7 @@ fn compose(
     // application and the two operator workers are built over the *same* stores. Every clone
     // here is an `Arc` refcount bump.
     let root = stores.root.clone();
+    let ledger = stores.ledger.clone();
     let clock = stores.clock.clone();
     let blobs = stores.blobs.clone();
     let index = stores.index.clone();
@@ -911,7 +931,8 @@ fn compose(
             // deterministically and has therefore never *not* been this deployment's key.
             // Publishing a rotation history is `ATTESTATION_KEY_HISTORY`'s job and nobody's yet.
             Timestamp::UNIX_EPOCH,
-        ),
+        )
+        .with_ledger(ledger),
         discovery: DiscoveryContext::new(server_info, revocations),
         escrow: EscrowContext::new(escrow, clock.clone()),
         federation: FederationContext::new(FederationCollaborators {
@@ -1028,6 +1049,10 @@ mod tests {
         let root = parent.path().join("does/not/exist/yet");
         let assembled = assemble(&memory_config(&root)).await.expect("it assembles");
         assert!(root.join("blobs").is_dir(), "the store's tree is created");
+        assert!(
+            root.join("ledger").is_dir(),
+            "and the owner ledgers live beside the blobs"
+        );
         drop(assembled);
     }
 

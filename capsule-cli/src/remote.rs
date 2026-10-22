@@ -9,10 +9,12 @@
 //! binary's command arms call and the E2E round-trip drives directly.
 
 use std::collections::HashSet;
+use std::path::PathBuf;
 
 use capsule_core::crypto::keys::MasterKey;
 use capsule_core::crypto::primitives::{Argon2Params, DeviceTier};
 use capsule_core::import::UploadPolicy;
+use capsule_core::library::{ReleaseDecision, RetainReason, StorageVerifier};
 use capsule_core::lifecycle::{LifecycleError, Workspace};
 use capsule_sdk::albums::{AlbumClient, AlbumTransport};
 use capsule_sdk::auth::{AuthClient, AuthError, LoginOutcome, Session};
@@ -25,7 +27,9 @@ use capsule_sdk::recovery::{MintedSecret, RecoveryClient, RecoveryError};
 use capsule_sdk::staged::{StagedScheduler, TierSessionOutcome, held_from_feed};
 use capsule_sdk::sync::{FeedEntry, SyncConsumer, SyncCursor, SyncError, SyncState};
 use capsule_sdk::upload::{UploadClient, UploadTransport};
-use capsule_sdk::verify::{StorageVerifyClient, VerifyError, VerifyTransport};
+use capsule_sdk::verify::{
+    HeldRelease, ReleaseCoordinator, StorageVerifyClient, VerifyError, VerifyTransport,
+};
 use sea_orm::{ConnectionTrait, TransactionTrait};
 use secrecy::SecretString;
 use serde::Serialize;
@@ -1466,6 +1470,185 @@ pub fn failed_run_reason(summary: &PushSummary) -> Option<String> {
     })
 }
 
+// ─── Move release (#671) ─────────────────────────────────────────────────────
+
+/// A source file `capsule import --move` left in place, and the library asset that holds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MovedSource {
+    /// The source file.
+    pub source: PathBuf,
+    /// The asset whose signed original it must match.
+    pub asset_id: Uuid,
+}
+
+/// What happened to one moved source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MoveReleaseOutcome {
+    /// The source file.
+    pub source: String,
+    /// The asset that holds it.
+    pub asset_id: String,
+    /// Whether the source was deleted.
+    pub released: bool,
+    /// Why it was kept, for a kept source only: `not_durable`, `receipt_missing`,
+    /// `verify_unavailable`, `receipt_unavailable`, `read_back_mismatch` or `unknown_asset`.
+    pub kept_because: Option<&'static str>,
+}
+
+/// The outcome of releasing a Move import's sources.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct MoveReleaseSummary {
+    /// Sources deleted on server custody.
+    pub released: usize,
+    /// Sources kept.
+    pub kept: usize,
+    /// One entry per source, in the order given.
+    pub outcomes: Vec<MoveReleaseOutcome>,
+}
+
+/// The stable name `--json`-shaped output and the human line give a retain reason.
+fn kept_because(reason: &RetainReason) -> &'static str {
+    match reason {
+        RetainReason::NotDurable => "not_durable",
+        RetainReason::ReceiptMissing => "receipt_missing",
+        RetainReason::VerifyUnavailable => "verify_unavailable",
+        RetainReason::ReceiptUnavailable => "receipt_unavailable",
+        RetainReason::ReadBackMismatch => "read_back_mismatch",
+    }
+}
+
+/// Delete each of `moved` that the server holds — the Move half of `capsule import --move`.
+///
+/// Invariant 7: a source is deleted only on server custody. The server's facts come through
+/// [`ReleaseCoordinator::resolve_custody`] (a verdict fresh within the re-verify window, and a
+/// verified receipt from the asset's log for its original and metadata blob), and each source
+/// then goes through [`Workspace::release_move_source`], which reads both copies back against
+/// the signed original before the gate may delete anything. A source whose asset is not
+/// confirmed is kept and reported; a re-run releases it once the server holds the asset.
+///
+/// # Errors
+///
+/// [`RemoteError::NotAuthenticated`] with no stored session, and
+/// [`RemoteError::AttestationKeys`] when the server's keys cannot be fetched. Either way no
+/// source has been touched.
+#[instrument(skip(store, workspace, moved), fields(sources = moved.len()))]
+pub async fn release_moved_sources(
+    remote: &RemoteConfig,
+    store: &SessionStore,
+    workspace: &Workspace,
+    moved: &[MovedSource],
+) -> Result<MoveReleaseSummary, RemoteError> {
+    let session = resume_session(remote, store).await?;
+    let outcome = release_moved_with(remote, workspace, session.clone(), moved).await;
+    checkpoint(store, &session).await;
+    outcome
+}
+
+/// The release itself, over a session somebody else is responsible for persisting.
+async fn release_moved_with(
+    remote: &RemoteConfig,
+    workspace: &Workspace,
+    session: Session,
+    moved: &[MovedSource],
+) -> Result<MoveReleaseSummary, RemoteError> {
+    // `sync_endpoint` is the bare server origin; the storage and receipt routes hang off `/v1`.
+    let verify = StorageVerifyClient::new(VerifyTransport::with_session(
+        session,
+        format!("{}/v1", remote.sync_endpoint.trim_end_matches('/')),
+    ));
+    let attestation_keys = verify
+        .fetch_attestation_keys()
+        .await
+        .map_err(RemoteError::AttestationKeys)?;
+    let coordinator = ReleaseCoordinator::new(verify, attestation_keys);
+    let verifier = coordinator
+        .resolve_custody(&held_releases(workspace, moved))
+        .await;
+    Ok(release_sources(workspace, &verifier, moved))
+}
+
+/// The custody question for each distinct asset behind `moved`. An asset whose bundle cannot be
+/// built is left out, so the verifier cannot answer for it and its source is kept.
+fn held_releases(workspace: &Workspace, moved: &[MovedSource]) -> Vec<HeldRelease> {
+    let mut seen = HashSet::new();
+    moved
+        .iter()
+        .filter(|m| seen.insert(m.asset_id))
+        .filter_map(|m| match workspace.upload_bundle(&m.asset_id) {
+            Ok(bundle) => Some(HeldRelease::for_original(&bundle)),
+            Err(error) => {
+                tracing::warn!(asset_id = %m.asset_id, %error, "move release: no bundle; the source is kept");
+                None
+            }
+        })
+        .collect()
+}
+
+/// Put every source in `moved` through the release gate over `verifier`, and tally the result.
+fn release_sources<V: StorageVerifier>(
+    workspace: &Workspace,
+    verifier: &V,
+    moved: &[MovedSource],
+) -> MoveReleaseSummary {
+    let mut summary = MoveReleaseSummary::default();
+    for m in moved {
+        let kept = match workspace.release_move_source(verifier, m.asset_id, &m.source) {
+            Ok(ReleaseDecision::Release) => None,
+            Ok(ReleaseDecision::Retain(reason)) => Some(kept_because(&reason)),
+            Err(error) => {
+                tracing::warn!(asset_id = %m.asset_id, %error, "move release: the library does not hold the asset");
+                Some("unknown_asset")
+            }
+        };
+        if kept.is_some() {
+            summary.kept += 1;
+        } else {
+            summary.released += 1;
+        }
+        summary.outcomes.push(MoveReleaseOutcome {
+            source: m.source.display().to_string(),
+            asset_id: m.asset_id.to_string(),
+            released: kept.is_none(),
+            kept_because: kept,
+        });
+    }
+    tracing::info!(
+        released = summary.released,
+        kept = summary.kept,
+        "move release complete"
+    );
+    summary
+}
+
+/// The line after a Move release: how many sources were deleted and how many kept.
+#[must_use]
+pub fn move_release_line(summary: &MoveReleaseSummary) -> String {
+    format!(
+        "Deleted {} source files the server holds; kept {}.",
+        summary.released, summary.kept
+    )
+}
+
+/// One kept source, as the line the human output prints for it.
+#[must_use]
+pub fn kept_source_line(outcome: &MoveReleaseOutcome) -> String {
+    format!(
+        "kept {}: {}",
+        outcome.source,
+        outcome.kept_because.unwrap_or("not released")
+    )
+}
+
+/// The line `capsule import --move` prints when it keeps every source because no server was
+/// asked: without `--push` the import stays offline, and the local copy is not custody.
+#[must_use]
+pub fn sources_kept_offline_line(count: usize) -> String {
+    format!(
+        "Kept {count} source files: --move deletes a source only once the server holds it. \
+         Re-run with --push to upload and release them."
+    )
+}
+
 /// Query the sync-fed local store — the client-side library `capsule list` renders.
 #[instrument(skip(db))]
 pub async fn list<C: ConnectionTrait>(
@@ -1802,5 +1985,197 @@ mod tests {
         .failure();
         assert_eq!(failure.kind, "upload");
         assert_eq!(failure.code.as_deref(), Some("error.upload.unavailable"));
+    }
+
+    // ── Move release (#671) ─────────────────────────────────────────────────
+
+    /// A scratch directory that removes itself.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!("capsule-cli-move-{}", nanoid::nanoid!()));
+            std::fs::create_dir_all(&path).expect("a temp dir");
+            Self(path)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).ok();
+        }
+    }
+
+    /// A library holding `files.len()` assets imported in Move mode, their sources left in
+    /// place, and the `MovedSource` for each.
+    fn moved_library(scratch: &Scratch, files: &[&[u8]]) -> (Workspace, Vec<MovedSource>) {
+        let lib = scratch.0.join("library");
+        std::fs::create_dir_all(&lib).unwrap();
+        let mut ws = Workspace::create_with_params(
+            &lib,
+            b"passphrase",
+            capsule_core::crypto::primitives::Argon2Params {
+                mem_kib: 64,
+                t_cost: 1,
+                p_cost: 1,
+            },
+        )
+        .unwrap();
+        let album = ws.default_album_id();
+        ws.ensure_album(album, "Imports").unwrap();
+        let opts = capsule_core::lifecycle::SignedImportOptions {
+            move_source: true,
+            defer_source_release: true,
+            stack: None,
+            enrichment: None,
+        };
+        let moved = files
+            .iter()
+            .enumerate()
+            .map(|(i, bytes)| {
+                let source = scratch.0.join(format!("photo-{i}.jpg"));
+                std::fs::write(&source, bytes).unwrap();
+                let asset_id = ws
+                    .import_asset_with(album, &source, &opts)
+                    .unwrap()
+                    .asset_id;
+                MovedSource { source, asset_id }
+            })
+            .collect();
+        (ws, moved)
+    }
+
+    /// A server that holds the assets in `durable` and nothing else.
+    struct HoldsOnly(Vec<Uuid>);
+
+    impl StorageVerifier for HoldsOnly {
+        fn verify(
+            &self,
+            asset_id: Uuid,
+            blob_hashes: &[capsule_core::crypto::hash::Hash32],
+        ) -> Result<capsule_core::library::StorageVerdict, capsule_core::library::VerifierError>
+        {
+            let durable = self.0.contains(&asset_id);
+            Ok(capsule_core::library::StorageVerdict {
+                asset_id,
+                durable,
+                blobs: blob_hashes
+                    .iter()
+                    .map(|hash| capsule_core::library::BlobVerdict {
+                        hash: *hash,
+                        role: capsule_core::library::BlobRole::Original,
+                        stored: durable,
+                        indexed: durable,
+                        retrievable: durable,
+                    })
+                    .collect(),
+                checked_at: "2026-10-22T00:00:00Z".into(),
+            })
+        }
+
+        fn receipt_verified(
+            &self,
+            asset_id: Uuid,
+            _blob_hashes: &[capsule_core::crypto::hash::Hash32],
+        ) -> Result<bool, capsule_core::library::VerifierError> {
+            Ok(self.0.contains(&asset_id))
+        }
+    }
+
+    /// Only the source whose asset the server holds is deleted; the other is kept and says why.
+    #[test]
+    fn a_move_release_deletes_only_the_sources_the_server_holds() {
+        let scratch = Scratch::new();
+        let (ws, moved) = moved_library(&scratch, &[b"held", b"not yet held"]);
+
+        let summary = release_sources(&ws, &HoldsOnly(vec![moved[0].asset_id]), &moved);
+
+        assert_eq!((summary.released, summary.kept), (1, 1));
+        assert!(
+            !moved[0].source.exists(),
+            "the held asset's source is released"
+        );
+        assert!(
+            moved[1].source.exists(),
+            "the unconfirmed asset's source is kept"
+        );
+        assert!(summary.outcomes[0].released);
+        assert_eq!(summary.outcomes[1].kept_because, Some("not_durable"));
+        assert_eq!(
+            kept_source_line(&summary.outcomes[1]),
+            format!("kept {}: not_durable", moved[1].source.display())
+        );
+        assert_eq!(
+            move_release_line(&summary),
+            "Deleted 1 source files the server holds; kept 1."
+        );
+    }
+
+    /// An asset the library does not hold is reported, and its source left alone.
+    #[test]
+    fn a_source_naming_an_unknown_asset_is_kept() {
+        let scratch = Scratch::new();
+        let (ws, mut moved) = moved_library(&scratch, &[b"orphan"]);
+        moved[0].asset_id = Uuid::now_v7();
+
+        let summary = release_sources(&ws, &HoldsOnly(vec![moved[0].asset_id]), &moved);
+
+        assert_eq!(summary.outcomes[0].kept_because, Some("unknown_asset"));
+        assert!(moved[0].source.exists());
+    }
+
+    /// One custody question per asset, declaring the original and its metadata blob, and none
+    /// for an asset the library cannot build a bundle for.
+    #[test]
+    fn held_releases_asks_once_per_asset_about_its_original() {
+        let scratch = Scratch::new();
+        let (ws, mut moved) = moved_library(&scratch, &[b"one asset"]);
+        moved.push(moved[0].clone());
+        moved.push(MovedSource {
+            source: scratch.0.join("absent.jpg"),
+            asset_id: Uuid::now_v7(),
+        });
+
+        let releases = held_releases(&ws, &moved);
+
+        assert_eq!(releases.len(), 1);
+        assert_eq!(releases[0].asset_id, moved[0].asset_id);
+        let roles: Vec<_> = releases[0].blobs.iter().map(|b| b.role).collect();
+        assert_eq!(
+            roles,
+            vec![
+                capsule_core::library::BlobRole::Original,
+                capsule_core::library::BlobRole::Metadata
+            ]
+        );
+    }
+
+    #[test]
+    fn every_retain_reason_has_a_stable_name() {
+        assert_eq!(kept_because(&RetainReason::NotDurable), "not_durable");
+        assert_eq!(
+            kept_because(&RetainReason::ReceiptMissing),
+            "receipt_missing"
+        );
+        assert_eq!(
+            kept_because(&RetainReason::VerifyUnavailable),
+            "verify_unavailable"
+        );
+        assert_eq!(
+            kept_because(&RetainReason::ReceiptUnavailable),
+            "receipt_unavailable"
+        );
+        assert_eq!(
+            kept_because(&RetainReason::ReadBackMismatch),
+            "read_back_mismatch"
+        );
+    }
+
+    /// Without a server the Move import says it kept every source, and why.
+    #[test]
+    fn the_offline_line_says_every_source_was_kept_and_how_to_release_them() {
+        let line = sources_kept_offline_line(3);
+        assert!(line.starts_with("Kept 3 source files"), "{line}");
+        assert!(line.contains("--push"), "{line}");
     }
 }
