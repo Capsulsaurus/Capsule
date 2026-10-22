@@ -87,6 +87,7 @@ The sidecar and the [encrypted metadata blob](/design/cryptography/encryption/#m
 
 - Definite-length encoding only.
 - Shortest-form integers.
+- Bignums (tags 2 and 3) in preferred form (RFC 8949 §3.4.3): one whose magnitude fits in 64 bits is the plain integer, and the byte string carries no leading zeros. Canonicalization refuses a negative bignum below -2^127.
 - Map keys sorted by bytewise order of their encoded form, no duplicates — including `_unknown`, which is re-sorted on write so round-trips are byte-stable.
 - Floats in the shortest IEEE-754 form that round-trips exactly; canonical quiet NaN. Prefer integers or strings in signed structures.
 
