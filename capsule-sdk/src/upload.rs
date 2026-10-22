@@ -653,6 +653,86 @@ fn asks_to_wait(code: &str) -> bool {
         || code == error_codes::UPLOAD_STORAGE_FULL
 }
 
+/// Whether a non-success answer asks the client to wait.
+///
+/// The code decides whenever the server sent one. A `HEAD` answer has no body by
+/// HTTP's rules, so it can carry no code: there the status names the three wait
+/// answers (`429`, `503`, `507`), which the server sends only with those codes.
+fn answer_asks_to_wait(status: u16, code: Option<&str>) -> bool {
+    match code {
+        Some(code) => asks_to_wait(code),
+        None => matches!(status, 429 | 503 | 507),
+    }
+}
+
+/// A single request the server answered with "wait, then ask again".
+///
+/// The single-shot public calls surface it as [`UploadError::Rejected`]; the
+/// transfer loop waits it out under the recovery budget instead.
+#[derive(Debug)]
+struct WaitAsked {
+    status: u16,
+    code: Option<String>,
+    message: String,
+    /// The `Retry-After` the server sent, when it sent one.
+    after: Option<Duration>,
+}
+
+impl From<WaitAsked> for UploadError {
+    fn from(wait: WaitAsked) -> Self {
+        UploadError::Rejected {
+            status: wait.status,
+            code: wait.code,
+            message: wait.message,
+        }
+    }
+}
+
+/// The bounded recovery state one transfer shares across every request it makes:
+/// the recovery budget, and the shared retry engine's backoff schedule.
+struct Recovery {
+    /// Recovery actions taken so far, bounded by [`MAX_RECOVERIES`].
+    count: u32,
+    /// The shared retry engine, `bulk-transfer` class: exponential backoff with
+    /// full jitter, bounded give-up. It governs mid-transfer transport resets and
+    /// server-asked waits that name no `Retry-After`.
+    engine: RetryEngine,
+}
+
+impl Recovery {
+    fn new() -> Self {
+        Self {
+            count: 0,
+            engine: RetryClass::BulkTransfer.engine(),
+        }
+    }
+
+    /// Charge one recovery action, failing loudly once the budget is spent.
+    fn charge(&mut self, action: &str) -> Result<(), UploadError> {
+        self.count += 1;
+        guard_budget(self.count, action)
+    }
+
+    /// Charge a server-asked wait and resolve how long to wait: the server's
+    /// `Retry-After` up to [`MAX_SERVER_BACKOFF`], else the engine's schedule.
+    fn server_wait(
+        &mut self,
+        asked: Option<Duration>,
+        action: &str,
+    ) -> Result<Duration, UploadError> {
+        self.charge(action)?;
+        match asked {
+            Some(asked) => Ok(asked.min(MAX_SERVER_BACKOFF)),
+            None => match self.engine.next_backoff(None) {
+                RetryDecision::Retry { after } => Ok(after),
+                RetryDecision::GiveUp => Err(UploadError::RetriesExhausted(format!(
+                    "{action}: the server kept asking for a wait without naming one"
+                ))),
+            },
+        }
+    }
+}
+
 /// The wait a `Retry-After` header names, in its delta-seconds form.
 ///
 /// The server sends delta-seconds; the HTTP-date form is not parsed, and a value
@@ -698,11 +778,22 @@ impl UploadClient {
     /// Resolves to [`CreateOutcome::Created`], or [`CreateOutcome::AlreadyStored`]
     /// on `duplicate_blob` (the merge trigger). A `426` returns
     /// [`UploadError::UpgradeRequired`] — the session is never created.
+    ///
+    /// This is one request: `rate_limited`, `unavailable` and `storage_full` come
+    /// back as [`UploadError::Rejected`]. [`UploadClient::upload`] waits those out.
     #[tracing::instrument(level = "debug", skip(self, request), fields(size = request.size, hash = %request.hash))]
     pub async fn create_session(
         &self,
         request: &CreateUploadRequest,
     ) -> Result<CreateOutcome, UploadError> {
+        Ok(self.try_create(request).await??)
+    }
+
+    /// One `POST /upload`, with a server-asked wait kept apart from a rejection.
+    async fn try_create(
+        &self,
+        request: &CreateUploadRequest,
+    ) -> Result<Result<CreateOutcome, WaitAsked>, UploadError> {
         let resp = self
             .transport
             .send(|http| {
@@ -719,12 +810,13 @@ impl UploadClient {
             let resume_offset = header_u64(resp.headers(), "X-Capsule-Offset").unwrap_or(0);
             let body: CreateSessionResponse = resp.json().await?;
             tracing::debug!(session_id = %body.id, resume_offset, "upload session created");
-            return Ok(CreateOutcome::Created {
+            return Ok(Ok(CreateOutcome::Created {
                 response: body,
                 resume_offset,
-            });
+            }));
         }
 
+        let after = retry_after(resp.headers());
         let (code, message, min, max) = read_error(resp).await?;
         if is_upgrade_required(status, code.as_deref()) {
             return Err(UploadError::UpgradeRequired { min, max, message });
@@ -732,7 +824,16 @@ impl UploadClient {
         if code.as_deref() == Some(error_codes::UPLOAD_DUPLICATE_BLOB) {
             let asset_ref = duplicate_asset_ref(&message);
             tracing::info!(%asset_ref, "duplicate_blob — resolving as a merge");
-            return Ok(CreateOutcome::AlreadyStored { asset_ref });
+            return Ok(Ok(CreateOutcome::AlreadyStored { asset_ref }));
+        }
+        if answer_asks_to_wait(status, code.as_deref()) {
+            tracing::debug!(status, ?code, ?after, "create: the server asked for a wait");
+            return Ok(Err(WaitAsked {
+                status,
+                code,
+                message,
+                after,
+            }));
         }
         Err(UploadError::Rejected {
             status,
@@ -743,8 +844,19 @@ impl UploadClient {
 
     /// Query progress (`HEAD /upload/{id}`). `Ok(None)` means the session is gone
     /// (`404`) — a discarded/expired/never-existent session is uniform.
+    ///
+    /// This is one request: a `429`, `503` or `507` comes back as
+    /// [`UploadError::Rejected`]. The transfer loop waits those out.
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn head(&self, session_id: &str) -> Result<Option<HeadInfo>, UploadError> {
+        Ok(self.try_head(session_id).await??)
+    }
+
+    /// One `HEAD /upload/{id}`, with a server-asked wait kept apart from a rejection.
+    async fn try_head(
+        &self,
+        session_id: &str,
+    ) -> Result<Result<Option<HeadInfo>, WaitAsked>, UploadError> {
         let resp = self
             .transport
             .send(|http| {
@@ -755,10 +867,20 @@ impl UploadClient {
 
         let status = resp.status().as_u16();
         if status == 404 {
-            return Ok(None);
+            return Ok(Ok(None));
         }
         if !(200..300).contains(&status) {
+            let after = retry_after(resp.headers());
             let (code, message, _, _) = read_error(resp).await?;
+            if answer_asks_to_wait(status, code.as_deref()) {
+                tracing::debug!(status, ?code, ?after, "HEAD: the server asked for a wait");
+                return Ok(Err(WaitAsked {
+                    status,
+                    code,
+                    message,
+                    after,
+                }));
+            }
             return Err(UploadError::Rejected {
                 status,
                 code,
@@ -772,11 +894,49 @@ impl UploadClient {
         })?;
         let total_size = header_u64(headers, "X-Capsule-Content-Length");
         let statusv = header_str(headers, "X-Capsule-Upload-Status").unwrap_or_default();
-        Ok(Some(HeadInfo {
+        Ok(Ok(Some(HeadInfo {
             offset,
             total_size,
             status: statusv,
-        }))
+        })))
+    }
+
+    /// `POST /upload`, waiting out every `rate_limited`, `unavailable` and
+    /// `storage_full` answer under the transfer's recovery budget.
+    async fn create_waiting(
+        &self,
+        request: &CreateUploadRequest,
+        recovery: &mut Recovery,
+    ) -> Result<CreateOutcome, UploadError> {
+        loop {
+            match self.try_create(request).await? {
+                Ok(outcome) => return Ok(outcome),
+                Err(asked) => {
+                    let wait = recovery.server_wait(asked.after, "session create")?;
+                    tracing::debug!(?wait, "waiting as the server asked, then creating again");
+                    self.sleeper.sleep(wait).await;
+                }
+            }
+        }
+    }
+
+    /// `HEAD /upload/{id}`, waiting out every `429`, `503` and `507` answer under
+    /// the transfer's recovery budget.
+    async fn head_waiting(
+        &self,
+        session_id: &str,
+        recovery: &mut Recovery,
+    ) -> Result<Option<HeadInfo>, UploadError> {
+        loop {
+            match self.try_head(session_id).await? {
+                Ok(info) => return Ok(info),
+                Err(asked) => {
+                    let wait = recovery.server_wait(asked.after, "progress query")?;
+                    tracing::debug!(?wait, "waiting as the server asked, then asking HEAD again");
+                    self.sleeper.sleep(wait).await;
+                }
+            }
+        }
     }
 
     /// Cancel a session (`DELETE /upload/{id}`). Idempotent for the caller: a
@@ -903,27 +1063,50 @@ impl UploadClient {
     /// `data` is the complete ciphertext (opaque bytes); the client chunks and
     /// checksums it. The transfer completes exactly when the received-byte count
     /// reaches the declared size, at which point the server finalizes.
+    ///
+    /// A `rate_limited`, `unavailable` or `storage_full` answer to any request it
+    /// makes — the create, a chunk, or a `HEAD` — is waited out, each wait charging
+    /// the one recovery budget the transfer shares.
     #[tracing::instrument(level = "debug", skip(self, data), fields(size = request.size, blob_role = ?request.blob_role))]
     pub async fn upload(
         &self,
         request: &CreateUploadRequest,
         data: &[u8],
     ) -> Result<UploadOutcome, UploadError> {
-        let (session, suggested, start_offset) = match self.create_session(request).await? {
-            CreateOutcome::Created {
-                response,
-                resume_offset,
-            } => (response.id, response.suggested_chunk_size, resume_offset),
-            CreateOutcome::AlreadyStored { asset_ref } => {
-                return Ok(UploadOutcome::AlreadyStored { asset_ref });
-            }
-        };
+        self.upload_with(request, data, &mut Recovery::new()).await
+    }
+
+    /// [`UploadClient::upload`] over a recovery budget the caller may already have
+    /// charged.
+    async fn upload_with(
+        &self,
+        request: &CreateUploadRequest,
+        data: &[u8],
+        recovery: &mut Recovery,
+    ) -> Result<UploadOutcome, UploadError> {
+        let (session, suggested, start_offset) =
+            match self.create_waiting(request, recovery).await? {
+                CreateOutcome::Created {
+                    response,
+                    resume_offset,
+                } => (response.id, response.suggested_chunk_size, resume_offset),
+                CreateOutcome::AlreadyStored { asset_ref } => {
+                    return Ok(UploadOutcome::AlreadyStored { asset_ref });
+                }
+            };
 
         let mut strategy = AdaptiveChunkSizeStrategy::for_file_size(request.size)
             .seeded_from_suggested(suggested)
             .with_connection_class(self.connection);
-        self.drive(session, request, data, &mut strategy, start_offset)
-            .await
+        self.drive(
+            session,
+            request,
+            data,
+            &mut strategy,
+            start_offset,
+            recovery,
+        )
+        .await
     }
 
     /// Resume an existing session: HEAD for the authoritative offset, then
@@ -937,7 +1120,8 @@ impl UploadClient {
         request: &CreateUploadRequest,
         data: &[u8],
     ) -> Result<UploadOutcome, UploadError> {
-        if let Some(info) = self.head(session_id).await? {
+        let mut recovery = Recovery::new();
+        if let Some(info) = self.head_waiting(session_id, &mut recovery).await? {
             let mut strategy = AdaptiveChunkSizeStrategy::for_file_size(request.size)
                 .with_connection_class(self.connection);
             tracing::debug!(offset = info.offset, "resuming from authoritative offset");
@@ -947,11 +1131,12 @@ impl UploadClient {
                 data,
                 &mut strategy,
                 info.offset,
+                &mut recovery,
             )
             .await
         } else {
             tracing::debug!("session gone on resume — re-creating");
-            self.upload(request, data).await
+            self.upload_with(request, data, &mut recovery).await
         }
     }
 
@@ -964,15 +1149,12 @@ impl UploadClient {
         data: &[u8],
         strategy: &mut AdaptiveChunkSizeStrategy,
         mut offset: u64,
+        recovery: &mut Recovery,
     ) -> Result<UploadOutcome, UploadError> {
         let size = request.size;
-        let mut recoveries: u32 = 0;
-        // The shared retry engine, `bulk-transfer` class: exponential backoff with
-        // full jitter, bounded give-up. Instantiated here (as sync/fetch do) so all
-        // three paths share one engine. It governs mid-transfer *transport resets*
-        // (the adverse-network steady state); the code-driven recovery matrix below
-        // stays switched on `error.*` codes.
-        let mut engine: RetryEngine = RetryClass::BulkTransfer.engine();
+        // The recovery's shared retry engine governs mid-transfer *transport
+        // resets* (the adverse-network steady state); the code-driven recovery
+        // matrix below stays switched on `error.*` codes.
 
         while offset < size {
             let remaining = size - offset;
@@ -990,11 +1172,11 @@ impl UploadClient {
                 // through the shared engine and resume from the SAME offset (the
                 // server holds nothing new, so no bytes are re-sent beyond this
                 // chunk). Bounded give-up prevents a hot loop on a dead path.
-                Err(UploadError::Transport(reason)) => match engine.next_backoff(None) {
+                Err(UploadError::Transport(reason)) => match recovery.engine.next_backoff(None) {
                     RetryDecision::GiveUp => {
                         return Err(UploadError::RetriesExhausted(format!(
                             "transport reset unrecovered after {} retries: {reason}",
-                            engine.policy().max_retries
+                            recovery.engine.policy().max_retries
                         )));
                     }
                     RetryDecision::Retry { after } => {
@@ -1009,27 +1191,25 @@ impl UploadClient {
                 ChunkAck::Accepted(new_offset) => {
                     strategy.record_chunk(want, attempt_start.elapsed());
                     // Real progress resets the transient-reset backoff budget.
-                    engine.reset();
+                    recovery.engine.reset();
                     offset = new_offset;
                 }
                 ChunkAck::Realign(authoritative) => {
-                    recoveries += 1;
-                    guard_budget(recoveries, "offset re-align")?;
+                    recovery.charge("offset re-align")?;
                     offset = if let Some(o) = authoritative {
                         o
-                    } else if let Some(info) = self.head(&session_id).await? {
+                    } else if let Some(info) = self.head_waiting(&session_id, recovery).await? {
                         info.offset
                     } else {
                         // Vanished mid-realign → recreate from zero.
-                        session_id = self.recreate(request).await?;
+                        session_id = self.recreate(request, recovery).await?;
                         *strategy = AdaptiveChunkSizeStrategy::for_file_size(size);
                         0
                     };
                 }
                 ChunkAck::Recreate => {
-                    recoveries += 1;
-                    guard_budget(recoveries, "session re-create")?;
-                    match self.create_session(request).await? {
+                    recovery.charge("session re-create")?;
+                    match self.create_waiting(request, recovery).await? {
                         CreateOutcome::Created {
                             response,
                             resume_offset,
@@ -1046,25 +1226,11 @@ impl UploadClient {
                     }
                 }
                 ChunkAck::Resend => {
-                    recoveries += 1;
-                    guard_budget(recoveries, "chunk re-send")?;
+                    recovery.charge("chunk re-send")?;
                     // Offset unchanged; the loop re-sends the same chunk.
                 }
                 ChunkAck::Backoff(asked) => {
-                    recoveries += 1;
-                    guard_budget(recoveries, "server-requested wait")?;
-                    let wait = match asked {
-                        Some(asked) => asked.min(MAX_SERVER_BACKOFF),
-                        // No hint: the shared engine's own schedule.
-                        None => match engine.next_backoff(None) {
-                            RetryDecision::Retry { after } => after,
-                            RetryDecision::GiveUp => {
-                                return Err(UploadError::RetriesExhausted(
-                                    "the server kept asking for a wait without naming one".into(),
-                                ));
-                            }
-                        },
-                    };
+                    let wait = recovery.server_wait(asked, "server-requested wait")?;
                     tracing::debug!(
                         offset,
                         ?wait,
@@ -1072,11 +1238,13 @@ impl UploadClient {
                     );
                     self.sleeper.sleep(wait).await;
                     // The refused chunk left nothing behind, but anything may have moved
-                    // while we waited: the authoritative offset is HEAD's.
-                    offset = if let Some(info) = self.head(&session_id).await? {
+                    // while we waited: the authoritative offset is HEAD's. A HEAD that
+                    // is itself asked to wait (an outage outlasting one wait) waits
+                    // again under the same budget rather than failing the transfer.
+                    offset = if let Some(info) = self.head_waiting(&session_id, recovery).await? {
                         info.offset
                     } else {
-                        session_id = self.recreate(request).await?;
+                        session_id = self.recreate(request, recovery).await?;
                         *strategy = AdaptiveChunkSizeStrategy::for_file_size(size);
                         0
                     };
@@ -1089,9 +1257,14 @@ impl UploadClient {
     }
 
     /// Re-create a session and return its id, mapping a racing `duplicate_blob`
-    /// into a transport error the caller resolves as a merge one level up.
-    async fn recreate(&self, request: &CreateUploadRequest) -> Result<String, UploadError> {
-        match self.create_session(request).await? {
+    /// into a transport error the caller resolves as a merge one level up. A create
+    /// the server asks to wait is waited out under the transfer's recovery budget.
+    async fn recreate(
+        &self,
+        request: &CreateUploadRequest,
+        recovery: &mut Recovery,
+    ) -> Result<String, UploadError> {
+        match self.create_waiting(request, recovery).await? {
             CreateOutcome::Created { response, .. } => Ok(response.id),
             CreateOutcome::AlreadyStored { asset_ref } => Err(UploadError::Rejected {
                 status: 409,

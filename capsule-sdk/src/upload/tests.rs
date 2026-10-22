@@ -597,6 +597,196 @@ fn a_server_named_wait_is_read_and_bounded() {
         Duration::from_mins(5),
         "an hour-long ask is waited in five-minute steps"
     );
+
+    // A HEAD answer has no body, so its status names the wait; a code, when
+    // there is one, decides.
+    for status in [429, 503, 507] {
+        assert!(answer_asks_to_wait(status, None), "{status}");
+    }
+    assert!(!answer_asks_to_wait(500, None));
+    assert!(!answer_asks_to_wait(
+        503,
+        Some(error_codes::UPLOAD_STORAGE_INCONSISTENT)
+    ));
+}
+
+/// An outage that outlasts one wait: the `HEAD` after the wait is itself a
+/// body-less `503`, and the client waits again rather than failing the transfer.
+#[tokio::test]
+async fn recovery_a_head_asked_to_wait_waits_again() {
+    let head_calls = Arc::new(AtomicUsize::new(0));
+    let patch_offsets = Arc::new(Mutex::new(Vec::<u64>::new()));
+    let hc = head_calls.clone();
+    let po = patch_offsets.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-out", CHUNK_SIZE_256KB),
+        ("HEAD", "/sess-out") => {
+            if hc.fetch_add(1, Ordering::SeqCst) < 2 {
+                MockResponse::new(503, "Service Unavailable").header("Retry-After", "0")
+            } else {
+                MockResponse::new(200, "OK")
+                    .header("X-Capsule-Offset", "0")
+                    .header("X-Capsule-Content-Length", "4096")
+                    .header("X-Capsule-Upload-Status", "pending")
+            }
+        }
+        ("PATCH", "/sess-out") => {
+            let mut seen = po.lock().unwrap();
+            seen.push(req.header("X-Capsule-Offset").unwrap().parse().unwrap());
+            if seen.len() == 1 {
+                MockResponse::api_error(
+                    503,
+                    "Service Unavailable",
+                    error_codes::UPLOAD_UNAVAILABLE,
+                    "wait",
+                )
+                .header("Retry-After", "0")
+            } else {
+                MockResponse::new(204, "No Content").header("X-Capsule-Offset", "4096")
+            }
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let client = server.client(PROTOCOL);
+    let outcome = client.upload(&request(4096), &[9u8; 4096]).await.unwrap();
+
+    assert!(matches!(outcome, UploadOutcome::Completed { .. }));
+    assert_eq!(
+        head_calls.load(Ordering::SeqCst),
+        3,
+        "two waited HEADs, then the one that answers"
+    );
+    assert_eq!(*patch_offsets.lock().unwrap(), vec![0, 0]);
+}
+
+/// The create is paced, not failed: `rate_limited`, `unavailable` and
+/// `storage_full` on `POST /upload` are waited out before the first chunk.
+#[tokio::test]
+async fn recovery_a_create_asked_to_wait_is_waited_out() {
+    for (status, code) in [
+        (429, error_codes::UPLOAD_RATE_LIMITED),
+        (503, error_codes::UPLOAD_UNAVAILABLE),
+        (507, error_codes::UPLOAD_STORAGE_FULL),
+    ] {
+        let creates = Arc::new(AtomicUsize::new(0));
+        let cr = creates.clone();
+        let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+            ("POST", "/") => {
+                if cr.fetch_add(1, Ordering::SeqCst) < 2 {
+                    MockResponse::api_error(status, "Wait", code, "wait").header("Retry-After", "0")
+                } else {
+                    created("sess-paced", CHUNK_SIZE_256KB)
+                }
+            }
+            ("PATCH", "/sess-paced") => {
+                let new_offset = ack_offset(req);
+                MockResponse::new(204, "No Content")
+                    .header("X-Capsule-Offset", new_offset.to_string())
+            }
+            other => panic!("unexpected {other:?}"),
+        })
+        .await;
+
+        let client = server.client(PROTOCOL);
+        let outcome = client.upload(&request(4096), &[9u8; 4096]).await.unwrap();
+
+        assert!(matches!(outcome, UploadOutcome::Completed { .. }), "{code}");
+        assert_eq!(
+            creates.load(Ordering::SeqCst),
+            3,
+            "{code}: two waits, one create"
+        );
+
+        // The single-shot call still reports the answer as it came.
+        let one = client.create_session(&request(4096)).await;
+        assert!(one.is_ok(), "{code}: the server now creates");
+    }
+}
+
+/// A re-create (after `session_not_found`) that the server asks to wait is
+/// waited out too, rather than failing the transfer mid-way.
+#[tokio::test]
+async fn recovery_a_recreate_asked_to_wait_is_waited_out() {
+    let creates = Arc::new(AtomicUsize::new(0));
+    let cr = creates.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => match cr.fetch_add(1, Ordering::SeqCst) {
+            0 => created("sess-A", CHUNK_SIZE_256KB),
+            1 => MockResponse::api_error(
+                429,
+                "Too Many Requests",
+                error_codes::UPLOAD_RATE_LIMITED,
+                "wait",
+            )
+            .header("Retry-After", "0"),
+            _ => created("sess-B", CHUNK_SIZE_256KB),
+        },
+        ("PATCH", "/sess-A") => MockResponse::api_error(
+            404,
+            "Not Found",
+            error_codes::UPLOAD_SESSION_NOT_FOUND,
+            "Session not found",
+        ),
+        ("PATCH", "/sess-B") => {
+            let new_offset = ack_offset(req);
+            MockResponse::new(204, "No Content").header("X-Capsule-Offset", new_offset.to_string())
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let client = server.client(PROTOCOL);
+    let outcome = client.upload(&request(4096), &[9u8; 4096]).await.unwrap();
+
+    match outcome {
+        UploadOutcome::Completed { session_id } => assert_eq!(session_id, "sess-B"),
+        other @ UploadOutcome::AlreadyStored { .. } => panic!("expected Completed, got {other:?}"),
+    }
+    assert_eq!(creates.load(Ordering::SeqCst), 3);
+}
+
+/// A server that never stops asking for a wait spends the recovery budget and
+/// fails the transfer loudly, and the single-shot create reports the rejection.
+#[tokio::test]
+async fn a_create_that_never_stops_waiting_exhausts_the_budget() {
+    let creates = Arc::new(AtomicUsize::new(0));
+    let cr = creates.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => {
+            cr.fetch_add(1, Ordering::SeqCst);
+            MockResponse::api_error(
+                503,
+                "Service Unavailable",
+                error_codes::UPLOAD_UNAVAILABLE,
+                "down",
+            )
+            .header("Retry-After", "0")
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let client = server.client(PROTOCOL);
+    let err = client
+        .upload(&request(4096), &[9u8; 4096])
+        .await
+        .unwrap_err();
+    assert!(matches!(err, UploadError::RetriesExhausted(_)), "{err:?}");
+    assert_eq!(
+        creates.load(Ordering::SeqCst),
+        MAX_RECOVERIES as usize + 1,
+        "every wait charged the budget"
+    );
+
+    match client.create_session(&request(4096)).await.unwrap_err() {
+        UploadError::Rejected { status, code, .. } => {
+            assert_eq!(status, 503);
+            assert_eq!(code.as_deref(), Some(error_codes::UPLOAD_UNAVAILABLE));
+        }
+        other => panic!("expected Rejected, got {other:?}"),
+    }
 }
 
 #[tokio::test]
