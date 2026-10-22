@@ -370,7 +370,7 @@ impl Held {
 fn client_for(base_url: &str, token: &str) -> Result<rest::Client, FederationError> {
     let http = net::http_client().map_err(|error| FederationError::Transport(error.to_string()))?;
     Ok(crate::client::negotiated_client(http, base_url)
-        .map_err(|error| FederationError::Transport(error.to_string()))?
+        .map_err(FederationError::Transport)?
         .with_credential(
             BEARER_SCHEME,
             rest::Credential::Bearer(token.to_owned().into()),

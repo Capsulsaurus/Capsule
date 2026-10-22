@@ -1591,6 +1591,7 @@ mod tests {
 
     async fn start_mock(handler: Handler) -> MockServer {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        crate::net::negotiation::forget_addr(listener.local_addr().unwrap());
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
             loop {

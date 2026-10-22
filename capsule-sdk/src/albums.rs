@@ -200,7 +200,7 @@ impl AlbumTransport {
             ),
         };
         Ok(crate::client::negotiated_client(http, root)
-            .map_err(|error| AlbumError::Transport(error.to_string()))?
+            .map_err(AlbumError::Transport)?
             .with_credential(BEARER_SCHEME, credential))
     }
 }

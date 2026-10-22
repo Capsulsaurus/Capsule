@@ -371,3 +371,29 @@ fn a_derivative_manifest_that_is_not_base64_is_malformed() {
     })));
     assert!(matches!(refused, Err(SyncError::MalformedManifest(_))));
 }
+
+/// **The protocol window (issue #674).** A feed pull is a read: it is served whatever window
+/// the server advertises, and the window it carried is latched, so the next write to that
+/// origin is judged against it.
+#[tokio::test]
+async fn a_feed_pull_is_served_and_latches_the_window() {
+    let server = crate::testmock::MockServer::start(|_req| {
+        crate::testmock::MockResponse::new(200, "OK")
+            .header("X-Capsule-Protocol-Min", "2026-01-01")
+            .header("X-Capsule-Protocol-Max", "2099-12-31")
+            .header("X-Capsule-Min-Client-Build", "999.0.0")
+            .json_body(r#"{"entries":[],"next_cursor":"c1","has_more":false}"#)
+    })
+    .await;
+    let consumer = SyncConsumer::with_static_token(&server.base_url(), "test-token").unwrap();
+    let page = consumer.pull(&SyncCursor::start(), 10).await.unwrap();
+    assert!(page.entries.is_empty(), "the read is served");
+
+    let origin = reqwest::Url::parse(&server.base_url()).unwrap();
+    let latched = crate::net::negotiation::advertised(&origin).expect("the window was latched");
+    assert_eq!(latched.min_client_build.as_deref(), Some("999.0.0"));
+    assert_eq!(
+        crate::net::negotiation::upgrade_required_for(&origin).map(|refusal| refusal.reason),
+        Some(crate::net::negotiation::UpgradeReason::BuildBelowFloor)
+    );
+}

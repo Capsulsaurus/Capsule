@@ -1024,6 +1024,7 @@ mod tests {
 
     async fn start_mock(handler: Handler) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        crate::net::negotiation::forget_addr(listener.local_addr().unwrap());
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
             loop {
@@ -1724,6 +1725,7 @@ mod tests {
     async fn an_unreachable_endpoint_is_a_transport_failure_not_an_auth_one() {
         // Bind, read the port, then drop the listener: the address is now certain to refuse.
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        crate::net::negotiation::forget_addr(listener.local_addr().unwrap());
         let addr = listener.local_addr().unwrap();
         drop(listener);
 
@@ -1846,5 +1848,42 @@ mod tests {
         assert_eq!(secret.as_bytes().len(), 32);
         assert_eq!(secret.to_hex().len(), 64);
         assert_eq!(format!("{secret:?}"), "MintedSecret { .. }");
+    }
+
+    /// **The protocol window (issue #674).** A `426` on either escrow write — documented or
+    /// undocumented — is the typed upgrade refusal with the protocol code, never `Unexpected`.
+    #[test]
+    fn an_escrow_write_426_is_the_typed_upgrade_refusal() {
+        fn gate_426<E>() -> rest::Error<E> {
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert(
+                "x-capsule-protocol-min",
+                reqwest::header::HeaderValue::from_static("2099-01-01"),
+            );
+            rest::Error::UnexpectedStatus {
+                status: reqwest::StatusCode::UPGRADE_REQUIRED,
+                headers,
+                body: br#"{"status":426,"detail":"too old","code":"error.protocol.version_unsupported"}"#
+                    .to_vec()
+                    .into(),
+            }
+        }
+        for error in [
+            store_escrow_error(gate_426()),
+            store_sealed_identity_error(gate_426()),
+        ] {
+            let RecoveryError::UpgradeRequired(refusal) = &error else {
+                panic!("expected UpgradeRequired, got {error:?}");
+            };
+            assert_eq!(
+                refusal.reason,
+                crate::net::negotiation::UpgradeReason::ProtocolBelowWindow
+            );
+            assert_eq!(refusal.message, "too old");
+            assert_eq!(
+                error.error_code(),
+                Some(error_codes::PROTOCOL_VERSION_UNSUPPORTED)
+            );
+        }
     }
 }

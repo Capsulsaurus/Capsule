@@ -410,6 +410,7 @@ async fn a_session_that_cannot_mint_a_bearer_is_unauthorized() {
 async fn an_unreachable_server_is_a_transport_failure() {
     // Bind, read the port, then drop the listener: the address now refuses connections.
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    crate::net::negotiation::forget_addr(listener.local_addr().unwrap());
     let addr = listener.local_addr().unwrap();
     drop(listener);
     let base = format!("http://{addr}");

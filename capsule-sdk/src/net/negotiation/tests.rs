@@ -18,6 +18,8 @@
 //! | `route_classes::a_session_write_is_refused_before_it_leaves` | write (session path): refused before sending, as `AuthError::UpgradeRequired` |
 //! | `route_classes::a_session_write_426_is_the_typed_refusal` | write (session path): the server's `426` is the same refusal |
 //! | `route_classes::session_upkeep_is_never_refused_locally` | refresh and sign-out still leave under a floor this build is below |
+//! | `route_classes::a_logout_426_still_clears_the_local_session` | a sign-out the server refuses with `426` still clears this device's tokens |
+//! | `forget_drops_only_its_own_origin` | a reused address starts from no window; other origins keep theirs |
 //!
 //! The upload route class is covered in `upload/tests.rs`.
 
@@ -454,4 +456,41 @@ mod route_classes {
             ]
         );
     }
+
+    /// **Sign-out under a `426`.** The server will not revoke the session for an
+    /// out-of-window client, but this device still signs out: the local tokens are cleared and
+    /// the typed refusal says the server-side revoke did not land.
+    #[tokio::test]
+    async fn a_logout_426_still_clears_the_local_session() {
+        let server = MockServer::start(refusing_server(426)).await;
+        let session = session_for(&server.base_url());
+        assert!(session.is_authenticated().await);
+
+        let error = session.logout().await.expect_err("the server refused");
+        assert!(
+            matches!(error, AuthError::UpgradeRequired(_)),
+            "expected UpgradeRequired, got {error:?}"
+        );
+        assert!(
+            !session.is_authenticated().await,
+            "the local tokens are gone"
+        );
+    }
+}
+
+#[test]
+fn forget_drops_only_its_own_origin() {
+    let gone = origin(5);
+    let kept = origin(6);
+    let refusing = headers("2099-01-01", "2099-12-31", "0.0.0");
+    observe(&gone, &refusing);
+    observe(&kept, &refusing);
+
+    forget(&gone);
+    assert_eq!(advertised(&gone), None);
+    assert!(preflight(&Method::POST, &gone, PROTOCOL_VERSION).is_ok());
+    assert!(
+        advertised(&kept).is_some(),
+        "another origin keeps its window"
+    );
 }

@@ -285,6 +285,15 @@ pub fn forget(url: &Url) {
         .remove(&origin_of(url));
 }
 
+/// [`forget`] for a mock server bound at `addr`: every in-crate mock calls this as it binds,
+/// so a window a previous test's server latched on the same ephemeral port never leaks in.
+#[cfg(test)]
+pub(crate) fn forget_addr(addr: std::net::SocketAddr) {
+    if let Ok(url) = Url::parse(&format!("http://{addr}")) {
+        forget(&url);
+    }
+}
+
 /// Why a [`send_negotiated`] or [`send_screened`] did not yield a response to read.
 #[derive(Debug)]
 pub(crate) enum SendError {

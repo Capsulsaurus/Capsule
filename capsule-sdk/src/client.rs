@@ -410,14 +410,14 @@ impl rest::HttpBackend for Negotiate {
 /// A generated client for `base_url` that executes on `http` under the window screen — the
 /// one way this crate builds a generated client outside [`AuthenticatedClient`], so a write
 /// through any of them is pre-flighted and a read through any of them latches the window.
-pub(crate) fn negotiated_client(
-    http: reqwest::Client,
-    base_url: &str,
-) -> Result<Client, rest::Error<std::convert::Infallible>> {
+///
+/// The error is the generated client's description of a `base_url` it cannot parse.
+pub(crate) fn negotiated_client(http: reqwest::Client, base_url: &str) -> Result<Client, String> {
     Client::with_backend(
         Arc::new(Negotiate::over(Arc::new(rest::ReqwestBackend::new(http)))),
         base_url,
     )
+    .map_err(|error| error.to_string())
 }
 
 /// The `426` [`Negotiate`] answers a refused write with: the window it was refused under, as
@@ -563,6 +563,7 @@ mod tests {
 
     async fn start_mock(handler: Handler) -> MockServer {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        crate::net::negotiation::forget_addr(listener.local_addr().unwrap());
         let addr = listener.local_addr().unwrap();
         let requests = Arc::new(Mutex::new(Vec::new()));
         let requests_srv = requests.clone();
