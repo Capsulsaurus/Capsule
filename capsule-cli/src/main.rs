@@ -1,6 +1,7 @@
 //! The `capsule` binary: a thin shim over the [`capsule_cli`] library, which owns
 //! the command implementations (so the real-server round-trip can drive them
-//! directly). This binary only installs error reporting + tracing and dispatches.
+//! directly). This binary only installs error reporting + tracing and dispatches. Logs go to
+//! stderr: stdout carries only what a command prints, which for `--json` is one document.
 
 use eyre::Result;
 use tracing_subscriber::prelude::*;
@@ -19,7 +20,10 @@ async fn main() -> Result<()> {
             }
         })
         .expect("built-in log filter directives are valid");
+    // stdout is a data channel: `--json` promises exactly one document there, so every log
+    // event goes to stderr, whatever the filter lets through.
     let fmt_layer = fmt::layer()
+        .with_writer(std::io::stderr)
         .pretty()
         .with_thread_ids(true)
         .with_thread_names(true)
