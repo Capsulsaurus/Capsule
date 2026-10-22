@@ -2106,6 +2106,7 @@
     <string name="error_drop_cap_exceeded">This upload link is full.</string>
     <string name="error_drop_cap_exhausted">This upload link is full. Ask for a new one.</string>
     <string name="error_drop_chunk_refused">That part of the upload could not be accepted. It will be retried.</string>
+    <string name="error_drop_chunk_unavailable">Capsule couldn\'t reach the upload service. The upload will resume shortly.</string>
     <string name="error_drop_file_too_large">That file is larger than this link accepts.</string>
     <string name="error_drop_malformed">That upload could not be accepted.</string>
     <string name="error_drop_malformed_descriptor">This upload couldn\'t be accepted.</string>
@@ -2113,6 +2114,7 @@
     <string name="error_drop_not_in_inbox">This drop is no longer available to adopt.</string>
     <string name="error_drop_passphrase_required">This upload link needs its passphrase.</string>
     <string name="error_drop_rate_limited">Too many attempts. Please wait and try again.</string>
+    <string name="error_drop_storage_full">The server is out of storage space. Uploading will resume once space is freed.</string>
     <string name="error_drop_unavailable">Capsule couldn\'t reach the upload service. Please try again.</string>
     <string name="error_enrollment_at_capacity">This server is handling too many enrollment attempts right now. Please try again shortly.</string>
     <string name="error_enrollment_channel_not_found">This device-add session has ended. Start again.</string>

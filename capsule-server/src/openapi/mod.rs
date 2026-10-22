@@ -327,7 +327,35 @@ const EXTRAS: &[Extra] = &[
         status: 503,
         members: UPLOAD_RETRY_AFTER,
     },
+    // The guest drop chunk's two waits, the album chunk's answers under `error.drop.*` codes.
+    Extra {
+        component: "DropChunkUnavailableProblem",
+        operation: "append_drop_chunk",
+        status: 503,
+        members: DROP_CHUNK_RETRY_AFTER,
+    },
+    Extra {
+        component: "DropChunkStorageFullProblem",
+        operation: "append_drop_chunk",
+        status: 507,
+        members: DROP_CHUNK_RETRY_AFTER,
+    },
 ];
+
+/// The retry hint the guest drop chunk's waits carry.
+///
+/// [`UPLOAD_RETRY_AFTER`]'s member, except for what the client does afterwards: the drop surface
+/// has no `HEAD`, so a guest resends the refused chunk at the same offset, which lands — or is
+/// answered as the replay it is — because nothing of it was kept.
+const DROP_CHUNK_RETRY_AFTER: &[Member] = &[Member {
+    name: "retry_after",
+    json_type: "integer",
+    format: Some("uint64"),
+    description: "When the guest may retry, as Unix seconds; the `Retry-After` header carries \
+                  the same instant as a delay. The guest waits, then resends the same chunk at \
+                  the same offset.",
+    nullable: false,
+}];
 
 /// The retry hint the upload surface's waits carry (transfer/upload.md, Hostile Clients).
 ///

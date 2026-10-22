@@ -41481,6 +41481,16 @@
         }
       }
     },
+    "error.drop.chunk_unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule couldn't reach the upload service. The upload will resume shortly."
+          }
+        }
+      }
+    },
     "error.drop.file_too_large": {
       "localizations": {
         "en": {
@@ -41835,6 +41845,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "嘗試次數過多。請稍候再試。"
+          }
+        }
+      }
+    },
+    "error.drop.storage_full": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The server is out of storage space. Uploading will resume once space is freed."
           }
         }
       }
