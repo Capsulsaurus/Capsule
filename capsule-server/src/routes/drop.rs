@@ -1088,9 +1088,10 @@ pub async fn append_drop_chunk(
     .await
     .map_err(|join| {
         // A panic inside the append or the deposit. A claim it held is left for the next boot's
-        // recovery; a full session it left unclaimed is deposited by the guest's replay.
+        // recovery; a full session it left unclaimed is deposited by the guest's replay — so the
+        // guest is told to wait and resend, as the album route tells its client.
         tracing::error!(error = %join, "the drop chunk task did not finish");
-        DropChunkRejection::internal()
+        DropChunkRejection::unavailable(drops.clock())
     })?
     .map_err(|error| {
         tracing::error!(%error, "a drop chunk could not be appended");

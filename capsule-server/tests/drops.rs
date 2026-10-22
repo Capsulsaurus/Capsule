@@ -2104,6 +2104,72 @@ async fn a_filed_drop_whose_status_write_was_lost_is_completed_at_boot_not_faile
     assert_one_drop(&fixture, &bearer, &bytes).await;
 }
 
+/// The link's file and byte totals.
+async fn link_totals(fixture: &Fixture, id: &str) -> (u32, u64) {
+    use capsule_server::drop::DropStore as _;
+
+    let link = fixture
+        .dropstore
+        .resolve(id)
+        .await
+        .expect("the drop store answers")
+        .expect("the link is provisioned");
+    (link.used_files, link.used_bytes)
+}
+
+/// A filing whose statement committed but whose answer was lost is a filed drop: the guest is
+/// told it landed, the session completes, and the link keeps the reservation the drop spent —
+/// a `500` here would send the guest to upload it a second time.
+#[tokio::test]
+async fn a_filing_whose_answer_was_lost_is_a_filed_drop_not_a_failed_one() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let bytes = payload(b'l', 4096);
+    let (id, upload_id) = open_drop(&fixture, &bearer, 66, &bytes).await;
+
+    fixture
+        .dropstore
+        .fault_next_file(support::FileFault::AnswerLost);
+    chunk_at(&fixture, &id, &upload_id, 0, &bytes)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(terminal_status(&fixture, &upload_id).await, "completed");
+    assert_one_drop(&fixture, &bearer, &bytes).await;
+    assert_eq!(
+        link_totals(&fixture, &id).await,
+        (1, 4096),
+        "a drop that landed keeps its reservation"
+    );
+}
+
+/// A filing that really did not happen is the failure it reports: the session is terminal, the
+/// inbox is empty, and the link gets its reservation back.
+#[tokio::test]
+async fn a_filing_that_did_not_happen_fails_the_drop_and_gives_the_link_back() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let bytes = payload(b'n', 4096);
+    let (id, upload_id) = open_drop(&fixture, &bearer, 67, &bytes).await;
+
+    fixture
+        .dropstore
+        .fault_next_file(support::FileFault::Refused);
+    chunk_at(&fixture, &id, &upload_id, 0, &bytes)
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        terminal_status(&fixture, &upload_id).await,
+        "failed_processing"
+    );
+    assert!(
+        inbox(&fixture, &bearer).await["drops"]
+            .as_array()
+            .expect("drops")
+            .is_empty()
+    );
+    assert_eq!(link_totals(&fixture, &id).await, (0, 0));
+}
+
 /// The link owner holds a drop's session as its uploader, but the album surface is not where a
 /// drop finishes: a chunk sent there is answered as an unknown session, writes nothing, and the
 /// guest's own chunk still deposits the drop.

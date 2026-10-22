@@ -148,10 +148,32 @@ pub async fn recover(drops: &DropContext, stranded: Vec<UploadSessionRecord>) ->
 /// Commit and file a session whose claim this caller holds, then leave it terminal.
 async fn drive(drops: &DropContext, record: &UploadSessionRecord) -> Result<(), DepositFailure> {
     let upload = &record.upload_id;
-    if let Err(failure) = file(drops, record).await {
-        fail(drops, upload).await;
-        tracing::warn!(%upload, %failure, "the deposit refused the drop");
-        return Err(failure);
+    let address = match commit(drops, record).await {
+        Ok(address) => address,
+        Err(failure) => {
+            fail(drops, upload).await;
+            tracing::warn!(%upload, %failure, "the deposit refused the drop");
+            return Err(failure);
+        }
+    };
+    match file(drops, record, &address).await {
+        Ok(()) => {}
+        Err(Unfiled::NotFiled(failure)) => {
+            fail(drops, upload).await;
+            tracing::warn!(%upload, %failure, "the deposit could not file the drop");
+            return Err(failure);
+        }
+        Err(Unfiled::Unknown(failure)) => {
+            // Neither filed nor known not to be: failing it could tell the guest a drop that
+            // landed did not, and refund a reservation it spent. The claim stays for the next
+            // boot's recovery, which files it or finds it filed.
+            tracing::error!(
+                %upload,
+                %failure,
+                "whether the drop was filed is unknown; its claim is left for recovery"
+            );
+            return Err(failure);
+        }
     }
     // The drop is filed: a status write that fails here leaves the claim for the next boot's
     // recovery, which finds the drop filed and completes it, rather than failing a drop that
@@ -165,8 +187,12 @@ async fn drive(drops: &DropContext, record: &UploadSessionRecord) -> Result<(), 
     Ok(())
 }
 
-/// Commit the stage, unless a lost depositor already did, and file the declaration.
-async fn file(drops: &DropContext, record: &UploadSessionRecord) -> Result<(), DepositFailure> {
+/// Hash the drop's bytes against its declared address and commit the stage there, unless a lost
+/// depositor already did. Returns the address.
+async fn commit(
+    drops: &DropContext,
+    record: &UploadSessionRecord,
+) -> Result<ContentAddress, DepositFailure> {
     let upload = &record.upload_id;
     let address = ContentAddress::parse(&record.expected_hash).map_err(|error| {
         // Unreachable while the create's gate holds: a drop's hash is an address or the session
@@ -226,18 +252,66 @@ async fn file(drops: &DropContext, record: &UploadSessionRecord) -> Result<(), D
             .await
             .map_err(blob_unavailable("commit the staged drop"))?;
     }
+    Ok(address)
+}
 
-    let filed = drops
+/// Why the declaration's move into the inbox did not report success.
+#[derive(Debug)]
+enum Unfiled {
+    /// The drop is not in the inbox: the move did not happen.
+    NotFiled(DepositFailure),
+    /// The store could not say either way.
+    Unknown(DepositFailure),
+}
+
+/// Move the held declaration into the owner's inbox as the drop at `address`.
+///
+/// A store error is not proof the move failed: the statement may have committed and only its
+/// answer been lost. Failing then would tell the guest a drop that landed did not, and invite a
+/// second upload of it, so an error is checked against the inbox before it is believed — the
+/// drop id is the session's asset id from creation on.
+async fn file(
+    drops: &DropContext,
+    record: &UploadSessionRecord,
+    address: &ContentAddress,
+) -> Result<(), Unfiled> {
+    let upload = &record.upload_id;
+    let error = match drops
         .drops()
-        .file(upload, &address, drops.clock().now())
+        .file(upload, address, drops.clock().now())
         .await
-        .map_err(unavailable("file the drop in its owner's inbox"))?;
-    if filed.is_none() {
-        // Moved in one operation, so a declaration that is gone was filed — by the depositor this
-        // claim outlived.
-        tracing::info!(%upload, "the drop was filed before its depositor was lost");
+    {
+        Ok(Some(_)) => return Ok(()),
+        Ok(None) => {
+            // Moved in one operation, so a declaration that is gone was filed — by the
+            // depositor this claim outlived.
+            tracing::info!(%upload, "the drop was filed before its depositor was lost");
+            return Ok(());
+        }
+        Err(error) => error,
+    };
+    tracing::warn!(
+        %upload,
+        %error,
+        "filing the drop failed; checking whether it landed anyway"
+    );
+    let failure =
+        DepositFailure::Unavailable("could not file the drop in its owner's inbox".into());
+    match drops.drops().inbox(&record.upload_user_id).await {
+        Ok(inbox)
+            if inbox
+                .iter()
+                .any(|entry| entry.drop_id == record.asset_id.as_str()) =>
+        {
+            tracing::info!(%upload, "the drop was filed although its store reported a failure");
+            Ok(())
+        }
+        Ok(_) => Err(Unfiled::NotFiled(failure)),
+        Err(recheck) => {
+            tracing::error!(%upload, error = %recheck, "the inbox could not be re-read");
+            Err(Unfiled::Unknown(failure))
+        }
     }
-    Ok(())
 }
 
 /// How many bytes one read of the hash takes, so a deposit holds one window and never the drop.
