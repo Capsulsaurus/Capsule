@@ -26,9 +26,8 @@ pub(crate) enum ImportProviderArg {
 }
 
 impl ImportProviderArg {
-    /// The provider's name as shown to the user. A brand name is displayed verbatim in
-    /// every locale, so it is a *value* substituted into the `cli.import.provider_notice`
-    /// message rather than translatable prose of its own.
+    /// The provider's name as shown to the user, substituted into the line `capsule import`
+    /// prints when it reads a source as that provider's export.
     #[must_use]
     pub(crate) const fn display_name(self) -> &'static str {
         match self {

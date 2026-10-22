@@ -10,9 +10,9 @@
 //! It reads the sidecar and the provenance chain off [`Workspace::asset`] and writes nothing of
 //! its own; the only write on its path is the default-album resolution every library verb
 //! shares when it opens the workspace. No index is queried. The shape mirrors `cull.rs` — a
-//! selector → [`resolve`] → [`collect`] into a plain [`AssetView`] → [`render`] through the
-//! catalog — so the projection and the rendering are unit-testable without a `clap` round trip
-//! or a spawned binary.
+//! selector → [`resolve`] → [`collect`] into a plain [`AssetView`] → [`render`] — so the
+//! projection and the rendering are unit-testable without a `clap` round trip or a spawned
+//! binary.
 //!
 //! ## Naming an asset
 //!
@@ -30,12 +30,9 @@
 use capsule_core::domain::GpsDatum;
 use capsule_core::lifecycle::{AssetState, Workspace};
 use capsule_core::sidecar::{CullFlag, GpsSource, StackRole};
-use capsule_i18n::Bundle;
 use colored::Colorize as _;
 use thiserror::Error;
 use uuid::Uuid;
-
-use crate::i18n::{Value, keys};
 
 /// The shortest hash prefix the selector accepts. Eight hex digits is 32 bits — ample against
 /// a personal library, and short enough to type from a `shasum` listing.
@@ -47,7 +44,7 @@ pub enum ShowError {
     /// Neither an asset id nor a hash prefix matched anything in the library.
     ///
     /// The `Display` strings on this enum are developer-facing (the selector and the count,
-    /// nothing else); the user sees [`describe_error`], which goes through the catalog.
+    /// nothing else); the user sees [`describe_error`]'s sentence.
     #[error("unknown: {0}")]
     UnknownAsset(String),
     /// A hash prefix matched more than one asset. Refused rather than guessed: printing the
@@ -232,162 +229,116 @@ pub fn collect(ws: &Workspace, asset_id: &Uuid) -> Option<AssetView> {
     })
 }
 
-/// Localize a [`ShowError`] for the failure line.
-pub fn describe_error(bundle: &Bundle, error: &ShowError) -> String {
+/// A human-readable reason for a [`ShowError`], for the failure line.
+pub fn describe_error(error: &ShowError) -> String {
     match error {
-        ShowError::UnknownAsset(selector) => bundle.format(
-            keys::SHOW_UNKNOWN_ASSET,
-            &[("selector", Value::Str(selector))],
+        ShowError::UnknownAsset(selector) => {
+            format!("No asset in this library matches {selector}.")
+        }
+        ShowError::Ambiguous { selector, count } => format!(
+            "{selector} matches {count} assets; give more of the hash, or the full asset id."
         ),
-        ShowError::Ambiguous { selector, count } => bundle.format(
-            keys::SHOW_AMBIGUOUS,
-            &[
-                ("selector", Value::Str(selector)),
-                ("count", Value::Int(*count as i64)),
-            ],
-        ),
-        ShowError::InvalidSelector(selector) => bundle.format(
-            keys::SHOW_INVALID_SELECTOR,
-            &[
-                ("selector", Value::Str(selector)),
-                ("min", Value::Int(MIN_HASH_PREFIX as i64)),
-            ],
+        ShowError::InvalidSelector(selector) => format!(
+            "{selector} is neither an asset id nor a hex prefix of at least {MIN_HASH_PREFIX} \
+             characters of a content hash."
         ),
     }
 }
 
-const fn gps_source_key(source: GpsSource) -> &'static str {
+const fn gps_source_name(source: GpsSource) -> &'static str {
     match source {
-        GpsSource::Exif => keys::SHOW_GPS_SOURCE_EXIF,
-        GpsSource::Manual => keys::SHOW_GPS_SOURCE_MANUAL,
-        GpsSource::Derived => keys::SHOW_GPS_SOURCE_DERIVED,
+        GpsSource::Exif => "EXIF",
+        GpsSource::Manual => "manual",
+        GpsSource::Derived => "derived",
     }
 }
 
-const fn gps_datum_key(datum: GpsDatum) -> &'static str {
+const fn gps_datum_name(datum: GpsDatum) -> &'static str {
     match datum {
-        GpsDatum::Wgs84 => keys::SHOW_GPS_DATUM_WGS84,
-        GpsDatum::Gcj02 => keys::SHOW_GPS_DATUM_GCJ02,
+        GpsDatum::Wgs84 => "WGS-84",
+        GpsDatum::Gcj02 => "GCJ-02",
     }
 }
 
-const fn stack_role_key(role: StackRole) -> &'static str {
+const fn stack_role_name(role: StackRole) -> &'static str {
     match role {
-        StackRole::Primary => keys::SHOW_STACK_ROLE_PRIMARY,
-        StackRole::Member => keys::SHOW_STACK_ROLE_MEMBER,
-        StackRole::Proxy => keys::SHOW_STACK_ROLE_PROXY,
+        StackRole::Primary => "primary",
+        StackRole::Member => "member",
+        StackRole::Proxy => "proxy",
     }
 }
 
-const fn cull_key(flag: CullFlag) -> &'static str {
+const fn cull_name(flag: CullFlag) -> &'static str {
     match flag {
-        CullFlag::Pick => keys::CULL_FLAG_PICK,
-        CullFlag::Neutral => keys::CULL_FLAG_NEUTRAL,
-        CullFlag::Reject => keys::CULL_FLAG_REJECT,
+        CullFlag::Pick => "pick",
+        CullFlag::Neutral => "neutral",
+        CullFlag::Reject => "reject",
     }
 }
 
-/// Render the view as the lines `capsule show` prints, one catalog message per line, every
+/// How an absent value is spelled in a row.
+const UNSET: &str = "(unset)";
+
+/// Render the view as the lines `capsule show` prints, one labelled row per field, every
 /// absent value spelled out as unset.
 #[must_use]
-pub fn render(bundle: &Bundle, view: &AssetView) -> String {
-    let unset = bundle.format(keys::SHOW_VALUE_UNSET, &[]);
-    let separator = bundle.format(keys::SHOW_VALUE_LIST_SEPARATOR, &[]);
-    let yes_no = |flag: bool| {
-        bundle.format(
-            if flag {
-                keys::SHOW_VALUE_YES
-            } else {
-                keys::SHOW_VALUE_NO
-            },
-            &[],
-        )
-    };
-    let or_unset = |value: Option<String>| value.unwrap_or_else(|| unset.clone());
+pub fn render(view: &AssetView) -> String {
+    let yes_no = |flag: bool| if flag { "yes" } else { "no" }.to_owned();
+    let or_unset = |value: Option<String>| value.unwrap_or_else(|| UNSET.to_owned());
     let list = |items: &[String]| {
         if items.is_empty() {
-            unset.clone()
+            UNSET.to_owned()
         } else {
-            items.join(&separator)
+            items.join(", ")
         }
     };
 
-    let dimensions = or_unset(view.dimensions.map(|(width, height)| {
-        bundle.format(
-            keys::SHOW_VALUE_DIMENSIONS,
-            &[
-                ("width", Value::Int(i64::from(width))),
-                ("height", Value::Int(i64::from(height))),
-            ],
-        )
-    }));
-    let rating = or_unset(view.rating.map(|stars| {
-        bundle.format(
-            keys::SHOW_VALUE_RATING,
-            &[("stars", Value::Int(i64::from(stars)))],
-        )
-    }));
-    let gps = or_unset(view.gps.map(|fix| {
-        let source = bundle.format(gps_source_key(fix.source), &[]);
-        let datum = bundle.format(gps_datum_key(fix.datum), &[]);
-        bundle.format(
-            keys::SHOW_VALUE_GPS,
-            &[
-                ("lat", Value::Str(&format!("{:.6}", fix.lat))),
-                ("lon", Value::Str(&format!("{:.6}", fix.lon))),
-                ("datum", Value::Str(&datum)),
-                ("source", Value::Str(&source)),
-            ],
-        )
-    }));
-    let stack = or_unset(view.stack.map(|(stack_id, role)| {
-        let role = bundle.format(stack_role_key(role), &[]);
-        bundle.format(
-            keys::SHOW_VALUE_STACK,
-            &[
-                ("stack_id", Value::Str(&stack_id.to_string())),
-                ("role", Value::Str(&role)),
-            ],
-        )
-    }));
-    let lqip = if view.lqip {
-        bundle.format(keys::SHOW_VALUE_PRESENT, &[])
-    } else {
-        unset.clone()
-    };
-    let cull = bundle.format(cull_key(view.cull), &[]);
-
-    let header = bundle.format(
-        keys::SHOW_HEADER,
-        &[("asset_id", Value::Str(&view.asset_id.to_string()))],
+    let dimensions = or_unset(
+        view.dimensions
+            .map(|(width, height)| format!("{width}×{height}")),
     );
+    let rating = or_unset(view.rating.map(|stars| format!("{stars}/5")));
+    let gps = or_unset(view.gps.map(|fix| {
+        format!(
+            "{:.6}, {:.6} ({}, {})",
+            fix.lat,
+            fix.lon,
+            gps_datum_name(fix.datum),
+            gps_source_name(fix.source)
+        )
+    }));
+    let stack = or_unset(
+        view.stack
+            .map(|(stack_id, role)| format!("{stack_id} ({})", stack_role_name(role))),
+    );
+    let lqip = if view.lqip { "present" } else { UNSET }.to_owned();
+
     let rows: [(&str, String); 17] = [
-        (keys::SHOW_ALBUM, view.album_id.to_string()),
-        (keys::SHOW_CONTENT_TYPE, view.content_type.clone()),
-        (keys::SHOW_HASH, view.hash.clone()),
-        (keys::SHOW_DIMENSIONS, dimensions),
-        (keys::SHOW_CAPTURED, view.capture_timestamp.clone()),
-        (keys::SHOW_IMPORTED, view.import_timestamp.clone()),
-        (keys::SHOW_CAPTION, or_unset(view.caption.clone())),
-        (keys::SHOW_RATING, rating),
-        (keys::SHOW_TAGS_USER, list(&view.tags_user)),
-        (keys::SHOW_TAGS_AI, list(&view.tags_ai)),
-        (keys::SHOW_GPS, gps),
-        (keys::SHOW_CULL, cull),
-        (keys::SHOW_HIDDEN, yes_no(view.hidden)),
-        (keys::SHOW_IN_TRASH, yes_no(view.in_trash)),
-        (keys::SHOW_STACK, stack),
-        (keys::SHOW_LQIP, lqip),
+        ("Album:", view.album_id.to_string()),
+        ("Content type:", view.content_type.clone()),
+        ("SHA-256:", view.hash.clone()),
+        ("Dimensions:", dimensions),
+        ("Captured:", view.capture_timestamp.clone()),
+        ("Imported:", view.import_timestamp.clone()),
+        ("Caption:", or_unset(view.caption.clone())),
+        ("Rating:", rating),
+        ("User tags:", list(&view.tags_user)),
+        ("AI tags:", list(&view.tags_ai)),
+        ("GPS:", gps),
+        ("Cull flag:", cull_name(view.cull).to_owned()),
+        ("Hidden:", yes_no(view.hidden)),
+        ("In trash:", yes_no(view.in_trash)),
+        ("Stack:", stack),
+        ("Placeholder:", lqip),
         (
-            keys::SHOW_PROVENANCE_RECORDS,
-            view.provenance_records.to_string(),
+            "Provenance:",
+            format!("{} signed record(s)", view.provenance_records),
         ),
     ];
 
-    let mut out = format!("{}\n", header.green());
-    for (key, value) in rows {
-        out.push_str(&bundle.format(key, &[("value", Value::Str(&value))]));
-        out.push('\n');
+    let mut out = format!("{}\n", format!("Asset {}", view.asset_id).green());
+    for (label, value) in rows {
+        out.push_str(&format!("  {label:<17}{value}\n"));
     }
     out
 }
@@ -439,10 +390,6 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.dir);
         }
-    }
-
-    fn bundle() -> Bundle {
-        Bundle::for_locale("en")
     }
 
     /// Three candidates whose hashes share a 10-character prefix, so ambiguity is a fact
@@ -620,8 +567,7 @@ mod tests {
     /// spelled out rather than omitted.
     #[test]
     fn render_prints_every_field_and_spells_out_absent_values() {
-        let bundle = bundle();
-        let page = render(&bundle, &sample_view());
+        let page = render(&sample_view());
         for expected in [
             "00000000-0000-0000-0000-000000000000",
             "image/jpeg",
@@ -636,21 +582,25 @@ mod tests {
         ] {
             assert!(page.contains(expected), "missing {expected:?} in:\n{page}");
         }
-        let unset = bundle.format(keys::SHOW_VALUE_UNSET, &[]);
-        assert_ne!(unset, keys::SHOW_VALUE_UNSET, "the key is in the catalog");
         // AI tags, stack and LQIP are absent in the sample: three unset rows.
-        assert_eq!(page.matches(&unset).count(), 3, "{page}");
+        assert_eq!(page.matches(UNSET).count(), 3, "{page}");
         assert_eq!(
             page.lines().count(),
             18,
             "a header plus seventeen rows:\n{page}"
         );
-        assert!(!page.contains("cli.show."), "no raw key leaks:\n{page}");
+        assert!(
+            page.contains("\n  Content type:    image/jpeg\n"),
+            "labels are padded to one column:\n{page}"
+        );
+        assert!(
+            page.contains("\n  Provenance:      1 signed record(s)\n"),
+            "{page}"
+        );
     }
 
     #[test]
     fn render_names_a_stack_placement_a_gcj02_manual_fix_and_the_flags() {
-        let bundle = bundle();
         let stack_id = Uuid::now_v7();
         let view = AssetView {
             gps: Some(Fix {
@@ -667,49 +617,40 @@ mod tests {
             caption: None,
             ..sample_view()
         };
-        let page = render(&bundle, &view);
+        let page = render(&view);
         assert!(
             page.contains("39.900000, 116.400000 (GCJ-02, manual)"),
             "a non-default datum is named, never silently read as WGS-84:\n{page}"
         );
         assert!(page.contains(&format!("{stack_id} (primary)")), "{page}");
-        let yes = bundle.format(keys::SHOW_VALUE_YES, &[]);
         assert_eq!(
-            page.matches(&yes).count(),
+            page.matches("yes").count(),
             2,
             "hidden and in trash:\n{page}"
         );
-        let present = bundle.format(keys::SHOW_VALUE_PRESENT, &[]);
-        assert!(page.contains(&present), "{page}");
+        assert!(page.contains("  Placeholder:     present\n"), "{page}");
     }
 
     #[test]
-    fn describe_error_localizes_each_variant_with_its_detail() {
-        let bundle = bundle();
-        let ambiguous = describe_error(
-            &bundle,
-            &ShowError::Ambiguous {
-                selector: "abcdef01".into(),
-                count: 3,
-            },
-        );
+    fn describe_error_names_each_variant_with_its_detail() {
+        let ambiguous = describe_error(&ShowError::Ambiguous {
+            selector: "abcdef01".into(),
+            count: 3,
+        });
         assert!(
             ambiguous.contains("abcdef01") && ambiguous.contains('3'),
             "{ambiguous}"
         );
-        let invalid = describe_error(&bundle, &ShowError::InvalidSelector("zz".into()));
+        let invalid = describe_error(&ShowError::InvalidSelector("zz".into()));
         assert!(
             invalid.contains("zz") && invalid.contains(&MIN_HASH_PREFIX.to_string()),
             "{invalid}"
         );
-        let unknown = describe_error(&bundle, &ShowError::UnknownAsset("deadbeef".into()));
+        let unknown = describe_error(&ShowError::UnknownAsset("deadbeef".into()));
         assert!(unknown.contains("deadbeef"), "{unknown}");
-        for text in [&ambiguous, &invalid, &unknown] {
-            assert!(!text.contains("cli.show."), "raw key leaked: {text}");
-        }
     }
 
-    /// A swept asset prints the row the catalog already described: the trash fact comes from
+    /// A swept asset prints the trash row: the trash fact comes from
     /// `Workspace::is_trashed`, the one place the chain is replayed.
     #[test]
     fn a_swept_asset_shows_in_trash() {
@@ -720,15 +661,7 @@ mod tests {
         assert_eq!(swept, vec![id]);
         let view = collect(&fx.ws, &id).expect("a trashed asset is still managed");
         assert!(view.in_trash);
-        let bundle = bundle();
-        let page = render(&bundle, &view);
-        let row = bundle.format(
-            keys::SHOW_IN_TRASH,
-            &[(
-                "value",
-                Value::Str(&bundle.format(keys::SHOW_VALUE_YES, &[])),
-            )],
-        );
-        assert!(page.contains(&row), "{page}");
+        let page = render(&view);
+        assert!(page.contains("  In trash:        yes\n"), "{page}");
     }
 }

@@ -53,13 +53,10 @@ use std::path::Path;
 
 use capsule_core::exif::{extract_exif, resolve_timezone};
 use capsule_core::lifecycle::Workspace;
-use capsule_i18n::Bundle;
 use colored::Colorize as _;
 use jiff::Timestamp;
 use thiserror::Error;
 use uuid::Uuid;
-
-use crate::i18n::{Value, keys};
 
 /// One `capsule repair capture-time` invocation, independent of the argument parser.
 #[derive(Debug, Clone, Copy, Default)]
@@ -277,22 +274,28 @@ pub fn run(ws: &mut Workspace, request: RepairRequest) -> Result<RepairSummary, 
     Ok(summary)
 }
 
-/// Localize a [`RepairError`] for the failure line.
-pub fn describe_error(bundle: &Bundle, error: &RepairError) -> String {
+/// A human-readable reason for a [`RepairError`], for the failure line.
+pub fn describe_error(error: &RepairError) -> String {
     match error {
-        RepairError::Lifecycle { asset_id, detail } => bundle.format(
-            keys::REPAIR_CAPTURE_TIME_FAILED_ASSET,
-            &[
-                ("asset_id", Value::Str(&asset_id.to_string())),
-                ("reason", Value::Str(detail)),
-            ],
+        RepairError::Lifecycle { asset_id, detail } => format!(
+            "Correcting {asset_id} failed: {detail}. Assets corrected before it stay corrected; \
+             nothing after it was touched."
         ),
     }
 }
 
+/// The line a run whose every timestamp agrees prints.
+const NOTHING_TO_REPAIR: &str =
+    "Every capture timestamp agrees with its original's EXIF; nothing to repair.";
+
+/// The closing note a run that corrected anything prints.
+const DRIFT_NOTICE: &str = "Corrected assets stay in the month directory they were imported \
+                            into; that drift between directory and capture date is expected \
+                            after a correction and is not a fault.";
+
 /// Render the run as the lines `capsule repair capture-time` prints.
 #[must_use]
-pub fn render(bundle: &Bundle, request: RepairRequest, summary: &RepairSummary) -> String {
+pub fn render(request: RepairRequest, summary: &RepairSummary) -> String {
     let detection = &summary.detection;
     let mut out = String::new();
     let mut line = |text: String| {
@@ -301,122 +304,80 @@ pub fn render(bundle: &Bundle, request: RepairRequest, summary: &RepairSummary) 
     };
 
     line(
-        bundle
-            .format(
-                keys::REPAIR_CAPTURE_TIME_CHECKED,
-                &[("count", Value::Int(detection.scanned as i64))],
-            )
-            .cyan()
-            .to_string(),
+        format!(
+            "Checked {} asset(s) against the EXIF capture time of their originals.",
+            detection.scanned
+        )
+        .cyan()
+        .to_string(),
     );
     if !request.apply {
         line(
-            bundle
-                .format(keys::REPAIR_CAPTURE_TIME_DRY_RUN_NOTICE, &[])
+            "Dry run: nothing was written. Re-run with --apply to correct the affected sidecars."
                 .yellow()
                 .to_string(),
         );
     }
 
     for item in &detection.affected {
-        let recovered = item.recovered.to_string();
-        let asset_id = item.asset_id.to_string();
+        let (asset_id, recorded, recovered) = (item.asset_id, &item.recorded_text, item.recovered);
         line(match item.delta_seconds() {
-            Some(delta) => bundle.format(
-                keys::REPAIR_CAPTURE_TIME_ROW,
-                &[
-                    ("asset_id", Value::Str(&asset_id)),
-                    ("recorded", Value::Str(&item.recorded_text)),
-                    ("recovered", Value::Str(&recovered)),
-                    ("delta", Value::Int(delta)),
-                ],
+            Some(delta) => format!(
+                "  {asset_id}: recorded {recorded}, EXIF says {recovered} (off by {delta} s)"
             ),
-            None => bundle.format(
-                keys::REPAIR_CAPTURE_TIME_ROW_UNPARSEABLE,
-                &[
-                    ("asset_id", Value::Str(&asset_id)),
-                    ("recorded", Value::Str(&item.recorded_text)),
-                    ("recovered", Value::Str(&recovered)),
-                ],
+            None => format!(
+                "  {asset_id}: recorded {recorded} (not a timestamp), EXIF says {recovered}"
             ),
         });
     }
     for (asset_id, reason) in &detection.unreadable {
         line(
-            bundle
-                .format(
-                    keys::REPAIR_CAPTURE_TIME_UNREADABLE,
-                    &[
-                        ("asset_id", Value::Str(&asset_id.to_string())),
-                        ("reason", Value::Str(reason)),
-                    ],
-                )
+            format!("  {asset_id}: original could not be read ({reason}); skipped")
                 .red()
                 .to_string(),
         );
     }
     for asset_id in &summary.corrected {
-        line(
-            bundle
-                .format(
-                    keys::REPAIR_CAPTURE_TIME_CORRECTED,
-                    &[("asset_id", Value::Str(&asset_id.to_string()))],
-                )
-                .green()
-                .to_string(),
-        );
+        line(format!("  {asset_id}: corrected").green().to_string());
     }
     if summary.limit_reached {
         line(
-            bundle
-                .format(
-                    keys::REPAIR_CAPTURE_TIME_LIMIT_NOTICE,
-                    &[("corrected", Value::Int(summary.corrected.len() as i64))],
-                )
-                .yellow()
-                .to_string(),
+            format!(
+                "Stopped after {} correction(s) because of --limit; re-run to continue.",
+                summary.corrected.len()
+            )
+            .yellow()
+            .to_string(),
         );
     }
 
     if !detection.trashed.is_empty() {
         line(
-            bundle
-                .format(
-                    keys::REPAIR_CAPTURE_TIME_TRASHED,
-                    &[("count", Value::Int(detection.trashed.len() as i64))],
-                )
-                .yellow()
-                .to_string(),
+            format!(
+                "  Skipped {} asset(s) in trash; restore an asset first if it should be repaired.",
+                detection.trashed.len()
+            )
+            .yellow()
+            .to_string(),
         );
     }
 
     if detection.affected.is_empty() && detection.unreadable.is_empty() {
-        line(
-            bundle
-                .format(keys::REPAIR_CAPTURE_TIME_NOTHING, &[])
-                .green()
-                .to_string(),
-        );
+        line(NOTHING_TO_REPAIR.green().to_string());
     } else {
-        line(bundle.format(
-            keys::REPAIR_CAPTURE_TIME_SUMMARY,
-            &[
-                ("affected", Value::Int(detection.affected.len() as i64)),
-                ("corrected", Value::Int(summary.corrected.len() as i64)),
-                ("agrees", Value::Int(detection.agrees as i64)),
-                ("no_instant", Value::Int(detection.no_instant as i64)),
-                ("unreadable", Value::Int(detection.unreadable.len() as i64)),
-                ("trashed", Value::Int(detection.trashed.len() as i64)),
-            ],
+        line(format!(
+            "Capture-time repair: {} affected, {} corrected, {} already correct, {} without a \
+             recoverable EXIF instant, {} unreadable, {} in trash.",
+            detection.affected.len(),
+            summary.corrected.len(),
+            detection.agrees,
+            detection.no_instant,
+            detection.unreadable.len(),
+            detection.trashed.len(),
         ));
     }
     if !summary.corrected.is_empty() {
-        line(
-            bundle
-                .format(keys::REPAIR_CAPTURE_TIME_DRIFT_NOTICE, &[])
-                .dimmed()
-                .to_string(),
-        );
+        line(DRIFT_NOTICE.dimmed().to_string());
     }
     out
 }
@@ -826,12 +787,7 @@ mod tests {
 
     #[test]
     fn a_dry_run_page_reports_the_affected_asset_and_says_nothing_was_written() {
-        let bundle = Bundle::for_locale("en");
-        let page = render(
-            &bundle,
-            RepairRequest::default(),
-            &sample_summary(false, false),
-        );
+        let page = render(RepairRequest::default(), &sample_summary(false, false));
         assert!(page.contains("Dry run"), "{page}");
         assert!(page.contains("--apply"), "{page}");
         assert!(page.contains("2026-09-02T10:00:00Z"), "{page}");
@@ -840,27 +796,23 @@ mod tests {
             page.contains("1 affected, 0 corrected, 2 already correct, 1 without"),
             "{page}"
         );
-        assert!(!page.contains("cli.repair."), "no raw key leaks:\n{page}");
     }
 
     #[test]
     fn an_apply_page_names_the_corrected_asset_and_the_expected_drift() {
-        let bundle = Bundle::for_locale("en");
         let request = RepairRequest {
             apply: true,
             limit: None,
         };
-        let page = render(&bundle, request, &sample_summary(true, true));
+        let page = render(request, &sample_summary(true, true));
         assert!(!page.contains("Dry run"), "{page}");
         assert!(page.contains(&Uuid::nil().to_string()), "{page}");
         assert!(page.contains("1 affected, 1 corrected"), "{page}");
-        let drift = bundle.format(keys::REPAIR_CAPTURE_TIME_DRIFT_NOTICE, &[]);
-        assert!(page.contains(&drift), "{page}");
+        assert!(page.contains(DRIFT_NOTICE), "{page}");
     }
 
     #[test]
     fn a_clean_library_reports_nothing_to_repair() {
-        let bundle = Bundle::for_locale("en");
         let summary = RepairSummary {
             detection: Detection {
                 scanned: 2,
@@ -869,9 +821,8 @@ mod tests {
             },
             ..Default::default()
         };
-        let page = render(&bundle, RepairRequest::default(), &summary);
-        let nothing = bundle.format(keys::REPAIR_CAPTURE_TIME_NOTHING, &[]);
-        assert!(page.contains(&nothing), "{page}");
+        let page = render(RepairRequest::default(), &summary);
+        assert!(page.contains(NOTHING_TO_REPAIR), "{page}");
         assert!(!page.contains("affected,"), "{page}");
     }
 }
