@@ -18,8 +18,9 @@
 //! - **The request goes away.** The chunk route runs the append and the deposit it triggers as
 //!   one task it awaits but does not own, so a guest who disconnects stops neither.
 //! - **The request that completed the session never claimed it.** The process died between the
-//!   append's record and the claim. The session is full and unclaimed, and the guest's replay of
-//!   any of its chunks deposits it (`crate::upload::chunk::Accepted::Replayed`).
+//!   append's record and the claim. The session is full and unclaimed, and the next boot
+//!   deposits it ([`finish_unclaimed`]) — or the guest's replay of any of its chunks does first
+//!   (`crate::upload::chunk::Accepted::Replayed`).
 //! - **The process goes away holding the claim.** [`recover`] drives every drop claim boot lists,
 //!   through the same steps, before this process has claimed anything.
 //!
@@ -141,6 +142,39 @@ pub async fn recover(drops: &DropContext, stranded: Vec<UploadSessionRecord>) ->
         completed = recovery.completed.len(),
         failed = recovery.failed.len(),
         "recovered the drop deposits a previous process left"
+    );
+    recovery
+}
+
+/// Deposit every guest drop in `full` — sessions
+/// [`full_unclaimed`](crate::upload::finalize::full_unclaimed) listed, whose completing chunk was
+/// recorded by a process that died before claiming the deposit.
+///
+/// Each goes through [`deposit`], claim first, so a guest's replay that reaches one first files
+/// it and this caller stands down. Album sessions in `full` are skipped:
+/// [`crate::upload::finalize::finish_unclaimed`] finalizes those. Sequential, for the reason
+/// [`recover`] is.
+#[tracing::instrument(skip_all, fields(full = full.len()))]
+pub async fn finish_unclaimed(drops: &DropContext, full: Vec<UploadSessionRecord>) -> Recovery {
+    let mut recovery = Recovery::default();
+    for record in full.into_iter().filter(UploadSessionRecord::is_guest_drop) {
+        let upload = record.upload_id;
+        tracing::info!(%upload, "depositing a full drop whose completing request never claimed it");
+        match deposit(drops, &upload).await {
+            Ok(Outcome::Filed) => recovery.completed.push(upload),
+            Ok(outcome @ (Outcome::AlreadyClaimed | Outcome::NotFound)) => {
+                tracing::debug!(%upload, ?outcome, "somebody else finished the full drop");
+            }
+            Err(failure) => {
+                tracing::warn!(%upload, %failure, "a full, unclaimed drop was not deposited");
+                recovery.failed.push(upload);
+            }
+        }
+    }
+    tracing::info!(
+        completed = recovery.completed.len(),
+        failed = recovery.failed.len(),
+        "deposited the full drops a previous process left unclaimed"
     );
     recovery
 }

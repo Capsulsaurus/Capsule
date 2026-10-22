@@ -81,13 +81,20 @@
 //!   the finalization it triggers run as one task, which the route awaits for its answer but
 //!   which outlives the route if the route is dropped. One task rather than two, because a
 //!   request dropped between an append that completed the session and the claim would leave a
-//!   full session nobody finishes. A full, unclaimed session — the process died in that window
-//!   — is finished by the client's replay of any of its chunks, which finalizes it as the
-//!   completing chunk would have.
+//!   full session nobody finishes.
 //! - **The process goes away.** The claim lives in the session store and outlives the process
 //!   that took it. [`recover`] drives every claim listed by
 //!   [`claimed`](crate::store::UploadSessionStore::claimed) before the listener accepts a
 //!   request — so every such claim belongs to a process that is gone — through the same steps.
+//!
+//! A process can also die *before* the claim: between recording the completing chunk and
+//! claiming. The session is then full and unclaimed
+//! ([`is_full_and_unclaimed`](crate::store::UploadSessionRecord::is_full_and_unclaimed)), and
+//! nothing depends on the client replaying a chunk to finish it. Every request that meets such a
+//! session finalizes it as the completing chunk would have — a replay of any of its chunks, the
+//! client's duplicate `create`, and its `HEAD` — and the next boot finalizes every one left
+//! ([`full_unclaimed`], [`finish_unclaimed`]). Each goes through [`finalize`]'s claim, so any two
+//! of them racing finalize once.
 //!
 //! A re-driven claim may find its stage already committed: the finalizer died between step 4
 //! and step 8. The committed blob is then re-hashed in place of the stage and step 4 is
@@ -295,6 +302,79 @@ pub async fn recover(
         completed = recovery.completed.len(),
         failed = recovery.failed.len(),
         "recovered the finalization claims a previous process left"
+    );
+    recovery
+}
+
+/// Every live session that holds every declared byte and whose finish nobody has claimed —
+/// album uploads and guest drops alike, oldest progress first.
+///
+/// What a process that died between recording a completing chunk and claiming its finish leaves
+/// behind. Read at boot, beside [`claimed`](crate::store::UploadSessionStore::claimed): the
+/// claimable sessions are exactly the ones
+/// [`least_recently_progressed`](crate::store::UploadSessionStore::least_recently_progressed)
+/// ranks, so this lists all of them — every progress instant is before the end of time — and
+/// keeps the full ones. A session that expires or is discarded between the listing and its read
+/// is skipped.
+#[tracing::instrument(skip_all)]
+pub async fn full_unclaimed(
+    sessions: &dyn crate::store::UploadSessionStore,
+) -> Result<Vec<UploadSessionRecord>, StoreError> {
+    let candidates = sessions
+        .least_recently_progressed(jiff::Timestamp::MAX, usize::MAX)
+        .await?;
+    let mut full = Vec::new();
+    for upload in &candidates {
+        if let Some(record) = sessions.read(upload).await?
+            && record.is_full_and_unclaimed()
+        {
+            full.push(record);
+        }
+    }
+    tracing::debug!(
+        claimable = candidates.len(),
+        full = full.len(),
+        "listed the full sessions nobody has claimed"
+    );
+    Ok(full)
+}
+
+/// Finalize every album session in `full` — sessions [`full_unclaimed`] listed, whose
+/// completing chunk was recorded by a process that died before claiming.
+///
+/// Each goes through [`finalize`], claim first, so a client's replay, duplicate `create` or
+/// `HEAD` that reaches one of them first finalizes it and this caller stands down. A guest drop
+/// in `full` is skipped: [`crate::drop::deposit::finish_unclaimed`] deposits it. Sequential, for
+/// the reason [`recover`] is.
+#[tracing::instrument(skip_all, fields(full = full.len()))]
+pub async fn finish_unclaimed(
+    context: &UploadContext,
+    attestation: &AttestationContext,
+    full: Vec<UploadSessionRecord>,
+) -> Recovery {
+    let mut recovery = Recovery::default();
+    for record in full.into_iter().filter(|record| !record.is_guest_drop()) {
+        let upload = record.upload_id;
+        tracing::info!(
+            %upload,
+            asset_id = %record.asset_id,
+            "finalizing a full session whose completing request never claimed it"
+        );
+        match finalize(context, attestation, &upload).await {
+            Ok(Outcome::Committed { .. }) => recovery.completed.push(upload),
+            Ok(outcome @ (Outcome::AlreadyClaimed | Outcome::NotFound)) => {
+                tracing::debug!(%upload, ?outcome, "somebody else finished the full session");
+            }
+            Err(failure) => {
+                tracing::warn!(%upload, %failure, "a full, unclaimed session did not finalize");
+                recovery.failed.push(upload);
+            }
+        }
+    }
+    tracing::info!(
+        completed = recovery.completed.len(),
+        failed = recovery.failed.len(),
+        "finalized the full sessions a previous process left unclaimed"
     );
     recovery
 }

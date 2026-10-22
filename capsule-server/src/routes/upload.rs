@@ -1024,28 +1024,52 @@ pub async fn create_upload(
             store_unavailable(&error, "list an uploader's sessions");
             CreateRejection::unavailable(upload.clock())
         })?;
+    // A session the finish below refused is terminal now, and is neither handed back nor counted
+    // against the cap: the client is given a fresh one to send its bytes again.
+    let mut refused = None;
     if let Some(existing) = active_session_for(live.iter(), &owner, &request.hash, &album) {
-        tracing::info!(
-            upload_id = %existing.upload_id,
-            received_bytes = existing.received_bytes,
-            "returning the active session for a duplicate create"
-        );
-        let body = describe(&existing.upload_id, existing.total_size);
-        return Ok(WithHeaders::new(
-            CreateReply::Existing(body),
-            CreateHeaders {
-                location: Some(session_url(&existing.upload_id)),
-                suggested_chunk_size: Some(suggested_chunk_size(existing.total_size)),
-                offset: Some(existing.received_bytes),
-            },
-        ));
+        // A full session nobody claimed is finished here, before the offset is handed back: a
+        // client told it is at its size sends nothing more, so this answer is the last request
+        // it makes about these bytes (#830).
+        match finish_if_full(&upload, &attestation, existing).await {
+            None | Some(Ok(Outcome::Committed { .. } | Outcome::AlreadyClaimed)) => {
+                tracing::info!(
+                    upload_id = %existing.upload_id,
+                    received_bytes = existing.received_bytes,
+                    "returning the active session for a duplicate create"
+                );
+                let body = describe(&existing.upload_id, existing.total_size);
+                return Ok(WithHeaders::new(
+                    CreateReply::Existing(body),
+                    CreateHeaders {
+                        location: Some(session_url(&existing.upload_id)),
+                        suggested_chunk_size: Some(suggested_chunk_size(existing.total_size)),
+                        offset: Some(existing.received_bytes),
+                    },
+                ));
+            }
+            // Whether the session finished is unknown: it is claimed and recovery drives it, or
+            // it failed and the client's next create opens a fresh one. Either is a retry away.
+            Some(Err(FinalizeFailure::Unavailable(_))) => {
+                return Err(CreateRejection::unavailable(upload.clock()));
+            }
+            // Refused and left `FailedProcessing` with its stage dropped, or gone: the bytes are
+            // not held, so the create carries on and opens a session to receive them again.
+            Some(Ok(Outcome::NotFound) | Err(_)) => {
+                tracing::info!(
+                    upload_id = %existing.upload_id,
+                    "a duplicate create's full session did not finalize; opening a fresh one"
+                );
+                refused = Some(existing.upload_id.clone());
+            }
+        }
     }
 
     // The live-session cap, after the idempotent answer so a client resuming what it already
     // holds is never refused, and before anything is reserved or staged on its behalf.
     let open = live
         .iter()
-        .filter(|record| record.status.is_active())
+        .filter(|record| record.status.is_active() && Some(&record.upload_id) != refused.as_ref())
         .count();
     if open >= budgets::UPLOAD_LIVE_SESSIONS {
         tracing::info!(
@@ -1377,7 +1401,8 @@ pub async fn append_chunk(
     .map_err(|join| {
         // A panic inside the append or the finalization. A claim it held is left for the next
         // boot's recovery to drive, and a full session it left unclaimed is finished by the
-        // client's replay of its last chunk; this client is told to come back.
+        // client's replay, duplicate create or `HEAD`, or else the next boot; this client is
+        // told to come back.
         tracing::error!(upload_id = %id, error = %join, "the chunk task did not finish");
         ChunkRejection::unavailable(upload.clock())
     })?
@@ -1487,19 +1512,74 @@ async fn append_and_finish(
     })
 }
 
+/// Finalize `record` when it holds every declared byte and nobody has claimed its finalization.
+///
+/// `None` when there is nothing to finish: the session is short of its size, already claimed or
+/// terminal, or a guest drop — whose finish is the drop surface's deposit, never a finalization,
+/// and which boot recovery deposits. Otherwise the same finish a replayed chunk runs, as its own
+/// task for the reason [`append_chunk`] spawns one: a client that goes away mid-finalization
+/// must not stop it between the commit and the index write.
+async fn finish_if_full(
+    upload: &UploadContext,
+    attestation: &crate::attestation::AttestationContext,
+    record: &UploadSessionRecord,
+) -> Option<Result<Outcome, FinalizeFailure>> {
+    if !record.is_full_and_unclaimed() || record.is_guest_drop() {
+        return None;
+    }
+    let id = record.upload_id.clone();
+    tracing::info!(upload_id = %id, "finalizing a full session nobody claimed");
+    let task = {
+        let (upload, attestation, id) = (upload.clone(), attestation.clone(), id.clone());
+        tokio::spawn(
+            async move { finalize::finalize(&upload, &attestation, &id).await }
+                .instrument(tracing::Span::current()),
+        )
+    };
+    Some(task.await.unwrap_or_else(|join| {
+        // A panic inside the finalization. A claim it held is left for the next boot's recovery.
+        tracing::error!(upload_id = %id, error = %join, "the finalization task did not finish");
+        Err(FinalizeFailure::Unavailable(
+            "the finalization task did not finish".to_owned(),
+        ))
+    }))
+}
+
 /// Report a session's progress and state.
 ///
 /// The resumption primitive: a client that lost a connection, an acknowledgement, or a process
 /// asks here and learns the authoritative offset, the declared length and the session's state.
 /// The answer carries **no body** — HTTP forbids one on `HEAD`, which is why the protocol puts
 /// all three on headers.
+///
+/// A session that holds every byte and whose finalization nobody claimed is finalized before it
+/// is reported: a client resuming at an offset equal to the size sends nothing more, so
+/// this is the last request it makes about the session, and the state it reads is the one the
+/// finalization left.
 #[kynos::head("/v1/upload/{id}", operation_id = "head_upload", tag = UploadTag)]
 pub async fn head_upload(
     Inject(upload): Inject<UploadContext>,
+    Inject(attestation): Inject<crate::attestation::AttestationContext>,
     Auth(credential): Auth<AccessToken>,
     Path(path): Path<UploadPath>,
 ) -> Result<WithHeaders<HeadReply, HeadHeaders>, SessionRejection> {
-    let record = session_for(&upload, &path, &credential.user).await?;
+    let mut record = session_for(&upload, &path, &credential.user).await?;
+    if let Some(finished) = finish_if_full(&upload, &attestation, &record).await {
+        // Whatever the finalization did, the record now says so — `Completed`, `FailedProcessing`,
+        // or still claimed for recovery — and that is the answer, not the outcome's shape.
+        if let Err(failure) = finished {
+            tracing::info!(upload_id = %record.upload_id, %failure, "a full session reported by HEAD did not finalize");
+        }
+        record = upload
+            .sessions()
+            .read(&record.upload_id)
+            .await
+            .map_err(|error| {
+                store_unavailable(&error, "re-read a finalized session");
+                SessionRejection::unavailable(upload.clock())
+            })?
+            .ok_or_else(SessionRejection::not_found)?;
+    }
 
     Ok(WithHeaders::new(
         HeadReply::Progress,

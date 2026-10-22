@@ -2004,6 +2004,91 @@ async fn a_full_drop_nobody_deposited_is_deposited_by_the_replay_of_its_last_chu
     assert_one_drop(&fixture, &bearer, &both).await;
 }
 
+/// Run the boot pass over full, unclaimed sessions, as a restarted process does: one listing,
+/// the album finisher and the drop finisher.
+async fn finish_unclaimed_at_boot(
+    fixture: &Fixture,
+) -> (
+    capsule_server::upload::finalize::Recovery,
+    capsule_server::upload::finalize::Recovery,
+) {
+    use capsule_server::attestation::AttestationContext;
+    use capsule_server::drop::DropContext;
+    use capsule_server::upload::UploadContext;
+    use kynos::di::Provides as _;
+
+    let app = fixture.app();
+    let upload: UploadContext = app.provide();
+    let attestation: AttestationContext = app.provide();
+    let drops: DropContext = app.provide();
+    let full = capsule_server::upload::finalize::full_unclaimed(upload.sessions())
+        .await
+        .expect("the store lists its sessions");
+    let albums =
+        capsule_server::upload::finalize::finish_unclaimed(&upload, &attestation, full.clone())
+            .await;
+    let deposits = capsule_server::drop::deposit::finish_unclaimed(&drops, full).await;
+    (albums, deposits)
+}
+
+#[tokio::test]
+async fn a_full_drop_whose_process_died_before_its_claim_is_deposited_at_boot() {
+    use capsule_server::store::UploadId;
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let first = payload(b'u', 4096);
+    let last = payload(b'v', 4096);
+    let both: Vec<u8> = first.iter().chain(last.iter()).copied().collect();
+    let (id, upload_id) = open_drop(&fixture, &bearer, 63, &both).await;
+    chunk_at(&fixture, &id, &upload_id, 0, &first)
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    record_without_depositing(&fixture, &upload_id, 4096, &last).await;
+    // A second drop still short of its size: a guest's transfer in progress, not a finish.
+    let pending = payload(b'w', 8192);
+    let (_, in_progress) = open_drop(&fixture, &bearer, 64, &pending).await;
+
+    // No guest replays a chunk: the next boot is what files the drop.
+    let (albums, deposits) = finish_unclaimed_at_boot(&fixture).await;
+    assert_eq!(
+        albums,
+        capsule_server::upload::finalize::Recovery::default(),
+        "the album finisher leaves a drop alone"
+    );
+    assert_eq!(
+        deposits
+            .completed
+            .iter()
+            .map(UploadId::as_str)
+            .collect::<Vec<_>>(),
+        vec![upload_id.as_str()],
+        "{deposits:?}"
+    );
+    assert!(deposits.failed.is_empty(), "{deposits:?}");
+    assert_eq!(terminal_status(&fixture, &upload_id).await, "completed");
+    assert_one_drop(&fixture, &bearer, &both).await;
+    assert!(
+        !fixture
+            .uploads
+            .read_for_test(&in_progress)
+            .await
+            .expect("the transfer is live")
+            .status
+            .is_terminal(),
+        "a drop still short of its size is left to its guest"
+    );
+
+    // A second boot finds nothing to finish, and files nothing twice.
+    let (albums, deposits) = finish_unclaimed_at_boot(&fixture).await;
+    assert_eq!(
+        (albums, deposits),
+        Default::default(),
+        "nothing is left full and unclaimed"
+    );
+    assert_one_drop(&fixture, &bearer, &both).await;
+}
+
 #[tokio::test]
 async fn a_drop_deposit_whose_process_died_is_recovered_at_boot_and_never_finalized_as_an_album_upload()
  {
