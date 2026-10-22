@@ -284,6 +284,61 @@ fn ffi_manifest_envelope_carries_the_derivative_pair_both_ways() {
     assert_eq!(back.derivative_format.as_deref(), Some("image/jxl"));
 }
 
+/// A sidecar with an as-imported capture time and, when `corrected` is given, a user correction
+/// in `capture_timestamp_user`.
+fn sidecar_with_capture(corrected: Option<&str>) -> capsule_core::sidecar::SidecarV1 {
+    use capsule_core::metadata::crdt::{Lww, OrSet};
+    use capsule_core::sidecar::{Regions, SIDECAR_SCHEMA_V1, SidecarV1};
+
+    let mut capture_timestamp_user = Lww::new();
+    if let Some(corrected) = corrected {
+        capture_timestamp_user.set(
+            corrected.to_string(),
+            "2026-06-01T00:00:00Z",
+            uuid::Uuid::from_u128(0xD1),
+        );
+    }
+    SidecarV1 {
+        sidecar_schema: SIDECAR_SCHEMA_V1,
+        crypto_suite_id: capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
+        uuid: uuid::Uuid::from_u128(0x7777),
+        hash: capsule_core::crypto::hash::Hash32([0xAB; 32]),
+        capture_timestamp: "2021-06-01T12:00:00Z".into(),
+        capture_timestamp_user,
+        import_timestamp: "2026-05-31T11:00:00Z".into(),
+        content_type: "image/jpeg".into(),
+        dimensions: None,
+        lqip: None,
+        tags_user: OrSet::new(),
+        tags_ai: OrSet::new(),
+        caption: Lww::new(),
+        rating: Lww::new(),
+        stack_membership: Lww::new(),
+        regions: Regions::new(),
+        cull: Lww::new(),
+        hidden: Lww::new(),
+        camera_id: None,
+        device_id: uuid::Uuid::from_u128(0xD1),
+        session_id: uuid::Uuid::from_u128(0x5E),
+        gps: None,
+        gps_user: Lww::new(),
+        provenance_chain_hash: None,
+        unknown: std::collections::BTreeMap::new(),
+        signature: None,
+    }
+}
+
+/// The record an app upserts dates the asset by the user's correction when the sidecar carries
+/// one, and by the as-imported capture time otherwise.
+#[test]
+fn ffi_asset_metadata_reports_the_effective_capture_time() {
+    let corrected = FfiAssetMetadata::from(sidecar_with_capture(Some("2001-09-09T01:46:40Z")));
+    assert_eq!(corrected.capture_timestamp, "2001-09-09T01:46:40Z");
+
+    let imported = FfiAssetMetadata::from(sidecar_with_capture(None));
+    assert_eq!(imported.capture_timestamp, "2021-06-01T12:00:00Z");
+}
+
 // ─── S-P1: the workspace verbs ───────────────────────────────────────────────
 
 /// The app's build identity every manifest this workspace authors reports (S-D15).
