@@ -136,7 +136,7 @@ The server can verify only ciphertext. The client verifies plaintext on download
 
 ## Idempotency and Resumption
 
-- **Duplicate create** keyed by `(owner_id, hash, album_id)`: an active session is returned (`200` + offset); an already-finalized hash is `409 error.upload.duplicate_blob` naming the existing asset.
+- **Duplicate create** keyed by `(owner_id, hash, album_id)`: an active session is returned (`200` + offset); an already-finalized hash is `409 error.upload.duplicate_blob` naming the existing asset. A `create` for a different asset first adopts the blob ([Deduplication and Merge](#deduplication-and-merge)).
 - **Resume** is `HEAD`-driven. Interrupted transfers are normal; arbitrary pauses within the lifetime are tolerated.
 - **Lost finalization ACK**: `HEAD` (or the session list) shows the terminal outcome.
 - Every step is logged with the upload id.
@@ -182,7 +182,11 @@ Unprefixed codes are `error.upload.*`.
 
 ## Deduplication and Merge
 
-Blobs are content-addressed, so identical bytes are stored once. A finalized hash on create is `409 duplicate_blob` naming the existing asset; for a retry of the same blob that is complete. An asset that already exists remotely under a different ciphertext is admitted by the [pipeline](/design/import/pipeline/#plan--confirm) and MUST resolve as a **merge**: the existing blob is linked to the new asset reference, never re-uploaded. A merge is strictly additive — it never deletes a blob or rewrites a manifest; references are removed only by a signed `delete` ([Authorization](/design/authorization/)). Not yet enforced; tracked by #672: the server refuses rather than adopts a cross-asset shared blob, so the second asset cannot record it. Duplicates already in a library are collapsed by [intra-library deduplication](/design/filesystem/maintenance/#deduplication).
+Blobs are content-addressed, so identical bytes are stored once. A finalized hash on create is `409 duplicate_blob` naming the existing asset; for a retry of the same blob that is complete. An asset that already exists remotely under a different ciphertext is admitted by the [pipeline](/design/import/pipeline/#plan--confirm) and MUST resolve as a **merge**: the existing blob is linked to the new asset reference, never re-uploaded. A merge is strictly additive — it never deletes a blob or rewrites a manifest; references are removed only by a signed `delete` ([Authorization](/design/authorization/)).
+
+The server performs the link. A `create` whose hash another asset of the same owner and album already holds is **adopted** before it is refused: the existing blob is recorded against the requesting asset, with the same owner-ledger entries and custody receipt a finalization writes, and only then is the `409` returned. Every asset that depends on a blob is therefore a row naming it, which is what [garbage collection](/design/filesystem/maintenance/) counts, so purging one holder never collects bytes another still references. Adoption never stores bytes and is never charged against quota. It does not apply to a retry of the same asset, which already names the blob; to a `replace` member, whose manifest records the whole bundle; or to a signed manifest, which names its own asset. Bytes the store no longer holds are not adopted: the create opens an ordinary session so they can be uploaded again. An adoption that would re-point a singular role the asset already holds is `400 error.upload.envelope_mismatch`, the same answer finalization gives.
+
+Duplicates already in a library are collapsed by [intra-library deduplication](/design/filesystem/maintenance/#deduplication).
 
 ## Quota and Permissions
 
