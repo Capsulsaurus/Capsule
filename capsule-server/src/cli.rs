@@ -415,6 +415,8 @@ async fn maintenance(config: &Config) -> Result<Maintenance> {
 /// configured by accident.
 async fn serve(config: &Config) -> Result<ExitCode> {
     let assembled = assemble(config).await?;
+    // Before the listener binds, so every claim listed belongs to a process that is gone.
+    recover_stranded_claims(&assembled.app).await;
     // The router is built here rather than through `Assembled::service` because the trusted-proxy
     // policy is a property of the listener's deployment, not of the assembled stores (#704).
     tracing::info!(trusted_proxies = %config.trusted_proxies, "resolving client addresses");
@@ -446,6 +448,44 @@ async fn serve(config: &Config) -> Result<ExitCode> {
         .map_err(|error| eyre!("serving: {error}"))?;
     tracing::info!("drained and stopped");
     Ok(ExitCode::SUCCESS)
+}
+
+/// Re-drive the finalization claims a previous process died holding.
+///
+/// The claims are listed **here**, before this process has accepted a request and so before it
+/// has claimed anything, which is what makes every one of them a claim no live finalizer holds
+/// (transfer/upload.md, Finalization and Integrity). Driving them is a background task: a boot
+/// does not wait on a hash of every stranded blob before it serves, and a claimed session
+/// refuses chunks and cancellation meanwhile, so nothing can race the driver for it.
+///
+/// A store that cannot list them is logged and not fatal: the claims stay in the store, and the
+/// next boot lists them again.
+async fn recover_stranded_claims(app: &crate::App) {
+    use kynos::di::Provides as _;
+
+    let upload: crate::upload::UploadContext = app.provide();
+    let attestation: crate::attestation::AttestationContext = app.provide();
+    let stranded = match upload.sessions().claimed().await {
+        Ok(stranded) => stranded,
+        Err(error) => {
+            tracing::error!(
+                %error,
+                "could not list stranded finalization claims; they wait for the next boot"
+            );
+            return;
+        }
+    };
+    if stranded.is_empty() {
+        tracing::debug!("no stranded finalization claims to recover");
+        return;
+    }
+    tracing::info!(
+        stranded = stranded.len(),
+        "recovering finalization claims a previous process left"
+    );
+    tokio::spawn(async move {
+        crate::upload::finalize::recover(&upload, &attestation, stranded).await;
+    });
 }
 
 /// Install the log stream, on stderr.

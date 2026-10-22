@@ -558,6 +558,28 @@ impl UploadSessionStore for InMemoryUploadSessions {
         })
     }
 
+    fn claimed(&self) -> StoreFuture<'_, Vec<UploadSessionRecord>> {
+        Box::pin(async move {
+            let now = self.clock.now();
+            let mut state = lock(&self.state);
+            state.purge(now);
+            let mut found: Vec<UploadSessionRecord> = state
+                .sessions
+                .values()
+                .map(|entry| &entry.record)
+                .filter(|record| record.status == UploadSessionStatus::WaitingForProcessing)
+                .cloned()
+                .collect();
+            found.sort_by(|a, b| {
+                a.created_at
+                    .cmp(&b.created_at)
+                    .then_with(|| a.upload_id.cmp(&b.upload_id))
+            });
+            tracing::debug!(count = found.len(), "listed claimed upload sessions");
+            Ok(found)
+        })
+    }
+
     fn discard<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, Option<UploadSessionRecord>> {
         Box::pin(async move {
             let now = self.clock.now();
@@ -1483,6 +1505,7 @@ mod tests {
         a_terminal_session_is_not_an_eviction_candidate,
         discarding_removes_the_record_its_chunks_and_its_listing,
         eviction_candidates_are_ordered_by_progress_and_bounded,
+        the_claimed_listing_is_exactly_the_sessions_awaiting_their_finalizer,
         an_expired_upload_session_leaves_no_listing_entry_behind,
         a_challenge_is_single_use,
         a_challenge_expires_with_its_store,

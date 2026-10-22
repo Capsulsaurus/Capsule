@@ -329,6 +329,113 @@ async fn the_progress_sweep_drops_an_expired_session_from_the_view() {
     assert!(!indexed(after), "and the collector's sweep is that walk");
 }
 
+/// The claimed view heals a member its record no longer backs.
+///
+/// `capsule:upload:claimed` has no lifetime of its own, and every script that writes a status
+/// keeps it in step; what is left is a member whose record lapsed, or whose status something
+/// else wrote. Boot recovery's listing is the walk that drops both, so a claim is never
+/// re-driven for a session that is gone or already terminal.
+#[tokio::test]
+async fn the_claimed_view_heals_a_member_its_record_no_longer_backs() {
+    let Some(server) = server().await else {
+        return;
+    };
+    let harness = ValkeyHarness::connect(&server.url).await;
+    let client = redis::Client::open(server.url.as_str()).expect("the URL opens");
+    let mut connection = client
+        .get_multiplexed_async_connection()
+        .await
+        .expect("a second connection");
+
+    let mut claimed_ids = Vec::new();
+    for tag in ["lapsed", "rewritten"] {
+        let upload_id = UploadId::new(format!("valkey-claimed-{tag}"));
+        harness
+            .uploads
+            .open(UploadSessionRecord {
+                upload_id: upload_id.clone(),
+                asset_id: AssetId::new(format!("valkey-claimed-{tag}-asset")),
+                owner_id: OwnerId::new("valkey-claimed-owner"),
+                upload_user_id: UserId::new("valkey-claimed-uploader"),
+                album_id: None,
+                content_type: None,
+                expected_hash: "c".repeat(64),
+                crypto_suite_id: 1,
+                protocol_version: "2026-08-29".to_owned(),
+                blob_role: BlobRole::Original,
+                intent_id: None,
+                manifest_envelope: "{}".to_owned(),
+                received_bytes: 0,
+                total_size: 1,
+                status: UploadSessionStatus::Pending,
+                created_at: harness.clock.now(),
+                last_progress_at: harness.clock.now(),
+            })
+            .await
+            .expect("the session opens");
+        assert!(
+            matches!(
+                harness
+                    .uploads
+                    .claim_finalize(&upload_id)
+                    .await
+                    .expect("the claim answers"),
+                FinalizeClaim::Won(_)
+            ),
+            "the first claim wins"
+        );
+        claimed_ids.push(upload_id);
+    }
+    let member = |id: &UploadId| {
+        let mut command = redis::cmd("SISMEMBER");
+        command.arg("capsule:upload:claimed").arg(id.to_string());
+        command
+    };
+    for id in &claimed_ids {
+        let indexed: i64 = member(id)
+            .query_async(&mut connection)
+            .await
+            .expect("answers");
+        assert_eq!(indexed, 1, "a claim enters the claimed view with the claim");
+    }
+
+    // One record gone out from under its member, one terminal by a write the set never saw.
+    let _: i64 = redis::cmd("DEL")
+        .arg(format!("capsule:upload:session:{}", claimed_ids[0]))
+        .query_async(&mut connection)
+        .await
+        .expect("DEL answers");
+    let _: i64 = redis::cmd("HSET")
+        .arg(format!("capsule:upload:session:{}", claimed_ids[1]))
+        .arg("status")
+        .arg("completed")
+        .query_async(&mut connection)
+        .await
+        .expect("HSET answers");
+
+    let listed = harness
+        .uploads
+        .claimed()
+        .await
+        .expect("the listing answers");
+    assert!(
+        listed
+            .iter()
+            .all(|record| !claimed_ids.contains(&record.upload_id)),
+        "neither is listed for recovery: {listed:?}"
+    );
+    for id in &claimed_ids {
+        let indexed: i64 = member(id)
+            .query_async(&mut connection)
+            .await
+            .expect("answers");
+        assert_eq!(
+            indexed, 0,
+            "and the listing dropped the member it walked over"
+        );
+    }
+}
+
 /// The sweep pages by score cursor across many pages, ties and drops alike (#519).
 ///
 /// Every session opens at one instant, so every member shares one score and each page resumes
