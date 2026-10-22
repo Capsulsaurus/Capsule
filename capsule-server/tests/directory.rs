@@ -486,6 +486,50 @@ async fn a_publish_attaches_its_document_and_identity_key_under_the_ledgered_has
     );
 }
 
+/// A copy that lands while the entry cannot still refuses the publish: nothing is stored or
+/// ledgered, and the copy left behind names nothing.
+#[tokio::test]
+async fn an_attached_copy_whose_entry_cannot_append_still_refuses_the_publish() {
+    use capsule_server::ledger::OwnerLedger as _;
+
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+    let ik = ik();
+    let document = signed_by(&ik, account(), 1);
+    fixture.ledger.set_appends_unavailable(true);
+
+    let problem: Value = publish(
+        &fixture,
+        &bearer,
+        &ik,
+        document.clone(),
+        StatusCode::INTERNAL_SERVER_ERROR,
+    )
+    .await
+    .json();
+    assert_eq!(problem["code"], "error.directory.unavailable");
+    assert!(
+        fixture
+            .ledger
+            .attachment(&owner(), &capsule_core::crypto::hash::hash_bytes(&document))
+            .await
+            .expect("the ledger answers")
+            .is_some(),
+        "the copy was attached before the append failed"
+    );
+    assert!(
+        fixture.verified_ledger(&owner()).await.is_empty(),
+        "nothing was ledgered"
+    );
+    fixture
+        .client
+        .get(&format!("/v1/auth/devices/directory/{}", user()))
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+}
+
 /// A ledger that cannot append refuses the publish, and nothing is stored.
 #[tokio::test]
 async fn a_ledger_that_cannot_append_refuses_the_publish() {

@@ -2796,12 +2796,20 @@ pub(crate) struct SwitchableIndex {
 pub(crate) struct SwitchableLedger {
     inner: InMemoryLedger,
     unavailable: AtomicBool,
+    /// Fail [`OwnerLedger::append`] alone, so a caller that attaches first gets past the attach.
+    appends_unavailable: AtomicBool,
 }
 
 impl SwitchableLedger {
     /// Make every subsequent append fail, or stop.
     pub(crate) fn set_unavailable(&self, unavailable: bool) {
         self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    /// Make every subsequent append fail while attachments still land, or stop.
+    pub(crate) fn set_appends_unavailable(&self, unavailable: bool) {
+        self.appends_unavailable
+            .store(unavailable, Ordering::SeqCst);
     }
 }
 
@@ -2813,7 +2821,9 @@ impl OwnerLedger for SwitchableLedger {
         recorded_at: Timestamp,
         signer: &'a dyn capsule_server::attestation::ReceiptSigner,
     ) -> LedgerFuture<'a, LedgerEntry> {
-        if self.unavailable.load(Ordering::SeqCst) {
+        if self.unavailable.load(Ordering::SeqCst)
+            || self.appends_unavailable.load(Ordering::SeqCst)
+        {
             return Box::pin(async {
                 Err(LedgerError::Backend {
                     operation: "append",
