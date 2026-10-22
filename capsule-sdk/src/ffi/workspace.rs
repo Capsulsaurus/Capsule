@@ -32,17 +32,20 @@
 //! [`verify_asset`]: capsule_core::crypto::verify_asset::verify_asset
 //! [`Workspace`]: capsule_core::lifecycle::Workspace
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use capsule_core::crypto::hash::Hash32;
 use capsule_core::crypto::keys::{
     HardwareBackedSigner, HardwareKeyAgreement, HardwareSigner, HardwareSignerError, P256HybridDek,
     P256HybridSigningKey, Signer, encapsulate_to_p256_public,
 };
 use capsule_core::crypto::primitives::DeviceTier;
+use capsule_core::crypto::provenance::ProvenanceRecord;
 use capsule_core::crypto::verify_asset::VerifyOutcome;
 use capsule_core::lifecycle::{
-    QuarantineReason, RemoteAssetFacts, RemoteEntry, SyncApplyOutcome, UploadBundle, Workspace,
+    QuarantineReason, RemoteAssetFacts, RemoteEntry, RemoteHead, RemoteOriginal, SyncApplyOutcome,
+    UploadBundle, Workspace, hash_ciphertext_from,
 };
 use capsule_core::sidecar::SidecarV1;
 use uuid::Uuid;
@@ -375,14 +378,110 @@ pub struct FfiSyncEntry {
     /// hashes it against the manifest's declared content address, and there is no variant of
     /// that check which skips it — so fetch the original blob before applying.
     ///
-    /// It crosses whole because the chokepoint hashes it as one slice. Receiving it does not
-    /// need to: [`FfiSession::fetch_blob_to_path`](crate::ffi::FfiSession::fetch_blob_to_path)
-    /// lands it on disk in bounded memory, content address checked.
+    /// It crosses whole, so this record costs the original's full size in memory. An original
+    /// of any size is received with
+    /// [`FfiSession::fetch_blob_to_path`](crate::ffi::FfiSession::fetch_blob_to_path), and
+    /// applied and opened from that file with an [`FfiSyncHead`] through
+    /// [`FfiWorkspace::apply_sync_entry_from_file`] and [`FfiWorkspace::open_synced_original`],
+    /// in bounded memory.
     pub original_ciphertext: Vec<u8>,
     /// The 32-byte provenance head your catalog already holds for this asset, or `None` if it
     /// has never seen it. This is what decides replay and fork; feed back
     /// [`FfiAssetFacts::provenance_head`] after a successful apply.
     pub local_chain_head: Option<Vec<u8>>,
+}
+
+/// One remote feed entry whose original is **on disk** rather than in hand: an
+/// [`FfiSyncEntry`] without its `original_ciphertext`, which
+/// [`FfiWorkspace::apply_sync_entry_from_file`] and [`FfiWorkspace::open_synced_original`] read
+/// from the file [`FfiSession::fetch_blob_to_path`](crate::ffi::FfiSession::fetch_blob_to_path)
+/// produced, in memory bounded by one STREAM chunk whatever the original's size.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct FfiSyncHead {
+    /// As [`FfiSyncEntry::album_id`].
+    pub album_id: Vec<u8>,
+    /// As [`FfiSyncEntry::manifest_cbor`].
+    pub manifest_cbor: Vec<u8>,
+    /// As [`FfiSyncEntry::metadata_blob`].
+    pub metadata_blob: Vec<u8>,
+    /// As [`FfiSyncEntry::local_chain_head`].
+    pub local_chain_head: Option<Vec<u8>>,
+}
+
+/// How [`FfiWorkspace::open_synced_original`] resolved. Only `Opened` leaves anything at the
+/// destination path.
+// `Opened` and the other verdicts carry a whole flattened facts record or apply outcome; see
+// `FfiSyncApplyOutcome` for why the payload is not boxed.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone, uniffi::Enum)]
+pub enum FfiOpenedOriginal {
+    /// Verified end to end and decrypted: the destination now holds the original's plaintext,
+    /// which hashes to the signed sidecar's digest.
+    Opened {
+        /// The verified facts of the entry.
+        facts: FfiAssetFacts,
+    },
+    /// The entry did not apply, exactly as
+    /// [`apply_sync_entry`](FfiWorkspace::apply_sync_entry) would say: held pending or
+    /// quarantined. A ciphertext file that is not the original the manifest commits to is
+    /// quarantined as `Rejected.CiphertextHashMismatch`.
+    Refused {
+        /// The verdict, never `Applied`.
+        outcome: FfiSyncApplyOutcome,
+    },
+    /// The entry applied, but its file key could not be recovered or its ciphertext failed
+    /// authentication under it.
+    Undecryptable {
+        /// The verified facts of the entry.
+        facts: FfiAssetFacts,
+    },
+    /// The ciphertext opened, but the plaintext does not hash to the signed sidecar's digest.
+    DigestMismatch {
+        /// The verified facts of the entry.
+        facts: FfiAssetFacts,
+    },
+}
+
+impl<W> From<RemoteOriginal<W>> for FfiOpenedOriginal {
+    fn from(original: RemoteOriginal<W>) -> Self {
+        match original {
+            RemoteOriginal::Opened { facts, .. } => Self::Opened {
+                facts: (*facts).into(),
+            },
+            RemoteOriginal::Refused(outcome) => Self::Refused {
+                outcome: outcome.into(),
+            },
+            RemoteOriginal::Undecryptable { facts } => Self::Undecryptable {
+                facts: (*facts).into(),
+            },
+            RemoteOriginal::DigestMismatch { facts } => Self::DigestMismatch {
+                facts: (*facts).into(),
+            },
+        }
+    }
+}
+
+impl FfiSyncHead {
+    /// The entry's structural arguments, parsed: the album id and the caller's chain head.
+    /// Cheap, so a verb checks them before it reads any file.
+    fn parsed(&self) -> Result<(Uuid, Option<Hash32>), FfiError> {
+        Ok((
+            uuid_from_bytes("album_id", &self.album_id)?,
+            chain_head(self.local_chain_head.as_deref())?,
+        ))
+    }
+
+    /// The core head for this entry, its original named by `original_ciphertext_hash`.
+    fn remote(&self, original_ciphertext_hash: Hash32) -> Result<RemoteHead<'_>, FfiError> {
+        let (album_id, local_chain_head) = self.parsed()?;
+        Ok(RemoteHead {
+            album_id,
+            manifest_cbor: &self.manifest_cbor,
+            metadata_blob: &self.metadata_blob,
+            original_ciphertext_hash,
+            local_chain_head,
+        })
+    }
 }
 
 /// The verified facts one applied entry contributes, flattened for a catalog upsert.
@@ -607,6 +706,74 @@ fn uuid_from_bytes(field: &str, bytes: &[u8]) -> Result<Uuid, FfiError> {
     Uuid::from_slice(bytes).map_err(|e| FfiError::InvalidArgument {
         message: format!("{field}: expected 16 UUID bytes ({e})"),
     })
+}
+
+/// Parse an optional 32-byte provenance head.
+fn chain_head(head: Option<&[u8]>) -> Result<Option<Hash32>, FfiError> {
+    head.map(|head| {
+        <[u8; 32]>::try_from(head)
+            .map(Hash32::from_bytes)
+            .map_err(|_| FfiError::InvalidArgument {
+                message: "local_chain_head must be exactly 32 bytes".into(),
+            })
+    })
+    .transpose()
+}
+
+/// A local file failure, as the workspace error it is.
+fn local_io(action: &str, path: &Path, error: &std::io::Error) -> FfiError {
+    FfiError::Workspace {
+        message: format!("{action} {}: {error}", path.display()),
+    }
+}
+
+/// A fresh hidden file beside `destination`, on the same filesystem so that renaming it into
+/// place is atomic, and named uniquely so that two opens never share one.
+fn staging_path(destination: &Path) -> Result<PathBuf, FfiError> {
+    let name = destination
+        .file_name()
+        .ok_or_else(|| FfiError::InvalidArgument {
+            message: format!("destination_path: {} names no file", destination.display()),
+        })?;
+    let mut staged = std::ffi::OsString::from(".");
+    staged.push(name);
+    staged.push(format!(".{}.part", Uuid::now_v7()));
+    Ok(destination.with_file_name(staged))
+}
+
+/// Move a fully written staging file into place as `target`, so that `target` is either
+/// untouched or the complete original: flushed and synced to disk, then renamed.
+fn commit_staged(
+    sink: std::io::BufWriter<std::fs::File>,
+    staged: &Path,
+    target: &Path,
+) -> std::io::Result<()> {
+    let file = sink
+        .into_inner()
+        .map_err(std::io::IntoInnerError::into_error)?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(staged, target)?;
+    // Persist the rename itself. Best effort: not every platform opens a directory for sync.
+    if let Some(parent) = target.parent()
+        && let Ok(dir) = std::fs::File::open(parent)
+    {
+        let _ = dir.sync_all();
+    }
+    Ok(())
+}
+
+/// Remove a staging file that will not be renamed into place.
+fn discard_staged(staged: &Path) {
+    match std::fs::remove_file(staged) {
+        Ok(()) => {
+            tracing::debug!(staged = %staged.display(), "ffi: unverified staging file removed");
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            tracing::warn!(staged = %staged.display(), %error, "ffi: staging file could not be removed");
+        }
+    }
 }
 
 /// The ladder tier's stable lowercase name (`index` / `preview` / `original`) — the same three
@@ -946,17 +1113,7 @@ impl FfiWorkspace {
     /// page. Errors are reserved for a failure of this workspace itself.
     pub fn apply_sync_entry(&self, entry: FfiSyncEntry) -> Result<FfiSyncApplyOutcome, FfiError> {
         let album_id = uuid_from_bytes("album_id", &entry.album_id)?;
-        let local_chain_head = entry
-            .local_chain_head
-            .as_deref()
-            .map(|head| {
-                <[u8; 32]>::try_from(head)
-                    .map(capsule_core::crypto::hash::Hash32::from_bytes)
-                    .map_err(|_| FfiError::InvalidArgument {
-                        message: "local_chain_head must be exactly 32 bytes".into(),
-                    })
-            })
-            .transpose()?;
+        let local_chain_head = chain_head(entry.local_chain_head.as_deref())?;
         self.with(|ws| {
             let outcome = ws.apply_remote_entry(RemoteEntry {
                 album_id,
@@ -966,6 +1123,113 @@ impl FfiWorkspace {
                 local_chain_head,
             })?;
             Ok(outcome.into())
+        })
+    }
+
+    /// [`apply_sync_entry`](Self::apply_sync_entry) for an entry whose original ciphertext is
+    /// the file at `ciphertext_path` — the one
+    /// [`FfiSession::fetch_blob_to_path`](crate::ffi::FfiSession::fetch_blob_to_path) wrote —
+    /// read in memory bounded by one STREAM chunk whatever the original's size.
+    ///
+    /// The same chokepoint and verdicts: the file is hashed, and that digest is what the
+    /// content-integrity step checks against the manifest's content address, so a file that is
+    /// not the committed ciphertext is quarantined as `Rejected.CiphertextHashMismatch`, as
+    /// `apply_sync_entry` quarantines those bytes. Nothing is written anywhere.
+    ///
+    /// A malformed `album_id` or `local_chain_head` is refused before the file is opened, so a
+    /// bad argument never costs a read of the original. The file is hashed before the workspace
+    /// is locked, so other verbs are not held up while a large original is read.
+    pub fn apply_sync_entry_from_file(
+        &self,
+        entry: FfiSyncHead,
+        ciphertext_path: String,
+    ) -> Result<FfiSyncApplyOutcome, FfiError> {
+        let (album_id, local_chain_head) = entry.parsed()?;
+        let path = PathBuf::from(ciphertext_path);
+        let file = std::fs::File::open(&path)
+            .map_err(|e| local_io("opening the ciphertext file", &path, &e))?;
+        let (digest, bytes) = hash_ciphertext_from(file)?;
+        tracing::debug!(path = %path.display(), bytes, "ffi: synced original hashed from disk");
+        let head = RemoteHead {
+            album_id,
+            manifest_cbor: &entry.manifest_cbor,
+            metadata_blob: &entry.metadata_blob,
+            original_ciphertext_hash: digest,
+            local_chain_head,
+        };
+        self.with(|ws| Ok(ws.apply_remote_head(head)?.into()))
+    }
+
+    /// **Open a synced original** from the ciphertext file at `ciphertext_path` to its plaintext
+    /// at `destination_path`, in memory bounded by a few STREAM chunks whatever its size.
+    ///
+    /// The entry goes through the chokepoint as
+    /// [`apply_sync_entry_from_file`](Self::apply_sync_entry_from_file) would take it, then the
+    /// file is hashed while it is decrypted: it opens only if it is the ciphertext the manifest
+    /// commits to, every chunk authenticates, and the plaintext hashes to the signed sidecar's
+    /// digest. The plaintext is written to a hidden staging file beside the destination and
+    /// renamed into place only once all of that holds, so `destination_path` is untouched by
+    /// any other verdict and never holds a partial or unverified original. An existing file there
+    /// is replaced only by a verified one.
+    ///
+    /// The workspace stays locked while the original decrypts.
+    ///
+    /// # Errors
+    ///
+    /// [`FfiError::Workspace`] when a file cannot be read or written, or the workspace itself
+    /// fails; [`FfiError::InvalidArgument`] for a malformed entry or a destination with no file
+    /// name. A refused entry is a verdict, never an error.
+    pub fn open_synced_original(
+        &self,
+        entry: FfiSyncHead,
+        ciphertext_path: String,
+        destination_path: String,
+    ) -> Result<FfiOpenedOriginal, FfiError> {
+        let source = PathBuf::from(ciphertext_path);
+        let destination = PathBuf::from(destination_path);
+        // The claim the chokepoint checks first is the manifest's own content address, because
+        // nothing has read the file yet. It is a claim only: `open_remote_original_from` hashes
+        // every byte it decrypts and refuses the original unless that hash is this address. A
+        // record that does not decode is quarantined by the apply before the claim is looked at.
+        let committed = ProvenanceRecord::decode(&entry.manifest_cbor)
+            .map_or(Hash32::from_bytes([0; 32]), |record| {
+                record.manifest.core.ciphertext_hash
+            });
+        let head = entry.remote(committed)?;
+        let ciphertext = std::fs::File::open(&source)
+            .map_err(|e| local_io("opening the ciphertext file", &source, &e))?;
+        let staged = staging_path(&destination)?;
+        let sink = std::fs::File::create_new(&staged)
+            .map(std::io::BufWriter::new)
+            .map_err(|e| local_io("creating the staging file", &staged, &e))?;
+        let opened = self.with(|ws| Ok(ws.open_remote_original_from(head, ciphertext, sink)?));
+        let (facts, sink) = match opened {
+            Ok(RemoteOriginal::Opened { facts, plaintext }) => (facts, plaintext),
+            Ok(refused) => {
+                discard_staged(&staged);
+                tracing::warn!(source = %source.display(), "ffi: synced original not opened; nothing placed");
+                return Ok(refused.into());
+            }
+            Err(error) => {
+                discard_staged(&staged);
+                return Err(error);
+            }
+        };
+        if let Err(e) = commit_staged(sink, &staged, &destination) {
+            discard_staged(&staged);
+            return Err(local_io(
+                "moving the original into place at",
+                &destination,
+                &e,
+            ));
+        }
+        tracing::info!(
+            asset_id = %facts.asset_id,
+            destination = %destination.display(),
+            "ffi: synced original verified and opened to disk"
+        );
+        Ok(FfiOpenedOriginal::Opened {
+            facts: (*facts).into(),
         })
     }
 
