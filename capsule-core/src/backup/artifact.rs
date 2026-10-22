@@ -1204,6 +1204,73 @@ mod tests {
         ));
     }
 
+    /// A manifest core listing exactly `paths`, and the files those paths hold, each a doc entry
+    /// sealed (nominally) under `ALBUM`'s epoch `amk_version`.
+    fn doc_listing(paths: &[&str], amk_version: u32) -> (ManifestCore, BTreeMap<String, Vec<u8>>) {
+        let data = cbor::to_canonical_vec(&DocEntry {
+            album_id: Uuid::from_u128(ALBUM),
+            amk_version,
+            sealed: vec![0; 40],
+        })
+        .unwrap();
+        let mut files = BTreeMap::new();
+        let entries = paths
+            .iter()
+            .map(|path| {
+                files.insert((*path).to_string(), data.clone());
+                EntryRef {
+                    path: (*path).to_string(),
+                    hash: hash::hash_bytes(&data),
+                    size: data.len() as u64,
+                }
+            })
+            .collect();
+        let core = ManifestCore {
+            artifact_version: ARTIFACT_FORMAT_VERSION,
+            crypto_suite_id: CRYPTO_SUITE_ID,
+            min_protocol_version: PROTOCOL_VERSION.into(),
+            exporter_device: Uuid::from_u128(0xD1),
+            export_timestamp: "2026-05-31T00:00:00Z".into(),
+            source_library_version: "1".into(),
+            entries,
+            provenance_heads: Vec::new(),
+        };
+        (core, files)
+    }
+
+    /// `load_docs` refuses a listed `docs/` entry whose path does not name a doc id, and one
+    /// sealed under an epoch the ledger does not escrow; a well-formed entry
+    /// under an escrowed epoch loads.
+    #[test]
+    fn load_docs_refuses_malformed_paths_and_unescrowed_amks() {
+        let ledger = BTreeMap::from([((Uuid::from_u128(ALBUM), 1u32), [0x55; 32])]);
+        let good = format!("docs/album/{}", Uuid::from_u128(ALBUM));
+
+        let (core, files) = doc_listing(&[&good], 1);
+        let docs = load_docs(&core, &files, &ledger).unwrap();
+        assert_eq!(docs.len(), 1);
+        assert_eq!(docs[0].kind, BackupDocKind::Album);
+
+        let no_id = "docs/album".to_string();
+        let bad_id = "docs/stack/not-a-uuid".to_string();
+        for path in [no_id, bad_id] {
+            let (core, files) = doc_listing(&[&path], 1);
+            assert!(
+                matches!(
+                    load_docs(&core, &files, &ledger),
+                    Err(BackupError::Format(ref m)) if m.contains(&path)
+                ),
+                "{path} must be refused"
+            );
+        }
+
+        let (core, files) = doc_listing(&[&good], 2);
+        assert!(matches!(
+            load_docs(&core, &files, &ledger),
+            Err(BackupError::AmkIncomplete(_))
+        ));
+    }
+
     /// #551: an adopted drop (`key_mode = wrapped`) restores. Its key is not
     /// `HKDF(AMK, file_id ‖ nonce_prefix)`, so restore must unwrap `wrapped_file_key` under
     /// the ledger AMK rather than re-derive; a derived asset alongside it still restores.
