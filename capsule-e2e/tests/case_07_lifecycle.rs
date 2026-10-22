@@ -129,7 +129,7 @@ async fn e2e_case_7_the_chain_advances_through_every_transition_and_purge_honour
     let gone = fetch_blob(
         &source,
         &purged_bundle.ciphertext_hash.to_hex(),
-        purged_bundle.ciphertext.len() as u64,
+        purged_bundle.ciphertext_size(),
     )
     .await
     .expect_err("a purged original no longer serves");

@@ -33,13 +33,12 @@ use std::collections::HashSet;
 use capsule_core::crypto::hash::Hash32;
 use capsule_core::lifecycle::Workspace;
 use capsule_core::sharing::{OPAQUE_ID_LEN, ShareLinkIssuer as _, ShareScope, SharingError};
-use capsule_i18n::Bundle;
 use capsule_sdk::share::{ShareClient, ShareError, share_url};
 use colored::Colorize as _;
 use thiserror::Error;
 use tracing::instrument;
 
-use crate::i18n::{Value, keys};
+use crate::i18n::error_message;
 use crate::remote::{self, RemoteConfig, RemoteError};
 use crate::session::SessionStore;
 
@@ -300,76 +299,67 @@ pub async fn revoke(
 
 /// Print what `capsule share create` registered: the count, the URL on a line of its own so it
 /// can be copied or piped, how to revoke it, and what the recipient needs besides the URL.
-pub fn render_issued(bundle: &Bundle, issued: &IssuedShare) {
-    let count = [(
-        "count",
-        Value::Int(i64::try_from(issued.covered).unwrap_or(i64::MAX)),
-    )];
-    println!(
-        "{}",
-        bundle.format(keys::SHARE_CREATE_SUCCESS, &count).green()
-    );
+pub fn render_issued(issued: &IssuedShare) {
+    let success = match issued.covered {
+        1 => "Share link issued for 1 asset. Anyone with this URL can view it:".to_owned(),
+        count => {
+            format!("Share link issued for {count} assets. Anyone with this URL can view them:")
+        }
+    };
+    println!("{}", success.green());
     println!("{}", issued.url);
     if issued.passphrase_protected {
         println!(
             "{}",
-            bundle
-                .format(keys::SHARE_CREATE_PASSPHRASE_NOTICE, &[])
+            "The link is passphrase-protected: send the passphrase separately from the URL."
                 .yellow()
         );
     }
     if let Some(expires_at) = &issued.expires_at {
-        println!(
-            "{}",
-            bundle.format(
-                keys::SHARE_CREATE_EXPIRES_NOTICE,
-                &[("expires_at", Value::Str(expires_at))]
-            )
-        );
+        println!("The link stops opening at {expires_at}.");
     }
     println!(
         "{}",
-        bundle
-            .format(
-                keys::SHARE_CREATE_REVOKE_HINT,
-                &[("opaque_id", Value::Str(&issued.opaque_id))]
-            )
-            .cyan()
+        format!("To revoke it: capsule share revoke {}", issued.opaque_id).cyan()
     );
 }
 
-/// A localized, human-readable reason for a `capsule share` failure.
+/// A human-readable reason for a `capsule share` failure: the English catalog message for a
+/// server's stable `error.*` code, else the CLI's own sentence or the English detail.
 #[must_use]
-pub fn describe_error(bundle: &Bundle, error: &ShareCommandError) -> String {
+pub fn describe_error(error: &ShareCommandError) -> String {
     match error {
-        ShareCommandError::InvalidExpiry(value) => bundle.format(
-            keys::SHARE_CREATE_INVALID_EXPIRY,
-            &[("value", Value::Str(value))],
+        ShareCommandError::InvalidExpiry(value) => format!(
+            "--expires-at {value} is not an RFC 3339 timestamp (for example \
+             2026-12-31T23:59:59Z)."
         ),
-        ShareCommandError::ExpiryNotInFuture(value) => bundle.format(
-            keys::SHARE_CREATE_EXPIRY_NOT_IN_FUTURE,
-            &[("value", Value::Str(value))],
+        ShareCommandError::ExpiryNotInFuture(value) => {
+            format!("--expires-at {value} is not in the future, so the link would never open.")
+        }
+        ShareCommandError::InvalidOpaqueId(value) => format!(
+            "{value} is not a share link's opaque id: expected the 32 lowercase hex characters \
+             after /s/ in its URL."
         ),
-        ShareCommandError::InvalidOpaqueId(value) => bundle.format(
-            keys::SHARE_REVOKE_INVALID_OPAQUE_ID,
-            &[("value", Value::Str(value))],
-        ),
-        ShareCommandError::EmptyScope => bundle.format(keys::SHARE_CREATE_EMPTY_SCOPE, &[]),
-        ShareCommandError::NotHeld { missing } => bundle.format(
-            keys::SHARE_CREATE_NOT_HELD,
-            &[(
-                "count",
-                Value::Int(i64::try_from(missing.len()).unwrap_or(i64::MAX)),
-            )],
-        ),
+        ShareCommandError::EmptyScope => {
+            "Nothing to share: that album holds no assets outside trash.".to_owned()
+        }
+        ShareCommandError::NotHeld { missing } => match missing.len() {
+            1 => "1 shared asset is not on the server yet, so the link could not show it. Run \
+                  capsule push for this library first."
+                .to_owned(),
+            count => format!(
+                "{count} shared assets are not on the server yet, so the link could not show \
+                 them. Run capsule push for this library first."
+            ),
+        },
         ShareCommandError::Sharing(SharingError::ScopeUnavailable) => {
-            bundle.format(keys::SHARE_CREATE_SCOPE_UNAVAILABLE, &[])
+            "This library does not hold that album or asset, or the asset is in trash.".to_owned()
         }
         ShareCommandError::Remote(RemoteError::NotAuthenticated) => {
-            bundle.format(keys::AUTH_NOT_AUTHENTICATED, &[])
+            crate::NOT_AUTHENTICATED.to_owned()
         }
         other => match other.error_code() {
-            Some(code) => bundle.format(code, &[]),
+            Some(code) => error_message(code),
             None => other.to_string(),
         },
     }
@@ -458,8 +448,7 @@ mod tests {
     }
 
     #[test]
-    fn every_local_refusal_is_described_from_the_catalog() {
-        let bundle = Bundle::for_locale("en");
+    fn every_local_refusal_is_described_in_its_own_words() {
         let cases = [
             ShareCommandError::InvalidExpiry("tomorrow".to_owned()),
             ShareCommandError::ExpiryNotInFuture("2020-01-01T00:00:00Z".to_owned()),
@@ -471,15 +460,22 @@ mod tests {
             ShareCommandError::Sharing(SharingError::ScopeUnavailable),
             ShareCommandError::Remote(RemoteError::NotAuthenticated),
         ];
+        let mut seen = HashSet::new();
         for error in &cases {
-            let described = describe_error(&bundle, error);
+            let described = describe_error(error);
             assert!(
-                !described.starts_with("cli.") && !described.is_empty(),
-                "{error:?} renders a catalog message, not a key: {described}"
+                !described.is_empty() && seen.insert(described.clone()),
+                "{error:?} renders a distinct sentence: {described}"
             );
         }
-        assert!(describe_error(&bundle, &cases[0]).contains("tomorrow"));
-        assert!(describe_error(&bundle, &cases[4]).contains('2'));
+        assert!(describe_error(&cases[0]).contains("tomorrow"));
+        assert!(describe_error(&cases[4]).starts_with("2 shared assets are"));
+        assert!(
+            describe_error(&ShareCommandError::NotHeld {
+                missing: vec!["ab".to_owned()],
+            })
+            .starts_with("1 shared asset is")
+        );
     }
 
     #[test]
@@ -621,14 +617,13 @@ mod tests {
 
     #[test]
     fn a_server_refusal_is_described_by_its_error_code() {
-        let bundle = Bundle::for_locale("en");
         let error = ShareCommandError::Share(ShareError::Unavailable {
             code: Some("error.share.unavailable".to_owned()),
         });
         assert_eq!(error.error_code(), Some("error.share.unavailable"));
         assert_eq!(
-            describe_error(&bundle, &error),
-            bundle.format("error.share.unavailable", &[])
+            describe_error(&error),
+            "Capsule couldn't reach that share. Please try again."
         );
     }
 }

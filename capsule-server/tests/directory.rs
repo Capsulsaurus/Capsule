@@ -12,7 +12,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use capsule_core::crypto::keys::{DeviceDirectory, DirectoryCore, HybridSigningKey};
 use kynos::http::StatusCode;
 use serde_json::Value;
-use support::{Fixture, user};
+use support::{Fixture, owner, user};
 use uuid::Uuid;
 
 /// An account's identity key.
@@ -425,5 +425,106 @@ async fn an_identity_key_that_is_not_base64_is_refused() {
     assert_eq!(
         response.json::<Value>()["code"],
         "error.directory.malformed"
+    );
+}
+
+// ===========================================================================================
+// The owner ledger (#753)
+// ===========================================================================================
+
+/// A publish is ledgered before the store commits: the account, the version and the hash of the
+/// signed document.
+#[tokio::test]
+async fn a_publish_is_ledgered_with_its_version_and_document_hash() {
+    use capsule_server::ledger::LedgerEvent;
+
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+    let ik = ik();
+    let document = signed_by(&ik, account(), 3);
+    publish(&fixture, &bearer, &ik, document.clone(), StatusCode::OK).await;
+
+    let entries = fixture.verified_ledger(&owner()).await;
+    let [entry] = entries.as_slice() else {
+        panic!("one directory entry, got {entries:?}");
+    };
+    assert_eq!(
+        entry.core.event,
+        LedgerEvent::Directory {
+            user_id: user().as_str().to_owned(),
+            directory_version: 3,
+            document_hash: capsule_core::crypto::hash::hash_bytes(&document),
+        }
+    );
+}
+
+/// A ledger that cannot append refuses the publish, and nothing is stored.
+#[tokio::test]
+async fn a_ledger_that_cannot_append_refuses_the_publish() {
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+    let ik = ik();
+    fixture.ledger.set_unavailable(true);
+
+    let problem: Value = publish(
+        &fixture,
+        &bearer,
+        &ik,
+        signed_by(&ik, account(), 1),
+        StatusCode::INTERNAL_SERVER_ERROR,
+    )
+    .await
+    .json();
+    assert_eq!(problem["code"], "error.directory.unavailable");
+
+    fixture
+        .client
+        .get(&format!("/v1/auth/devices/directory/{}", user()))
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+}
+
+/// A publish refused before the ledger is reached leaves no entry, and one the store refuses
+/// after it leaves the entry it was offered under.
+#[tokio::test]
+async fn only_a_publish_that_reaches_the_store_is_ledgered() {
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+    let ik = ik();
+    publish(
+        &fixture,
+        &bearer,
+        &ik,
+        b"not a directory".to_vec(),
+        StatusCode::BAD_REQUEST,
+    )
+    .await;
+    assert!(
+        fixture.verified_ledger(&owner()).await.is_empty(),
+        "a malformed body is refused before anything is ledgered"
+    );
+
+    publish(
+        &fixture,
+        &bearer,
+        &ik,
+        signed_by(&ik, account(), 2),
+        StatusCode::OK,
+    )
+    .await;
+    publish(
+        &fixture,
+        &bearer,
+        &ik,
+        signed_by(&ik, account(), 1),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    assert_eq!(
+        fixture.verified_ledger(&owner()).await.len(),
+        2,
+        "the stale offer is recorded as attempted; replaying it re-runs the version check"
     );
 }
