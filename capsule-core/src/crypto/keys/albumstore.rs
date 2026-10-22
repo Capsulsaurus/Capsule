@@ -78,15 +78,18 @@ pub enum EscrowCoverage {
     /// The escrow is this album's state exactly.
     Current,
     /// The escrow holds every epoch this album holds, with the same keys, and more: another
-    /// device rotated further. Every local epoch is covered; replacing it would drop the newer
-    /// epochs, so it is left alone.
+    /// device rotated further, or the escrow holds a write-tier seed, admin seed or authority
+    /// this album lacks (a read-only device). Every local epoch is covered; replacing it would
+    /// drop the newer epochs or the capability, so it is left alone.
     Behind,
     /// This album holds every epoch the escrow holds, with the same keys, and more (or the same
-    /// epochs with other details changed): replacing the escrow only adds to it.
+    /// epochs with other details changed), and every seed and authority the escrow holds:
+    /// replacing the escrow only adds to it.
     Superseded,
-    /// The two disagree: a shared epoch under different keys, or each holds an epoch the other
-    /// lacks. Neither may replace the other without losing an epoch, so it is left alone and
-    /// this album's own epochs stay uncovered.
+    /// The two disagree: a shared epoch under different keys, each holds an epoch the other
+    /// lacks, or this album holds an epoch the escrow lacks while the escrow holds a seed or
+    /// authority this album lacks. Neither may replace the other without losing an epoch or a
+    /// capability, so it is left alone and this album's own epochs stay uncovered.
     Divergent,
     /// The escrow does not open under this master key as this album — sealed under another
     /// master key, or not an escrow of it. Left alone: replacing what cannot be read could
@@ -342,7 +345,10 @@ impl PersistedAlbum {
     ///
     /// The comparison is per epoch: an escrow is never replaced by one that lacks an epoch it
     /// holds, or that holds a different key for an epoch they share, because a recovery from the
-    /// replacement would lose that epoch's assets. See [`EscrowCoverage`].
+    /// replacement would lose that epoch's assets. Nor is it replaced by one that lacks a
+    /// write-tier seed, admin seed or authority it holds: a read-only device (one restored from a
+    /// backup) would otherwise strip the capability every later recovery depends on. See
+    /// [`EscrowCoverage`].
     pub fn escrow_coverage(&self, blob: &[u8], master: &MasterKey) -> EscrowCoverage {
         let Ok(escrowed) = Self::open_escrow(blob, master, self.album_id) else {
             return EscrowCoverage::Unreadable;
@@ -365,15 +371,26 @@ impl PersistedAlbum {
         }
         let local_only = local.keys().any(|epoch| !held.contains_key(epoch));
         let held_only = held.keys().any(|epoch| !local.contains_key(epoch));
+        let lacks_held_capability = self.lacks_capability_of(&escrowed);
         match (local_only, held_only) {
             (true, true) => EscrowCoverage::Divergent,
             (false, true) => EscrowCoverage::Behind,
+            (true, false) if lacks_held_capability => EscrowCoverage::Divergent,
             (true, false) => EscrowCoverage::Superseded,
+            (false, false) if lacks_held_capability => EscrowCoverage::Behind,
             (false, false) => match (escrowed.escrow_plaintext(), self.escrow_plaintext()) {
                 (Ok(escrowed), Ok(local)) if escrowed == local => EscrowCoverage::Current,
                 _ => EscrowCoverage::Superseded,
             },
         }
+    }
+
+    /// Whether `other` holds a write-tier seed, an admin seed or an authority this album does
+    /// not, so that replacing `other` with this album would drop a capability.
+    fn lacks_capability_of(&self, other: &Self) -> bool {
+        (other.write_tier_seed64.is_some() && self.write_tier_seed64.is_none())
+            || (other.admin_seed64.is_some() && self.admin_seed64.is_none())
+            || (other.authority.is_some() && self.authority.is_none())
     }
 
     /// The bytes [`seal_escrow`](Self::seal_escrow) seals: the domain separator, then the
@@ -995,5 +1012,82 @@ mod tests {
         assert!(!store.get(&writable).unwrap().escrow_matches(&blob, &master));
         assert!(!before.escrow_matches(b"not an escrow", &master));
         assert!(!before.escrow_matches(&blob, &MasterKey::generate()));
+    }
+
+    /// #837: a read-only album (restored from a backup: no signing seeds, perhaps no authority)
+    /// never supersedes an escrow that carries the seeds. On the same epochs the escrow covers
+    /// it ([`EscrowCoverage::Behind`]); with an extra local epoch neither may replace the other
+    /// ([`EscrowCoverage::Divergent`]).
+    #[test]
+    fn a_read_only_album_never_supersedes_an_escrow_that_carries_its_seeds() {
+        let master = MasterKey::generate();
+        let (store, writable, _) = fixture();
+        let full = store.get(&writable).unwrap().clone();
+        let escrow = full.seal_escrow(&master).unwrap();
+
+        let bare = PersistedAlbum::recovered(writable, "Trip", full.amks.clone(), None);
+        let with_authority =
+            PersistedAlbum::recovered(writable, "Trip", full.amks.clone(), full.authority.clone());
+        let mut no_admin = full.clone();
+        no_admin.admin_seed64 = None;
+        let mut no_write_tier = full.clone();
+        no_write_tier.write_tier_seed64 = None;
+        let mut no_authority = full.clone();
+        no_authority.authority = None;
+        for (label, local) in [
+            ("no seeds, no authority", &bare),
+            ("no seeds", &with_authority),
+            ("no admin seed", &no_admin),
+            ("no write-tier seed", &no_write_tier),
+            ("no authority", &no_authority),
+        ] {
+            assert_eq!(
+                local.escrow_coverage(&escrow, &master),
+                EscrowCoverage::Behind,
+                "{label}: same epochs, the escrow holds what this album lacks"
+            );
+        }
+
+        let mut ahead = bare.clone();
+        ahead.amks.push((writable, 2, [6; 32]));
+        assert_eq!(
+            ahead.escrow_coverage(&escrow, &master),
+            EscrowCoverage::Divergent,
+            "an extra epoch does not license dropping the escrowed seeds"
+        );
+    }
+
+    /// #837 controls: replacing an escrow is still allowed whenever this album holds every
+    /// capability the escrow holds — a writable album adding an epoch or its seeds, and a
+    /// read-only album extending a read-only escrow.
+    #[test]
+    fn an_album_holding_every_escrowed_capability_still_supersedes_it() {
+        let master = MasterKey::generate();
+        let (store, writable, recovered) = fixture();
+        let full = store.get(&writable).unwrap().clone();
+
+        let bare = PersistedAlbum::recovered(writable, "Trip", full.amks.clone(), None);
+        assert_eq!(
+            full.escrow_coverage(&bare.seal_escrow(&master).unwrap(), &master),
+            EscrowCoverage::Superseded,
+            "a writable album adds its seeds and authority to a read-only escrow"
+        );
+
+        let mut full_ahead = full.clone();
+        full_ahead.amks.push((writable, 2, [6; 32]));
+        assert_eq!(
+            full_ahead.escrow_coverage(&full.seal_escrow(&master).unwrap(), &master),
+            EscrowCoverage::Superseded,
+            "a writable album adds an epoch to its own escrow"
+        );
+
+        let read_only = store.get(&recovered).unwrap().clone();
+        let mut read_only_ahead = read_only.clone();
+        read_only_ahead.amks.push((recovered, 3, [5; 32]));
+        assert_eq!(
+            read_only_ahead.escrow_coverage(&read_only.seal_escrow(&master).unwrap(), &master),
+            EscrowCoverage::Superseded,
+            "a read-only album adds an epoch to a read-only escrow"
+        );
     }
 }

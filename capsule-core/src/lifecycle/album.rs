@@ -173,7 +173,9 @@ impl Workspace {
     /// **An escrow is never shrunk.** An album is stored only when the server holds none for it,
     /// or holds one this album strictly extends ([`EscrowCoverage::Superseded`]). An escrow that
     /// holds epochs this device lacks ([`EscrowCoverage::Behind`], another device rotated
-    /// further) is left alone and counts as covering this device's epochs. One that disagrees
+    /// further), or the same epochs plus a signing seed or authority this device lacks (a
+    /// read-only device restored from a backup), is left alone and counts as covering this
+    /// device's epochs. One that disagrees
     /// with this device ([`EscrowCoverage::Divergent`]) or does not open under this master key
     /// ([`EscrowCoverage::Unreadable`]) is left alone too, and the album is reported
     /// [`uncovered`](AlbumKeyEscrowPlan::uncovered): replacing it could lose epochs a recovery
@@ -204,7 +206,8 @@ impl Workspace {
                 EscrowCoverage::Behind => {
                     tracing::info!(
                         album_id = %album.album_id,
-                        "album key escrow holds epochs this device lacks; left as it is"
+                        "album key escrow holds epochs or capabilities this device lacks; left \
+                         as it is"
                     );
                     plan.current += 1;
                 }
@@ -213,8 +216,8 @@ impl Workspace {
                     tracing::warn!(
                         album_id = %album.album_id,
                         ?coverage,
-                        "album key escrow cannot be replaced without losing epochs; the album \
-                         is held back"
+                        "album key escrow cannot be replaced without losing epochs or \
+                         capabilities; the album is held back"
                     );
                     plan.uncovered.push(album.album_id);
                 }
