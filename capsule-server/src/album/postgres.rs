@@ -115,7 +115,7 @@ async fn read_through<C: ConnectionTrait>(
 ) -> Result<Option<AlbumRecord>, StoreError> {
     let lock = if for_update { " FOR UPDATE" } else { "" };
     let row = connection
-        .query_one(Statement::from_sql_and_values(
+        .query_one_raw(Statement::from_sql_and_values(
             DbBackend::Postgres,
             format!("SELECT {COLUMNS} FROM albums WHERE album_id = $1{lock}"),
             [Value::from(album.as_str().to_owned())],
@@ -149,7 +149,7 @@ async fn write_upgrade(
 ) -> Result<(), StoreError> {
     let (intent, received_at) = encode_upgrade(upgrade)?;
     transaction
-        .execute(Statement::from_sql_and_values(
+        .execute_raw(Statement::from_sql_and_values(
             DbBackend::Postgres,
             "UPDATE albums SET upgrade_intent = $2, upgrade_received_at = $3 WHERE album_id = $1",
             [
@@ -179,7 +179,7 @@ impl AlbumStore for PostgresAlbums {
             let (intent, received_at) = encode_upgrade(record.upgrade.as_ref())?;
             let inserted = self
                 .connection
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "INSERT INTO albums \
                        (album_id, owner_id, protocol_version, created_at, upgrade_intent, \

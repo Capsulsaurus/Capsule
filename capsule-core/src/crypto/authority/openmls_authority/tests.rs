@@ -130,6 +130,7 @@ fn create_manifest_core(album: Uuid, epoch: AmkVersion, user: Uuid, device: Uuid
         action: Action::Create,
         prior_provenance_hash: None,
         upgraded_from: None,
+        unknown: Default::default(),
         retention_until: None,
     }
 }
