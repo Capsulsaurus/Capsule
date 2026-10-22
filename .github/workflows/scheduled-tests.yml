@@ -134,3 +134,50 @@ jobs:
         run: >-
           cargo nextest run -p capsule-core -p capsule-sdk --no-fail-fast
           --test codec_properties --test crdt_laws --test upload_fault_schedules
+
+  # The kill-anywhere suite (#678) at soak depth: the pull request's two seeds become many, in
+  # four shards so each stays inside the suite's 30-minute nextest leash. Each shard starts from
+  # a seed derived from the run id, so every night searches new kill points; every seed's
+  # schedule is printed, and `CAPSULE_KILL_SEED=<seed> CAPSULE_KILL_SEEDS=1` replays one.
+  kill-anywhere:
+    name: Kill anywhere (soak, shard ${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: Install nasm and libdav1d
+        run: sudo apt-get update && sudo apt-get install -y nasm libdav1d-dev
+      - name: Install nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - name: Kill anywhere under the run's seeds
+        env:
+          CAPSULE_TEST_KILL_ANYWHERE: "1"
+          CAPSULE_KILL_SEEDS: "16"
+          CAPSULE_KILL_LOG_DIR: ${{ github.workspace }}/target/kill-anywhere-logs
+        run: |
+          set -euo pipefail
+          export CAPSULE_KILL_SEED=$(( ${{ github.run_id }} * 4 * 16 + ${{ matrix.shard }} * 16 ))
+          log=target/nextest/kill-anywhere.log
+          mkdir -p "$(dirname "$log")"
+          cargo nextest run -p capsule-e2e --test kill_anywhere --retries 0 \
+            --no-tests=fail --success-output final 2>&1 | tee "$log"
+          if grep -n 'skipping kill-anywhere' "$log" >&2; then
+            echo "kill-anywhere skipped instead of running; check the container runtime." >&2
+            exit 1
+          fi
+      - name: Upload the processes' logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kill-anywhere-logs-${{ matrix.shard }}
+          path: target/kill-anywhere-logs/
