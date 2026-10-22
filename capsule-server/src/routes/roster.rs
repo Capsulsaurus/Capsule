@@ -293,11 +293,11 @@ fn decode(
     tag = AlbumsTag
 )]
 pub async fn publish_album_roster(
+    Auth(credential): Auth<AccessToken>,
     Inject(albums): Inject<AlbumContext>,
     Inject(directories): Inject<DeviceDirectoryContext>,
     Inject(membership): Inject<MembershipContext>,
     Inject(federation): Inject<FederationContext>,
-    Auth(credential): Auth<AccessToken>,
     Path(path): Path<AlbumPath>,
     Json(request): Json<RosterRequest>,
 ) -> Result<Json<RosterResponse>, RosterRejection> {

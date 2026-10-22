@@ -692,8 +692,11 @@ fn map_error(error: rest::Error<rest::SyncFeedError>) -> SyncError {
                     Some(problem.code.clone()),
                     problem.detail.clone().unwrap_or_default(),
                 ),
-                // The body-size backstop, which carries no body at all.
-                rest::SyncFeedError::Status413 => (None, "the request was too large".into()),
+                // The body-size backstop.
+                rest::SyncFeedError::Status413(problem) => (
+                    Some(problem.code.clone()),
+                    "the request was too large".into(),
+                ),
             };
             SyncError::Rejected { code, message }
         }

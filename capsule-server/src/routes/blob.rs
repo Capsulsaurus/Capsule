@@ -46,8 +46,8 @@
 //! [Encryption — ranged reads]: ../../../capsule-docs/src/content/docs/design/cryptography/encryption.md
 
 use capsule_i18n::error_codes;
-use kynos::extract::media::OctetStream;
 use kynos::http::etag::ETag;
+use kynos::http::media::OctetStream;
 use kynos::prelude::*;
 use kynos::response::range::served::{Conditions, Delivery, Served};
 
@@ -271,10 +271,10 @@ impl BlobRejection {
 /// the same resolution and the same authority.
 #[kynos::get("/v1/blob/{hash}", operation_id = "get_blob", tag = MediaTag)]
 pub async fn get_blob(
+    Auth(principal): Auth<ReadBearer>,
     Inject(serve): Inject<ServeContext>,
     Inject(federation): Inject<FederationContext>,
     Inject(counters): Inject<CounterContext>,
-    Auth(principal): Auth<ReadBearer>,
     Path(path): Path<BlobPath>,
     conditions: Conditions,
 ) -> Result<Delivery<OctetStream>, BlobRejection> {

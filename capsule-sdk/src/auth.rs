@@ -804,8 +804,8 @@ impl AuthClient {
                     | rest::BeginOidcLoginError::Status426(problem)
                     | rest::BeginOidcLoginError::Status429(problem)
                     | rest::BeginOidcLoginError::Status500(problem)
-                    | rest::BeginOidcLoginError::Status503(problem) => Some(*problem),
-                    rest::BeginOidcLoginError::Status413 => None,
+                    | rest::BeginOidcLoginError::Status503(problem)
+                    | rest::BeginOidcLoginError::Status413(problem) => Some(*problem),
                 })
             })?
             .into_inner();
@@ -878,8 +878,8 @@ impl AuthClient {
                     | rest::CompleteOidcLoginError::Status415(problem)
                     | rest::CompleteOidcLoginError::Status422(problem)
                     | rest::CompleteOidcLoginError::Status426(problem)
-                    | rest::CompleteOidcLoginError::Status500(problem) => Some(*problem),
-                    rest::CompleteOidcLoginError::Status413 => None,
+                    | rest::CompleteOidcLoginError::Status500(problem)
+                    | rest::CompleteOidcLoginError::Status413(problem) => Some(*problem),
                 })
             })?
             .into_inner();
@@ -943,8 +943,8 @@ impl AuthClient {
                     | rest::BeginOidcDeviceLoginError::Status426(problem)
                     | rest::BeginOidcDeviceLoginError::Status429(problem)
                     | rest::BeginOidcDeviceLoginError::Status500(problem)
-                    | rest::BeginOidcDeviceLoginError::Status503(problem) => Some(*problem),
-                    rest::BeginOidcDeviceLoginError::Status413 => None,
+                    | rest::BeginOidcDeviceLoginError::Status503(problem)
+                    | rest::BeginOidcDeviceLoginError::Status413(problem) => Some(*problem),
                 })
             })?
             .into_inner();
@@ -1015,8 +1015,8 @@ impl AuthClient {
                             | rest::PollOidcDeviceLoginError::Status422(problem)
                             | rest::PollOidcDeviceLoginError::Status426(problem)
                             | rest::PollOidcDeviceLoginError::Status429(problem)
-                            | rest::PollOidcDeviceLoginError::Status500(problem) => Some(*problem),
-                            rest::PollOidcDeviceLoginError::Status413 => None,
+                            | rest::PollOidcDeviceLoginError::Status500(problem)
+                            | rest::PollOidcDeviceLoginError::Status413(problem) => Some(*problem),
                         }
                     }));
                 }

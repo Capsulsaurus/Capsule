@@ -39,8 +39,8 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use capsule_core::crypto::hash::hash_bytes;
 use capsule_i18n::error_codes;
 use kynos::extract::body::binary::Binary;
-use kynos::extract::media::OctetStream;
 use kynos::http::etag::ETag;
+use kynos::http::media::OctetStream;
 use kynos::prelude::*;
 use kynos::response::range::served::{Conditions, Delivery, Served};
 use kynos::response::status::NoContent;
@@ -281,9 +281,9 @@ pub enum ShareRejection {
 /// `403 error.quota.suspended`.
 #[kynos::post("/v1/shares", operation_id = "issue_share", tag = SharesTag)]
 pub async fn issue_share(
+    Auth(credential): Auth<AccessToken>,
     Inject(share): Inject<ShareContext>,
     Inject(quota): Inject<QuotaContext>,
-    Auth(credential): Auth<AccessToken>,
     Json(request): Json<IssueShareRequest>,
 ) -> Result<IssueShareReply, IssueShareRejection> {
     let owner = UserId::new(credential.user.as_str());
@@ -411,8 +411,8 @@ pub async fn issue_share(
     tag = SharesTag
 )]
 pub async fn revoke_share(
-    Inject(share): Inject<ShareContext>,
     Auth(credential): Auth<AccessToken>,
+    Inject(share): Inject<ShareContext>,
     Path(path): Path<SharePath>,
 ) -> Result<NoContent, IssueShareRejection> {
     let owner = UserId::new(credential.user.as_str());

@@ -55,8 +55,8 @@
 
 use std::time::Duration;
 
-use kynos::middleware::limits::BodySize;
-use kynos::server::protocol::Http1Config;
+use kynos::middleware::limits::body_size::BodySize;
+use kynos::server::protocol::http1::Http1Config;
 
 /// The largest request body any operation will accept, in bytes.
 ///

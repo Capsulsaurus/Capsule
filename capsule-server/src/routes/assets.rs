@@ -155,9 +155,9 @@ pub enum AssetReceiptsRejection {
     tag = StorageTag
 )]
 pub async fn get_asset_receipts(
+    Auth(credential): Auth<AccessToken>,
     Inject(verify): Inject<VerifyContext>,
     Inject(attestation): Inject<AttestationContext>,
-    Auth(credential): Auth<AccessToken>,
     Path(path): Path<AssetPath>,
 ) -> Result<Json<AssetReceiptsResponse>, AssetReceiptsRejection> {
     let asset = AssetId::new(path.asset_id);

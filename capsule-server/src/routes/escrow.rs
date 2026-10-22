@@ -44,7 +44,7 @@
 
 use capsule_i18n::error_codes;
 use kynos::extract::body::binary::Binary;
-use kynos::extract::media::MediaType;
+use kynos::http::media::MediaType;
 use kynos::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -150,8 +150,8 @@ pub enum FetchEscrowRejection {
 /// the lost recovery secret must stop working, which is the entire point of rotating.
 #[kynos::put("/v1/auth/escrow", operation_id = "store_escrow", tag = EscrowTag)]
 pub async fn store_escrow(
-    Inject(escrow): Inject<EscrowContext>,
     Auth(credential): Auth<AccessToken>,
+    Inject(escrow): Inject<EscrowContext>,
     body: EscrowBody,
 ) -> Result<Json<StoreEscrowResponse>, StoreEscrowRejection> {
     let user = UserId::new(credential.user.as_str());
@@ -195,8 +195,8 @@ pub async fn store_escrow(
 /// opens, and the failure would look like a lost master key.
 #[kynos::get("/v1/auth/escrow", operation_id = "fetch_escrow", tag = EscrowTag)]
 pub async fn fetch_escrow(
-    Inject(escrow): Inject<EscrowContext>,
     Auth(credential): Auth<AccessToken>,
+    Inject(escrow): Inject<EscrowContext>,
 ) -> Result<Binary<OctetStream>, FetchEscrowRejection> {
     let user = UserId::new(credential.user.as_str());
     let held = escrow
@@ -266,8 +266,8 @@ pub enum FetchSealedIdentityRejection {
     tag = EscrowTag
 )]
 pub async fn store_sealed_identity(
-    Inject(escrow): Inject<EscrowContext>,
     Auth(credential): Auth<AccessToken>,
+    Inject(escrow): Inject<EscrowContext>,
     body: EscrowBody,
 ) -> Result<Json<StoreSealedIdentityResponse>, StoreEscrowRejection> {
     let user = UserId::new(credential.user.as_str());
@@ -312,8 +312,8 @@ pub async fn store_sealed_identity(
     tag = EscrowTag
 )]
 pub async fn fetch_sealed_identity(
-    Inject(escrow): Inject<EscrowContext>,
     Auth(credential): Auth<AccessToken>,
+    Inject(escrow): Inject<EscrowContext>,
 ) -> Result<Binary<OctetStream>, FetchSealedIdentityRejection> {
     let user = UserId::new(credential.user.as_str());
     let held = escrow

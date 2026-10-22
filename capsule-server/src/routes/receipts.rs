@@ -28,7 +28,7 @@
 
 use capsule_i18n::error_codes;
 use kynos::extract::body::binary::Binary;
-use kynos::extract::media::MediaType;
+use kynos::http::media::MediaType;
 use kynos::prelude::*;
 
 use crate::attestation::AttestationContext;
@@ -86,9 +86,9 @@ pub enum ReceiptRejection {
     tag = UploadTag
 )]
 pub async fn get_upload_receipt(
+    Auth(credential): Auth<AccessToken>,
     Inject(upload): Inject<UploadContext>,
     Inject(attestation): Inject<AttestationContext>,
-    Auth(credential): Auth<AccessToken>,
     Path(path): Path<UploadPath>,
 ) -> Result<Binary<Cbor>, ReceiptRejection> {
     let id = UploadId::new(path.id);

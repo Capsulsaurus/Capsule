@@ -103,7 +103,7 @@ impl Authenticator<ReadBearer, App> for FederationContext {
             Ok(session) => return Ok(Principal::Session(session)),
             // `AuthRejection` is non-exhaustive; anything that is not "insufficient" is "not a
             // session", which is the one answer that opens the capability path.
-            Err(AuthRejection::Forbidden) => return Err(AuthRejection::Forbidden),
+            Err(rejection @ AuthRejection::Forbidden { .. }) => return Err(rejection),
             Err(_) => {}
         }
 
@@ -167,7 +167,7 @@ impl Authenticator<ReadBearer, App> for FederationContext {
     async fn authorize(
         &self,
         _credential: &Principal,
-        _scopes: &'static [&'static str],
+        _scopes: &[kynos::security::Unscoped],
         _context: &App,
     ) -> Result<(), AuthRejection> {
         // Neither token type carries OAuth-style scopes; a capability's `scope` is decided

@@ -530,11 +530,11 @@ impl From<Refusal> for RefreshRejection {
     tag = FederationTag
 )]
 pub async fn issue_capability(
+    Auth(credential): Auth<AccessToken>,
     _: Federating,
     Inject(federation): Inject<FederationContext>,
     Inject(albums): Inject<AlbumContext>,
     Inject(membership): Inject<MembershipContext>,
-    Auth(credential): Auth<AccessToken>,
     Path(path): Path<CapabilitiesPath>,
     Json(request): Json<MintCapabilityRequest>,
 ) -> Result<MintReply, MintRejection> {
@@ -708,10 +708,10 @@ pub enum MintReply {
     tag = FederationTag
 )]
 pub async fn revoke_capability(
+    Auth(credential): Auth<AccessToken>,
     _: Federating,
     Inject(federation): Inject<FederationContext>,
     Inject(albums): Inject<AlbumContext>,
-    Auth(credential): Auth<AccessToken>,
     Path(path): Path<CapabilityPath>,
 ) -> Result<NoContent, RevokeRejection> {
     let album = AlbumId::new(&path.album_id);
@@ -775,11 +775,11 @@ pub async fn revoke_capability(
     tag = FederationTag
 )]
 pub async fn refresh_capability(
+    Auth(principal): Auth<ReadBearer>,
     _: Federating,
     Inject(federation): Inject<FederationContext>,
     Inject(membership): Inject<MembershipContext>,
     Inject(counters): Inject<CounterContext>,
-    Auth(principal): Auth<ReadBearer>,
 ) -> Result<Json<RefreshedCapabilityResponse>, RefreshRejection> {
     let Principal::Peer(capability) = principal else {
         tracing::info!("a session token was presented on the capability refresh");

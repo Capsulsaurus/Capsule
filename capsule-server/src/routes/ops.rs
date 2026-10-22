@@ -298,11 +298,11 @@ pub enum OpRejection {
     tag = LifecycleTag
 )]
 pub async fn apply_op(
+    Auth(credential): Auth<AccessToken>,
     Inject(upload): Inject<UploadContext>,
     Inject(attestation): Inject<AttestationContext>,
     Inject(quota): Inject<crate::quota::QuotaContext>,
     Inject(moderation): Inject<crate::moderation::ModerationContext>,
-    Auth(credential): Auth<AccessToken>,
     Path(path): Path<AlbumPath>,
     Json(request): Json<OpRequest>,
 ) -> Result<Json<OpResponse>, OpRejection> {

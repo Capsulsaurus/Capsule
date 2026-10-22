@@ -712,9 +712,9 @@ fn fetch_escrow_error(error: rest::Error<rest::FetchEscrowError>) -> RecoveryErr
             rest::FetchEscrowError::Status500(problem) => unavailable(&problem),
             // Declared by the transport backstop and unreachable on a body-less `GET`; kept
             // honest rather than folded into a class it does not belong to.
-            rest::FetchEscrowError::Status413 => RecoveryError::Unexpected {
+            rest::FetchEscrowError::Status413(problem) => RecoveryError::Unexpected {
                 status: 413,
-                code: None,
+                code: Some(problem.code.clone()),
             },
         },
         other => wire_error(&other),
@@ -750,8 +750,8 @@ fn store_escrow_error(error: rest::Error<rest::StoreEscrowError>) -> RecoveryErr
             // something it did not — a client localizing it would be reading the SDK's guess
             // as the server's judgement. The English detail says what happened instead; the
             // variant already says "these bytes will not do, do not resend them".
-            rest::StoreEscrowError::Status413 => RecoveryError::Malformed {
-                code: None,
+            rest::StoreEscrowError::Status413(problem) => RecoveryError::Malformed {
+                code: Some(problem.code.clone()),
                 detail: "the escrow blob exceeds the server's request-body limit".to_owned(),
             },
         },
@@ -777,9 +777,9 @@ fn fetch_sealed_identity_error(
             rest::FetchSealedIdentityError::Status401(problem)
             | rest::FetchSealedIdentityError::Status403(problem) => refused(&problem),
             rest::FetchSealedIdentityError::Status500(problem) => unavailable(&problem),
-            rest::FetchSealedIdentityError::Status413 => RecoveryError::Unexpected {
+            rest::FetchSealedIdentityError::Status413(problem) => RecoveryError::Unexpected {
                 status: 413,
-                code: None,
+                code: Some(problem.code.clone()),
             },
         },
         other => wire_error(&other),
@@ -809,8 +809,8 @@ fn store_sealed_identity_error(
             rest::StoreSealedIdentityError::Status401(problem)
             | rest::StoreSealedIdentityError::Status403(problem) => refused(&problem),
             rest::StoreSealedIdentityError::Status500(problem) => unavailable(&problem),
-            rest::StoreSealedIdentityError::Status413 => RecoveryError::Malformed {
-                code: None,
+            rest::StoreSealedIdentityError::Status413(problem) => RecoveryError::Malformed {
+                code: Some(problem.code.clone()),
                 detail: "the sealed identity exceeds the server's request-body limit".to_owned(),
             },
         },

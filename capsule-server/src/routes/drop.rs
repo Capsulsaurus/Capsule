@@ -624,9 +624,9 @@ pub enum AdoptRejection {
 /// `403 error.quota.suspended`.
 #[kynos::post("/v1/drops/links", operation_id = "provision_link", tag = DropsTag)]
 pub async fn provision_link(
+    Auth(credential): Auth<AccessToken>,
     Inject(drops): Inject<DropContext>,
     Inject(quota): Inject<crate::quota::QuotaContext>,
-    Auth(credential): Auth<AccessToken>,
     Json(request): Json<ProvisionLinkRequest>,
 ) -> Result<ProvisionLinkReply, LinkRejection> {
     let owner = UserId::new(credential.user.as_str());
@@ -741,8 +741,8 @@ async fn admit_link_growth(
     tag = DropsTag
 )]
 pub async fn revoke_link(
-    Inject(drops): Inject<DropContext>,
     Auth(credential): Auth<AccessToken>,
+    Inject(drops): Inject<DropContext>,
     Path(path): Path<LinkPath>,
 ) -> Result<NoContent, LinkRejection> {
     let owner = UserId::new(credential.user.as_str());
@@ -1186,10 +1186,10 @@ pub struct AdoptRequest {
     tag = DropsTag
 )]
 pub async fn adopt_drop(
+    Auth(credential): Auth<AccessToken>,
     Inject(drops): Inject<DropContext>,
     Inject(upload): Inject<crate::upload::UploadContext>,
     Inject(attestation): Inject<crate::attestation::AttestationContext>,
-    Auth(credential): Auth<AccessToken>,
     Path(path): Path<DropPath>,
     Json(request): Json<AdoptRequest>,
 ) -> Result<Json<AdoptResponse>, AdoptRejection> {
@@ -1644,8 +1644,8 @@ fn adoption_receipt(
 /// The caller's pending drops.
 #[kynos::get("/v1/drops", operation_id = "list_inbox", tag = DropsTag)]
 pub async fn list_inbox(
-    Inject(drops): Inject<DropContext>,
     Auth(credential): Auth<AccessToken>,
+    Inject(drops): Inject<DropContext>,
 ) -> Result<Json<InboxResponse>, InboxReadRejection> {
     let owner = UserId::new(credential.user.as_str());
     let entries = drops.drops().inbox(&owner).await.map_err(|error| {
@@ -1667,8 +1667,8 @@ pub async fn list_inbox(
 /// keep it, which is not the same as a link slot never having been used.
 #[kynos::delete("/v1/drops/{drop_id}", operation_id = "discard_drop", tag = DropsTag)]
 pub async fn discard_drop(
-    Inject(drops): Inject<DropContext>,
     Auth(credential): Auth<AccessToken>,
+    Inject(drops): Inject<DropContext>,
     Path(path): Path<DropPath>,
 ) -> Result<NoContent, DiscardRejection> {
     let owner = UserId::new(credential.user.as_str());
