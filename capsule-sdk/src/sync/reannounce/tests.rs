@@ -31,7 +31,7 @@ fn nothing_is_reannounced_when_the_feed_lists_everything() {
 
 #[test]
 fn batches_are_cut_by_count() {
-    let held: Vec<HeldManifest> = (0..MAX_BATCH_MANIFESTS * 2 + 1)
+    let held: Vec<HeldManifest> = (0..=MAX_BATCH_MANIFESTS * 2)
         .map(|n| held(&n.to_string(), 10))
         .collect();
     let refs: Vec<&HeldManifest> = held.iter().collect();

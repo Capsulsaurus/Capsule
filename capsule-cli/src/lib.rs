@@ -1334,21 +1334,17 @@ async fn sync(
                 "{}",
                 "The server rebuilt this library's index; resynced from the start.".yellow()
             );
-            match library {
-                Some(library) => {
-                    let ws = open_workspace(library, passphrase_stdin)?;
-                    reannounce_workspace(&ws, dry_run, false).await
-                }
-                None => {
-                    println!(
-                        "{}",
-                        "Run `capsule sync reannounce --library PATH` to give it back what this \
-                         library holds."
-                            .yellow()
-                    );
-                    Ok(())
-                }
+            if let Some(library) = library {
+                let ws = open_workspace(library, passphrase_stdin)?;
+                return reannounce_workspace(&ws, dry_run, false).await;
             }
+            println!(
+                "{}",
+                "Run `capsule sync reannounce --library PATH` to give it back what this \
+                 library holds."
+                    .yellow()
+            );
+            Ok(())
         }
         Err(remote::RemoteError::NotAuthenticated) => Err(eyre!(NOT_AUTHENTICATED)),
         Err(error) => Err(eyre!("Sync failed: {}", describe_remote_error(&error))),
