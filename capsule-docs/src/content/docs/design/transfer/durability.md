@@ -38,7 +38,12 @@ A verdict says the bytes are serveable *now*. A **custody receipt** proves the s
 
 ## Signed Storage Attestation
 
-The verdict MAY be requested in a signed form carrying a client nonce and signed under the attestation key, so an honest server's self-reported loss and periodic audits are retainable evidence. Signing is rate-limited like `deep`. Not yet enforced; tracked by #706.
+The verdict MAY be requested in a signed form carrying a client nonce and signed under the attestation key, so an honest server's self-reported loss and periodic audits are retainable evidence. The type is `StorageAttestation` in `capsule-core::crypto::storage_attestation`, shared by client and server.
+
+- **Requested** by sending `attestation_nonce` — 32 bytes the client draws fresh per request, as lowercase hex — on `POST /v1/storage/verify`. The response then also carries `attestation`, the canonical-CBOR attestation in base64.
+- **Contents.** Server identity and signing-key id, the account the verdicts were computed for, the client's nonce, the server's `checked_at`, and the same per-asset, per-blob verdicts the unsigned response carries, `deep` included when a scan ran. The `storage-attestation/v1` version and field set keep it from being mistaken for a custody receipt, which the same key signs.
+- **Priced like `deep`.** Signing spends the account's deep-verify budget, charged once per request that asks for either. A throttled signed request is refused whole with `429` and `Retry-After`, never downgraded to an unsigned answer. A client that asked for evidence and got none would not know it.
+- **Verified by the client.** The signature verifies under the pinned attestation key, the nonce is the one the client sent, and the verdicts answer exactly the assets and declared hashes asked about, in order. A replayed or tampered attestation fails one of these checks. The client acts on the verdicts read from the signed core, and keeps the bytes as evidence.
 
 ## Proof of Loss
 
