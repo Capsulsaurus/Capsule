@@ -2,7 +2,7 @@
 //! `--signed` keep its signed answer as evidence (SSoT:
 //! [Transfer — Durability](https://docs/design/transfer/durability/)).
 //!
-//! The network legs are the SDK's: [`crate::remote::verify_storage`] builds a [`VerdictSource`]
+//! The network legs are the SDK's: [`crate::remote::verify_storage`] builds a `VerdictSource`
 //! over `capsule_sdk::verify`, which sends `POST /v1/storage/verify` and, for a signed request,
 //! verifies the attestation under the server's attestation-key history before handing it back.
 //! Persistence is the library's: `capsule_core::library::append_attestation` appends the verified
