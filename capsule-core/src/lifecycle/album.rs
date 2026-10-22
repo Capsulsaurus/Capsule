@@ -33,11 +33,17 @@ impl Workspace {
     /// Refuses with [`LifecycleError::AlbumExists`] if the workspace already holds key material
     /// for `album_id`: minting over it would discard the AMKs every existing asset in that album
     /// was encrypted under. Use [`ensure_album`](Self::ensure_album) for resolve-or-create.
+    ///
+    /// The name follows the label rule, as [`rename_album`](Self::rename_album)'s does, so
+    /// creation never accepts a name a rename would refuse: [`LifecycleError::InvalidLabel`]
+    /// before any key is minted.
     #[tracing::instrument(skip_all, fields(album_id = %album_id, name = name))]
     pub fn create_album_with_id(&mut self, album_id: Uuid, name: &str) -> Result<Uuid> {
         if self.albums.contains_key(&album_id) {
             return Err(LifecycleError::AlbumExists(album_id));
         }
+        let name = normalize_label(name)?;
+        let name = name.as_str();
         let amk = Amk::generate();
         let write_tier = HybridSigningKey::generate();
         let admin = HybridSigningKey::generate();
@@ -593,6 +599,33 @@ mod tests {
         let doc = ws.album_doc(&album).unwrap();
         assert!(doc.verify(&ws.user_ik_public()));
         assert_eq!(doc.labels.value(), BTreeSet::from(["family".to_string()]));
+    }
+
+    /// Creation applies the same label rule to the name as a rename does: a name a rename
+    /// would refuse is refused before any key is minted, and an accepted one is stored
+    /// normalized in both the keystore and the record.
+    #[test]
+    fn creation_and_rename_apply_the_same_name_rule() {
+        let lib = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let too_long = "x".repeat(257);
+        for bad in ["", "   ", too_long.as_str()] {
+            assert!(matches!(
+                ws.create_album(bad),
+                Err(LifecycleError::InvalidLabel(_))
+            ));
+        }
+        assert!(ws.albums().is_empty(), "a refused name mints no album");
+
+        let album = ws.create_album("  Spaced  ").unwrap();
+        assert_eq!(ws.albums(), vec![(album, "Spaced".to_string())]);
+        assert_eq!(ws.album_doc(&album).unwrap().current_name(), Some("Spaced"));
+        for bad in ["", "   ", too_long.as_str()] {
+            assert!(matches!(
+                ws.rename_album(album, bad),
+                Err(LifecycleError::InvalidLabel(_))
+            ));
+        }
     }
 
     /// An album that predates its record reads its keystore name under the legacy stamp, so
