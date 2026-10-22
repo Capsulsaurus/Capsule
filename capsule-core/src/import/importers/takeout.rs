@@ -9,8 +9,9 @@
 //!
 //! **Every file is kept.** JSON is the exporter's sidecar and album-manifest channel; every other
 //! file of an export is a media file whatever its extension (a GIF, a WebP, a 3GP video, a suffix
-//! Capsule has never seen), and only Takeout's own named non-media artefacts (`archive_browser.html`)
-//! are left out, each with a log line.
+//! Capsule has never seen). Only Takeout's own named non-media artefacts (`archive_browser.html`)
+//! and the operating system's folder metadata (`.DS_Store`, `._*`, `Thumbs.db`, `desktop.ini`, the
+//! same rule as the plain scanner) are left out, each with a log line.
 //!
 //! Takeout's structural quirks are handled here so the pure planner never special-cases them:
 //!
@@ -42,6 +43,7 @@ use crate::import::importers::{
     SourceAdapter, SourceEntry,
 };
 use crate::import::scan::ImportCandidate;
+use crate::import::scanner::is_os_folder_metadata;
 use crate::metadata::AssetType;
 
 /// Minimum shared-prefix length before the truncation fallback will pair a media file with a
@@ -342,8 +344,9 @@ struct ExportWalk {
 
 impl ExportWalk {
     /// Walk one export part. JSON files are the sidecar and album-manifest channel; every other
-    /// file is a media file whatever its extension, except a named [`TAKEOUT_ARTEFACTS`] entry,
-    /// which is left out and logged.
+    /// file is a media file whatever its extension, except a named [`TAKEOUT_ARTEFACTS`] entry.
+    /// Operating-system folder metadata ([`is_os_folder_metadata`]) is left out before either
+    /// channel, as the plain scanner does. Every file left out is logged.
     fn absorb_root(&mut self, root: &Path) -> Result<(), AdapterError> {
         for entry in WalkDir::new(root) {
             let entry = entry.map_err(|e| AdapterError::Io {
@@ -354,6 +357,14 @@ impl ExportWalk {
                 continue;
             }
             let path = entry.into_path();
+            if is_os_folder_metadata(&path) {
+                tracing::debug!(
+                    path = %path.display(),
+                    reason = "os_folder_metadata",
+                    "takeout import: left out OS folder metadata that is not an original"
+                );
+                continue;
+            }
             let name = file_name_lower(&path);
             let ext = path
                 .extension()
@@ -981,6 +992,13 @@ mod tests {
         // An unknown suffix with no sidecar, and a file with no extension at all.
         write(&y.join("mystery.zzq"), b"mystery-bytes");
         write(&y.join("NOEXTENSION"), b"no-extension-bytes");
+        // Operating-system folder metadata left by unpacking the archive on macOS or Windows:
+        // none of it is an original, so none of it may become an asset.
+        write(&y.join(".DS_Store"), b"finder-bytes");
+        write(&y.join("._loop.gif"), b"appledouble-bytes");
+        write(&y.join("._loop.gif.json"), b"appledouble-bytes");
+        write(&y.join("Thumbs.db"), b"explorer-bytes");
+        write(&y.join("desktop.ini"), b"explorer-bytes");
     }
 
     #[test]
@@ -1012,7 +1030,7 @@ mod tests {
                 "old-phone.3gp",
                 "sticker.webp"
             ],
-            "every non-JSON file is an asset; no JSON and no Takeout artefact is"
+            "every non-JSON file is an asset; no JSON, Takeout artefact or OS folder metadata is"
         );
 
         // Each pairs with its own sidecar where one exists.
