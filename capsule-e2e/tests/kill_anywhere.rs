@@ -3,19 +3,16 @@
 //! and the phase rerun until it converges.
 //!
 //! The harness covers the whole pipeline — import, push and restore, the CLI or the server as
-//! the victim — and runs the part that converges on this server today:
+//! the victim. Every seed runs all three [`PHASES`], and each must converge. A phase is cut at
+//! its seeded point first when that point is [`armed`]: import and restore points are, for
+//! either victim. Push points are armed once a finalization whose finalizer dies no longer
+//! strands its upload session (#801, tracked by #794), which this suite found: armed, seed 678
+//! (the CLI) and seed 679 (the server) each leave an asset no rerun can make durable.
 //!
-//! - [`PHASES`] — import and push — run for every seed and must converge. Restore joins once
-//!   `capsule restore` can restore from a real server at all (#791).
-//! - Each phase is cut at its seeded point first when that point is [`armed`]: today, import.
-//!   Push points — the CLI or the server — are armed once a finalization whose finalizer dies
-//!   no longer strands its upload session (#801), which this suite found: armed, seed 678
-//!   (the CLI) and seed 679 (the server) each leave an asset no rerun can make durable.
-//!
-//! Both are tracked by #794. Its target is **E2E case 11's process-restart variant** — a server
-//! killed outright mid-transfer loses nothing it committed and leaves nothing referencing bytes
-//! it never stored — and the crash halves of **E2E case 2** (import + upload + finalize, whose
-//! in-process half is `case_02_import_upload_finalize.rs`) and **E2E case 6** (restore).
+//! This is **E2E case 11's process-restart variant** — a server killed outright mid-transfer
+//! loses nothing it committed and leaves nothing referencing bytes it never stored — and the
+//! crash halves of **E2E case 2** (import + upload + finalize, whose in-process half is
+//! `case_02_import_upload_finalize.rs`) and **E2E case 6** (restore).
 //!
 //! # What converges
 //!
@@ -33,8 +30,9 @@
 //!   debris under the blob root, a stage with no session — is the collector's to reclaim, and is
 //!   counted in the log rather than failed. One more is filtered by its exact shape until #790
 //!   lands ([`is_issue_790`]);
-//! - **a byte-equal restore**, once the restore phase runs — the final `capsule restore` writes
-//!   one file per asset, and the files are the corpus, byte for byte.
+//! - **a byte-equal restore** — the rerun of `capsule restore` reports no failed asset and one
+//!   outcome per library asset, and the files in its output directory are the corpus, byte for
+//!   byte.
 //!
 //! A kill point is a fraction of the phase (see `capsule_e2e::killpoints`), scaled by how long
 //! the same phase took in an unkilled baseline run over the same corpus. A point that lands
@@ -61,7 +59,10 @@ use capsule_core::lifecycle::Workspace;
 use capsule_e2e::fixtures::synthetic_jpeg_sized;
 use capsule_e2e::killpoints::{self, KillPlan, KillPoint, Phase, Victim};
 use capsule_e2e::processes::{Binaries, Cli, CliOutput, ServerProcess};
-use capsule_e2e::{Device, FAST_KDF, JWT_ED25519_DER, PASSPHRASE, PASSWORD, auth_base_of, feed_at};
+use capsule_e2e::{
+    ATTESTATION_KEY_SEED, Device, FAST_KDF, JWT_ED25519_DER, PASSPHRASE, PASSWORD, auth_base_of,
+    feed_at,
+};
 use capsule_sdk::auth::AuthClient;
 use capsule_sdk::sync::ChangeKind;
 use capsule_server::boot;
@@ -75,21 +76,20 @@ use testcontainers_modules::postgres::Postgres;
 use testcontainers_modules::valkey::{VALKEY_PORT, Valkey};
 use uuid::Uuid;
 
-/// The phases every run drives, in pipeline order, each asserted to converge. [`Phase::Restore`]
-/// joins once `capsule restore` can restore from a real server (#791, tracked by #794).
-const PHASES: [Phase; 2] = [Phase::Import, Phase::Push];
+/// The phases every run drives, in pipeline order, each asserted to converge.
+const PHASES: [Phase; 3] = [Phase::Import, Phase::Push, Phase::Restore];
 
 /// Whether a seed's kill point for its phase is armed before the converging rerun; an unarmed
 /// phase runs unkilled.
 ///
-/// Import points are armed. Push points are not, whichever process they kill: a finalization
-/// whose finalizer dies — the CLI's request dropped mid-flight, or the server killed between
-/// its claim and its index write — strands the upload session, and the asset never becomes
-/// durable whatever the rerun does (#801, found by this suite; tracked by #794). Restore points
-/// wait for restore itself (#791). Every seed's plan draws its points whether or not they are
-/// armed, so arming one later changes no other point of any seed's schedule.
+/// Import and restore points are armed, whichever process they kill. Push points are not: a
+/// finalization whose finalizer dies — the CLI's request dropped mid-flight, or the server
+/// killed between its claim and its index write — strands the upload session, and the asset
+/// never becomes durable whatever the rerun does (#801, found by this suite; tracked by #794).
+/// Every seed's plan draws its points whether or not they are armed, so arming one later
+/// changes no other point of any seed's schedule.
 fn armed(point: KillPoint) -> bool {
-    matches!(point.phase, Phase::Import)
+    !matches!(point.phase, Phase::Push)
 }
 
 /// The variable that admits the suite.
@@ -106,11 +106,6 @@ const USERNS_MODE: &str = "CAPSULE_TEST_CONTAINER_USERNS";
 const POSTGRES_TAG: &str = "18";
 /// See [`POSTGRES_TAG`].
 const VALKEY_TAG: &str = "9.0.4";
-
-/// A 64-byte attestation seed, base64 — the durable profile needs one of its own, and it signs
-/// nothing anywhere (`capsule-server/tests/binary.rs` uses the same bytes).
-const ATTESTATION_SEED: &str =
-    "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQ==";
 
 /// How long any one `capsule` run may take before the suite fails it. A CLI that outlives this
 /// after its server came back is a hang, which is a finding in its own right.
@@ -198,7 +193,7 @@ impl Backends {
             ("JWT_ED25519_DER".to_owned(), JWT_ED25519_DER.to_owned()),
             (
                 "ATTESTATION_KEY_SEED".to_owned(),
-                ATTESTATION_SEED.to_owned(),
+                ATTESTATION_KEY_SEED.to_owned(),
             ),
         ]
     }
