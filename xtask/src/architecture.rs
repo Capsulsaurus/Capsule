@@ -1,4 +1,4 @@
-//! Enforces the active Rust workspace and retired-boundary decisions.
+//! Enforces the active Rust workspace, the retired-boundary decisions, and the stateless core.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -126,6 +126,7 @@ pub(crate) fn run(root: &Path) -> Result<()> {
     check_workspace_dependencies(root, &mut violations)?;
     check_legacy_manifests(root, &mut violations)?;
     check_chrono_isolation(root, &mut violations)?;
+    check_stateless_core(root, &mut violations)?;
     check_retired_references(root, &mut violations)?;
 
     if violations.is_empty() {
@@ -646,6 +647,206 @@ fn workspace_member_names(root: &Path) -> Result<BTreeSet<String>> {
     Ok(names)
 }
 
+/// Crates that exist to hold local state. None may be a normal (non-dev) dependency of the
+/// stateless core; they belong to `capsule-library` (local) or the server.
+const STATEFUL_DEPENDENCIES: &[&str] = &["rusqlite", "sea-orm", "sqlite-vec", "sqlx", "walkdir"];
+
+/// The stateless core's boundary (Module Map — Stateless Core): `capsule-core` holds no
+/// connection or file handle and reads no environment, so neither its manifest nor its sources
+/// may reach for a database or the process's filesystem and environment.
+///
+/// Two halves, so each catches what the other cannot:
+///
+/// - the **manifest**: no [`STATEFUL_DEPENDENCIES`] entry is a normal dependency of
+///   `capsule-core` (dev-dependencies are the tests' business);
+/// - the **sources**: no file under `capsule-core/src` names `std::fs`, `std::env`, `rusqlite`
+///   or `sea_orm` (see [`stateless_core_violations`]).
+///
+/// The design's two sanctioned exceptions — the OS CSPRNG behind `crypto::rng` and
+/// `catch_unwind` in `media::decode` — touch none of these, so no file is exempt. A missing
+/// `capsule-core/src`, or one holding no Rust source, is itself a violation: a guard that finds
+/// nothing to read must not report clean.
+fn check_stateless_core(root: &Path, violations: &mut Vec<String>) -> Result<()> {
+    let metadata = cargo_metadata(root)?;
+    let core = metadata["packages"]
+        .as_array()
+        .context("cargo metadata packages missing")?
+        .iter()
+        .find(|package| package["name"].as_str() == Some("capsule-core"));
+    let Some(core) = core else {
+        violations.push(
+            "the stateless-core guard found no `capsule-core` package; it checked nothing".into(),
+        );
+        return Ok(());
+    };
+    for dependency in core["dependencies"]
+        .as_array()
+        .context("package dependencies missing")?
+    {
+        let name = dependency["name"]
+            .as_str()
+            .context("dependency name missing")?;
+        let is_dev = dependency["kind"].as_str() == Some("dev");
+        if !is_dev && STATEFUL_DEPENDENCIES.contains(&name) {
+            violations.push(format!(
+                "`capsule-core` depends on `{name}`; the stateless core holds no local state, \
+                 which belongs in `capsule-library`"
+            ));
+        }
+    }
+
+    let src = root.join("capsule-core/src");
+    if !src.is_dir() {
+        violations.push(format!(
+            "the stateless-core guard found no `{}`; it checked nothing",
+            display_relative(root, &src)
+        ));
+        return Ok(());
+    }
+    let mut scanned = 0usize;
+    walk_files(&src, &mut |path| {
+        if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+            return Ok(());
+        }
+        scanned += 1;
+        let source = fs::read_to_string(path)
+            .with_context(|| format!("reading {}", display_relative(root, path)))?;
+        violations.extend(stateless_core_violations(
+            &display_relative(root, path),
+            &source,
+        ));
+        Ok(())
+    })?;
+    if scanned == 0 {
+        violations.push(format!(
+            "the stateless-core guard found no Rust source under `{}`; it checked nothing",
+            display_relative(root, &src)
+        ));
+    }
+    Ok(())
+}
+
+/// Every stateful reach in one `capsule-core` source file, one violation line each.
+///
+/// A reach is a path through `std::fs`, `std::env`, `rusqlite` or `sea_orm`, written out
+/// (`std::fs::read`) or grouped (`use std::{env, fs}`). Comment lines are skipped, so a doc
+/// comment explaining why a module stays `std::fs`-free is not a reach. `env!` and
+/// `option_env!` read the build environment at compile time, not the process's, and do not
+/// match.
+fn stateless_core_violations(relative: &str, source: &str) -> Vec<String> {
+    const FORBIDDEN: &[(&str, &str)] = &[
+        ("std::fs", "the filesystem"),
+        ("std::env", "the process environment"),
+        ("rusqlite", "SQLite"),
+        ("sea_orm", "a database"),
+    ];
+    let code: Vec<&str> = source
+        .lines()
+        .map(|line| {
+            if line.trim_start().starts_with("//") {
+                ""
+            } else {
+                line
+            }
+        })
+        .collect();
+
+    let mut found = Vec::new();
+    for (index, line) in code.iter().enumerate() {
+        for (path, what) in FORBIDDEN {
+            if contains_path(line, path) {
+                found.push(format!(
+                    "{relative}:{}: names `{path}`; the stateless core reads no {what} \
+                     (move the code to `capsule-library`)",
+                    index + 1
+                ));
+            }
+        }
+    }
+
+    // A grouped import spans lines, so it is read over the joined code with its line recovered
+    // from the offset of `std::{`.
+    let joined = code.join("\n");
+    let mut from = 0;
+    while let Some(offset) = joined[from..].find("std::{") {
+        let open = from + offset + "std::".len();
+        let close = matching_brace(&joined, open).unwrap_or(joined.len());
+        let group = &joined[open + 1..close];
+        let line = joined[..open].matches('\n').count() + 1;
+        for (member, what) in [("fs", "the filesystem"), ("env", "the process environment")] {
+            if top_level_members(group).any(|candidate| candidate == member) {
+                found.push(format!(
+                    "{relative}:{line}: imports `std::{{{member}}}`; the stateless core reads no \
+                     {what} (move the code to `capsule-library`)"
+                ));
+            }
+        }
+        from = close.min(joined.len());
+        if from == open {
+            from += 1;
+        }
+    }
+    found
+}
+
+/// Whether `line` names `path` as a whole path segment: not as the tail of a longer identifier
+/// (`my_std::fs`) nor the head of one (`std::fsck`).
+fn contains_path(line: &str, path: &str) -> bool {
+    let is_ident = |character: char| character.is_alphanumeric() || character == '_';
+    line.match_indices(path).any(|(start, _)| {
+        let before = line[..start].chars().next_back();
+        let after = line[start + path.len()..].chars().next();
+        let before_ok = before.is_none_or(|character| !is_ident(character));
+        let after_ok = after.is_none_or(|character| !is_ident(character));
+        before_ok && after_ok
+    })
+}
+
+/// The index of the `}` closing the `{` at `open`, or `None` if it is never closed.
+fn matching_brace(text: &str, open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (index, character) in text[open..].char_indices() {
+        match character {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(open + index);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The first path segment of each top-level member of a `use` group's body: `fs` and `io` for
+/// `fs, io::{self, Read}`. Nested groups are skipped, so `io::{fs}` does not name `std::fs`.
+fn top_level_members(group: &str) -> impl Iterator<Item = &str> {
+    let mut members = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0;
+    for (index, character) in group.char_indices() {
+        match character {
+            '{' => depth += 1,
+            '}' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                members.push(&group[start..index]);
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    members.push(&group[start..]);
+    members.into_iter().map(|member| {
+        let member = member.trim();
+        let end = member
+            .find(|character: char| !(character.is_alphanumeric() || character == '_'))
+            .unwrap_or(member.len());
+        &member[..end]
+    })
+}
+
 fn check_legacy_manifests(root: &Path, violations: &mut Vec<String>) -> Result<()> {
     let legacy = root.join("legacy-review");
     if legacy.exists() {
@@ -751,6 +952,70 @@ fn display_relative(root: &Path, path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn core_violations(source: &str) -> Vec<String> {
+        stateless_core_violations("capsule-core/src/x.rs", source)
+    }
+
+    #[test]
+    fn a_core_file_without_state_is_clean() {
+        let source = "use std::io::{self, Read};\nuse std::collections::BTreeMap;\n\
+                      const COMMIT: Option<&str> = option_env!(\"CAPSULE_COMMIT\");\n\
+                      fn f() -> &'static str { env!(\"CARGO_PKG_VERSION\") }\n";
+        assert_eq!(core_violations(source), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_written_out_filesystem_or_environment_path_is_reported_with_its_line() {
+        let found = core_violations("fn a() {}\nfn b() { std::fs::read(\"x\").ok(); }\n");
+        assert_eq!(found.len(), 1);
+        assert!(
+            found[0].starts_with("capsule-core/src/x.rs:2:"),
+            "{found:?}"
+        );
+        assert!(found[0].contains("`std::fs`"));
+
+        let found = core_violations("let home = ::std::env::var(\"HOME\");\n");
+        assert_eq!(found.len(), 1);
+        assert!(found[0].contains("`std::env`"));
+    }
+
+    #[test]
+    fn a_database_crate_is_reported() {
+        assert_eq!(
+            core_violations("use rusqlite::Connection;\nuse sea_orm::Database;\n").len(),
+            2
+        );
+    }
+
+    #[test]
+    fn a_grouped_import_of_fs_or_env_is_reported_across_lines() {
+        let found = core_violations("use std::{\n    collections::BTreeMap,\n    env, fs,\n};\n");
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(
+            found
+                .iter()
+                .all(|line| line.starts_with("capsule-core/src/x.rs:1:"))
+        );
+        assert!(found.iter().any(|line| line.contains("std::{fs}")));
+        assert!(found.iter().any(|line| line.contains("std::{env}")));
+    }
+
+    #[test]
+    fn a_nested_group_member_named_like_fs_is_not_a_reach() {
+        assert_eq!(
+            core_violations("use std::{io::{fs_like, Read}, path::Path};\n"),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn comments_and_longer_identifiers_are_not_reaches() {
+        let source = "//! This module must stay `std::fs`-free.\n\
+                      /// Persisting it is `rusqlite`'s business.\n\
+                      fn f(my_std::fs: u8) {}\nconst A: &str = \"std::fsck\";\n";
+        assert_eq!(core_violations(source), Vec::<String>::new());
+    }
 
     #[test]
     fn architecture_text_excludes_lockfiles() {

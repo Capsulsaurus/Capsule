@@ -17,7 +17,9 @@
 //!   [`translate_readme`]). `--check` is the CI drift gate; `--extract` scaffolds a
 //!   locale's translation-data file.
 //! - `architecture-check` rejects implicit workspace packages, retired dependencies,
-//!   buildable review-only code, and stale component references (see [`architecture`]).
+//!   buildable review-only code, stale component references, and any reach for the
+//!   filesystem, the environment or a database from the stateless `capsule-core` (see
+//!   [`architecture`]).
 //! - `screenshot-seed` / `screenshot-compose` are the platform-independent halves of the
 //!   README hero screenshot pipeline driven by `mise run screenshot-ios` (see [`screenshot`]).
 
