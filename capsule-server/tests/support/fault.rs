@@ -248,6 +248,10 @@ impl AssetIndex for CrashBeforeCommit {
         self.inner.ledger_head(owner)
     }
 
+    fn anchored_owners(&self) -> IndexFuture<'_, Vec<OwnerId>> {
+        self.inner.anchored_owners()
+    }
+
     fn record_ledger_head<'a>(
         &'a self,
         owner: &'a OwnerId,

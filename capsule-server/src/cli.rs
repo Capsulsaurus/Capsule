@@ -36,6 +36,7 @@ use tracing_subscriber::{EnvFilter, fmt as log_fmt};
 use crate::boot::{self, Assembled, Maintenance};
 use crate::config::{Config, Demands, Environment, LogFormat, Overrides, ProcessEnvironment};
 use crate::gc::{CollectionReport, Mode, PurgeReport};
+use crate::ledger::ChainFault;
 use crate::ledger::rebuild::RebuildReport;
 use crate::scrub::{Depth, ScrubReport};
 use crate::store::UserId;
@@ -187,10 +188,20 @@ pub enum Command {
     /// numbers the ledger proved, recomputes their quota attribution, quarantines manifests that
     /// fail structural validation, and moves an owner whose sequence it cannot prove to a new
     /// sync epoch. Exits non-zero when it found something an operator must look at.
+    ///
+    /// Each owner ledger is verified against the head the index recorded for it. A ledger that
+    /// lost its tail is re-anchored by `--apply`; one holding another entry where the recorded
+    /// head was (a rewrite) keeps its anchor, and the server refuses that owner's writes, until
+    /// an operator who has read the report adds `--accept-rewrites`.
     Rebuild {
         /// Carry it out. Without this nothing is written.
         #[arg(long)]
         apply: bool,
+
+        /// With `--apply`, also re-anchor an owner whose ledger the recorded head caught
+        /// rewritten, accepting the ledger as it stands so the server writes to it again.
+        #[arg(long, requires = "apply")]
+        accept_rewrites: bool,
 
         /// Where state lives.
         #[command(flatten)]
@@ -350,7 +361,11 @@ pub async fn run() -> Result<ExitCode> {
             };
             scrub(&config, depth).await
         }
-        Command::Rebuild { apply, .. } => rebuild(&config, mode(apply)).await,
+        Command::Rebuild {
+            apply,
+            accept_rewrites,
+            ..
+        } => rebuild(&config, mode(apply), accept_rewrites).await,
         Command::Quota { action } => quota(&config, &action).await,
         // The document is a property of the router's types, so the configuration is loaded only
         // to refuse `--config` and is deliberately not logged: `mise run openapi-check-kynos` is
@@ -547,9 +562,14 @@ async fn scrub(config: &Config, depth: Depth) -> Result<ExitCode> {
 /// Exits [`EXIT_FINDINGS`] when the report holds a fault — a broken ledger, a row that disagrees
 /// with the index, a dangling entry, a quarantined manifest — and zero when the only news is rows
 /// to restore, which is what a rebuild is for.
-async fn rebuild(config: &Config, mode: Mode) -> Result<ExitCode> {
+async fn rebuild(config: &Config, mode: Mode, accept_rewrites: bool) -> Result<ExitCode> {
     let maintenance = maintenance(config).await?;
-    let report = crate::ledger::rebuild::rebuild(&maintenance.rebuild, mode)
+    let context = if accept_rewrites {
+        maintenance.rebuild.accepting_rewrites()
+    } else {
+        maintenance.rebuild
+    };
+    let report = crate::ledger::rebuild::rebuild(&context, mode)
         .await
         .map_err(|error| eyre!("the index rebuild could not finish: {error}"))?;
     print!("{}", render_rebuild(&report, mode));
@@ -736,6 +756,18 @@ impl std::fmt::Display for Rendered<'_, RebuildReport> {
             )?;
             if let Some(fault) = &owner.chain_fault {
                 writeln!(f, "    ledger broken: {fault}; replay stopped there")?;
+            }
+            if let Some(seq) = owner.reanchored {
+                writeln!(
+                    f,
+                    "    ledger re-anchored at entry {seq}; the server writes to it again"
+                )?;
+            } else if matches!(owner.chain_fault, Some(ChainFault::AnchorMismatch { .. })) {
+                writeln!(
+                    f,
+                    "    the server refuses this owner's writes until an operator accepts the \
+                     ledger as it stands: rebuild --apply --accept-rewrites"
+                )?;
             }
             let restored = match mode {
                 Mode::Apply => "restored",
@@ -1135,7 +1167,26 @@ mod tests {
         let dry = Cli::parse_from(["capsule-server", "rebuild"]).command;
         assert!(matches!(dry, Command::Rebuild { apply: false, .. }));
         let applied = Cli::parse_from(["capsule-server", "rebuild", "--apply"]).command;
-        assert!(matches!(applied, Command::Rebuild { apply: true, .. }));
+        assert!(matches!(
+            applied,
+            Command::Rebuild {
+                apply: true,
+                accept_rewrites: false,
+                ..
+            }
+        ));
+        let accepting =
+            Cli::parse_from(["capsule-server", "rebuild", "--apply", "--accept-rewrites"]).command;
+        assert!(matches!(
+            accepting,
+            Command::Rebuild {
+                apply: true,
+                accept_rewrites: true,
+                ..
+            }
+        ));
+        // Accepting a rewrite is a write, so it is refused without `--apply`.
+        assert!(Cli::try_parse_from(["capsule-server", "rebuild", "--accept-rewrites"]).is_err());
     }
 
     #[test]
@@ -1162,6 +1213,7 @@ mod tests {
             foreign_manifests: Vec::new(),
             epoch_bump_needed: true,
             epoch: None,
+            reanchored: None,
         };
         let report = RebuildReport {
             applied: false,
@@ -1191,6 +1243,62 @@ mod tests {
         assert!(
             !rendered.contains("asset-agreed"),
             "agreeing rows are counted, not listed"
+        );
+    }
+
+    /// A caught rewrite names the operator's way out; a re-anchored owner says it was.
+    #[test]
+    fn a_rebuild_report_names_the_way_out_of_a_caught_rewrite() {
+        use crate::ledger::ChainFault;
+        use crate::ledger::rebuild::OwnerReport;
+        use crate::store::OwnerId;
+
+        let owner = |name: &str, fault, reanchored| OwnerReport {
+            owner: OwnerId::new(name),
+            verified: 1,
+            chain_fault: Some(fault),
+            restored: Vec::new(),
+            agreed: Vec::new(),
+            differs: Vec::new(),
+            unprovable: Vec::new(),
+            incomplete: Vec::new(),
+            purged: Vec::new(),
+            dangling: Vec::new(),
+            unusable_manifests: Vec::new(),
+            foreign_manifests: Vec::new(),
+            epoch_bump_needed: true,
+            epoch: Some(1),
+            reanchored,
+        };
+        let report = RebuildReport {
+            applied: true,
+            links_only: false,
+            owners: vec![
+                owner("rewritten", ChainFault::AnchorMismatch { seq: 2 }, None),
+                owner(
+                    "cut",
+                    ChainFault::BehindAnchor {
+                        found: 1,
+                        anchored: 3,
+                    },
+                    Some(1),
+                ),
+            ],
+            orphans: Vec::new(),
+        };
+        let rendered = render_rebuild(&report, Mode::Apply).to_string();
+        assert!(
+            rendered.contains("rebuild --apply --accept-rewrites"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("ledger re-anchored at entry 1"),
+            "{rendered}"
+        );
+        assert_eq!(
+            rendered.matches("--accept-rewrites").count(),
+            1,
+            "only the rewritten owner needs the way out: {rendered}"
         );
     }
 

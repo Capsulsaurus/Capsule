@@ -765,7 +765,11 @@ async fn ledger_agrees(context: &ScrubContext, report: &mut ScrubReport) -> Resu
         return Ok(());
     };
     report.ledger_links_only = !keys.checks_signatures();
-    for owner in ledger.owners().await.map_err(ledger_failure)? {
+    let owners = crate::ledger::owners_to_verify(
+        ledger.owners().await.map_err(ledger_failure)?,
+        context.index.anchored_owners().await?,
+    );
+    for owner in owners {
         let scan = ledger.scan(&owner).await.map_err(ledger_failure)?;
         // The head the index recorded: without it a tail cut at an entry boundary reads as a
         // shorter, valid ledger.

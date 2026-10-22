@@ -1467,6 +1467,31 @@ impl AssetIndex for PostgresAssetIndex {
         })
     }
 
+    fn anchored_owners(&self) -> IndexFuture<'_, Vec<OwnerId>> {
+        Box::pin(async move {
+            // `COLLATE "C"`: byte order, which is the order the in-memory adapter and the ledger's
+            // own listing use.
+            let found = self
+                .connection
+                .query_all_raw(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "SELECT owner_id FROM owner_ledger_heads ORDER BY owner_id COLLATE \"C\"",
+                    [],
+                ))
+                .await
+                .map_err(PORT.failing("listing the owners with a ledger head"))?;
+            let column = PORT.failing("reading an anchored owner");
+            found
+                .iter()
+                .map(|row| {
+                    row.try_get::<String>("", "owner_id")
+                        .map(OwnerId::new)
+                        .map_err(&column)
+                })
+                .collect()
+        })
+    }
+
     fn record_ledger_head<'a>(
         &'a self,
         owner: &'a OwnerId,

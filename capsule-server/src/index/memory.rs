@@ -630,6 +630,10 @@ impl AssetIndex for InMemoryAssetIndex {
         Box::pin(async move { Ok(lock(&self.inner).ledger_heads.get(owner).copied()) })
     }
 
+    fn anchored_owners(&self) -> IndexFuture<'_, Vec<OwnerId>> {
+        Box::pin(async move { Ok(lock(&self.inner).ledger_heads.keys().cloned().collect()) })
+    }
+
     fn record_ledger_head<'a>(
         &'a self,
         owner: &'a OwnerId,

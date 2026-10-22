@@ -2497,6 +2497,13 @@ pub async fn a_ledger_head_only_rises_until_it_is_reset(index: &dyn AssetIndex) 
     );
     assert_eq!(read(&owner).await, Some(head(5, b"five")));
     assert_eq!(read(&other).await, None, "one owner's head moved another's");
+    let listed = ok(index.anchored_owners().await, "list the anchored owners");
+    assert!(listed.contains(&owner), "an anchored owner is not listed");
+    assert!(!listed.contains(&other), "an owner with no head is listed");
+    assert!(
+        listed.windows(2).all(|pair| pair[0] < pair[1]),
+        "anchored owners are not in ascending order: {listed:?}"
+    );
 
     // A reset is the one write that lowers it, and `None` clears it.
     ok(
@@ -2508,6 +2515,10 @@ pub async fn a_ledger_head_only_rises_until_it_is_reset(index: &dyn AssetIndex) 
     assert_eq!(read(&owner).await, Some(head(3, b"three")));
     ok(index.reset_ledger_head(&owner, None).await, "clear a head");
     assert_eq!(read(&owner).await, None);
+    assert!(
+        !ok(index.anchored_owners().await, "list the anchored owners").contains(&owner),
+        "a cleared owner is still listed"
+    );
     ok(
         index.reset_ledger_head(&other, None).await,
         "clear an absent head",

@@ -509,6 +509,71 @@ async fn a_rebuild_into_an_empty_index_anchors_the_chain_it_verified() {
     assert_eq!(empty.ledger_head(&alice).await.expect("read"), Some(left));
 }
 
+/// A ledger that lost every entry is not listed by the ledger at all; its anchor is what says it
+/// existed, so the rebuild still reports the cut at 0, clears the anchor under `--apply`, and the
+/// server writes to the owner again.
+#[tokio::test]
+async fn a_ledger_that_lost_every_entry_is_reported_from_its_anchor_and_reanchored() {
+    let server = Server::new();
+    let alice = owner("alice");
+    server.publish(&alice, "gone", false).await;
+    server.ledger.replace_raw(&alice, Vec::new());
+    assert!(
+        server.ledger.owners().await.expect("owners").is_empty(),
+        "the ledger lists an owner with no entries"
+    );
+
+    // Until a rebuild re-anchors, the server refuses to write over the loss.
+    let refused = crate::ledger::AnchoredLedger::new(server.ledger.clone(), server.index.clone())
+        .append(
+            &alice,
+            LedgerEvent::Directory {
+                user_id: "alice".to_owned(),
+                directory_version: 1,
+                document_hash: hash_bytes(b"directory"),
+            },
+            at(),
+            &server.signer,
+        )
+        .await;
+    assert!(
+        matches!(
+            refused,
+            Err(LedgerError::Damaged {
+                fault: ChainFault::BehindAnchor {
+                    found: 0,
+                    anchored: 4
+                },
+                ..
+            })
+        ),
+        "{refused:?}"
+    );
+
+    let context = server.rebuild_into(server.index.clone());
+    let dry = rebuild(&context, Mode::DryRun).await.expect("a pass");
+    assert_eq!(dry.owners.len(), 1, "the anchored owner was not walked");
+    assert_eq!(dry.owners[0].owner, alice);
+    assert_eq!(
+        dry.owners[0].chain_fault,
+        Some(ChainFault::BehindAnchor {
+            found: 0,
+            anchored: 4
+        })
+    );
+    assert_eq!(dry.owners[0].reanchored, None, "a dry run re-anchored");
+
+    let applied = rebuild(&context, Mode::Apply).await.expect("a pass");
+    assert_eq!(applied.owners[0].reanchored, Some(0));
+    assert_eq!(applied.owners[0].epoch, Some(1));
+    assert_eq!(server.index.ledger_head(&alice).await.expect("read"), None);
+
+    // The way out works: the owner's next write lands, from position 1.
+    server.publish(&alice, "after", false).await;
+    let again = rebuild(&context, Mode::DryRun).await.expect("a pass");
+    assert_eq!(again.owners[0].chain_fault, None);
+}
+
 /// A rewrite the anchor caught keeps its evidence: `--apply` does not move the anchor down to
 /// the entry before it.
 #[tokio::test]
@@ -542,6 +607,38 @@ async fn an_anchor_mismatch_is_not_reanchored() {
         server.index.ledger_head(&alice).await.expect("read"),
         Some(rival),
         "a caught rewrite was re-anchored away"
+    );
+    assert_eq!(report.owners[0].reanchored, None);
+
+    // The operator's way out: having read the report, accept the ledger as it stands. The pass
+    // still reports the mismatch; the anchor moves to the last entry before it, and the next pass
+    // verifies the ledger as it now is.
+    let accepting = server
+        .rebuild_into(server.index.clone())
+        .accepting_rewrites();
+    let dry = rebuild(&accepting, Mode::DryRun).await.expect("a pass");
+    assert_eq!(dry.owners[0].reanchored, None, "a dry run re-anchored");
+    let accepted = rebuild(&accepting, Mode::Apply).await.expect("a pass");
+    assert_eq!(
+        accepted.owners[0].chain_fault,
+        Some(ChainFault::AnchorMismatch { seq: anchored.seq })
+    );
+    assert_eq!(accepted.owners[0].reanchored, Some(anchored.seq - 1));
+    assert_eq!(
+        server
+            .index
+            .ledger_head(&alice)
+            .await
+            .expect("read")
+            .map(|head| head.seq),
+        Some(anchored.seq - 1)
+    );
+    let after = rebuild(&context, Mode::Apply).await.expect("a pass");
+    assert_eq!(after.owners[0].chain_fault, None);
+    assert_eq!(
+        server.index.ledger_head(&alice).await.expect("read"),
+        Some(anchored),
+        "the next pass raises the anchor to the ledger as it stands"
     );
 }
 

@@ -490,6 +490,22 @@ pub trait OwnerLedger: fmt::Debug + Send + Sync {
     fn owners(&self) -> LedgerFuture<'_, Vec<OwnerId>>;
 }
 
+/// The owners a verifier walks: those with a ledger, and those the index anchored, once each in
+/// ascending order.
+///
+/// An owner whose ledger lost every entry has nothing for [`OwnerLedger::owners`] to list, and
+/// only its anchor says it ever had one. Rebuild and the scrub both walk this, so that owner is
+/// reported ([`ChainFault::BehindAnchor`] at 0) and re-anchored, rather than left refused by
+/// [`AnchoredLedger`] with nothing to say why.
+pub fn owners_to_verify(listed: Vec<OwnerId>, anchored: Vec<OwnerId>) -> Vec<OwnerId> {
+    listed
+        .into_iter()
+        .chain(anchored)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
 /// Check that `owner` can name a ledger on any adapter.
 ///
 /// The rule [`crate::blob::check_upload_id`] applies to a staged file, for the same reason: an

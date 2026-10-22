@@ -917,6 +917,10 @@ impl AssetIndex for RacesTheListing {
         self.inner.ledger_head(owner)
     }
 
+    fn anchored_owners(&self) -> crate::index::IndexFuture<'_, Vec<OwnerId>> {
+        self.inner.anchored_owners()
+    }
+
     fn record_ledger_head<'a>(
         &'a self,
         owner: &'a OwnerId,

@@ -908,6 +908,12 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
     /// [Server Filesystem § The Owner Ledger]: https://github.com/Capsulsaurus/Capsule/blob/master/capsule-docs/src/content/docs/design/filesystem/server.md#the-owner-ledger
     fn ledger_head<'a>(&'a self, owner: &'a OwnerId) -> IndexFuture<'a, Option<LedgerHead>>;
 
+    /// Every owner with a recorded ledger head, in ascending order.
+    ///
+    /// Rebuild and the scrub walk these beside the owners the ledger lists: an owner whose
+    /// ledger lost every entry has no ledger to list, and only its anchor says it ever had one.
+    fn anchored_owners(&self) -> IndexFuture<'_, Vec<OwnerId>>;
+
     /// Record `head` as `owner`'s ledger head if it is past the one recorded.
     ///
     /// Raise-only, in one critical section: appends for one owner may record out of order, and
