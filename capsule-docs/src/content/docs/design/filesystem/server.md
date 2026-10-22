@@ -32,6 +32,7 @@ Rules:
 ├── incoming/{upload_id}.bin                 # append-only upload, pre-verification
 ├── blobs/{hash[0:2]}/{hash[2:4]}/{hash}.bin # finalized, content-addressed, immutable
 ├── ledger/{owner_id}/{first_seq}.log         # owner ledger, append-only, signed
+├── ledger/{owner_id}/attachments/{hash}      # documents a ledger entry names by hash
 ├── quarantine/                              # rejected objects + .reason.json, for humans
 └── .server/{version,config}                 # operator metadata (plaintext, not user data)
 ```
@@ -66,6 +67,7 @@ accepted it. The **owner ledger** carries those facts:
 
 ```text
 {blob_root}/ledger/{owner_id}/{first_seq}.log   # append-only segments
+{blob_root}/ledger/{owner_id}/attachments/{hash} # documents an entry names by hash
 ```
 
 - One entry per accepted manifest, per device-directory version and per lifecycle action:
@@ -116,7 +118,11 @@ accepted it. The **owner ledger** carries those facts:
   fsync, and reads the tail from disk whenever another process has appended since. A scan holds
   the lock shared.
 - Device-directory versions are in the ledger, so a rebuild verifies signatures against the
-  directory as it stood when each manifest was accepted.
+  directory as it stood when each manifest was accepted. The entry names the signed document by
+  hash; the document itself, with the identity key it verifies under, is kept beside the ledger
+  under that hash (`ledger/{owner_id}/attachments/`), written before the entry. The database
+  keeps only the version in force, so the blob root is the one place every version lives, and
+  a rebuild needs nothing else to verify against them.
 
 ### Rebuild
 
@@ -138,10 +144,22 @@ when it finds a fault ([`capsule-server::ledger::rebuild`](https://github.com/Ca
 2. Replay entries in ledger order: uploads and drop adoptions (custody entries the index did
    not refuse) and lifecycle ops, including retention purges. Decode each named manifest and
    write the rows they imply, the way the index's own writes would. An op with no recorded
-   position is replayed only if it still chains onto the head the replay has reached. Checking
-   each manifest's device signature against the directory version the ledger recorded is not
-   implemented yet ([#782](https://github.com/Capsulsaurus/Capsule/issues/782)). Replay is
-   idempotent; a row the backup already holds is compared, never overwritten.
+   position is replayed only if it still chains onto the head the replay has reached. Each
+   manifest's `device_sig` is verified against the signer's directory version in force at that
+   point: the last one before the manifest's entry when the signer's ledger is the one replayed,
+   and otherwise the last one the server's clock recorded no later than it, since two ledgers
+   share no order. The versions come from the copies beside the ledger, replayed through the
+   store's own checks (a version that does not strictly advance, or that is signed under
+   another identity key than the account's first, was refused and is not in force; when a
+   version with no usable copy comes before any key is known, the account's key is unknown and
+   no later version vouches for anything). A device
+   the version in force does not list, or lists as revoked, or that was added after the
+   manifest's timestamp, fails; a device a later version revoked does not. A manifest that
+   fails, or that falls under a version whose copy is missing or does not match its entry, is
+   reported and its asset is not restored; when the index lacks the row, the owner moves to a
+   new [sync epoch](#sync-epoch-and-client-re-announce), so the clients holding the manifest
+   re-announce it and the server verifies it against the live directory. Replay is idempotent;
+   a row the backup already holds is compared, never overwritten.
 3. Recompute quota attribution for the restored rows. Blob references are a query over rows,
    so restoring the rows recomputes them.
 4. Report blobs no entry names (orphans, left to GC), entries naming a missing blob (dangling,

@@ -3,7 +3,7 @@
 //! nothing; a row the index holds is compared, never overwritten.
 
 use capsule_core::crypto::hash::hash_bytes;
-use capsule_core::crypto::keys::{AmkVersion, HybridSigningKey};
+use capsule_core::crypto::keys::{AmkVersion, DeviceEntry, HybridSigningKey};
 use capsule_core::crypto::provenance::{ASSET_MANIFEST_VERSION, Action, KeyMode, ManifestCore};
 
 use super::*;
@@ -11,12 +11,29 @@ use crate::attestation::{LocalAttestationKey, PublishedKey, ReceiptSigner as _};
 use crate::blob::InMemoryBlobStore;
 use crate::index::memory::InMemoryAssetIndex;
 use crate::index::{BlobOutcome, BlobRecord, PendingAsset};
+use crate::ledger::directory::tests as directory_fixture;
 use crate::ledger::{InMemoryLedger, LedgerEvent};
 use crate::quota::InMemoryQuota;
 use crate::store::memory::ManualClock;
 
 /// The album every fixture files under.
 const ALBUM: &str = "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e70";
+
+/// The account whose device signs every fixture manifest. It sorts after every named owner, so
+/// its ledger (which holds only its directory) is never `report.owners[0]`.
+const SIGNER: uuid::Uuid = uuid::Uuid::from_u128(0xffff_0000_0000_7000_8000_0000_0000_0007);
+
+/// The signing device, and its key.
+const DEVICE: uuid::Uuid = uuid::Uuid::from_u128(8);
+
+fn device_key() -> HybridSigningKey {
+    HybridSigningKey::from_seed64(&[1; 64])
+}
+
+/// The signer's ledger.
+fn signer_owner() -> OwnerId {
+    OwnerId::new(SIGNER.to_string())
+}
 
 /// The instant every fixture write happens at, so a rebuilt row's times equal the original's.
 fn at() -> Timestamp {
@@ -50,8 +67,8 @@ fn manifest(asset: &AssetId, metadata: &ContentAddress) -> Vec<u8> {
         key_mode: KeyMode::Derived,
         wrapped_file_key: None,
         metadata_blob_hash: Some(Hash32::from_hex(metadata.as_str()).expect("a digest")),
-        created_by_user: uuid::Uuid::from_u128(7),
-        created_by_device: uuid::Uuid::from_u128(8),
+        created_by_user: SIGNER,
+        created_by_device: DEVICE,
         client_version: "capsule-cli/0.1.0".to_owned(),
         timestamp: "2026-01-01T00:00:00Z".to_owned(),
         action: Action::Create,
@@ -60,7 +77,7 @@ fn manifest(asset: &AssetId, metadata: &ContentAddress) -> Vec<u8> {
         unknown: Default::default(),
         retention_until: None,
     };
-    let device = HybridSigningKey::from_seed64(&[1; 64]);
+    let device = device_key();
     let write_tier = HybridSigningKey::from_seed64(&[2; 64]);
     let signed = core.sign(&device, &write_tier).expect("a manifest signs");
     // What a client stores as the provenance blob: the chain head's record, not the bare
@@ -81,11 +98,17 @@ struct Server {
     quotas: Arc<InMemoryQuota>,
     signer: LocalAttestationKey,
     clock: Arc<ManualClock>,
+    /// The signer's identity key.
+    identity: HybridSigningKey,
+    /// Whether the signer's directory is still to be published before the first manifest.
+    directory_pending: std::sync::atomic::AtomicBool,
 }
 
 impl Server {
     fn new() -> Self {
         Self {
+            identity: HybridSigningKey::from_seed64(&[3; 64]),
+            directory_pending: std::sync::atomic::AtomicBool::new(true),
             index: Arc::new(InMemoryAssetIndex::new()),
             blobs: Arc::new(InMemoryBlobStore::new()),
             ledger: Arc::new(InMemoryLedger::new()),
@@ -127,6 +150,41 @@ impl Server {
             .expect("an append lands");
     }
 
+    /// Publish the signer's directory at `version` with the fixture device, `revoked` or not, as
+    /// the publish route does: the copy, then the entry. A test that calls this decides the
+    /// signer's directory history itself.
+    async fn publish_directory(&self, version: u64, devices: Vec<DeviceEntry>) {
+        self.directory_pending
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        let document = directory_fixture::document(&self.identity, SIGNER, version, devices);
+        let anchored = crate::ledger::AnchoredLedger::new(self.ledger.clone(), self.index.clone());
+        directory_fixture::publish(
+            &anchored,
+            &self.signer,
+            &self.identity,
+            SIGNER,
+            version,
+            document,
+            at(),
+        )
+        .await;
+    }
+
+    /// The fixture device's directory entry.
+    fn device(revoked_at: Option<&str>) -> DeviceEntry {
+        directory_fixture::device(DEVICE, &device_key(), "2025-12-01T00:00:00Z", revoked_at)
+    }
+
+    /// Publish the signer's directory once, before the first manifest, unless a test took over.
+    async fn ensure_directory(&self) {
+        if self
+            .directory_pending
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            self.publish_directory(1, vec![Self::device(None)]).await;
+        }
+    }
+
     async fn store(&self, bytes: &[u8]) -> ContentAddress {
         let address = ContentAddress::parse(&hash_bytes(bytes).to_hex()).expect("an address");
         self.blobs.put(&address, bytes).await.expect("stored");
@@ -143,6 +201,9 @@ impl Server {
         bytes: &[u8],
         crash: bool,
     ) -> ContentAddress {
+        if role == BlobRole::Provenance {
+            self.ensure_directory().await;
+        }
         let address = self.store(bytes).await;
         let manifest_sha256 = (role == BlobRole::Provenance).then(|| hash_bytes(bytes));
         let upload = format!("{asset}-{}", role.as_str());
@@ -288,7 +349,7 @@ fn delete_record(asset: &AssetId, prior: Hash32) -> Vec<u8> {
     core.metadata_blob_hash = None;
     core.prior_provenance_hash = Some(prior);
     core.retention_until = Some(retention().to_string());
-    let device = HybridSigningKey::from_seed64(&[1; 64]);
+    let device = device_key();
     let write_tier = HybridSigningKey::from_seed64(&[2; 64]);
     let signed = core.sign(&device, &write_tier).expect("a manifest signs");
     let record = capsule_core::crypto::provenance::ProvenanceRecord::new(
@@ -519,8 +580,9 @@ async fn a_ledger_that_lost_every_entry_is_reported_from_its_anchor_and_reanchor
     let alice = owner("alice");
     server.publish(&alice, "gone", false).await;
     server.ledger.replace_raw(&alice, Vec::new());
-    assert!(
-        server.ledger.owners().await.expect("owners").is_empty(),
+    assert_eq!(
+        server.ledger.owners().await.expect("owners"),
+        vec![signer_owner()],
         "the ledger lists an owner with no entries"
     );
 
@@ -553,7 +615,14 @@ async fn a_ledger_that_lost_every_entry_is_reported_from_its_anchor_and_reanchor
 
     let context = server.rebuild_into(server.index.clone());
     let dry = rebuild(&context, Mode::DryRun).await.expect("a pass");
-    assert_eq!(dry.owners.len(), 1, "the anchored owner was not walked");
+    assert_eq!(
+        dry.owners
+            .iter()
+            .filter(|report| report.owner != signer_owner())
+            .count(),
+        1,
+        "the anchored owner was not walked"
+    );
     assert_eq!(dry.owners[0].owner, alice);
     assert_eq!(
         dry.owners[0].chain_fault,
@@ -1075,4 +1144,137 @@ fn only_facts_a_rebuild_can_reconstruct_are_compared() {
         differences(&other, &row),
         vec!["owner_id", "crypto_suite_id"]
     );
+}
+
+/// #782: the signer's own ledger orders its directory versions and its manifests exactly, so a
+/// manifest is judged by the version in force at its entry.
+#[tokio::test]
+async fn a_manifest_signed_by_a_device_added_after_it_in_the_ledger_is_refused() {
+    let server = Server::new();
+    let signer = signer_owner();
+    let other = directory_fixture::device(
+        uuid::Uuid::from_u128(0xA),
+        &HybridSigningKey::from_seed64(&[4; 64]),
+        "2025-12-01T00:00:00Z",
+        None,
+    );
+    server.publish_directory(1, vec![other.clone()]).await;
+    let id = server.publish(&signer, "early", false).await;
+    server
+        .publish_directory(2, vec![other, Server::device(None)])
+        .await;
+
+    let empty = Arc::new(InMemoryAssetIndex::new());
+    let report = rebuild(&server.rebuild_into(empty.clone()), Mode::Apply)
+        .await
+        .expect("a pass");
+    let owner = &report.owners[0];
+    assert_eq!(owner.owner, signer);
+    assert_eq!(owner.unverified_manifests.len(), 1, "{report:?}");
+    assert_eq!(owner.unverified_manifests[0].0, id);
+    assert_eq!(
+        owner.unverified_manifests[0].2,
+        Refusal::Device(capsule_core::crypto::verify_asset::RejectReason::UnknownDevice)
+    );
+    assert!(owner.restored.is_empty(), "{report:?}");
+    assert!(
+        rows(&empty).await.is_empty(),
+        "an unverified row was restored"
+    );
+    assert!(report.has_faults());
+    // The clients holding the manifest re-announce it after the epoch moves.
+    assert_eq!(owner.epoch, Some(1));
+}
+
+#[tokio::test]
+async fn a_manifest_signed_by_a_device_the_directory_later_revoked_still_replays() {
+    let server = Server::new();
+    let signer = signer_owner();
+    server
+        .publish_directory(1, vec![Server::device(None)])
+        .await;
+    server.publish(&signer, "before-revocation", false).await;
+    server
+        .publish_directory(2, vec![Server::device(Some("2026-06-01T00:00:00Z"))])
+        .await;
+    let original = rows(&server.index).await;
+
+    let empty = Arc::new(InMemoryAssetIndex::new());
+    let report = rebuild(&server.rebuild_into(empty.clone()), Mode::Apply)
+        .await
+        .expect("a pass");
+    assert!(!report.has_faults(), "{report:?}");
+    assert_eq!(report.owners[0].restored.len(), 1);
+    assert_eq!(rows(&empty).await, original);
+}
+
+#[tokio::test]
+async fn a_manifest_with_no_directory_in_the_ledger_is_reported_and_a_held_row_is_left_alone() {
+    let server = Server::new();
+    let alice = owner("alice");
+    // The signer never published: nothing vouches for its device.
+    server
+        .directory_pending
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    let id = server.publish(&alice, "unvouched", false).await;
+    let original = rows(&server.index).await;
+
+    let report = rebuild(&server.rebuild_into(server.index.clone()), Mode::Apply)
+        .await
+        .expect("a pass");
+    let alice_report = &report.owners[0];
+    assert_eq!(alice_report.unverified_manifests.len(), 1, "{report:?}");
+    assert_eq!(alice_report.unverified_manifests[0].0, id);
+    assert_eq!(alice_report.unverified_manifests[0].2, Refusal::NoDirectory);
+    assert!(alice_report.agreed.is_empty() && alice_report.differs.is_empty());
+    assert!(
+        !alice_report.epoch_bump_needed,
+        "the index holds the row, so no client needs to re-announce it"
+    );
+    assert_eq!(
+        rows(&server.index).await,
+        original,
+        "a held row was touched"
+    );
+}
+
+#[tokio::test]
+async fn a_directory_version_with_no_copy_is_reported_on_its_ledger() {
+    let server = Server::new();
+    let signer = signer_owner();
+    server.publish(&signer, "one", false).await;
+    // Version 2's copy is lost: its entry is all that is left.
+    server
+        .append(
+            &signer,
+            LedgerEvent::Directory {
+                user_id: SIGNER.to_string(),
+                directory_version: 2,
+                document_hash: Hash32::from_bytes([7; 32]),
+            },
+        )
+        .await;
+    let later = server.publish(&signer, "two", false).await;
+
+    let empty = Arc::new(InMemoryAssetIndex::new());
+    let report = rebuild(&server.rebuild_into(empty), Mode::DryRun)
+        .await
+        .expect("a pass");
+    let owner = &report.owners[0];
+    assert_eq!(owner.unusable_directories.len(), 1, "{report:?}");
+    assert_eq!(
+        owner.unusable_directories[0].1,
+        crate::ledger::directory::DirectoryFault::Missing
+    );
+    assert_eq!(
+        owner.restored.len(),
+        1,
+        "the earlier asset verifies: {report:?}"
+    );
+    assert_eq!(owner.unverified_manifests.len(), 1);
+    assert_eq!(owner.unverified_manifests[0].0, later);
+    assert!(matches!(
+        owner.unverified_manifests[0].2,
+        Refusal::DirectoryUnavailable { .. }
+    ));
 }

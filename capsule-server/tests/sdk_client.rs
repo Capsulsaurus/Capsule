@@ -1150,6 +1150,12 @@ async fn a_pushed_asset_reaches_the_feed_and_the_entry_decodes_and_verifies() {
     );
     let base_url = serve(&fixture).await;
     let live = session(&base_url).await;
+    // The library's own directory, published as a client does at enrollment: the ledger records
+    // it, so the rebuild below verifies the pushed manifest's device signature against it (#782).
+    capsule_sdk::directory::DirectoryClient::new(live.clone(), &format!("{base_url}/v1/auth"))
+        .publish(workspace.device_directory(), &workspace.user_ik_public())
+        .await
+        .expect("the library's directory publishes");
 
     // ── The SDK's own ladder, over the socket ─────────────────────────────────────────────
     let albums = AlbumClient::new(AlbumTransport::with_session(

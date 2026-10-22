@@ -8,11 +8,13 @@
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
+use capsule_core::crypto::hash::Hash32;
 use jiff::Timestamp;
 
 use super::{
     ChainFault, LedgerEntry, LedgerError, LedgerEvent, LedgerFuture, LedgerHead, LedgerScan,
-    OwnerLedger, check_owner_id, decode_frames, encode_frame, link_check, sign_entry,
+    OwnerLedger, check_attachment_size, check_owner_id, decode_frames, encode_frame, link_check,
+    sign_entry,
 };
 use crate::attestation::ReceiptSigner;
 use crate::store::OwnerId;
@@ -21,6 +23,7 @@ use crate::store::OwnerId;
 #[derive(Debug, Default)]
 pub struct InMemoryLedger {
     owners: Mutex<BTreeMap<OwnerId, Log>>,
+    attachments: Mutex<BTreeMap<(OwnerId, Hash32), Vec<u8>>>,
 }
 
 /// One owner's bytes, and the head an append extends.
@@ -140,6 +143,32 @@ impl OwnerLedger for InMemoryLedger {
                 .filter(|(_, log)| !log.bytes.is_empty())
                 .map(|(owner, _)| owner.clone())
                 .collect())
+        })
+    }
+
+    fn attach<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        key: Hash32,
+        bytes: Vec<u8>,
+    ) -> LedgerFuture<'a, ()> {
+        Box::pin(async move {
+            check_owner_id(owner)?;
+            check_attachment_size(bytes.len() as u64)?;
+            tracing::debug!(%owner, %key, bytes = bytes.len(), "attached a document to an in-memory owner ledger");
+            lock(&self.attachments).insert((owner.clone(), key), bytes);
+            Ok(())
+        })
+    }
+
+    fn attachment<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        key: &'a Hash32,
+    ) -> LedgerFuture<'a, Option<Vec<u8>>> {
+        Box::pin(async move {
+            check_owner_id(owner)?;
+            Ok(lock(&self.attachments).get(&(owner.clone(), *key)).cloned())
         })
     }
 }

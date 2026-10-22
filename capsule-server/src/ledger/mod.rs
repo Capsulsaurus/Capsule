@@ -50,7 +50,9 @@
 //!   `indexed` entry is. The manifest hash is the index's replay key, so replaying both entries
 //!   applies the op once;
 //! - a **device-directory publish** appends [`LedgerEvent::Directory`] before the directory
-//!   store commits, under the publishing account.
+//!   store commits, under the publishing account, after attaching the signed document and the
+//!   identity key it verifies under beside the ledger ([`OwnerLedger::attach`], [`directory`]),
+//!   so a rebuild verifies manifests against the directory from the blob root alone.
 //!
 //! An op or a publish the index or the store then refuses leaves its entry unresolved: whatever
 //! replays the ledger re-runs the checks that refused it. There is no entry kind for those
@@ -122,6 +124,7 @@
 
 pub mod anchored;
 pub mod conformance;
+pub mod directory;
 pub mod fs;
 pub mod manifest;
 pub mod memory;
@@ -199,6 +202,16 @@ pub enum LedgerError {
         owner: OwnerId,
         /// What is wrong with it.
         fault: ChainFault,
+    },
+
+    /// An attachment past [`MAX_ATTACHMENT_BYTES`]: refused when kept, and not read back.
+    ///
+    /// Distinct from [`LedgerError::Backend`] because reading one back is damage found, not a
+    /// store that could not answer: a recovery walk reports it and keeps walking.
+    #[error("the attachment is {size} bytes, past the {MAX_ATTACHMENT_BYTES}-byte ceiling")]
+    AttachmentTooLarge {
+        /// Its length.
+        size: u64,
     },
 }
 
@@ -488,6 +501,54 @@ pub trait OwnerLedger: fmt::Debug + Send + Sync {
 
     /// Every owner that has a ledger, in ascending order.
     fn owners(&self) -> LedgerFuture<'_, Vec<OwnerId>>;
+
+    /// Keep `bytes` beside `owner`'s ledger under `key`, durably, replacing what was there.
+    ///
+    /// An **attachment** is a document an entry names only by hash, kept where the ledger is so
+    /// that the blob root alone holds it: a device-directory publish attaches the signed
+    /// directory under the `document_hash` its [`LedgerEvent::Directory`] entry records
+    /// ([`directory`]). The producer attaches **before** it appends the entry naming `key`, so a
+    /// durable entry never names an attachment that was not written; a crash between the two
+    /// leaves an attachment no entry names, which is inert.
+    ///
+    /// The bytes are the producer's and are not signed by the ledger: a reader checks them
+    /// against what the entry signed before trusting them. Nothing here removes an attachment.
+    fn attach<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        key: Hash32,
+        bytes: Vec<u8>,
+    ) -> LedgerFuture<'a, ()>;
+
+    /// The bytes [`Self::attach`] kept for `owner` under `key`, or `None` when there are none.
+    ///
+    /// An attachment past [`MAX_ATTACHMENT_BYTES`] is [`LedgerError::AttachmentTooLarge`] rather
+    /// than read, so damage cannot make a recovery walk load an arbitrary object into memory.
+    fn attachment<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        key: &'a Hash32,
+    ) -> LedgerFuture<'a, Option<Vec<u8>>>;
+}
+
+/// The largest attachment a ledger keeps or reads back.
+///
+/// A device directory is bounded at [`crate::directory::MAX_DIRECTORY_BYTES`]; an attachment
+/// carries one beside its identity key, so the ceiling is the frame ceiling, which already
+/// bounds anything a ledger holds.
+pub const MAX_ATTACHMENT_BYTES: usize = MAX_FRAME_BYTES as usize;
+
+/// Refuse an attachment of `size` bytes past [`MAX_ATTACHMENT_BYTES`], before an adapter writes
+/// or reads it.
+///
+/// # Errors
+///
+/// [`LedgerError::AttachmentTooLarge`].
+pub(crate) fn check_attachment_size(size: u64) -> Result<(), LedgerError> {
+    if size > MAX_ATTACHMENT_BYTES as u64 {
+        return Err(LedgerError::AttachmentTooLarge { size });
+    }
+    Ok(())
 }
 
 /// The owners a verifier walks: those with a ledger, and those the index anchored, once each in

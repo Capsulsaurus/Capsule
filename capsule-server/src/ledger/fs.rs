@@ -16,6 +16,13 @@
 //! is returned, exactly as [`crate::blob::BlobStore::append`] cuts a stage back: the bytes were
 //! never acknowledged, and leaving them would make the next append's frame unreadable.
 //!
+//! # Attachments
+//!
+//! `ledger/{owner_id}/attachments/{key}` holds what [`OwnerLedger::attach`] keeps, one file per
+//! key. A write goes to `{key}.{uuid}.partial`, is fsynced, renamed into place and the directory
+//! fsynced, so a reader sees the old bytes or the new ones and never a torn file, and a crash
+//! leaves at most a `.partial` file nothing reads.
+//!
 //! # Segments
 //!
 //! A segment is named for the `seq` of its first entry and holds frames until it reaches the
@@ -43,12 +50,14 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use capsule_core::crypto::hash::Hash32;
 use jiff::Timestamp;
 use tokio::io::AsyncWriteExt;
 
 use super::{
     ChainFault, LedgerEntry, LedgerError, LedgerEvent, LedgerFuture, LedgerHead, LedgerScan,
-    OwnerLedger, check_owner_id, decode_frames, encode_frame, link_check, sign_entry,
+    OwnerLedger, check_attachment_size, check_owner_id, decode_frames, encode_frame, link_check,
+    sign_entry,
 };
 use crate::attestation::ReceiptSigner;
 use crate::store::OwnerId;
@@ -58,6 +67,13 @@ pub const LEDGER_DIR: &str = "ledger";
 
 /// A segment's file-name suffix.
 const SEGMENT_SUFFIX: &str = ".log";
+
+/// The directory inside an owner's ledger directory its attachments live in, one file each,
+/// named for its key in hex.
+pub const ATTACHMENT_DIR: &str = "attachments";
+
+/// The suffix a partly written attachment carries until it is renamed into place.
+const PARTIAL_SUFFIX: &str = ".partial";
 
 /// The size past which an append opens a new segment: 64 MiB, some tens of thousands of entries.
 pub const DEFAULT_SEGMENT_BYTES: u64 = 64 * 1024 * 1024;
@@ -262,6 +278,9 @@ async fn segments(dir: &Path) -> Result<Vec<(u64, PathBuf)>, LedgerError> {
         .map_err(|error| backend("list an owner's ledger", &error))?
     {
         let name = entry.file_name();
+        if name == ATTACHMENT_DIR {
+            continue;
+        }
         let Some(first) = name
             .to_str()
             .and_then(|name| name.strip_suffix(SEGMENT_SUFFIX))
@@ -482,6 +501,78 @@ impl OwnerLedger for FilesystemLedger {
             }
             owners.sort();
             Ok(owners)
+        })
+    }
+
+    fn attach<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        key: Hash32,
+        bytes: Vec<u8>,
+    ) -> LedgerFuture<'a, ()> {
+        Box::pin(async move {
+            check_owner_id(owner)?;
+            check_attachment_size(bytes.len() as u64)?;
+            let owner_dir = self.ensure_owner_dir(owner).await?;
+            let dir = owner_dir.join(ATTACHMENT_DIR);
+            match tokio::fs::create_dir(&dir).await {
+                Ok(()) => sync_dir(&owner_dir).await?,
+                Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+                Err(error) => {
+                    return Err(backend("create an owner's attachment directory", &error));
+                }
+            }
+            let name = key.to_hex();
+            let target = dir.join(&name);
+            let partial = dir.join(format!("{name}.{}{PARTIAL_SUFFIX}", uuid::Uuid::now_v7()));
+            let written = async {
+                let mut file = tokio::fs::File::create(&partial).await?;
+                file.write_all(&bytes).await?;
+                file.sync_all().await?;
+                tokio::fs::rename(&partial, &target).await
+            }
+            .await;
+            if let Err(error) = written {
+                if let Err(remove_error) = tokio::fs::remove_file(&partial).await
+                    && remove_error.kind() != ErrorKind::NotFound
+                {
+                    tracing::warn!(
+                        file = %partial.display(),
+                        %remove_error,
+                        "a failed attachment write left a partial file behind; nothing reads it"
+                    );
+                }
+                tracing::error!(%owner, %key, %error, "an owner ledger attachment could not be written");
+                return Err(backend("write an attachment", &error));
+            }
+            sync_dir(&dir).await?;
+            tracing::debug!(%owner, %key, bytes = bytes.len(), "attached a document to an owner ledger");
+            Ok(())
+        })
+    }
+
+    fn attachment<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        key: &'a Hash32,
+    ) -> LedgerFuture<'a, Option<Vec<u8>>> {
+        Box::pin(async move {
+            check_owner_id(owner)?;
+            let path = self
+                .owner_dir(owner)
+                .join(ATTACHMENT_DIR)
+                .join(key.to_hex());
+            let size = match tokio::fs::metadata(&path).await {
+                Ok(metadata) => metadata.len(),
+                Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+                Err(error) => return Err(backend("read an attachment", &error)),
+            };
+            check_attachment_size(size)?;
+            match tokio::fs::read(&path).await {
+                Ok(bytes) => Ok(Some(bytes)),
+                Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+                Err(error) => Err(backend("read an attachment", &error)),
+            }
         })
     }
 }

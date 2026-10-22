@@ -26,13 +26,16 @@
 //! A publish appends a [`LedgerEvent::Directory`] entry (the account, the version, the hash of
 //! the signed document) to the publishing account's [owner ledger](crate::ledger) before the
 //! store commits, so a rebuild can verify every manifest against the directory as it stood when
-//! that manifest was accepted. A ledger that cannot append refuses the publish with the
-//! surface's `500` and nothing is stored. A publish the store then refuses (a stale version, a
+//! that manifest was accepted. Before the entry it attaches a
+//! [`DirectoryCopy`] — the document and the identity key presented with it — beside the ledger
+//! under the document's hash, because the store keeps only the version in force and a rebuild
+//! reads every version from the blob root ([`crate::ledger::directory`]). A ledger that cannot
+//! attach or append refuses the publish with the surface's `500` and nothing is stored. A publish the store then refuses (a stale version, a
 //! foreign identity key) leaves its entry behind, unresolved, exactly as a refused lifecycle op
 //! does: the ledger records what was offered and in what order, and whatever replays it has to
 //! re-run the store's checks (strictly advancing version, the account's identity anchor) to
 //! learn which offers were in force. A stale offer is decidable from the ledger alone; an
-//! identity mismatch needs the document, which the entry names only by hash.
+//! identity mismatch from the copy, which carries the key.
 //!
 //! # `S-C28` audit
 //!
@@ -71,6 +74,7 @@ use crate::directory::{
     DeviceDirectoryContext, MalformedDirectory, PublishOutcome, PublishedDirectory,
 };
 use crate::ledger::LedgerEvent;
+use crate::ledger::directory::DirectoryCopy;
 use crate::store::{OwnerId, UserId};
 
 /// The device surface: who a user's devices are, and which keys to trust for them.
@@ -260,9 +264,31 @@ pub async fn publish_device_directory(
     // cannot record is not published.
     let now = directories.clock().now();
     let document_hash = hash_bytes(&document);
+    let owner = OwnerId::new(user.as_str());
+    // The copy a rebuild verifies against, beside the ledger and before the entry naming it
+    // (#782): the database holds only the version in force, and a rebuild may have neither.
+    attestation
+        .ledger()
+        .attach(
+            &owner,
+            document_hash,
+            DirectoryCopy {
+                identity_key: identity_key.clone(),
+                document: document.clone(),
+            }
+            .encode(),
+        )
+        .await
+        .map_err(|error| {
+            tracing::error!(
+                %error, %user, directory_version,
+                "the owner ledger could not keep a device directory's copy; nothing was published"
+            );
+            PublishRejection::unavailable()
+        })?;
     attestation
         .append_to_ledger(
-            &OwnerId::new(user.as_str()),
+            &owner,
             LedgerEvent::Directory {
                 user_id: user.as_str().to_owned(),
                 directory_version,
