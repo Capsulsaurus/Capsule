@@ -144,9 +144,21 @@ After an epoch change, each client **re-announces** the signed manifests it hold
 the server reports missing from the index: manifests only, no bytes. The server verifies each
 like an upload's manifest and restores the row if every named blob is present; otherwise the
 client re-uploads through the normal [transfer protocol](/design/transfer/upload/). A
-re-announced manifest can only restore what its owner's devices signed. Re-announce is not
-implemented yet ([#781](https://github.com/Capsulsaurus/Capsule/issues/781)): until it is, a
-client resyncs and keeps what it holds, and a row the ledger could not replay stays missing.
+re-announced manifest can only restore what its owner's devices signed.
+
+`POST /v1/sync/reannounce` takes a batch of chain-head provenance records and answers each one:
+`restored`, `already_indexed`, `missing_blobs` naming what the store lacks, or `refused` with an
+`error.sync.reannounce_*` code
+([`capsule-server::sync::reannounce`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-server/src/sync/reannounce.rs)).
+A manifest passes the write authority an upload's envelope passes, except the clock-drift
+check: `created_by_user` is the caller, the caller may write to its album and it carries the
+album's pin, and its device is in the caller's directory from before its timestamp. A head that
+names no metadata blob is walked back through the store to the manifest that does, and the
+manifests walked past become the row's superseded chain. A deletion is not re-announced, and
+derivatives are not restored: an asset manifest does not name them, so the next push re-attaches
+them. A restore appends the ledger entries a finalization would, before the index is touched,
+so a later rebuild keeps the row. The client side is `capsule sync reannounce`, which
+`capsule sync` runs itself after a stale cursor when it is given the library.
 
 ### What a Rebuild Cannot Recover
 
