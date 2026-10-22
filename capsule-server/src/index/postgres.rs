@@ -1480,6 +1480,24 @@ mod tests {
             conformance::run_custody(&index, &receipts, &conformance::suite_signer()).await;
         }
 
+        /// Two assets, one blob: purging one and collecting leaves the other's bytes (#672).
+        ///
+        /// The collector's half of the shared-reference contract, over this index and the
+        /// Postgres mark store on one database — the pair a deployment runs.
+        #[tokio::test]
+        async fn a_shared_blob_survives_purging_one_holder() {
+            let Some(database) = testing::start("the Postgres shared-blob collection").await else {
+                return;
+            };
+            crate::gc::conformance::a_shared_blob_survives_purging_one_holder(
+                std::sync::Arc::new(PostgresAssetIndex::new(database.connection().clone())),
+                std::sync::Arc::new(crate::gc::PostgresCollection::new(
+                    database.connection().clone(),
+                )),
+            )
+            .await;
+        }
+
         /// A receipt that cannot be written takes the index rows down with it (#693).
         ///
         /// The failure is planted below the port, where only the database can put it: a chain

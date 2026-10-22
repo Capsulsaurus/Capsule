@@ -1420,6 +1420,24 @@ async fn adopt_claimed(
     // (invariant 33): an adoption is the second path by which a blob becomes indexed, and it
     // must not be the one that leaves an indexed blob without a receipt.
     let draft = adoption_receipt(entry, request, owner, &asset_id, now)?;
+
+    // The owner ledger brackets the index write exactly as it does finalization's (#753): a
+    // custody entry before it, whose failure refuses the adoption so no row exists without one,
+    // and an indexed or refused entry after it. An adoption is the second path by which a blob
+    // becomes indexed, so it must not be the one a rebuild from the blob root cannot see.
+    attestation
+        .append_to_ledger(&owner_id, custody_event(&draft), now)
+        .await
+        .map_err(|error| {
+            tracing::error!(
+                %error,
+                drop_id = %entry.drop_id,
+                %asset_id,
+                "the owner ledger could not record an adoption's custody; nothing was indexed"
+            );
+            AdoptRejection::unavailable()
+        })?;
+
     let crate::index::Receipted { outcome, receipt } = upload
         .index()
         .record_blob_with_receipt(
@@ -1457,15 +1475,41 @@ async fn adopt_claimed(
     }
     match outcome {
         // Recorded, or already held at this exact address: a retried adoption.
-        crate::index::BlobOutcome::Recorded { .. } | crate::index::BlobOutcome::AlreadyHeld(_) => {}
+        crate::index::BlobOutcome::Recorded { minted, .. } => {
+            ledger_resolution(
+                attestation,
+                &owner_id,
+                entry,
+                &asset_id,
+                indexed_event(&draft, minted, receipt),
+                now,
+            )
+            .await;
+        }
+        crate::index::BlobOutcome::AlreadyHeld(row) => {
+            ledger_resolution(
+                attestation,
+                &owner_id,
+                entry,
+                &asset_id,
+                indexed_event(&draft, row.sync_seq, receipt),
+                now,
+            )
+            .await;
+        }
         // The asset already holds a different original. Re-pointing it would swap the bytes
         // under a signature that still verifies against the old ones, so it is refused and the
         // drop goes back to the inbox.
         crate::index::BlobOutcome::Conflict => {
             tracing::info!(%owner, %asset_id, "an adoption was refused: the asset already holds a different original");
-            return Err(AdoptRejection::refused(
-                "the asset already holds a different original",
-            ));
+            let reason = "the asset already holds a different original";
+            let refused = crate::ledger::LedgerEvent::Refused {
+                upload_id: draft.upload_id.as_str().to_owned(),
+                asset_id: asset_id.as_str().to_owned(),
+                reason: reason.to_owned(),
+            };
+            ledger_resolution(attestation, &owner_id, entry, &asset_id, refused, now).await;
+            return Err(AdoptRejection::refused(reason));
         }
         // The row reserved a moment ago is gone: the server's own inconsistency.
         crate::index::BlobOutcome::NotFound => {
@@ -1475,6 +1519,61 @@ async fn adopt_claimed(
     }
 
     Ok(asset_id)
+}
+
+/// The owner-ledger custody entry for an adoption: the facts its receipt will sign.
+fn custody_event(draft: &crate::attestation::ReceiptDraft) -> crate::ledger::LedgerEvent {
+    crate::ledger::LedgerEvent::Custody {
+        upload_id: draft.upload_id.as_str().to_owned(),
+        asset_id: draft.asset_id.as_str().to_owned(),
+        blob_role: draft.blob_role.clone(),
+        content_hash: draft.ciphertext_hash,
+        size: draft.size,
+        manifest_sha256: draft.envelope_hash,
+        upload_user_id: draft.uploaded_by_user.clone(),
+        uploader_device: draft.uploaded_by_device.clone(),
+        received_at: draft.received_at.clone(),
+    }
+}
+
+/// The owner-ledger entry resolving an adoption's custody entry with what the index committed.
+fn indexed_event(
+    draft: &crate::attestation::ReceiptDraft,
+    sync_seq: Option<u64>,
+    receipt: Option<capsule_core::crypto::receipts::CustodyReceipt>,
+) -> crate::ledger::LedgerEvent {
+    crate::ledger::LedgerEvent::Indexed {
+        upload_id: draft.upload_id.as_str().to_owned(),
+        asset_id: draft.asset_id.as_str().to_owned(),
+        sync_seq,
+        receipt: receipt.map(Box::new),
+    }
+}
+
+/// Append the entry that resolves an adoption's custody entry: `indexed` or `refused`.
+///
+/// Best-effort, as finalization's are: the index has already answered. A lost `indexed` entry
+/// is a sequence a rebuild cannot prove; a lost `refused` one is replayed and refused again by
+/// the same checks.
+async fn ledger_resolution(
+    attestation: &crate::attestation::AttestationContext,
+    owner: &OwnerId,
+    entry: &InboxEntry,
+    asset_id: &crate::store::AssetId,
+    event: crate::ledger::LedgerEvent,
+    now: jiff::Timestamp,
+) {
+    let kind = event.kind();
+    if let Err(error) = attestation.append_to_ledger(owner, event, now).await {
+        tracing::error!(
+            %error,
+            drop_id = %entry.drop_id,
+            %asset_id,
+            kind,
+            "the owner ledger could not resolve an adoption's custody entry; \
+             a rebuild will replay it"
+        );
+    }
 }
 
 /// The asset `entry` was already adopted as, read from the custody receipt filed under its
