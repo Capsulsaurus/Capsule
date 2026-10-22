@@ -958,7 +958,7 @@ async fn a_pushed_asset_reaches_the_feed_and_the_entry_decodes_and_verifies() {
             album_id,
             manifest_cbor: &entry.manifest_cbor,
             metadata_blob: &bundle.metadata_blob,
-            original_ciphertext: &bundle.ciphertext,
+            original_ciphertext: &bundle.original.to_vec().unwrap(),
             local_chain_head: None,
         })
         .expect("applying is not a workspace failure");

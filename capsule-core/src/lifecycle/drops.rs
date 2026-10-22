@@ -621,7 +621,7 @@ mod tests {
         // A push bundle builds for it: the regenerated ciphertext is the guest's, byte for byte,
         // and the index tier is the blob and record adoption returned.
         let bundle = ws.upload_bundle(&asset_id).unwrap();
-        assert_eq!(bundle.ciphertext, ciphertext);
+        assert_eq!(bundle.original.to_vec().unwrap(), ciphertext);
         assert_eq!(bundle.key_mode, KeyMode::Wrapped);
         assert_eq!(bundle.metadata_blob, adopted.metadata_blob);
         assert_eq!(

@@ -72,5 +72,5 @@ async fn e2e_case_3_a_second_device_sees_the_entry_and_fetches_the_bytes() {
     let original_bytes = fetch_blob(&source, &original.ciphertext_hash, original.size)
         .await
         .expect("the original fetches");
-    assert_eq!(original_bytes, pushed.bundle.ciphertext);
+    assert_eq!(original_bytes, pushed.bundle.original.to_vec().unwrap());
 }

@@ -59,7 +59,7 @@ pub use self::migrate_unsigned::{
 };
 pub use self::open::HardwareDekBinding;
 pub use self::sync_apply::{QuarantineReason, RemoteAssetFacts, RemoteEntry, SyncApplyOutcome};
-pub use self::upload::{DerivativeBlob, UploadBundle};
+pub use self::upload::{DerivativeBlob, OriginalCiphertext, UploadBundle};
 use crate::backup::BackupError;
 use crate::crypto::CryptoError;
 use crate::crypto::authority::Authority;

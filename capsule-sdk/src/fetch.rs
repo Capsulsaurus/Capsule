@@ -16,7 +16,9 @@
 //!   ([`open_representation`]).
 //! - **Resumable ranged fetch.** [`fetch_blob`] fetches a blob with HTTP `Range`
 //!   windows; an interrupted transfer resumes from the last persisted byte instead
-//!   of restarting, and re-fetches zero bytes it already holds.
+//!   of restarting, and re-fetches zero bytes it already holds. [`fetch_blob_into`]
+//!   streams the same loop into a writer in bounded windows, so an original of any size
+//!   is fetched — and, through a `StreamDecryptor` sink, restored — in bounded memory.
 //! - **Self-verification.** The client recomputes the ciphertext content hash
 //!   against the requested content address; any mismatch discards the blob.
 //! - **Opening a derivative.** Derivative bytes are ciphertext on the server
@@ -500,6 +502,11 @@ pub enum FetchError {
     /// The bounded resume budget was spent without completing the transfer.
     #[error("fetch gave up after exhausting the resume budget: {0}")]
     Exhausted(String),
+    /// The destination of a streamed fetch ([`RangedFetcher::fetch_into`]) refused bytes: a
+    /// local write failed, or a decrypting sink rejected a chunk. Whatever the sink holds is
+    /// unverified and must be discarded.
+    #[error("writing the fetched blob failed: {0}")]
+    Sink(#[source] std::io::Error),
     /// A derivative's ciphertext hashed correctly but failed AEAD authentication under the
     /// key its manifest selects — a corrupt blob, discarded.
     #[error("derivative {hash} failed authentication; discarded")]
@@ -637,7 +644,29 @@ impl<S: Sleeper, C: MonotonicClock> RangedFetcher<S, C> {
         self.run(source, hash, expected_len).await
     }
 
-    #[instrument(skip(self, source), fields(hash, expected_len, class = ?self.class))]
+    /// Fetch a whole blob into `sink` as it arrives, never holding more than one `Range`
+    /// window of it — the path an original takes, at any size the server accepts.
+    ///
+    /// Each request asks for at most [`SINK_WINDOW`] bytes (or the class's smaller window), so
+    /// the memory a fetch holds is bounded by the window rather than the blob. The content
+    /// address is computed incrementally and checked once the last byte has landed: until this
+    /// returns `Ok`, what `sink` holds is **unverified** and a caller writing to a file must
+    /// discard it on any error. Composing the sink with a
+    /// [`StreamDecryptor`](capsule_core::crypto::encryption::StreamDecryptor) restores an
+    /// original to plaintext in the same bounded memory, each STREAM chunk authenticated
+    /// before it is written.
+    pub async fn fetch_into<B: BlobSource, W: std::io::Write>(
+        &self,
+        source: &B,
+        hash: &str,
+        expected_len: u64,
+        sink: &mut W,
+    ) -> Result<Vec<TransferSignal>, FetchError> {
+        let window = Some(self.window().map_or(SINK_WINDOW, |w| w.min(SINK_WINDOW)));
+        self.run_into(source, hash, expected_len, window, sink)
+            .await
+    }
+
     async fn run<B: BlobSource>(
         &self,
         source: &B,
@@ -645,15 +674,31 @@ impl<S: Sleeper, C: MonotonicClock> RangedFetcher<S, C> {
         expected_len: u64,
     ) -> Result<(Vec<u8>, Vec<TransferSignal>), FetchError> {
         let mut buffer: Vec<u8> = Vec::with_capacity(usize::try_from(expected_len).unwrap_or(0));
+        let signals = self
+            .run_into(source, hash, expected_len, self.window(), &mut buffer)
+            .await?;
+        Ok((buffer, signals))
+    }
+
+    #[instrument(skip(self, source, sink), fields(hash, expected_len, ?window, class = ?self.class))]
+    async fn run_into<B: BlobSource, W: std::io::Write>(
+        &self,
+        source: &B,
+        hash: &str,
+        expected_len: u64,
+        window: Option<u64>,
+        sink: &mut W,
+    ) -> Result<Vec<TransferSignal>, FetchError> {
+        let mut received: u64 = 0;
+        let mut hasher = Sha256::new();
         let mut signals: Vec<TransferSignal> = Vec::new();
         // The shared retry engine, `bulk-transfer` class: resume-first, patient,
         // backoff between attempts, bounded give-up.
         let mut engine: RetryEngine = RetryClass::BulkTransfer.engine();
         let mut stall = StallDetector::new(self.stall, self.clock.now_millis());
-        let window = self.window();
 
-        while (buffer.len() as u64) < expected_len {
-            let start = buffer.len() as u64;
+        while received < expected_len {
+            let start = received;
             let remaining = expected_len - start;
             let max_len = window.map(|w| w.min(remaining));
             let outcome = source.get_range(hash, start, max_len).await;
@@ -662,7 +707,7 @@ impl<S: Sleeper, C: MonotonicClock> RangedFetcher<S, C> {
             match outcome {
                 // Progress: bytes landed. Rearm the stall timer, refresh the retry
                 // budget (each resumed window earns a fresh one), and continue —
-                // every request resumes from `buffer.len()`, so zero held bytes are
+                // every request resumes from the bytes received, so zero held bytes are
                 // ever re-requested.
                 RangeOutcome::Complete { bytes } | RangeOutcome::Partial { bytes }
                     if !bytes.is_empty() =>
@@ -675,11 +720,13 @@ impl<S: Sleeper, C: MonotonicClock> RangedFetcher<S, C> {
                         now = start + bytes.len() as u64,
                         "range window landed; resuming from persisted offset"
                     );
-                    buffer.extend_from_slice(&bytes);
+                    hasher.update(&bytes);
+                    sink.write_all(&bytes).map_err(FetchError::Sink)?;
+                    received += bytes.len() as u64;
                 }
                 // A no-byte read: the request stalled or was black-holed. Cut on
                 // no-bytes-for-T (a stall counts toward `adverse`), back off through
-                // the shared engine, and resume from the SAME offset — the buffer is
+                // the shared engine, and resume from the SAME offset — the sink is
                 // untouched, so the resume re-fetches zero duplicate bytes.
                 RangeOutcome::Complete { .. } | RangeOutcome::Partial { .. } => {
                     if stall.is_stalled(now) {
@@ -708,14 +755,36 @@ impl<S: Sleeper, C: MonotonicClock> RangedFetcher<S, C> {
 
         // The server can only attest to ciphertext; the client verifies the content
         // address itself before trusting the bytes.
-        if hash_hex(&buffer) != hash {
+        if hex::encode(hasher.finalize()) != hash {
             tracing::warn!(hash, "ciphertext content-hash mismatch; discarding blob");
             return Err(FetchError::IntegrityFailed {
                 expected: hash.to_string(),
             });
         }
-        Ok((buffer, signals))
+        sink.flush().map_err(FetchError::Sink)?;
+        Ok(signals)
     }
+}
+
+/// The largest `Range` window [`RangedFetcher::fetch_into`] asks for: the memory a streamed
+/// fetch holds is one of these, whatever the blob's size. 16 MiB matches the upload
+/// protocol's largest chunk, so a transfer holds the same bound in either direction.
+pub const SINK_WINDOW: u64 = 16 * 1024 * 1024;
+
+/// Fetch a whole blob into `sink` with bounded `Range` windows, verifying it against its
+/// content address — the unmetered convenience over [`RangedFetcher::fetch_into`], and the
+/// bounded-memory counterpart of [`fetch_blob`]. `sink` holds unverified bytes until this
+/// returns `Ok`.
+pub async fn fetch_blob_into<S: BlobSource, W: std::io::Write>(
+    source: &S,
+    hash: &str,
+    expected_len: u64,
+    sink: &mut W,
+) -> Result<(), FetchError> {
+    RangedFetcher::new(ConnectionClass::Unmetered)
+        .fetch_into(source, hash, expected_len, sink)
+        .await
+        .map(drop)
 }
 
 /// Fetch a whole blob with resumable `Range` windows, verifying the reassembled

@@ -499,7 +499,7 @@ mod tests {
         let wire = Wire {
             manifest_cbor: bundle.provenance_blob.clone(),
             metadata_blob: bundle.metadata_blob.clone(),
-            ciphertext: bundle.ciphertext.clone(),
+            ciphertext: bundle.original.to_vec().unwrap(),
         };
         (ws, album, asset, wire)
     }
@@ -557,7 +557,7 @@ mod tests {
             manifest_cbor: bundle.provenance_blob.clone(),
             // A tombstone carries no metadata blob on the wire.
             metadata_blob: Vec::new(),
-            ciphertext: bundle.ciphertext.clone(),
+            ciphertext: bundle.original.to_vec().unwrap(),
         };
 
         let outcome = ws

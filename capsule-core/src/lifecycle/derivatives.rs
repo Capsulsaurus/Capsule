@@ -1266,7 +1266,7 @@ mod tests {
             .expect("an index row");
         assert_eq!((row.width, row.height), (Some(512), Some(384)));
         let bundle = ws.upload_bundle(&asset_id).unwrap();
-        assert_eq!(bundle.ciphertext, staged);
+        assert_eq!(bundle.original.to_vec().unwrap(), staged);
         assert_eq!(bundle.content_type, "image/jpeg");
         assert!(
             !bundle.derivatives.is_empty(),

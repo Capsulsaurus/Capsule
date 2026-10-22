@@ -15,12 +15,17 @@
 //! (`capsule push`) rather than a flag on import.
 
 use std::fs;
+use std::io::{self, Write};
+use std::path::PathBuf;
 
 use uuid::Uuid;
 
 use super::{AlbumKeys, AssetState, LifecycleError, Result, Workspace, media_dir};
 use crate::cbor;
-use crate::crypto::encryption::encrypt_asset_vec_with_prefix;
+use crate::crypto::encryption::{
+    AssetEncryption, CiphertextReader, NONCE_PREFIX_LEN, StreamError, ciphertext_len,
+    encrypt_asset_vec_with_prefix, encrypt_asset_with_prefix,
+};
 use crate::crypto::hash::{self, Hash32};
 use crate::crypto::provenance::{Action, DerivativeManifest, DerivativeRole, KeyMode};
 use crate::derivative_format::{DerivativeFormat, verify_still_format};
@@ -46,8 +51,10 @@ pub struct DerivativeBlob {
 
 /// Everything needed to push one managed asset: its identity, the re-derived original
 /// ciphertext, the exact sealed metadata blob, any derivative blobs, and the manifest-envelope
-/// projection fields the server validates. Carries no [`Workspace`] internals and no key
-/// material — the AMK never leaves the workspace.
+/// projection fields the server validates. Carries no [`Workspace`] internals and no album key
+/// material — the AMK never leaves the workspace. The one secret it holds is the original's
+/// per-file key, privately inside [`OriginalCiphertext`], which can open that one file and
+/// nothing else.
 ///
 /// Every field maps one-for-one onto the upload protocol's `POST /upload` body
 /// (`capsule_sdk::push` owns that mapping).
@@ -63,8 +70,9 @@ pub struct UploadBundle {
     pub protocol_version: String,
     /// The AMK epoch the asset is sealed under.
     pub amk_version: u32,
-    /// The original's ciphertext, re-derived from the manifest's recorded `nonce_prefix`.
-    pub ciphertext: Vec<u8>,
+    /// The original's ciphertext, re-derived on demand from the plaintext on disk and the
+    /// manifest's recorded `nonce_prefix`. It is never held whole: see [`OriginalCiphertext`].
+    pub original: OriginalCiphertext,
     /// The original ciphertext's content address (equal to the manifest's `ciphertext_hash`).
     pub ciphertext_hash: Hash32,
     /// Total plaintext byte length of the original.
@@ -131,7 +139,88 @@ impl UploadBundle {
     /// the original blob.
     #[must_use]
     pub fn ciphertext_size(&self) -> u64 {
-        self.ciphertext.len() as u64
+        self.original.size()
+    }
+}
+
+/// The original's ciphertext as a **source**, not a buffer: the plaintext's path on disk, the
+/// per-file key and the nonce prefix the signed manifest recorded.
+///
+/// Every read re-derives the requested ciphertext window from the plaintext
+/// ([`CiphertextReader`]), so pushing an original holds one transfer window of it, never the
+/// file — an original may be as large as the server accepts (4 GiB) and the device it is pushed
+/// from may be a phone. The bytes it yields are the bytes [`Workspace::upload_bundle`] verified
+/// against the manifest's `ciphertext_hash` when it built the bundle; a plaintext file changed
+/// on disk after that point yields bytes the server's finalize-time hash check refuses, never
+/// bytes it stores under the wrong address.
+#[derive(Clone)]
+pub struct OriginalCiphertext {
+    path: PathBuf,
+    file_key: [u8; 32],
+    nonce_prefix: [u8; NONCE_PREFIX_LEN],
+    plaintext_size: u64,
+}
+
+impl std::fmt::Debug for OriginalCiphertext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OriginalCiphertext")
+            .field("path", &self.path)
+            .field("file_key", &"<redacted>")
+            .field("plaintext_size", &self.plaintext_size)
+            .finish_non_exhaustive()
+    }
+}
+
+impl OriginalCiphertext {
+    /// The ciphertext's length in bytes — what `POST /upload` declares as `size`.
+    #[must_use]
+    pub fn size(&self) -> u64 {
+        ciphertext_len(self.plaintext_size)
+    }
+
+    /// The ciphertext bytes `[offset, offset + len)`, clamped to the end. Memory is the window
+    /// plus one STREAM chunk.
+    pub fn read_at(&self, offset: u64, len: usize) -> io::Result<Vec<u8>> {
+        let file = fs::File::open(&self.path)?;
+        CiphertextReader::new(self.file_key, self.nonce_prefix, file, self.plaintext_size)
+            .read_at(offset, len)
+    }
+
+    /// Stream the whole ciphertext into `writer`, one STREAM chunk at a time, and return its
+    /// content address.
+    pub fn write_to<W: Write>(&self, writer: W) -> io::Result<hash::Hash32> {
+        let rederived = self.encrypt_into(writer)?;
+        if rederived.plaintext_size != self.plaintext_size {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "the original changed size since its manifest was signed",
+            ));
+        }
+        Ok(rederived.ciphertext_hash)
+    }
+
+    /// The whole ciphertext in memory. For small originals and tests only: it is exactly the
+    /// buffer this type exists to avoid.
+    pub fn to_vec(&self) -> io::Result<Vec<u8>> {
+        let mut out = Vec::with_capacity(usize::try_from(self.size()).unwrap_or(0));
+        self.write_to(&mut out)?;
+        Ok(out)
+    }
+
+    /// Re-derive the ciphertext over whatever is on disk now, discarding it, and report what
+    /// it hashed to and how much plaintext there was.
+    fn rederive(&self) -> io::Result<AssetEncryption> {
+        self.encrypt_into(io::sink())
+    }
+
+    fn encrypt_into<W: Write>(&self, writer: W) -> io::Result<AssetEncryption> {
+        let file = io::BufReader::new(fs::File::open(&self.path)?);
+        encrypt_asset_with_prefix(&self.file_key, self.nonce_prefix, file, writer).map_err(
+            |error| match error {
+                StreamError::Io(io) => io,
+                other @ StreamError::Auth(_) => io::Error::other(other),
+            },
+        )
     }
 }
 
@@ -163,21 +252,31 @@ impl Workspace {
         let provenance_blob = cbor::to_canonical_vec(head_record)
             .map_err(|e| LifecycleError::Cbor(format!("encoding the provenance record: {e}")))?;
 
-        let plaintext =
-            fs::read(self.media_path(asset)).map_err(|e| LifecycleError::Io(e.to_string()))?;
         let epoch = head.amk_version.0;
         let file_key = self.original_file_key(album, head)?;
-        let (_, ciphertext) =
-            encrypt_asset_vec_with_prefix(&file_key, head.nonce_prefix, &plaintext);
+        let original = OriginalCiphertext {
+            path: self.media_path(asset),
+            file_key,
+            nonce_prefix: head.nonce_prefix,
+            plaintext_size: head.plaintext_size,
+        };
 
         // The re-derivation is deterministic, so a mismatch means the library's bytes and its
-        // own signed manifest disagree — never ship that.
-        let ciphertext_hash = hash::hash_bytes(&ciphertext);
-        if ciphertext_hash != head.ciphertext_hash {
+        // own signed manifest disagree — never ship that. Hashed in one streaming pass, so
+        // building the bundle holds one STREAM chunk of the original, whatever its size.
+        let rederived = original
+            .rederive()
+            .map_err(|e| LifecycleError::Io(e.to_string()))?;
+        let ciphertext_hash = rederived.ciphertext_hash;
+        if ciphertext_hash != head.ciphertext_hash
+            || rederived.plaintext_size != head.plaintext_size
+        {
             tracing::error!(
                 asset_id = %asset.asset_id,
                 expected = %head.ciphertext_hash.to_hex(),
                 actual = %ciphertext_hash.to_hex(),
+                expected_plaintext_size = head.plaintext_size,
+                actual_plaintext_size = rederived.plaintext_size,
                 "upload bundle: re-derived ciphertext does not match the manifest"
             );
             return Err(LifecycleError::CiphertextMismatch(asset.asset_id));
@@ -190,7 +289,7 @@ impl Workspace {
         tracing::debug!(
             album_id = %asset.album_id,
             amk_version = epoch,
-            ciphertext_bytes = ciphertext.len(),
+            ciphertext_bytes = original.size(),
             metadata_blob_bytes = asset.metadata_blob.len(),
             provenance_blob_bytes = provenance_blob.len(),
             derivatives = derivatives.len(),
@@ -205,7 +304,7 @@ impl Workspace {
             crypto_suite_id: head.crypto_suite_id,
             protocol_version: head.protocol_version.clone(),
             amk_version: epoch,
-            ciphertext,
+            original,
             ciphertext_hash,
             plaintext_size: head.plaintext_size,
             chunk_size: head.chunk_size,
