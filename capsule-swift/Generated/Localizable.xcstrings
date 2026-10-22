@@ -31515,6 +31515,76 @@
         }
       }
     },
+    "cli.help.verify.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ask the server whether it durably holds this library's originals, and keep its signed answer as evidence"
+          }
+        }
+      }
+    },
+    "cli.help.verify.arg.asset": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verify only this asset (repeatable); every asset in the library when omitted"
+          }
+        }
+      }
+    },
+    "cli.help.verify.arg.deep": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Have the server re-hash the stored bytes rather than only check they are present; spends the account's deep-verify budget"
+          }
+        }
+      }
+    },
+    "cli.help.verify.arg.json": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Print the run as one JSON document on stdout: the totals and each asset's verdict (durable, not durable, or failed with its error)"
+          }
+        }
+      }
+    },
+    "cli.help.verify.arg.library": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Path to the Capsule library"
+          }
+        }
+      }
+    },
+    "cli.help.verify.arg.passphrase_stdin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal"
+          }
+        }
+      }
+    },
+    "cli.help.verify.arg.signed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ask for the server's signed verdict, check it under the server's attestation key, and keep it in the library beside each asset's custody receipts"
+          }
+        }
+      }
+    },
     "cli.import.candidates_found": {
       "localizations": {
         "en": {

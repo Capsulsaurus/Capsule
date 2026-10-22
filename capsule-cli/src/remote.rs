@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use capsule_core::crypto::keys::MasterKey;
 use capsule_core::crypto::primitives::{Argon2Params, DeviceTier};
 use capsule_core::import::UploadPolicy;
-use capsule_core::library::{ReleaseDecision, RetainReason, StorageVerifier};
+use capsule_core::library::{ReleaseDecision, RetainReason, StorageVerdict, StorageVerifier};
 use capsule_core::lifecycle::{LifecycleError, Workspace};
 use capsule_sdk::albums::{AlbumClient, AlbumTransport};
 use capsule_sdk::auth::{AuthClient, AuthError, LoginOutcome, Session};
@@ -28,7 +28,8 @@ use capsule_sdk::staged::{StagedScheduler, TierSessionOutcome, held_from_feed};
 use capsule_sdk::sync::{FeedEntry, SyncConsumer, SyncCursor, SyncError, SyncState};
 use capsule_sdk::upload::{UploadClient, UploadTransport};
 use capsule_sdk::verify::{
-    HeldRelease, ReleaseCoordinator, StorageVerifyClient, VerifyError, VerifyTransport,
+    AssetQuery, HeldRelease, ReleaseCoordinator, StorageVerifyClient, VerifiedAttestation,
+    VerifyError, VerifyTransport,
 };
 use sea_orm::{ConnectionTrait, TransactionTrait};
 use secrecy::SecretString;
@@ -40,6 +41,7 @@ use uuid::Uuid;
 use crate::restore::{self, RestoreOptions, RestoreSummary};
 use crate::session::{SessionError, SessionStore};
 use crate::syncstore::{self, SyncStoreError, SyncedAssetView};
+use crate::verify::{self, VerifyOptions, VerifySummary};
 
 /// The client's default max-known protocol version — the top of the dev sync
 /// server's negotiation window.
@@ -1647,6 +1649,92 @@ pub fn sources_kept_offline_line(count: usize) -> String {
         "Kept {count} source files: --move deletes a source only once the server holds it. \
          Re-run with --push to upload and release them."
     )
+}
+
+// ─── Verify (#747) ───────────────────────────────────────────────────────────
+
+/// `capsule verify`: ask the server whether it durably holds each asset in `options`, and with
+/// `options.signed` keep its signed answer in each asset's attestation log.
+///
+/// The orchestration is [`verify::verify_assets`]; this function supplies its network legs over
+/// the SDK. A signed run first fetches the server's attestation-key history, as a push does,
+/// and every attestation is verified under it, bound to a nonce drawn fresh per request
+/// ([`ReleaseCoordinator::fetch_verified_attestation`]). An attestation that does not verify is
+/// reported against its assets and never stored.
+///
+/// # Errors
+///
+/// [`RemoteError::NotAuthenticated`] with no stored session, and, on a signed run,
+/// [`RemoteError::AttestationKeys`] when the server's keys cannot be fetched. Either way nothing
+/// has been stored.
+#[instrument(skip(store, workspace), fields(signed = options.signed, deep = options.deep))]
+pub async fn verify_storage(
+    remote: &RemoteConfig,
+    store: &SessionStore,
+    workspace: &Workspace,
+    options: &VerifyOptions,
+) -> Result<VerifySummary, RemoteError> {
+    let session = resume_session(remote, store).await?;
+    let outcome = verify_storage_with(remote, workspace, session.clone(), options).await;
+    checkpoint(store, &session).await;
+    outcome
+}
+
+/// The verify itself, over a session somebody else is responsible for persisting.
+async fn verify_storage_with(
+    remote: &RemoteConfig,
+    workspace: &Workspace,
+    session: Session,
+    options: &VerifyOptions,
+) -> Result<VerifySummary, RemoteError> {
+    // `sync_endpoint` is the bare server origin; the storage route hangs off `/v1`.
+    let client = StorageVerifyClient::new(VerifyTransport::with_session(
+        session,
+        format!("{}/v1", remote.sync_endpoint.trim_end_matches('/')),
+    ));
+    let coordinator = if options.signed {
+        let keys = client
+            .fetch_attestation_keys()
+            .await
+            .map_err(RemoteError::AttestationKeys)?;
+        tracing::info!(keys = keys.len(), "verify: attestation keys fetched");
+        Some(ReleaseCoordinator::new(client.clone(), keys))
+    } else {
+        None
+    };
+    let source = SdkVerdictSource {
+        client,
+        coordinator,
+    };
+    Ok(verify::verify_assets(workspace, &source, options).await)
+}
+
+/// [`verify::VerdictSource`] over the SDK's storage-verify client.
+struct SdkVerdictSource {
+    client: StorageVerifyClient,
+    /// Present on a signed run: it holds the attestation keys and draws each nonce.
+    coordinator: Option<ReleaseCoordinator>,
+}
+
+impl verify::VerdictSource for SdkVerdictSource {
+    async fn verdicts(
+        &self,
+        assets: &[AssetQuery],
+        deep: bool,
+    ) -> Result<Vec<StorageVerdict>, VerifyError> {
+        self.client.verify(assets, deep).await
+    }
+
+    async fn attestation(
+        &self,
+        assets: &[AssetQuery],
+        deep: bool,
+    ) -> Result<VerifiedAttestation, VerifyError> {
+        let coordinator = self.coordinator.as_ref().ok_or_else(|| {
+            VerifyError::Malformed("a signed verdict needs the attestation keys".to_owned())
+        })?;
+        coordinator.fetch_verified_attestation(assets, deep).await
+    }
 }
 
 /// Query the sync-fed local store — the client-side library `capsule list` renders.

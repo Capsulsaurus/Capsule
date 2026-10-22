@@ -7467,6 +7467,34 @@
     "message": "Discard the saved cursor and re-drain the feed from the start. The per-album anti-rewind floor still applies, so this cannot resurrect stale entries",
     "context": "clap --help: help for the `--force` flag of `capsule sync`."
   },
+  "cli.help.verify.about": {
+    "message": "Ask the server whether it durably holds this library's originals, and keep its signed answer as evidence",
+    "context": "clap --help: the one-line description of `capsule verify`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.verify.arg.asset": {
+    "message": "Verify only this asset (repeatable); every asset in the library when omitted",
+    "context": "clap --help: help for the `--asset <ASSET_ID>` option of `capsule verify`."
+  },
+  "cli.help.verify.arg.deep": {
+    "message": "Have the server re-hash the stored bytes rather than only check they are present; spends the account's deep-verify budget",
+    "context": "clap --help: help for the `--deep` flag of `capsule verify`."
+  },
+  "cli.help.verify.arg.json": {
+    "message": "Print the run as one JSON document on stdout: the totals and each asset's verdict (durable, not durable, or failed with its error)",
+    "context": "clap --help: help for the `--json` flag of `capsule verify`."
+  },
+  "cli.help.verify.arg.library": {
+    "message": "Path to the Capsule library",
+    "context": "clap --help: help for the `--library <PATH>` option of `capsule verify`."
+  },
+  "cli.help.verify.arg.passphrase_stdin": {
+    "message": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+    "context": "clap --help: help for the `--passphrase-stdin` flag of `capsule verify`."
+  },
+  "cli.help.verify.arg.signed": {
+    "message": "Ask for the server's signed verdict, check it under the server's attestation key, and keep it in the library beside each asset's custody receipts",
+    "context": "clap --help: help for the `--signed` flag of `capsule verify`. A signed verdict is a storage attestation: the server's answer signed under its attestation key."
+  },
   "cli.import.candidates_found": {
     "message": "Found {candidates} candidate(s) ({files} file(s) total).",
     "context": "CLI summary after `capsule import` finishes scanning. {candidates} is the number of importable items found; {files} is the total number of files seen, including sidecars and non-media files. Both are counts."

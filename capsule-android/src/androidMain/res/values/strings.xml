@@ -1857,6 +1857,13 @@
     <string name="cli_help_sync_about">Sync local and remote data</string>
     <string name="cli_help_sync_arg_dry_run">Perform a dry run without making changes</string>
     <string name="cli_help_sync_arg_force">Discard the saved cursor and re-drain the feed from the start. The per-album anti-rewind floor still applies, so this cannot resurrect stale entries</string>
+    <string name="cli_help_verify_about">Ask the server whether it durably holds this library\'s originals, and keep its signed answer as evidence</string>
+    <string name="cli_help_verify_arg_asset">Verify only this asset (repeatable); every asset in the library when omitted</string>
+    <string name="cli_help_verify_arg_deep">Have the server re-hash the stored bytes rather than only check they are present; spends the account\'s deep-verify budget</string>
+    <string name="cli_help_verify_arg_json">Print the run as one JSON document on stdout: the totals and each asset\'s verdict (durable, not durable, or failed with its error)</string>
+    <string name="cli_help_verify_arg_library">Path to the Capsule library</string>
+    <string name="cli_help_verify_arg_passphrase_stdin">Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal</string>
+    <string name="cli_help_verify_arg_signed">Ask for the server\'s signed verdict, check it under the server\'s attestation key, and keep it in the library beside each asset\'s custody receipts</string>
     <string name="cli_import_candidates_found">Found %1$s candidate(s) (%2$s file(s) total).</string>
     <string name="cli_import_done">Done: %1$s imported, %2$s duplicate(s), %3$s error(s).</string>
     <string name="cli_import_execute_failed">The import failed: %s</string>
