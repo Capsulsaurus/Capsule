@@ -1829,6 +1829,13 @@
     <string name="cli_help_reset_arg_cache">Reset cache directory</string>
     <string name="cli_help_reset_arg_config">Reset configuration</string>
     <string name="cli_help_reset_arg_data">Reset data directory</string>
+    <string name="cli_help_restore_about">Download originals from the server and verify them byte for byte</string>
+    <string name="cli_help_restore_arg_album">Restore only the assets of this album</string>
+    <string name="cli_help_restore_arg_asset">Restore only this asset</string>
+    <string name="cli_help_restore_arg_json">Print the run as one JSON document on stdout: the totals and each asset\'s outcome (restored, already present, or failed with its error)</string>
+    <string name="cli_help_restore_arg_library">Path to the Capsule library whose album keys open the originals</string>
+    <string name="cli_help_restore_arg_out">Directory the originals are written to, one file per asset named by its id; an interrupted run resumes from what it left there</string>
+    <string name="cli_help_restore_arg_passphrase_stdin">Read the library passphrase from stdin instead of prompting, so restores work in scripts and CI where there is no terminal</string>
     <string name="cli_help_root_about">A command line interface for Capsule - the photo management platform</string>
     <string name="cli_help_root_long_about">Capsule CLI provides tools for managing your photos and albums:\n\n- Authentication management\n- Sync local and remote data\n- Check status and list files\n- Manage albums and collections</string>
     <string name="cli_help_share_about">Issue and revoke view-only share links on the server</string>
