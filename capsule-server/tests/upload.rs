@@ -2365,6 +2365,219 @@ async fn a_replay_on_a_session_still_short_of_its_size_finalizes_nothing() {
     );
 }
 
+/// Open a session for `whole`, land its first chunk, and record its last the way a process that
+/// died before claiming leaves it: full and unclaimed. `last` is what the stage receives.
+async fn leave_full_and_unclaimed(
+    fixture: &Fixture,
+    bearer: &str,
+    first: &[u8],
+    last: &[u8],
+    whole: &[u8],
+) -> String {
+    let id = fixture.open_session(whole, "original", bearer).await;
+    fixture
+        .chunk(&id, 0, first, bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    record_last_chunk(fixture, &id, last).await;
+    let stranded = fixture
+        .uploads
+        .read_for_test(&id)
+        .await
+        .expect("the session is live");
+    assert!(
+        stranded.is_full_and_unclaimed(),
+        "full, and nobody has claimed its finalization: {stranded:?}"
+    );
+    id
+}
+
+/// The client's duplicate `create` for `whole`, as `UploadClient::upload_with` resumes.
+async fn create_again(fixture: &Fixture, bearer: &str, whole: &[u8]) -> kynos::test::TestResponse {
+    fixture
+        .client
+        .post("/v1/upload")
+        .header("authorization", bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .json(&create_request(&fixture.clock, whole, "original"))
+        .send()
+        .await
+}
+
+/// The client's `HEAD` on `id`.
+async fn head(fixture: &Fixture, bearer: &str, id: &str) -> kynos::test::TestResponse {
+    fixture
+        .client
+        .head(&format!("/v1/upload/{id}"))
+        .header("authorization", bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .send()
+        .await
+}
+
+#[tokio::test]
+async fn a_duplicate_create_finalizes_a_full_session_nobody_claimed() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, second, whole) = blob();
+    let id = leave_full_and_unclaimed(&fixture, &bearer, &first, &second, &whole).await;
+
+    // The SDK resumes from the duplicate create's offset and, at the size, sends nothing more.
+    let response = create_again(&fixture, &bearer, &whole).await;
+    response.assert_status(StatusCode::OK);
+    response.assert_header("x-capsule-offset", "8192");
+    let body: serde_json::Value = response.json();
+    assert_eq!(body["id"].as_str(), Some(id.as_str()), "the same session");
+
+    // Finished before the answer, with no chunk replayed.
+    let record = fixture
+        .uploads
+        .read_for_test(&id)
+        .await
+        .expect("the session survives as a receipt");
+    assert_eq!(record.status.as_str(), "completed");
+    assert_indexed_and_durable(&fixture, &bearer, &whole).await;
+
+    // Asked again, the bytes are held: the finalized tuple is the duplicate it always was.
+    create_again(&fixture, &bearer, &whole)
+        .await
+        .assert_status(StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn head_finalizes_a_full_session_nobody_claimed_and_reports_it_completed() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, second, whole) = blob();
+    let id = leave_full_and_unclaimed(&fixture, &bearer, &first, &second, &whole).await;
+
+    let response = head(&fixture, &bearer, &id).await;
+    response.assert_status(StatusCode::OK);
+    response.assert_header("x-capsule-offset", "8192");
+    response.assert_header("x-capsule-content-length", "8192");
+    response.assert_header("x-capsule-upload-status", "completed");
+    assert_indexed_and_durable(&fixture, &bearer, &whole).await;
+
+    // A second HEAD reads the terminal state and finalizes nothing twice.
+    head(&fixture, &bearer, &id)
+        .await
+        .assert_header("x-capsule-upload-status", "completed");
+}
+
+#[tokio::test]
+async fn head_reports_a_full_session_whose_bytes_do_not_hash_as_failed() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, _, whole) = blob();
+    let id =
+        leave_full_and_unclaimed(&fixture, &bearer, &first, &payload(b'x', 4096), &whole).await;
+
+    head(&fixture, &bearer, &id)
+        .await
+        .assert_header("x-capsule-upload-status", "failed_processing");
+    assert_eq!(
+        fixture.blobs.staged_len_for_test(&id).await,
+        None,
+        "the stage is dropped"
+    );
+}
+
+#[tokio::test]
+async fn a_duplicate_create_whose_full_session_will_not_finalize_opens_a_fresh_one() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, _, whole) = blob();
+    // The stage holds bytes that do not hash to the declaration: finalization refuses them.
+    let id =
+        leave_full_and_unclaimed(&fixture, &bearer, &first, &payload(b'x', 4096), &whole).await;
+
+    let response = create_again(&fixture, &bearer, &whole).await;
+    response.assert_status(StatusCode::CREATED);
+    let body: serde_json::Value = response.json();
+    let fresh = body["id"].as_str().expect("a session id").to_owned();
+    assert_ne!(fresh, id, "the refused session is not handed back");
+    assert_eq!(terminal_status(&fixture, &id).await, "failed_processing");
+
+    // The client sends its bytes again, and they land.
+    let (first, second, _) = blob();
+    for (offset, chunk) in [(0, &first), (4096, &second)] {
+        fixture
+            .chunk(&fresh, offset, chunk, &bearer)
+            .send()
+            .await
+            .assert_status(StatusCode::NO_CONTENT);
+    }
+    assert_eq!(terminal_status(&fixture, &fresh).await, "completed");
+    assert_indexed_and_durable(&fixture, &bearer, &whole).await;
+}
+
+#[tokio::test]
+async fn a_full_session_nobody_claimed_is_finalized_at_boot() {
+    use capsule_server::attestation::AttestationContext;
+    use capsule_server::upload::UploadContext;
+    use capsule_server::upload::finalize::{finish_unclaimed, full_unclaimed};
+    use kynos::di::Provides as _;
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, second, whole) = blob();
+    let id = leave_full_and_unclaimed(&fixture, &bearer, &first, &second, &whole).await;
+    // A session still short of its size is somebody's transfer in progress, not a finish.
+    let other_first = payload(b'p', CHUNK);
+    let other_whole: Vec<u8> = other_first
+        .iter()
+        .chain(payload(b'q', CHUNK).iter())
+        .copied()
+        .collect();
+    let in_progress = fixture
+        .open_session(&other_whole, "derivative", &bearer)
+        .await;
+    fixture
+        .chunk(&in_progress, 0, &other_first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    let app = fixture.app();
+    let upload: UploadContext = app.provide();
+    let attestation: AttestationContext = app.provide();
+    let full = full_unclaimed(upload.sessions())
+        .await
+        .expect("the store lists its sessions");
+    assert_eq!(
+        full.iter()
+            .map(|record| record.upload_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![id.as_str()],
+        "only the full session is listed"
+    );
+    let recovery = finish_unclaimed(&upload, &attestation, full).await;
+    assert_eq!(recovery.completed.len(), 1, "{recovery:?}");
+    assert!(recovery.failed.is_empty(), "{recovery:?}");
+    assert_eq!(terminal_status(&fixture, &id).await, "completed");
+    assert_indexed_and_durable(&fixture, &bearer, &whole).await;
+    assert_eq!(
+        fixture
+            .uploads
+            .read_for_test(&in_progress)
+            .await
+            .expect("the transfer is live")
+            .status
+            .as_str(),
+        "uploading",
+        "a transfer in progress is left to its client"
+    );
+
+    // A second boot finds nothing full and unclaimed.
+    assert!(
+        full_unclaimed(upload.sessions())
+            .await
+            .expect("the store lists its sessions")
+            .is_empty()
+    );
+}
+
 /// Run boot recovery over the fixture's stores, as a restarted process would before it binds.
 async fn recover_at_boot(fixture: &Fixture) -> capsule_server::upload::finalize::Recovery {
     use capsule_server::attestation::AttestationContext;
