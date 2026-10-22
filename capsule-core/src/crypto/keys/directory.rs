@@ -659,6 +659,130 @@ mod tests {
         );
     }
 
+    // ── Unknown keys from a newer writer (versioning invariant 2) ───────────────
+
+    /// A value no build has defined: a tag, a full-width integer and a nested map with a float.
+    fn future_value() -> ciborium::Value {
+        use ciborium::Value;
+        Value::Map(vec![
+            (
+                Value::Text("captured".into()),
+                Value::Tag(1, Box::new(Value::from(1_790_000_000u64))),
+            ),
+            (
+                Value::Text("weights".into()),
+                Value::Array(vec![Value::Float(0.5), Value::from(u64::MAX)]),
+            ),
+        ])
+    }
+
+    /// Splice `extra` into the CBOR map `value` (which must be one).
+    fn with_keys(value: ciborium::Value, extra: &[(&str, ciborium::Value)]) -> ciborium::Value {
+        let ciborium::Value::Map(mut entries) = value else {
+            panic!("a CBOR map")
+        };
+        for (k, v) in extra {
+            entries.push((ciborium::Value::Text((*k).to_owned()), v.clone()));
+        }
+        ciborium::Value::Map(entries)
+    }
+
+    /// A "future" writer that does not use these types: it adds keys this build has never
+    /// heard of to the directory core and to a device entry, and signs the canonical core it
+    /// built. This build decodes it, keeps every key, re-emits the core byte for byte, and so
+    /// verifies; dropping either set of keys fails verification.
+    #[test]
+    fn a_directory_from_a_newer_writer_keeps_its_unknown_keys_under_the_signature() {
+        let (ik, dev) = (ik(), dev());
+        let current: ciborium::Value =
+            crate::cbor::from_slice(&core(4, &dev).signing_bytes()).unwrap();
+        let ciborium::Value::Map(entries) = current else {
+            panic!("a core is a map")
+        };
+        let entries = entries
+            .into_iter()
+            .map(|(k, v)| {
+                if k.as_text() == Some("devices") {
+                    let devices = v
+                        .into_array()
+                        .unwrap()
+                        .into_iter()
+                        .map(|d| with_keys(d, &[("x_attested_by", future_value())]))
+                        .collect();
+                    (k, ciborium::Value::Array(devices))
+                } else {
+                    (k, v)
+                }
+            })
+            .collect();
+        let future_core = with_keys(
+            ciborium::Value::Map(entries),
+            &[
+                ("x_recovery_policy", future_value()),
+                ("z", ciborium::Value::Bytes(vec![0xFF; 4])),
+            ],
+        );
+        let signed_bytes = crate::cbor::value_to_canonical_vec(&future_core);
+        let wire = crate::cbor::value_to_canonical_vec(&ciborium::Value::Map(vec![
+            (ciborium::Value::Text("core".into()), future_core.clone()),
+            (
+                ciborium::Value::Text("signature".into()),
+                crate::cbor::from_slice(
+                    &crate::cbor::to_canonical_vec(&ik.sign(&signed_bytes)).unwrap(),
+                )
+                .unwrap(),
+            ),
+        ]));
+
+        let directory: DeviceDirectory = crate::cbor::from_slice(&wire).unwrap();
+        assert_eq!(
+            directory.core.unknown.keys().collect::<Vec<_>>(),
+            ["x_recovery_policy", "z"]
+        );
+        assert_eq!(
+            directory.core.devices[0].unknown.keys().collect::<Vec<_>>(),
+            ["x_attested_by"]
+        );
+        assert_eq!(directory.core.signing_bytes(), signed_bytes);
+        assert!(directory.verify(&ik.verifying_key()));
+        assert_eq!(crate::cbor::to_canonical_vec(&directory).unwrap(), wire);
+
+        let mut stripped_core = directory.clone();
+        stripped_core.core.unknown.clear();
+        assert!(
+            !stripped_core.verify(&ik.verifying_key()),
+            "dropping a core key must fail verification"
+        );
+        let mut stripped_entry = directory;
+        stripped_entry.core.devices[0].unknown.clear();
+        assert!(
+            !stripped_entry.verify(&ik.verifying_key()),
+            "dropping a device-entry key must fail verification"
+        );
+    }
+
+    /// Everything this build writes has empty unknown maps, and an empty map is wire-absent: the
+    /// core encodes exactly the four keys it always had.
+    #[test]
+    fn an_empty_unknown_map_is_wire_absent() {
+        let c = core(1, &dev());
+        let value: ciborium::Value = crate::cbor::from_slice(&c.signing_bytes()).unwrap();
+        let keys: Vec<_> = value
+            .as_map()
+            .unwrap()
+            .iter()
+            .filter_map(|(k, _)| k.as_text())
+            .collect();
+        assert_eq!(
+            keys,
+            ["devices", "user_id", "updated_at", "directory_version"]
+        );
+        assert_eq!(
+            entry_keys(&c),
+            ["added_at", "device_id", "dsk_public", "revoked_at"]
+        );
+    }
+
     // ── Encapsulating to a published entry (the point of publishing it) ─────────
 
     /// **The slice's acceptance.** A peer holding only the published entry wraps a secret to the
