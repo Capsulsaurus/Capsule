@@ -1,0 +1,129 @@
+name: Scheduled tests
+
+# The testing plan's slow tiers, too long for a pull request: coverage-guided fuzzing of every
+# capsule-core decoder, mutation testing of the CRDT, transfer and provenance code, and the
+# property suites at soak depth. Nightly on master, or on demand. A separate workflow rather
+# than a `schedule:` on ci.yml, whose `ci-<ref>` concurrency group would let a nightly run and a
+# push to master cancel each other.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MISE_AUTO_INSTALL: "false"
+
+jobs:
+  fuzz:
+    name: Fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - cbor_canonicalize
+          - signed_documents
+          - custody_receipt
+          - lqip
+          - media_decode
+          - enrollment_payload
+          - hybrid_verifying_key
+          - metadata_blob
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: capsule-core/fuzz
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz@0.13.2
+      - name: Fuzz for ten minutes
+        working-directory: capsule-core/fuzz
+        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=600 -max_len=65536
+      - name: Upload the crashing input
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: capsule-core/fuzz/artifacts/${{ matrix.target }}/
+
+  mutants:
+    name: Mutants (shard ${{ matrix.shard }}/8)
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: Install nextest and cargo-mutants
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest,cargo-mutants@27.1.0
+      - name: Set up mise (task runner)
+        uses: jdx/mise-action@v2
+        with:
+          install: false
+      # Exits 2 when a mutant survives and 3 when one times out: a surviving mutant is a
+      # behaviour no test constrains, and the job says so rather than passing.
+      - name: Mutation-test the CRDT, transfer and provenance code
+        run: mise run mutants -- --shard ${{ matrix.shard }}/8 --sharding round-robin
+      - name: Summarize survivors
+        if: always()
+        run: |
+          {
+            echo "### Mutants, shard ${{ matrix.shard }}/8"
+            for kind in caught missed timeout unviable; do
+              file="mutants.out/$kind.txt"
+              [ -f "$file" ] && echo "- $kind: $(wc -l < "$file")"
+            done
+            if [ -s mutants.out/missed.txt ]; then
+              echo
+              echo '```'
+              cat mutants.out/missed.txt
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload mutants.out
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-shard-${{ matrix.shard }}
+          path: mutants.out/
+
+  properties:
+    name: Property suites (soak)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: Install nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      # A fresh seed each night widens the search; it is printed in every case's stderr, and
+      # `PROPTEST_RNG_SEED=<seed>` replays a failure locally.
+      - name: Run the property suites at depth under the run's seed
+        env:
+          PROPTEST_CASES: "4096"
+          PROPTEST_RNG_SEED: ${{ github.run_id }}
+        run: >-
+          cargo nextest run -p capsule-core -p capsule-sdk --no-fail-fast
+          --test codec_properties --test crdt_laws --test upload_fault_schedules
