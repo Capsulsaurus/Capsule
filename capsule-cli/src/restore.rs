@@ -13,7 +13,10 @@
 //!   prefix from disk and asks the server only for the bytes after it; the fetcher still hashes
 //!   the whole reassembled ciphertext against its content address, so a prefix is trusted only
 //!   once the blob it belongs to verifies. A part file whose blob fails that check is removed,
-//!   so a bad prefix is fetched again rather than kept.
+//!   so a bad prefix is fetched again rather than kept. The production source reads each `Range`
+//!   whole and hands over nothing from a response whose body drops, so a restore always asks for
+//!   bounded windows ([`RESTORE_RANGE_WINDOW`], or the connection class's smaller one): a run
+//!   that is cut off loses at most the window in flight, whatever the connection class.
 //! - **Atomic writes.** An original is written to a temporary file in the staging directory,
 //!   flushed to disk, and renamed into `OUT`. A file named for the asset in `OUT` is therefore
 //!   always a complete, verified original, and a run that finds one skips the asset without
@@ -32,7 +35,7 @@ use capsule_core::lifecycle::{
     QuarantineReason, RemoteEntry, RemoteOriginal, SyncApplyOutcome, Workspace,
 };
 use capsule_sdk::fetch::{BlobSource, FetchError, RangeOutcome, RangedFetcher};
-use capsule_sdk::net::ConnectionClass;
+use capsule_sdk::net::{ConnectionClass, StallConfig, SystemClock, TokioSleeper};
 use capsule_sdk::sync::{ChangeKind, FeedEntry};
 use indexmap::IndexMap;
 use serde::Serialize;
@@ -41,6 +44,9 @@ use uuid::Uuid;
 
 /// The staging directory under the output directory: part files and temporary writes.
 pub const STAGING_DIR: &str = ".capsule-restore";
+
+/// The largest `Range` window a restore asks for (4 MiB): the most a cut-off run re-fetches.
+pub const RESTORE_RANGE_WINDOW: u64 = 4 * 1024 * 1024;
 
 /// What a restore covers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +78,20 @@ pub struct RestoreOptions {
     pub out: PathBuf,
     /// The connection class the ranged fetch sizes its windows for.
     pub connection: ConnectionClass,
+    /// The largest `Range` window to ask for, normally [`RESTORE_RANGE_WINDOW`]. A class with a
+    /// smaller window of its own (`adverse`) keeps it.
+    pub range_window: u64,
+}
+
+impl RestoreOptions {
+    /// The window every blob request of this run asks for. Never open-ended: the production
+    /// source keeps nothing from a response whose body drops, so only whole windows persist.
+    fn window(&self) -> u64 {
+        let window = self.range_window.max(1);
+        self.connection
+            .range_window()
+            .map_or(window, |class| class.min(window))
+    }
 }
 
 /// Where one asset ended up after a restore run.
@@ -274,7 +294,13 @@ pub async fn restore_entries<B: BlobSource + Sync>(
     let staging = options.out.join(STAGING_DIR);
     std::fs::create_dir_all(&staging)?;
     let present = present_stems(&options.out)?;
-    let fetcher = RangedFetcher::new(options.connection);
+    let fetcher = RangedFetcher::from_parts(
+        options.connection,
+        StallConfig::default(),
+        Some(options.window()),
+        TokioSleeper,
+        SystemClock::new(),
+    );
     let mut summary = RestoreSummary {
         out: options.out.display().to_string(),
         ..Default::default()
@@ -607,10 +633,13 @@ fn remove_part(part: &Path) {
 /// [`RangedFetcher`] asks for consecutive ranges from offset zero and appends what each returns,
 /// so the bytes below the part file's length are answered from the file without a request, and
 /// the first request that reaches the inner source starts exactly at its end. The fetcher still
-/// hashes the whole reassembled blob, so nothing read from the file is trusted on its own.
+/// hashes the whole reassembled blob, so nothing read from the file is trusted on its own. The
+/// held prefix is read from the file one window at a time rather than kept in memory.
 pub struct PersistingSource<'a, B> {
     inner: &'a B,
-    held: Vec<u8>,
+    held: u64,
+    /// A read handle on the part file, for serving the held prefix.
+    reader: Mutex<std::fs::File>,
     part: Mutex<std::fs::File>,
     fetched: AtomicU64,
 }
@@ -619,23 +648,21 @@ impl<'a, B> PersistingSource<'a, B> {
     /// Open (or create) the part file at `path` for a blob of `size` bytes. A part file longer
     /// than the blob cannot be a prefix of it and is started over.
     pub fn open(inner: &'a B, path: &Path, size: u64) -> std::io::Result<Self> {
-        let mut held = match std::fs::read(path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-            Err(error) => return Err(error),
-        };
-        if held.len() as u64 > size {
-            tracing::warn!(part = %path.display(), held = held.len(), size, "restore: part file is longer than its blob; starting over");
-            held.clear();
-            std::fs::write(path, b"")?;
-        }
         let part = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(path)?;
+        let mut held = part.metadata()?.len();
+        if held > size {
+            tracing::warn!(part = %path.display(), held, size, "restore: part file is longer than its blob; starting over");
+            part.set_len(0)?;
+            held = 0;
+        }
+        let reader = std::fs::File::open(path)?;
         Ok(Self {
             inner,
             held,
+            reader: Mutex::new(reader),
             part: Mutex::new(part),
             fetched: AtomicU64::new(0),
         })
@@ -643,7 +670,21 @@ impl<'a, B> PersistingSource<'a, B> {
 
     /// Bytes the part file held when it was opened.
     pub fn held_len(&self) -> u64 {
-        self.held.len() as u64
+        self.held
+    }
+
+    /// The held bytes `start..end`, read from the part file.
+    fn read_held(&self, start: u64, end: u64) -> std::io::Result<Vec<u8>> {
+        use std::io::{Read as _, Seek as _, SeekFrom};
+        let mut reader = self
+            .reader
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        reader.seek(SeekFrom::Start(start))?;
+        // `end - start` is at most one window, which fits in memory by construction.
+        let mut bytes = vec![0; (end - start) as usize];
+        reader.read_exact(&mut bytes)?;
+        Ok(bytes)
     }
 
     /// Bytes the inner source delivered.
@@ -669,9 +710,18 @@ impl<B: BlobSource + Sync> BlobSource for PersistingSource<'_, B> {
         let held = self.held_len();
         if start < held {
             let end = max_len.map_or(held, |window| start.saturating_add(window).min(held));
-            // `start < held <= usize::MAX`, so both offsets index the in-memory prefix.
-            let bytes = self.held[start as usize..end as usize].to_vec();
-            return RangeOutcome::Partial { bytes };
+            return match self.read_held(start, end) {
+                Ok(bytes) => RangeOutcome::Partial { bytes },
+                Err(error) => {
+                    // The part file vanished or shrank under us: fail this fetch as a transport
+                    // error would. The next run reopens whatever is left of the file.
+                    tracing::warn!(%error, start, end, "restore: the part file could not be read");
+                    RangeOutcome::Status {
+                        status: 0,
+                        code: None,
+                    }
+                }
+            };
         }
         let outcome = self.inner.get_range(hash, start, max_len).await;
         if let RangeOutcome::Complete { bytes } | RangeOutcome::Partial { bytes } = &outcome

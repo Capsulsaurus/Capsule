@@ -185,7 +185,159 @@ fn options(out: &Path, scope: RestoreScope) -> RestoreOptions {
         scope,
         out: out.to_path_buf(),
         connection: ConnectionClass::Unmetered,
+        range_window: RESTORE_RANGE_WINDOW,
     }
+}
+
+/// A server reached the way [`capsule_sdk::fetch::HttpBlobSource`] reaches it: each `Range` is
+/// read whole and answered `Complete`, and a response whose body drops hands over nothing
+/// (`Partial` with no bytes). After `windows` answered requests for `drop_hash`, the next body
+/// drops and every later request finds the network gone (a transport error).
+struct HttpLikeSource {
+    blobs: HashMap<String, Vec<u8>>,
+    requests: Mutex<Vec<(String, u64, Option<u64>)>>,
+    drop_after: Option<(String, usize)>,
+}
+
+impl HttpLikeSource {
+    fn new(blobs: HashMap<String, Vec<u8>>) -> Self {
+        Self {
+            blobs,
+            requests: Mutex::new(Vec::new()),
+            drop_after: None,
+        }
+    }
+
+    fn requests_for(&self, hash: &str) -> Vec<(u64, Option<u64>)> {
+        self.requests
+            .lock()
+            .expect("the request log")
+            .iter()
+            .filter(|(h, _, _)| h == hash)
+            .map(|(_, start, max_len)| (*start, *max_len))
+            .collect()
+    }
+}
+
+impl BlobSource for HttpLikeSource {
+    async fn get_range(&self, hash: &str, start: u64, max_len: Option<u64>) -> RangeOutcome {
+        let answered = {
+            let mut log = self.requests.lock().expect("the request log");
+            let answered = log.iter().filter(|(h, _, _)| h == hash).count();
+            log.push((hash.to_owned(), start, max_len));
+            answered
+        };
+        let Some(blob) = self.blobs.get(hash) else {
+            return RangeOutcome::Status {
+                status: 404,
+                code: None,
+            };
+        };
+        if let Some((drop_hash, windows)) = &self.drop_after
+            && drop_hash == hash
+        {
+            if answered == *windows {
+                return RangeOutcome::Partial { bytes: Vec::new() };
+            }
+            if answered > *windows {
+                return RangeOutcome::Status {
+                    status: 0,
+                    code: None,
+                };
+            }
+        }
+        let len = blob.len() as u64;
+        let end = max_len.map_or(len, |window| (start + window).min(len));
+        RangeOutcome::Complete {
+            bytes: blob[start as usize..end as usize].to_vec(),
+        }
+    }
+}
+
+/// A restore never asks for the open-ended remainder: whatever the class, a window bounds it,
+/// and `adverse` keeps its own smaller one.
+#[test]
+fn a_restore_always_asks_for_bounded_windows() {
+    let mut options = options(Path::new("out"), RestoreScope::Library);
+    assert_eq!(options.window(), RESTORE_RANGE_WINDOW);
+    options.connection = ConnectionClass::Adverse;
+    assert_eq!(
+        options.window(),
+        capsule_sdk::net::ADVERSE_RANGE_WINDOW.min(RESTORE_RANGE_WINDOW)
+    );
+    options.connection = ConnectionClass::Unmetered;
+    options.range_window = 0;
+    assert_eq!(options.window(), 1, "a zero window is never open-ended");
+}
+
+/// The resume property over the production source's semantics: an `unmetered` run whose
+/// connection drops mid-original keeps every whole window that landed, and the next run asks
+/// only for the bytes after them. Time is paused, so the fetcher's backoff after the dropped
+/// body costs nothing.
+#[tokio::test(start_paused = true)]
+async fn an_interrupted_restore_resumes_over_whole_window_responses() {
+    const WINDOW: u64 = 32 * 1024;
+    let fx = fixture("http-resume", 1);
+    let out = Scratch::new("http-resume-out");
+    let asset = fx.assets[0];
+    let original = fx.entries[0].blobs.original.clone().expect("an original");
+    assert!(
+        original.size > 3 * WINDOW,
+        "the original spans several windows"
+    );
+    let mut run_options = options(out.path(), RestoreScope::Library);
+    run_options.range_window = WINDOW;
+
+    let mut dropping = HttpLikeSource::new(fx.blobs.clone());
+    dropping.drop_after = Some((original.ciphertext_hash.clone(), 2));
+    let first = restore_entries(&fx.workspace, &dropping, fx.entries.clone(), &run_options)
+        .await
+        .expect("the run completes");
+    let failed = outcome_of(&first, asset);
+    assert_eq!(failed.status, AssetRestoreStatus::Failed, "{first:#?}");
+    assert_eq!(failed.fetched_bytes, 2 * WINDOW);
+    assert!(
+        dropping
+            .requests_for(&original.ciphertext_hash)
+            .iter()
+            .all(|(_, max_len)| *max_len == Some(WINDOW)),
+        "an unmetered restore still asks for bounded windows"
+    );
+    let part = out
+        .path()
+        .join(STAGING_DIR)
+        .join(format!("{}.part", original.ciphertext_hash));
+    assert_eq!(
+        std::fs::metadata(&part)
+            .expect("the part file is kept")
+            .len(),
+        2 * WINDOW,
+        "every whole window that landed is on disk"
+    );
+
+    let resumed = HttpLikeSource::new(fx.blobs.clone());
+    let second = restore_entries(&fx.workspace, &resumed, fx.entries.clone(), &run_options)
+        .await
+        .expect("the run completes");
+    let restored = outcome_of(&second, asset);
+    assert_eq!(restored.status, AssetRestoreStatus::Restored, "{second:#?}");
+    assert_eq!(
+        resumed
+            .requests_for(&original.ciphertext_hash)
+            .first()
+            .copied(),
+        Some((2 * WINDOW, Some(WINDOW))),
+        "the first request for the original starts where the part file ends"
+    );
+    assert_eq!(restored.resumed_bytes, 2 * WINDOW);
+    assert_eq!(restored.fetched_bytes, original.size - 2 * WINDOW);
+    assert_eq!(
+        restored_bytes(restored),
+        fx.workspace
+            .read_plaintext(&asset)
+            .expect("the library's copy")
+    );
+    assert!(!part.exists(), "a verified blob's part file is removed");
 }
 
 fn outcome_of(summary: &RestoreSummary, asset: Uuid) -> &AssetRestoreOutcome {

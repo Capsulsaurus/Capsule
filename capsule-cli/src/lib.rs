@@ -588,6 +588,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 // As for push: the CLI has no link-quality probe, so it reports the class a
                 // desktop or server run is on.
                 connection: ConnectionClass::Unmetered,
+                range_window: restore::RESTORE_RANGE_WINDOW,
             };
             restore_workspace(&ws, &options, json).await?;
         }
