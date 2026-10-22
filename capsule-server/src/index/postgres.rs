@@ -45,7 +45,8 @@ use sea_orm::{
 use super::{
     AssetIndex, AssetRow, AssetState, BlobOutcome, BlobRecord, BlobRef, BlobReference, Custody,
     FeedEntry, HoldOutcome, IndexFuture, LifecycleOp, OpAction, OpOutcome, PendingAsset,
-    PurgeOutcome, Receipted, Reservation, ServingHold, entry_for, is_singular, set_singular,
+    PurgeOutcome, Receipted, Reservation, RestoreOutcome, ServingHold, entry_for, is_singular,
+    set_singular,
 };
 use crate::attestation;
 use crate::blob::ContentAddress;
@@ -1380,6 +1381,115 @@ impl AssetIndex for PostgresAssetIndex {
                 .try_get("", "next_seq")
                 .map_err(PORT.failing("reading an owner's head sequence number"))?;
             sequence_from(next)
+        })
+    }
+
+    fn sync_epoch<'a>(&'a self, owner: &'a OwnerId) -> IndexFuture<'a, u64> {
+        Box::pin(async move {
+            let found = self
+                .connection
+                .query_one_raw(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "SELECT epoch FROM owner_sync_epochs WHERE owner_id = $1",
+                    [Value::from(owner.as_str().to_owned())],
+                ))
+                .await
+                .map_err(PORT.failing("reading an owner's sync epoch"))?;
+            let Some(found) = found else { return Ok(0) };
+            let epoch: i64 = found
+                .try_get("", "epoch")
+                .map_err(PORT.failing("reading an owner's sync epoch"))?;
+            sequence_from(epoch)
+        })
+    }
+
+    fn bump_sync_epoch<'a>(&'a self, owner: &'a OwnerId) -> IndexFuture<'a, u64> {
+        Box::pin(async move {
+            // One upsert, so two concurrent bumps each move the epoch rather than both writing
+            // the same next value.
+            let bumped = self
+                .connection
+                .query_one_raw(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "INSERT INTO owner_sync_epochs (owner_id, epoch) VALUES ($1, 1) \
+                     ON CONFLICT (owner_id) DO UPDATE SET epoch = owner_sync_epochs.epoch + 1 \
+                     RETURNING epoch",
+                    [Value::from(owner.as_str().to_owned())],
+                ))
+                .await
+                .map_err(PORT.failing("bumping an owner's sync epoch"))?
+                .ok_or_else(|| StoreError::Rejected {
+                    store: PORT.store,
+                    detail: "the sync epoch bump returned no row".to_owned(),
+                })?;
+            let epoch: i64 = bumped
+                .try_get("", "epoch")
+                .map_err(PORT.failing("reading a bumped sync epoch"))?;
+            let epoch = sequence_from(epoch)?;
+            tracing::info!(%owner, epoch, "an owner moved to a new sync epoch");
+            Ok(epoch)
+        })
+    }
+
+    fn restore(&self, row: AssetRow) -> IndexFuture<'_, RestoreOutcome> {
+        Box::pin(async move {
+            let transaction = begin(&self.connection).await?;
+            // `ON CONFLICT DO NOTHING`: a row that exists is compared by the caller, never
+            // overwritten, and the conflict is the check — a read-then-insert would race a
+            // finalization of the same asset.
+            let inserted = transaction
+                .query_one_raw(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    "INSERT INTO assets (asset_id, owner_id, album_id, protocol_version, \
+                     crypto_suite_id, state, amk_version, created_at, updated_at) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+                     ON CONFLICT (asset_id) DO NOTHING RETURNING asset_id",
+                    [
+                        Value::from(row.asset_id.as_str().to_owned()),
+                        Value::from(row.owner_id.as_str().to_owned()),
+                        Value::from(row.album_id.as_str().to_owned()),
+                        Value::from(row.protocol_version.clone()),
+                        Value::from(i32::from(row.crypto_suite_id)),
+                        Value::from(state_token(row.state).to_owned()),
+                        Value::from(row.amk_version as i64),
+                        Value::from(to_micros(row.created_at)),
+                        Value::from(to_micros(row.updated_at)),
+                    ],
+                ))
+                .await
+                .map_err(PORT.failing("restoring an asset row"))?;
+            if inserted.is_none() {
+                let existing = hydrate(&transaction, &row.asset_id).await?;
+                commit(transaction).await?;
+                return existing
+                    .map(|existing| RestoreOutcome::Present(Box::new(existing)))
+                    .ok_or_else(|| StoreError::Rejected {
+                        store: PORT.store,
+                        detail: "an asset id conflicted with a row that could not then be read"
+                            .to_owned(),
+                    });
+            }
+            // The remaining columns and the collections, through the one writer every mutation
+            // here uses.
+            persist(&transaction, &row).await?;
+            if let Some(seq) = row.sync_seq {
+                transaction
+                    .execute_raw(Statement::from_sql_and_values(
+                        DbBackend::Postgres,
+                        "INSERT INTO owner_sequences (owner_id, next_seq) VALUES ($1, $2) \
+                         ON CONFLICT (owner_id) DO UPDATE \
+                         SET next_seq = GREATEST(owner_sequences.next_seq, EXCLUDED.next_seq)",
+                        [
+                            Value::from(row.owner_id.as_str().to_owned()),
+                            Value::from(seq as i64),
+                        ],
+                    ))
+                    .await
+                    .map_err(PORT.failing("raising an owner's allocator past a restored row"))?;
+            }
+            commit(transaction).await?;
+            tracing::debug!(asset = %row.asset_id, sync_seq = ?row.sync_seq, "restored a rebuilt row");
+            Ok(RestoreOutcome::Restored)
         })
     }
 

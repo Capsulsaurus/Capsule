@@ -295,6 +295,7 @@
   "error.storage.invalid_request": "存储验证请求格式不正确。",
   "error.storage.unavailable": "Capsule 无法确认你的照片是否已安全存储，请重试。",
   "error.sync.cursor_invalid": "同步会话已过期。Capsule 将从头重新同步。",
+  "error.sync.cursor_stale": "你的资料库已在服务器上重建。Capsule 将从头重新同步，并保留此设备上的所有内容。",
   "error.sync.unauthenticated": "请重新登录以继续同步。",
   "error.sync.unavailable": "Capsule could not reach the server to sync. It will try again.",
   "error.upload.album_access_denied": "您无权向此相册添加照片。",

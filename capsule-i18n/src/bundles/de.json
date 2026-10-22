@@ -295,6 +295,7 @@
   "error.storage.invalid_request": "Die Anfrage zur Speicherüberprüfung ist fehlerhaft.",
   "error.storage.unavailable": "Capsule konnte nicht prüfen, ob deine Fotos sicher gespeichert sind. Bitte versuche es erneut.",
   "error.sync.cursor_invalid": "Die Synchronisierungssitzung ist veraltet. Capsule synchronisiert von vorne.",
+  "error.sync.cursor_stale": "Deine Mediathek wurde auf dem Server neu aufgebaut. Capsule synchronisiert von vorne und behält alles auf diesem Gerät.",
   "error.sync.unauthenticated": "Bitte melden Sie sich erneut an, um die Synchronisierung fortzusetzen.",
   "error.sync.unavailable": "Capsule could not reach the server to sync. It will try again.",
   "error.upload.album_access_denied": "Sie haben keine Berechtigung, Fotos zu diesem Album hinzuzufügen.",

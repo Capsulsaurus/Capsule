@@ -901,6 +901,21 @@ impl AssetIndex for RacesTheListing {
     ) -> crate::index::IndexFuture<'a, u64> {
         self.inner.album_head_seq(owner, album)
     }
+
+    fn sync_epoch<'a>(&'a self, owner: &'a OwnerId) -> crate::index::IndexFuture<'a, u64> {
+        self.inner.sync_epoch(owner)
+    }
+
+    fn bump_sync_epoch<'a>(&'a self, owner: &'a OwnerId) -> crate::index::IndexFuture<'a, u64> {
+        self.inner.bump_sync_epoch(owner)
+    }
+
+    fn restore(
+        &self,
+        row: crate::index::AssetRow,
+    ) -> crate::index::IndexFuture<'_, crate::index::RestoreOutcome> {
+        self.inner.restore(row)
+    }
 }
 
 #[tokio::test]

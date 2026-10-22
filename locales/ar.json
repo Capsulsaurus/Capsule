@@ -1152,6 +1152,10 @@
     "message": "جلسة المزامنة قديمة. سيعيد Capsule المزامنة من البداية.",
     "context": "Machine-translated seed pending human review."
   },
+  "error.sync.cursor_stale": {
+    "message": "أُعيد بناء مكتبتك على الخادم. سيعيد Capsule المزامنة من البداية ويحتفظ بكل ما على هذا الجهاز.",
+    "context": "Machine-translated seed pending human review."
+  },
   "error.sync.unauthenticated": {
     "message": "يُرجى تسجيل الدخول مرة أخرى لمتابعة المزامنة.",
     "context": "Machine-translated seed pending human review."

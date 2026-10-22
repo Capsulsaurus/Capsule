@@ -8747,6 +8747,10 @@
     "message": "The sync session is out of date. Capsule will resync from the start.",
     "context": "HTTP 400 on GET /v1/sync (threat-model invariant 22): the opaque sync cursor failed its server MAC — forged, mutated, issued to another owner, or minted under a rotated key. The client discards it and resyncs from an empty cursor."
   },
+  "error.sync.cursor_stale": {
+    "message": "Your library was rebuilt on the server. Capsule will resync from the start and keep everything on this device.",
+    "context": "HTTP 409 on GET /v1/sync: the cursor is authentic but was minted before the server rebuilt this library's index and moved it to a new sync epoch. The client drops its high-water mark, resyncs from an empty cursor and discards nothing it holds."
+  },
   "error.sync.unauthenticated": {
     "message": "Please sign in again to continue syncing.",
     "context": "HTTP 401 on the sync feed: the request carried no valid access token. Currently unused — the framework renders the 401 and carries no error code on it (slice S-C36)."

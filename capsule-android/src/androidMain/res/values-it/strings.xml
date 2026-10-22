@@ -287,6 +287,7 @@
     <string name="error_storage_invalid_request">La richiesta di verifica dello spazio di archiviazione è malformata.</string>
     <string name="error_storage_unavailable">Capsule non è riuscito a verificare se le tue foto sono archiviate in sicurezza. Riprova.</string>
     <string name="error_sync_cursor_invalid">La sessione di sincronizzazione non è aggiornata. Capsule risincronizzerà dall\'inizio.</string>
+    <string name="error_sync_cursor_stale">La tua libreria è stata ricostruita sul server. Capsule risincronizzerà dall\'inizio e manterrà tutto ciò che si trova su questo dispositivo.</string>
     <string name="error_sync_unauthenticated">Accedi di nuovo per continuare la sincronizzazione.</string>
     <string name="error_sync_unavailable">Capsule could not reach the server to sync. It will try again.</string>
     <string name="error_upload_album_access_denied">Non hai il permesso di aggiungere foto a questo album.</string>

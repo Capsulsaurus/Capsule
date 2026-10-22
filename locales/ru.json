@@ -1152,6 +1152,10 @@
     "message": "Сеанс синхронизации устарел. Capsule повторно синхронизируется с самого начала.",
     "context": "Machine-translated seed pending human review."
   },
+  "error.sync.cursor_stale": {
+    "message": "Ваша медиатека была перестроена на сервере. Capsule повторно синхронизируется с самого начала и сохранит всё на этом устройстве.",
+    "context": "Machine-translated seed pending human review."
+  },
   "error.sync.unauthenticated": {
     "message": "Войдите снова, чтобы продолжить синхронизацию.",
     "context": "Machine-translated seed pending human review."
