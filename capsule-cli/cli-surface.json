@@ -957,9 +957,77 @@
           "repeatable": false,
           "required": false,
           "takes_value": false
+        },
+        {
+          "help": "The library to re-announce from when the server has rebuilt this library's index: with it, a sync that meets a stale cursor runs `capsule sync reannounce` itself",
+          "id": "library",
+          "long": "library",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": true,
+          "value_names": [
+            "PATH"
+          ]
+        },
+        {
+          "help": "Read the library passphrase from stdin instead of prompting (with `--library`)",
+          "id": "passphrase_stdin",
+          "long": "passphrase-stdin",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": false
         }
       ],
-      "name": "sync"
+      "name": "sync",
+      "subcommands": [
+        {
+          "about": "Give the server back the signed manifests this library holds and its feed no longer lists, after it rebuilt this library's index. Manifests only: no bytes are uploaded",
+          "args": [
+            {
+              "help": "Path to the Capsule library whose manifests are re-announced",
+              "id": "library",
+              "long": "library",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            },
+            {
+              "help": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+              "id": "passphrase_stdin",
+              "long": "passphrase-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Report what would be re-announced without sending anything",
+              "id": "dry_run",
+              "long": "dry-run",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Print the run as one JSON document on stdout: the totals and each asset's answer (restored, already indexed, missing blobs, refused, or planned on a dry run)",
+              "id": "json",
+              "long": "json",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "reannounce"
+        }
+      ]
     },
     {
       "about": "Ask the server whether it durably holds this library's originals, and keep its signed answer as evidence",

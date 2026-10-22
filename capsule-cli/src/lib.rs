@@ -23,6 +23,7 @@ use capsule_core::metadata::FileMetadata;
 use capsule_sdk::net::ConnectionClass;
 use cli::{
     AuthCommands, Cli, Commands, ImportProviderArg, LibraryCommands, RepairCommands, ShareCommands,
+    SyncCommands,
 };
 use colored::*;
 use dialoguer::{Confirm, Input, Password};
@@ -41,6 +42,7 @@ pub mod i18n;
 pub mod import_report;
 pub mod migrate;
 pub mod oidc;
+pub mod reannounce;
 pub mod remote;
 pub mod repair;
 pub mod restore;
@@ -660,7 +662,26 @@ async fn dispatch(cli: Cli) -> Result<()> {
         }
 
         // ── Sync ──────────────────────────────────────────────────────────
-        Commands::Sync { force, dry_run } => sync(dry_run, force).await?,
+        Commands::Sync {
+            command:
+                Some(SyncCommands::Reannounce {
+                    library,
+                    passphrase_stdin,
+                    dry_run,
+                    json,
+                }),
+            ..
+        } => {
+            let ws = open_workspace(&library, passphrase_stdin)?;
+            reannounce_workspace(&ws, dry_run, json).await?;
+        }
+        Commands::Sync {
+            command: None,
+            force,
+            dry_run,
+            library,
+            passphrase_stdin,
+        } => sync(dry_run, force, library.as_deref(), passphrase_stdin).await?,
 
         // ── Status ────────────────────────────────────────────────────────
         Commands::Status => {
@@ -1259,7 +1280,16 @@ async fn auth_logout() -> Result<()> {
 }
 
 /// `capsule sync`: drain the feed over the SDK into the local store.
-async fn sync(dry_run: bool, from_start: bool) -> Result<()> {
+///
+/// When the server answers with a stale cursor, the drain starts over from zero (#697), and
+/// what the library holds that the server lost is re-announced (#781): by this run when
+/// `library` names the library, and otherwise by the `capsule sync reannounce` it names.
+async fn sync(
+    dry_run: bool,
+    from_start: bool,
+    library: Option<&Path>,
+    passphrase_stdin: bool,
+) -> Result<()> {
     let remote = remote::RemoteConfig::from_env();
     let store = session_store()?;
     let db = db::init_sqlite()
@@ -1297,7 +1327,28 @@ async fn sync(dry_run: bool, from_start: bool) -> Result<()> {
                     .green()
                 );
             }
-            Ok(())
+            if !summary.resynced {
+                return Ok(());
+            }
+            println!(
+                "{}",
+                "The server rebuilt this library's index; resynced from the start.".yellow()
+            );
+            match library {
+                Some(library) => {
+                    let ws = open_workspace(library, passphrase_stdin)?;
+                    reannounce_workspace(&ws, dry_run, false).await
+                }
+                None => {
+                    println!(
+                        "{}",
+                        "Run `capsule sync reannounce --library PATH` to give it back what this \
+                         library holds."
+                            .yellow()
+                    );
+                    Ok(())
+                }
+            }
         }
         Err(remote::RemoteError::NotAuthenticated) => Err(eyre!(NOT_AUTHENTICATED)),
         Err(error) => Err(eyre!("Sync failed: {}", describe_remote_error(&error))),
@@ -1356,6 +1407,84 @@ fn push_options(dry_run: bool, force: bool, staged: bool) -> remote::PushOptions
         },
         connection: ConnectionClass::Unmetered,
     }
+}
+
+/// `capsule sync reannounce`: re-announce what `workspace` holds and the server's feed does not
+/// list, and report each answer; `json` prints the run as one document on stdout.
+///
+/// A refused or missing-blobs answer is a result, not a failure: the run exits non-zero only
+/// when it could not complete (no session, the feed unreadable, a batch refused whole).
+async fn reannounce_workspace(workspace: &Workspace, dry_run: bool, json: bool) -> Result<()> {
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let run_error = |error: &remote::RemoteError| {
+        if matches!(error, remote::RemoteError::NotAuthenticated) {
+            return eyre!(NOT_AUTHENTICATED);
+        }
+        eyre!("Re-announce failed: {}", describe_remote_error(error))
+    };
+
+    if json {
+        let summary = remote::reannounce(&remote, &store, workspace, dry_run)
+            .await
+            .map_err(|error| run_error(&error))?;
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+        return Ok(());
+    }
+
+    println!(
+        "{}",
+        format!(
+            "Re-announcing this library's manifests to {}…",
+            remote.sync_endpoint
+        )
+        .green()
+    );
+    let summary = remote::reannounce(&remote, &store, workspace, dry_run)
+        .await
+        .map_err(|error| run_error(&error))?;
+    if summary.dry_run {
+        println!(
+            "{}",
+            format!(
+                "Dry run: would re-announce {} of {} asset(s).",
+                summary.reannounced, summary.held
+            )
+            .cyan()
+        );
+        return Ok(());
+    }
+    if summary.reannounced == 0 {
+        println!(
+            "{}",
+            "The server lists everything this library holds.".cyan()
+        );
+        return Ok(());
+    }
+    println!(
+        "{}",
+        format!(
+            "Re-announced {} asset(s): {} restored, {} already on the server, {} missing blobs, {} refused.",
+            summary.reannounced,
+            summary.restored,
+            summary.already_indexed,
+            summary.missing_blobs,
+            summary.refused
+        )
+        .green()
+    );
+    if summary.missing_blobs > 0 {
+        println!(
+            "{}",
+            "Run `capsule push` to upload what the server no longer holds.".yellow()
+        );
+    }
+    for line in &summary.assets {
+        if let Some(code) = &line.code {
+            println!("  {}: {}", line.asset_id, error_message(code).red());
+        }
+    }
+    Ok(())
 }
 
 /// `capsule push`: upload every managed asset of `workspace` over the SDK.

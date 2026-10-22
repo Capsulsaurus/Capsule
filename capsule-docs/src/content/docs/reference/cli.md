@@ -31,10 +31,11 @@ A `capsule` invocation reads at most two pieces of durable state, and it helps t
   user's configuration directory. Every networked command reads it, and `capsule reset` removes
   it.
 
-Six commands unseal a library, and all six take its passphrase: `capsule import`,
-`capsule push`, `capsule restore`, `capsule cull`, `capsule show`, and
-`capsule repair capture-time`. Each accepts `--passphrase-stdin` as well as prompting, so each
-runs unattended. The
+Seven commands unseal a library, and all seven take its passphrase: `capsule import`,
+`capsule push`, `capsule restore`, `capsule cull`, `capsule show`,
+`capsule repair capture-time`, and `capsule sync reannounce` (which `capsule sync --library`
+runs itself when the server has rebuilt the library's index). Each accepts `--passphrase-stdin`
+as well as prompting, so each runs unattended. The
 `capsule library` subcommands are not among them — `info` and `rebuild` read the version
 file, the sidecars, and the index, none of which is sealed, so they need no passphrase and
 offer no flag for one.

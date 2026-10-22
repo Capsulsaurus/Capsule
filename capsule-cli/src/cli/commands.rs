@@ -225,7 +225,10 @@ pub(crate) enum Commands {
         image: Option<PathBuf>,
     },
     /// Sync local and remote data
+    #[command(args_conflicts_with_subcommands = true)]
     Sync {
+        #[command(subcommand)]
+        command: Option<SyncCommands>,
         /// Discard the saved cursor and re-drain the feed from the start. The per-album
         /// anti-rewind floor still applies, so this cannot resurrect stale entries.
         #[arg(long)]
@@ -233,6 +236,13 @@ pub(crate) enum Commands {
         /// Perform a dry run without making changes
         #[arg(long)]
         dry_run: bool,
+        /// The library to re-announce from when the server has rebuilt this library's index:
+        /// with it, a sync that meets a stale cursor runs `capsule sync reannounce` itself
+        #[arg(long, value_name = "PATH")]
+        library: Option<PathBuf>,
+        /// Read the library passphrase from stdin instead of prompting (with `--library`)
+        #[arg(long, requires = "library")]
+        passphrase_stdin: bool,
     },
     /// Show current status
     Status,
@@ -261,6 +271,28 @@ pub(crate) enum Commands {
         /// Reset all data
         #[arg(long)]
         all: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum SyncCommands {
+    /// Give the server back the signed manifests this library holds and its feed no longer
+    /// lists, after it rebuilt this library's index. Manifests only: no bytes are uploaded
+    Reannounce {
+        /// Path to the Capsule library whose manifests are re-announced
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// Read the library passphrase from stdin instead of prompting, so the command
+        /// works in scripts and CI where there is no terminal.
+        #[arg(long)]
+        passphrase_stdin: bool,
+        /// Report what would be re-announced without sending anything
+        #[arg(long)]
+        dry_run: bool,
+        /// Print the run as one JSON document on stdout: the totals and each asset's answer
+        /// (restored, already indexed, missing blobs, refused, or planned on a dry run)
+        #[arg(long)]
+        json: bool,
     },
 }
 
