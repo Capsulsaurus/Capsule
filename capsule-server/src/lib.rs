@@ -230,10 +230,20 @@ pub fn router() -> ServerRouter {
                 .intercept(negotiation::ProtocolGate::new())
                 .mount(kynos::routes![
                     routes::upload::create_upload,
-                    routes::upload::append_chunk,
                     routes::ops::apply_op,
                     routes::share::issue_share,
                 ]),
+        )
+        // The album chunk route, alone so the length-less chunk deadline covers it and nothing
+        // else (#717). Mounted **outside** the body-size cap, which would otherwise read a
+        // length-less body whole with no clock before the chunk extractor's deadline could start.
+        // See [`upload::body`].
+        .group(
+            Group::<App>::new("/")
+                .intercept(upload::body::LengthlessChunkDeadline::new())
+                .intercept(limits::body_size())
+                .intercept(negotiation::ProtocolGate::new())
+                .mount(kynos::routes![routes::upload::append_chunk]),
         )
         // Federation's lifecycle: minting, revoking and refreshing the capability a peer pulls
         // with, and the signed report intake. The pull itself is `sync_feed` and `get_blob` in
@@ -318,10 +328,14 @@ pub fn router() -> ServerRouter {
         .group(
             Group::<App>::new("/")
                 .intercept(limits::body_size())
-                .mount(kynos::routes![
-                    routes::drop::create_drop,
-                    routes::drop::append_drop_chunk,
-                ]),
+                .mount(kynos::routes![routes::drop::create_drop]),
+        )
+        // The guest's chunk route, alone for the album chunk route's reason (#717).
+        .group(
+            Group::<App>::new("/")
+                .intercept(upload::body::LengthlessChunkDeadline::new())
+                .intercept(limits::body_size())
+                .mount(kynos::routes![routes::drop::append_drop_chunk]),
         )
 }
 

@@ -59,3 +59,17 @@ fn the_body_rejections_keep_their_codes_through_the_conversion() {
         ChunkBodyRejection::Unreadable { code } if code == error_codes::UPLOAD_MALFORMED_REQUEST
     ));
 }
+
+#[tokio::test]
+async fn a_length_less_body_within_the_cap_is_read_whole() {
+    let bytes = read_past(Body::from_bytes(Bytes::from_static(b"ciphertext")), 64).await;
+    assert_eq!(&bytes[..], b"ciphertext");
+}
+
+#[tokio::test]
+async fn a_length_less_body_past_the_cap_is_left_past_it_for_the_cap_to_refuse() {
+    // Stopped on the frame that crossed the limit, not truncated to it: the body-size cap
+    // inside must still see more than its limit to answer its own `413`.
+    let bytes = read_past(Body::from_bytes(Bytes::from_static(b"ciphertext")), 4).await;
+    assert!(bytes.len() > 4);
+}
