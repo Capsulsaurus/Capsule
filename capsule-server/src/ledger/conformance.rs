@@ -333,6 +333,32 @@ pub async fn a_torn_tail_is_reported_and_cut_by_the_next_append(harness: &dyn Ha
     assert_eq!(report.verified, 3);
 }
 
+/// Zeroes where a crashed append's frame was being written are a torn tail, not damage: the
+/// next append cuts them and lands, rather than wedging the owner.
+pub async fn a_zero_filled_tail_is_cut_by_the_next_append(harness: &dyn Harness) {
+    let signer = key();
+    let owner = owner("zero-filled", "a");
+    fill(harness, &owner, &signer, 2).await;
+    let mut raw = ok(harness.raw(&owner).await, "read raw");
+    raw.extend_from_slice(&[0; 512]);
+    ok(harness.replace_raw(&owner, raw).await, "crash");
+
+    let report = verify(harness, &owner, &signer, None).await;
+    assert_eq!(report.fault, Some(ChainFault::TornTail { entries: 2 }));
+
+    let next = ok(
+        harness
+            .ledger()
+            .append(&owner, custody(9), Timestamp::UNIX_EPOCH, &signer)
+            .await,
+        "append after a zero-filled crash",
+    );
+    assert_eq!(next.core.seq, 3);
+    let report = verify(harness, &owner, &signer, None).await;
+    assert_eq!(report.fault, None);
+    assert_eq!(report.verified, 3);
+}
+
 /// A tail cut exactly at an entry boundary verifies as a shorter chain, and an anchor catches it.
 pub async fn a_tail_cut_at_a_boundary_is_caught_by_an_anchor(harness: &dyn Harness) {
     let signer = key();
@@ -426,6 +452,7 @@ pub async fn run_all(harness: &dyn Harness) {
     a_removed_entry_is_detected(harness).await;
     a_dropped_head_is_detected(harness).await;
     a_torn_tail_is_reported_and_cut_by_the_next_append(harness).await;
+    a_zero_filled_tail_is_cut_by_the_next_append(harness).await;
     a_tail_cut_at_a_boundary_is_caught_by_an_anchor(harness).await;
     an_unpublished_key_is_detected(harness).await;
     a_damaged_ledger_refuses_appends(harness).await;

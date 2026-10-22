@@ -136,6 +136,7 @@ conformance_cases! {
     a_removed_entry_is_detected,
     a_dropped_head_is_detected,
     a_torn_tail_is_reported_and_cut_by_the_next_append,
+    a_zero_filled_tail_is_cut_by_the_next_append,
     a_tail_cut_at_a_boundary_is_caught_by_an_anchor,
     an_unpublished_key_is_detected,
     a_damaged_ledger_refuses_appends,
@@ -241,11 +242,26 @@ async fn a_torn_frame_in_an_earlier_segment_is_a_hole_not_a_tail() {
 
 #[test]
 fn an_oversized_or_non_canonical_frame_is_not_an_entry() {
+    let signer = key();
+    let valid = encode_frame(&sign_entry(
+        &OwnerId::new("frame"),
+        None,
+        event(1),
+        Timestamp::UNIX_EPOCH,
+        &signer,
+    ));
+
     let mut oversized = (MAX_FRAME_BYTES + 1).to_be_bytes().to_vec();
     oversized.extend_from_slice(&[0; 8]);
     assert_eq!(
         decode_frames(&oversized).damage,
-        Some(ChainFault::Undecodable { entries: 0 })
+        Some(ChainFault::TornTail { entries: 0 }),
+        "bad bytes with no entry after them were never acknowledged"
+    );
+    assert_eq!(
+        decode_frames(&[oversized.as_slice(), &valid].concat()).damage,
+        Some(ChainFault::Undecodable { entries: 0 }),
+        "bad bytes an entry follows are a hole in the chain"
     );
 
     // A whole frame of bytes that are CBOR but not an entry.
@@ -257,8 +273,18 @@ fn an_oversized_or_non_canonical_frame_is_not_an_entry() {
     frame.extend_from_slice(&body);
     assert_eq!(
         decode_frames(&frame).damage,
+        Some(ChainFault::TornTail { entries: 0 })
+    );
+    assert_eq!(
+        decode_frames(&[frame.as_slice(), &valid].concat()).damage,
         Some(ChainFault::Undecodable { entries: 0 })
     );
+
+    // A crash that extended the file without writing the frame: zeroes after a whole entry.
+    let zero_filled = [valid.as_slice(), &[0; 300]].concat();
+    let decoded = decode_frames(&zero_filled);
+    assert_eq!(decoded.damage, Some(ChainFault::TornTail { entries: 1 }));
+    assert_eq!(decoded.whole_len, valid.len());
 
     assert_eq!(
         decode_frames(&[0, 0]).damage,

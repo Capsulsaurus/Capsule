@@ -25,6 +25,17 @@
 //!    which rebuild handles exactly like a lost tail: it replays the custody entry, and cannot
 //!    prove the sequence number, so it bumps the owner's sync epoch.
 //!
+//! A write the index **refuses** after the custody entry is durable — a role already holding
+//! another blob, a replace whose bundle is incomplete or whose chain is stale, an asset that is
+//! gone — gets a third entry instead of the second: [`LedgerEvent::Refused`], naming the upload.
+//! Without it a refusal would look exactly like the crash case, and a rebuild would replay a
+//! write the server refused. So a custody entry is resolved by an `indexed` or a `refused`
+//! entry for its upload, and only an **unresolved** one is replayed. The `refused` append is
+//! best-effort, as the `indexed` one is; if it is lost, the replay re-runs the same checks the
+//! index ran and refuses the write again, so the entry is the record rather than the safeguard.
+//! A write the index could not *answer* (an outage, where whether it committed is unknown) gets
+//! no entry: it is the crash case, and is replayed as one.
+//!
 //! [`LedgerEvent::Directory`] and [`LedgerEvent::Lifecycle`] are the other two entry kinds the
 //! design names; they are part of the signed shape now so the format does not change when their
 //! producers are wired.
@@ -38,8 +49,11 @@
 //! owner field), a dropped *head* (the first entry must open the chain) and a torn tail (a
 //! frame that does not decode). The one thing a chain cannot see on its own is a tail cut
 //! exactly at an entry boundary: what is left is a valid shorter chain. That is detected
-//! against an **anchor** — a head known from elsewhere, such as the highest entry an index row
-//! or a receipt names — which is why [`verify_chain`] takes one.
+//! against an **anchor** — a head recorded outside the ledger — which is why [`verify_chain`]
+//! takes one. No store records one yet: neither an index row nor a receipt carries a ledger
+//! position or hash, and recording the head is #757's. Until then the weaker check available
+//! is the index's own: an owner row whose `sync_seq` is above every [`LedgerEvent::Indexed`]
+//! entry's means the ledger lost a tail, or the append after that write failed.
 //!
 //! # The byte format
 //!
@@ -52,12 +66,13 @@
 //! # Never rewritten, with one exception
 //!
 //! There is no operation that replaces or removes an entry. The only bytes an adapter ever cuts
-//! are a **torn tail**: an incomplete final frame left by a crash or a failed write in the
-//! middle of an append. Such bytes were never acknowledged — an append is durable before it
-//! returns — so they were never an entry, and cutting them is what lets the next append land
-//! rather than wedging the owner. A complete frame is never cut, whatever it decodes to; a
-//! ledger damaged anywhere but its tail refuses further appends ([`LedgerError::Damaged`]) and
-//! is left for an operator.
+//! are a **torn tail**: whatever follows the last whole entry when no complete entry starts
+//! anywhere after it — a short frame, or the zeroes or stale blocks a crash can leave where an
+//! append's frame was being written. Such bytes were never acknowledged — an append is durable
+//! before it returns, and only one append per owner is in flight — so they were never an entry,
+//! and cutting them is what lets the next append land rather than wedging the owner. Damage
+//! followed by a complete entry is a hole in an acknowledged chain: that ledger refuses further
+//! appends ([`LedgerError::Damaged`]) and is left for an operator.
 //!
 //! [Server Filesystem § The Owner Ledger]: https://github.com/Capsulsaurus/Capsule/blob/master/capsule-docs/src/content/docs/design/filesystem/server.md#the-owner-ledger
 
@@ -183,6 +198,18 @@ pub enum LedgerEvent {
         receipt: Option<Box<CustodyReceipt>>,
     },
 
+    /// The index refused a write whose custody entry is already durable.
+    ///
+    /// Resolves that custody entry, so a rebuild does not replay a write the server refused.
+    Refused {
+        /// The session the custody entry named.
+        upload_id: String,
+        /// The asset the write was for.
+        asset_id: String,
+        /// Why, in English, for an operator.
+        reason: String,
+    },
+
     /// A device-directory version the server accepted.
     ///
     /// Recorded so a rebuild verifies each manifest against the directory as it stood when the
@@ -217,6 +244,7 @@ impl LedgerEvent {
         match self {
             Self::Custody { .. } => "custody",
             Self::Indexed { .. } => "indexed",
+            Self::Refused { .. } => "refused",
             Self::Directory { .. } => "directory",
             Self::Lifecycle { .. } => "lifecycle",
         }
@@ -483,30 +511,16 @@ pub(crate) fn decode_frames(bytes: &[u8]) -> Decoded {
         };
         let len = u32::from_be_bytes([prefix[0], prefix[1], prefix[2], prefix[3]]);
         if len > MAX_FRAME_BYTES {
-            let count = entries.len();
-            return Decoded {
-                entries,
-                whole_len: at,
-                damage: Some(ChainFault::Undecodable { entries: count }),
-            };
+            return damaged(entries, bytes, at);
         }
         let start = at + 4;
         let Some(body) = bytes.get(start..start + len as usize) else {
             return torn(entries, at);
         };
-        match capsule_core::cbor::from_slice::<LedgerEntry>(body) {
-            // Canonical bytes only: an entry that decodes but re-encodes differently was not
-            // written by this server, and its hash would not be the one its successor names.
-            Ok(entry) if entry.to_canonical_cbor() == body => entries.push(entry),
-            _ => {
-                let count = entries.len();
-                return Decoded {
-                    entries,
-                    whole_len: at,
-                    damage: Some(ChainFault::Undecodable { entries: count }),
-                };
-            }
-        }
+        let Some(entry) = entry_in(body) else {
+            return damaged(entries, bytes, at);
+        };
+        entries.push(entry);
         at = start + len as usize;
     }
     Decoded {
@@ -514,6 +528,55 @@ pub(crate) fn decode_frames(bytes: &[u8]) -> Decoded {
         whole_len: at,
         damage: None,
     }
+}
+
+/// The entry `body` holds, if it is the canonical encoding of one.
+///
+/// Canonical bytes only: an entry that decodes but re-encodes differently was not written by
+/// this server, and its hash would not be the one its successor names.
+fn entry_in(body: &[u8]) -> Option<LedgerEntry> {
+    capsule_core::cbor::from_slice::<LedgerEntry>(body)
+        .ok()
+        .filter(|entry| entry.to_canonical_cbor() == body)
+}
+
+/// A read that met bytes at `at` that are not an entry.
+///
+/// A **torn tail** when nothing from `at` to the end holds a complete entry: a crash mid-append
+/// can leave a frame's worth of zeroes or stale blocks rather than a short file, and those bytes
+/// were never acknowledged any more than a short frame was. Anything else is a hole in the
+/// middle of the chain — an acknowledged entry follows the damage, so cutting it would lose one.
+fn damaged(entries: Vec<LedgerEntry>, bytes: &[u8], at: usize) -> Decoded {
+    if holds_an_entry(&bytes[at..]) {
+        let count = entries.len();
+        return Decoded {
+            entries,
+            whole_len: at,
+            damage: Some(ChainFault::Undecodable { entries: count }),
+        };
+    }
+    torn(entries, at)
+}
+
+/// Whether any offset of `region` begins a complete frame holding an entry.
+///
+/// Every offset, not frame boundaries: the damage may have destroyed the length prefix the
+/// boundaries were derived from. Run only on a damaged ledger, and a length prefix that does
+/// not fit the region is rejected before anything is decoded, so zero-filled bytes cost a pass.
+fn holds_an_entry(region: &[u8]) -> bool {
+    (0..region.len()).any(|offset| {
+        let Some(prefix) = region.get(offset..offset + 4) else {
+            return false;
+        };
+        let len = u32::from_be_bytes([prefix[0], prefix[1], prefix[2], prefix[3]]);
+        if len == 0 || len > MAX_FRAME_BYTES {
+            return false;
+        }
+        region
+            .get(offset + 4..offset + 4 + len as usize)
+            .and_then(entry_in)
+            .is_some()
+    })
 }
 
 /// A read that ended inside a frame.

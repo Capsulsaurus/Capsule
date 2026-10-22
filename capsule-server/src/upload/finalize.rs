@@ -20,7 +20,8 @@
 //!    (`S-C37`) — and the custody receipt, the server's signed admission of what it accepted
 //!    (`S-C15`), is signed and logged with it.
 //! 7. **Ledger the index write**: a [`LedgerEvent::Indexed`] entry carries the sequence number
-//!    and the receipt step 6 minted.
+//!    and the receipt step 6 minted — or, when the index refused the write, a
+//!    [`LedgerEvent::Refused`] entry resolves the custody entry so a rebuild does not replay it.
 //! 8. **Complete**, or fail the session and drop the staged bytes.
 //!
 //! # Why the ledger brackets the index
@@ -286,7 +287,7 @@ async fn run_claimed(
 
     // 6. Record and receipt: the durable half and the signed half, in one transaction. Nothing
     //    before this point is observable to another device.
-    let (minted, receipt) = record_against_asset(
+    let (minted, receipt) = match record_against_asset(
         context,
         attestation,
         &draft,
@@ -294,12 +295,65 @@ async fn run_claimed(
         &address,
         manifest_sha256,
     )
-    .await?;
+    .await
+    {
+        Ok(written) => written,
+        Err(failure) => {
+            // 7, refused: resolve the custody entry, so a rebuild does not replay a write the
+            // server refused. An outage is not a refusal — whether it committed is unknown — and
+            // is left unresolved, which is the crash case.
+            if !matches!(failure, FinalizeFailure::Unavailable(_)) {
+                ledger_refused(context, attestation, record, &failure).await;
+            }
+            return Err(failure);
+        }
+    };
 
     // 7. What the transaction minted, for the rebuild that has to reproduce it.
     ledger_indexed(context, attestation, record, minted, receipt).await;
 
     Ok((placement, minted))
+}
+
+/// Step 7 for a write the index refused: append a `refused` entry naming the upload.
+///
+/// Best-effort, as [`ledger_indexed`] is: the finalization has already failed, and a replay of
+/// an unresolved custody entry re-runs the checks that refused it.
+async fn ledger_refused(
+    context: &UploadContext,
+    attestation: &crate::attestation::AttestationContext,
+    record: &UploadSessionRecord,
+    failure: &FinalizeFailure,
+) {
+    let event = LedgerEvent::Refused {
+        upload_id: record.upload_id.as_str().to_owned(),
+        asset_id: record.asset_id.as_str().to_owned(),
+        reason: failure.to_string(),
+    };
+    match attestation
+        .ledger()
+        .append(
+            &record.owner_id,
+            event,
+            context.clock().now(),
+            attestation.signer(),
+        )
+        .await
+    {
+        Ok(entry) => tracing::debug!(
+            owner = %record.owner_id,
+            upload = %record.upload_id,
+            ledger_seq = entry.core.seq,
+            "ledgered a refused write"
+        ),
+        Err(error) => tracing::error!(
+            %error,
+            owner = %record.owner_id,
+            upload = %record.upload_id,
+            "the owner ledger could not record a refused write; \
+             a rebuild will re-run the checks that refused it"
+        ),
+    }
 }
 
 /// Step 5: append the custody entry and wait for it to be durable.
