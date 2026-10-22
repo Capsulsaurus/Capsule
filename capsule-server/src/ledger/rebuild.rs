@@ -2,8 +2,14 @@
 //!
 //! [Server Filesystem § Rebuild] is the contract. Per owner:
 //!
-//! 1. Verify the ledger chain ([`LedgerKeys::verify`]). A break stops that owner's replay at
-//!    the last good entry and is reported; other owners continue.
+//! 1. Verify the ledger chain ([`LedgerKeys::verify`]) against the head the index recorded
+//!    ([`AssetIndex::ledger_head`]), so a tail cut at an entry boundary is a break too. A break
+//!    stops that owner's replay at the last good entry and is reported; other owners continue.
+//!    The owners walked are those with a ledger and those the index anchored, so an owner whose
+//!    ledger lost every entry is reported too. Under `--apply` the recorded head is then raised
+//!    to the verified one, or, after a cut (or a rewrite the operator accepted with
+//!    [`RebuildContext::accepting_rewrites`]), moved down to it ([`super`]'s "Where the anchor
+//!    lives").
 //! 2. Replay the verified entries in ledger order: each custody entry the index did not refuse
 //!    (an upload or a drop adoption) and each lifecycle op (a delete, a restore, a metadata
 //!    update, a derivative, a retention purge). Read each named blob's presence, decode each
@@ -101,6 +107,8 @@ pub struct RebuildContext {
     quotas: Arc<dyn QuotaStore>,
     keys: LedgerKeys,
     clock: Arc<dyn Clock>,
+    /// Whether `--apply` also re-anchors an owner whose ledger the anchor caught rewritten.
+    accept_rewrites: bool,
 }
 
 impl RebuildContext {
@@ -120,7 +128,22 @@ impl RebuildContext {
             quotas,
             keys,
             clock,
+            accept_rewrites: false,
         }
+    }
+
+    /// Under [`Mode::Apply`], also re-anchor an owner whose ledger holds another entry at its
+    /// anchored position ([`ChainFault::AnchorMismatch`]), accepting the ledger as it stands.
+    ///
+    /// The operator's way out of a caught rewrite (`rebuild --apply --accept-rewrites`). Never
+    /// the default: the mismatch is the only evidence of the rewrite, so it is kept until an
+    /// operator who has read the report says otherwise. The pass still reports the mismatch,
+    /// stops that owner's replay before it and moves the owner's epoch; only the anchor moves,
+    /// which lets the server append again and the next pass verify the ledger as it now is.
+    #[must_use]
+    pub fn accepting_rewrites(mut self) -> Self {
+        self.accept_rewrites = true;
+        self
     }
 }
 
@@ -169,6 +192,10 @@ pub struct OwnerReport {
     pub epoch_bump_needed: bool,
     /// The epoch the owner moved to, under `--apply`.
     pub epoch: Option<u64>,
+    /// The position the owner's ledger was re-anchored at after a reported cut or an accepted
+    /// rewrite, under `--apply`: `Some(0)` when nothing of the ledger is left. `None` when the
+    /// anchor was only raised, or left alone.
+    pub reanchored: Option<u64>,
 }
 
 impl OwnerReport {
@@ -220,7 +247,11 @@ pub async fn rebuild(context: &RebuildContext, mode: Mode) -> Result<RebuildRepo
     };
     let mut named: BTreeSet<ContentAddress> = BTreeSet::new();
 
-    for owner in context.ledger.owners().await? {
+    let owners = super::owners_to_verify(
+        context.ledger.owners().await?,
+        context.index.anchored_owners().await?,
+    );
+    for owner in owners {
         let owner_report = rebuild_owner(context, mode, &owner, &mut named).await?;
         tracing::info!(
             %owner,
@@ -305,7 +336,16 @@ async fn rebuild_owner(
     named: &mut BTreeSet<ContentAddress>,
 ) -> Result<OwnerReport, RebuildError> {
     let scan = context.ledger.scan(owner).await?;
-    let chain = context.keys.verify(owner, &scan);
+    let anchor = context.index.ledger_head(owner).await?;
+    let chain = context.keys.verify(owner, &scan, anchor);
+    // A reported cut is re-anchored under `--apply`; a caught rewrite only when the operator
+    // accepted it.
+    let lower = match chain.fault {
+        Some(ChainFault::BehindAnchor { .. }) => true,
+        Some(ChainFault::AnchorMismatch { .. }) => context.accept_rewrites,
+        _ => false,
+    };
+    let verified_head = chain.head;
     let mut report = OwnerReport {
         owner: owner.clone(),
         verified: chain.verified,
@@ -321,6 +361,7 @@ async fn rebuild_owner(
         unusable_manifests: Vec::new(),
         foreign_manifests: Vec::new(),
         epoch: None,
+        reanchored: None,
     };
 
     // Ledger order, uploads and lifecycle ops interleaved as the server accepted them, and
@@ -399,7 +440,36 @@ async fn rebuild_owner(
     if mode == Mode::Apply && report.epoch_bump_needed {
         report.epoch = Some(context.index.bump_sync_epoch(owner).await?);
     }
+    if mode == Mode::Apply {
+        reanchor(context, owner, lower, verified_head).await?;
+        if lower {
+            report.reanchored = Some(verified_head.map_or(0, |head| head.seq));
+        }
+    }
     Ok(report)
+}
+
+/// Bring `owner`'s recorded ledger head in line with what this pass verified.
+///
+/// With `lower` — a cut the pass reported (the ledger ends below its anchor), or a rewrite the
+/// operator accepted ([`RebuildContext::accepting_rewrites`]), each acknowledged by the epoch
+/// bump just made — the anchor is moved **down** to the head that verified (cleared when none
+/// did): until then the server refuses to extend that owner's ledger
+/// ([`super::AnchoredLedger`]), and every pass would report the same fault. Otherwise it is only
+/// **raised**, so a rebuild into an empty schema anchors the chain it verified, and a rewrite
+/// nobody accepted keeps its evidence.
+async fn reanchor(
+    context: &RebuildContext,
+    owner: &OwnerId,
+    lower: bool,
+    verified: Option<super::LedgerHead>,
+) -> Result<(), RebuildError> {
+    if lower {
+        context.index.reset_ledger_head(owner, verified).await?;
+    } else if let Some(head) = verified {
+        context.index.record_ledger_head(owner, head).await?;
+    }
+    Ok(())
 }
 
 /// Fold one custody entry into its asset's facts.

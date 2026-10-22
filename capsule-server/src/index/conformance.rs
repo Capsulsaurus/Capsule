@@ -39,6 +39,7 @@ use super::{
 use crate::attestation::{ReceiptDraft, ReceiptLog, ReceiptSigner};
 use crate::blob::ContentAddress;
 use crate::blob::address::CONTENT_ADDRESS_LEN;
+use crate::ledger::LedgerHead;
 use crate::store::{AlbumId, AssetId, BlobRole, OwnerId, UploadId};
 
 /// Unwrap an index result, failing with the operation that was expected to work.
@@ -2460,6 +2461,71 @@ pub async fn a_sync_epoch_starts_at_zero_and_only_rises(index: &dyn AssetIndex) 
     );
 }
 
+/// An owner's ledger head is absent until recorded, only rises, keeps the first hash at a
+/// position, and moves down or clears only by a reset (#757).
+pub async fn a_ledger_head_only_rises_until_it_is_reset(index: &dyn AssetIndex) {
+    let owner = OwnerId::new("ledger-head-owner");
+    let other = OwnerId::new("ledger-head-other-owner");
+    let head = |seq: u64, tag: &[u8]| LedgerHead {
+        seq,
+        hash: capsule_core::crypto::hash::hash_bytes(tag),
+    };
+    let read = |owner| async move { ok(index.ledger_head(owner).await, "read a ledger head") };
+
+    assert_eq!(read(&owner).await, None);
+    ok(
+        index.record_ledger_head(&owner, head(2, b"two")).await,
+        "record a head",
+    );
+    assert_eq!(read(&owner).await, Some(head(2, b"two")));
+
+    // A late, lower record does not pull the anchor back below an entry the ledger holds.
+    ok(
+        index.record_ledger_head(&owner, head(1, b"one")).await,
+        "record a lower head",
+    );
+    assert_eq!(read(&owner).await, Some(head(2, b"two")));
+    // A second claim to the recorded position does not replace its hash.
+    ok(
+        index.record_ledger_head(&owner, head(2, b"rival")).await,
+        "record a rival head",
+    );
+    assert_eq!(read(&owner).await, Some(head(2, b"two")));
+    ok(
+        index.record_ledger_head(&owner, head(5, b"five")).await,
+        "record a higher head",
+    );
+    assert_eq!(read(&owner).await, Some(head(5, b"five")));
+    assert_eq!(read(&other).await, None, "one owner's head moved another's");
+    let listed = ok(index.anchored_owners().await, "list the anchored owners");
+    assert!(listed.contains(&owner), "an anchored owner is not listed");
+    assert!(!listed.contains(&other), "an owner with no head is listed");
+    assert!(
+        listed.windows(2).all(|pair| pair[0] < pair[1]),
+        "anchored owners are not in ascending order: {listed:?}"
+    );
+
+    // A reset is the one write that lowers it, and `None` clears it.
+    ok(
+        index
+            .reset_ledger_head(&owner, Some(head(3, b"three")))
+            .await,
+        "reset a head",
+    );
+    assert_eq!(read(&owner).await, Some(head(3, b"three")));
+    ok(index.reset_ledger_head(&owner, None).await, "clear a head");
+    assert_eq!(read(&owner).await, None);
+    assert!(
+        !ok(index.anchored_owners().await, "list the anchored owners").contains(&owner),
+        "a cleared owner is still listed"
+    );
+    ok(
+        index.reset_ledger_head(&other, None).await,
+        "clear an absent head",
+    );
+    assert_eq!(read(&other).await, None);
+}
+
 /// The row a rebuild reconstructs for `case`'s asset `n`, published at `sync_seq`.
 fn rebuilt(case: &str, n: u32, sync_seq: u64) -> AssetRow {
     let pending = pending(case, n);
@@ -2610,6 +2676,7 @@ pub async fn run_all(index: &dyn AssetIndex) {
     the_row_walk_covers_every_state_and_resumes(index).await;
     the_row_walk_orders_by_the_identifiers_own_bytes(index).await;
     a_sync_epoch_starts_at_zero_and_only_rises(index).await;
+    a_ledger_head_only_rises_until_it_is_reset(index).await;
     a_restored_row_keeps_its_number_and_the_allocator_moves_past_it(index).await;
     a_restored_row_without_a_number_takes_the_allocators_next(index).await;
     restoring_over_an_existing_row_overwrites_nothing(index).await;
