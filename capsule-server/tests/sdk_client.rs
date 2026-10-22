@@ -245,6 +245,160 @@ async fn after_an_epoch_bump_the_sdk_sees_a_stale_cursor_and_resyncs_from_zero()
     assert_eq!(page.entries[0].manifest_cbor, held);
 }
 
+/// Store `bytes` under their content address, as a rebuild leaves a lost row's blobs behind.
+async fn hold(fixture: &Fixture, bytes: &[u8]) {
+    store(fixture, bytes).await;
+}
+
+#[tokio::test]
+async fn after_an_epoch_change_the_sdk_reannounces_what_the_feed_lost_and_the_index_converges() {
+    // The #697 drill continued (#781), over a socket. One asset survived the rebuild; one lost
+    // its row while its blobs stayed in the store; one lost its blobs too; and the client also
+    // holds a manifest another account signed. After the stale cursor and the resync, the SDK
+    // re-announces what the feed no longer lists: the lost row comes back, the one without
+    // blobs is named as missing and nothing is restored, and the foreign one is refused.
+    use std::collections::HashSet;
+
+    use capsule_sdk::sync::reannounce::{HeldManifest, ReannounceOutcome, reannounce_unlisted};
+
+    let fixture = Fixture::working();
+    let survived = publish(&fixture, "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e09").await;
+    let base_url = serve(&fixture).await;
+    let consumer =
+        SyncConsumer::with_session(&base_url, session(&base_url).await).expect("a consumer builds");
+    let mut state = SyncState::new(CLIENT_MAX_PROTOCOL);
+    consumer
+        .pull_into(&mut state, 10)
+        .await
+        .expect("the first drain");
+
+    let lost_id = uuid::Uuid::parse_str("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5ea2").expect("a uuid");
+    let lost = support::signed_create(&fixture.clock, lost_id, b"lost-original", b"lost-metadata");
+    hold(&fixture, b"lost-original").await;
+    hold(&fixture, b"lost-metadata").await;
+    hold(&fixture, &lost).await;
+
+    let gone_id = uuid::Uuid::parse_str("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5ea3").expect("a uuid");
+    let gone = support::signed_create(&fixture.clock, gone_id, b"gone-original", b"gone-metadata");
+
+    let foreign_id = uuid::Uuid::parse_str("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5ea4").expect("a uuid");
+    let foreign = support::signed_create_by(
+        &fixture.clock,
+        uuid::Uuid::from_u128(42),
+        foreign_id,
+        b"foreign-original",
+        b"foreign-metadata",
+    );
+    hold(&fixture, b"foreign-original").await;
+    hold(&fixture, b"foreign-metadata").await;
+    hold(&fixture, &foreign).await;
+
+    // The rebuild moved the epoch: the old cursor is stale, and a resync from zero lists only
+    // what survived.
+    fixture
+        .index
+        .bump_sync_epoch(&owner())
+        .await
+        .expect("the index bumps");
+    let error = consumer
+        .pull_into(&mut state, 10)
+        .await
+        .expect_err("a cursor from the old epoch is refused");
+    assert!(error.is_stale_cursor(), "got {error:?}");
+    state.reset_for_resync();
+    let page = consumer
+        .pull_into(&mut state, 10)
+        .await
+        .expect("a resync from zero");
+    let listed: HashSet<String> = page
+        .entries
+        .iter()
+        .map(|entry| String::from_utf8(entry.asset_id.clone()).expect("a utf-8 id"))
+        .collect();
+    assert_eq!(listed.len(), 1);
+
+    let held = vec![
+        HeldManifest {
+            asset_id: "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e09".to_owned(),
+            manifest: survived,
+        },
+        HeldManifest {
+            asset_id: lost_id.to_string(),
+            manifest: lost.clone(),
+        },
+        HeldManifest {
+            asset_id: gone_id.to_string(),
+            manifest: gone,
+        },
+        HeldManifest {
+            asset_id: foreign_id.to_string(),
+            manifest: foreign,
+        },
+    ];
+    let answers = reannounce_unlisted(&consumer, &held, &listed)
+        .await
+        .expect("the re-announce is answered");
+    let by_asset: std::collections::BTreeMap<String, ReannounceOutcome> = answers
+        .into_iter()
+        .map(|(asset, result)| (asset, result.outcome))
+        .collect();
+    assert_eq!(by_asset.len(), 3, "the survivor is not re-announced");
+    assert!(
+        matches!(
+            by_asset[&lost_id.to_string()],
+            ReannounceOutcome::Restored { sync_seq: Some(_) }
+        ),
+        "got {by_asset:?}"
+    );
+    let ReannounceOutcome::MissingBlobs(missing) = &by_asset[&gone_id.to_string()] else {
+        panic!("got {by_asset:?}");
+    };
+    let mut missing = missing.clone();
+    missing.sort();
+    let mut expected = vec![
+        support::checksum(b"gone-original"),
+        support::checksum(b"gone-metadata"),
+        support::checksum(&held[2].manifest),
+    ];
+    expected.sort();
+    assert_eq!(missing, expected);
+    assert_eq!(
+        by_asset[&foreign_id.to_string()],
+        ReannounceOutcome::Refused {
+            code: "error.sync.reannounce_denied".to_owned()
+        }
+    );
+
+    // The index converged: the feed lists the survivor and the restored row, with the restored
+    // manifest byte for byte, and nothing else.
+    let page = consumer
+        .pull_into(&mut state, 10)
+        .await
+        .expect("the next page");
+    assert_eq!(page.entries.len(), 1);
+    assert_eq!(
+        String::from_utf8(page.entries[0].asset_id.clone()).expect("a utf-8 id"),
+        lost_id.to_string()
+    );
+    assert_eq!(page.entries[0].manifest_cbor, lost);
+    assert!(
+        fixture
+            .index
+            .read(&AssetId::new(gone_id.to_string()))
+            .await
+            .expect("read")
+            .is_none()
+    );
+    assert!(
+        fixture
+            .index
+            .read(&AssetId::new(foreign_id.to_string()))
+            .await
+            .expect("read")
+            .is_none()
+    );
+}
+
 #[tokio::test]
 async fn a_refresh_rotates_the_pair_and_closes_the_one_it_replaced() {
     // The server behaviour the CLI's session-persistence bug tripped over. A refresh mints a new
