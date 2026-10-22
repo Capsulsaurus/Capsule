@@ -1527,11 +1527,7 @@ async fn push_workspace(
                 .await
                 .map_err(|error| push_run_error(&bundle, &error))?
         };
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&summary)
-                .map_err(|e| eyre!("Failed to render the push report: {e}"))?
-        );
+        println!("{}", serde_json::to_string_pretty(&summary)?);
         return push_failures(&bundle, &summary);
     }
 
