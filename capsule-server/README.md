@@ -75,6 +75,12 @@ flavour. One test (`tests/sdk_client.rs`) binds an ephemeral port, because the p
 that the **generated** SDK client round-trips the real router over TCP — is the one an in-process
 client cannot.
 
+`mise run test-rust-containers` runs the Postgres and Valkey tiers, and with them the backup drill
+in `capsule-e2e/tests/backup_restore_drill.rs`. The drill takes a hot backup of a durable server,
+restores it onto a fresh host, and rebuilds the index from the owner ledgers into an empty
+database. It follows the procedure in the
+[self-hosting guide](../capsule-docs/src/content/docs/guides/self-hosting.md#backups).
+
 ## The served contract
 
 `openapi.json` is the committed OpenAPI **3.2** document, emitted from the router's own types and
@@ -100,6 +106,7 @@ capsule-server [--config PATH] <SUBCOMMAND>
   gc          [--apply] [--grace-window-hours N] [--memory] --blob-root PATH
   purge       [--apply] [--limit N]              [--memory] --blob-root PATH
   scrub       [--deep] [--budget BYTES]          [--memory] --blob-root PATH
+  rebuild     [--apply]                          [--memory] --blob-root PATH
   gen-openapi [FILE] [--check]
 
 Without `--memory` the three operator commands run on the durable stores `serve` writes, and need
