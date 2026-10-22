@@ -9,6 +9,8 @@
 
 mod support;
 
+use std::net::SocketAddr;
+
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use capsule_server::blob::{BlobStore, ContentAddress};
@@ -1243,4 +1245,60 @@ async fn a_saturated_limiter_partition_is_a_429_and_not_an_outage() {
     let problem = create_drop(&fixture, &id, &bytes, StatusCode::TOO_MANY_REQUESTS).await;
     assert_eq!(problem["code"], "error.drop.rate_limited");
     assert!(problem["retry_after"].as_u64().is_some_and(|s| s > 0));
+}
+
+/// Open a drop session from `peer`, returning the status.
+async fn create_drop_from(fixture: &Fixture, id: &str, bytes: &[u8], peer: &str) -> StatusCode {
+    fixture
+        .client
+        .post(&format!("/d/{id}"))
+        .header("accept", "application/json")
+        .peer(SocketAddr::new(
+            peer.parse().expect("a test address"),
+            40_000,
+        ))
+        .json(&json!({
+            "content_type": "image/jpeg",
+            "size": bytes.len(),
+            "ciphertext_hash": checksum(bytes),
+            "kem_ct": BASE64.encode([9_u8; 64]),
+        }))
+        .send()
+        .await
+        .status()
+}
+
+#[tokio::test]
+async fn drop_session_creation_is_rate_limited_per_source_independently_of_the_link() {
+    // Invariant 31's per-source half (#704). An address spraying fabricated ids never spends
+    // any one link's budget, so only a per-source key sees it — and once it is spent, the
+    // sprayer cannot drain the budget of a real link a guest was sent.
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let id = opaque(1);
+    provision(
+        &fixture,
+        &bearer,
+        &link_body(&id, json!({ "max_file_count": 1000 })),
+        StatusCode::CREATED,
+    )
+    .await;
+    let bytes = payload(b'h', 64);
+
+    // `DROP_SOURCE` is sixty an hour, each against a different unknown link.
+    for tag in 0..60_u8 {
+        let status = create_drop_from(&fixture, &opaque(100 + tag), &bytes, "203.0.113.9").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    assert_eq!(
+        create_drop_from(&fixture, &id, &bytes, "203.0.113.9").await,
+        StatusCode::TOO_MANY_REQUESTS,
+        "the sprayer is refused even on a live link"
+    );
+    assert_eq!(
+        create_drop_from(&fixture, &id, &bytes, "198.51.100.7").await,
+        StatusCode::CREATED,
+        "the link's own budget is untouched, so a guest elsewhere still deposits"
+    );
 }

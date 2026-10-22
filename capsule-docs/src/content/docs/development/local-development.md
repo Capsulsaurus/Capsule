@@ -46,7 +46,8 @@ capsule-server [--config PATH] <SUBCOMMAND>
   gen-openapi [FILE] [--check]
 ```
 
-Settings come from flag, then environment, then default; `capsule-server/.env.example` lists them.
+Settings come from flag, then environment, then default; `capsule-server/.env.example` is a starting template, and
+`Config::load` in `capsule-server/src/config.rs` reads the full set.
 There is no configuration file (`--config` is refused). Every configuration fault is reported in
 **one** message with exit code 2.
 

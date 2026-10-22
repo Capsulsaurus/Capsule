@@ -70,6 +70,7 @@ pub mod blob;
 pub mod body;
 pub mod boot;
 pub mod cli;
+pub mod client_addr;
 pub mod config;
 pub mod counter;
 pub mod directory;
@@ -341,7 +342,24 @@ pub type ServerRouter =
 /// match its path template, two operations claiming the same method and path, or a guarded
 /// operation whose context cannot authenticate the scheme guarding it.
 pub fn service(context: App) -> kynos::Result<Service<App>> {
-    router().build(context)
+    service_behind(context, &client_addr::ProxyTrust::default())
+}
+
+/// Builds the service with the deployment's trusted-proxy policy (issue #704).
+///
+/// [`service`] is this with a policy that trusts nobody, which is what every in-process test
+/// wants: the socket peer is the client and no forwarding header is read. `serve` passes the
+/// policy [`config`] read, so the per-source limiters see the client behind the deployment's
+/// proxies — and only behind the proxies it named.
+///
+/// # Errors
+///
+/// As [`service`].
+pub fn service_behind(
+    context: App,
+    trust: &client_addr::ProxyTrust,
+) -> kynos::Result<Service<App>> {
+    router().trusted_proxies(trust.policy()).build(context)
 }
 
 /// The specification version Capsule's document targets.
