@@ -23,14 +23,12 @@
 //! is worse in every way, because a client that believed it would then fail to sign in with no
 //! explanation.
 //!
-//! What bounds it is a rate limiter, and **there is none**. The counter port exists (`S-C32`)
-//! and the key it needs does not: limiting registration means limiting *a source*, and this
-//! server has no trusted client address behind an unconfigured proxy chain. That is the same
-//! missing fact [`CounterKey::ShareSource`](crate::counter::CounterKey::ShareSource) and
-//! [`DropSource`](crate::counter::CounterKey::DropSource) are waiting on, and it is why
-//! [`CounterKey::RegistrationSource`](crate::counter::CounterKey::RegistrationSource) is
-//! declared here and consumed nowhere: the shape is written down so the day the fact arrives is
-//! a one-line day. An email-keyed limiter was considered and rejected — it would bound repeated
+//! What bounds it is a rate limiter, and **there is none yet**. Limiting registration means
+//! limiting *a source*, and the trusted client address that needs now exists
+//! ([`crate::client_addr`], #704) — [`CounterKey::ShareSource`](crate::counter::CounterKey::ShareSource)
+//! and [`DropSource`](crate::counter::CounterKey::DropSource) are charged with it.
+//! [`CounterKey::RegistrationSource`](crate::counter::CounterKey::RegistrationSource) is declared
+//! and not yet consumed: the shape is written down so wiring it is a one-line change. An email-keyed limiter was considered and rejected — it would bound repeated
 //! probes against *one* address while doing nothing about a sweep across many, which is the
 //! actual attack, and a limiter that reads as protection without providing it is worse than an
 //! absent one.

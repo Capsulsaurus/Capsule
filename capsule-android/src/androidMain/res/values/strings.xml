@@ -1814,6 +1814,7 @@
     <string name="cli_help_push_about">Upload a local Capsule library to the server</string>
     <string name="cli_help_push_arg_dry_run">Report what would be uploaded without opening a single upload session</string>
     <string name="cli_help_push_arg_force">Re-drive every blob regardless of what the server already holds</string>
+    <string name="cli_help_push_arg_json">Print the run as one JSON document on stdout: the totals and each asset\'s outcome (verified, failed with its error, or planned on a dry run)</string>
     <string name="cli_help_push_arg_library">Path to the Capsule library to push</string>
     <string name="cli_help_push_arg_passphrase_stdin">Read the library passphrase from stdin instead of prompting, so pushes work in scripts and CI where there is no terminal</string>
     <string name="cli_help_push_arg_staged">Open the tier sessions in ladder order (index → preview → original), gating the above-index tiers on the connection class, instead of opening all eagerly</string>

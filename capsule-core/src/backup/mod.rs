@@ -15,8 +15,8 @@
 mod artifact;
 
 pub use artifact::{
-    BackupArtifact, BackupAsset, BackupInput, RestoreMode, RestoreReport, RestoredAsset,
-    WRAP_PARAMS, export, export_with_salt,
+    BackupArtifact, BackupAsset, BackupDoc, BackupDocKind, BackupInput, RestoreMode, RestoreReport,
+    RestoredAsset, WRAP_PARAMS, export, export_with_salt,
 };
 /// The caller-chosen-cost export entry points. Gated identically to their definitions: a weak
 /// Argon2id cost yields a brute-forceable artifact, so reaching one takes `cfg(test)` or an
@@ -35,6 +35,11 @@ use crate::crypto::{CryptoError, kdf, rng};
 /// - `2` — adds an `authority/{album_id}` entry per album: its public admin-signed epoch
 ///   ledger, so a restored asset verifies (#468). A format-1 artifact still opens; its albums
 ///   restore readable but unverifiable. A format newer than this build is refused.
+///
+/// Format 2 also carries optional `docs/{album|stack}/{id}` entries: each album's and stack's
+/// label record, sealed under its album's AMK (#667). Additive, so no bump: an older format-2
+/// reader verifies them as manifest entries and otherwise ignores them, restoring the album as
+/// `Recovered album` exactly as before.
 pub const ARTIFACT_FORMAT_VERSION: u16 = 2;
 
 /// Errors from backup export/restore and recovery.

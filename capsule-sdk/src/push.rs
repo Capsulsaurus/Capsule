@@ -41,12 +41,27 @@
 //! declared content address of *this* blob). A bundle's metadata and derivative blobs are not
 //! the original, so their envelope carries their own content address; every other field is the
 //! head manifest's, verbatim. See [`envelope_for`].
+//!
+//! # A transfer is not custody
+//!
+//! Every byte reaching the server is not the same as the server holding the asset. A finalize
+//! that lost its claim race answers the chunk `204` and is still running; an index failure after
+//! the commit leaves bytes nobody references. So a push does not end at the last chunk:
+//! [`verify_custody`] asks `POST /storage/verify` whether every blob the asset now relies on is
+//! stored, indexed and retrievable, then fetches the asset's custody-receipt log and requires a
+//! receipt per blob that verifies under the server's published attestation key and names the
+//! exact bytes, size and role the client sent. Only then is the asset reported as pushed, and
+//! the verified receipts are what the caller persists beside the provenance chain.
 
 use std::collections::HashSet;
 
-use capsule_core::crypto::hash::hash_bytes;
+use capsule_core::crypto::hash::{Hash32, hash_bytes};
+use capsule_core::crypto::keys::HybridVerifyingKey;
 use capsule_core::crypto::provenance::DerivativeRole;
 use capsule_core::import::UploadTier;
+use capsule_core::library::{
+    BlobRole as CoreBlobRole, CustodyReceipt, ReceiptExpectations, ReceiptRejection, verify_receipt,
+};
 use capsule_core::lifecycle::UploadBundle;
 use serde::Serialize;
 use tracing::instrument;
@@ -56,6 +71,7 @@ use crate::staged::{StagedAsset, StagedScheduler, TierBlob, TierSessionOutcome, 
 use crate::upload::{
     BlobRole, CreateUploadRequest, ManifestEnvelope, UploadClient, UploadError, UploadOutcome,
 };
+use crate::verify::{AssetQuery, StorageVerifyClient, VerifyError};
 
 /// The content type a blob the server may not parse declares. The sealed metadata blob is AMK
 /// ciphertext and the provenance blob is a signed CBOR document with no media type of its own —
@@ -285,6 +301,8 @@ pub struct PushPlan {
     pub already_held: usize,
     /// Blobs a staged policy defers to a later window.
     pub deferred: usize,
+    /// The content addresses of those deferred blobs.
+    pub deferred_hashes: Vec<String>,
     /// Bytes the planned blobs carry.
     pub bytes: u64,
 }
@@ -309,12 +327,30 @@ pub fn plan<H: std::hash::BuildHasher>(
         remaining_tiers(&asset, held)
     };
     let blobs = scheduler.plan_sessions(&outstanding);
+    let deferred_hashes = outstanding
+        .blobs
+        .iter()
+        .filter(|candidate| !blobs.iter().any(|b| b.hash == candidate.hash))
+        .map(|candidate| candidate.hash.clone())
+        .collect();
     PushPlan {
         already_held: total - outstanding.blobs.len(),
         deferred: outstanding.blobs.len() - blobs.len(),
+        deferred_hashes,
         bytes: blobs.iter().map(|b| b.size).sum(),
         blobs,
     }
+}
+
+/// Every blob of the bundle except the deferred ones, in ladder order — what the server must
+/// hold once a run that deferred `deferred` is done.
+fn custody_hashes(blobs: &[(BundleBlob<'_>, String)], deferred: &[String]) -> Vec<String> {
+    blobs
+        .iter()
+        .map(|(_, hash)| hash)
+        .filter(|hash| !deferred.contains(hash))
+        .cloned()
+        .collect()
 }
 
 /// Errors a push can fail with.
@@ -336,6 +372,64 @@ pub enum PushError {
         /// The content address that could not be resolved.
         hash: String,
     },
+    /// The storage-verification or custody-receipt surface could not answer, so custody is
+    /// unconfirmed — never assumed.
+    #[error(transparent)]
+    Verify(#[from] VerifyError),
+    /// The server's verdict says it does not durably hold every blob the asset relies on.
+    #[error("asset {asset_id}: the server does not durably hold {} of its blobs", not_durable.len())]
+    NotDurable {
+        /// The asset the verdict is for.
+        asset_id: String,
+        /// The content addresses not stored ∧ indexed ∧ retrievable (or absent from the verdict).
+        not_durable: Vec<String>,
+    },
+    /// The asset's receipt log holds no receipt for a blob the asset relies on.
+    #[error("asset {asset_id}: no custody receipt for blob {hash}")]
+    ReceiptMissing {
+        /// The asset whose log was read.
+        asset_id: String,
+        /// The blob with no receipt.
+        hash: String,
+    },
+    /// Every receipt the log holds for a blob was refused: a signature no published attestation
+    /// key verifies, or a field that disagrees with what the client sent.
+    #[error("asset {asset_id}: the custody receipt for blob {hash} did not verify ({rejection:?})")]
+    ReceiptRejected {
+        /// The asset whose log was read.
+        asset_id: String,
+        /// The blob whose receipt was refused.
+        hash: String,
+        /// Why the last candidate receipt was refused.
+        rejection: ReceiptRejection,
+    },
+}
+
+impl PushError {
+    /// A stable, machine-readable name for the failure — the `kind` a `--json` report carries.
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Album(_) => "album",
+            Self::Upload(_) => "upload",
+            Self::UnknownBlob { .. } => "unknown_blob",
+            Self::Verify(_) => "verify_unavailable",
+            Self::NotDurable { .. } => "not_durable",
+            Self::ReceiptMissing { .. } => "receipt_missing",
+            Self::ReceiptRejected { .. } => "receipt_rejected",
+        }
+    }
+
+    /// The stable `error.*` code the server supplied, when there was one.
+    #[must_use]
+    pub fn error_code(&self) -> Option<&str> {
+        match self {
+            Self::Upload(UploadError::Rejected { code, .. })
+            | Self::Verify(VerifyError::Status { code, .. }) => code.as_deref(),
+            Self::Album(error) => error.error_code(),
+            _ => None,
+        }
+    }
 }
 
 /// How one blob of a bundle resolved.
@@ -362,6 +456,11 @@ pub struct AssetPushReport {
     pub deferred: usize,
     /// Total bytes handed to the upload client this run.
     pub bytes: u64,
+    /// The content addresses the server must hold once this run is done, in ladder order:
+    /// every blob of the bundle except those a staged policy deferred. This is the set
+    /// [`verify_custody`] declares to `/storage/verify` and requires a receipt for — a deferred
+    /// tier was never sent, so it is not yet the server's to hold.
+    pub custody_hashes: Vec<String>,
 }
 
 impl AssetPushReport {
@@ -394,11 +493,13 @@ pub async fn push_bundle<H: std::hash::BuildHasher + Sync>(
 ) -> Result<AssetPushReport, PushError> {
     let asset_id = bundle.asset_id.to_string();
     let planned = plan(scheduler, bundle, held, force);
+    let blobs = bundle_blobs(bundle);
 
     let mut report = AssetPushReport {
         asset_id: asset_id.clone(),
         already_held: planned.already_held,
         deferred: planned.deferred,
+        custody_hashes: custody_hashes(&blobs, &planned.deferred_hashes),
         ..Default::default()
     };
     tracing::info!(
@@ -409,7 +510,6 @@ pub async fn push_bundle<H: std::hash::BuildHasher + Sync>(
         "push: bundle planned"
     );
 
-    let blobs = bundle_blobs(bundle);
     for tier_blob in planned.blobs {
         let Some((blob, hash)) = blobs.iter().find(|(_, hash)| *hash == tier_blob.hash) else {
             return Err(PushError::UnknownBlob {
@@ -450,6 +550,208 @@ pub async fn push_bundle<H: std::hash::BuildHasher + Sync>(
         "push: bundle complete"
     );
     Ok(report)
+}
+
+// ─── Confirming custody ───────────────────────────────────────────────────────
+
+/// What [`verify_custody`] established for one asset.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedCustody {
+    /// The server's trusted clock when it judged the asset durable (RFC 3339).
+    pub checked_at: String,
+    /// One verified receipt per blob the asset relies on, in ladder order — the evidence the
+    /// caller persists beside the provenance chain
+    /// ([`append_receipt`](capsule_core::library::append_receipt)).
+    pub receipts: Vec<CustodyReceipt>,
+}
+
+/// The core receipt role for a protocol blob role, where the core's closed enum names it.
+fn core_role(role: BlobRole) -> Option<CoreBlobRole> {
+    match role {
+        BlobRole::Original => Some(CoreBlobRole::Original),
+        BlobRole::Derivative => Some(CoreBlobRole::Derivative),
+        BlobRole::Metadata => Some(CoreBlobRole::Metadata),
+        BlobRole::Provenance => Some(CoreBlobRole::Provenance),
+        BlobRole::Backup | BlobRole::DerivativeManifest => None,
+    }
+}
+
+/// Check one receipt against the blob the client sent.
+///
+/// The four roles `capsule_core`'s receipt verifier names go through
+/// [`verify_receipt`] unchanged. A `derivative_manifest` blob has no arm there, so it gets the
+/// same signature and field checks spelled against its wire role; the `received_at` drift bound
+/// is the one check it does not get, and that bound is evidentiary only.
+fn check_receipt(
+    receipt: &CustodyReceipt,
+    keys: &[HybridVerifyingKey],
+    blob: &BundleBlob<'_>,
+    hash: Hash32,
+    now_unix: i64,
+) -> Result<(), ReceiptRejection> {
+    let size = blob.bytes.len() as u64;
+    // The chain position, and only on the blob that *is* the manifest. SHA-256 by definition,
+    // which is what `hash_bytes` computes, whatever digest the suite addresses blobs with.
+    let envelope_hash = (blob.role == BlobRole::Provenance).then(|| hash_bytes(blob.bytes));
+    if let Some(role) = core_role(blob.role) {
+        let expected = ReceiptExpectations {
+            ciphertext_hash: hash,
+            size,
+            role,
+            envelope_hash,
+        };
+        return verify_receipt(receipt, keys, &expected, now_unix);
+    }
+    if !keys.iter().any(|key| receipt.verify_under(key)) {
+        return Err(ReceiptRejection::Signature);
+    }
+    let core = &receipt.core;
+    if core.ciphertext_hash != hash {
+        return Err(ReceiptRejection::FieldMismatch("ciphertext_hash"));
+    }
+    if core.size != size {
+        return Err(ReceiptRejection::FieldMismatch("size"));
+    }
+    if core.blob_role != wire_enum(&blob.role) {
+        return Err(ReceiptRejection::FieldMismatch("blob_role"));
+    }
+    if core.envelope_hash.is_some() {
+        return Err(ReceiptRejection::FieldMismatch("envelope_hash"));
+    }
+    Ok(())
+}
+
+/// Confirm the server holds what [`push_bundle`] sent, and collect the evidence that it does.
+///
+/// Two facts, both required, in this order:
+///
+/// 1. **Durability.** `POST /storage/verify` over exactly `report.custody_hashes`. The verdict's
+///    aggregate is not trusted on its own: every declared hash must appear in the per-blob
+///    detail as stored ∧ indexed ∧ retrievable, the re-check
+///    [`release_is_safe`](capsule_core::library::release_is_safe) makes before a release.
+/// 2. **Accountability.** The asset's receipt log (`GET /assets/{id}/receipts`), and for every
+///    declared blob a receipt that verifies under one of `attestation_keys` and names the
+///    bytes, size, role and — for the provenance blob — the chain position the client sent.
+///
+/// The durable log rather than the per-session fetch, because a blob this run did not
+/// transfer — one the feed said was held, or one a retry of this same asset found finalized as
+/// `duplicate_blob` — has no session to ask about, and its custody needs the same evidence as a
+/// fresh one. A `duplicate_blob` naming a *different* asset is not covered: until the server
+/// records cross-asset shared blobs (#672) it neither indexes that blob under this asset nor
+/// receipts it, so this asset fails custody on every run.
+///
+/// `now_unix` is the client's clock, injected for the receipt's drift bound.
+#[instrument(skip_all, fields(asset_id = %bundle.asset_id, blobs = report.custody_hashes.len()))]
+pub async fn verify_custody(
+    client: &StorageVerifyClient,
+    attestation_keys: &[HybridVerifyingKey],
+    bundle: &UploadBundle,
+    report: &AssetPushReport,
+    now_unix: i64,
+) -> Result<VerifiedCustody, PushError> {
+    let asset_id = bundle.asset_id.to_string();
+    let blobs = bundle_blobs(bundle);
+    let mut declared = Vec::with_capacity(report.custody_hashes.len());
+    for hash in &report.custody_hashes {
+        let Some((blob, _)) = blobs.iter().find(|(_, candidate)| candidate == hash) else {
+            return Err(PushError::UnknownBlob {
+                asset_id,
+                hash: hash.clone(),
+            });
+        };
+        let parsed = Hash32::from_hex(hash).map_err(|_| PushError::UnknownBlob {
+            asset_id: asset_id.clone(),
+            hash: hash.clone(),
+        })?;
+        declared.push((blob, hash, parsed));
+    }
+
+    // 1. Durability.
+    let query = AssetQuery {
+        asset_id: bundle.asset_id,
+        blob_hashes: declared.iter().map(|(_, _, parsed)| *parsed).collect(),
+    };
+    let verdict = client
+        .verify(&[query], false)
+        .await?
+        .into_iter()
+        .find(|verdict| verdict.asset_id == bundle.asset_id)
+        .ok_or_else(|| VerifyError::Malformed("the verdict omits the asset asked about".into()))?;
+    let not_durable: Vec<String> = declared
+        .iter()
+        .filter(|(_, _, parsed)| {
+            !verdict
+                .blobs
+                .iter()
+                .any(|blob| blob.hash == *parsed && blob.safely_stored())
+        })
+        .map(|(_, hash, _)| (*hash).clone())
+        .collect();
+    if !verdict.durable || !not_durable.is_empty() {
+        tracing::warn!(
+            durable = verdict.durable,
+            not_durable = ?not_durable,
+            "push: the server does not durably hold the asset"
+        );
+        return Err(PushError::NotDurable {
+            asset_id,
+            not_durable,
+        });
+    }
+    tracing::debug!(checked_at = %verdict.checked_at, "push: the server reports the asset durable");
+
+    // 2. Accountability.
+    let log = client.fetch_asset_receipts(bundle.asset_id).await?;
+    tracing::debug!(
+        receipts = log.len(),
+        "push: the asset's receipt log fetched"
+    );
+    let mut receipts = Vec::with_capacity(declared.len());
+    for (blob, hash, parsed) in declared {
+        let mut last_rejection = None;
+        let mut verified = None;
+        for candidate in log.iter().filter(|r| r.core.ciphertext_hash == parsed) {
+            match check_receipt(candidate, attestation_keys, blob, parsed, now_unix) {
+                Ok(()) => {
+                    verified = Some(candidate.clone());
+                    break;
+                }
+                Err(rejection) => last_rejection = Some(rejection),
+            }
+        }
+        match (verified, last_rejection) {
+            (Some(receipt), _) => {
+                tracing::debug!(
+                    hash = %hash,
+                    role = ?blob.role,
+                    receipt_seq = receipt.core.receipt_seq,
+                    "push: custody receipt verified"
+                );
+                receipts.push(receipt);
+            }
+            (None, Some(rejection)) => {
+                tracing::warn!(hash = %hash, ?rejection, "push: custody receipt refused");
+                return Err(PushError::ReceiptRejected {
+                    asset_id,
+                    hash: hash.clone(),
+                    rejection,
+                });
+            }
+            (None, None) => {
+                tracing::warn!(hash = %hash, "push: no custody receipt for a blob");
+                return Err(PushError::ReceiptMissing {
+                    asset_id,
+                    hash: hash.clone(),
+                });
+            }
+        }
+    }
+
+    tracing::info!(receipts = receipts.len(), "push: custody verified");
+    Ok(VerifiedCustody {
+        checked_at: verdict.checked_at,
+        receipts,
+    })
 }
 
 #[cfg(test)]

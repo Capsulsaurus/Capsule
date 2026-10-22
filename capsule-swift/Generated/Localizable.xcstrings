@@ -31085,6 +31085,16 @@
         }
       }
     },
+    "cli.help.push.arg.json": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Print the run as one JSON document on stdout: the totals and each asset's outcome (verified, failed with its error, or planned on a dry run)"
+          }
+        }
+      }
+    },
     "cli.help.push.arg.library": {
       "localizations": {
         "en": {

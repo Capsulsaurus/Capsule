@@ -12,11 +12,15 @@
 
 mod support;
 
+use std::net::SocketAddr;
+
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use capsule_server::blob::{BlobStore, ContentAddress};
+use capsule_server::client_addr::ProxyTrust;
 use jiff::SignedDuration;
 use kynos::http::StatusCode;
+use kynos::test::TestClient;
 use serde_json::{Value, json};
 use support::{Fixture, payload};
 
@@ -1211,4 +1215,144 @@ async fn a_saturated_limiter_partition_is_a_429_and_not_an_outage() {
         .json();
     assert_eq!(problem["code"], "error.share.rate_limited");
     assert!(problem["retry_after"].as_u64().is_some_and(|s| s > 0));
+}
+
+/// `SHARE_SOURCE`: requests from one source address in one window.
+const SOURCE_BUDGET: u8 = 120;
+
+fn socket(address: &str) -> SocketAddr {
+    SocketAddr::new(address.parse().expect("a test address"), 40_000)
+}
+
+/// Send one share request from `peer`, optionally carrying an `X-Forwarded-For`.
+async fn probe_from(
+    client: &support::Client,
+    path: &str,
+    peer: &str,
+    forwarded_for: Option<&str>,
+) -> kynos::test::TestResponse {
+    let mut request = client
+        .get(path)
+        .header("accept", "application/json")
+        .peer(socket(peer));
+    if let Some(value) = forwarded_for {
+        request = request.header("x-forwarded-for", value);
+    }
+    request.send().await
+}
+
+/// Spend `SOURCE_BUDGET` from one source, each request against a different unknown link so no
+/// per-link budget is anywhere near spent.
+async fn spend_source_budget(
+    client: &support::Client,
+    peer: &str,
+    forwarded_for: impl Fn(u8) -> Option<String>,
+) {
+    for tag in 0..SOURCE_BUDGET {
+        let path = format!("/s/{}", opaque(100 + tag));
+        probe_from(client, &path, peer, forwarded_for(tag).as_deref())
+            .await
+            .assert_status(StatusCode::NOT_FOUND);
+    }
+}
+
+#[tokio::test]
+async fn the_public_path_is_rate_limited_per_source_independently_of_the_link() {
+    // The contract's second limiter (#704). One address sweeping many ids spends its own budget
+    // long before it spends any one link's, so a per-link limiter alone never sees the sweep.
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (id, _, _) = live_link(&fixture, &bearer, 1).await;
+
+    spend_source_budget(&fixture.client, "203.0.113.9", |_| None).await;
+
+    // The sweeper is refused even on a live link it has never asked for...
+    let problem: Value = probe_from(&fixture.client, &format!("/s/{id}"), "203.0.113.9", None)
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS)
+        .json();
+    assert_eq!(problem["code"], "error.share.rate_limited");
+    assert!(problem["retry_after"].as_u64().is_some_and(|s| s > 0));
+
+    // ...while that link's own budget is untouched, so a viewer elsewhere is served.
+    probe_from(&fixture.client, &format!("/s/{id}"), "198.51.100.7", None)
+        .await
+        .assert_status(StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_spoofed_forwarded_for_from_an_untrusted_peer_is_ignored() {
+    // No proxy is trusted, so a client that writes a fresh `X-Forwarded-For` on every request
+    // is still one source: the socket peer. Were the header believed, it would choose a new
+    // bucket each time and the limiter would bound nothing.
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (id, _, _) = live_link(&fixture, &bearer, 1).await;
+
+    spend_source_budget(&fixture.client, "203.0.113.9", |tag| {
+        Some(format!("192.0.2.{tag}"))
+    })
+    .await;
+
+    probe_from(
+        &fixture.client,
+        &format!("/s/{id}"),
+        "203.0.113.9",
+        Some("192.0.2.250"),
+    )
+    .await
+    .assert_status(StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn a_trusted_proxy_networks_forwarded_for_is_honoured() {
+    assert_forwarded_for_is_honoured_behind(&ProxyTrust {
+        hops: 0,
+        networks: ProxyTrust::parse_networks("10.0.0.0/8").expect("it parses"),
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_trusted_proxy_hops_forwarded_for_is_honoured() {
+    // One hop trusted by count rather than by address: the proxy's own address is never named.
+    assert_forwarded_for_is_honoured_behind(&ProxyTrust {
+        hops: 1,
+        networks: Vec::new(),
+    })
+    .await;
+}
+
+/// Behind a proxy `trust` names, the client is the address the proxy appended: two clients
+/// behind one proxy are two sources, and a client cannot escape its own bucket by prepending a
+/// spoofed element of its own.
+async fn assert_forwarded_for_is_honoured_behind(trust: &ProxyTrust) {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (id, _, _) = live_link(&fixture, &bearer, 1).await;
+    let behind = support::Client::new(TestClient::new(
+        capsule_server::service_behind(fixture.app(), trust).expect("the router builds"),
+    ));
+
+    spend_source_budget(&behind, "10.0.0.1", |tag| {
+        Some(format!("192.0.2.{tag}, 203.0.113.9"))
+    })
+    .await;
+
+    probe_from(
+        &behind,
+        &format!("/s/{id}"),
+        "10.0.0.1",
+        Some("203.0.113.9"),
+    )
+    .await
+    .assert_status(StatusCode::TOO_MANY_REQUESTS);
+    probe_from(
+        &behind,
+        &format!("/s/{id}"),
+        "10.0.0.1",
+        Some("198.51.100.7"),
+    )
+    .await
+    .assert_status(StatusCode::OK);
 }

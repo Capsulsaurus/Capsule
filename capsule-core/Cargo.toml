@@ -259,6 +259,11 @@ openmls_memory_storage = { version = "0.6.0", features = ["draft-ietf-mls-pq-cip
 # build pulls in the TPM stack. See `crypto::keys::tpm`.
 tss-esapi = { version = "7", optional = true }
 
+# NFC for user labels (`sidecar::normalize_label`; Organization — Labels): one normalizer for
+# asset, region, stack and album labels, so a label typed on two platforms is one label. Pure
+# Rust, no dependencies of its own beyond `tinyvec`, already in the lock file transitively.
+unicode-normalization = "0.1.25"
+
 # ── Free-space probe (native `library::space`) ─────────────────────────────
 # The streaming-import free-space probe (`library::available_bytes`, slice S-B3) is a thin
 # `statvfs` / `GetDiskFreeSpaceEx` wrapper. rustix gives the pure-Rust POSIX `statvfs(2)`
@@ -295,6 +300,10 @@ getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] 
 uuid = { workspace = true, features = ["rng-getrandom"] }
 
 [dev-dependencies]
+# Property tests for the CRDT merge laws (commutative, associative, idempotent), per the testing
+# plan. `std` only: the `fork`/`timeout` runners and the `bit-set` strategies are unused, and
+# `bit-set` would drag a newer `borsh` through the lock file.
+proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 # The encoders the fixtures need and the shipping graph does not. Cargo unifies features per
 # build, so a `cargo build` links decode only while `cargo test` gets the encoders — which keeps
 # `jpeg-encoder`'s IJG arm out of every release binary while leaving it in the graph

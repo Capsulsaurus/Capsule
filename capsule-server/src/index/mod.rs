@@ -62,8 +62,10 @@ pub mod memory;
 pub mod postgres;
 
 use capsule_core::crypto::hash::Hash32;
+use capsule_core::crypto::receipts::CustodyReceipt;
 use jiff::Timestamp;
 
+use crate::attestation::{ReceiptDraft, ReceiptSigner};
 use crate::blob::ContentAddress;
 use crate::store::{AlbumId, AssetId, BlobRole, OwnerId, StoreFuture};
 
@@ -351,6 +353,49 @@ pub enum BlobOutcome {
     NotFound,
 }
 
+/// The custody receipt a finalization asks the index to write with its rows (#693).
+///
+/// The draft and the attestation key, never a pre-signed receipt: a receipt's chain position is
+/// inside its signed core, so it can only be signed where the position is allocated, and that is
+/// inside the index's own critical section (see [`crate::attestation`]).
+#[derive(Debug, Clone, Copy)]
+pub struct Custody<'a> {
+    /// What the server established about the write.
+    pub draft: &'a ReceiptDraft,
+    /// The attestation key that signs it.
+    pub signer: &'a dyn ReceiptSigner,
+}
+
+/// An index outcome, with the custody receipt committed alongside it.
+///
+/// `receipt` is `Some` exactly when the outcome leaves the blob held — recorded, already held,
+/// applied or replayed — and `None` when the index refused, in which case nothing was written.
+/// The two are one commit: an adapter never returns `Some` for rows it did not commit, nor
+/// commits rows whose receipt it could not write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Receipted<T> {
+    /// What the index did.
+    pub outcome: T,
+    /// The receipt that committed with it.
+    pub receipt: Option<CustodyReceipt>,
+}
+
+impl BlobOutcome {
+    /// Whether the asset holds the blob once this outcome stands — the outcomes a custody
+    /// receipt is written for.
+    pub fn holds_the_blob(&self) -> bool {
+        matches!(self, Self::Recorded { .. } | Self::AlreadyHeld(_))
+    }
+}
+
+impl OpOutcome {
+    /// Whether the op stands applied once this outcome stands — the outcomes a custody receipt
+    /// is written for.
+    pub fn is_applied(&self) -> bool {
+        matches!(self, Self::Applied { .. } | Self::Replayed { .. })
+    }
+}
+
 /// What a feed entry is, relative to the reader asking for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ChangeKind {
@@ -626,6 +671,21 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
         blob: BlobRecord,
     ) -> IndexFuture<'a, BlobOutcome>;
 
+    /// [`record_blob`](Self::record_blob), with the custody receipt appended in the same
+    /// critical section (#693).
+    ///
+    /// Finalization's one durable write. The rows and the receipt commit together or neither
+    /// does, which is invariant 33's "no indexed blob without a receipt, no receipt without
+    /// custody" made a property of one call rather than of an order between two. A receipt is
+    /// written for [`BlobOutcome::Recorded`] and [`BlobOutcome::AlreadyHeld`] — a retry of a
+    /// committed finalization returns the receipt it already has — and for nothing else.
+    fn record_blob_with_receipt<'a>(
+        &'a self,
+        asset: &'a AssetId,
+        blob: BlobRecord,
+        custody: Custody<'a>,
+    ) -> IndexFuture<'a, Receipted<BlobOutcome>>;
+
     /// Tombstone `asset`, minting a sequence number so the deletion reaches every device.
     ///
     /// Tombstoning a still-pending row publishes nothing: nobody ever saw it, so there is
@@ -702,6 +762,19 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
     /// it can both chain onto the same head — which is the double-apply invariant 17 exists to
     /// catch. An adapter owes atomicity across the whole sequence.
     fn apply_op(&self, op: LifecycleOp) -> IndexFuture<'_, OpOutcome>;
+
+    /// [`apply_op`](Self::apply_op), with the custody receipt appended in the same critical
+    /// section (#693).
+    ///
+    /// The finalization of a `replace` bundle's manifest (`S-C43`), which applies the bundle as
+    /// one op. A receipt is written for [`OpOutcome::Applied`] and [`OpOutcome::Replayed`] and
+    /// for nothing else, on the terms of
+    /// [`record_blob_with_receipt`](Self::record_blob_with_receipt).
+    fn apply_op_with_receipt<'a>(
+        &'a self,
+        op: LifecycleOp,
+        custody: Custody<'a>,
+    ) -> IndexFuture<'a, Receipted<OpOutcome>>;
 
     /// Place, replace or lift `asset`'s serving hold (`S-C17`).
     ///

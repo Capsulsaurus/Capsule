@@ -32,12 +32,9 @@
 //! | create `400 error.drop.malformed` | invariants 27 and 30 |
 //! | create `403 error.quota.exceeded` | invariant 29, charged to the **link owner** |
 //! | create `403 error.quota.suspended` | the link owner's quota is suspended by the operator (#705) |
+//! | create `429 error.drop.rate_limited` / `error.drop.at_capacity` | invariant 31: the per-source or per-link budget is spent, or its limiter partition is full, with a `retry_after` |
 //! | adopt `404` / `409` | the row is not the caller's, or another adoption holds it |
-//! | `500` | a store could not answer |
-//!
-//! **No `429`.** Invariant 31's two limiters need `S-C32`'s counter. Declaring the status would
-//! promise something nothing can produce; the caps bound total damage but not request rate, and
-//! saying so is the point.
+//! | `500` | a store could not answer, the limiter's included |
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -51,7 +48,8 @@ use uuid::Uuid;
 
 use crate::auth::AccessToken;
 use crate::blob::ContentAddress;
-use crate::counter::{CounterContext, CounterKey, Verdict, budgets, unix_seconds};
+use crate::client_addr::ClientAddr;
+use crate::counter::{Budget, CounterContext, CounterKey, Verdict, budgets, unix_seconds};
 use crate::drop::{
     Admission, DropContext, InboxEntry, LinkCaps, LinkProvisionOutcome, UploadLinkRecord,
     is_opaque_id,
@@ -641,6 +639,32 @@ pub async fn revoke_link(
     Ok(NoContent)
 }
 
+/// Charge one of invariant 31's limiters, failing closed.
+async fn charge_drop_limiter(
+    counters: &CounterContext,
+    key: &CounterKey,
+    budget: Budget,
+) -> Result<(), DropRejection> {
+    let verdict = counters.hit(key, budget).await.map_err(|error| {
+        // A full partition is the limiter working, not a broken store, and a caller told `500`
+        // cannot tell the difference. Fail-closed either way; only the answer differs.
+        if let Some(retry_after) = counters.capacity_refusal(&error, budget) {
+            tracing::warn!(%error, limiter = key.as_str(), "the drop limiter is at capacity");
+            DropRejection::at_capacity(retry_after)
+        } else {
+            tracing::error!(%error, limiter = key.as_str(), "the drop limiter could not be reached");
+            DropRejection::unavailable()
+        }
+    })?;
+    match verdict {
+        Verdict::Admitted { .. } => Ok(()),
+        Verdict::Limited { retry_after } => Err(DropRejection::RateLimited {
+            code: error_codes::DROP_RATE_LIMITED,
+            retry_after: unix_seconds(retry_after),
+        }),
+    }
+}
+
 /// Open a drop session through a link.
 ///
 /// Invariants 26–30 in order: the link admits the file and reserves its caps in one store
@@ -652,40 +676,31 @@ pub async fn create_drop(
     Inject(drops): Inject<DropContext>,
     Inject(quota): Inject<crate::quota::QuotaContext>,
     Inject(counters): Inject<CounterContext>,
+    client: ClientAddr,
     Path(path): Path<LinkPath>,
     Json(request): Json<CreateDropRequest>,
 ) -> Result<CreateDropReply, DropRejection> {
+    // Invariant 31's two limiters, charged before the link is resolved so probing costs the
+    // prober whether or not the id exists (`S-C32`). The per-source budget goes first and is
+    // charged even for a malformed id, so a sweep of junk ids still spends the sweeper's budget;
+    // a source that has spent it cannot drain the link's budget for the guest it was sent to.
+    // The source is the address the router resolved through the trusted proxies (#704), never a
+    // forwarding header taken on its word.
+    charge_drop_limiter(
+        &counters,
+        &CounterKey::DropSource(client.source_key()),
+        budgets::DROP_SOURCE,
+    )
+    .await?;
     if !is_opaque_id(&path.opaque_id) {
         return Err(DropRejection::NotFound);
     }
-
-    // Invariant 31's per-link limiter, charged before the link is resolved so probing costs the
-    // prober whether or not the id exists (`S-C32`). The per-*source* half of the invariant is
-    // owed for the same reason the share path's is: there is no trusted client address on this
-    // port, and throttling by an untrusted header is throttling by a value the attacker picks.
-    let verdict = counters
-        .hit(
-            &CounterKey::DropLink(path.opaque_id.clone()),
-            budgets::DROP_LINK,
-        )
-        .await
-        .map_err(|error| {
-            // A full partition is the limiter working, not a broken store, and a caller told
-            // `500` cannot tell the difference. Fail-closed either way; only the answer differs.
-            if let Some(retry_after) = counters.capacity_refusal(&error, budgets::DROP_LINK) {
-                tracing::warn!(%error, "the drop limiter is at capacity");
-                DropRejection::at_capacity(retry_after)
-            } else {
-                tracing::error!(%error, "the drop limiter could not be reached");
-                DropRejection::unavailable()
-            }
-        })?;
-    if let Verdict::Limited { retry_after } = verdict {
-        return Err(DropRejection::RateLimited {
-            code: error_codes::DROP_RATE_LIMITED,
-            retry_after: unix_seconds(retry_after),
-        });
-    }
+    charge_drop_limiter(
+        &counters,
+        &CounterKey::DropLink(path.opaque_id.clone()),
+        budgets::DROP_LINK,
+    )
+    .await?;
 
     // Invariant 30's shape, before the link is touched: a declaration that cannot be a drop
     // must not spend a cap on its way to being refused.
@@ -1507,3 +1522,6 @@ impl AdoptRejection {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

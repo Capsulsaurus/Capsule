@@ -78,6 +78,7 @@ use crate::library::{Library, LibraryError};
 use crate::metadata::crdt::Counter;
 use crate::sharing::{ShareLinkId, ShareLinkRecord};
 use crate::sidecar::sidecar_v1::{Gps, SidecarV1, StackMembership, StackRole};
+use crate::sidecar::{DocError, LabelError, RegionError};
 
 /// Errors from lifecycle operations.
 #[derive(Debug, Error)]
@@ -149,6 +150,30 @@ pub enum LifecycleError {
     /// user IK, or it names another account. Nothing is adopted.
     #[error("untrusted account directory: {0}")]
     UntrustedDirectory(String),
+    /// A label (or album name) was refused by the label rule: NFC, trimmed, 1–256 bytes.
+    #[error(transparent)]
+    InvalidLabel(#[from] LabelError),
+    /// A region shape broke the normalized-coordinate contract.
+    #[error(transparent)]
+    InvalidRegion(#[from] RegionError),
+    /// A stack or album label document could not be decoded, sealed or opened.
+    #[error(transparent)]
+    Document(#[from] DocError),
+    /// A stack or album label document does not verify under this account's user IK. Nothing
+    /// is merged.
+    #[error("document {0} does not verify under this account's identity key")]
+    UnverifiedDocument(Uuid),
+    /// Joining the asset to the stack would split the stack across container albums: every
+    /// member of a stack belongs to the same album.
+    #[error("stack {stack_id} lives in album {stack_album}; asset is in album {asset_album}")]
+    StackAlbumMismatch {
+        /// The stack being joined.
+        stack_id: Uuid,
+        /// The album the stack's members (or its label document) live in.
+        stack_album: Uuid,
+        /// The album of the asset that tried to join.
+        asset_album: Uuid,
+    },
 }
 
 type Result<T> = std::result::Result<T, LifecycleError>;

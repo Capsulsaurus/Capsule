@@ -91,6 +91,8 @@ fn server(args: &[&str]) -> Command {
         "SHUTDOWN_TIMEOUT_SECONDS",
         "MAX_CONNECTIONS",
         "LOG_FORMAT",
+        "TRUSTED_PROXY_HOPS",
+        "TRUSTED_PROXIES",
     ] {
         command.env_remove(key);
     }
@@ -276,6 +278,47 @@ async fn an_account_registers_and_signs_in_against_the_running_binary() {
         .login("somebody@example.test", "the wrong password entirely")
         .await;
     assert!(refused.is_err(), "a wrong password is refused");
+
+    assert_eq!(serving.terminate(), Some(0));
+}
+
+#[tokio::test]
+async fn serve_resolves_client_addresses_through_the_configured_proxy_trust() {
+    // `serve` builds its router with the configured `TRUSTED_PROXY_HOPS` (#704). Every request
+    // here arrives from 127.0.0.1, so if that wiring were dropped the server would trust nobody,
+    // every request would share the loopback bucket, and the last request below would be
+    // refused with the rest.
+    const SHARE_SOURCE_BUDGET: u32 = 120;
+
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let serving = Serving::spawn_with(root.path(), &["--memory"], &[("TRUSTED_PROXY_HOPS", "1")]);
+    let http = reqwest::Client::new();
+    let probe = |tag: u32, forwarded_for: &'static str| {
+        let request = http
+            .get(format!("{}/s/{tag:032x}", serving.base_url))
+            .header("accept", "application/json")
+            .header("x-forwarded-for", forwarded_for);
+        async move { request.send().await.expect("the server answers").status() }
+    };
+
+    // One client behind the proxy spends its whole budget on links that do not exist...
+    for tag in 0..SHARE_SOURCE_BUDGET {
+        assert_eq!(
+            probe(tag, "203.0.113.9").await,
+            reqwest::StatusCode::NOT_FOUND
+        );
+    }
+    assert_eq!(
+        probe(SHARE_SOURCE_BUDGET, "203.0.113.9").await,
+        reqwest::StatusCode::TOO_MANY_REQUESTS,
+        "the client that spent its budget is refused"
+    );
+    // ...and a second client behind the same proxy is a different source.
+    assert_eq!(
+        probe(SHARE_SOURCE_BUDGET + 1, "198.51.100.7").await,
+        reqwest::StatusCode::NOT_FOUND,
+        "the proxy's forwarded address is the source, not the socket peer"
+    );
 
     assert_eq!(serving.terminate(), Some(0));
 }
