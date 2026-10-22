@@ -1160,7 +1160,8 @@ mod tests {
             "no derivative directory is created for an asset with no derivatives"
         );
 
-        // Not a still at all.
+        // Not a still at all: a video, whose derivatives are deferred until video codecs land
+        // rather than inapplicable (issue #695).
         let video = import(
             &mut ws,
             album,
@@ -1168,7 +1169,7 @@ mod tests {
             "clip.mp4",
             b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom",
         );
-        assert_eq!(video.derivatives, DerivativeStatus::NotAKnownStill);
+        assert_eq!(video.derivatives, DerivativeStatus::DeferredNoCodec);
         assert_eq!(
             sidecar_of(lib.path(), video.asset_id).content_type,
             "video/mp4",

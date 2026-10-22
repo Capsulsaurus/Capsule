@@ -501,3 +501,77 @@ async fn the_widest_version_the_server_can_name_still_decodes() {
         "a decode failure would have collapsed this into a transport error"
     );
 }
+
+// ─── The protocol window (issue #674) ───────────────────────────────────────
+
+/// A roster publish the gate answers `426` is the SDK's one upgrade refusal, not a status.
+#[tokio::test]
+async fn a_roster_426_is_the_typed_upgrade_refusal() {
+    let (server, _) = recording(|_| {
+        MockResponse::new(426, "Upgrade Required")
+            .header("X-Capsule-Protocol-Min", "2099-01-01")
+            .header("X-Capsule-Protocol-Max", "2099-12-31")
+            .json_body(
+                r#"{"type":"about:blank","status":426,"detail":"too old","code":"error.protocol.version_unsupported"}"#
+                    .to_owned(),
+            )
+    })
+    .await;
+    let error = client_for(&server)
+        .publish_roster(&signed_roster(3))
+        .await
+        .expect_err("refused");
+    let AlbumError::UpgradeRequired(refusal) = &error else {
+        panic!("expected UpgradeRequired, got {error:?}");
+    };
+    assert_eq!(
+        refusal.reason,
+        crate::net::negotiation::UpgradeReason::ProtocolBelowWindow
+    );
+    assert_eq!(
+        error.error_code(),
+        Some(error_codes::PROTOCOL_VERSION_UNSUPPORTED)
+    );
+}
+
+/// Once a response latched a build floor above this build, neither album write leaves: the
+/// hand-written provision nor the generated roster publish.
+#[tokio::test]
+async fn album_writes_under_a_latched_floor_never_leave() {
+    let (server, seen) = recording(|_| {
+        MockResponse::new(404, "Not Found")
+            .header("X-Capsule-Protocol-Min", "2026-01-01")
+            .header("X-Capsule-Protocol-Max", "2099-12-31")
+            .header("X-Capsule-Min-Client-Build", "999.0.0")
+    })
+    .await;
+    // Any response from the origin latches its window; a read is the realistic first one.
+    reqwest::Client::new()
+        .get(format!("{}/v1/anything", server.base_url()))
+        .send()
+        .await
+        .map(|response| {
+            crate::net::negotiation::observe(response.url(), response.headers());
+        })
+        .expect("the read is answered");
+
+    let client = client_for(&server);
+    let provision = client.provision(album()).await.expect_err("refused");
+    assert!(
+        matches!(provision, AlbumError::UpgradeRequired(_)),
+        "{provision:?}"
+    );
+    let publish = client
+        .publish_roster(&signed_roster(3))
+        .await
+        .expect_err("refused");
+    assert!(
+        matches!(publish, AlbumError::UpgradeRequired(_)),
+        "{publish:?}"
+    );
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        1,
+        "only the read reached the server"
+    );
+}

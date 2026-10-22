@@ -497,7 +497,7 @@ mod tests {
             sync_endpoint: "http://127.0.0.1:1".to_string(),
             upload_endpoint: "http://127.0.0.1:1/v1/upload".to_string(),
             albums_endpoint: "http://127.0.0.1:1/v1/albums".to_string(),
-            protocol_version: crate::remote::DEFAULT_PROTOCOL_VERSION.to_string(),
+            protocol_version: capsule_core::crypto::primitives::PROTOCOL_VERSION.to_string(),
         };
         let status = ServerStatus::check(&remote).await.expect("check");
         assert!(

@@ -11,8 +11,9 @@ use uuid::Uuid;
 
 use super::derivatives::{PreparedStill, StillSource};
 use super::{
-    AssetState, LifecycleError, Result, SidecarEnrichment, SignedImport, SignedImportOptions,
-    StackPlacement, StreamedImport, Workspace, asset_is_deleted, media_dir, now_rfc3339,
+    AssetState, DerivativeStatus, LifecycleError, Result, SidecarEnrichment, SignedImport,
+    SignedImportOptions, StackPlacement, StreamedImport, Workspace, asset_is_deleted, media_dir,
+    now_rfc3339,
 };
 use crate::cbor;
 use crate::crypto::encryption::{blob_ciphertext_hash, encrypt_asset_rekey, seal_metadata_blob};
@@ -237,6 +238,20 @@ fn content_type_for(ext: &str) -> String {
         _ => "application/octet-stream",
     }
     .to_string()
+}
+
+/// A video's derivatives are **deferred**, not inapplicable: the tier table commits to a
+/// first-frame still and an H.264 preview for every video, and no build links the codec for
+/// them yet (SSoT: thumbnails § Video Previews). The still path sees a video as
+/// [`DerivativeStatus::NotAKnownStill`], so it is reclassified here, where the content type is
+/// known, and the import summary counts it with every other deferral. Any other status passes
+/// through unchanged.
+fn video_derivatives_deferred(status: DerivativeStatus, content_type: &str) -> DerivativeStatus {
+    if status == DerivativeStatus::NotAKnownStill && content_type.starts_with("video/") {
+        DerivativeStatus::DeferredNoCodec
+    } else {
+        status
+    }
 }
 
 fn asset_type_for(content_type: &str) -> String {
@@ -561,7 +576,7 @@ impl Workspace {
     /// on disk (the private `prepare_still`, slices `S-B1`/`S-B14`).
     ///
     /// Returns a [`SignedImport`]: the asset id, the
-    /// [`DerivativeStatus`](super::DerivativeStatus) saying whether derivatives were generated
+    /// [`DerivativeStatus`] saying whether derivatives were generated
     /// and, if not, why, and the per-format deferral count. A format this build has no
     /// codec for **still imports** — the original is the backup, the thumbnail is a bonus — so
     /// the status is a report, never a rejection (slice `S-B13`).
@@ -720,6 +735,10 @@ impl Workspace {
             &amk,
             &enc,
         )?;
+        // Header-derived wherever the bytes name a still Capsule models; the extension table is
+        // the fallback for everything else (video, unknown suffixes).
+        let content_type = format.map_or_else(|| content_type_for(&ext), |f| f.mime().to_string());
+        let derivative_status = video_derivatives_deferred(derivative_status, &content_type);
 
         // Sealing order (1) the prior head `H` is `None` on a create; (2) author + sign the
         // sidecar with `provenance_chain_hash = H`.
@@ -730,9 +749,7 @@ impl Workspace {
             hash: hash::hash_bytes(&plaintext),
             capture_timestamp: capture_rfc3339(capture_utc),
             import_timestamp: req.import_timestamp.clone().unwrap_or_else(now_rfc3339),
-            // Header-derived wherever the bytes name a still Capsule models; the extension
-            // table is the fallback for everything else (video, unknown suffixes).
-            content_type: format.map_or_else(|| content_type_for(&ext), |f| f.mime().to_string()),
+            content_type,
             dimensions,
             lqip,
             tags_user,
@@ -1287,6 +1304,63 @@ mod tests {
             .unwrap();
         assert_eq!(ws.asset(&asset).unwrap().ext, "bin");
         assert_eq!(ws.verify(&asset).unwrap(), VerifyOutcome::Accept);
+    }
+
+    /// A video imports as a signed original whose derivatives are *deferred* — the tier table
+    /// commits to video derivatives and no build links their codec yet — while a file with
+    /// nothing to derive (an unknown suffix) stays `NotAKnownStill`. A zero-byte file is an
+    /// original like any other (issue #695).
+    #[test]
+    fn video_derivatives_are_deferred_and_unknown_files_have_none_to_defer() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Camera Roll").unwrap();
+        let cases: [(&str, &[u8], DerivativeStatus); 4] = [
+            (
+                "clip.mp4",
+                b"\0\0\0\x18ftypmp42 not really",
+                DerivativeStatus::DeferredNoCodec,
+            ),
+            (
+                "clip.mov",
+                b"\0\0\0\x14ftypqt   not really",
+                DerivativeStatus::DeferredNoCodec,
+            ),
+            (
+                "scan.pdf",
+                b"%PDF-1.4 not really",
+                DerivativeStatus::NotAKnownStill,
+            ),
+            ("empty.dat", b"", DerivativeStatus::NotAKnownStill),
+        ];
+        for (name, bytes, expected) in cases {
+            let path = src.path().join(name);
+            fs::write(&path, bytes).unwrap();
+            let import = ws
+                .import_asset_with(album, &path, &SignedImportOptions::default())
+                .unwrap();
+            assert_eq!(import.derivatives, expected, "for {name}");
+            assert_eq!(ws.verify(&import.asset_id).unwrap(), VerifyOutcome::Accept);
+            let asset = ws.asset(&import.asset_id).unwrap();
+            assert_eq!(fs::read(ws.media_path(asset)).unwrap(), bytes, "for {name}");
+        }
+    }
+
+    #[test]
+    fn only_a_video_turns_not_a_known_still_into_a_deferral() {
+        use DerivativeStatus::{DecodeFailed, Decoded, DeferredNoCodec, NotAKnownStill};
+        assert_eq!(
+            video_derivatives_deferred(NotAKnownStill, "video/mp4"),
+            DeferredNoCodec
+        );
+        assert_eq!(
+            video_derivatives_deferred(NotAKnownStill, "application/octet-stream"),
+            NotAKnownStill
+        );
+        for status in [Decoded, DecodeFailed, DeferredNoCodec] {
+            assert_eq!(video_derivatives_deferred(status, "video/mp4"), status);
+        }
     }
 
     /// The rewrite guard, directly. A media path holding bytes of a *different length* than

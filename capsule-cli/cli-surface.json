@@ -402,6 +402,15 @@
           "repeatable": false,
           "required": false,
           "takes_value": false
+        },
+        {
+          "help": "Print the run as one JSON document on stdout: the totals, including how many originals arrived without derivatives and why, and each file's outcome. Not combined with `--push`; run `capsule push --json` for the push report",
+          "id": "json",
+          "long": "json",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": false
         }
       ],
       "name": "import"
