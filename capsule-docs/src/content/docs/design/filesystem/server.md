@@ -96,6 +96,10 @@ accepted it. The **owner ledger** carries those facts:
   which were never acknowledged. Damage followed by an entry refuses further appends.
 - The ledger is never rewritten. Purge appends a purge entry; the purged blobs go through
   [GC](#deletion-and-garbage-collection) as before.
+- Two processes append to one ledger: the server and an operator's `purge --apply`. An append
+  holds an exclusive file lock on the owner's ledger directory from reading the tail to the
+  fsync, and reads the tail from disk whenever another process has appended since. A scan holds
+  the lock shared.
 - Device-directory versions are in the ledger, so a rebuild verifies signatures against the
   directory as it stood when each manifest was accepted.
 

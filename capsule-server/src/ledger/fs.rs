@@ -27,9 +27,16 @@
 //!
 //! Appends to one owner are serialised by a per-owner lock, held from reading the head to the
 //! fsync, so two finalizations for one owner get two positions. Appends to different owners do
-//! not wait on each other. One process owns a blob root; two processes appending to one ledger
-//! is a deployment the design does not allow, exactly as two processes committing to one blob
-//! store is.
+//! not wait on each other.
+//!
+//! That lock is two locks, because two **processes** append to one ledger: the server, and a
+//! `capsule-server purge --apply` run from cron while it serves (#767). Inside a process, a
+//! per-owner async mutex. Across processes, an exclusive OS file lock (`flock`) on the owner's
+//! directory, taken after the mutex and held to the fsync; a scan takes it shared. Under it the
+//! cached tail is **re-checked against the disk** — the last segment's name and length — and
+//! re-read when another process has appended since, so no append reuses a position another
+//! process took. A failed append's cut-back goes to the length observed under the same lock, so
+//! it can only remove its own bytes. The lock is advisory, and every writer is this adapter.
 
 use std::collections::BTreeMap;
 use std::io::ErrorKind;
@@ -209,6 +216,26 @@ impl FilesystemLedger {
         })
     }
 
+    /// Whether the cached `tail` still ends where `owner`'s ledger ends on disk.
+    ///
+    /// Asked under the cross-process lock. Another process's append either grew the last
+    /// segment or opened a new one, and its cut-back only ever restores a length it observed
+    /// under the same lock, so the last segment's name and length are enough to tell.
+    async fn still_current(&self, owner: &OwnerId, tail: &Tail) -> Result<bool, LedgerError> {
+        let on_disk = segments(&self.owner_dir(owner)).await?;
+        Ok(match (&tail.segment, on_disk.last()) {
+            (None, None) => true,
+            (Some((cached, len)), Some((_, last))) if cached == last => {
+                let held = tokio::fs::metadata(last)
+                    .await
+                    .map_err(|error| backend("read a ledger segment's length", &error))?
+                    .len();
+                held == *len
+            }
+            _ => false,
+        })
+    }
+
     /// Create `owner`'s directory if it is absent, fsyncing `ledger/` when this call made it.
     async fn ensure_owner_dir(&self, owner: &OwnerId) -> Result<PathBuf, LedgerError> {
         let path = self.owner_dir(owner);
@@ -259,6 +286,28 @@ fn across_segments(damage: &ChainFault, entries: usize) -> ChainFault {
         ChainFault::Unrecognised { .. } => ChainFault::Unrecognised { entries },
         _ => ChainFault::Undecodable { entries },
     }
+}
+
+/// Take the cross-process lock on the directory at `path`, exclusive or shared; it is released
+/// when the returned handle is dropped. See the module docs.
+///
+/// Blocking, so it waits on the blocking pool rather than on a runtime worker.
+async fn lock_dir(path: PathBuf, exclusive: bool) -> Result<std::fs::File, LedgerError> {
+    let locked = tokio::task::spawn_blocking(move || {
+        let dir = std::fs::File::open(&path)?;
+        if exclusive {
+            dir.lock()?;
+        } else {
+            dir.lock_shared()?;
+        }
+        Ok::<_, std::io::Error>(dir)
+    })
+    .await
+    .map_err(|error| LedgerError::Backend {
+        operation: "lock an owner's ledger",
+        detail: error.to_string(),
+    })?;
+    locked.map_err(|error| backend("lock an owner's ledger", &error))
 }
 
 /// A segment's bytes.
@@ -321,8 +370,15 @@ impl OwnerLedger for FilesystemLedger {
             check_owner_id(owner)?;
             let lock = self.lock_for(owner);
             let mut cached = lock.lock().await;
+            // The directory first, because it is what the cross-process lock is taken on.
+            let dir = self.ensure_owner_dir(owner).await?;
+            let _across_processes = lock_dir(dir.clone(), true).await?;
             let tail = match cached.take() {
-                Some(tail) => tail,
+                Some(tail) if self.still_current(owner, &tail).await? => tail,
+                Some(_) => {
+                    tracing::debug!(%owner, "another process appended to this ledger; re-reading its tail");
+                    self.load_tail(owner).await?
+                }
                 None => self.load_tail(owner).await?,
             };
 
@@ -331,14 +387,11 @@ impl OwnerLedger for FilesystemLedger {
 
             let (path, len, created) = match &tail.segment {
                 Some((path, len)) if *len < self.segment_bytes => (path.clone(), *len, false),
-                _ => {
-                    let dir = self.ensure_owner_dir(owner).await?;
-                    (
-                        dir.join(format!("{}{SEGMENT_SUFFIX}", entry.core.seq)),
-                        0,
-                        true,
-                    )
-                }
+                _ => (
+                    dir.join(format!("{}{SEGMENT_SUFFIX}", entry.core.seq)),
+                    0,
+                    true,
+                ),
             };
 
             if let Err(error) = write_frame(&path, len, &frame).await {
@@ -372,11 +425,19 @@ impl OwnerLedger for FilesystemLedger {
     fn scan<'a>(&'a self, owner: &'a OwnerId) -> LedgerFuture<'a, LedgerScan> {
         Box::pin(async move {
             check_owner_id(owner)?;
-            // Under the owner's lock, so a scan never reads an append half-written.
+            // Under the owner's lock, so a scan never reads an append half-written — this
+            // process's or another's.
             let lock = self.lock_for(owner);
             let _held = lock.lock().await;
             let mut scan = LedgerScan::default();
-            let segments = segments(&self.owner_dir(owner)).await?;
+            let dir = self.owner_dir(owner);
+            let _across_processes = match lock_dir(dir.clone(), false).await {
+                Ok(locked) => Some(locked),
+                // No directory, no ledger: nothing to read, and nothing to wait for.
+                Err(_) if !tokio::fs::try_exists(&dir).await.unwrap_or(true) => None,
+                Err(error) => return Err(error),
+            };
+            let segments = segments(&dir).await?;
             let count = segments.len();
             for (index, (_, path)) in segments.into_iter().enumerate() {
                 let decoded = decode_frames(&read(&path).await?);
