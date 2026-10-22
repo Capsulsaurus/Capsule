@@ -263,7 +263,7 @@ impl PersistedAlbum {
     }
 
     /// This album's **server-side key escrow**: its canonical CBOR behind
-    /// [`ALBUM_KEY_ESCROW_DOMAIN`], sealed under the account master key with
+    /// a versioned domain separator, sealed under the account master key with
     /// [`MasterKey::seal`].
     ///
     /// Everything the album holds travels — every epoch's AMK, the write-tier and admin seeds,

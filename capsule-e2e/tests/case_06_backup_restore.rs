@@ -835,7 +835,7 @@ async fn e2e_case_6_a_recovered_device_restores_every_album_byte_for_byte() {
 
     // Rotations after the setup: each push escrows the new epoch before its asset leaves. Each
     // epoch is pushed before the album rotates past it, because invariant 18 refuses a create
-    // below the album's highest accepted epoch.
+    // below the album's highest accepted epoch and no client path re-seals one yet (#822).
     let pushed = remote::push(&remote, &store_a, &a.workspace, PushOptions::default())
         .await
         .expect("the push runs");

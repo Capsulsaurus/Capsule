@@ -421,9 +421,9 @@ pub(crate) async fn checkpoint(store: &SessionStore, session: &Session) {
 /// [`RemoteError::NotAuthenticated`] with no stored session; [`RemoteError::Recovery`] for an
 /// escrow, sealed-identity or album-key refusal (`IdentityNotStored` carries its own code);
 /// [`RemoteError::WrongRecoverySecret`] when no reading of the secret opens the escrow;
-/// [`RemoteError::Lifecycle`] when the library cannot be created, an album key escrow does not
-/// open under the recovered master key, or the account's directory cannot be extended with the
-/// new device; [`RemoteError::Directory`] when the account's directory cannot be fetched, does
+/// [`RemoteError::Lifecycle`] when the library cannot be created, an album key escrow opens
+/// under the recovered master key but is inconsistent (one sealed under another master key is
+/// skipped, not refused), or the account's directory cannot be extended with the new device; [`RemoteError::Directory`] when the account's directory cannot be fetched, does
 /// not verify, or the publish is refused.
 #[instrument(skip(store, recovery_secret, passphrase, params), fields(library = %library.display()))]
 pub async fn auth_recover(
