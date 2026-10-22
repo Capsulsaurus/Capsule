@@ -683,7 +683,7 @@ jobs:
     if: always()
     # TODO(track:deferred): re-add `kotlin` and `swift` here and to the loop below when mobile
     # resumes — see #389 (Android) and #391–#393 (Apple). Both jobs are disabled (`if: false`).
-    needs: [changes, commit-lint, rust, rust-advisories, rust-test, rust-containers, rust-oidc, rust-cross, web, docs, docs-truth, markdown]
+    needs: [changes, commit-lint, rust, rust-advisories, rust-test, rust-containers, rust-kill-anywhere, rust-oidc, rust-cross, web, docs, docs-truth, markdown]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs succeeded
@@ -704,6 +704,7 @@ jobs:
           for r in "${{ needs.commit-lint.result }}" "${{ needs.rust.result }}" \
                    "${{ needs.rust-advisories.result }}" \
                    "${{ needs.rust-test.result }}" "${{ needs.rust-containers.result }}" \
+                   "${{ needs.rust-kill-anywhere.result }}" \
                    "${{ needs.rust-oidc.result }}" "${{ needs.rust-cross.result }}" \
                    "${{ needs.web.result }}" \
                    "${{ needs.docs.result }}" "${{ needs.docs-truth.result }}" \

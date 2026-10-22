@@ -77,6 +77,8 @@ const SERVER_SETTINGS: &[&str] = &[
     "LOG_FORMAT",
     "TRUSTED_PROXY_HOPS",
     "TRUSTED_PROXIES",
+    "HEADER_READ_TIMEOUT_SECONDS",
+    "CHUNK_READ_TIMEOUT_SECONDS",
 ];
 
 /// Every endpoint override the CLI reads, removed so only `CAPSULE_ENDPOINT` decides.
