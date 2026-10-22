@@ -596,44 +596,27 @@ fn without_the_provider_flag_the_exporter_metadata_is_not_applied() {
     );
 }
 
-/// Slice `S-I5`: the import arm's output is rendered from the `locales/` catalog, not from
-/// literals in `capsule-cli`. The assertion is deliberately written against the catalog
-/// message rather than against English text — an English-only assertion would still pass if
-/// somebody re-hardcoded the string, which is exactly the regression `S-I5` exists to stop.
+/// A `--provider` run says which adapter read the source, alongside the phase lines every
+/// import prints; a plain import does not.
 #[test]
-fn the_import_arm_prints_catalog_messages_not_hardcoded_english() {
+fn a_provider_import_announces_its_adapter_and_a_plain_one_does_not() {
     let fx = fixture();
     let library = fx.library();
-    let bundle = capsule_cli::i18n::cli_bundle();
 
     let out = fx.import(&library, true);
 
-    // The provider notice is new in `S-I5`: a `--provider` run says which adapter read the
-    // source. The product name is substituted in, never translated.
-    let notice = bundle.format(
-        capsule_cli::i18n::keys::IMPORT_PROVIDER_NOTICE,
-        &[("provider", capsule_cli::i18n::Value::Str("Google Takeout"))],
-    );
-    assert!(
-        notice.contains("Google Takeout"),
-        "the key must interpolate the provider name, got {notice:?}"
-    );
-    assert!(out.contains(&notice), "stdout:\n{out}");
+    let notice = "Reading the source as a Google Takeout export.";
+    assert!(out.contains(notice), "stdout:\n{out}");
 
-    for key in [
-        capsule_cli::i18n::keys::IMPORT_SCANNING,
-        capsule_cli::i18n::keys::IMPORT_EXECUTING,
-    ] {
-        let message = bundle.format(key, &[]);
-        assert_ne!(message, key, "{key} is missing from the catalog");
-        assert!(out.contains(&message), "{key} missing from stdout:\n{out}");
+    for line in ["Scanning source files…", "Importing…"] {
+        assert!(out.contains(line), "{line:?} missing from stdout:\n{out}");
     }
 
     // A plain filesystem import takes the other arm, so it must NOT claim a provider.
     let plain_library = fx.library();
     let plain = fx.import(&plain_library, false);
     assert!(
-        !plain.contains(&notice),
+        !plain.contains(notice),
         "a plain import must not announce an export adapter\nstdout:\n{plain}"
     );
 }

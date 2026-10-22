@@ -31,8 +31,8 @@ capsule-cli-migration = { path = "./migration" }
 capsule-core = { path = "../capsule-core", features = ["media-linked-codecs"] }
 # The CLI is a client: every network flow (auth login/refresh/logout, the sync
 # feed) rides `capsule-sdk`, the sanctioned network path — the CLI never
-# hand-rolls a request (S-D5). `capsule-i18n` supplies the localized user-facing
-# strings; no output string is hardcoded in this crate's new surfaces.
+# hand-rolls a request (S-D5). The CLI is English-only; `capsule-i18n` only renders
+# the server's stable `error.*` codes through the English catalog.
 capsule-sdk = { path = "../capsule-sdk" }
 capsule-i18n = { path = "../capsule-i18n" }
 secrecy = { workspace = true }

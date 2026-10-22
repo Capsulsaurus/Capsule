@@ -15,15 +15,11 @@
 //! `clap::Command` built from compile-time attributes. That is what lets `--check` run in the
 //! Rust check gate beside `openapi-check-kynos`.
 //!
-//! ## Its output is English on purpose
+//! ## Its output is English
 //!
-//! `xtask i18n-guard` scans `capsule-cli/src/**` because the `capsule` binary renders prose to
-//! a user in their own language. This binary does not: it runs from `mise run cli-surface` and
-//! from CI, is never installed, and its reader is a developer looking at a task's output.
-//! `xtask::i18n_guard::NEVER_SCANNED` carves `capsule-cli/src/bin/` out of that root for
-//! exactly that reason, so the lines below are plain English and stay that way — routing a
-//! build tool's status line through `locales/` would put a string no user can reach into every
-//! translation catalog.
+//! Like the `capsule` binary itself, which is English-only (ADR-0011), this tool prints plain
+//! English: it runs from `mise run cli-surface` and from CI, is never installed, and its reader
+//! is a developer looking at a task's output.
 //!
 //! Usage:
 //! - `gen_cli_surface [FILE]` writes the document (default `capsule-cli/cli-surface.json`).
