@@ -18,7 +18,7 @@
 //! | create `400` "Bad request" (untyped) | **deleted.** Never constructed with a code; the 400 a malformed body actually produces is the `Json` extractor's, which Kynos declares |
 //! | create `401` | kept, and now the framework's — `Auth<AccessToken>` declares it and fills the `WWW-Authenticate` challenge |
 //! | create `403` | kept — album access, device authorization, a declared owner that is not the album's |
-//! | create `409 duplicate_blob` | **restored, with `S-C22`'s structured `existing_asset`.** It was deleted while this crate had no asset index, because it must name the existing asset and answering from blob presence alone would tell one account what another holds. `S-C37` answers it honestly and owner-scoped |
+//! | create `409 duplicate_blob` | **restored, with `S-C22`'s structured `existing_asset`.** It was deleted while this crate had no asset index, because it must name the existing asset and answering from blob presence alone would tell one account what another holds. `S-C37` answers it honestly and owner-scoped, and a `create` for a different asset adopts the blob before it is refused (#672) |
 //! | create `413` | kept — the declared size past the deployment ceiling |
 //! | create `426` | kept — the manifest envelope's `protocol_version` pin, refused by the envelope gate. The *header* handshake is no longer this surface's: [`crate::negotiation::ProtocolGate`] answers it before the handler runs, and the accepted window rides `X-Capsule-Protocol-Min`/`-Max` on every response |
 //! | create `500` | **now `503`** — a collaborator that could not answer, with `error.upload.unavailable` and a retry instant (transfer/upload.md, Hostile Clients) |
@@ -59,18 +59,21 @@
 //! interceptor sits outside every rejection and stamps the window on all of them. The seam an
 //! `ApiError` lacks, an `Interceptor` has.
 //!
-//! # `409 duplicate_blob` refuses, and nothing yet adopts
+//! # `409 duplicate_blob` refuses the session, and adopts the blob
 //!
 //! The status says "you already hold these bytes" and names the asset that holds them. For a
 //! **retry** — the same asset, the same blob, a lost `201` — that is a complete answer. For
 //! genuine cross-asset deduplication, where a second asset legitimately shares a thumbnail with
-//! a first, it is only half of one: the requesting asset is refused a session and has no way to
-//! record the blob it now knows exists, so its feed entry will not list it.
+//! a first, it is only half of one unless the requesting asset also comes to name the blob: the
+//! client resolves the `409` as a merge and never uploads the bytes, so a requesting asset that
+//! never recorded them left the collector counting one holder where two depended on the bytes,
+//! and purging the first asset swept the second's (#672).
 //!
-//! That gap is created by restoring the contracted status, not hidden by it. The alternative —
-//! silently recording the existing blob against the requesting asset and answering `200` — is a
-//! new reply variant and a wire-contract decision, and the idempotency table this surface is
-//! written against specifies the `409`. Filed rather than improvised.
+//! So a `create` for a different asset is **adopted** before it is refused: the existing blob is
+//! recorded against the requesting asset, with its own custody receipt and ledger entries
+//! ([`crate::upload::adopt`]). The wire answer is unchanged — the `409` the idempotency table
+//! specifies and the SDK's merge path already handles — rather than a new `200` reply variant,
+//! which would have been a contract change every client had to learn.
 //!
 //! # What this port does not have
 //!
@@ -809,9 +812,20 @@ pub(crate) fn retry_at(clock: &dyn Clock, after: jiff::SignedDuration) -> u64 {
 /// The quota is checked here and nowhere later: a declared size that would cross the hard limit
 /// is `403 error.quota.exceeded`, and an account whose quota the operator suspended is
 /// `403 error.quota.suspended`, both before anything is charged or staged.
+///
+/// A finalized `(owner, hash, album)` is `409 error.upload.duplicate_blob` naming the asset that
+/// holds the bytes. When the request is a `create` for a *different* asset, the server first
+/// records the existing blob against the requesting asset — custody-receipted and ledgered as a
+/// finalization is — so the merge the client performs on the `409` leaves both assets holding a
+/// reference, and purging one cannot collect bytes the other depends on.
 #[kynos::post("/v1/upload", operation_id = "create_upload", tag = UploadTag)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one extractor per argument; Kynos resolves each one, and bundling them would hide which the contract declares"
+)]
 pub async fn create_upload(
     Inject(upload): Inject<UploadContext>,
+    Inject(attestation): Inject<crate::attestation::AttestationContext>,
     Inject(quota): Inject<crate::quota::QuotaContext>,
     Inject(moderation): Inject<crate::moderation::ModerationContext>,
     Inject(counters): Inject<CounterContext>,
@@ -1053,22 +1067,29 @@ pub async fn create_upload(
         tracing::error!(%error, "a gate-passed hash is not a content address");
         CreateRejection::unavailable(upload.clock())
     })?;
-    if let Some(existing) = upload
+    // The asset the manifest names — "the same id across the bundle's members".
+    let asset_id = AssetId::new(&request.manifest_envelope.file_id);
+    let duplicate = upload
         .index()
         .find_by_address(&owner, &album, &address)
         .await
         .map_err(|error| {
             store_unavailable(&error, "look up a duplicate blob");
             CreateRejection::unavailable(upload.clock())
-        })?
-    {
-        tracing::info!(%owner, existing_asset = %existing, "an upload was refused: already held");
-        return Err(CreateRejection::duplicate_blob(&existing));
-    }
+        })?;
+    // Only a *create* of a *different* asset adopts (#672). The same asset holding the blob is a
+    // retry with a lost `201`, whose row already names it; a `replace` member records nothing
+    // until its manifest applies the whole bundle as one op, which names the blob itself.
+    let adopting = match duplicate {
+        Some(existing) if existing == asset_id || request.manifest_envelope.action != "create" => {
+            tracing::info!(%owner, existing_asset = %existing, "an upload was refused: already held");
+            return Err(CreateRejection::duplicate_blob(&existing));
+        }
+        other => other,
+    };
 
-    // The asset the manifest names — "the same id across the bundle's members" — reserved
-    // before a session exists, so every blob of a bundle joins one row rather than minting one.
-    let asset_id = AssetId::new(&request.manifest_envelope.file_id);
+    // Reserved before a session exists, so every blob of a bundle joins one row rather than
+    // minting one — and before an adoption, which records against this row.
     match upload
         .index()
         .reserve(crate::index::PendingAsset {
@@ -1092,6 +1113,47 @@ pub async fn create_upload(
         crate::index::Reservation::Conflict => {
             tracing::info!(%owner, %asset_id, "an upload was refused: the asset id is not this caller's");
             return Err(CreateRejection::album_access_denied());
+        }
+    }
+
+    // The owner already holds these bytes under another asset in this album. The client will
+    // resolve the `409` as a merge and never upload them, so the requesting asset must name the
+    // blob *now* or the collector counts one holder where two depend on it (#672). The wire
+    // answer is the `409` it always was; the reference is the side effect.
+    if let Some(existing) = adopting {
+        let adoption = crate::upload::adopt::Adoption {
+            owner: &owner,
+            uploader: &uploader,
+            asset_id: &asset_id,
+            role: request.blob_role.into(),
+            address: &address,
+            crypto_suite_id: request.crypto_suite_id,
+            protocol_version: &protocol_pin,
+        };
+        match crate::upload::adopt::adopt(&upload, &attestation, adoption).await {
+            Ok(
+                crate::upload::adopt::Adopted::Recorded { .. }
+                | crate::upload::adopt::Adopted::AlreadyHeld
+                | crate::upload::adopt::Adopted::Declined,
+            ) => {
+                tracing::info!(%owner, existing_asset = %existing, %asset_id, "an upload was refused: already held, and adopted");
+                return Err(CreateRejection::duplicate_blob(&existing));
+            }
+            // Nothing to adopt: the bytes are gone from the store. An ordinary session puts
+            // them back, which is the only repair a dangling reference has.
+            Ok(crate::upload::adopt::Adopted::Missing) => {}
+            // The asset already names other bytes under this singular role, so telling the
+            // client it now holds these would be false. Finalization's answer to the same
+            // contradiction.
+            Ok(crate::upload::adopt::Adopted::Conflict) => {
+                return Err(CreateRejection::from_gate(GateReject::EnvelopeMismatch(
+                    "blob_role",
+                )));
+            }
+            Err(failure) => {
+                tracing::warn!(%failure, %asset_id, "a duplicate create could not adopt the blob");
+                return Err(CreateRejection::unavailable(upload.clock()));
+            }
         }
     }
 
