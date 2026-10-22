@@ -8,6 +8,12 @@
 
 mod support;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use capsule_core::crypto::hash::Hash32;
+use capsule_core::crypto::storage_attestation::{
+    AttestationRejection, DeclaredAsset, StorageAttestation, verify_storage_attestation,
+};
 use capsule_server::blob::{BlobStore, ContentAddress};
 use capsule_server::gc::CollectionStore;
 use capsule_server::index::{AssetIndex, BlobRecord, PendingAsset, ServingHold};
@@ -636,4 +642,258 @@ async fn a_blob_the_asset_does_not_hold_is_never_re_hashed() {
         blobs[1].get("deep").is_none(),
         "a hash this asset does not hold has no deep verdict, however much the store may hold it"
     );
+}
+
+// ===========================================================================================
+// Signed storage attestation (transfer/durability.md, Signed Storage Attestation)
+// ===========================================================================================
+
+/// A nonce, distinct per `seed`.
+fn nonce(seed: u8) -> [u8; 32] {
+    [seed; 32]
+}
+
+/// Decode the response's signed attestation.
+fn attestation_of(body: &Value) -> StorageAttestation {
+    let encoded = body["attestation"]
+        .as_str()
+        .expect("a signed request carries an attestation");
+    let bytes = BASE64.decode(encoded).expect("base64");
+    StorageAttestation::from_canonical_cbor(&bytes).expect("a canonical attestation")
+}
+
+/// The client's side of the question, for [`verify_storage_attestation`].
+fn declared(asset: &AssetId, hashes: &[&ContentAddress]) -> Vec<DeclaredAsset> {
+    vec![DeclaredAsset {
+        asset_id: asset.as_str().to_owned(),
+        blob_hashes: hashes
+            .iter()
+            .map(|hash| Hash32::from_hex(hash.as_str()).expect("a digest"))
+            .collect(),
+    }]
+}
+
+#[tokio::test]
+async fn a_signed_verdict_verifies_under_the_attestation_key_and_binds_the_nonce() {
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+    let (asset, provenance, metadata) = publish(&fixture, "signed").await;
+    let sent = nonce(0x42);
+
+    let body = verify(
+        &fixture,
+        &bearer,
+        &json!({
+            "assets": [declare(&asset, &[&provenance, &metadata])],
+            "attestation_nonce": Hash32(sent).to_hex(),
+        }),
+        StatusCode::OK,
+    )
+    .await;
+
+    let attestation = attestation_of(&body);
+    let pinned = [fixture.attestation_key.verifying_key()];
+    let asked = declared(&asset, &[&provenance, &metadata]);
+    assert_eq!(
+        verify_storage_attestation(&attestation, &pinned, &sent, &asked),
+        Ok(())
+    );
+    // The signed answer and the readable one are the same answer.
+    let verdict = &attestation.core.verdicts[0];
+    assert!(verdict.durable);
+    assert_eq!(body["verdicts"][0]["durable"], true);
+    assert_eq!(
+        attestation.core.checked_at,
+        body["verdicts"][0]["checked_at"]
+            .as_str()
+            .expect("an instant")
+    );
+    assert_eq!(verdict.blobs[0].role, "provenance");
+    assert!(verdict.blobs.iter().all(|blob| blob.deep.is_none()));
+
+    // A replay: the same signed answer presented to a later request with a new nonce.
+    assert_eq!(
+        verify_storage_attestation(&attestation, &pinned, &nonce(0x43), &asked),
+        Err(AttestationRejection::Nonce)
+    );
+    // A tamper: a server that later lost the bytes cannot rewrite what it signed.
+    let mut tampered = attestation.clone();
+    tampered.core.verdicts[0].blobs[1].stored = false;
+    assert_eq!(
+        verify_storage_attestation(&tampered, &pinned, &sent, &asked),
+        Err(AttestationRejection::Signature)
+    );
+}
+
+#[tokio::test]
+async fn a_signed_verdict_records_a_loss_as_evidence() {
+    // The reason the signed form exists: an honest server's self-reported loss becomes a
+    // statement the client can keep.
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+    let (asset, provenance, metadata) = publish(&fixture, "signed-loss").await;
+    fixture
+        .blobs
+        .remove(&metadata)
+        .await
+        .expect("the store removes");
+
+    let body = verify(
+        &fixture,
+        &bearer,
+        &json!({
+            "assets": [declare(&asset, &[&provenance, &metadata])],
+            "attestation_nonce": Hash32(nonce(7)).to_hex(),
+        }),
+        StatusCode::OK,
+    )
+    .await;
+    let attestation = attestation_of(&body);
+    assert_eq!(
+        verify_storage_attestation(
+            &attestation,
+            &[fixture.attestation_key.verifying_key()],
+            &nonce(7),
+            &declared(&asset, &[&provenance, &metadata]),
+        ),
+        Ok(())
+    );
+    assert!(!attestation.core.verdicts[0].durable);
+    assert!(!attestation.core.verdicts[0].blobs[1].stored);
+}
+
+#[tokio::test]
+async fn an_unsigned_request_carries_no_attestation() {
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+    let (asset, provenance, _) = publish(&fixture, "unsigned").await;
+    let body = verify(
+        &fixture,
+        &bearer,
+        &json!({ "assets": [declare(&asset, &[&provenance])] }),
+        StatusCode::OK,
+    )
+    .await;
+    assert!(body.get("attestation").is_none());
+}
+
+#[tokio::test]
+async fn a_malformed_nonce_is_refused() {
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+    let (asset, provenance, _) = publish(&fixture, "bad-nonce").await;
+    for bad in [
+        String::new(),
+        "ab".to_owned(),
+        Hash32(nonce(0xab)).to_hex().to_uppercase(),
+        "zz".repeat(32),
+        format!("{}00", Hash32(nonce(1)).to_hex()),
+    ] {
+        let body = verify(
+            &fixture,
+            &bearer,
+            &json!({
+                "assets": [declare(&asset, &[&provenance])],
+                "attestation_nonce": bad,
+            }),
+            StatusCode::BAD_REQUEST,
+        )
+        .await;
+        assert_eq!(body["code"], "error.storage.invalid_request");
+    }
+}
+
+#[tokio::test]
+async fn signing_spends_the_deep_budget_and_a_throttled_signed_request_is_a_429() {
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+    let (asset, provenance, metadata) = publish(&fixture, "signed-budget").await;
+    let signed = |seed: u8| {
+        json!({
+            "assets": [declare(&asset, &[&provenance, &metadata])],
+            "attestation_nonce": Hash32(nonce(seed)).to_hex(),
+        })
+    };
+
+    // One budget: two signed requests and two deep ones spend it.
+    for seed in 0..2 {
+        verify(&fixture, &bearer, &signed(seed), StatusCode::OK).await;
+    }
+    for _ in 0..2 {
+        let body = verify(
+            &fixture,
+            &bearer,
+            &json!({ "assets": [declare(&asset, &[&provenance])], "deep": true }),
+            StatusCode::OK,
+        )
+        .await;
+        assert_eq!(body["verdicts"][0]["blobs"][0]["deep"], "intact");
+    }
+
+    // A signed request past it is refused whole, with a wait.
+    let refused = fixture
+        .client
+        .post("/v1/storage/verify")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .json(&signed(9))
+        .send()
+        .await;
+    refused.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    let body = refused.json::<Value>();
+    assert_eq!(body["code"], "error.storage.deep_rate_limited");
+    let instant = body["retry_after"].as_u64().expect("a retry instant");
+    let now = u64::try_from(fixture.now().as_second()).expect("a post-epoch clock");
+    let header = refused
+        .header("retry-after")
+        .expect("and Retry-After")
+        .parse::<u64>()
+        .expect("delta-seconds");
+    assert_eq!(header, instant - now);
+
+    // A deep request past it still answers, structurally, as before.
+    let body = verify(
+        &fixture,
+        &bearer,
+        &json!({ "assets": [declare(&asset, &[&provenance])], "deep": true }),
+        StatusCode::OK,
+    )
+    .await;
+    assert_eq!(body["verdicts"][0]["blobs"][0]["deep"], "rate_limited");
+
+    // And a structural, unsigned request is never charged.
+    verify(
+        &fixture,
+        &bearer,
+        &json!({ "assets": [declare(&asset, &[&provenance])] }),
+        StatusCode::OK,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_signed_deep_request_is_charged_once() {
+    // Four signed deep requests fit the four-an-hour budget: one request, one charge.
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+    let (asset, provenance, _) = publish(&fixture, "signed-deep").await;
+    for seed in 0..4 {
+        let body = verify(
+            &fixture,
+            &bearer,
+            &json!({
+                "assets": [declare(&asset, &[&provenance])],
+                "deep": true,
+                "attestation_nonce": Hash32(nonce(seed)).to_hex(),
+            }),
+            StatusCode::OK,
+        )
+        .await;
+        let attestation = attestation_of(&body);
+        assert_eq!(
+            attestation.core.verdicts[0].blobs[0].deep.as_deref(),
+            Some("intact"),
+            "the deep finding is inside the signature"
+        );
+    }
 }

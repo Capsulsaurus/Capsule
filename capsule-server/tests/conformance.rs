@@ -1768,6 +1768,29 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::OK);
 
+    // 429: a signed verdict past the account's deep budget is refused whole.
+    let signed = json!({
+        "assets": [{ "asset_id": "anything", "blob_hashes": [checksum(b"anything")] }],
+        "attestation_nonce": "ab".repeat(32),
+    });
+    for _ in 0..4 {
+        client
+            .post("/v1/storage/verify")
+            .header("authorization", &bearer)
+            .header("accept", "application/json")
+            .json(&signed)
+            .send()
+            .await
+            .assert_status(StatusCode::OK);
+    }
+    client
+        .post("/v1/storage/verify")
+        .header("authorization", &bearer)
+        .json(&signed)
+        .send()
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS);
+
     // ── /v1/auth/devices/directory ─────────────────────────────────────────────────────────
     // One identity key for the whole block: the account is anchored to the first key it
     // publishes under (`S-C42`), so a fresh key per request would make every publish after the

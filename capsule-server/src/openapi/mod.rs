@@ -265,6 +265,12 @@ const EXTRAS: &[Extra] = &[
         members: RETRY_AFTER,
     },
     Extra {
+        component: "StorageVerifyRateLimitedProblem",
+        operation: "verify_storage",
+        status: 429,
+        members: RETRY_AFTER,
+    },
+    Extra {
         component: "ShareBlobRateLimitedProblem",
         operation: "share_blob",
         status: 429,

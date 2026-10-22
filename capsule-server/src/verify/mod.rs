@@ -53,8 +53,10 @@
 //!   right now and on their way out, so a client that read `stored` alone and released its copy
 //!   would be releasing it into a window that closes. A **quarantined** blob already reports
 //!   correctly with no extra check, because quarantining moves the bytes out of the store.
-//! - The **signed** `StorageAttestation` form of this verdict is `S-C15`. It wraps this engine
-//!   rather than replacing it, which is why the verdict type is public.
+//! - The **signed** form of this verdict wraps this engine rather than replacing it:
+//!   [`attested`] projects the verdicts into the shared
+//!   [`StorageAttestation`](capsule_core::crypto::storage_attestation::StorageAttestation) shape,
+//!   and [`crate::attestation::sign_storage_attestation`] signs it under the attestation key.
 
 use std::sync::Arc;
 
@@ -376,6 +378,53 @@ async fn verify_one(
         blobs,
         checked_at,
     })
+}
+
+/// Project verdicts into the shape a storage attestation signs.
+///
+/// The same facts the JSON verdict carries, spelled the same way (`unknown` for a hash the asset
+/// does not hold, `deep` absent when no scan ran), so the signed and the unsigned answer to one
+/// request cannot say different things.
+///
+/// # Errors
+///
+/// Returns [`VerifyUnavailable`] if a declared address is not a SHA-256 digest. Unreachable for
+/// an address that came through [`ContentAddress::parse`], and refused rather than signed if it
+/// ever is: a signature over a hash the client did not send is evidence about nothing.
+pub fn attested(
+    verdicts: &[AssetVerdict],
+) -> Result<Vec<capsule_core::crypto::storage_attestation::AttestedAsset>, VerifyUnavailable> {
+    use capsule_core::crypto::hash::Hash32;
+    use capsule_core::crypto::storage_attestation::{AttestedAsset, AttestedBlob};
+
+    verdicts
+        .iter()
+        .map(|verdict| {
+            let blobs = verdict
+                .blobs
+                .iter()
+                .map(|blob| {
+                    let hash = Hash32::from_hex(blob.hash.as_str()).map_err(|_| {
+                        tracing::error!(hash = %blob.hash, "a declared address is not a digest");
+                        VerifyUnavailable("a declared address is not a digest".to_owned())
+                    })?;
+                    Ok(AttestedBlob {
+                        hash,
+                        role: blob.role.map_or("unknown", |role| role.as_str()).to_owned(),
+                        stored: blob.stored,
+                        indexed: blob.indexed,
+                        retrievable: blob.retrievable,
+                        deep: blob.deep.map(|deep| deep.as_str().to_owned()),
+                    })
+                })
+                .collect::<Result<Vec<_>, VerifyUnavailable>>()?;
+            Ok(AttestedAsset {
+                asset_id: verdict.asset_id.to_string(),
+                durable: verdict.durable,
+                blobs,
+            })
+        })
+        .collect()
 }
 
 /// How much of a blob is read into memory at once during a deep scan.
