@@ -456,6 +456,100 @@ impl Workspace {
             sidecar,
         })))
     }
+
+    /// Verify a remote entry and **open its original**: run it through
+    /// [`apply_remote_entry`](Self::apply_remote_entry), recover the original's file key from
+    /// this workspace's album keys (honouring the manifest's `key_mode`), decrypt the STREAM
+    /// ciphertext, and check the plaintext digest against the signed sidecar's `hash`.
+    ///
+    /// The read half of a restore: what comes back as [`RemoteOriginal::Opened`] is byte for
+    /// byte the original the account's device signed, because every link from the bytes to a
+    /// signature has been checked — the ciphertext against the manifest's `ciphertext_hash`
+    /// (inside the chokepoint), every chunk against its AEAD tag, and the plaintext against the
+    /// sidecar's digest, which the account's identity key signs. A head that binds no metadata
+    /// blob (a `trash-restore`, say) has no sidecar, so its plaintext stands on the first two.
+    ///
+    /// An entry that does not apply is handed back unchanged as [`RemoteOriginal::Refused`] —
+    /// nothing is decrypted. Read-only with respect to this workspace, like the apply it wraps.
+    ///
+    /// # Errors
+    ///
+    /// As [`apply_remote_entry`](Self::apply_remote_entry): only a failure of this workspace
+    /// itself. A file key that cannot be recovered or bytes that do not open are verdicts
+    /// ([`RemoteOriginal::Undecryptable`], [`RemoteOriginal::DigestMismatch`]), never errors.
+    #[tracing::instrument(skip_all, fields(album_id = %entry.album_id))]
+    pub fn open_remote_original(&self, entry: RemoteEntry<'_>) -> Result<RemoteOriginal> {
+        let facts = match self.apply_remote_entry(entry)? {
+            SyncApplyOutcome::Applied(facts) => facts,
+            refused => return Ok(RemoteOriginal::Refused(refused)),
+        };
+        // The apply decoded these exact bytes a moment ago, so this cannot fail; answered as a
+        // verdict rather than unwrapped all the same.
+        let Ok(record) = cbor::from_slice::<ProvenanceRecord>(entry.manifest_cbor) else {
+            return Ok(RemoteOriginal::Undecryptable { facts });
+        };
+        let core = &record.manifest.core;
+        let album = self.album(&facts.album_id)?;
+        let file_key = match self.original_file_key(album, core) {
+            Ok(key) => key,
+            Err(error) => {
+                tracing::warn!(asset_id = %facts.asset_id, %error, "open-remote: the file key could not be recovered");
+                return Ok(RemoteOriginal::Undecryptable { facts });
+            }
+        };
+        let plaintext = match crate::crypto::encryption::decrypt_asset_vec(
+            &file_key,
+            &core.nonce_prefix,
+            entry.original_ciphertext,
+        ) {
+            Ok(plaintext) => plaintext,
+            Err(error) => {
+                tracing::warn!(asset_id = %facts.asset_id, %error, "open-remote: the original failed authentication");
+                return Ok(RemoteOriginal::Undecryptable { facts });
+            }
+        };
+        if let Some(sidecar) = &facts.sidecar
+            && crate::crypto::hash::hash_bytes(&plaintext) != sidecar.hash
+        {
+            tracing::warn!(
+                asset_id = %facts.asset_id,
+                "open-remote: the plaintext digest differs from the signed sidecar's"
+            );
+            return Ok(RemoteOriginal::DigestMismatch { facts });
+        }
+        tracing::debug!(
+            asset_id = %facts.asset_id,
+            bytes = plaintext.len(),
+            "open-remote: original verified and decrypted"
+        );
+        Ok(RemoteOriginal::Opened { facts, plaintext })
+    }
+}
+
+/// How [`Workspace::open_remote_original`] resolved.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RemoteOriginal {
+    /// Verified end to end and decrypted; when the head carries a sidecar, `plaintext` hashes
+    /// to its signed digest.
+    Opened {
+        /// The verified facts of the entry.
+        facts: Box<RemoteAssetFacts>,
+        /// The original's bytes.
+        plaintext: Vec<u8>,
+    },
+    /// The entry did not apply (held pending or quarantined); nothing was decrypted.
+    Refused(SyncApplyOutcome),
+    /// The entry applied, but its file key could not be recovered or its ciphertext failed
+    /// authentication under it.
+    Undecryptable {
+        /// The verified facts of the entry.
+        facts: Box<RemoteAssetFacts>,
+    },
+    /// The ciphertext opened, but the plaintext does not hash to the signed sidecar's digest.
+    DigestMismatch {
+        /// The verified facts of the entry.
+        facts: Box<RemoteAssetFacts>,
+    },
 }
 
 #[cfg(test)]
@@ -876,6 +970,57 @@ mod tests {
                 SyncApplyOutcome::Quarantined(QuarantineReason::MalformedManifest(_))
             ),
             "a record must name the asset its manifest names"
+        );
+    }
+
+    /// The restore read path: a verified entry opens to exactly the bytes that were imported.
+    #[test]
+    fn an_applied_entry_opens_to_the_imported_bytes() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let (ws, album, asset, wire) = seeded(&lib, &src);
+
+        match ws.open_remote_original(entry(album, &wire, None)).unwrap() {
+            RemoteOriginal::Opened { facts, plaintext } => {
+                assert_eq!(facts.asset_id, asset);
+                assert_eq!(plaintext, ws.read_plaintext(&asset).unwrap());
+            }
+            other => panic!("expected the original to open, got {other:?}"),
+        }
+    }
+
+    /// An entry that does not apply is handed back as its verdict, and nothing is decrypted:
+    /// bytes that are not the signed ciphertext, and an album this workspace holds no keys for.
+    #[test]
+    fn an_entry_that_does_not_apply_is_refused_without_decrypting() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let (ws, album, _asset, wire) = seeded(&lib, &src);
+
+        let mut flipped = wire.ciphertext.clone();
+        flipped[0] ^= 0x01;
+        let tampered = Wire {
+            manifest_cbor: wire.manifest_cbor.clone(),
+            metadata_blob: wire.metadata_blob.clone(),
+            ciphertext: flipped,
+        };
+        assert_eq!(
+            ws.open_remote_original(entry(album, &tampered, None))
+                .unwrap(),
+            RemoteOriginal::Refused(SyncApplyOutcome::Quarantined(QuarantineReason::Rejected(
+                RejectReason::CiphertextHashMismatch
+            ))),
+        );
+
+        let other_lib = TempDir::new().unwrap();
+        let keyless = fast_workspace(other_lib.path());
+        assert_eq!(
+            keyless
+                .open_remote_original(entry(album, &wire, None))
+                .unwrap(),
+            RemoteOriginal::Refused(SyncApplyOutcome::Quarantined(
+                QuarantineReason::UnknownAlbum(album)
+            )),
         );
     }
 }
