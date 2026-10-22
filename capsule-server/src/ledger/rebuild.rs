@@ -248,6 +248,21 @@ impl RebuildReport {
 /// cannot spell it differently.
 pub const PURGE: &str = "purge";
 
+/// The lifecycle action that confirms a retention purge the index applied (#811).
+///
+/// The purge worker appends it, for the same asset, once the index answers that the purge
+/// committed. It names the [`PURGE`] entry it confirms by that entry's ledger position, carried
+/// in the event's `sync_seq` (a purge mints no sequence number, so the field is otherwise
+/// unused here); [`replay::lifecycle`] confirms exactly that entry, and a rebuild empties a
+/// tombstone only for a confirmed purge. Naming the entry, rather than taking the latest
+/// unconfirmed purge of the asset, keeps two concurrent purge passes from confirming the one the
+/// index refused. A reader that predates the confirmation pairs it as a lifecycle op's second
+/// entry, which a purge ignores, so the entry is tolerated by older replays. A purge the index refused
+/// (the asset was restored, or re-deleted under a later floor, after the worker listed it) is
+/// never confirmed, so a rebuild cannot drop references the live row kept, whatever order the
+/// purge and the concurrent op reached the ledger in.
+pub const PURGED: &str = "purged";
+
 /// Run one rebuild pass.
 ///
 /// # Errors
@@ -723,8 +738,20 @@ async fn apply_lifecycle(
     let (context, mode) = (replay.context, replay.mode);
     // A retention purge (#767) carries no manifest: the server initiates it under the signed
     // `retention_until`. It drops the tombstone's references and keeps the row, as the index's
-    // purge does, and only for a tombstone — the index refuses any other.
+    // purge does, and only once a `purged` entry confirmed the index applied it (#811): the
+    // purge entry precedes the index's re-check, which may have refused it for an op the ledger
+    // holds *after* it, so the replayed state at this position cannot say. An unconfirmed purge
+    // — refused, or applied with its confirmation lost — keeps the references; at worst they
+    // name blobs GC has since swept, which step 4 reports rather than loses.
+    //
+    // A confirmed purge applies here, at its own position, not at its confirmation's: an op
+    // ledgered between the two re-adds what it adds, so the replay never drops a reference the
+    // live row holds.
     if op.action == PURGE {
+        if !op.confirmed {
+            tracing::debug!(%asset, ledger_seq = op.ledger_seq, "an unconfirmed purge keeps the asset's references");
+            return Ok(());
+        }
         if facts.state == Some(AssetState::Tombstoned) || facts.head.is_none() {
             facts.blobs.clear();
             facts.superseded.clear();

@@ -142,12 +142,15 @@ impl Server {
         )
     }
 
-    /// Append as a deployment does: through the anchor, so the index records each head.
-    async fn append(&self, owner: &OwnerId, event: LedgerEvent) {
+    /// Append as a deployment does: through the anchor, so the index records each head. Returns
+    /// the entry's ledger position.
+    async fn append(&self, owner: &OwnerId, event: LedgerEvent) -> u64 {
         crate::ledger::AnchoredLedger::new(self.ledger.clone(), self.index.clone())
             .append(owner, event, at(), &self.signer)
             .await
-            .expect("an append lands");
+            .expect("an append lands")
+            .core
+            .seq
     }
 
     /// Publish the signer's directory at `version` with the fixture device, `revoked` or not, as
@@ -290,15 +293,34 @@ impl Server {
     /// entry. `prior` overrides the predecessor the manifest names, to write one that does not
     /// chain; the index is then not asked at all, as it would refuse.
     async fn delete(&self, owner: &OwnerId, asset: &AssetId, crash: bool, prior: Option<Hash32>) {
+        self.op(owner, asset, OpAction::Delete, crash, prior).await;
+    }
+
+    /// Ledger and apply a lifecycle `action` on `asset`, as the ops route does: the entry
+    /// before the index call, and the position after it unless `crash`. A `prior` that is not
+    /// the head is refused by the index and never applied.
+    async fn op(
+        &self,
+        owner: &OwnerId,
+        asset: &AssetId,
+        action: OpAction,
+        crash: bool,
+        prior: Option<Hash32>,
+    ) {
         let row = self.index.read(asset).await.expect("read").expect("a row");
         let chains = prior.is_none();
         let prior = prior.or(row.chain_head);
-        let bytes = delete_record(asset, prior.expect("a published row has a head"));
+        let signed = match action {
+            OpAction::Delete => Action::Delete,
+            OpAction::TrashRestore => Action::TrashRestore,
+            other => panic!("the fixture signs no {other:?}"),
+        };
+        let bytes = op_record(asset, prior.expect("a published row has a head"), signed);
         let address = self.store(&bytes).await;
         let manifest_hash = hash_bytes(&bytes);
         let event = |sync_seq| LedgerEvent::Lifecycle {
             asset_id: asset.as_str().to_owned(),
-            action: OpAction::Delete.as_str().to_owned(),
+            action: action.as_str().to_owned(),
             manifest_hash: Some(manifest_hash),
             sync_seq,
         };
@@ -312,20 +334,20 @@ impl Server {
                 asset_id: asset.clone(),
                 owner_id: owner.clone(),
                 album_id: row.album_id.clone(),
-                action: OpAction::Delete,
+                action,
                 manifest_hash,
                 prior_provenance_hash: prior,
                 amk_version: 0,
                 provenance: address,
                 metadata: None,
                 original: None,
-                retention_until: Some(retention()),
+                retention_until: (action == OpAction::Delete).then(retention),
                 at: at(),
             })
             .await
             .expect("the index applies");
         let crate::index::OpOutcome::Applied { sync_seq, .. } = outcome else {
-            panic!("the delete answered {outcome:?}");
+            panic!("the {action:?} answered {outcome:?}");
         };
         if !crash {
             self.append(owner, event(Some(sync_seq))).await;
@@ -338,17 +360,18 @@ fn retention() -> Timestamp {
     Timestamp::from_second(1_769_904_000).expect("a valid instant")
 }
 
-/// A signed `delete` for `asset`, chaining onto `prior`, in its provenance record.
-fn delete_record(asset: &AssetId, prior: Hash32) -> Vec<u8> {
+/// A signed lifecycle `action` (a `delete` or a `trash-restore`) for `asset`, chaining onto
+/// `prior`, in its provenance record. A delete signs the fixture's retention floor.
+fn op_record(asset: &AssetId, prior: Hash32, action: Action) -> Vec<u8> {
     let metadata = ContentAddress::parse(&hash_bytes(b"unused").to_hex()).expect("an address");
     let created = manifest(asset, &metadata);
     let record: capsule_core::crypto::provenance::ProvenanceRecord =
         capsule_core::cbor::from_slice(&created).expect("the create record decodes");
     let mut core = record.manifest.core;
-    core.action = Action::Delete;
+    core.action = action;
     core.metadata_blob_hash = None;
     core.prior_provenance_hash = Some(prior);
-    core.retention_until = Some(retention().to_string());
+    core.retention_until = (action == Action::Delete).then(|| retention().to_string());
     let device = device_key();
     let write_tier = HybridSigningKey::from_seed64(&[2; 64]);
     let signed = core.sign(&device, &write_tier).expect("a manifest signs");
@@ -1017,25 +1040,15 @@ async fn a_ledgered_delete_is_replayed_into_the_rebuilt_row() {
 
 #[tokio::test]
 async fn a_ledgered_purge_drops_the_tombstones_references_and_keeps_the_row() {
-    // The entry #767 specifies: a `purge` lifecycle entry with no manifest, before the index's
-    // purge commits. The purged blobs are then collected, so without the entry a rebuild would
-    // report every one of them as dangling.
+    // The entries #767 and #811 specify: a `purge` lifecycle entry with no manifest before the
+    // index's purge commits, and a `purged` one confirming it after. The purged blobs are then
+    // collected, so without the entries a rebuild would report every one of them as dangling.
     let server = Server::new();
     let alice = owner("alice");
     let id = server.publish(&alice, "purged", false).await;
     server.delete(&alice, &id, false, None).await;
     let held = server.index.read(&id).await.expect("read").expect("a row");
-    server
-        .append(
-            &alice,
-            LedgerEvent::Lifecycle {
-                asset_id: id.as_str().to_owned(),
-                action: "purge".to_owned(),
-                manifest_hash: None,
-                sync_seq: None,
-            },
-        )
-        .await;
+    let purge_seq = server.append(&alice, purge_entry(&id)).await;
     assert!(matches!(
         server
             .index
@@ -1044,6 +1057,7 @@ async fn a_ledgered_purge_drops_the_tombstones_references_and_keeps_the_row() {
             .expect("the index purges"),
         crate::index::PurgeOutcome::Purged(_)
     ));
+    server.append(&alice, purged_entry(&id, purge_seq)).await;
     let original = rows(&server.index).await;
 
     // Before the collector runs, the manifests are still there: the purged tombstone comes back
@@ -1072,6 +1086,227 @@ async fn a_ledgered_purge_drops_the_tombstones_references_and_keeps_the_row() {
     assert_eq!(report.owners[0].purged, vec![id]);
     assert!(report.owners[0].dangling.is_empty(), "{report:?}");
     assert!(!report.has_faults(), "{report:?}");
+}
+
+/// A retention purge entry for `asset`, as the purge worker writes it before the index call.
+fn purge_entry(asset: &AssetId) -> LedgerEvent {
+    LedgerEvent::Lifecycle {
+        asset_id: asset.as_str().to_owned(),
+        action: PURGE.to_owned(),
+        manifest_hash: None,
+        sync_seq: None,
+    }
+}
+
+/// The confirmation the purge worker writes once the index applied the purge ledgered at
+/// `purge_seq`.
+fn purged_entry(asset: &AssetId, purge_seq: u64) -> LedgerEvent {
+    LedgerEvent::Lifecycle {
+        asset_id: asset.as_str().to_owned(),
+        action: PURGED.to_owned(),
+        manifest_hash: None,
+        sync_seq: Some(purge_seq),
+    }
+}
+
+#[tokio::test]
+async fn a_purge_the_index_refused_for_a_later_ledgered_restore_keeps_every_reference() {
+    // #811: the purge worker ledgers its purge at N; a restore ledgers at N+1 and commits in
+    // the index first, so the index refuses the purge (`NotTombstoned`) and nothing confirms
+    // it. At N the replay still has a tombstone, so a rebuild that applied every purge entry
+    // would drop the original the live row keeps.
+    let server = Server::new();
+    let alice = owner("alice");
+    let id = server.publish(&alice, "restored", false).await;
+    server.delete(&alice, &id, false, None).await;
+    server.append(&alice, purge_entry(&id)).await;
+    server
+        .op(&alice, &id, OpAction::TrashRestore, false, None)
+        .await;
+    assert_eq!(
+        server
+            .index
+            .purge(&id, retention())
+            .await
+            .expect("the index answers"),
+        crate::index::PurgeOutcome::NotTombstoned
+    );
+    let original = rows(&server.index).await;
+    assert_eq!(original[0].state, AssetState::Visible);
+    assert!(
+        original[0]
+            .blobs
+            .iter()
+            .any(|blob| blob.role == BlobRole::Metadata)
+            && !original[0].superseded.is_empty(),
+        "the live row keeps more than the restore's provenance blob: {original:?}"
+    );
+
+    let empty = Arc::new(InMemoryAssetIndex::new());
+    let report = rebuild(&server.rebuild_into(empty.clone()), Mode::Apply)
+        .await
+        .expect("a pass");
+    assert!(report.owners[0].purged.is_empty(), "{report:?}");
+    assert!(!report.has_faults(), "{report:?}");
+    assert_eq!(
+        rows(&empty).await,
+        original,
+        "the rebuilt row holds every reference the live row holds"
+    );
+}
+
+#[tokio::test]
+async fn a_purge_whose_confirmation_was_lost_keeps_the_tombstones_references() {
+    // The index purged, and the `purged` append after it was lost. The rebuild cannot tell
+    // that from a refusal, so it keeps the references: a reference to a blob GC has since
+    // swept is reported as dangling, never a reference the live index holds dropped.
+    let server = Server::new();
+    let alice = owner("alice");
+    let id = server.publish(&alice, "unconfirmed", false).await;
+    server.delete(&alice, &id, false, None).await;
+    let tombstone = rows(&server.index).await;
+    server.append(&alice, purge_entry(&id)).await;
+    assert!(matches!(
+        server
+            .index
+            .purge(&id, retention())
+            .await
+            .expect("the index purges"),
+        crate::index::PurgeOutcome::Purged(_)
+    ));
+
+    let empty = Arc::new(InMemoryAssetIndex::new());
+    let report = rebuild(&server.rebuild_into(empty.clone()), Mode::Apply)
+        .await
+        .expect("a pass");
+    assert!(report.owners[0].purged.is_empty(), "{report:?}");
+    assert_eq!(
+        rows(&empty).await,
+        tombstone,
+        "the tombstone comes back with the references it held before the purge"
+    );
+}
+
+/// Every blob and superseded manifest `live` references, `rebuilt` references too.
+///
+/// Not equality: after a purge, an op's replay supersedes the head the purge left, which the
+/// live index no longer referenced, so the rebuilt row can hold one manifest more.
+fn keeps_every_live_reference(rebuilt: &AssetRow, live: &AssetRow) {
+    for blob in &live.blobs {
+        assert!(
+            rebuilt
+                .blobs
+                .iter()
+                .any(|held| held.role == blob.role && held.address == blob.address),
+            "{blob:?} is dropped: {rebuilt:?}"
+        );
+    }
+    for address in &live.superseded {
+        assert!(
+            rebuilt.superseded.contains(address),
+            "{address} is dropped: {rebuilt:?}"
+        );
+    }
+    assert_eq!(
+        (rebuilt.state, rebuilt.chain_head, rebuilt.retention_until),
+        (live.state, live.chain_head, live.retention_until)
+    );
+}
+
+/// The provenance blob `row` points at.
+fn provenance(row: &AssetRow) -> ContentAddress {
+    row.blobs
+        .iter()
+        .find(|blob| blob.role == BlobRole::Provenance)
+        .map(|blob| blob.address.clone())
+        .expect("a row with a provenance blob")
+}
+
+#[tokio::test]
+async fn a_confirmed_purge_applies_at_its_own_position_not_its_confirmations() {
+    // #811 decision 3: an op ledgered between a purge and its confirmation, and committed in
+    // the index after the purge, re-adds what it adds. Applying the purge at the confirmation
+    // would clear the re-delete's manifest, which the live row references.
+    let server = Server::new();
+    let alice = owner("alice");
+    let id = server.publish(&alice, "between", false).await;
+    server.delete(&alice, &id, false, None).await;
+    let purge_seq = server.append(&alice, purge_entry(&id)).await;
+    assert!(matches!(
+        server
+            .index
+            .purge(&id, retention())
+            .await
+            .expect("the index purges"),
+        crate::index::PurgeOutcome::Purged(_)
+    ));
+    server.delete(&alice, &id, false, None).await;
+    server.append(&alice, purged_entry(&id, purge_seq)).await;
+    let original = rows(&server.index).await;
+    let redelete = provenance(&original[0]);
+
+    let empty = Arc::new(InMemoryAssetIndex::new());
+    let report = rebuild(&server.rebuild_into(empty.clone()), Mode::Apply)
+        .await
+        .expect("a pass");
+    assert!(!report.has_faults(), "{report:?}");
+    let rebuilt = rows(&empty).await;
+    assert_eq!(
+        provenance(&rebuilt[0]),
+        redelete,
+        "the re-delete's manifest is still referenced"
+    );
+    keeps_every_live_reference(&rebuilt[0], &original[0]);
+}
+
+#[tokio::test]
+async fn a_confirmation_never_confirms_a_concurrent_pass_s_refused_purge() {
+    // Two purge passes over one asset: B ledgers its purge and the index applies it; a re-delete
+    // under a floor A's clock has not reached lands; A ledgers its purge and the index refuses
+    // it; then B confirms. Matching B's confirmation to the latest unconfirmed purge would
+    // confirm A, whose position is after the re-delete, and drop the re-delete's manifest.
+    let server = Server::new();
+    let alice = owner("alice");
+    let id = server.publish(&alice, "concurrent", false).await;
+    server.delete(&alice, &id, false, None).await;
+    let pass_b = server.append(&alice, purge_entry(&id)).await;
+    assert!(matches!(
+        server
+            .index
+            .purge(&id, retention())
+            .await
+            .expect("the index purges"),
+        crate::index::PurgeOutcome::Purged(_)
+    ));
+    server.delete(&alice, &id, false, None).await;
+    server.append(&alice, purge_entry(&id)).await;
+    let before_floor = retention()
+        .checked_sub(jiff::SignedDuration::from_secs(1))
+        .expect("an instant");
+    assert_eq!(
+        server
+            .index
+            .purge(&id, before_floor)
+            .await
+            .expect("the index answers"),
+        crate::index::PurgeOutcome::Retained
+    );
+    server.append(&alice, purged_entry(&id, pass_b)).await;
+    let original = rows(&server.index).await;
+    let redelete = provenance(&original[0]);
+
+    let empty = Arc::new(InMemoryAssetIndex::new());
+    let report = rebuild(&server.rebuild_into(empty.clone()), Mode::Apply)
+        .await
+        .expect("a pass");
+    assert!(!report.has_faults(), "{report:?}");
+    let rebuilt = rows(&empty).await;
+    assert_eq!(
+        provenance(&rebuilt[0]),
+        redelete,
+        "the re-delete's manifest is still referenced"
+    );
+    keeps_every_live_reference(&rebuilt[0], &original[0]);
 }
 
 #[tokio::test]

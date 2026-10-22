@@ -1320,13 +1320,23 @@ impl OwnerLedger for RefusingLedger {
     }
 }
 
-/// The purge entry `purge_expired` writes for `asset`.
+/// The purge entry `purge_expired` writes for `asset` before the index call.
 fn purge_event(asset: &str) -> LedgerEvent {
+    purge_entry(asset, PURGE_ACTION, None)
+}
+
+/// The entry `purge_expired` writes for `asset` once the index applied the purge ledgered at
+/// `purge_seq` (#811).
+fn purged_event(asset: &str, purge_seq: u64) -> LedgerEvent {
+    purge_entry(asset, PURGED_ACTION, Some(purge_seq))
+}
+
+fn purge_entry(asset: &str, action: &str, sync_seq: Option<u64>) -> LedgerEvent {
     LedgerEvent::Lifecycle {
         asset_id: asset.to_owned(),
-        action: PURGE_ACTION.to_owned(),
+        action: action.to_owned(),
         manifest_hash: None,
-        sync_seq: None,
+        sync_seq,
     }
 }
 
@@ -1350,8 +1360,17 @@ async fn a_purge_appends_its_ledger_entry_before_the_index_write() {
     assert_eq!(report.purged, vec![AssetId::new("ledgered")]);
 
     let entries = h.ledger_entries().await;
-    assert_eq!(entries.len(), 1, "one purge, one entry");
+    assert_eq!(
+        entries.len(),
+        2,
+        "one purge: its entry and its confirmation"
+    );
     assert_eq!(entries[0].core.event, purge_event("ledgered"));
+    assert_eq!(
+        entries[1].core.event,
+        purged_event("ledgered", 1),
+        "the confirmation follows the index's answer"
+    );
     assert_eq!(entries[0].core.recorded_at, h.clock.now().to_string());
     assert_eq!(
         *observed
@@ -1439,23 +1458,27 @@ async fn the_owners_chain_verifies_after_a_delete_followed_by_a_purge() {
     }]);
     let chain = keys.verify(&owner, &scan, None);
     assert_eq!(chain.fault, None, "{chain:?}");
-    assert_eq!(chain.verified, 2, "the delete and the purge both verify");
+    assert_eq!(
+        chain.verified, 3,
+        "the delete, the purge and its confirmation all verify"
+    );
     assert_eq!(scan.entries[1].core.event, purge_event("chained"));
+    assert_eq!(scan.entries[2].core.event, purged_event("chained", 2));
 
-    // Replay reads the purge as a lifecycle op of its own, which rebuild empties the tombstone
-    // for.
+    // Replay reads the purge as a lifecycle op of its own, confirmed, which rebuild empties the
+    // tombstone for; the confirmation is not an op.
     let ops = crate::ledger::replay::lifecycle(&scan.entries);
     assert_eq!(
         ops.iter().map(|op| op.action.as_str()).collect::<Vec<_>>(),
         vec![OpAction::Delete.as_str(), PURGE_ACTION]
     );
+    assert!(ops[1].confirmed, "{ops:?}");
 }
 
 #[tokio::test]
-async fn a_purge_the_index_no_longer_allows_gets_no_resolving_entry() {
-    // The decision #767 records: the purge entry is not followed by a resolving one when the
-    // index's re-check keeps the row, because rebuild re-checks the replayed state and empties
-    // only a tombstone.
+async fn a_purge_the_index_no_longer_allows_is_never_confirmed() {
+    // #811: the purge entry is confirmed only once the index answers `Purged`. When the
+    // re-check keeps the row, nothing follows it, and rebuild keeps the asset's references.
     let h = Harness::new();
     h.publish("vanished", b"its row went before the purge")
         .await;
