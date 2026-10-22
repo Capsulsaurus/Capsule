@@ -237,3 +237,203 @@ fn a_pinned_key_that_does_not_decode_is_a_typed_error() {
 
     assert!(matches!(error, KeyPinError::CorruptPin { .. }), "{error:?}");
 }
+
+/// The pin file as `pin` leaves it in a fresh library, read back the way an export reads it.
+fn carried_pin(pins: &[(&str, &[HybridVerifyingKey])]) -> Vec<u8> {
+    let dir = TempDir::new().unwrap();
+    for (origin, keys) in pins {
+        pin_attestation_keys(dir.path(), origin, keys).unwrap();
+    }
+    read_attestation_key_pins(dir.path())
+        .unwrap()
+        .expect("something was pinned")
+}
+
+#[test]
+fn an_unpinned_library_carries_no_pin() {
+    let dir = TempDir::new().unwrap();
+    assert_eq!(read_attestation_key_pins(dir.path()).unwrap(), None);
+}
+
+#[test]
+fn a_pin_that_does_not_decode_is_not_carried() {
+    let dir = TempDir::new().unwrap();
+    let mut file = empty_pin_file();
+    file.servers
+        .insert(ORIGIN.to_owned(), vec![ByteBuf::from(vec![0u8; 3])]);
+    store_pin_file(dir.path(), &file).unwrap();
+
+    let error = read_attestation_key_pins(dir.path()).unwrap_err();
+
+    assert!(matches!(error, KeyPinError::CorruptPin { .. }), "{error:?}");
+}
+
+#[test]
+fn restoring_into_an_unpinned_library_writes_the_pin_byte_for_byte() {
+    let carried = carried_pin(&[(ORIGIN, &[key(1), key(2)]), (OTHER, &[key(5)])]);
+    let dir = TempDir::new().unwrap();
+
+    let outcome = restore_attestation_key_pins(dir.path(), &carried).unwrap();
+
+    assert_eq!(outcome, KeyPinRestoreOutcome::Restored { origins: 2 });
+    assert_eq!(
+        fs::read(attestation_key_pins_path(dir.path())).unwrap(),
+        carried
+    );
+    assert!(!tmp_path(&attestation_key_pins_path(dir.path())).exists());
+}
+
+/// The point of carrying the pin: a server that drops a key pinned before the backup is
+/// refused after the restore, not trusted on a fresh first contact.
+#[test]
+fn a_run_after_the_restore_refuses_a_history_that_drops_a_pinned_key() {
+    let carried = carried_pin(&[(ORIGIN, &[key(1), key(2)])]);
+    let dir = TempDir::new().unwrap();
+    restore_attestation_key_pins(dir.path(), &carried).unwrap();
+
+    let error = pin_attestation_keys(dir.path(), ORIGIN, &[key(2), key(3)]).unwrap_err();
+
+    assert!(
+        matches!(
+            error,
+            KeyPinError::HistoryRewritten {
+                missing: 1,
+                pinned: 2,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_restore_the_library_already_extends_writes_nothing() {
+    let carried = carried_pin(&[(ORIGIN, &[key(1)])]);
+    let dir = TempDir::new().unwrap();
+    pin_attestation_keys(dir.path(), ORIGIN, &[key(1), key(2)]).unwrap();
+    let before = fs::read(attestation_key_pins_path(dir.path())).unwrap();
+
+    let outcome = restore_attestation_key_pins(dir.path(), &carried).unwrap();
+
+    assert_eq!(outcome, KeyPinRestoreOutcome::Unchanged);
+    assert_eq!(
+        fs::read(attestation_key_pins_path(dir.path())).unwrap(),
+        before
+    );
+}
+
+#[test]
+fn a_restore_that_extends_the_library_keeps_the_union() {
+    let carried = carried_pin(&[(ORIGIN, &[key(1), key(2), key(3)]), (OTHER, &[key(5)])]);
+    let dir = TempDir::new().unwrap();
+    pin_attestation_keys(dir.path(), ORIGIN, &[key(2)]).unwrap();
+
+    let outcome = restore_attestation_key_pins(dir.path(), &carried).unwrap();
+
+    assert_eq!(
+        outcome,
+        KeyPinRestoreOutcome::Merged {
+            origins_added: 1,
+            keys_added: 2
+        }
+    );
+    // The library's own key keeps its place; the carried ones follow in carried order.
+    assert_eq!(
+        pinned(dir.path(), ORIGIN),
+        Some(bytes(&[key(2), key(1), key(3)]))
+    );
+    assert_eq!(pinned(dir.path(), OTHER), Some(bytes(&[key(5)])));
+}
+
+#[test]
+fn diverging_histories_are_refused_and_neither_is_overwritten() {
+    let carried = carried_pin(&[(OTHER, &[key(5)]), (ORIGIN, &[key(1), key(2)])]);
+    let dir = TempDir::new().unwrap();
+    pin_attestation_keys(dir.path(), ORIGIN, &[key(1), key(9)]).unwrap();
+    let before = fs::read(attestation_key_pins_path(dir.path())).unwrap();
+
+    let error = restore_attestation_key_pins(dir.path(), &carried).unwrap_err();
+
+    match error {
+        KeyPinError::HistoriesDiverge {
+            origin,
+            only_carried,
+            only_local,
+        } => {
+            assert_eq!(origin, ORIGIN);
+            assert_eq!((only_carried, only_local), (1, 1));
+        }
+        other => panic!("expected HistoriesDiverge, got {other:?}"),
+    }
+    // Not even the origin that would have merged cleanly was written.
+    assert_eq!(
+        fs::read(attestation_key_pins_path(dir.path())).unwrap(),
+        before
+    );
+}
+
+#[test]
+fn a_carried_pin_that_does_not_decode_is_refused_before_any_write() {
+    let dir = TempDir::new().unwrap();
+    let mut file = empty_pin_file();
+    file.servers
+        .insert(ORIGIN.to_owned(), vec![ByteBuf::from(vec![0u8; 3])]);
+    let corrupt = cbor::to_canonical_vec(&file).unwrap();
+
+    let error = restore_attestation_key_pins(dir.path(), &corrupt).unwrap_err();
+    assert!(matches!(error, KeyPinError::CorruptPin { .. }), "{error:?}");
+
+    let older = cbor::to_canonical_vec(&PinFile {
+        version: PIN_FILE_VERSION - 1,
+        servers: BTreeMap::new(),
+    })
+    .unwrap();
+    let error = restore_attestation_key_pins(dir.path(), &older).unwrap_err();
+    assert!(
+        matches!(error, KeyPinError::UnsupportedVersion { .. }),
+        "{error:?}"
+    );
+
+    let error = restore_attestation_key_pins(dir.path(), b"not cbor").unwrap_err();
+    assert!(matches!(error, KeyPinError::Codec(_)), "{error:?}");
+    assert!(!attestation_key_pins_path(dir.path()).exists());
+}
+
+/// A pin from a newer build is skipped, not refused: the backup it rides still restores here.
+/// The newer schema is free to change its shape; only its `version` field is read.
+#[test]
+fn a_carried_pin_of_a_newer_schema_is_skipped_and_writes_nothing() {
+    #[derive(Serialize)]
+    struct FuturePinFile {
+        version: u8,
+        servers: Vec<String>,
+    }
+    let future = cbor::to_canonical_vec(&FuturePinFile {
+        version: PIN_FILE_VERSION + 1,
+        servers: vec!["a shape this build cannot decode".to_owned()],
+    })
+    .unwrap();
+
+    let empty = TempDir::new().unwrap();
+    assert_eq!(
+        restore_attestation_key_pins(empty.path(), &future).unwrap(),
+        KeyPinRestoreOutcome::SkippedNewerSchema {
+            found: PIN_FILE_VERSION + 1
+        }
+    );
+    assert!(!attestation_key_pins_path(empty.path()).exists());
+
+    let pinned_dir = TempDir::new().unwrap();
+    pin_attestation_keys(pinned_dir.path(), ORIGIN, &[key(1)]).unwrap();
+    let before = fs::read(attestation_key_pins_path(pinned_dir.path())).unwrap();
+    assert_eq!(
+        restore_attestation_key_pins(pinned_dir.path(), &future).unwrap(),
+        KeyPinRestoreOutcome::SkippedNewerSchema {
+            found: PIN_FILE_VERSION + 1
+        }
+    );
+    assert_eq!(
+        fs::read(attestation_key_pins_path(pinned_dir.path())).unwrap(),
+        before
+    );
+}

@@ -274,8 +274,10 @@ impl Command {
     fn demands(&self) -> Demands {
         match self {
             Self::Serve { .. } => Demands::Serve,
-            // No key material. A maintenance host that had to hold the production
+            // No key material is demanded. A maintenance host that had to hold the production
             // token-signing key to sweep a directory would be a reason to put the key there.
+            // `purge --apply` alone uses `ATTESTATION_KEY_SEED` when set, to ledger each purge,
+            // and refuses without it (#767).
             Self::Gc { .. }
             | Self::Purge { .. }
             | Self::Scrub { .. }
@@ -389,8 +391,10 @@ async fn assemble(config: &Config) -> Result<Assembled> {
 /// Assemble only what the operator workers read.
 ///
 /// A separate entry point rather than reaching into [`Assembled`], because `gc`, `purge` and
-/// `scrub` need **no key material** and the way to make that true is for the assembly they use
-/// to have none in scope — not for it to build a token signer and then not use it.
+/// `scrub` need **no token-signing key** and the way to make that true is for the assembly they
+/// use to have none in scope — not for it to build a token signer and then not use it. The one
+/// signing key it may hold is the attestation key, and only when the host was given
+/// `ATTESTATION_KEY_SEED`, for `purge --apply` to ledger its purges (#767).
 async fn maintenance(config: &Config) -> Result<Maintenance> {
     tracing::debug!(?config, "loaded the configuration");
     Ok(boot::assemble_maintenance(config).await?)
@@ -415,6 +419,8 @@ async fn maintenance(config: &Config) -> Result<Maintenance> {
 /// configured by accident.
 async fn serve(config: &Config) -> Result<ExitCode> {
     let assembled = assemble(config).await?;
+    // Before the listener binds, so every claim listed belongs to a process that is gone.
+    recover_stranded_claims(&assembled.app).await;
     // The router is built here rather than through `Assembled::service` because the trusted-proxy
     // policy is a property of the listener's deployment, not of the assembled stores (#704).
     tracing::info!(trusted_proxies = %config.trusted_proxies, "resolving client addresses");
@@ -446,6 +452,44 @@ async fn serve(config: &Config) -> Result<ExitCode> {
         .map_err(|error| eyre!("serving: {error}"))?;
     tracing::info!("drained and stopped");
     Ok(ExitCode::SUCCESS)
+}
+
+/// Re-drive the finalization claims a previous process died holding.
+///
+/// The claims are listed **here**, before this process has accepted a request and so before it
+/// has claimed anything, which is what makes every one of them a claim no live finalizer holds
+/// (transfer/upload.md, Finalization and Integrity). Driving them is a background task: a boot
+/// does not wait on a hash of every stranded blob before it serves, and a claimed session
+/// refuses chunks and cancellation meanwhile, so nothing can race the driver for it.
+///
+/// A store that cannot list them is logged and not fatal: the claims stay in the store, and the
+/// next boot lists them again.
+async fn recover_stranded_claims(app: &crate::App) {
+    use kynos::di::Provides as _;
+
+    let upload: crate::upload::UploadContext = app.provide();
+    let attestation: crate::attestation::AttestationContext = app.provide();
+    let stranded = match upload.sessions().claimed().await {
+        Ok(stranded) => stranded,
+        Err(error) => {
+            tracing::error!(
+                %error,
+                "could not list stranded finalization claims; they wait for the next boot"
+            );
+            return;
+        }
+    };
+    if stranded.is_empty() {
+        tracing::debug!("no stranded finalization claims to recover");
+        return;
+    }
+    tracing::info!(
+        stranded = stranded.len(),
+        "recovering finalization claims a previous process left"
+    );
+    tokio::spawn(async move {
+        crate::upload::finalize::recover(&upload, &attestation, stranded).await;
+    });
 }
 
 /// Install the log stream, on stderr.
@@ -531,14 +575,21 @@ async fn collect(config: &Config, mode: Mode) -> Result<ExitCode> {
 
 /// Drop the blob references of tombstoned assets past their retention window.
 ///
-/// An interrupted pass reports nothing, for the reason [`collect`] records.
+/// An interrupted pass reports nothing, for the reason [`collect`] records. An applied pass
+/// needs `ATTESTATION_KEY_SEED`, because every purge is appended to the owner ledger before it
+/// is applied (#767), and exits non-zero when the ledger could not take an entry: those assets
+/// were left unpurged, and that is a fault for an operator rather than a quiet pass.
 async fn purge(config: &Config, mode: Mode, limit: usize) -> Result<ExitCode> {
     let maintenance = maintenance(config).await?;
     let report = crate::gc::purge_expired(&maintenance.collection, mode, limit)
         .await
         .map_err(|error| eyre!("the retention purge could not finish: {error}"))?;
     print!("{}", render_purge(&report, mode));
-    Ok(ExitCode::SUCCESS)
+    if report.unrecorded.is_empty() {
+        Ok(ExitCode::SUCCESS)
+    } else {
+        Ok(ExitCode::FAILURE)
+    }
 }
 
 /// Compare the index against the store.
@@ -713,6 +764,7 @@ impl std::fmt::Display for Rendered<'_, PurgeReport> {
             ("purged", &report.purged),
             ("retained", &report.retained),
             ("skipped", &report.skipped),
+            ("unrecorded, kept", &report.unrecorded),
         ] {
             if assets.is_empty() {
                 continue;
@@ -1096,6 +1148,7 @@ mod tests {
             purged: vec![crate::store::AssetId::new("gone")],
             retained: vec![crate::store::AssetId::new("waiting")],
             skipped: vec![crate::store::AssetId::new("restored")],
+            unrecorded: vec![crate::store::AssetId::new("unledgered")],
         };
         let rendered = render_purge(&report, Mode::DryRun).to_string();
         assert!(rendered.contains("purged (1)"), "{rendered}");
@@ -1104,6 +1157,8 @@ mod tests {
         assert!(rendered.contains("waiting"), "{rendered}");
         assert!(rendered.contains("skipped (1)"), "{rendered}");
         assert!(rendered.contains("restored"), "{rendered}");
+        assert!(rendered.contains("unrecorded, kept (1)"), "{rendered}");
+        assert!(rendered.contains("unledgered"), "{rendered}");
     }
 
     #[test]

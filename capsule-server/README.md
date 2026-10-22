@@ -137,7 +137,10 @@ rather than coming up on state it loses at the next restart.
 Logs go to stderr. stdout is a data channel: `serve` writes one `listening on <url>` line there,
 which is how a `--listen 127.0.0.1:0` caller learns its port.
 
-`gc`, `purge` and `scrub` need a blob root and no key material at all; without `--memory` they
+`gc`, `purge` and `scrub` need a blob root and no token-signing key. `purge --apply` alone also
+needs `ATTESTATION_KEY_SEED`, because it signs each purge into the owner ledger before applying it,
+and it refuses to apply without the seed. It may run while `serve` is up: the two processes append
+to the ledger under a shared file lock. Without `--memory` they
 read the durable stores, so they need `DATABASE_URL` and `VALKEY_URL` as `serve` does. Dry run is the default for
 the two that write; `scrub` mutates nothing and exits non-zero on a non-empty report. `gc --apply`
 also sweeps the upload-progress set, the one Valkey index with no lifetime of its own, so run it

@@ -31,7 +31,7 @@
 //! `IS_LIVE`, `LOOKUP_CHANNEL` and the mutations guarded by `live`) a false "not live" verdict
 //! costs that replica one early miss and nobody else anything. The index-listing scripts
 //! (`SESSIONS_FOR_USER`, `UPLOADS_FOR_UPLOADER`, `PENDING_FOR_ADDRESS`, `IN_FLIGHT_FOR_ALBUM`,
-//! `LEAST_RECENTLY_PROGRESSED`) are the residual: they `SREM`/`ZREM` a member whose record they
+//! `LEAST_RECENTLY_PROGRESSED`, `CLAIMED_UPLOADS`) are the residual: they `SREM`/`ZREM` a member whose record they
 //! judge dead, and the index is **shared**, so a fast clock on one replica hides a still-live
 //! record from every replica's listings until a state change re-indexes it or the record
 //! expires for real. The record itself is untouched — a direct read on a well-clocked replica
@@ -69,6 +69,7 @@
 //! | `capsule:upload:album:{album}` | set | refreshed on open |
 //! | `capsule:upload:pending:{uploader}:{hash}` | set | refreshed on open |
 //! | `capsule:upload:progress` | zset (score = `last_progress_at` µs) | none — heals when the pressure sweep (`least_recently_progressed`) walks it, which every `gc --apply` pass does over the whole set (#519) |
+//! | `capsule:upload:claimed` | set (`WaitingForProcessing` ids) | none — a member leaves on a terminal status or a discard, and a lapsed one heals when boot recovery (`claimed`) walks the set |
 //! | `capsule:counter:{kind}:{scope}` | hash (`hits`, `opened_at`) | the counter's window |
 //! | `capsule:counter_index:{kind}` | zset (score = window end µs), the partition its ceiling bounds | raised to the longest window, never lowered |
 //! | `capsule:challenge:{token}` | hash | challenge TTL |
@@ -612,6 +613,9 @@ const OIDC_DEVICES: &str = "oidc devices";
 /// The global eviction view.
 const PROGRESS_KEY: &str = "capsule:upload:progress";
 
+/// The global claimed view: every session in `WaitingForProcessing`, for boot recovery.
+const CLAIMED_KEY: &str = "capsule:upload:claimed";
+
 fn session_key(session: &SessionId) -> String {
     format!("capsule:session:{session}")
 }
@@ -812,10 +816,10 @@ return {gone, mismatched, found}"
 
 // ---- uploads ------------------------------------------------------------------------------
 
-// KEYS: record, chunks, uploader index, pending set, progress zset, [album set].
+// KEYS: record, chunks, uploader index, pending set, progress zset, claimed set, [album set].
 // ARGV: ttl_ms, upload_id, in_flight, evictable, score, fields… Re-opening an id under a
 // different uploader, owner, hash or album unindexes the previous record first, as
-// `OPEN_SESSION` does for a previous user.
+// `OPEN_SESSION` does for a previous user. The claimed set follows the status just written.
 script!(
     OPEN_UPLOAD,
     "local previous = redis.call('HMGET', KEYS[1], 'upload_user_id', 'owner_id', 'expected_hash', 'album_id')
@@ -824,7 +828,7 @@ if previous[1] then
   if uploader ~= KEYS[3] then redis.call('SREM', uploader, ARGV[2]) end
   local pending = 'capsule:upload:pending:' .. previous[1] .. ':' .. previous[3]
   if pending ~= KEYS[4] then redis.call('SREM', pending, ARGV[2]) end
-  if previous[4] and ('capsule:upload:album:' .. previous[4]) ~= KEYS[6] then
+  if previous[4] and ('capsule:upload:album:' .. previous[4]) ~= KEYS[7] then
     redis.call('SREM', 'capsule:upload:album:' .. previous[4], ARGV[2])
   end
 end
@@ -836,18 +840,23 @@ redis.call('PEXPIRE', KEYS[3], ARGV[1])
 if ARGV[3] == '1' then
   redis.call('SADD', KEYS[4], ARGV[2])
   redis.call('PEXPIRE', KEYS[4], ARGV[1])
-  if KEYS[6] then
-    redis.call('SADD', KEYS[6], ARGV[2])
-    redis.call('PEXPIRE', KEYS[6], ARGV[1])
+  if KEYS[7] then
+    redis.call('SADD', KEYS[7], ARGV[2])
+    redis.call('PEXPIRE', KEYS[7], ARGV[1])
   end
 else
   redis.call('SREM', KEYS[4], ARGV[2])
-  if KEYS[6] then redis.call('SREM', KEYS[6], ARGV[2]) end
+  if KEYS[7] then redis.call('SREM', KEYS[7], ARGV[2]) end
 end
 if ARGV[4] == '1' then
   redis.call('ZADD', KEYS[5], ARGV[5], ARGV[2])
 else
   redis.call('ZREM', KEYS[5], ARGV[2])
+end
+if redis.call('HGET', KEYS[1], 'status') == 'waiting_for_processing' then
+  redis.call('SADD', KEYS[6], ARGV[2])
+else
+  redis.call('SREM', KEYS[6], ARGV[2])
 end
 return 1"
 );
@@ -914,7 +923,8 @@ redis.call('HSET', KEYS[1], 'received_bytes', ARGV[2])
 return redis.call('HGETALL', KEYS[1])"
 );
 
-// KEYS: record, chunks, progress zset. ARGV: now, status, upload_id, in_flight, evictable.
+// KEYS: record, chunks, progress zset, claimed set. ARGV: now, status, upload_id, in_flight,
+// evictable.
 script!(
     SET_STATUS,
     "if not live(KEYS[1], ARGV[1], KEYS[2]) then return nil end
@@ -940,12 +950,18 @@ if ARGV[5] == '1' then
 else
   redis.call('ZREM', KEYS[3], ARGV[3])
 end
+if ARGV[2] == 'waiting_for_processing' then
+  redis.call('SADD', KEYS[4], ARGV[3])
+else
+  redis.call('SREM', KEYS[4], ARGV[3])
+end
 return redis.call('HGETALL', KEYS[1])"
 );
 
-// KEYS: record, chunks, progress zset. ARGV: now, upload_id. Returns 0 (not found), 1 (already
-// claimed) or the record (won) — the compare and the set are one script, so two racing
-// finalizers cannot both see `pending`.
+// KEYS: record, chunks, progress zset, claimed set. ARGV: now, upload_id. Returns 0 (not
+// found), 1 (already claimed) or the record (won) — the compare and the set are one script, so
+// two racing finalizers cannot both see `pending`, and the claim enters the claimed view in the
+// same step it leaves the eviction view.
 script!(
     CLAIM_FINALIZE,
     "if not live(KEYS[1], ARGV[1], KEYS[2]) then return 0 end
@@ -953,16 +969,18 @@ local status = redis.call('HGET', KEYS[1], 'status')
 if status ~= 'pending' and status ~= 'uploading' then return 1 end
 redis.call('HSET', KEYS[1], 'status', 'waiting_for_processing')
 redis.call('ZREM', KEYS[3], ARGV[2])
+redis.call('SADD', KEYS[4], ARGV[2])
 return redis.call('HGETALL', KEYS[1])"
 );
 
-// KEYS: record, chunks, progress zset. ARGV: now, upload_id. Record, replay entries and every
-// view entry, together.
+// KEYS: record, chunks, progress zset, claimed set. ARGV: now, upload_id. Record, replay
+// entries and every view entry, together.
 script!(
     DISCARD_UPLOAD,
     "local record = redis.call('HGETALL', KEYS[1])
 redis.call('DEL', KEYS[1], KEYS[2])
 redis.call('ZREM', KEYS[3], ARGV[2])
+redis.call('SREM', KEYS[4], ARGV[2])
 if #record == 0 then return nil end
 local f = {}
 for i = 1, #record, 2 do f[record[i]] = record[i + 1] end
@@ -998,6 +1016,29 @@ for _, id in ipairs(redis.call('SMEMBERS', KEYS[1])) do
     else
       found[#found + 1] = id
     end
+  end
+end
+return {gone, mismatched, found}"
+);
+
+// KEYS: claimed set. ARGV: now. Returns {gone, mismatched, {record…}}. A member whose record
+// lapsed is gone; one whose record is no longer `waiting_for_processing` is mismatched — a
+// status written by something that did not leave the set, healed here as every listing heals.
+script!(
+    CLAIMED_UPLOADS,
+    "local gone = 0
+local mismatched = 0
+local found = {}
+for _, id in ipairs(redis.call('SMEMBERS', KEYS[1])) do
+  local key = 'capsule:upload:session:' .. id
+  if not live(key, ARGV[1], 'capsule:upload:chunks:' .. id) then
+    redis.call('SREM', KEYS[1], id)
+    gone = gone + 1
+  elseif redis.call('HGET', key, 'status') ~= 'waiting_for_processing' then
+    redis.call('SREM', KEYS[1], id)
+    mismatched = mismatched + 1
+  else
+    found[#found + 1] = redis.call('HGETALL', key)
   end
 end
 return {gone, mismatched, found}"
@@ -1433,12 +1474,14 @@ impl ValkeyUploadSessions {
         micros(self.clock.now()).to_string()
     }
 
-    /// The three keys most record scripts take: the record, its replay hash, the eviction view.
-    fn record_keys(upload: &UploadId) -> [String; 3] {
+    /// The four keys most record scripts take: the record, its replay hash, the eviction view
+    /// and the claimed view. A script that maintains neither view simply does not name them.
+    fn record_keys(upload: &UploadId) -> [String; 4] {
         [
             upload_key(upload),
             chunks_key(upload),
             PROGRESS_KEY.to_owned(),
+            CLAIMED_KEY.to_owned(),
         ]
     }
 
@@ -1476,6 +1519,7 @@ impl UploadSessionStore for ValkeyUploadSessions {
                 uploader_key(&uploader),
                 pending_key(&record.upload_user_id, &record.expected_hash),
                 PROGRESS_KEY.to_owned(),
+                CLAIMED_KEY.to_owned(),
             ];
             if let Some(album) = &record.album_id {
                 keys.push(album_key(album));
@@ -1678,6 +1722,32 @@ impl UploadSessionStore for ValkeyUploadSessions {
                     Ok(FinalizeClaim::Won(Box::new(claimed)))
                 }
             }
+        })
+    }
+
+    fn claimed(&self) -> StoreFuture<'_, Vec<UploadSessionRecord>> {
+        Box::pin(async move {
+            let (gone, mismatched, records): (u64, u64, Vec<Vec<String>>) = self
+                .valkey
+                .eval(
+                    UPLOADS,
+                    &CLAIMED_UPLOADS,
+                    &[CLAIMED_KEY.to_owned()],
+                    &[self.now()],
+                )
+                .await?;
+            healed(UPLOADS, CLAIMED_KEY, gone, mismatched);
+            let mut found = records
+                .into_iter()
+                .map(decode_upload)
+                .collect::<Result<Vec<_>, _>>()?;
+            found.sort_by(|a, b| {
+                a.created_at
+                    .cmp(&b.created_at)
+                    .then_with(|| a.upload_id.cmp(&b.upload_id))
+            });
+            tracing::debug!(count = found.len(), "listed claimed upload sessions");
+            Ok(found)
         })
     }
 
@@ -2712,6 +2782,8 @@ mod tests {
             (&PENDING_FOR_ADDRESS, strip(chunks_key(&up))),
             (&IN_FLIGHT_FOR_ALBUM, strip(upload_key(&up))),
             (&LEAST_RECENTLY_PROGRESSED, strip(upload_key(&up))),
+            (&CLAIMED_UPLOADS, strip(upload_key(&up))),
+            (&CLAIMED_UPLOADS, strip(chunks_key(&up))),
             (
                 &REDEEM_ENROLLMENT,
                 strip(enrollment_key(&EnrollmentCode::new("x"))),

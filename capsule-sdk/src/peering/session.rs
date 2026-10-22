@@ -61,8 +61,9 @@ pub const DEFAULT_HANDSHAKES_PER_WINDOW: usize = 8;
 /// The default rate-limit window.
 pub const DEFAULT_HANDSHAKE_WINDOW: Duration = Duration::from_secs(60);
 
-/// The most source addresses the limiter tracks at once, bounding its memory. Idle sources are
-/// pruned when the table is full; a new source that still finds it full is refused.
+/// The most source addresses the limiter tracks at once, bounding its memory. When a new source
+/// finds the table full, idle sources are pruned, and if it is still full of live ones the
+/// least recently active source is evicted: a full table never refuses a new source.
 pub const MAX_TRACKED_SOURCES: usize = 1024;
 
 /// A sliding-window handshake rate limit per source address.
@@ -92,8 +93,10 @@ impl HandshakeLimiter {
 
     /// Whether a handshake from `source` at `now` is admitted. An admitted attempt counts against
     /// the window; a refused one does not extend it. The table never holds more than
-    /// [`MAX_TRACKED_SOURCES`] sources: when it is full, idle sources are pruned, and a new source
-    /// that still finds it full of live ones is refused. A poisoned lock refuses too (fail closed).
+    /// [`MAX_TRACKED_SOURCES`] sources: when a new source finds it full, idle sources are pruned,
+    /// and if it is still full of live ones the source whose latest attempt is oldest is evicted
+    /// (its budget is forgotten), so no flood of addresses can lock a new peer out. A poisoned
+    /// lock refuses (fail closed).
     pub fn admit(&self, source: IpAddr, now: Instant) -> bool {
         let Ok(mut attempts) = self.attempts.lock() else {
             return false;
@@ -102,9 +105,21 @@ impl HandshakeLimiter {
         let live = |at: &Instant| now.saturating_duration_since(*at) < window;
         if !attempts.contains_key(&source) && attempts.len() >= MAX_TRACKED_SOURCES {
             attempts.retain(|_, seen| seen.iter().any(live));
-            if attempts.len() >= MAX_TRACKED_SOURCES {
-                tracing::warn!(%source, "handshake limiter full of live sources; refusing");
-                return false;
+            let stalest = (attempts.len() >= MAX_TRACKED_SOURCES)
+                .then(|| {
+                    attempts
+                        .iter()
+                        .min_by_key(|(_, seen)| seen.back().copied())
+                        .map(|(evicted, _)| *evicted)
+                })
+                .flatten();
+            if let Some(evicted) = stalest {
+                attempts.remove(&evicted);
+                tracing::debug!(
+                    %source,
+                    %evicted,
+                    "handshake limiter full of live sources; evicted the least recently active"
+                );
             }
         }
         let seen = attempts.entry(source).or_default();

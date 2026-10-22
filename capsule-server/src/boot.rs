@@ -203,12 +203,15 @@ pub enum BootError {
 
 /// The operator workers' collaborators, and the quota ledger the operator suspends through.
 ///
-/// Assembled **without any key material**, which is what makes `config`'s claim that
-/// `gc`/`purge`/`scrub` need none structural rather than a promise: there is no signing key in
-/// scope here to accidentally require. A maintenance host that had to hold the production
-/// token-signing key to sweep a directory would be a reason to put the key on a maintenance
-/// host. The one key-derived value here is the attestation key's **public** half, which the
-/// scrub verifies owner ledgers under (`ledger_keys`); the signing half is never kept.
+/// Assembled **without demanding any key material**, which is what makes `config`'s claim that
+/// `gc`/`purge`/`scrub` need none structural rather than a promise: there is no token-signing
+/// key in scope here to accidentally require. A maintenance host that had to hold the
+/// production token-signing key to sweep a directory would be a reason to put the key on a
+/// maintenance host. The key-derived values here come from `ATTESTATION_KEY_SEED` only when the
+/// host was given one: its **public** half, which the scrub verifies owner ledgers under
+/// (`ledger_keys`), and its signing half, held only by the collector to append the purge entries
+/// an applied retention purge must ledger (`purge_attestation`, #767). Without the seed,
+/// `purge --apply` refuses and everything else runs.
 ///
 /// None of them has a wire surface, so none is reachable through the router — which is why
 /// they are a separate assembly rather than fields on [`App`].
@@ -341,7 +344,8 @@ async fn open_durable_database(config: &Config) -> Result<sea_orm::DatabaseConne
 /// # Errors
 ///
 /// Returns [`BootError`] for the blob root or a durable backend that cannot be opened. It cannot
-/// fail on key material, because it asks for none.
+/// fail on key material, because it demands none: an `ATTESTATION_KEY_SEED` the host holds is
+/// used, and one it lacks only leaves `purge --apply` refusing.
 pub async fn assemble_maintenance(config: &Config) -> Result<Maintenance, BootError> {
     let base = base(config, Arc::new(SystemClock)).await?;
     let (stores, adapters) = match config.backends {
@@ -372,10 +376,13 @@ pub async fn assemble_maintenance(config: &Config) -> Result<Maintenance, BootEr
             )
         }
     };
-    let maintenance = stores.maintenance(config.grace_window, ledger_keys(config));
+    let purge_signer = purge_attestation(config, &stores);
+    let ledgers_purges = purge_signer.is_some();
+    let maintenance = stores.maintenance(config.grace_window, ledger_keys(config), purge_signer);
     tracing::info!(
         blob_root = %stores.root.display(),
         grace_window = %config.grace_window,
+        ledgers_purges,
         adapters,
         "assembled the operator workers"
     );
@@ -449,20 +456,32 @@ struct Stores {
 
 impl Stores {
     /// The operator workers over these stores.
-    fn maintenance(&self, grace_window: jiff::SignedDuration, keys: LedgerKeys) -> Maintenance {
+    ///
+    /// `purge_signer` is what an applied retention purge appends its ledger entries through
+    /// (#767); `None` leaves `purge --apply` refusing rather than purging unrecorded.
+    fn maintenance(
+        &self,
+        grace_window: jiff::SignedDuration,
+        keys: LedgerKeys,
+        purge_signer: Option<AttestationContext>,
+    ) -> Maintenance {
+        let mut collection = CollectionContext::new(
+            self.index.clone(),
+            self.blobs.clone(),
+            self.marks.clone(),
+            self.quotas.clone(),
+            self.shares.clone(),
+            self.clock.clone(),
+            grace_window,
+        )
+        // The upload-progress view has no lifetime of its own, so `gc --apply` is what keeps
+        // it from growing with every abandoned upload (#519).
+        .with_progress_sweep(Arc::new(self.uploads.clone()));
+        if let Some(attestation) = purge_signer {
+            collection = collection.with_attestation(attestation);
+        }
         Maintenance {
-            collection: CollectionContext::new(
-                self.index.clone(),
-                self.blobs.clone(),
-                self.marks.clone(),
-                self.quotas.clone(),
-                self.shares.clone(),
-                self.clock.clone(),
-                grace_window,
-            )
-            // The upload-progress view has no lifetime of its own, so `gc --apply` is what
-            // keeps it from growing with every abandoned upload (#519).
-            .with_progress_sweep(Arc::new(self.uploads.clone())),
+            collection,
             // The same share store as the collector's, so a record the collector keeps for a
             // live link is not one the scrub reports as an orphan (#653).
             //
@@ -513,6 +532,37 @@ fn ledger_keys(config: &Config) -> LedgerKeys {
                 active_to: None,
             }])
         })
+}
+
+/// The attestation context an applied retention purge signs its owner-ledger entries with
+/// (#767), when the host was given `ATTESTATION_KEY_SEED`.
+///
+/// The one place the maintenance assembly keeps a signing half, and only to append purge
+/// entries to the same ledgers under the blob root the server appends to. A host given no seed
+/// gets `None`, and its `purge --apply` refuses rather than purging what no ledger records;
+/// `gc`, `scrub`, `rebuild` and a dry-run purge sign nothing.
+///
+/// The receipt log is a log of its own, as the in-memory arm's is: a purge issues no receipt.
+fn purge_attestation(config: &Config, stores: &Stores) -> Option<AttestationContext> {
+    let seed = config.attestation_key_seed?;
+    let key = LocalAttestationKey::new(
+        config.server_domain.clone(),
+        capsule_core::crypto::keys::HybridSigningKey::from_seed64(&seed),
+    );
+    Some(
+        AttestationContext::new(
+            Arc::new(InMemoryReceipts::new()),
+            Arc::new(key),
+            Timestamp::UNIX_EPOCH,
+        )
+        // Through the anchor, as the server's own producers append (#757): a purge entry moves
+        // the owner's recorded head like any other, and a ledger cut below its anchor refuses
+        // the purge rather than extending the cut chain.
+        .with_ledger(Arc::new(AnchoredLedger::new(
+            stores.ledger.clone(),
+            stores.index.clone(),
+        ))),
+    )
 }
 
 /// The half of [`Stores`] that is the same on both arms: the blob root and the clock.
@@ -921,6 +971,20 @@ fn compose(
         None => OidcContext::disabled(clock.clone()),
     };
 
+    // One context for the application and the purge worker, so a purge signs under the key the
+    // server's receipts name and appends to the ledgers the server's writes append to (#767).
+    let attestation = AttestationContext::new(
+        receipts.clone(),
+        attestation_key,
+        // The published key has been active since the epoch, because the seed is derived
+        // deterministically and has therefore never *not* been this deployment's key.
+        // Publishing a rotation history is `ATTESTATION_KEY_HISTORY`'s job and nobody's yet.
+        Timestamp::UNIX_EPOCH,
+    )
+    // Every producer appends through the anchor, so each owner's head is recorded in the
+    // index the rebuild and the scrub verify the ledger against (#757).
+    .with_ledger(Arc::new(AnchoredLedger::new(ledger, index.clone())));
+
     let app = App::new(Modules {
         auth: AuthContext::new(AuthCollaborators {
             sessions,
@@ -976,17 +1040,7 @@ fn compose(
         // Unlimited, which is what a self-hosted deployment runs. A configurable ceiling is a
         // quota policy this slice does not own; `QuotaLimits` already takes one.
         quota: QuotaContext::new(quotas.clone(), clock.clone(), QuotaLimits::unlimited()),
-        attestation: AttestationContext::new(
-            receipts.clone(),
-            attestation_key,
-            // The published key has been active since the epoch, because the seed is derived
-            // deterministically and has therefore never *not* been this deployment's key.
-            // Publishing a rotation history is `ATTESTATION_KEY_HISTORY`'s job and nobody's yet.
-            Timestamp::UNIX_EPOCH,
-        )
-        // Every producer appends through the anchor, so each owner's head is recorded in the
-        // index the rebuild and the scrub verify the ledger against (#757).
-        .with_ledger(Arc::new(AnchoredLedger::new(ledger, index.clone()))),
+        attestation: attestation.clone(),
         discovery: DiscoveryContext::new(server_info, revocations),
         escrow: EscrowContext::new(escrow, clock.clone()),
         federation: FederationContext::new(FederationCollaborators {
@@ -1017,7 +1071,11 @@ fn compose(
         app,
         // The same stores, so "upload it, then let the collector see it" is a property of the
         // server rather than of two disconnected assemblies.
-        maintenance: stores.maintenance(config.grace_window, ledger_keys(config)),
+        maintenance: stores.maintenance(
+            config.grace_window,
+            ledger_keys(config),
+            Some(attestation),
+        ),
     })
 }
 
