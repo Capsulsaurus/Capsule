@@ -107,6 +107,11 @@ impl AssetVerifyFailure {
                 code: code.clone(),
                 message: error.to_string(),
             },
+            VerifyError::UpgradeRequired(refusal) => Self {
+                kind: "upgrade_required",
+                code: Some(refusal.error_code().to_owned()),
+                message: error.to_string(),
+            },
             VerifyError::Transport(_) | VerifyError::Malformed(_) => {
                 Self::new("verify_unavailable", error.to_string())
             }

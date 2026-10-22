@@ -60,7 +60,9 @@ use jiff::Timestamp;
 use tracing::instrument;
 
 use crate::auth::Session;
-use crate::client::{AuthenticatedClient, ClientError, describe_error, is_token_failure};
+use crate::client::{
+    AuthenticatedClient, ClientError, describe_error, is_token_failure, upgrade_required_of,
+};
 use crate::rest;
 
 /// Everything the networked recovery flows can fail with. Callers switch on the typed
@@ -146,17 +148,20 @@ pub enum RecoveryError {
     #[error("re-wrapping the master key failed: {0}")]
     Wrap(String),
     /// The server returned a status this client does not model as an escrow outcome — an
-    /// unmodeled status, the body-size backstop's body-less `413` on a read, or the protocol
-    /// gate's `426` (a write from outside the server's window, issue #404).
+    /// unmodeled status, or the body-size backstop's body-less `413` on a read.
     #[error("unexpected {status} response from the escrow endpoint")]
     Unexpected {
         /// The HTTP status code the server returned.
         status: u16,
         /// The stable `error.*` catalog code the response carried, when it came with a coded
-        /// problem body — `error.protocol.version_unsupported` on a `426`, the one that means
-        /// "update the client". `None` when there was no body to read a code from.
+        /// problem body. `None` when there was no body to read a code from.
         code: Option<String>,
     },
+    /// The server will not take this client's writes: the protocol gate's `426`, or a window
+    /// it advertised that already refuses this build, so the write never left (issue #674).
+    /// Nothing about the escrow is wrong — update the client.
+    #[error(transparent)]
+    UpgradeRequired(Box<crate::net::negotiation::UpgradeRequired>),
 }
 
 impl RecoveryError {
@@ -169,6 +174,7 @@ impl RecoveryError {
             | Self::Malformed { code, .. }
             | Self::Unavailable { code, .. }
             | Self::Unexpected { code, .. } => code.as_deref(),
+            Self::UpgradeRequired(refusal) => Some(refusal.error_code()),
             // The one code this module states rather than reads. `NotEnrolled` is a *state*
             // ("this account has escrowed nothing"), not a message, and the server's own code
             // for that state is this constant — see `capsule-server/src/routes/escrow.rs`.
@@ -686,6 +692,9 @@ impl RecoveryClient {
 /// operation stops the build here; a new `rest::Error` **class** still falls through to
 /// [`wire_error`]'s catch-all.
 fn fetch_escrow_error(error: rest::Error<rest::FetchEscrowError>) -> RecoveryError {
+    if let Some(refusal) = upgrade_required_of(&error) {
+        return RecoveryError::UpgradeRequired(Box::new(refusal));
+    }
     match error {
         rest::Error::Api(response) => match response.into_inner() {
             rest::FetchEscrowError::Status404(_) => RecoveryError::NotEnrolled,
@@ -714,6 +723,9 @@ fn fetch_escrow_error(error: rest::Error<rest::FetchEscrowError>) -> RecoveryErr
 
 /// Map a `PUT /v1/auth/escrow` refusal onto its typed variant.
 fn store_escrow_error(error: rest::Error<rest::StoreEscrowError>) -> RecoveryError {
+    if let Some(refusal) = upgrade_required_of(&error) {
+        return RecoveryError::UpgradeRequired(Box::new(refusal));
+    }
     match error {
         rest::Error::Api(response) => match response.into_inner() {
             // `400` and `415` are the same answer to the caller: these bytes are not an
@@ -723,11 +735,8 @@ fn store_escrow_error(error: rest::Error<rest::StoreEscrowError>) -> RecoveryErr
                 code: Some(problem.code.clone()),
                 detail: detail(&problem),
             },
-            // `426` is the protocol gate refusing a write from outside the server's window
-            // (issue #404). It says nothing about the *blob*, so it is not `Malformed`; it is
-            // an outcome this module does not model, carried with the server's own code —
-            // `error.protocol.version_unsupported`, the one that means "update the client" —
-            // so a caller localizing codes reads the gate's judgement, not this client's.
+            // Unreachable: every `426` is taken as `UpgradeRequired` above. Kept because the
+            // generated enum is matched exhaustively.
             rest::StoreEscrowError::Status426(problem) => RecoveryError::Unexpected {
                 status: 426,
                 code: Some(problem.code.clone()),
@@ -755,6 +764,9 @@ fn store_escrow_error(error: rest::Error<rest::StoreEscrowError>) -> RecoveryErr
 fn fetch_sealed_identity_error(
     error: rest::Error<rest::FetchSealedIdentityError>,
 ) -> RecoveryError {
+    if let Some(refusal) = upgrade_required_of(&error) {
+        return RecoveryError::UpgradeRequired(Box::new(refusal));
+    }
     match error {
         rest::Error::Api(response) => match response.into_inner() {
             rest::FetchSealedIdentityError::Status404(_) => RecoveryError::IdentityNotStored,
@@ -779,6 +791,9 @@ fn fetch_sealed_identity_error(
 fn store_sealed_identity_error(
     error: rest::Error<rest::StoreSealedIdentityError>,
 ) -> RecoveryError {
+    if let Some(refusal) = upgrade_required_of(&error) {
+        return RecoveryError::UpgradeRequired(Box::new(refusal));
+    }
     match error {
         rest::Error::Api(response) => match response.into_inner() {
             rest::StoreSealedIdentityError::Status400(problem)
@@ -786,6 +801,7 @@ fn store_sealed_identity_error(
                 code: Some(problem.code.clone()),
                 detail: detail(&problem),
             },
+            // Unreachable: every `426` is taken as `UpgradeRequired` above.
             rest::StoreSealedIdentityError::Status426(problem) => RecoveryError::Unexpected {
                 status: 426,
                 code: Some(problem.code.clone()),
@@ -1008,6 +1024,7 @@ mod tests {
 
     async fn start_mock(handler: Handler) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        crate::net::negotiation::forget_addr(listener.local_addr().unwrap());
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
             loop {
@@ -1708,6 +1725,7 @@ mod tests {
     async fn an_unreachable_endpoint_is_a_transport_failure_not_an_auth_one() {
         // Bind, read the port, then drop the listener: the address is now certain to refuse.
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        crate::net::negotiation::forget_addr(listener.local_addr().unwrap());
         let addr = listener.local_addr().unwrap();
         drop(listener);
 
@@ -1830,5 +1848,42 @@ mod tests {
         assert_eq!(secret.as_bytes().len(), 32);
         assert_eq!(secret.to_hex().len(), 64);
         assert_eq!(format!("{secret:?}"), "MintedSecret { .. }");
+    }
+
+    /// **The protocol window (issue #674).** A `426` on either escrow write — documented or
+    /// undocumented — is the typed upgrade refusal with the protocol code, never `Unexpected`.
+    #[test]
+    fn an_escrow_write_426_is_the_typed_upgrade_refusal() {
+        fn gate_426<E>() -> rest::Error<E> {
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert(
+                "x-capsule-protocol-min",
+                reqwest::header::HeaderValue::from_static("2099-01-01"),
+            );
+            rest::Error::UnexpectedStatus {
+                status: reqwest::StatusCode::UPGRADE_REQUIRED,
+                headers,
+                body: br#"{"status":426,"detail":"too old","code":"error.protocol.version_unsupported"}"#
+                    .to_vec()
+                    .into(),
+            }
+        }
+        for error in [
+            store_escrow_error(gate_426()),
+            store_sealed_identity_error(gate_426()),
+        ] {
+            let RecoveryError::UpgradeRequired(refusal) = &error else {
+                panic!("expected UpgradeRequired, got {error:?}");
+            };
+            assert_eq!(
+                refusal.reason,
+                crate::net::negotiation::UpgradeReason::ProtocolBelowWindow
+            );
+            assert_eq!(refusal.message, "too old");
+            assert_eq!(
+                error.error_code(),
+                Some(error_codes::PROTOCOL_VERSION_UNSUPPORTED)
+            );
+        }
     }
 }

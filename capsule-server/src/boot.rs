@@ -112,7 +112,7 @@ use crate::store::memory::{
 };
 use crate::store::valkey::ValkeyStores;
 use crate::store::{
-    AuthStateStore, ChallengeStore, ChannelStore, CohortStore, EnrollmentStore,
+    AuthStateStore, ChallengeStore, ChannelStore, Clock, CohortStore, EnrollmentStore,
     OidcAuthorizationStore, OidcDeviceStore, PostgresCohorts, SystemClock, UploadSessionStore,
 };
 use crate::sync::{CursorCodec, SyncContext};
@@ -261,7 +261,17 @@ impl Assembled {
 /// Returns [`BootError`] for any of the startup failures above. Nothing is left half-built: the
 /// blob root is the only side effect, and it is idempotent.
 pub async fn assemble(config: &Config) -> Result<Assembled, BootError> {
-    let base = base(config).await?;
+    assemble_on(config, Arc::new(SystemClock)).await
+}
+
+/// [`assemble`] on `clock` rather than the system clock.
+///
+/// The seam exists for the tests: a property that depends on time passing — a lockout window
+/// decaying — is asserted by moving a [`crate::store::memory::ManualClock`] rather than by
+/// sleeping across the window on a loaded machine (#784). Production reaches it only through
+/// [`assemble`], with the [`SystemClock`].
+async fn assemble_on(config: &Config, clock: Arc<dyn Clock>) -> Result<Assembled, BootError> {
+    let base = base(config, clock).await?;
     match config.backends {
         Backends::Memory => {
             warn_in_memory();
@@ -333,7 +343,7 @@ async fn open_durable_database(config: &Config) -> Result<sea_orm::DatabaseConne
 /// Returns [`BootError`] for the blob root or a durable backend that cannot be opened. It cannot
 /// fail on key material, because it asks for none.
 pub async fn assemble_maintenance(config: &Config) -> Result<Maintenance, BootError> {
-    let base = base(config).await?;
+    let base = base(config, Arc::new(SystemClock)).await?;
     let (stores, adapters) = match config.backends {
         Backends::Memory => {
             warn_in_memory();
@@ -424,7 +434,7 @@ fn oidc_roots(path: &std::path::Path) -> Result<Vec<reqwest::Certificate>, BootE
 #[derive(Debug)]
 struct Stores {
     root: std::path::PathBuf,
-    clock: Arc<SystemClock>,
+    clock: Arc<dyn Clock>,
     blobs: Arc<FilesystemBlobStore>,
     /// The owner ledgers under the blob root, on both backends.
     ledger: Arc<FilesystemLedger>,
@@ -509,7 +519,7 @@ fn ledger_keys(config: &Config) -> LedgerKeys {
 #[derive(Debug)]
 struct Base {
     root: std::path::PathBuf,
-    clock: Arc<SystemClock>,
+    clock: Arc<dyn Clock>,
     blobs: Arc<FilesystemBlobStore>,
     ledger: Arc<FilesystemLedger>,
 }
@@ -555,7 +565,7 @@ impl Base {
 /// rather than deferred: a store that cannot be created now is a store every upload will fail
 /// against at write time, and a server that accepts bytes it cannot keep is worse than one that
 /// does not start.
-async fn base(config: &Config) -> Result<Base, BootError> {
+async fn base(config: &Config, clock: Arc<dyn Clock>) -> Result<Base, BootError> {
     let root = config
         .blob_root
         .clone()
@@ -583,7 +593,7 @@ async fn base(config: &Config) -> Result<Base, BootError> {
         );
     Ok(Base {
         root,
-        clock: Arc::new(SystemClock),
+        clock,
         blobs,
         ledger,
     })
@@ -673,7 +683,7 @@ fn credentials() -> Result<Credentials, BootError> {
 /// finalization wrote.
 fn memory_ports(
     config: &Config,
-    clock: &Arc<SystemClock>,
+    clock: &Arc<dyn Clock>,
     receipts: Arc<InMemoryReceipts>,
 ) -> Result<Ports, BootError> {
     Ok(Ports {
@@ -711,7 +721,7 @@ fn memory_ports(
 /// account table's rows and the pending ceremonies are Valkey's.
 fn durable_ports(
     config: &Config,
-    clock: &Arc<SystemClock>,
+    clock: &Arc<dyn Clock>,
     connection: &DatabaseConnection,
     valkey: &ValkeyStores,
 ) -> Result<Ports, BootError> {
@@ -1013,8 +1023,9 @@ fn compose(
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{App, BootError, assemble};
+    use super::{App, BootError, assemble, assemble_on};
     use crate::config::{Config, Demands, Overrides};
+    use crate::store::memory::ManualClock;
 
     /// A PKCS#8 v1 Ed25519 key, base64. Signs nothing; see `config`'s own tests.
     const EXAMPLE_DER: &str = "MC4CAQAwBQYDK2VwBCIEIN6eTvXEL7xMZWHY8rTk7VbQSGSuRkle5MVfiiYUStLF";
@@ -1838,12 +1849,13 @@ mod tests {
         // before it verifies anything, so a lockout that did not decay would be an account no
         // request could ever open again — there is no unlock operation on any surface.
         //
-        // A one-attempt threshold, a one-second window and a real wait. Both numbers are
-        // settings rather than constants precisely so this is expressible: driving the default
-        // ten-failure ceiling through the route would cost ten Argon2id verifications, and on a
-        // loaded machine the gaps between them can themselves exceed a short window — a test
-        // whose setup races its own subject. The alternative was a clock seam through the whole
-        // composition root for one case, and the composition root is the thing under test.
+        // A one-attempt threshold and a one-second window, crossed by moving an injected clock
+        // rather than by sleeping (#784). Both numbers are settings rather than constants so this
+        // is expressible: driving the default ten-failure ceiling through the route would cost
+        // ten Argon2id verifications. A real wait raced the window on a loaded machine, so time
+        // is the one input taken off the composition root under test; everything else is the
+        // assembly `serve` runs. The clock starts at the real present because `jsonwebtoken`
+        // checks `exp` against the system clock, so a token minted at the epoch would be stale.
         let root = tempfile::tempdir().expect("a scratch directory");
         let config = memory_config_with(
             root.path(),
@@ -1852,7 +1864,10 @@ mod tests {
                 ("LOCKOUT_WINDOW_SECONDS", "1"),
             ],
         );
-        let assembled = assemble(&config).await.expect("it assembles");
+        let clock = ManualClock::new(jiff::Timestamp::now());
+        let assembled = assemble_on(&config, std::sync::Arc::new(clock.clone()))
+            .await
+            .expect("it assembles");
         let client = kynos::test::TestClient::new(assembled.service().expect("the router builds"));
 
         register(&client, "correct horse battery staple").await;
@@ -1866,7 +1881,14 @@ mod tests {
             "the ceiling engages, and a correct password is told so rather than refused"
         );
 
-        tokio::time::sleep(std::time::Duration::from_millis(1_500)).await;
+        clock.advance(jiff::SignedDuration::from_millis(999));
+        assert_eq!(
+            login(&client, "correct horse battery staple").await,
+            kynos::http::StatusCode::LOCKED,
+            "inside the window the lockout holds, so the recovery below is the clock's doing"
+        );
+
+        clock.advance(jiff::SignedDuration::from_millis(1_001));
         assert_eq!(
             login(&client, "correct horse battery staple").await,
             kynos::http::StatusCode::OK,

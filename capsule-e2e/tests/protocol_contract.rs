@@ -22,6 +22,7 @@ use capsule_core::crypto::pwkdf::WrappedSecret;
 use capsule_e2e::push::ensure_album;
 use capsule_e2e::{Device, PASSWORD, Server};
 use capsule_sdk::auth::{AuthClient, AuthError};
+use capsule_sdk::net::negotiation::UpgradeReason;
 use capsule_sdk::push::{bundle_blobs, create_request};
 use capsule_sdk::recovery::{RecoveryClient, RecoveryError};
 use capsule_sdk::rest;
@@ -87,12 +88,14 @@ async fn e2e_case_9_a_server_outside_this_builds_window_refuses_writes_with_426(
     else {
         panic!("a write from outside the window is refused");
     };
+    // The SDK maps the gate's `426` to its one typed refusal (issue #674), naming the bound the
+    // advertised window says this build broke.
     match &refused {
-        AuthError::Unexpected { status, code, .. } => {
-            assert_eq!(*status, 426);
-            assert_eq!(code.as_deref(), Some(VERSION_UNSUPPORTED));
+        AuthError::UpgradeRequired(refusal) => {
+            assert_eq!(refusal.reason, UpgradeReason::ProtocolAboveWindow);
+            assert_eq!(refusal.window.protocol_max.as_deref(), Some("2000-01-01"));
         }
-        other => panic!("expected a 426 with the gate's code, got {other:?}"),
+        other => panic!("expected the typed upgrade refusal, got {other:?}"),
     }
     assert_eq!(refused.error_code(), Some(VERSION_UNSUPPORTED));
 

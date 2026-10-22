@@ -67,8 +67,9 @@ mod workspace;
 
 pub use workspace::{
     FfiAlbum, FfiAssetFacts, FfiAssetMetadata, FfiClientBuild, FfiDeviceTier,
-    FfiHardwareKeyAgreement, FfiHardwareSigner, FfiHardwareSignerError, FfiSyncApplyOutcome,
-    FfiSyncEntry, FfiUploadBlob, FfiVerifyOutcome, FfiWorkspace, p256_hardware_dek_round_trip,
+    FfiHardwareKeyAgreement, FfiHardwareSigner, FfiHardwareSignerError, FfiOpenedOriginal,
+    FfiSyncApplyOutcome, FfiSyncEntry, FfiSyncHead, FfiUploadBlob, FfiVerifyOutcome, FfiWorkspace,
+    p256_hardware_dek_round_trip,
 };
 
 /// The local-alert surface (`S-D29`): the shared `capsule_core::notify` predicate, flattened.
@@ -229,6 +230,9 @@ impl From<UploadError> for FfiError {
         }
         let code = match &err {
             UploadError::Rejected { code, .. } => code.clone(),
+            UploadError::UpgradeRequired { .. } => {
+                Some(capsule_i18n::error_codes::PROTOCOL_VERSION_UNSUPPORTED.to_owned())
+            }
             _ => None,
         };
         Self::Upload {

@@ -170,6 +170,42 @@ pub struct RemoteHead<'a> {
     pub local_chain_head: Option<Hash32>,
 }
 
+/// The SHA-256 and length of the original ciphertext `ciphertext` yields, read one STREAM chunk
+/// at a time: the [`RemoteHead::original_ciphertext_hash`] for an original that is on disk
+/// rather than in memory, computed in memory bounded by one chunk whatever the original's size.
+///
+/// The digest is of exactly the bytes read, so a head built from it vouches for those bytes:
+/// [`Workspace::apply_remote_head`] then checks it against the manifest's content address as
+/// [`Workspace::apply_remote_entry`] checks the bytes themselves.
+///
+/// # Errors
+///
+/// [`LifecycleError::Io`] when `ciphertext` cannot be read.
+pub fn hash_ciphertext_from<R: Read>(mut ciphertext: R) -> Result<(Hash32, u64)> {
+    let mut hasher = Sha256Hasher::new();
+    let mut window = vec![0u8; CIPHERTEXT_CHUNK];
+    let mut read: u64 = 0;
+    loop {
+        let n = match ciphertext.read(&mut window) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => {
+                return Err(LifecycleError::Io(format!(
+                    "reading the original's ciphertext: {error}"
+                )));
+            }
+        };
+        hasher.update(&window[..n]);
+        read += n as u64;
+    }
+    tracing::debug!(
+        bytes = read,
+        "sync-apply: original ciphertext hashed from a stream"
+    );
+    Ok((hasher.finalize(), read))
+}
+
 /// Why an entry was quarantined: surfaced to the user, never silently dropped.
 ///
 /// Each variant names the check that refused it, so a client's quarantine surface can say what
@@ -1438,6 +1474,49 @@ mod tests {
             facts.provenance_head,
             crate::crypto::hash::hash_bytes(&future_wire.manifest_cbor),
             "the head covers the preserved field"
+        );
+    }
+
+    /// A head hashed from a stream is the head of the bytes: one spanning several read windows
+    /// hashes to what the bytes do and applies as the entry does, and a flipped byte refuses it
+    /// at the chokepoint's content-integrity step.
+    #[test]
+    fn a_head_hashed_from_a_stream_applies_as_the_entry_does() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let (ws, album, _asset, wire) = seeded(&lib, &src);
+
+        let long: Vec<u8> = (0..3 * CIPHERTEXT_CHUNK + 7)
+            .map(|i| (i % 251) as u8)
+            .collect();
+        assert_eq!(
+            hash_ciphertext_from(long.as_slice()).unwrap(),
+            (hash_bytes(&long), long.len() as u64)
+        );
+
+        let (digest, len) = hash_ciphertext_from(wire.ciphertext.as_slice()).unwrap();
+        assert_eq!(len, wire.ciphertext.len() as u64);
+        let streamed = RemoteHead {
+            original_ciphertext_hash: digest,
+            ..entry(album, &wire, None).head()
+        };
+        assert_eq!(
+            ws.apply_remote_head(streamed).unwrap(),
+            ws.apply_remote_entry(entry(album, &wire, None)).unwrap()
+        );
+
+        let mut tampered = wire.ciphertext.clone();
+        tampered[0] ^= 0xFF;
+        let (digest, _) = hash_ciphertext_from(tampered.as_slice()).unwrap();
+        assert_eq!(
+            ws.apply_remote_head(RemoteHead {
+                original_ciphertext_hash: digest,
+                ..entry(album, &wire, None).head()
+            })
+            .unwrap(),
+            SyncApplyOutcome::Quarantined(QuarantineReason::Rejected(
+                RejectReason::CiphertextHashMismatch
+            ))
         );
     }
 }

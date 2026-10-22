@@ -545,6 +545,9 @@ async fn run_schedule(
 ) -> Result<(Model, Result<UploadOutcome, UploadError>), TestCaseError> {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr: SocketAddr = listener.local_addr().expect("addr");
+    // A schedule that ends in a version refusal latches a refusing window for this origin; a
+    // later case that lands on the same ephemeral port must start from nothing.
+    capsule_sdk::net::negotiation::forget(&format!("http://{addr}").parse().expect("url"));
     let model = Arc::new(Mutex::new(Model {
         size,
         faults: faults.clone(),
