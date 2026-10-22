@@ -6,7 +6,7 @@
 //! append-only provenance, self-verified through
 //! [`verify_asset`](capsule_core::crypto::verify_asset::verify_asset), and — when the still decodes —
 //! with a chromahash `lqip` in the sidecar and signed thumbnail derivatives on disk
-//! ([`capsule_core::media`](capsule_core::media), slices `S-B1`/`S-B13`/`S-B14`). A format with no
+//! ([`capsule_core::media`], slices `S-B1`/`S-B13`/`S-B14`). A format with no
 //! codec in this build still imports, as a signed original with the gap recorded rather than
 //! hidden.
 //!

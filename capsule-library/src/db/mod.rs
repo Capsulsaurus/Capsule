@@ -10,6 +10,6 @@ pub use rows::{
     AlbumRow, AssetRow, AssetStackRow, AssetTagRow, CachedRepresentationRow, StackMemberRow,
 };
 pub use vector::{
-    EmbeddingInsert, EmbeddingProvenance, EmbeddingRecord, KnnHit, VectorIndexError,
+    EmbeddingInsert, EmbeddingProvenance, EmbeddingRecord, KnnHit, VectorIndex, VectorIndexError,
     VectorTableSpec,
 };

@@ -10,7 +10,7 @@ This doc is the canonical statement of the [atomic-write](#atomic-writes-and-cra
 
 ## Scrubbing
 
-A startup scrub removes `.tmp` debris under `media/` older than an age floor (so it never races an in-flight write), at most once per interval; both constants live in [`capsule-core::library::scrub`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-core/src/library/scrub.rs). Every removal is logged. The server sweeps stale `incoming/*.bin` likewise.
+A startup scrub removes `.tmp` debris under `media/` older than an age floor (so it never races an in-flight write), at most once per interval; both constants live in [`capsule-library::library::scrub`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-library/src/library/scrub.rs). Every removal is logged. The server sweeps stale `incoming/*.bin` likewise.
 
 ## Self-Validation
 

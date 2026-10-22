@@ -43,7 +43,7 @@ Capsule reclaims space itself. Eligible: `cache/` and fetched-but-unpinned origi
 
 ### Automatic cache management
 
-The reclaimable set is held within a user-configurable budget ([`capsule-core::library::cache_sweep`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-core/src/library/cache.rs)):
+The reclaimable set is held within a user-configurable budget ([`capsule-library::library::cache_sweep`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-library/src/library/cache.rs)):
 
 - Viewing stamps a last-access time; eviction is least-recently-accessed first.
 - At equal recency, evict original → preview → thumbnail. The metadata tier (sidecar + LQIP) is never reclaimed, so an asset always stays listable.

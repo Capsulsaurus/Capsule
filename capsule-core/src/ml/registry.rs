@@ -19,7 +19,7 @@
 //! rows* (the v1-committed slots, enriched with the function and fallback the contract names) and
 //! the version-bump **swap primitive** ([`Registry::bump_version`]); the background per-asset
 //! **regeneration orchestration** that consumes the resulting staleness lives in
-//! [`crate::ml::regen`], and the provenance gate the [vector index](crate::db::EmbeddingInsert) calls is
+//! [`crate::ml::regen`], and the provenance gate the [vector index](crate::ml::EmbeddingInsert) calls is
 //! [`Registry::check_insert`].
 //!
 //! [AI/ML — Models and Algorithms]: https://docs/design/ai/#models-and-algorithms
@@ -190,7 +190,7 @@ impl Registry {
     /// version gets a `+1` suffix so the tuple still changes. Returns the new canonical version, or
     /// `None` if `task` has no row. This is the swap half of the version-bump regeneration loop —
     /// its regeneration half is [`regen::regenerate_stale`](crate::ml::regenerate_stale),
-    /// which walks the now-stale entries [`stale_embedding_assets`](crate::db::DatabaseDriver::stale_embedding_assets)
+    /// which walks the now-stale entries [`stale_embedding_assets`](crate::ml::VectorIndex::stale_embedding_assets)
     /// reports and replaces each per-asset.
     ///
     /// [AI/ML — Embedding Provenance]: https://docs/design/ai/#embedding-provenance
@@ -266,7 +266,7 @@ impl Registry {
 
 /// The partition tables this inventory's embedding slots need — the `db`-side description of the
 /// `vec0` schema, with no `ml` type in sight. Hand it to
-/// [`DatabaseDriver::create_vector_tables`](crate::db::DatabaseDriver::create_vector_tables) to
+/// `DatabaseDriver::create_vector_tables` to
 /// materialize the whole schema up front instead of on first use.
 impl Registry {
     /// One [`VectorTableSpec`] per embedding-producing slot (detection slots store no vectors).

@@ -16,7 +16,7 @@ capsule-library      -> core
 capsule-sdk          -> core, library, i18n
 capsule-wasm         -> core
 capsule-core-ffi     -> core, library, sdk
-capsule-server       -> core, i18n   (dev: sdk, wasm, server-migration; never linked)
+capsule-server       -> core, i18n   (dev: sdk, library, wasm, server-migration; never linked)
 capsule-cli          -> core, library, sdk, i18n, cli-entity, cli-migration
 capsule-e2e          -> server, sdk, cli, library, core, wasm   (tests only)
 xtask                -> core, i18n
@@ -24,8 +24,8 @@ xtask                -> core, i18n
 
 | Crate | Responsibility |
 | --- | --- |
-| `capsule-core` | **Stateless**: cryptography and MLS authority, canonical CBOR, sidecar and CRDT logic, validation, import planning, media, LQIP, sharing and drop crypto, ML orchestration |
-| `capsule-library` | **All local state**: the SQLite index, the on-disk library and its lock, the `Workspace`, import scanning and execution, sidecar I/O, backup, hardware signers |
+| `capsule-core` | **Stateless**: cryptography and MLS authority, canonical CBOR, sidecar and CRDT logic, validation, import grouping and upload policy, media, LQIP, sharing and drop crypto, enrollment payloads, ML orchestration |
+| `capsule-library` | **All local state**: the SQLite index, the on-disk library and its lock, the `Workspace`, import scanning, planning and execution, sidecar and album-store I/O, backup I/O, file-path EXIF reading, desktop TPM signers |
 | `capsule-i18n` | Canonical ICU catalogs and runtime localization ([Internationalization](/design/i18n/)) |
 | `capsule-sdk` | Spargen-generated REST client plus Capsule's orchestration: auth refresh, resumable upload, sync, recovery, version negotiation, LAN peering |
 | `capsule-wasm` | Browser sealing surface (share-link open, guest-drop seal) over `capsule-core` with default features off |
@@ -50,8 +50,11 @@ every core behaviour is testable with fixed inputs. Exceptions, each confined to
 | `catch_unwind` in `media::decode` | A decoder panic on hostile input must become a typed error, not abort the caller |
 
 Anything else that needs state belongs in `capsule-library` (local) or `capsule-sdk` (network).
-The split from the earlier all-in-one `capsule-core` is tracked in the roadmap; until it lands,
-the library modules still live in `capsule-core` and are the only stateful code there.
+`cargo xtask architecture-check` holds the boundary: `capsule-core` takes no normal dependency on
+a stateful crate (`rusqlite`, `sea-orm`, `sqlite-vec`, `sqlx`, `walkdir`), and no file under
+`capsule-core/src` names `std::fs`, `std::env`, `rusqlite` or `sea_orm`. Routing core's remaining
+clock reads, the UUIDv7 identifiers it mints, through `Clock` and `Rng` is tracked in
+[#846](https://github.com/Capsulsaurus/Capsule/issues/846).
 
 GraphQL and gRPC are retired
 ([ADR-0001](https://github.com/Capsulsaurus/Capsule/blob/master/adr/0001-the-public-server-surface-is-kynos-rest-only.md));
@@ -73,7 +76,7 @@ Authentication and upload state are separate typed ports; no generic CAS, transf
 | --- | --- |
 | REST client | Spargen-generated from the checked-in OpenAPI 3.2 document |
 | Namespaces an app links | Exactly two, `capsule_core_ffi` and `capsule_sdk`, both inside the `capsule-core-ffi` staticlib (two Rust staticlibs cannot share a binary). Hardware seams reach Swift/Kotlin as `capsule_sdk` foreign traits. ADR-0005 |
-| Workspace verbs over FFI | Orchestration only: each verb is one call into `capsule-core`, which keeps every cryptographic step |
+| Workspace verbs over FFI | Orchestration only: each verb is one call into the `capsule-library` `Workspace`, which leaves every cryptographic step to `capsule-core` |
 | Media | Rawshift through `capsule-core::media`; Chromahash imported directly |
 | Alerts | Classes and predicates in `capsule-core::notify`; scheduling and presentation are native ([Notifications](/design/notifications/)) |
 

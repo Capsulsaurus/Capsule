@@ -4,7 +4,7 @@
 //! Album keys used to be **session-scoped** — minted per `Workspace` and dropped on close — so a
 //! reopened library could neither decrypt nor write its own prior assets. This module is the
 //! durable half of the [key chain](https://docs/design/cryptography/keys/#key-chain) the
-//! [keystore](super::keystore) already provides for device identity keys: `AccountFile` persists
+//! keystore (`Account`) already provides for device identity keys: `AccountFile` persists
 //! the master key (passphrase-wrapped) and the device private keys (master-sealed);
 //! [`AlbumStore`] persists everything below the master key that an album needs.
 //!
@@ -25,8 +25,8 @@
 //!   different plaintexts and leak the keystream.
 //! - **Canonical CBOR, sorted by album id** (and each album's AMK rows by epoch), so the
 //!   plaintext is byte-stable for a given logical state.
-//! - Written **temp-then-rename** ([`tmp_path`]), so a crash mid-write never leaves a
-//!   half-written keystore where the previous good one was.
+//! - Written **temp-then-rename** by `capsule-library`'s `AlbumStoreFile::save`, so a crash
+//!   mid-write never leaves a half-written keystore where the previous good one was.
 //! - The AMK rows reuse the backup artifact's row shape `(album_id, epoch, amk)`, so
 //!   keystore ↔ backup-ledger conversion is a `map`, not a translation table.
 //!

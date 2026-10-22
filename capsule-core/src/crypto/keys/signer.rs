@@ -21,7 +21,7 @@ use crate::crypto::CryptoError;
 /// This is the abstraction the device signing key (DSK) is consumed through. Keeping it
 /// object-safe (`&dyn Signer`) lets a software key and a Secure Enclave / StrongBox / TPM
 /// backend be used interchangeably at every signing site. `Send + Sync` so a `Box<dyn Signer>`
-/// can live inside the (`Mutex`-shared) [`Workspace`](crate::lifecycle::Workspace).
+/// can live inside the (`Mutex`-shared) `Workspace`.
 pub trait Signer: Send + Sync {
     /// Sign `msg`, producing both signature halves (Ed25519 ‖ ML-DSA-65).
     ///

@@ -54,6 +54,7 @@ jobs:
               - 'capsule-cli/**'
               - 'capsule-e2e/**'
               - 'capsule-core/**'
+              - 'capsule-library/**'
               - 'capsule-sdk/**'
               - 'capsule-core-ffi/**'
               - 'capsule-wasm/**'

@@ -10,7 +10,7 @@
 //!
 //! The stateful surface (writing flags as signed `metadata-update`s, the cull-filtered views,
 //! flagging a whole stack, and the reject-sweep) lives on
-//! [`Workspace`](crate::lifecycle::Workspace), which ties these predicates to the on-disk
+//! `Workspace`, which ties these predicates to the on-disk
 //! signed data plane. Flagging never touches bytes and is fully reversible; the reject-sweep's
 //! batch-move to trash is the *only* destructive step, and it is soft-per-retention like any
 //! delete.

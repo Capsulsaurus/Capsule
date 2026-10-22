@@ -19,7 +19,7 @@
 //! Nothing in this crate holds the trigger state. There is no `last_completed_sync` column, no
 //! client-side quota type (server-held, and only as current as the last `GET /v1/quota`), and no
 //! persisted quarantine table — a refused sync entry is a per-entry verdict
-//! ([`crate::lifecycle::SyncApplyOutcome`]), not a row. Pending drops live in the provisioning
+//! (`capsule_library::lifecycle::SyncApplyOutcome`), not a row. Pending drops live in the provisioning
 //! user's server-side inbox. So the predicate cannot read its own inputs; it takes them, which
 //! is also what keeps it pure.
 //!

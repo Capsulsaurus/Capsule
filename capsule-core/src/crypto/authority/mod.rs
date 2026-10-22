@@ -73,7 +73,7 @@ pub trait AlbumAuthority {
 }
 
 /// A concrete album authority behind the [`AlbumAuthority`] seam, so a holder (e.g.
-/// [`Workspace`](crate::lifecycle::Workspace)) can store either backend without naming a
+/// `Workspace`) can store either backend without naming a
 /// concrete type. `Reference` is the offline/test default present on every build; `OpenMls` is
 /// the live MLS backend, available only under the `mls` feature (host-only). The enum itself
 /// implements [`AlbumAuthority`], so `&Authority` coerces to `&dyn AlbumAuthority` at every

@@ -73,7 +73,7 @@ pub const WRAP_PARAMS: Argon2Params = Argon2Params {
 /// A **source**, not a buffer: the export streams each original straight into the artifact's
 /// writer, so exporting holds one STREAM chunk of it rather than the whole library's ciphertext.
 /// The library's sources re-derive the ciphertext from the plaintext on disk
-/// ([`OriginalCiphertext`](crate::lifecycle::OriginalCiphertext)); an in-memory `Vec<u8>` is a
+/// (`OriginalCiphertext`); an in-memory `Vec<u8>` is a
 /// source too, for callers that already hold the bytes.
 pub trait CiphertextSource: std::fmt::Debug + Send + Sync {
     /// The ciphertext's exact length in bytes — what the artifact's tar header declares before
@@ -768,7 +768,7 @@ pub fn export(
 /// so memory stays at one STREAM chunk of an original whatever the library's size. On an error
 /// `out` holds a partial artifact, which the caller must discard.
 ///
-/// This is the entry point [`Workspace::export_backup`](crate::lifecycle::Workspace::export_backup)
+/// This is the entry point `Workspace::export_backup`
 /// runs, and it takes no cost argument, so no caller of it can produce a weak artifact.
 pub fn export_to(
     input: &BackupInput,

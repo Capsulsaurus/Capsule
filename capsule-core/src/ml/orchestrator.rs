@@ -5,7 +5,7 @@
 //! pixels, then land the results —
 //!
 //! - **embeddings** (semantic-search + face-recognition vectors) into the right `vec0` partition of
-//!   the [vector index](crate::db::EmbeddingInsert), tagged with the runner's resolved partition
+//!   the [vector index](crate::ml::EmbeddingInsert), tagged with the runner's resolved partition
 //!   discriminator ([`resolve_partition`]);
 //! - **zero-shot AI tags** into the asset's `tags_ai` OR-set as a **signed metadata update** through
 //!   the lifecycle ([`AiTagSink::add_ai_tags`]) — structurally separate from user tags, mirroring
@@ -14,7 +14,7 @@
 //!
 //! The store reaches this module through the [`AssetSource`] / [`AiTagSink`] seams rather than as a
 //! concrete type. The one production implementor is
-//! [`Workspace`](crate::lifecycle::Workspace) — but naming it here would make `ml` depend on
+//! `Workspace` — but naming it here would make `ml` depend on
 //! `lifecycle`, which already depends on `ml` (`lifecycle::metadata` reads the registry to filter
 //! stale AI tags). Inverting the edge leaves the dependency running one way, and lets the
 //! orchestration be driven by any store that can hand over plaintext bytes and accept AI tags.
@@ -46,7 +46,7 @@ use crate::sidecar::AiTag;
 
 /// The store the orchestrator reads asset pixels from and indexes vectors into.
 ///
-/// Implemented by [`Workspace`](crate::lifecycle::Workspace); a test double only has to produce
+/// Implemented by `Workspace`; a test double only has to produce
 /// bytes for an id and hand back a catalog. Keeping it a trait is what removes the
 /// `ml -> lifecycle` import (see the module docs).
 pub trait AssetSource {
@@ -76,7 +76,7 @@ pub trait AiTagSink: AssetSource {
 
 /// A failure from the asset store behind the [`AssetSource`] / [`AiTagSink`] seam, type-erased.
 ///
-/// For the [`Workspace`](crate::lifecycle::Workspace) implementation this wraps a
+/// For the `Workspace` implementation this wraps a
 /// `LifecycleError`; `ml` cannot name that type without re-creating the cycle this seam broke, so
 /// the concrete error is boxed and its message preserved.
 #[derive(Debug, Error)]

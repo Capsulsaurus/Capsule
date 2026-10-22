@@ -3,7 +3,7 @@
 //!
 //! A model swap [increments](crate::ml::Registry::bump_version) a task's canonical `model_version`;
 //! every embedding stored at the prior version is left **stale-flagged** and excluded from queries
-//! ([`stale_embedding_assets`](crate::db::DatabaseDriver::stale_embedding_assets) is the resulting
+//! ([`stale_embedding_assets`](crate::ml::VectorIndex::stale_embedding_assets) is the resulting
 //! work-list). This module walks that list and re-embeds each asset at the new canonical version,
 //! **replacing** the old vector per-asset — never a global truncate-and-rebuild — so
 //! already-regenerated assets stay queryable throughout and the not-yet-done ones stay excluded

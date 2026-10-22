@@ -16,7 +16,7 @@ fn sem() -> TaskKind {
 }
 
 fn db() -> DatabaseDriver {
-    DatabaseDriver::open_in_memory().unwrap()
+    DatabaseDriver::open_in_memory().expect("an in-memory catalog opens")
 }
 
 /// Index an asset at the embedder's current canonical version (the S-H1 indexing path), so the
@@ -28,8 +28,8 @@ fn index(
     asset_id: &str,
     task: TaskKind,
 ) {
-    let (model_id, model_version) = emb.model(task).unwrap();
-    let vector = emb.embed(asset_id, task).unwrap();
+    let (model_id, model_version) = emb.model(task).expect("the embedder serves the task");
+    let vector = emb.embed(asset_id, task).expect("the asset embeds");
     db.insert_embedding(
         registry,
         EmbeddingInsert {
@@ -41,7 +41,7 @@ fn index(
             vector: &vector,
         },
     )
-    .unwrap();
+    .expect("the canonical embedding inserts");
 }
 
 #[test]
@@ -298,7 +298,7 @@ impl AssetSource for MemStore {
 impl MemStore {
     fn with_assets(assets: &[(Uuid, &[u8])]) -> Self {
         Self {
-            db: DatabaseDriver::open_in_memory().unwrap(),
+            db: DatabaseDriver::open_in_memory().expect("an in-memory catalog opens"),
             bytes: assets.iter().map(|(id, b)| (*id, b.to_vec())).collect(),
         }
     }
@@ -309,8 +309,10 @@ fn seed_v1(store: &MemStore, asset: Uuid) {
     let reg1 = Registry::canonical();
     let runner1 = FixtureRunner::new(PLATFORM);
     let emb = RunnerEmbedder::new(store, &runner1, CANONICAL_PARTITION);
-    let (model_id, model_version) = emb.model(sem()).unwrap();
-    let vector = emb.embed(&asset.to_string(), sem()).unwrap();
+    let (model_id, model_version) = emb.model(sem()).expect("the embedder serves the task");
+    let vector = emb
+        .embed(&asset.to_string(), sem())
+        .expect("the asset embeds");
     store
         .db
         .insert_embedding(
@@ -324,7 +326,7 @@ fn seed_v1(store: &MemStore, asset: Uuid) {
                 vector: &vector,
             },
         )
-        .unwrap();
+        .expect("the v1 embedding inserts");
 }
 
 /// The whole point of the adapter: the vector it produces is inference over the asset's

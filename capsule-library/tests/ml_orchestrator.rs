@@ -33,7 +33,7 @@ impl MemStore {
     fn with_asset(bytes: &[u8]) -> (Self, Uuid) {
         let id = Uuid::now_v7();
         let store = Self {
-            db: DatabaseDriver::open_in_memory().unwrap(),
+            db: DatabaseDriver::open_in_memory().expect("an in-memory catalog opens"),
             bytes: [(id, bytes.to_vec())].into_iter().collect(),
             tags: BTreeMap::new(),
         };

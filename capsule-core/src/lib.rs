@@ -61,9 +61,10 @@ pub mod constants;
 pub mod culling;
 #[cfg(feature = "native")]
 pub mod domain;
-/// The cross-device add ceremony's wire form: the advertised key bundles, the relayed payloads
-/// and the safety code. The Workspace verbs that draw and cross-sign them are
-/// `capsule-library`'s.
+// The cross-device add ceremony's wire form: the advertised key bundles, the relayed payloads
+// and the safety code. The Workspace verbs that draw and cross-sign them are `capsule-library`'s.
+// A plain comment for the reason `notify`'s is: an outer doc comment would resolve the module's
+// short intra-doc links at this declaration site.
 #[cfg(feature = "native")]
 pub mod enrollment;
 #[cfg(feature = "native")]

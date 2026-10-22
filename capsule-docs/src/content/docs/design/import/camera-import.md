@@ -4,7 +4,7 @@ description: Tethered and wireless in-camera import over PTP/IP
 status: draft
 ---
 
-**Planned, post-v1; no code exists** (`capsule-core::import::camera`). Cameras expose storage over **PTP/IP** (ISO 15740), spoken through the in-house `ptpip-rs` crate — portable to mobile, unlike LGPL libgphoto2. Vendor extensions stay behind that crate.
+**Planned, post-v1; no code exists** (`capsule-library::import::camera`). Cameras expose storage over **PTP/IP** (ISO 15740), spoken through the in-house `ptpip-rs` crate — portable to mobile, unlike LGPL libgphoto2. Vendor extensions stay behind that crate.
 
 ## The Camera Is a Source Adapter
 

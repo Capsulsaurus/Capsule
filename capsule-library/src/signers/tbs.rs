@@ -13,7 +13,7 @@
 //!
 //! Shipping TPMs expose **ECDSA over NIST P-256**, so — exactly like Secure Enclave and StrongBox
 //! (slice `S-F2`) and the `tpm` reference — the classical half is P-256, and this signer plugs
-//! into [`P256HybridSigningKey`](capsule_core::crypto::keys::p256::P256HybridSigningKey) unchanged:
+//! into [`P256HybridSigningKey`](capsule_core::crypto::keys::P256HybridSigningKey) unchanged:
 //! [`enroll`](capsule_core::crypto::keys::HardwareSigner::enroll) returns the bare `x‖y` public point (64 bytes — the
 //! form `p256::parse_p256_public` normalizes), and [`sign_classical`] returns a **DER-encoded**
 //! ECDSA signature (the composition's contract; the TPM emits raw `r‖s`, which this adapter
@@ -36,7 +36,7 @@
 //!
 //! [`Tbsip_Submit_Command`]: https://learn.microsoft.com/windows/win32/api/tbs/nf-tbs-tbsip_submit_command
 //! [`Tbsi_Is_Tpm_Present`]: https://learn.microsoft.com/windows/win32/api/tbs/nf-tbs-tbsi_is_tpm_present
-//! [`sign_classical`]: super::HardwareSigner::sign_classical
+//! [`sign_classical`]: capsule_core::crypto::keys::HardwareSigner::sign_classical
 
 #[cfg(windows)]
 pub use backend::TbsTpmSigner;

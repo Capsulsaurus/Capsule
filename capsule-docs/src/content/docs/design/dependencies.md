@@ -42,12 +42,12 @@ Every Rust version is pinned once in the root `[workspace.dependencies]`; member
 | WebAuthn | **none** — passkeys are not in v1 | Reintroducing `webauthn-rs` would reopen the openssl question. |
 | ORM | `sea-orm` (`sqlx-postgres` server, `sqlx-sqlite` CLI) | Rebuildable indexes only; sidecars stay canonical. |
 | Volatile state (Valkey) | `redis` **1.2.2** (`tokio-comp`, `connection-manager`, `tokio-rustls-comp`, `script`) | One `ConnectionManager`, no pool (no `bb8`); Lua scripts for multi-key writes, so no Redis Cluster. No `object_store` or generic TTL/CAS crate. |
-| Embedded SQLite | `rusqlite` (`bundled`) | `library.sqlite`. |
-| Vector index | `sqlite-vec` (`vec0`) | Client-local, `native`-only; not on wasm32. |
+| Embedded SQLite | `rusqlite` (`bundled`) | `library.sqlite`, in `capsule-library` only; never a `capsule-core` dependency. |
+| Vector index | `sqlite-vec` (`vec0`) | Client-local, in `capsule-library` only; not on wasm32. |
 | Still decode / encode | `rawshift-image` **0.1.1** from crates.io (`default-features = false`; JPEG, PNG, JXL, TIFF, GIF, ARW, DNG decode) | Pure Rust by default. Opt-in `media-linked-codecs` (vendored libjxl, ravif) and `media-avif-decode` (system libdav1d, dynamically linked; not Windows), never in `default`. Refused: **HEIC** (libheif/libde265 are LGPL-3.0), WebP (fails to compile on aarch64), SVG, other RAW families. Absent from wasm32. |
 | Media metadata (EXIF, XMP, ICC) | `rawshift-image` | `kamadak-exif` is transitional: removed once Rawshift's extraction covers capture time, GPS and orientation ([Thumbnails — Media Is Rawshift's](/design/thumbnails/#media-is-rawshifts)). |
 | LQIP placeholder codec | `chromahash` **0.7.1** | Imported directly, never through Rawshift. **ThumbHash is retired**; see ADR-0003. |
-| Free-space probe | `rustix` (Unix) + `windows-sys` (Windows) | `native` only. |
+| Free-space probe | `rustix` (Unix) + `windows-sys` (Windows) | `capsule-library` only. |
 | Windows TPM (TBS) | `windows-sys` (`Win32_System_TpmBaseServices`) | Not tss-esapi on Windows. |
 | MLS group layer | `openmls` (`libcrux-provider`) + `openmls_memory_storage` and companions | X-Wing PQ suite `0x004D`; `mls` feature, not on wasm32. Not `mls-rs` ([MLS](/design/cryptography/mls/)). |
 | CBOR | `ciborium` (+ `serde_bytes`, `half`) | Rules: [Metadata — Canonical CBOR](/design/metadata/#canonical-cbor-encoding). |

@@ -6,10 +6,8 @@
 //! so a probe that looks at nothing but those two keys classifies a file exactly, and it
 //! builds no model of either shape — which is what keeps it from being a second reader after
 //! the unsigned one is deleted. The only consumer of a legacy record's *contents* is the
-//! migration verb ([`Workspace::migrate_unsigned_sidecars`]), which owns its own private
+//! migration verb (`capsule-library`'s `Workspace::migrate_unsigned_sidecars`), which owns its own private
 //! decoder.
-//!
-//! [`Workspace::migrate_unsigned_sidecars`]: crate::lifecycle::Workspace::migrate_unsigned_sidecars
 
 use ciborium::value::Value;
 

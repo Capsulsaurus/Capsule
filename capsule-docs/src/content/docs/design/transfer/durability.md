@@ -4,7 +4,7 @@ description: Storage verification, deep re-hash, custody receipts, proof of loss
 status: draft
 ---
 
-Finalization's `Completed` is a one-time transfer acknowledgement, and [`verify_asset`](/design/cryptography/keys/#write-authorization) proves cryptographic validity, never that the server still holds the bytes. This page defines the re-checkable durability verdict, the signed custody receipt, and the rule every client follows before destroying local data — the [transfer protocol's](/design/transfer/) invariants 6 and 7. Server: `capsule-server::verify`, `capsule-server::attestation`; client gate: `capsule-core::library::ReleaseGate`, driven by `capsule-sdk::verify`.
+Finalization's `Completed` is a one-time transfer acknowledgement, and [`verify_asset`](/design/cryptography/keys/#write-authorization) proves cryptographic validity, never that the server still holds the bytes. This page defines the re-checkable durability verdict, the signed custody receipt, and the rule every client follows before destroying local data — the [transfer protocol's](/design/transfer/) invariants 6 and 7. Server: `capsule-server::verify`, `capsule-server::attestation`; client gate: `capsule-library::library::ReleaseGate`, driven by `capsule-sdk::verify`.
 
 ## What "Safely Stored" Means
 

@@ -14,7 +14,7 @@
 //!
 //! The commit-before-reveal order in steps 1–3, over inputs that each carry a fresh per-ceremony
 //! nonce, is what makes a twelve-digit code sound against a man in the middle (see
-//! [the safety-code module](mod@crate::crypto::keys::safety_code)). Each side therefore draws its
+//! the safety-code module, `crypto::keys::safety_code`). Each side therefore draws its
 //! bundle **once per ceremony** and keeps the one it sent: a second call draws a new nonce, and
 //! so a different code. The master-key transfer under a
 //! channel key (design step 5) is not here: the channel's ephemeral key agreement is not yet
