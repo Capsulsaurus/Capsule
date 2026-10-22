@@ -151,6 +151,25 @@ pub const UPLOAD_SESSIONS: Budget = Budget::new(300, SignedDuration::from_mins(1
 /// sending one-byte chunks at the head is the one this throttles.
 pub const UPLOAD_CHUNKS: Budget = Budget::new(3_000, SignedDuration::from_mins(1));
 
+/// Upload sessions opened from one source address, across every account behind it
+/// (transfer/upload.md, Hostile Clients; #718).
+///
+/// Six hundred a minute, twice [`UPLOAD_SESSIONS`]: a household or office behind one address
+/// legitimately has a couple of accounts importing at once, and one account alone never reaches
+/// this, because the route charges the account's budget first and a request that budget refuses
+/// spends nothing here. What it bounds is many credentials driven from one address. Keyed on
+/// [`ClientAddr::source_key`](crate::client_addr::ClientAddr::source_key), so behind a proxy the
+/// deployment must name it in `TRUSTED_PROXIES` or `TRUSTED_PROXY_HOPS`, or every uploader shares
+/// the proxy's budget.
+pub const UPLOAD_SESSIONS_SOURCE: Budget = Budget::new(600, SignedDuration::from_mins(1));
+
+/// Chunks appended from one source address, across every account behind it (transfer/upload.md,
+/// Hostile Clients; #718).
+///
+/// Six thousand a minute, twice [`UPLOAD_CHUNKS`], for the reasons [`UPLOAD_SESSIONS_SOURCE`] is
+/// twice its per-account budget.
+pub const UPLOAD_CHUNKS_SOURCE: Budget = Budget::new(6_000, SignedDuration::from_mins(1));
+
 /// Live upload sessions one account may hold at once (transfer/upload.md, Hostile Clients).
 ///
 /// A cap rather than a rate: the session store holds every live session for up to its 24-hour

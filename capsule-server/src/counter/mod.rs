@@ -93,7 +93,9 @@
 //! has a code of its own.
 //!
 //! What partitioning is *not* is a fix for the flood. A per-source key is what bounds it: the
-//! share and drop paths charge [`CounterKey::ShareSource`] and [`CounterKey::DropSource`] first,
+//! share and drop paths charge [`CounterKey::ShareSource`] and [`CounterKey::DropSource`] first
+//! (the upload writes charge [`CounterKey::UploadSessionsSource`] and
+//! [`CounterKey::UploadChunksSource`] beside their per-account keys),
 //! keyed on the client address [`crate::client_addr`] resolves through the deployment's trusted
 //! proxies (#704), so one address cannot fill a partition faster than its own budget allows.
 //!
@@ -179,6 +181,19 @@ pub enum CounterKey {
     /// Per account and not per session, for the reason [`Self::UploadSessions`] is: a session
     /// is cheap to open, so a per-session budget is one a flood multiplies by opening more.
     UploadChunks(UserId),
+    /// Upload sessions opened from one source address, across every account behind it
+    /// (transfer/upload.md, Hostile Clients; #718).
+    ///
+    /// Keyed as [`Self::ShareSource`] is. Charged **after** [`Self::UploadSessions`], so a
+    /// request the account's own budget refuses never reaches this one: one account flooding
+    /// from a shared address spends at most its own allowance of the address's, and the other
+    /// accounts behind that address keep the rest.
+    UploadSessionsSource(String),
+    /// Chunks appended from one source address, across every account and session behind it
+    /// (transfer/upload.md, Hostile Clients; #718).
+    ///
+    /// Keyed and ordered as [`Self::UploadSessionsSource`] is, after [`Self::UploadChunks`].
+    UploadChunksSource(String),
     /// Code attempts against one second-factor challenge (`S-C55`).
     ///
     /// Keyed on the **challenge** and not the account, deliberately. A per-account key would let
@@ -306,6 +321,8 @@ impl CounterKey {
             Self::DeepVerify(_) => "deep_verify",
             Self::UploadSessions(_) => "upload_sessions",
             Self::UploadChunks(_) => "upload_chunks",
+            Self::UploadSessionsSource(_) => "upload_sessions_source",
+            Self::UploadChunksSource(_) => "upload_chunks_source",
             Self::SecondFactor(_) => "second_factor",
             Self::RegistrationSource(_) => "registration_source",
             Self::OidcAuthorize(_) => "oidc_authorize",
@@ -329,9 +346,11 @@ impl CounterKey {
             Self::EnrollmentRedemptionMalformed => ceilings::ENROLLMENT_REDEMPTION_MALFORMED,
             Self::ShareLink(_) => ceilings::SHARE_LINK,
             Self::DropLink(_) => ceilings::DROP_LINK,
-            Self::ShareSource(_) | Self::DropSource(_) | Self::RegistrationSource(_) => {
-                ceilings::SOURCE_ADDRESS
-            }
+            Self::ShareSource(_)
+            | Self::DropSource(_)
+            | Self::UploadSessionsSource(_)
+            | Self::UploadChunksSource(_)
+            | Self::RegistrationSource(_) => ceilings::SOURCE_ADDRESS,
             Self::DeepVerify(_) => ceilings::DEEP_VERIFY,
             Self::UploadSessions(_) | Self::UploadChunks(_) => ceilings::UPLOADING_ACCOUNT,
             Self::SecondFactor(_) => ceilings::SECOND_FACTOR,
@@ -357,6 +376,8 @@ impl CounterKey {
             | Self::ShareSource(scope)
             | Self::DropLink(scope)
             | Self::DropSource(scope)
+            | Self::UploadSessionsSource(scope)
+            | Self::UploadChunksSource(scope)
             | Self::SecondFactor(scope)
             | Self::OidcAuthorize(scope)
             | Self::PeerRequests(scope)
@@ -525,11 +546,15 @@ pub mod ceilings {
     /// is its own partition at this size.
     pub const UPLOADING_ACCOUNT: usize = 10_000;
 
-    /// The three source-address keys — 1-minute and 1-hour windows, keyed on a client address.
+    /// The five source-address keys — 1-minute and 1-hour windows, keyed on a client address.
     ///
-    /// Charged by the share and drop paths (#704); registration's is not yet charged. Sized for
-    /// distinct addresses in the window, which for a self-hosted deployment is thousands, not
-    /// millions — an IPv6 client counts once per `/64`, so walking a prefix does not grow it.
+    /// Charged by the share and drop paths (#704) and the two upload writes (#718);
+    /// registration's is not yet charged. Sized for distinct addresses in the window, which for a
+    /// self-hosted deployment is thousands, not millions — an IPv6 client counts once per `/64`,
+    /// so walking a prefix does not grow it. Each variant is its own partition at this size. The
+    /// upload keys are reached only by an authenticated request, and only once its account's own
+    /// budget admitted it, so no caller mints one without an account and an account mints at
+    /// most its own budget's worth a minute.
     pub const SOURCE_ADDRESS: usize = 10_000;
 
     /// [`CounterKey::OidcAuthorize`](super::CounterKey::OidcAuthorize) — 1-minute window, keyed

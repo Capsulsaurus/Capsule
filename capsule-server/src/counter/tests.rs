@@ -401,6 +401,8 @@ fn every_ceiling_is_sized_from_its_own_window() {
         CounterKey::DeepVerify(UserId::new("u")),
         CounterKey::UploadSessions(UserId::new("u")),
         CounterKey::UploadChunks(UserId::new("u")),
+        CounterKey::UploadSessionsSource(String::new()),
+        CounterKey::UploadChunksSource(String::new()),
         CounterKey::SecondFactor(String::new()),
         CounterKey::RegistrationSource(String::new()),
         CounterKey::OidcAuthorize(String::new()),
@@ -421,6 +423,10 @@ fn every_budget_is_declared_in_one_place() {
     assert_eq!(budgets::ENROLLMENT_REDEMPTION.window.as_mins(), 1);
     const { assert!(budgets::SHARE_SOURCE.limit > budgets::SHARE_LINK.limit) };
     const { assert!(budgets::DROP_SOURCE.limit > budgets::DROP_LINK.limit) };
+    // One account must not reach its address's upload budget on its own: the route charges the
+    // account first, so the address keeps room for the other accounts behind it.
+    const { assert!(budgets::UPLOAD_SESSIONS_SOURCE.limit > budgets::UPLOAD_SESSIONS.limit) };
+    const { assert!(budgets::UPLOAD_CHUNKS_SOURCE.limit > budgets::UPLOAD_CHUNKS.limit) };
     assert_eq!(budgets::DEEP_VERIFY.window.as_hours(), 1);
 }
 
