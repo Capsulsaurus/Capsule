@@ -50,8 +50,9 @@
 //! the commit leaves bytes nobody references. So a push does not end at the last chunk:
 //! [`verify_custody`] asks `POST /storage/verify` whether every blob the asset now relies on is
 //! stored, indexed and retrievable, then fetches the asset's custody-receipt log and requires a
-//! receipt per blob that verifies under the server's published attestation key and names the
-//! exact bytes, size and role the client sent. Only then is the asset reported as pushed, and
+//! receipt per blob that verifies under the server's attestation-key history and names the
+//! exact bytes, size and role the client sent. That history is the one the caller pinned for the
+//! server (`capsule_core::library::pin_attestation_keys`), never a fetch trusted on its own. Only then is the asset reported as pushed, and
 //! the verified receipts are what the caller persists beside the provenance chain.
 
 use std::borrow::Cow;
@@ -692,7 +693,8 @@ fn check_receipt(
 ///    detail as stored ∧ indexed ∧ retrievable, the re-check
 ///    [`release_is_safe`](capsule_core::library::release_is_safe) makes before a release.
 /// 2. **Accountability.** The asset's receipt log (`GET /assets/{id}/receipts`), and for every
-///    declared blob a receipt that verifies under one of `attestation_keys` and names the
+///    declared blob a receipt that verifies under one of `attestation_keys` (the pinned
+///    history, not a fetch the caller has not checked against its pin) and names the
 ///    bytes, size, role and — for the provenance blob — the chain position the client sent.
 ///
 /// The durable log rather than the per-session fetch, because a blob this run did not

@@ -11,7 +11,8 @@
 //!   constants in [`super::chunk`] where no deployment can move it.
 //! - **Server-tunable** — the accepted protocol window and the client-build cutoff it
 //!   advertises beside it, the per-file ceiling, the closed `content_type` enum, the
-//!   timestamp-drift bound, and the suggested chunk-size tiers — is here, because a self-hosted
+//!   timestamp-drift bound, the chunk-body read deadline, and the suggested chunk-size tiers —
+//!   is here, because a self-hosted
 //!   deployment legitimately sets them differently.
 //!
 //! The protocol window is read by more than the upload surface: [`crate::negotiation`]
@@ -20,6 +21,10 @@
 //!
 //! Every value carries the Salvo deployment's default, so the rebuild starts from the
 //! behaviour clients already see rather than from a fresh set of numbers.
+
+use std::fmt;
+use std::sync::Arc;
+use std::time::Duration;
 
 use jiff::Timestamp;
 
@@ -84,6 +89,43 @@ pub const DEFAULT_DRIFT_DAYS: i64 = 30;
 /// and is not this type's business.
 pub const DEFAULT_MAX_FILE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
+/// How long one chunk's body may take to arrive once the server starts reading it: two minutes.
+///
+/// The body-read half of transfer/upload.md's per-connection bound (Hostile Clients). Without
+/// it a client that sends a chunk one byte at a time holds a connection, a handler task and up
+/// to the 32 MiB transport backstop of buffer for as long as it likes, and nothing above the
+/// read loop ever ends it (#717).
+///
+/// Two minutes is generous to an honest client on a poor link: the 16 MiB protocol maximum
+/// lands at a sustained 1.1 Mbit/s, and the largest *suggested* chunk, 4 MiB, at 280 kbit/s. A
+/// client slower than that is told so with `408 error.upload.chunk_timeout` and resends the
+/// same chunk at the same offset, smaller — the offset never moved, because nothing of a chunk
+/// that did not arrive whole is written.
+pub const DEFAULT_CHUNK_READ_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// How long a chunk body may take to arrive.
+///
+/// # Why a port and not a `Duration`
+///
+/// For the reason [`FederationSetting`](crate::federation::FederationSetting) is one. Production
+/// reads the deadline once at boot and never changes it: `boot::assemble` hands in a plain
+/// [`Duration`], which implements this trait. It is a trait only because the conformance walk
+/// (`tests/conformance.rs`) proves every response the document declares through **one** server,
+/// and the `408` a stalled chunk earns has to come from the same server that answers every
+/// chunk's `204`. An in-process request's body is whole before the handler sees it, so the
+/// test double is a switch to a deadline that has already passed.
+pub trait ChunkReadDeadline: fmt::Debug + Send + Sync {
+    /// How long a chunk body may take to arrive, counted from the moment the read starts.
+    fn chunk_read_timeout(&self) -> Duration;
+}
+
+/// The deadline as boot reads it: fixed for the life of the process.
+impl ChunkReadDeadline for Duration {
+    fn chunk_read_timeout(&self) -> Duration {
+        *self
+    }
+}
+
 /// The tunable half of the upload contract.
 ///
 /// Cheap to clone (one `Vec` of short strings), because a Kynos provider hands the context out
@@ -102,6 +144,8 @@ pub struct UploadPolicy {
     drift_days: i64,
     /// The per-blob ceiling in bytes (invariant 4's upper half).
     max_file_bytes: u64,
+    /// How long one chunk's body may take to arrive.
+    chunk_read_deadline: Arc<dyn ChunkReadDeadline>,
 }
 
 impl Default for UploadPolicy {
@@ -116,6 +160,7 @@ impl Default for UploadPolicy {
                 .collect(),
             drift_days: DEFAULT_DRIFT_DAYS,
             max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+            chunk_read_deadline: Arc::new(DEFAULT_CHUNK_READ_TIMEOUT),
         }
     }
 }
@@ -149,6 +194,18 @@ impl UploadPolicy {
     /// The per-blob ceiling in bytes.
     pub fn max_file_bytes(&self) -> u64 {
         self.max_file_bytes
+    }
+
+    /// How long one chunk's body may take to arrive, read now.
+    pub fn chunk_read_timeout(&self) -> Duration {
+        self.chunk_read_deadline.chunk_read_timeout()
+    }
+
+    /// Replace the chunk-body deadline — a [`Duration`] at boot, a switch in the test suite.
+    #[must_use]
+    pub fn with_chunk_read_deadline(mut self, deadline: Arc<dyn ChunkReadDeadline>) -> Self {
+        self.chunk_read_deadline = deadline;
+        self
     }
 
     /// Narrow the accepted protocol window.

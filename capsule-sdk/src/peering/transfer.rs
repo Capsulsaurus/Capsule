@@ -9,10 +9,18 @@
 //!
 //! A received artifact is ingested through the **backup restore path** ([`ingest`]) — peering
 //! adds no separate deserialization. Restore re-verifies every ciphertext hash, checks STREAM
-//! tags on decrypt, and runs each manifest through `verify_asset`. Peering adds one thing on top:
-//! **chain-aware forward-vs-stale reconciliation**. A peer pull cannot resurrect an asset the
-//! local device has already superseded — even if the artifact was honestly produced from an
-//! older state of the sender. Such an asset is **quarantined**, never silently applied.
+//! tags on decrypt, and runs each manifest through `verify_asset`. Peering adds on top:
+//!
+//! - **Chain-aware forward-vs-stale reconciliation.** A peer pull cannot resurrect an asset the
+//!   local device has already superseded — even if the artifact was honestly produced from an
+//!   older state of the sender. Such an asset is **quarantined**, never silently applied.
+//! - **No resurrection.** An asset the device holds a tombstone for (kept past purge) is refused.
+//! - **All-or-nothing per asset.** Each asset restores on its own: one that fails to decrypt, or
+//!   arrives without the metadata its manifest commits to, is not applied, and does not stop the
+//!   rest.
+//!
+//! The artifact is sealed under the session's [`ArtifactSecret`], derived from the channel's TLS
+//! exporter — never a user passphrase.
 //!
 //! [backup artifact]: https://docs/design/backup-recovery/#backup-artifact
 
@@ -28,7 +36,8 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use super::PeeringError;
-use crate::fetch::{BlobSource, RangeOutcome, RangedFetcher};
+use super::channel::ArtifactSecret;
+use crate::fetch::{BlobSource, FetchScope, RangeOutcome, RangedFetcher, Representation};
 use crate::net::ConnectionClass;
 
 /// The ciphertext content address of a backup asset — the head manifest's `ciphertext_hash`,
@@ -46,6 +55,9 @@ pub struct DeltaExport<'a> {
     pub assets: &'a [BackupAsset],
     /// The content addresses the receiver is missing — the delta to include.
     pub delta: &'a BTreeSet<Hash32>,
+    /// The receiver's synchronization scope. A backup artifact always carries each asset's
+    /// original, so only a receiver that eagerly holds originals can take one.
+    pub scope: FetchScope,
     /// The AMKs for every `(album, epoch)` an included asset references.
     pub amks: &'a BTreeMap<(Uuid, u32), [u8; 32]>,
     /// The exporting device id (provenance: who produced the artifact).
@@ -60,12 +72,24 @@ pub struct DeltaExport<'a> {
 /// address is in `delta`, then export through the ordinary backup path. Assets the receiver
 /// already holds are never in `delta`, so they never enter the artifact — the "only missing
 /// assets transfer" guarantee is structural, decided before a single byte is sealed.
-#[instrument(skip(export_input, passphrase, signer), fields(delta = export_input.delta.len()))]
+///
+/// The receiver's scope is honoured: a receiver whose scope does not eagerly hold originals is
+/// refused with [`PeeringError::OutOfScope`] rather than sent bytes it would not keep; it syncs
+/// from the server, where its scope is served representation by representation.
+#[instrument(skip(export_input, secret, signer), fields(delta = export_input.delta.len()))]
 pub fn build_delta_artifact(
     export_input: &DeltaExport<'_>,
-    passphrase: &[u8],
+    secret: &ArtifactSecret,
     signer: &dyn Signer,
 ) -> Result<Vec<u8>, PeeringError> {
+    if !export_input
+        .scope
+        .eager_representations()
+        .contains(&Representation::Original)
+    {
+        tracing::debug!(scope = ?export_input.scope, "receiver scope excludes originals");
+        return Err(PeeringError::OutOfScope(export_input.scope));
+    }
     let assets: Vec<BackupAsset> = export_input
         .assets
         .iter()
@@ -89,7 +113,7 @@ pub fn build_delta_artifact(
         source_library_version: export_input.source_library_version.clone(),
         export_timestamp: export_input.export_timestamp.clone(),
     };
-    Ok(export(&input, passphrase, signer)?)
+    Ok(export(&input, secret.as_bytes(), signer)?)
 }
 
 /// The content address (SHA-256 hex) of an assembled artifact, for the ranged-GET integrity
@@ -115,23 +139,38 @@ pub async fn pull_artifact<B: BlobSource>(
         .map_err(|e| PeeringError::Transfer(e.to_string()))
 }
 
-/// The outcome of ingesting a peered artifact: assets to apply, assets quarantined as stale, and
-/// assets already current locally.
+/// The receiving device's state an ingest reconciles against.
+#[derive(Debug, Clone, Copy)]
+pub struct LocalLibrary<'a> {
+    /// Each held asset's current provenance head (`asset_id -> head record hash`).
+    pub heads: &'a BTreeMap<Uuid, Hash32>,
+    /// Every asset this device has tombstoned, kept past purge: never resurrected by a peer.
+    pub tombstones: &'a BTreeSet<Uuid>,
+}
+
+/// The outcome of ingesting a peered artifact: every asset the artifact carried lands in exactly
+/// one bucket.
 #[derive(Debug, Default)]
 pub struct PeerRestore {
-    /// Decrypted, verified assets to write — new assets and **forward** updates the local head is
-    /// an ancestor of.
+    /// Decrypted, verified, complete assets to write — new assets and **forward** updates the
+    /// local head is an ancestor of.
     pub applied: Vec<RestoredAsset>,
     /// Assets whose artifact head the local device has already superseded (or diverged from):
     /// **quarantined**, never applied — "peer sent stale state".
     pub quarantined: Vec<Uuid>,
     /// Assets already at the artifact's head locally — a no-op.
     pub identical: Vec<Uuid>,
+    /// Assets this device holds a tombstone for: refused, never resurrected.
+    pub tombstoned: Vec<Uuid>,
+    /// Assets that failed to restore or arrived without the metadata their manifest commits
+    /// to: not applied, in whole.
+    pub incomplete: Vec<Uuid>,
 }
 
 /// Ingest a peered artifact through the backup restore path with chain-aware reconciliation.
 ///
-/// For each asset the artifact carries, relative to `local_heads`:
+/// For each asset the artifact carries, relative to `local`:
+/// - **tombstoned locally** → refused, whatever its chain says;
 /// - **absent locally** → applied (a new asset);
 /// - **head identical** → no-op;
 /// - **head differs, artifact chain contains our head as an ancestor** → a *forward* update, so
@@ -139,48 +178,90 @@ pub struct PeerRestore {
 /// - **head differs otherwise** → the artifact is stale or divergent; **quarantined**, never
 ///   applied, so a peer can never resurrect a locally-superseded asset.
 ///
-/// Applying is delegated to [`BackupArtifact::restore`] in `Commit` mode (which decrypts and
-/// re-verifies), driven by a reconciled head map so forward assets restore and stale ones fall
-/// into restore's conflict bucket.
-#[instrument(skip(artifact_bytes, passphrase, exporter_pub, local_heads), fields(bytes = artifact_bytes.len()))]
+/// Each asset to apply restores on its own through [`BackupArtifact::restore`] in `Commit` mode
+/// (which decrypts and re-verifies), so it applies whole or not at all: a restore failure, or a
+/// metadata blob that is missing or does not match the hash its manifest commits to, lands it in
+/// [`PeerRestore::incomplete`] without touching the others.
+#[instrument(skip_all, fields(bytes = artifact_bytes.len()))]
 pub fn ingest(
     artifact_bytes: &[u8],
-    passphrase: &[u8],
+    secret: &ArtifactSecret,
     exporter_pub: &HybridVerifyingKey,
-    local_heads: &BTreeMap<Uuid, Hash32>,
+    local: LocalLibrary<'_>,
 ) -> Result<PeerRestore, PeeringError> {
-    let artifact = BackupArtifact::open(artifact_bytes, passphrase, exporter_pub)?;
-
-    // The head map restore reconciles against — forward assets are removed so restore adds them,
-    // stale assets keep their local head so restore quarantines them as conflicts.
-    let mut restore_heads = local_heads.clone();
-    let mut quarantined = Vec::new();
-    let mut identical = Vec::new();
+    let artifact = BackupArtifact::open(artifact_bytes, secret.as_bytes(), exporter_pub)?;
+    let mut outcome = PeerRestore::default();
+    let mut to_apply = Vec::new();
 
     for (asset_id, artifact_head) in artifact.provenance_heads() {
-        match local_heads.get(asset_id) {
-            None => {} // new asset: absent in restore_heads → would_add → applied
-            Some(local) if local == artifact_head => identical.push(*asset_id),
-            Some(local) => {
+        if local.tombstones.contains(asset_id) {
+            tracing::warn!(asset = %asset_id, "peer offered a tombstoned asset; refusing");
+            outcome.tombstoned.push(*asset_id);
+            continue;
+        }
+        match local.heads.get(asset_id) {
+            None => to_apply.push(*asset_id),
+            Some(head) if head == artifact_head => outcome.identical.push(*asset_id),
+            Some(head) => {
                 let chain = artifact.provenance_chain(asset_id)?.unwrap_or_default();
-                let is_forward = chain.iter().any(|record| record.record_hash() == *local);
-                if is_forward {
-                    // Adopt the newer state: drop our older head so restore applies it.
-                    restore_heads.remove(asset_id);
+                if chain.iter().any(|record| record.record_hash() == *head) {
+                    to_apply.push(*asset_id);
                 } else {
                     tracing::warn!(asset = %asset_id, "peer sent stale state; quarantining");
-                    quarantined.push(*asset_id);
+                    outcome.quarantined.push(*asset_id);
                 }
             }
         }
     }
 
-    let report = artifact.restore(RestoreMode::Commit, &restore_heads)?;
-    Ok(PeerRestore {
-        applied: report.applied,
-        quarantined,
-        identical,
-    })
+    // A head map under which every carried asset reads as identical, so a restore against it
+    // with one asset's entry removed applies exactly that asset.
+    let mut isolate: BTreeMap<Uuid, Hash32> = artifact.provenance_heads().iter().copied().collect();
+    for asset_id in to_apply {
+        let held = isolate.remove(&asset_id);
+        let restored = artifact
+            .restore(RestoreMode::Commit, &isolate)
+            .map(|report| report.applied);
+        if let Some(head) = held {
+            isolate.insert(asset_id, head);
+        }
+        match restored {
+            Ok(mut applied) if applied.len() == 1 && carries_committed_metadata(&applied[0]) => {
+                outcome.applied.append(&mut applied);
+            }
+            Ok(_) => {
+                tracing::warn!(asset = %asset_id, "peer sent a partial asset; not applying it");
+                outcome.incomplete.push(asset_id);
+            }
+            Err(error) => {
+                tracing::warn!(asset = %asset_id, %error, "peer asset failed to restore");
+                outcome.incomplete.push(asset_id);
+            }
+        }
+    }
+    tracing::debug!(
+        applied = outcome.applied.len(),
+        quarantined = outcome.quarantined.len(),
+        identical = outcome.identical.len(),
+        tombstoned = outcome.tombstoned.len(),
+        incomplete = outcome.incomplete.len(),
+        "peer artifact ingested"
+    );
+    Ok(outcome)
+}
+
+/// Whether a restored asset carries the metadata its chain requires: the exact blob the newest
+/// metadata-bearing manifest commits to, or — for a chain that commits to none — a non-empty one.
+fn carries_committed_metadata(asset: &RestoredAsset) -> bool {
+    let committed = asset
+        .provenance
+        .iter()
+        .rev()
+        .find_map(|record| record.manifest.core.metadata_blob_hash);
+    match committed {
+        Some(hash) => hash_bytes(&asset.metadata_blob) == hash,
+        None => !asset.metadata_blob.is_empty(),
+    }
 }
 
 // ── In-memory ranged source ───────────────────────────────────────────────────

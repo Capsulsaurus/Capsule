@@ -537,6 +537,12 @@ fn media_dir(root: &Path, capture_utc: i64) -> PathBuf {
         .join(format!("{:04}-{:02}", date.year(), date.month()))
 }
 
+/// `media/{YYYY}/{YYYY-MM}/{uuid}.{ext}` — an asset's original, nameable before its
+/// [`AssetState`] exists (an import stages the original there while it encrypts it).
+fn media_file_path(root: &Path, capture_utc: i64, asset_id: Uuid, ext: &str) -> PathBuf {
+    media_dir(root, capture_utc).join(format!("{}.{ext}", asset_id.simple()))
+}
+
 /// Whether an asset is currently in trash — derived by replaying its provenance chain's
 /// lifecycle actions (a `delete` moves it to trash; a later `trash-restore` brings it back).
 /// The chain is the single source of truth, so a swept (reject-swept) asset is exactly one
@@ -603,11 +609,7 @@ impl Workspace {
         media_dir(&self.root, asset.capture_utc).join(format!("{}.cbor", asset.asset_id.simple()))
     }
     fn media_path(&self, asset: &AssetState) -> PathBuf {
-        media_dir(&self.root, asset.capture_utc).join(format!(
-            "{}.{}",
-            asset.asset_id.simple(),
-            asset.ext
-        ))
+        media_file_path(&self.root, asset.capture_utc, asset.asset_id, &asset.ext)
     }
     /// `media/{YYYY}/{YYYY-MM}/{uuid}.metadata.bin` — the **exact** sealed metadata-blob wire
     /// bytes the asset's metadata-bearing manifest commits to via `metadata_blob_hash`

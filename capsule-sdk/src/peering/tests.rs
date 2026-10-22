@@ -1,19 +1,21 @@
-//! Deterministic tests for LAN peering (slice `S-E3`). Each of the peering doc's six Validation
-//! bullets gets a test here, plus the cross-module E2E case 5 in its in-process shape.
+//! Deterministic tests for LAN peering, one group per item of the peering doc's Validation list,
+//! plus the cross-module LAN-sync-then-server-reconcile case in its in-process shape.
 //!
 //! - Discovery is **mocked** ([`MockDiscovery`]) — it is inherently non-deterministic on a real
 //!   LAN, so the seam is what we test: the opaque, rotating advertisement.
 //! - The mTLS handshake is **real, in-process** — a rustls client and server over a localhost
 //!   socket with generated certs — so wrong-cert rejection and the application-layer hybrid check
 //!   are exercised against an actual TLS 1.3 channel.
-//! - Delta scoping, ranged-GET resume, restore ingest, and stale-revival quarantine run over the
-//!   real backup artifact + restore path.
+//! - Delta scoping, ranged-GET resume, restore ingest, tombstones, partial assets and stale-revival
+//!   quarantine run over the real backup artifact + restore path.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::net::IpAddr;
+use std::time::{Duration, Instant};
 
-use capsule_core::backup::{BackupArtifact, BackupAsset};
+use capsule_core::backup::{BackupArtifact, BackupAsset, BackupError};
 use capsule_core::crypto::encryption::{encrypt_asset_rekey, seal_metadata_blob};
-use capsule_core::crypto::hash::Hash32;
+use capsule_core::crypto::hash::{Hash32, hash_bytes};
 use capsule_core::crypto::keys::{
     Amk, AmkVersion, DeviceDirectory, DeviceEntry, DirectoryCore, HybridSigningKey,
 };
@@ -21,24 +23,38 @@ use capsule_core::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
 use capsule_core::crypto::provenance::{
     ASSET_MANIFEST_VERSION, Action, KeyMode, ManifestCore, ProvenanceRecord,
 };
+use jiff::Timestamp;
 use tokio::net::{TcpListener, TcpStream};
 use uuid::Uuid;
 
 use super::PeeringError;
 use super::channel::{
-    PEERING_PROTOCOL, PeerHello, PinnedTrust, VerifiedPeer, accept, connect, verify_hello,
+    ArtifactSecret, LocalPeer, PEERING_PROTOCOL, PEERING_PROTOCOL_MIN, PeerHello, PinnedTrust,
+    UpdateDevice, VerifiedPeer, VersionWindow, accept, connect, verify_hello,
 };
-use super::delta::{Offer, missing_from, symmetric_difference};
+use super::delta::{
+    MIN_OFFER_BUCKET, OFFER_PAGE_CAP, Offer, decode_offer_page, missing_from, offer_bucket,
+    symmetric_difference,
+};
 use super::discovery::{
     Discovery, MockDiscovery, OpaqueAdvertisement, SERVICE_TYPE, rotation_epoch,
 };
-use super::transfer::{
-    ArtifactBlobSource, DeltaExport, artifact_address, build_delta_artifact, ingest, pull_artifact,
+use super::session::{
+    DirectoryVersions, HandshakeLimiter, MAX_TRACKED_SOURCES, MemoryDirectoryVersions, PeerSession,
 };
+use super::transfer::{
+    ArtifactBlobSource, DeltaExport, LocalLibrary, artifact_address, build_delta_artifact, ingest,
+    pull_artifact,
+};
+use crate::fetch::FetchScope;
 
 const ALBUM: u128 = 0xA1;
 const USER: u128 = 0x05E2;
-const PASSPHRASE: &[u8] = b"shared-account-wrap-secret-derived-from-master-key";
+
+/// The artifact secret a session would export; fixed here, where there is no TLS session.
+fn secret() -> ArtifactSecret {
+    ArtifactSecret::from_bytes([0x5E; 32])
+}
 
 /// A two-device single-user fixture: the User IK, two device keys, a write-tier key, and an AMK.
 struct Fx {
@@ -102,26 +118,38 @@ impl Fx {
         .sign(signer)
     }
 
-    fn directory(&self, revoke_b: bool) -> DeviceDirectory {
-        self.directory_signed_by(1, revoke_b, &self.ik)
+    fn trust_at(&self, version: u64, revoke_b: bool) -> PinnedTrust {
+        PinnedTrust {
+            user_ik: self.ik.verifying_key(),
+            directory: self.directory_signed_by(version, revoke_b, &self.ik),
+        }
     }
 
     fn trust(&self, revoke_b: bool) -> PinnedTrust {
-        PinnedTrust {
-            user_ik: self.ik.verifying_key(),
-            directory: self.directory(revoke_b),
-        }
+        self.trust_at(1, revoke_b)
     }
 
     /// Build a `versions`-long provenance chain (Create, then MetadataUpdate for each later
     /// version) over a single ciphertext blob, returning the chain, the ciphertext, and the
-    /// metadata blob. Later versions share the exact earlier records, so an older device's head is
-    /// literally an ancestor record in a newer device's chain.
+    /// metadata blob. Every record commits to the metadata blob's hash. Later versions share the
+    /// exact earlier records, so an older device's head is literally an ancestor record in a newer
+    /// device's chain.
     fn records(
         &self,
         asset: u128,
         plaintext: &[u8],
         versions: usize,
+    ) -> (Vec<ProvenanceRecord>, Vec<u8>, Vec<u8>) {
+        self.records_committing(asset, plaintext, versions, true)
+    }
+
+    /// As [`records`](Self::records), choosing whether the records commit to the metadata hash.
+    fn records_committing(
+        &self,
+        asset: u128,
+        plaintext: &[u8],
+        versions: usize,
+        commit_meta: bool,
     ) -> (Vec<ProvenanceRecord>, Vec<u8>, Vec<u8>) {
         let amk = Amk::from_bytes(self.amk);
         let file_id = Uuid::from_u128(asset);
@@ -129,6 +157,7 @@ impl Fx {
         let meta = seal_metadata_blob(&amk, &file_id, b"{sidecar}", None)
             .unwrap()
             .0;
+        let metadata_blob_hash = commit_meta.then(|| hash_bytes(&meta));
 
         let mut chain: Vec<ProvenanceRecord> = Vec::new();
         let mut prior: Option<Hash32> = None;
@@ -151,7 +180,7 @@ impl Fx {
                 nonce_prefix: enc.nonce_prefix,
                 key_mode: KeyMode::Derived,
                 wrapped_file_key: None,
-                metadata_blob_hash: None,
+                metadata_blob_hash,
                 created_by_user: Uuid::from_u128(USER),
                 created_by_device: self.id_a,
                 client_version: "t".into(),
@@ -168,6 +197,24 @@ impl Fx {
             chain.push(record);
         }
         (chain, ct, meta)
+    }
+
+    /// A delta-scoped artifact of `assets` exported by device A under the fixture secret.
+    fn artifact_of(&self, assets: &[BackupAsset]) -> Vec<u8> {
+        let delta: BTreeSet<Hash32> = assets
+            .iter()
+            .map(|a| a.provenance.last().unwrap().manifest.core.ciphertext_hash)
+            .collect();
+        let export = DeltaExport {
+            assets,
+            delta: &delta,
+            scope: FetchScope::MetadataThumbnailsOriginal,
+            amks: &self.amks(),
+            exporter_device: self.id_a,
+            source_library_version: "1".into(),
+            export_timestamp: "2026-05-31T00:00:00Z".into(),
+        };
+        build_delta_artifact(&export, &secret(), &self.dev_a).unwrap()
     }
 }
 
@@ -193,15 +240,28 @@ fn head_hash(chain: &[ProvenanceRecord]) -> Hash32 {
     chain.last().unwrap().record_hash()
 }
 
-// ── Bullet 1: mDNS opaque identifier (unit) ───────────────────────────────────
+/// A local library view with no tombstones.
+fn library<'a>(
+    heads: &'a BTreeMap<Uuid, Hash32>,
+    tombstones: &'a BTreeSet<Uuid>,
+) -> LocalLibrary<'a> {
+    LocalLibrary { heads, tombstones }
+}
 
-/// Generate an advertisement; assert it carries no user handle, no device name. Re-generate after
-/// the rotation interval; assert a new opaque identifier.
+fn ip(last: u8) -> IpAddr {
+    IpAddr::from([192, 168, 1, last])
+}
+
+// ── Advertisement (unit) ──────────────────────────────────────────────────────
+
+/// Generate an advertisement; assert it carries no user handle, device name or model.
+/// Re-generate after the rotation interval and after a reboot; assert a new opaque identifier.
 #[test]
 fn mdns_advert_is_opaque_and_rotates() {
     let seed = [0x77u8; 32];
     let user_handle = "alice@example.com";
     let device_name = "Alice's iPhone";
+    let model = "iPhone16,2";
 
     let e0 = rotation_epoch(0xBEEF, 1_760_000_000);
     let advert = OpaqueAdvertisement::for_epoch(&seed, e0, 5555);
@@ -214,6 +274,8 @@ fn mdns_advert_is_opaque_and_rotates() {
     assert!(!name.contains(user_handle));
     assert!(!name.to_lowercase().contains("alice"));
     assert!(!name.contains(device_name));
+    assert!(!name.to_lowercase().contains("iphone"));
+    assert!(!name.contains(model));
     assert!(!name.contains('@'));
     assert_eq!(advert.service_type(), SERVICE_TYPE);
     assert!(!SERVICE_TYPE.contains('@'));
@@ -241,18 +303,46 @@ fn mdns_advert_is_opaque_and_rotates() {
         name
     );
 
-    // Same boot, same day → epoch is stable (rotates at most every 24 h).
+    // Same boot, same day → epoch is stable.
     assert_eq!(
         rotation_epoch(0xBEEF, 1_760_000_000),
         rotation_epoch(0xBEEF, 1_760_000_000 + 3_600)
     );
 }
 
+/// No name outlives 24 h: across a sweep of start times, the epoch an instant later by a full day
+/// always differs, and no boot's epoch on one day equals another boot's on any nearby day.
+#[test]
+fn mdns_advert_rotates_at_least_every_24h_and_never_collides_across_boots() {
+    for start in (1_760_000_000i64..1_760_000_000 + 86_400).step_by(3_607) {
+        assert_ne!(
+            rotation_epoch(7, start),
+            rotation_epoch(7, start + 86_400),
+            "a name never lives a full day"
+        );
+    }
+    let seed = [3u8; 32];
+    let mut names = BTreeSet::new();
+    for boot in [0u64, 1, 2, u64::MAX] {
+        for day in 0..4i64 {
+            let epoch = rotation_epoch(boot, 1_760_000_000 + day * 86_400);
+            assert!(
+                names.insert(
+                    OpaqueAdvertisement::for_epoch(&seed, epoch, 1)
+                        .advertised_name()
+                        .to_string()
+                ),
+                "every (boot, day) yields a distinct name"
+            );
+        }
+    }
+}
+
 /// The mocked discovery seam round-trips an opaque advertisement to a browsing peer.
 #[test]
 fn mock_discovery_advertises_and_browses() {
     let disc = MockDiscovery::new();
-    let advert = OpaqueAdvertisement::for_epoch(&[1; 32], 7, 6000);
+    let advert = OpaqueAdvertisement::for_epoch(&[1; 32], rotation_epoch(1, 0), 6000);
     let addr = "127.0.0.1:6000".parse().unwrap();
     disc.advertise(&advert, addr).unwrap();
 
@@ -262,14 +352,27 @@ fn mock_discovery_advertises_and_browses() {
     assert_eq!(found[0].addr, addr);
 }
 
-// ── Bullet 2: TLS mutual-auth handshake (unit + real in-process) ───────────────
+// ── Handshake (unit + real in-process) ────────────────────────────────────────
 
 /// Drive a **real** in-process mutual TLS 1.3 handshake between device A (client) and device B
-/// (server), each pinning its own trust, and return both sides' verification outcomes.
+/// (server), each pinning its own trust and a fresh anti-rollback floor, and return both sides'
+/// verification outcomes.
 async fn run_handshake(
     fx: &Fx,
     server_trust: PinnedTrust,
     client_trust: PinnedTrust,
+) -> (
+    Result<VerifiedPeer, PeeringError>,
+    Result<VerifiedPeer, PeeringError>,
+) {
+    run_limited_handshake(fx, server_trust, client_trust, HandshakeLimiter::default()).await
+}
+
+async fn run_limited_handshake(
+    fx: &Fx,
+    server_trust: PinnedTrust,
+    client_trust: PinnedTrust,
+    limiter: HandshakeLimiter,
 ) -> (
     Result<VerifiedPeer, PeeringError>,
     Result<VerifiedPeer, PeeringError>,
@@ -281,17 +384,32 @@ async fn run_handshake(
     let id_b = fx.id_b;
     let server = tokio::spawn(async move {
         let (tcp, _) = listener.accept().await.unwrap();
-        accept(tcp, id_b, &dev_b, &server_trust).await
+        let versions = MemoryDirectoryVersions::default();
+        let local = LocalPeer {
+            device_id: id_b,
+            signer: &dev_b,
+            trust: &server_trust,
+            versions: &versions,
+        };
+        accept(tcp, local, &limiter).await
     });
 
     let tcp = TcpStream::connect(addr).await.unwrap();
-    let client_res = connect(tcp, fx.id_a, &fx.dev_a, &client_trust).await;
+    let versions = MemoryDirectoryVersions::default();
+    let local = LocalPeer {
+        device_id: fx.id_a,
+        signer: &fx.dev_a,
+        trust: &client_trust,
+        versions: &versions,
+    };
+    let client_res = connect(tcp, local).await;
     let server_res = server.await.unwrap();
     (server_res, client_res)
 }
 
-/// Two device certificates chaining to the same IK — the handshake succeeds and each side learns
-/// the other's verified `device_id` over a real TLS 1.3 channel.
+/// Two device certificates chaining to the same IK — the handshake succeeds, each side learns the
+/// other's verified `device_id` over a real TLS 1.3 channel, and both derive the same artifact
+/// secret, distinct from the material the proofs signed.
 #[tokio::test]
 async fn mtls_handshake_succeeds_for_same_ik_devices() {
     let fx = Fx::new();
@@ -303,6 +421,31 @@ async fn mtls_handshake_succeeds_for_same_ik_devices() {
     assert_eq!(client.device_id, fx.id_b, "client learned peer = device B");
     // Both sides bound the hybrid identity to the *same* TLS session (RFC 5705 exporter).
     assert_eq!(server.exporter, client.exporter);
+    assert_eq!(server.protocol, PEERING_PROTOCOL);
+    assert_eq!(client.protocol, PEERING_PROTOCOL);
+    // The artifact secret is shared, and is not the value either side signed.
+    assert_eq!(
+        server.artifact_secret.as_bytes(),
+        client.artifact_secret.as_bytes()
+    );
+    assert_ne!(server.artifact_secret.as_bytes(), &server.exporter);
+    assert_eq!(
+        format!("{:?}", server.artifact_secret),
+        "ArtifactSecret(..)",
+        "the secret never reaches a log"
+    );
+}
+
+/// Two sessions never share an artifact secret: it is fresh per session.
+#[tokio::test]
+async fn artifact_secret_is_fresh_per_session() {
+    let fx = Fx::new();
+    let (first, _) = run_handshake(&fx, fx.trust(false), fx.trust(false)).await;
+    let (second, _) = run_handshake(&fx, fx.trust(false), fx.trust(false)).await;
+    assert_ne!(
+        first.unwrap().artifact_secret.as_bytes(),
+        second.unwrap().artifact_secret.as_bytes()
+    );
 }
 
 /// Replace one peer with a **revoked-device** entry — the handshake fails at the hybrid check.
@@ -335,84 +478,296 @@ async fn mtls_handshake_rejects_a_foreign_ik() {
     );
 }
 
-/// The application-layer hybrid check in isolation (deterministic, no socket): the full rejection
-/// matrix, including the protocol-version gate and an unknown / bad-proof peer.
+/// A peer presenting a directory older than ours is refused over the real channel: the server
+/// pins version 1, the client version 2.
+#[tokio::test]
+async fn mtls_handshake_rejects_a_peer_with_an_older_directory() {
+    let fx = Fx::new();
+    let (_server_res, client_res) =
+        run_handshake(&fx, fx.trust_at(1, false), fx.trust_at(2, false)).await;
+    assert!(
+        matches!(
+            client_res,
+            Err(PeeringError::PeerDirectoryStale { theirs: 1, ours: 2 })
+        ),
+        "a peer on a stale directory is refused: {client_res:?}"
+    );
+}
+
+/// The handshake rate limit refuses a source address over its budget before any TLS byte.
+#[tokio::test]
+async fn handshake_rate_limit_refuses_over_budget() {
+    let fx = Fx::new();
+    let (server_res, client_res) = run_limited_handshake(
+        &fx,
+        fx.trust(false),
+        fx.trust(false),
+        HandshakeLimiter::new(0, Duration::from_secs(60)),
+    )
+    .await;
+    assert!(
+        matches!(server_res, Err(PeeringError::RateLimited(addr)) if addr.is_loopback()),
+        "{server_res:?}"
+    );
+    assert!(client_res.is_err(), "the refused client gets no channel");
+}
+
+/// The limiter admits a budget per source within the window, keeps sources apart, and admits again
+/// once the window has passed.
+#[test]
+fn handshake_limiter_is_per_source_and_slides() {
+    let limiter = HandshakeLimiter::new(2, Duration::from_secs(10));
+    let t0 = Instant::now();
+    assert!(limiter.admit(ip(1), t0));
+    assert!(limiter.admit(ip(1), t0 + Duration::from_secs(1)));
+    assert!(
+        !limiter.admit(ip(1), t0 + Duration::from_secs(2)),
+        "third attempt in the window is refused"
+    );
+    assert!(
+        limiter.admit(ip(2), t0 + Duration::from_secs(2)),
+        "per source"
+    );
+    assert!(
+        !limiter.admit(ip(1), t0 + Duration::from_secs(9)),
+        "still inside the window"
+    );
+    assert!(
+        limiter.admit(ip(1), t0 + Duration::from_secs(10)),
+        "the first attempt has aged out"
+    );
+}
+
+/// A flood of distinct live sources never grows the table past its cap: a new source that finds
+/// it full of live ones is refused, a tracked source keeps its budget, and once the flood ages
+/// out a new source is admitted again.
+#[test]
+fn handshake_limiter_caps_tracked_sources() {
+    let limiter = HandshakeLimiter::new(2, Duration::from_secs(10));
+    let t0 = Instant::now();
+    let source = |n: usize| IpAddr::from((n as u32 + 0x0A00_0000).to_be_bytes());
+    for n in 0..MAX_TRACKED_SOURCES {
+        assert!(limiter.admit(source(n), t0));
+    }
+    assert_eq!(limiter.tracked(), MAX_TRACKED_SOURCES);
+
+    assert!(
+        !limiter.admit(source(MAX_TRACKED_SOURCES), t0),
+        "a new source is refused while the table is full of live ones"
+    );
+    assert_eq!(limiter.tracked(), MAX_TRACKED_SOURCES, "the cap holds");
+    assert!(
+        limiter.admit(source(0), t0 + Duration::from_secs(1)),
+        "a tracked source keeps its budget"
+    );
+
+    let later = t0 + Duration::from_secs(11);
+    assert!(
+        limiter.admit(source(MAX_TRACKED_SOURCES), later),
+        "idle sources are pruned to make room"
+    );
+    assert!(limiter.tracked() <= MAX_TRACKED_SOURCES);
+}
+
+/// The application-layer check in isolation (deterministic, no socket): the full rejection
+/// matrix, including the version window, rollback, and an unknown / bad-proof peer.
 #[test]
 fn hybrid_check_rejection_matrix() {
     let fx = Fx::new();
     let exporter = [0x42u8; 32];
     let trust = fx.trust(false);
+    let versions = MemoryDirectoryVersions::default();
 
     // Valid hello from device B.
-    let good = build_hello(&fx, fx.id_b, &fx.dev_b, &exporter);
-    assert_eq!(verify_hello(&good, &exporter, &trust).unwrap(), fx.id_b);
+    let good = build_hello(fx.id_b, &fx.dev_b, &exporter, 1);
+    assert_eq!(
+        verify_hello(&good, &exporter, &trust, &versions).unwrap(),
+        (fx.id_b, PEERING_PROTOCOL.to_string())
+    );
 
-    // Protocol mismatch → aborts before any identity check.
-    let mut wrong_proto = good.clone();
-    wrong_proto.peering_protocol = "1999-01-01".into();
+    // A peer whose window lies wholly below ours → disjoint, before any identity check.
+    let mut old = good.clone();
+    old.peering_protocol = "1999-01-01".into();
+    old.peering_protocol_min = None;
     assert!(matches!(
-        verify_hello(&wrong_proto, &exporter, &trust),
-        Err(PeeringError::ProtocolMismatch { .. })
+        verify_hello(&old, &exporter, &trust, &versions),
+        Err(PeeringError::VersionDisjoint {
+            update: UpdateDevice::Peer,
+            ..
+        })
+    ));
+
+    // A malformed window → codec error.
+    let mut garbled = good.clone();
+    garbled.peering_protocol = "tomorrow".into();
+    assert!(matches!(
+        verify_hello(&garbled, &exporter, &trust, &versions),
+        Err(PeeringError::Codec(_))
     ));
 
     // A device id absent from the pinned directory → unknown.
-    let stranger = build_hello(&fx, Uuid::from_u128(0xDEAD), &fx.dev_b, &exporter);
+    let stranger = build_hello(Uuid::from_u128(0xDEAD), &fx.dev_b, &exporter, 1);
     assert!(matches!(
-        verify_hello(&stranger, &exporter, &trust),
+        verify_hello(&stranger, &exporter, &trust, &versions),
         Err(PeeringError::UnknownDevice(_))
     ));
 
     // The claimed device is real, but the proof was signed by a different key → hybrid fail.
     let imposter_key = HybridSigningKey::from_seed_bytes(&[7; 32], &[8; 32]);
-    let imposter = build_hello(&fx, fx.id_b, &imposter_key, &exporter);
+    let imposter = build_hello(fx.id_b, &imposter_key, &exporter, 1);
     assert!(matches!(
-        verify_hello(&imposter, &exporter, &trust),
+        verify_hello(&imposter, &exporter, &trust, &versions),
         Err(PeeringError::HybridCheckFailed)
     ));
 
     // A proof over *different* exporter material (a MITM's session) → hybrid fail.
-    let other_session = build_hello(&fx, fx.id_b, &fx.dev_b, &[0x11u8; 32]);
+    let other_session = build_hello(fx.id_b, &fx.dev_b, &[0x11u8; 32], 1);
     assert!(matches!(
-        verify_hello(&other_session, &exporter, &trust),
+        verify_hello(&other_session, &exporter, &trust, &versions),
         Err(PeeringError::HybridCheckFailed)
     ));
 
     // Revoked device → rejected even with a valid proof.
     assert!(matches!(
-        verify_hello(&good, &exporter, &fx.trust(true)),
+        verify_hello(&good, &exporter, &fx.trust(true), &versions),
         Err(PeeringError::RevokedDevice(_))
     ));
 }
 
-/// The handshake hello (with its embedded hybrid signature) round-trips through the JSON framing.
+/// Directory anti-rollback: once version 2 (which revokes B) has verified, a stale pinned
+/// version 1 (which still lists B as active) is refused, so it cannot readmit B.
+#[test]
+fn rolled_back_directory_cannot_readmit_a_revoked_device() {
+    let fx = Fx::new();
+    let exporter = [0x42u8; 32];
+    let versions = MemoryDirectoryVersions::default();
+    let hello = build_hello(fx.id_b, &fx.dev_b, &exporter, 2);
+
+    assert!(matches!(
+        verify_hello(&hello, &exporter, &fx.trust_at(2, true), &versions),
+        Err(PeeringError::RevokedDevice(_))
+    ));
+    assert_eq!(
+        versions.highest().unwrap(),
+        2,
+        "the verified version is recorded"
+    );
+
+    let stale = build_hello(fx.id_b, &fx.dev_b, &exporter, 1);
+    assert!(matches!(
+        verify_hello(&stale, &exporter, &fx.trust_at(1, false), &versions),
+        Err(PeeringError::DirectoryRollback {
+            pinned: 1,
+            highest: 2
+        })
+    ));
+
+    // A floor restored from persistence holds across a restart, and only rises.
+    let restored = MemoryDirectoryVersions::starting_at(5);
+    restored.record(3).unwrap();
+    assert_eq!(restored.highest().unwrap(), 5);
+}
+
+/// The handshake hello (with its embedded hybrid signature) round-trips through the JSON framing,
+/// and a hello from before the window (no min, no directory version) still decodes.
 #[test]
 fn peer_hello_round_trips_through_json_framing() {
     let fx = Fx::new();
-    let hello = build_hello(&fx, fx.id_b, &fx.dev_b, &[0x42u8; 32]);
+    let hello = build_hello(fx.id_b, &fx.dev_b, &[0x42u8; 32], 1);
     let bytes = serde_json::to_vec(&hello).unwrap();
     let back: PeerHello = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(back.device_id, hello.device_id);
     assert_eq!(back.peering_protocol, PEERING_PROTOCOL);
+    assert_eq!(
+        back.peering_protocol_min.as_deref(),
+        Some(PEERING_PROTOCOL_MIN)
+    );
+    assert_eq!(back.directory_version, 1);
     // The recovered proof still verifies under device B's key over the exporter material.
     let trust = fx.trust(false);
-    assert_eq!(verify_hello(&back, &[0x42u8; 32], &trust).unwrap(), fx.id_b);
+    let versions = MemoryDirectoryVersions::default();
+    assert_eq!(
+        verify_hello(&back, &[0x42u8; 32], &trust, &versions)
+            .unwrap()
+            .0,
+        fx.id_b
+    );
+
+    let mut legacy = serde_json::to_value(&hello).unwrap();
+    let object = legacy.as_object_mut().unwrap();
+    object.remove("peering_protocol_min");
+    object.remove("directory_version");
+    object.insert("peering_protocol".into(), "2026-07-10".into());
+    let legacy: PeerHello = serde_json::from_value(legacy).unwrap();
+    assert_eq!(
+        legacy.window().unwrap(),
+        VersionWindow::new("2026-07-10", "2026-07-10").unwrap()
+    );
+    assert_eq!(legacy.directory_version, 0);
 }
 
 /// Test helper mirroring the private `build_hello`: sign the exporter material with a device key.
 fn build_hello(
-    _fx: &Fx,
     device_id: Uuid,
     signer: &HybridSigningKey,
     exporter: &[u8; 32],
+    directory_version: u64,
 ) -> PeerHello {
     PeerHello {
         device_id,
         peering_protocol: PEERING_PROTOCOL.to_string(),
+        peering_protocol_min: Some(PEERING_PROTOCOL_MIN.to_string()),
+        directory_version,
         proof: signer.sign(exporter),
     }
 }
 
-// ── Bullet 3: delta calculation (unit) ────────────────────────────────────────
+// ── Version window (unit) ─────────────────────────────────────────────────────
+
+/// Overlapping windows pick the highest common version; disjoint windows refuse with the typed
+/// error naming the device to update.
+#[test]
+fn version_window_negotiates_the_highest_common_version() {
+    let w = |min: &str, max: &str| VersionWindow::new(min, max).unwrap();
+    let ours = w("2026-01-01", "2026-06-01");
+
+    assert_eq!(
+        ours.negotiate(&w("2026-03-01", "2026-09-01")).unwrap(),
+        "2026-06-01"
+    );
+    assert_eq!(
+        ours.negotiate(&w("2025-01-01", "2026-03-01")).unwrap(),
+        "2026-03-01"
+    );
+    assert_eq!(
+        ours.negotiate(&w("2026-06-01", "2026-06-01")).unwrap(),
+        "2026-06-01",
+        "touching windows meet at their shared edge"
+    );
+
+    let newer = w("2026-07-01", "2026-12-01");
+    assert!(matches!(
+        ours.negotiate(&newer),
+        Err(PeeringError::VersionDisjoint {
+            update: UpdateDevice::ThisDevice,
+            ..
+        })
+    ));
+    assert!(matches!(
+        newer.negotiate(&ours),
+        Err(PeeringError::VersionDisjoint {
+            update: UpdateDevice::Peer,
+            ..
+        })
+    ));
+
+    assert!(VersionWindow::new("2026-06-01", "2026-01-01").is_err());
+    assert!(VersionWindow::new("2026-6-1", "2026-07-01").is_err());
+    let ours = VersionWindow::ours();
+    assert!(ours.min <= ours.max);
+}
+
+// ── Delta (unit) ──────────────────────────────────────────────────────────────
 
 /// Two devices with overlapping but distinct content-address sets; the delta is the symmetric
 /// difference, and each side's one-way pull is the complement.
@@ -436,7 +791,89 @@ fn delta_is_the_symmetric_difference() {
     assert_eq!(sym, union);
 }
 
-// ── Bullet 4: delta-scoped artifact + restore ingest (smoke) ──────────────────
+fn offer_of(count: usize) -> Offer {
+    let addresses = (0..count)
+        .map(|n| {
+            let mut bytes = [0xFFu8; 32];
+            bytes[..8].copy_from_slice(&(n as u64).to_be_bytes());
+            Hash32(bytes)
+        })
+        .collect();
+    Offer::new(addresses, 9)
+}
+
+/// Offers are padded to a size bucket, so close sizes are indistinguishable on the wire, and
+/// capped per request, so a large offer is split into pages that reassemble exactly.
+#[test]
+fn offers_are_padded_and_capped() {
+    let one = offer_of(1).encode_pages();
+    let bucketful = offer_of(MIN_OFFER_BUCKET).encode_pages();
+    let empty = offer_of(0).encode_pages();
+    assert_eq!(one.len(), 1);
+    assert_eq!(one[0].len(), bucketful[0].len(), "1 and 64 share a bucket");
+    assert_eq!(one[0].len(), empty[0].len(), "an empty offer is padded too");
+    assert!(offer_of(MIN_OFFER_BUCKET + 1).encode_pages()[0].len() > one[0].len());
+    assert_eq!(offer_bucket(MIN_OFFER_BUCKET + 1), 2 * MIN_OFFER_BUCKET);
+
+    let big = offer_of(OFFER_PAGE_CAP + 10);
+    let pages = big.encode_pages();
+    assert_eq!(pages.len(), 2, "split at the per-request cap");
+    let decoded: Vec<_> = pages
+        .iter()
+        .map(|page| decode_offer_page(page).unwrap())
+        .collect();
+    assert!(
+        decoded
+            .iter()
+            .all(|page| page.addresses.len() <= OFFER_PAGE_CAP)
+    );
+    assert_eq!(Offer::from_pages(&decoded).unwrap(), big);
+    assert_eq!(
+        Offer::from_pages(&[decode_offer_page(&empty[0]).unwrap()]).unwrap(),
+        offer_of(0)
+    );
+}
+
+/// A page the encoder would not produce is refused: wrong size, over the cap, a count beyond the
+/// page, non-zero padding, or pages disagreeing on the cursor.
+#[test]
+fn malformed_offer_pages_are_refused() {
+    let page = offer_of(3).encode_pages().remove(0);
+    assert!(decode_offer_page(&page[..5]).is_err(), "short header");
+    assert!(
+        decode_offer_page(&page[..page.len() - 1]).is_err(),
+        "torn slot"
+    );
+    assert!(
+        decode_offer_page(&page[..page.len() - 32]).is_err(),
+        "63 slots is not a bucket"
+    );
+
+    let mut padded = page.clone();
+    *padded.last_mut().unwrap() = 1;
+    assert!(decode_offer_page(&padded).is_err(), "non-zero padding");
+
+    let mut overcount = page.clone();
+    overcount[8..12].copy_from_slice(&65u32.to_be_bytes());
+    assert!(
+        decode_offer_page(&overcount).is_err(),
+        "count beyond the page"
+    );
+
+    let mut oversized = vec![0u8; 12 + 2 * OFFER_PAGE_CAP * 32];
+    oversized[8..12].copy_from_slice(&1u32.to_be_bytes());
+    assert!(
+        decode_offer_page(&oversized).is_err(),
+        "bucket above the cap"
+    );
+
+    let mut a = decode_offer_page(&page).unwrap();
+    let b = a.clone();
+    a.cursor += 1;
+    assert!(Offer::from_pages(&[a, b]).is_err(), "cursor disagreement");
+}
+
+// ── Ingest (smoke) ────────────────────────────────────────────────────────────
 
 /// Build a delta-scoped artifact on device A; feed it to device B; assert restore applies exactly
 /// the missing assets — and *only* the missing assets ever enter the artifact.
@@ -465,15 +902,17 @@ async fn delta_scoped_transfer_moves_only_missing_assets_and_ingests() {
     let export = DeltaExport {
         assets: &a_assets,
         delta: &delta,
+        scope: FetchScope::MetadataThumbnailsOriginal,
         amks: &fx.amks(),
         exporter_device: fx.id_a,
         source_library_version: "1".into(),
         export_timestamp: "2026-05-31T00:00:00Z".into(),
     };
-    let artifact = build_delta_artifact(&export, PASSPHRASE, &fx.dev_a).unwrap();
+    let artifact = build_delta_artifact(&export, &secret(), &fx.dev_a).unwrap();
 
     // Only the missing assets are in the artifact — asset 1 (already held) never entered it.
-    let opened = BackupArtifact::open(&artifact, PASSPHRASE, &fx.dev_a.verifying_key()).unwrap();
+    let opened =
+        BackupArtifact::open(&artifact, secret().as_bytes(), &fx.dev_a.verifying_key()).unwrap();
     let carried: BTreeSet<Uuid> = opened
         .provenance_heads()
         .iter()
@@ -498,7 +937,14 @@ async fn delta_scoped_transfer_moves_only_missing_assets_and_ingests() {
     // B holds asset 1 already; restore adds 2 and 3.
     let mut b_heads = BTreeMap::new();
     b_heads.insert(Uuid::from_u128(1), head_hash(&c1));
-    let restored = ingest(&pulled, PASSPHRASE, &fx.dev_a.verifying_key(), &b_heads).unwrap();
+    let none = BTreeSet::new();
+    let restored = ingest(
+        &pulled,
+        &secret(),
+        &fx.dev_a.verifying_key(),
+        library(&b_heads, &none),
+    )
+    .unwrap();
 
     let applied: BTreeSet<Uuid> = restored.applied.iter().map(|a| a.asset_id).collect();
     assert_eq!(
@@ -506,6 +952,7 @@ async fn delta_scoped_transfer_moves_only_missing_assets_and_ingests() {
         BTreeSet::from([Uuid::from_u128(2), Uuid::from_u128(3)])
     );
     assert!(restored.quarantined.is_empty());
+    assert!(restored.incomplete.is_empty());
 
     // Byte-equal rebuild proxy: the decrypted plaintext on B matches A's originals.
     let mut plaintexts: Vec<Vec<u8>> = restored
@@ -518,9 +965,117 @@ async fn delta_scoped_transfer_moves_only_missing_assets_and_ingests() {
         plaintexts,
         vec![b"asset three".to_vec(), b"asset two".to_vec()]
     );
+
+    // An artifact sealed under one session's secret does not open under another's.
+    let wrong = ArtifactSecret::from_bytes([0x01; 32]);
+    assert!(matches!(
+        ingest(
+            &pulled,
+            &wrong,
+            &fx.dev_a.verifying_key(),
+            library(&b_heads, &none)
+        ),
+        Err(PeeringError::Backup(BackupError::Auth(_)))
+    ));
 }
 
-// ── Bullet 5: stale-revival quarantine on peer pull (smoke) ───────────────────
+/// A receiver whose scope does not eagerly hold originals is not sent an artifact (which always
+/// carries them); it syncs from the server instead.
+#[test]
+fn delta_artifact_honours_the_receiver_scope() {
+    let fx = Fx::new();
+    let (chain, ct, meta) = fx.records(1, b"scoped", 1);
+    let assets = vec![asset_from(&chain, &ct, &meta)];
+    for scope in [FetchScope::MetadataOnly, FetchScope::MetadataThumbnails] {
+        let export = DeltaExport {
+            assets: &assets,
+            delta: &BTreeSet::from([address(&chain)]),
+            scope,
+            amks: &fx.amks(),
+            exporter_device: fx.id_a,
+            source_library_version: "1".into(),
+            export_timestamp: "2026-05-31T00:00:00Z".into(),
+        };
+        assert!(matches!(
+            build_delta_artifact(&export, &secret(), &fx.dev_a),
+            Err(PeeringError::OutOfScope(s)) if s == scope
+        ));
+    }
+}
+
+/// An asset this device holds a tombstone for — kept past purge, so it is absent from the heads
+/// — is never resurrected by a peer that still holds it; the rest of the artifact applies.
+#[test]
+fn tombstoned_asset_is_not_resurrected() {
+    let fx = Fx::new();
+    let (c1, ct1, m1) = fx.records(1, b"deleted long ago", 1);
+    let (c2, ct2, m2) = fx.records(2, b"still wanted", 1);
+    let artifact = fx.artifact_of(&[asset_from(&c1, &ct1, &m1), asset_from(&c2, &ct2, &m2)]);
+
+    let heads = BTreeMap::new();
+    let tombstones = BTreeSet::from([Uuid::from_u128(1)]);
+    let got = ingest(
+        &artifact,
+        &secret(),
+        &fx.dev_a.verifying_key(),
+        library(&heads, &tombstones),
+    )
+    .unwrap();
+    assert_eq!(got.tombstoned, vec![Uuid::from_u128(1)]);
+    let applied: Vec<Uuid> = got.applied.iter().map(|a| a.asset_id).collect();
+    assert_eq!(applied, vec![Uuid::from_u128(2)]);
+}
+
+/// Per asset, all or nothing: an asset whose metadata is missing or is not the blob its manifest
+/// commits to is not applied, and does not stop a complete asset beside it.
+#[test]
+fn partial_asset_is_not_applied() {
+    let fx = Fx::new();
+    let (c1, ct1, _m1) = fx.records(1, b"metadata lost", 1);
+    let (c2, ct2, m2) = fx.records(2, b"complete", 1);
+    let (c3, ct3, _m3) = fx.records(3, b"metadata swapped", 1);
+    // Asset 1 arrives with no metadata; asset 3 with asset 2's blob in place of its own.
+    let artifact = fx.artifact_of(&[
+        asset_from(&c1, &ct1, &[]),
+        asset_from(&c2, &ct2, &m2),
+        asset_from(&c3, &ct3, &m2),
+    ]);
+
+    let heads = BTreeMap::new();
+    let none = BTreeSet::new();
+    let got = ingest(
+        &artifact,
+        &secret(),
+        &fx.dev_a.verifying_key(),
+        library(&heads, &none),
+    )
+    .unwrap();
+    let applied: Vec<Uuid> = got.applied.iter().map(|a| a.asset_id).collect();
+    assert_eq!(applied, vec![Uuid::from_u128(2)]);
+    assert_eq!(got.incomplete, vec![Uuid::from_u128(1), Uuid::from_u128(3)]);
+}
+
+/// A chain that commits to no metadata hash still needs a metadata blob to apply.
+#[test]
+fn uncommitted_chain_needs_a_metadata_blob() {
+    let fx = Fx::new();
+    let (c1, ct1, m1) = fx.records_committing(1, b"legacy with meta", 1, false);
+    let (c2, ct2, _m2) = fx.records_committing(2, b"legacy without meta", 1, false);
+    let artifact = fx.artifact_of(&[asset_from(&c1, &ct1, &m1), asset_from(&c2, &ct2, &[])]);
+
+    let heads = BTreeMap::new();
+    let none = BTreeSet::new();
+    let got = ingest(
+        &artifact,
+        &secret(),
+        &fx.dev_a.verifying_key(),
+        library(&heads, &none),
+    )
+    .unwrap();
+    let applied: Vec<Uuid> = got.applied.iter().map(|a| a.asset_id).collect();
+    assert_eq!(applied, vec![Uuid::from_u128(1)]);
+    assert_eq!(got.incomplete, vec![Uuid::from_u128(2)]);
+}
 
 /// Device A holds an old manifest; device B holds a newer chain head. A pulls from B: the forward
 /// update is adopted. B pulls from A: the stale state is **quarantined**, never a silent overwrite.
@@ -538,24 +1093,32 @@ async fn stale_revival_is_quarantined_not_overwritten() {
     let asset_v1 = asset_from(&chain1, &ct, &meta); // what A holds/exports
     let asset_v2 = asset_from(&chain2, &ct, &meta); // what B holds/exports
     let amks = fx.amks();
+    let none = BTreeSet::new();
 
     let export_of = |assets: &[BackupAsset], device: &HybridSigningKey, dev_id: Uuid| {
         let list = assets.to_vec();
         let export = DeltaExport {
             assets: &list,
             delta: &BTreeSet::from([address(&chain2)]),
+            scope: FetchScope::MetadataThumbnailsOriginal,
             amks: &amks,
             exporter_device: dev_id,
             source_library_version: "1".into(),
             export_timestamp: "2026-05-31T00:00:00Z".into(),
         };
-        build_delta_artifact(&export, PASSPHRASE, device).unwrap()
+        build_delta_artifact(&export, &secret(), device).unwrap()
     };
 
     // A pulls from B (newer): B's chain contains A's head as an ancestor → forward, adopted.
     let from_b = export_of(std::slice::from_ref(&asset_v2), &fx.dev_b, fx.id_b);
     let a_heads = BTreeMap::from([(Uuid::from_u128(1), head_old)]);
-    let a_got = ingest(&from_b, PASSPHRASE, &fx.dev_b.verifying_key(), &a_heads).unwrap();
+    let a_got = ingest(
+        &from_b,
+        &secret(),
+        &fx.dev_b.verifying_key(),
+        library(&a_heads, &none),
+    )
+    .unwrap();
     assert_eq!(a_got.applied.len(), 1, "A adopts the newer forward update");
     assert_eq!(a_got.applied[0].asset_id, Uuid::from_u128(1));
     assert!(a_got.quarantined.is_empty());
@@ -563,7 +1126,13 @@ async fn stale_revival_is_quarantined_not_overwritten() {
     // B pulls from A (older): A's head is NOT an ancestor of B's newer head → stale, quarantined.
     let from_a = export_of(std::slice::from_ref(&asset_v1), &fx.dev_a, fx.id_a);
     let b_heads = BTreeMap::from([(Uuid::from_u128(1), head_new)]);
-    let b_got = ingest(&from_a, PASSPHRASE, &fx.dev_a.verifying_key(), &b_heads).unwrap();
+    let b_got = ingest(
+        &from_a,
+        &secret(),
+        &fx.dev_a.verifying_key(),
+        library(&b_heads, &none),
+    )
+    .unwrap();
     assert!(
         b_got.applied.is_empty(),
         "a peer never silently overwrites newer local state"
@@ -575,7 +1144,92 @@ async fn stale_revival_is_quarantined_not_overwritten() {
     );
 }
 
-// ── Bullet 6: resume across LAN drop (smoke) ──────────────────────────────────
+// ── Revocation mid-session (smoke) ────────────────────────────────────────────
+
+/// A peer revoked during a session is cut off at its next request, stays cut off, and everything
+/// it delivered at or after its revocation took effect is quarantined.
+#[tokio::test]
+async fn peer_revoked_mid_session_is_cut_off_and_its_later_deliveries_quarantined() {
+    let fx = Fx::new();
+    let (server_res, _client_res) = run_handshake(&fx, fx.trust(false), fx.trust(false)).await;
+    let peer = server_res.unwrap();
+    let versions = MemoryDirectoryVersions::default();
+    let mut session = PeerSession::new(&peer);
+    assert_eq!(session.peer(), fx.id_a);
+
+    // Device A is the server's peer here; revoke A in directory version 2.
+    let revoke_a = PinnedTrust {
+        user_ik: fx.ik.verifying_key(),
+        directory: DirectoryCore {
+            user_id: Uuid::from_u128(USER),
+            directory_version: 2,
+            updated_at: "2026-05-16T00:00:00Z".into(),
+            devices: vec![
+                fx.entry(fx.id_a, &fx.dev_a, true),
+                fx.entry(fx.id_b, &fx.dev_b, false),
+            ],
+            unknown: Default::default(),
+        }
+        .sign(&fx.ik),
+    };
+
+    let at = |s: &str| s.parse::<Timestamp>().unwrap();
+    session.authorize(&fx.trust(false), &versions).unwrap();
+    session.record_delivery(Uuid::from_u128(1), at("2026-05-14T00:00:00Z"));
+    session.authorize(&fx.trust(false), &versions).unwrap();
+    session.record_delivery(Uuid::from_u128(2), at("2026-05-15T12:00:00Z"));
+    assert!(session.quarantined_deliveries(&fx.trust(false)).is_empty());
+
+    // The directory refreshes: the next request is refused...
+    assert!(matches!(
+        session.authorize(&revoke_a, &versions),
+        Err(PeeringError::RevokedDevice(id)) if id == fx.id_a
+    ));
+    // ...and the session stays cut off, even against the older directory.
+    assert!(matches!(
+        session.authorize(&fx.trust(false), &versions),
+        Err(PeeringError::RevokedDevice(_))
+    ));
+    // Only what arrived after the revocation took effect (2026-05-15) is quarantined.
+    assert_eq!(
+        session.quarantined_deliveries(&revoke_a),
+        vec![Uuid::from_u128(2)]
+    );
+}
+
+/// A peer that vanished from the directory entirely, or whose revocation time does not parse, has
+/// every delivery quarantined.
+#[tokio::test]
+async fn unknown_or_unparseable_revocation_quarantines_everything() {
+    let fx = Fx::new();
+    let (server_res, _) = run_handshake(&fx, fx.trust(false), fx.trust(false)).await;
+    let mut session = PeerSession::new(&server_res.unwrap());
+    session.record_delivery(Uuid::from_u128(1), "2026-01-01T00:00:00Z".parse().unwrap());
+
+    let directory = |entry: Option<DeviceEntry>| PinnedTrust {
+        user_ik: fx.ik.verifying_key(),
+        directory: DirectoryCore {
+            user_id: Uuid::from_u128(USER),
+            directory_version: 3,
+            updated_at: "2026-05-16T00:00:00Z".into(),
+            devices: entry.into_iter().collect(),
+            unknown: Default::default(),
+        }
+        .sign(&fx.ik),
+    };
+    assert_eq!(
+        session.quarantined_deliveries(&directory(None)),
+        vec![Uuid::from_u128(1)]
+    );
+    let mut garbled = fx.entry(fx.id_a, &fx.dev_a, true);
+    garbled.revoked_at = Some("yesterday".into());
+    assert_eq!(
+        session.quarantined_deliveries(&directory(Some(garbled))),
+        vec![Uuid::from_u128(1)]
+    );
+}
+
+// ── Resume (smoke) ────────────────────────────────────────────────────────────
 
 /// Start a large artifact transfer, sever the LAN mid-transfer, reconnect; assert a Range-resumed
 /// transfer that re-fetches **zero** bytes already held.
@@ -585,17 +1239,7 @@ async fn ranged_transfer_resumes_across_a_lan_drop_with_zero_duplicate_bytes() {
     // A sizeable artifact so the drop lands mid-stream.
     let big = vec![0x5Au8; 500_000];
     let (chain, ct, meta) = fx.records(1, &big, 1);
-    let asset = asset_from(&chain, &ct, &meta);
-    let list = vec![asset];
-    let export = DeltaExport {
-        assets: &list,
-        delta: &BTreeSet::from([address(&chain)]),
-        amks: &fx.amks(),
-        exporter_device: fx.id_a,
-        source_library_version: "1".into(),
-        export_timestamp: "2026-05-31T00:00:00Z".into(),
-    };
-    let artifact = build_delta_artifact(&export, PASSPHRASE, &fx.dev_a).unwrap();
+    let artifact = fx.artifact_of(&[asset_from(&chain, &ct, &meta)]);
     let total = artifact.len() as u64;
     assert!(
         total > 100_000,
@@ -630,11 +1274,12 @@ async fn ranged_transfer_resumes_across_a_lan_drop_with_zero_duplicate_bytes() {
     );
 }
 
-// ── E2E case 5 (in-process shape): full A→B LAN sync + server reconciliation ───
+// ── LAN sync then server reconcile (in-process shape) ─────────────────────────
 
 /// The cross-module case in its in-process shape: mocked discovery → real mTLS + hybrid check →
-/// delta → ranged-GET transfer → restore ingest → server reconciliation converges by content hash
-/// (a device never re-uploads a blob the server already holds).
+/// delta → ranged-GET transfer under the session's artifact secret → restore ingest → server
+/// reconciliation converges by content hash (a device never re-uploads a blob the server already
+/// holds).
 #[tokio::test]
 async fn e2e_lan_sync_then_server_reconciliation() {
     let fx = Fx::new();
@@ -659,14 +1304,31 @@ async fn e2e_lan_sync_then_server_reconciliation() {
     let server_trust = fx.trust(false);
     let server = tokio::spawn(async move {
         let (tcp, _) = listener.accept().await.unwrap();
-        accept(tcp, id_b, &dev_b, &server_trust).await
+        let versions = MemoryDirectoryVersions::default();
+        let local = LocalPeer {
+            device_id: id_b,
+            signer: &dev_b,
+            trust: &server_trust,
+            versions: &versions,
+        };
+        accept(tcp, local, &HandshakeLimiter::default()).await
     });
     let tcp = TcpStream::connect(peer_addr).await.unwrap();
-    let a_view = connect(tcp, fx.id_a, &fx.dev_a, &fx.trust(false))
-        .await
-        .unwrap();
+    let a_trust = fx.trust(false);
+    let a_versions = MemoryDirectoryVersions::default();
+    let a_view = connect(
+        tcp,
+        LocalPeer {
+            device_id: fx.id_a,
+            signer: &fx.dev_a,
+            trust: &a_trust,
+            versions: &a_versions,
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(a_view.device_id, fx.id_b);
-    server.await.unwrap().unwrap();
+    let b_view = server.await.unwrap().unwrap();
 
     // 3. Delta: A has nothing, B has one asset. A pulls it.
     let (chain, ct, meta) = fx.records(1, b"shared moment", 1);
@@ -676,25 +1338,29 @@ async fn e2e_lan_sync_then_server_reconciliation() {
     let delta = missing_from(&a_offer, &b_offer);
     assert_eq!(delta, BTreeSet::from([address(&chain)]));
 
-    // 4. B builds the delta-scoped artifact; 5. A pulls it over ranged GET; 6. A ingests via restore.
+    // 4. B builds the delta-scoped artifact under its session secret; 5. A pulls it over ranged
+    //    GET; 6. A ingests via restore under its own copy of the same secret.
     let export = DeltaExport {
         assets: &b_assets,
         delta: &delta,
+        scope: FetchScope::MetadataThumbnailsOriginal,
         amks: &fx.amks(),
         exporter_device: fx.id_b,
         source_library_version: "1".into(),
         export_timestamp: "2026-05-31T00:00:00Z".into(),
     };
-    let artifact = build_delta_artifact(&export, PASSPHRASE, &fx.dev_b).unwrap();
+    let artifact = build_delta_artifact(&export, &b_view.artifact_secret, &fx.dev_b).unwrap();
     let source = ArtifactBlobSource::new(artifact.clone());
     let pulled = pull_artifact(&source, &artifact_address(&artifact), source.len())
         .await
         .unwrap();
+    let heads = BTreeMap::new();
+    let none = BTreeSet::new();
     let restored = ingest(
         &pulled,
-        PASSPHRASE,
+        &a_view.artifact_secret,
         &fx.dev_b.verifying_key(),
-        &BTreeMap::new(),
+        library(&heads, &none),
     )
     .unwrap();
     assert_eq!(restored.applied.len(), 1);

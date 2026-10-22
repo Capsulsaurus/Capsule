@@ -16,6 +16,8 @@
 
 mod support;
 
+use std::time::{Duration, Instant};
+
 use capsule_server::limits::{
     MAX_BOUNDED_BODY_BYTES, MAX_FEDERATION_BODY_BYTES, MAX_REQUEST_BODY_BYTES,
 };
@@ -23,6 +25,8 @@ use capsule_server::upload::chunk::MAX_CHUNK_BYTES;
 use kynos::http::StatusCode;
 use kynos::test::TestClient;
 use support::{Fixture, PROTOCOL_VERSION};
+use tokio::io::AsyncWriteExt as _;
+use tokio::net::TcpStream;
 
 fn client() -> TestClient<capsule_server::App> {
     TestClient::new(capsule_server::service(Fixture::working_app()).expect("router builds"))
@@ -336,4 +340,79 @@ async fn a_body_past_the_chunk_bound_still_reaches_the_chunk_routes() {
         .assert_status(StatusCode::NOT_FOUND);
 
     client.assert_conformance();
+}
+
+// ===========================================================================================
+// The header-read and idle bound, on a socket (#717)
+// ===========================================================================================
+
+/// The header-read bound every socket case below serves with.
+const HEADER_READ_TIMEOUT: Duration = Duration::from_millis(300);
+
+/// A client that sends part of a request head and then stalls is disconnected.
+#[tokio::test]
+async fn a_client_that_stalls_inside_its_request_head_is_disconnected() {
+    let address = support::serve_on_socket(Fixture::working_app(), HEADER_READ_TIMEOUT).await;
+    let mut stream = TcpStream::connect(address).await.expect("it connects");
+    let started = Instant::now();
+    // A request line and one header, and never the blank line that ends the head.
+    stream
+        .write_all(b"GET /v1/version HTTP/1.1\r\nHost: capsule.test\r\n")
+        .await
+        .expect("it writes");
+
+    support::read_until_closed(&mut stream).await;
+    assert!(
+        started.elapsed() >= HEADER_READ_TIMEOUT,
+        "closed before the header bound passed"
+    );
+}
+
+/// A kept-alive connection that sits idle after its response is closed at the same bound.
+///
+/// The first request proves the connection is kept alive at all — the response is read and the
+/// socket is still open — and the close that follows, with no further byte sent, is the idle
+/// bound.
+#[tokio::test]
+async fn a_kept_alive_connection_left_idle_is_closed() {
+    let address = support::serve_on_socket(Fixture::working_app(), HEADER_READ_TIMEOUT).await;
+    let mut stream = TcpStream::connect(address).await.expect("it connects");
+    stream
+        .write_all(
+            b"GET /v1/version HTTP/1.1\r\nHost: capsule.test\r\nAccept: application/json\r\n\r\n",
+        )
+        .await
+        .expect("it writes");
+    let answer = support::read_response(&mut stream).await;
+    assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+
+    let idle_from = Instant::now();
+    let trailing = support::read_until_closed(&mut stream).await;
+    assert!(
+        trailing.is_empty(),
+        "nothing more was asked for: {trailing}"
+    );
+    assert!(
+        idle_from.elapsed() >= HEADER_READ_TIMEOUT,
+        "closed before the idle bound passed"
+    );
+}
+
+/// A client that keeps its connection busy is not cut off by the bound: a second request sent
+/// inside it is answered on the same connection.
+#[tokio::test]
+async fn a_kept_alive_connection_used_inside_the_bound_stays_open() {
+    let address = support::serve_on_socket(Fixture::working_app(), Duration::from_secs(5)).await;
+    let mut stream = TcpStream::connect(address).await.expect("it connects");
+    for _ in 0..2 {
+        stream
+            .write_all(
+                b"GET /v1/version HTTP/1.1\r\nHost: capsule.test\r\nAccept: application/json\r\n\r\n",
+            )
+            .await
+            .expect("it writes");
+        let answer = support::read_response(&mut stream).await;
+        assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }

@@ -413,6 +413,9 @@ async fn serve(config: &Config) -> Result<ExitCode> {
         .graceful_shutdown(Shutdown::signals())
         .shutdown_timeout(config.shutdown_timeout)
         .max_connections(config.max_connections)
+        // The header-read and keep-alive idle bound (#717): explicit rather than Kynos's default,
+        // so the number transfer/upload.md's per-connection bound rests on is this deployment's.
+        .http1(crate::limits::http1(config.header_read_timeout))
         .prepare()
         .await
         .map_err(|error| eyre!("binding {}: {error}", config.listen))?;

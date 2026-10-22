@@ -26,7 +26,7 @@
 pub(crate) mod fault;
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use base64::Engine as _;
@@ -112,7 +112,7 @@ use capsule_server::sync::{CURSOR_KEY_LEN, CursorCodec, SyncContext};
 use capsule_server::upload::authority::{
     AlbumWriteAccess, AuthorityError, AuthorityFuture, WriteAuthority,
 };
-use capsule_server::upload::{UploadContext, UploadPolicy, WriteRole};
+use capsule_server::upload::{ChunkReadDeadline, UploadContext, UploadPolicy, WriteRole};
 use capsule_server::verify::VerifyContext;
 use jiff::{SignedDuration, Timestamp};
 use kynos::test::{TestClient, TestRequest};
@@ -1498,6 +1498,41 @@ impl SwitchableFederation {
 impl FederationSetting for SwitchableFederation {
     fn is_enabled(&self) -> bool {
         self.enabled.load(Ordering::SeqCst)
+    }
+}
+
+/// The fixture server's chunk-body read deadline (#717), switchable per request.
+///
+/// A switch for the reason [`SwitchableFederation`] is one: the `408` both chunk routes declare
+/// has to come from the same server that answers their `204`s, and an in-process body is always
+/// whole, so the walk produces it by switching to a deadline that has already passed. Production
+/// hands in a fixed `Duration`.
+#[derive(Debug)]
+pub(crate) struct SwitchableChunkDeadline {
+    millis: AtomicU64,
+}
+
+impl SwitchableChunkDeadline {
+    /// A switch starting at `timeout`.
+    pub(crate) fn new(timeout: std::time::Duration) -> Self {
+        let switch = Self {
+            millis: AtomicU64::new(0),
+        };
+        switch.set(timeout);
+        switch
+    }
+
+    /// Move the deadline for every subsequent chunk; [`Duration::ZERO`](std::time::Duration::ZERO)
+    /// refuses every one.
+    pub(crate) fn set(&self, timeout: std::time::Duration) {
+        let millis = u64::try_from(timeout.as_millis()).expect("a test deadline fits in u64 ms");
+        self.millis.store(millis, Ordering::SeqCst);
+    }
+}
+
+impl ChunkReadDeadline for SwitchableChunkDeadline {
+    fn chunk_read_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.millis.load(Ordering::SeqCst))
     }
 }
 
@@ -3532,6 +3567,8 @@ pub(crate) struct Fixture {
     pub(crate) oidc_authorizations: Arc<SwitchableOidcAuthorizations>,
     /// The pending OIDC device authorizations (issue #635).
     pub(crate) oidc_devices: Arc<SwitchableOidcDevices>,
+    /// The chunk-body read deadline both chunk routes read (#717).
+    pub(crate) chunk_deadline: Arc<SwitchableChunkDeadline>,
 }
 
 impl Fixture {
@@ -3627,6 +3664,9 @@ impl Fixture {
         let revocations = Arc::new(SwitchableRevocations::new(clock.clone()));
         let peers = Arc::new(InMemoryPeers::new());
         let federation = Arc::new(SwitchableFederation::new(federating));
+        let chunk_deadline = Arc::new(SwitchableChunkDeadline::new(
+            capsule_server::upload::policy::DEFAULT_CHUNK_READ_TIMEOUT,
+        ));
         let challenges = Arc::new(SwitchableChallenges::new(clock.clone()));
         let escrows = Arc::new(SwitchableEscrow::new());
         let cohorts = Arc::new(SwitchableCohorts::new());
@@ -3669,7 +3709,7 @@ impl Fixture {
                 index_fault.clone(),
                 authority.clone(),
                 clock.clone(),
-                UploadPolicy::default(),
+                UploadPolicy::default().with_chunk_read_deadline(chunk_deadline.clone()),
             ),
             sync: SyncContext::new(
                 index_fault.clone(),
@@ -3776,6 +3816,7 @@ impl Fixture {
             idp,
             oidc_authorizations,
             oidc_devices,
+            chunk_deadline,
         }
     }
 
@@ -4416,4 +4457,106 @@ pub(crate) fn signed_upgrade_intent(
         proposer_sig,
     })
     .expect("a signed intent serializes")
+}
+
+// ===========================================================================================
+// Socket helpers (#717)
+// ===========================================================================================
+
+/// Serve `app` on an ephemeral loopback port with the HTTP/1 settings `serve` gives its
+/// listener, and return the address.
+///
+/// The connection bounds are properties of the listener and the body read on a real socket — an
+/// in-process `TestClient` hands the router a whole body and has no connection to time out — so
+/// the cases about them speak raw HTTP/1 over TCP to this.
+pub(crate) async fn serve_on_socket(
+    app: App,
+    header_read_timeout: std::time::Duration,
+) -> std::net::SocketAddr {
+    let service = capsule_server::service(app).expect("the router builds");
+    let bound = kynos::server::Server::new(service)
+        .bind(("127.0.0.1", 0))
+        .http1(capsule_server::limits::http1(header_read_timeout))
+        .prepare()
+        .await
+        .expect("an ephemeral port binds");
+    let address = *bound
+        .local_addrs()
+        .first()
+        .expect("a bound server has an address");
+    tokio::spawn(async move {
+        // The task lives as long as the test; a serve error after the test has finished is not
+        // this test's to report.
+        let _ = bound.serve().await;
+    });
+    address
+}
+
+/// The outer bound on any one socket read a case makes: far above every deadline a case sets,
+/// so reaching it means the server held a connection it should have answered or closed.
+pub(crate) const SOCKET_PATIENCE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Read whatever the server sends until it closes the connection.
+///
+/// A reset counts as closed: a server that stops reading a body and closes with bytes still
+/// unread in its buffer resets the connection rather than ending it, and either way it is gone.
+///
+/// # Panics
+///
+/// When the server neither answers nor closes within [`SOCKET_PATIENCE`].
+pub(crate) async fn read_until_closed(stream: &mut tokio::net::TcpStream) -> String {
+    use tokio::io::AsyncReadExt as _;
+
+    let mut received = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    tokio::time::timeout(SOCKET_PATIENCE, async {
+        loop {
+            match stream.read(&mut buffer).await {
+                Ok(0) => break,
+                Ok(read) => received.extend_from_slice(&buffer[..read]),
+                Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => break,
+                Err(error) => panic!("the socket reads: {error}"),
+            }
+        }
+    })
+    .await
+    .expect("the server closed the connection within the patience bound");
+    String::from_utf8_lossy(&received).into_owned()
+}
+
+/// Read one response head and its `Content-Length` body, leaving the connection open.
+///
+/// # Panics
+///
+/// When no whole response arrives within [`SOCKET_PATIENCE`].
+pub(crate) async fn read_response(stream: &mut tokio::net::TcpStream) -> String {
+    use tokio::io::AsyncReadExt as _;
+
+    let mut received = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    tokio::time::timeout(SOCKET_PATIENCE, async {
+        loop {
+            let read = stream.read(&mut buffer).await.expect("the socket reads");
+            assert!(read > 0, "the server closed before a whole response");
+            received.extend_from_slice(&buffer[..read]);
+            let text = String::from_utf8_lossy(&received);
+            if let Some(head_end) = text.find("\r\n\r\n") {
+                let length = text[..head_end]
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())
+                            .flatten()
+                    })
+                    .unwrap_or(0);
+                if received.len() >= head_end + 4 + length {
+                    break;
+                }
+            }
+        }
+    })
+    .await
+    .expect("a whole response arrived within the patience bound");
+    String::from_utf8_lossy(&received).into_owned()
 }

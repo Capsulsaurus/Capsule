@@ -44,15 +44,17 @@ pub struct OpaqueAdvertisement {
 
 impl OpaqueAdvertisement {
     /// Derive the advertisement for a rotation `epoch` (see [`rotation_epoch`]). The instance
-    /// name is `hex(SHA-256("capsule-peer-advert-v1" ‖ rotation_seed ‖ epoch)[..16])` — a
-    /// one-way function of a secret the peer never broadcasts, so the same epoch reproduces the
-    /// same opaque name and a new epoch yields an unlinkable new one.
+    /// name is `hex(SHA-256("capsule-peer-advert-v2" ‖ rotation_seed ‖ boot_id ‖ day)[..16])` —
+    /// a one-way function of a secret the peer never broadcasts, so the same epoch reproduces the
+    /// same opaque name and a new epoch (a new boot, or a new UTC day) yields an unlinkable new
+    /// one. Hashing the two components separately means no two distinct epochs can collide.
     #[must_use]
-    pub fn for_epoch(rotation_seed: &[u8; 32], epoch: u64, port: u16) -> Self {
+    pub fn for_epoch(rotation_seed: &[u8; 32], epoch: RotationEpoch, port: u16) -> Self {
         let mut hasher = Sha256::new();
-        hasher.update(b"capsule-peer-advert-v1");
+        hasher.update(b"capsule-peer-advert-v2");
         hasher.update(rotation_seed);
-        hasher.update(epoch.to_le_bytes());
+        hasher.update(epoch.boot_id.to_le_bytes());
+        hasher.update(epoch.day.to_le_bytes());
         let digest = hasher.finalize();
         Self {
             name: hex::encode(&digest[..OPAQUE_BYTES]),
@@ -79,19 +81,34 @@ impl OpaqueAdvertisement {
     }
 }
 
+/// The rotation epoch an advertisement is derived for: the boot it was made in and the UTC day.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RotationEpoch {
+    /// A per-boot identifier, drawn fresh at every boot (see [`new_boot_id`]).
+    pub boot_id: u64,
+    /// The UTC day number (`unix_secs / 86_400`, floored).
+    pub day: i64,
+}
+
+/// A fresh random per-boot identifier — what a device draws once at boot and feeds to
+/// [`rotation_epoch`] for the life of that boot.
+#[must_use]
+pub fn new_boot_id() -> u64 {
+    u64::from_le_bytes(capsule_core::crypto::rng::random_array::<8>())
+}
+
 /// Compute the rotation epoch from a per-boot identifier and the current UTC time.
 ///
-/// The peering doc requires the opaque advertisement to rotate **at least per boot and at most
-/// every 24 h**. This returns a value that (a) changes whenever `boot_id` changes — satisfying
-/// "at least per boot" — and (b) within a single boot changes only at a UTC-day boundary —
-/// satisfying "at most every 24 h". Multiplying `boot_id` by an odd constant is a bijection, so
-/// distinct boots map to distinct epoch families; the day bucket advances it once per day.
+/// The peering doc requires the opaque advertisement to rotate **at every boot and at least every
+/// 24 h**. The epoch changes whenever `boot_id` changes (a new boot), and within one boot at every
+/// UTC-day boundary, so no advertised name outlives 24 h. A device re-advertises when the epoch
+/// it computes differs from the one it last advertised.
 #[must_use]
-pub fn rotation_epoch(boot_id: u64, unix_secs: i64) -> u64 {
-    let day_bucket = unix_secs.div_euclid(DAY_SECS) as u64;
-    boot_id
-        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        .wrapping_add(day_bucket)
+pub fn rotation_epoch(boot_id: u64, unix_secs: i64) -> RotationEpoch {
+    RotationEpoch {
+        boot_id,
+        day: unix_secs.div_euclid(DAY_SECS),
+    }
 }
 
 /// A peer found on the LAN: its opaque instance name and the socket to dial.

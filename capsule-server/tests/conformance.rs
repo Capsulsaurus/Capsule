@@ -714,6 +714,22 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    // 408: the chunk read deadline passed before the body arrived (#717). An in-process body is
+    // always whole, so the deadline is switched to one that has already passed.
+    fixture.chunk_deadline.set(std::time::Duration::ZERO);
+    client
+        .patch(&session)
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .header("x-capsule-offset", "4096")
+        .header("x-capsule-checksum", &checksum(&second))
+        .body("application/octet-stream", second.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::REQUEST_TIMEOUT);
+    fixture
+        .chunk_deadline
+        .set(capsule_server::upload::policy::DEFAULT_CHUNK_READ_TIMEOUT);
     client
         .patch(&session)
         .header("authorization", &bearer)
@@ -4642,6 +4658,20 @@ async fn drops_block(
         .send()
         .await
         .assert_status(StatusCode::BAD_REQUEST);
+    // 408: the chunk read deadline passed before the body arrived (#717). An in-process body is
+    // always whole, so the deadline is switched to one that has already passed.
+    fixture.chunk_deadline.set(std::time::Duration::ZERO);
+    client
+        .patch(&chunk_path)
+        .header("x-capsule-offset", "0")
+        .header("x-capsule-checksum", &checksum(&dropped))
+        .body("application/octet-stream", dropped.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::REQUEST_TIMEOUT);
+    fixture
+        .chunk_deadline
+        .set(capsule_server::upload::policy::DEFAULT_CHUNK_READ_TIMEOUT);
     client
         .patch(&chunk_path)
         .header("x-capsule-offset", "512")

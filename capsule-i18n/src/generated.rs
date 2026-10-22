@@ -446,6 +446,9 @@ pub mod error_codes {
     /// `error.upload.chunk_not_aligned`
     pub const UPLOAD_CHUNK_NOT_ALIGNED: &str = "error.upload.chunk_not_aligned";
 
+    /// `error.upload.chunk_timeout`
+    pub const UPLOAD_CHUNK_TIMEOUT: &str = "error.upload.chunk_timeout";
+
     /// `error.upload.chunk_too_large`
     pub const UPLOAD_CHUNK_TOO_LARGE: &str = "error.upload.chunk_too_large";
 

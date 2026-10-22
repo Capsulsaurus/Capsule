@@ -951,7 +951,9 @@ fn compose(
             // discovery record above publishes the same two values. One window, three readers.
             UploadPolicy::default()
                 .with_protocol_window(config.protocol_min.clone(), config.protocol_max.clone())
-                .with_min_client_build(config.min_client_build.clone()),
+                .with_min_client_build(config.min_client_build.clone())
+                // The chunk-body read deadline (#717), fixed for the life of the process.
+                .with_chunk_read_deadline(Arc::new(config.chunk_read_timeout)),
         ),
         sync: SyncContext::new(
             index.clone(),

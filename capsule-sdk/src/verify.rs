@@ -510,9 +510,11 @@ impl StorageVerifyClient {
             .collect()
     }
 
-    /// Fetch and pin the server's attestation-key history from
-    /// `GET {origin}/.well-known/capsule/attestation-keys` (TOFU on first contact).
-    /// Every published key is returned so a receipt's `server_key_id` resolves against the whole
+    /// Fetch the server's published attestation-key history from
+    /// `GET {origin}/.well-known/capsule/attestation-keys`. This only fetches: the caller checks
+    /// the result against the history it pinned for the server before trusting it
+    /// (`capsule_core::library::pin_attestation_keys` — TOFU on first contact, append-only
+    /// after). Every published key is returned so a receipt's `server_key_id` resolves against the whole
     /// history — a pre-rotation receipt still verifies.
     ///
     /// The record lives at the **origin** (RFC 8615), not under the API root the other methods

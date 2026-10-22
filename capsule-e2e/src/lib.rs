@@ -5,7 +5,8 @@
 //!
 //! - **The server** is the composition root — [`capsule_server::boot::assemble`] under the
 //!   memory profile, the same function `capsule-server serve --memory` runs — bound to an
-//!   ephemeral port. Real argon2 accounts, the real provisioned write authority, a real
+//!   ephemeral port. The backup drill boots the durable profile instead
+//!   ([`Server::boot_durable`]) over a Postgres and a Valkey it starts itself. Real argon2 accounts, the real provisioned write authority, a real
 //!   filesystem blob store under a temp root, the system clock. Not the test-only `Fixture`
 //!   the server's own suites use: its `SwallowingBlobs`, `TestAuthority` and `ManualClock` are
 //!   doubles, and a case that passed against them would prove the doubles.
@@ -82,6 +83,24 @@ pub const FAST_KDF: Argon2Params = Argon2Params {
 /// by any case that pushes more than a handful of assets.
 pub const PAGE_SIZE: u32 = 64;
 
+/// A 64-byte attestation seed, base64, for the durable profile.
+///
+/// The memory profile derives its seed from the signing key; a durable deployment must supply
+/// one of its own, independent of `JWT_ED25519_DER`. The same bytes `capsule-server`'s process
+/// tests use, and they sign nothing anywhere. A drill that boots a second host keeps the seed,
+/// as a restored deployment keeps its secrets, so the ledgers verify under the same key.
+pub const ATTESTATION_KEY_SEED: &str =
+    "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQ==";
+
+/// Where a durable [`Server`] finds its two external services.
+#[derive(Debug, Clone)]
+pub struct DurableBackends {
+    /// `DATABASE_URL`: a Postgres that already carries the server's schema.
+    pub database_url: String,
+    /// `VALKEY_URL`.
+    pub valkey_url: String,
+}
+
 /// The composition root, assembled and listening on an ephemeral port.
 ///
 /// Holds the [`Assembled`] so a case can reach the operator workers
@@ -113,11 +132,6 @@ impl Server {
         // Exactly what `serve --memory` reads: the memory profile needs two variables and
         // derives the rest (cursor MAC key, attestation seed) from the signing key.
         let mut env: BTreeMap<String, String> = BTreeMap::new();
-        env.insert(
-            "BLOB_ROOT".to_owned(),
-            blob_root.path().display().to_string(),
-        );
-        env.insert("JWT_ED25519_DER".to_owned(), JWT_ED25519_DER.to_owned());
         if let Some((min, max)) = window {
             env.insert("PROTOCOL_MIN".to_owned(), min.to_owned());
             env.insert("PROTOCOL_MAX".to_owned(), max.to_owned());
@@ -126,11 +140,43 @@ impl Server {
             memory: true,
             ..Overrides::default()
         };
-        let config = Config::load(&env, &overrides, Demands::Serve)
-            .expect("the memory profile loads from BLOB_ROOT and JWT_ED25519_DER alone");
+        Self::serve(blob_root, env, &overrides).await
+    }
+
+    /// Boot the **durable** profile, the one a deployment runs, over `blob_root` and the
+    /// Postgres and Valkey `backends` name.
+    ///
+    /// `blob_root` is taken rather than created, so a case can boot a second server over a blob
+    /// directory it restored from a backup. The database must already carry the server's
+    /// schema: `serve` refuses an unmigrated one, and so does this.
+    pub async fn boot_durable(blob_root: TempDir, backends: &DurableBackends) -> Self {
+        let mut env: BTreeMap<String, String> = BTreeMap::new();
+        env.insert("DATABASE_URL".to_owned(), backends.database_url.clone());
+        env.insert("VALKEY_URL".to_owned(), backends.valkey_url.clone());
+        env.insert(
+            "ATTESTATION_KEY_SEED".to_owned(),
+            ATTESTATION_KEY_SEED.to_owned(),
+        );
+        Self::serve(blob_root, env, &Overrides::default()).await
+    }
+
+    /// Assemble the composition root from `env`, plus the blob root and the signing key every
+    /// profile needs, and serve it on an ephemeral port.
+    async fn serve(
+        blob_root: TempDir,
+        mut env: BTreeMap<String, String>,
+        overrides: &Overrides,
+    ) -> Self {
+        env.insert(
+            "BLOB_ROOT".to_owned(),
+            blob_root.path().display().to_string(),
+        );
+        env.insert("JWT_ED25519_DER".to_owned(), JWT_ED25519_DER.to_owned());
+        let config = Config::load(&env, overrides, Demands::Serve)
+            .expect("the configuration loads from the variables the harness sets");
         let assembled = boot::assemble(&config)
             .await
-            .expect("the composition root assembles under the memory profile");
+            .expect("the composition root assembles");
         let service = assembled.service().expect("the router builds");
         let bound = kynos::server::Server::new(service)
             .bind(("127.0.0.1", 0))
