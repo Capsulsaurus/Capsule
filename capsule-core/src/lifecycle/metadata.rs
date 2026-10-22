@@ -13,12 +13,18 @@ use crate::crypto::provenance::Action;
 use crate::db::DatabaseDriver;
 use crate::metadata::crdt::AddId;
 use crate::ml::{AiTagSink, AssetSource, ModelId, Registry};
-use crate::sidecar::AiTag;
+use crate::sidecar::{AiTag, normalize_label};
 
 impl Workspace {
     /// Add a user tag (OR-set) and emit a `metadata-update` provenance record.
+    ///
+    /// The tag is an asset label and follows the one label rule
+    /// ([`normalize_label`]: NFC, trimmed, 1–256 bytes); a tag the rule refuses is
+    /// [`LifecycleError::InvalidLabel`] and nothing is appended. Tags already stored are read
+    /// as they are: only new writes are normalized.
+    #[tracing::instrument(skip(self, tag), fields(asset_id = %asset_id))]
     pub fn tag_add(&mut self, asset_id: &Uuid, tag: &str) -> Result<()> {
-        let tag = tag.to_string();
+        let tag = normalize_label(tag)?;
         self.append_lifecycle(asset_id, Action::MetadataUpdate, None, move |s, add_id| {
             s.tags_user.add(tag, add_id);
         })
@@ -143,6 +149,11 @@ impl Workspace {
     /// Promote an AI tag to a user tag: copy its text into `tags_user` with a **fresh user-scoped
     /// `add_id`**, leaving the AI entry intact (still independently dismissable). An explicit,
     /// signed lifecycle operation — never automatic (ai § AI Output Containment).
+    ///
+    /// The copied text becomes an asset label, so it passes through [`normalize_label`]: an AI
+    /// tag whose text the label rule refuses cannot be promoted
+    /// ([`LifecycleError::InvalidLabel`]), nothing is appended, and the AI entry is untouched.
+    #[tracing::instrument(skip(self, tag), fields(asset_id = %asset_id))]
     pub fn promote_ai_tag(&mut self, asset_id: &Uuid, tag: &str) -> Result<()> {
         let present = self
             .assets
@@ -156,7 +167,7 @@ impl Workspace {
         if !present {
             return Err(LifecycleError::NotFound(format!("ai tag '{tag}'")));
         }
-        let tag = tag.to_string();
+        let tag = normalize_label(tag)?;
         self.append_lifecycle(asset_id, Action::MetadataUpdate, None, move |s, add_id| {
             s.tags_user.add(tag, add_id);
         })
@@ -568,5 +579,84 @@ mod tests {
         let hits = crate::ml::semantic_search(&ws, &runner, &reg, "beach", 5, CANONICAL_PARTITION)
             .unwrap();
         assert_eq!(hits[0].asset_id, id.to_string());
+    }
+
+    /// The asset's provenance chain length: one record per signed lifecycle write.
+    fn chain_len(ws: &Workspace, id: &Uuid) -> usize {
+        ws.asset(id).unwrap().chain.records().len()
+    }
+
+    /// An asset label follows the one label rule: NFC-equivalent spellings land as one label,
+    /// surrounding whitespace is trimmed, and a refused tag appends no provenance record.
+    #[test]
+    fn tag_add_normalizes_and_refuses_before_any_record() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let (mut ws, id) = workspace_with(&lib, &src, b"\xFF\xD8\xFF tag label rule bytes");
+
+        // Decomposed "Cafe" + combining acute, padded, then the precomposed form.
+        ws.tag_add(&id, "  Cafe\u{301} \n").unwrap();
+        ws.tag_add(&id, "Caf\u{e9}").unwrap();
+        let tags = ws.asset(&id).unwrap().sidecar.tags_user.value();
+        assert_eq!(tags, ["Caf\u{e9}".to_string()].into_iter().collect());
+
+        let before = chain_len(&ws, &id);
+        let too_long = "x".repeat(257);
+        for bad in ["", " \t\n", too_long.as_str()] {
+            assert!(matches!(
+                ws.tag_add(&id, bad),
+                Err(LifecycleError::InvalidLabel(_))
+            ));
+        }
+        assert_eq!(chain_len(&ws, &id), before, "a refused tag emits no record");
+        assert_eq!(ws.asset(&id).unwrap().sidecar.tags_user.value(), tags);
+
+        // 256 bytes is the inclusive bound.
+        ws.tag_add(&id, &"x".repeat(256)).unwrap();
+        assert_eq!(chain_len(&ws, &id), before + 1);
+    }
+
+    /// Promotion normalizes the AI text into `tags_user`; an AI tag whose text the label rule
+    /// refuses cannot be promoted, emits no record, and stays intact in `tags_ai`.
+    #[test]
+    fn promote_ai_tag_applies_the_label_rule() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let (mut ws, id) = workspace_with(&lib, &src, b"\xFF\xD8\xFF promote label rule bytes");
+
+        let ai = |tag: &str| AiTag {
+            tag: tag.to_string(),
+            model_id: "mobileclip-b".to_string(),
+            model_version: "1".to_string(),
+        };
+        let too_long = "y".repeat(257);
+        ws.add_ai_tags(&id, vec![ai(" beach "), ai("   "), ai(&too_long)])
+            .unwrap();
+
+        ws.promote_ai_tag(&id, " beach ").unwrap();
+        assert_eq!(
+            ws.asset(&id).unwrap().sidecar.tags_user.value(),
+            ["beach".to_string()].into_iter().collect()
+        );
+
+        let before = chain_len(&ws, &id);
+        for bad in ["   ", too_long.as_str()] {
+            assert!(matches!(
+                ws.promote_ai_tag(&id, bad),
+                Err(LifecycleError::InvalidLabel(_))
+            ));
+        }
+        assert_eq!(
+            chain_len(&ws, &id),
+            before,
+            "a refused promotion emits no record"
+        );
+        let sidecar = &ws.asset(&id).unwrap().sidecar;
+        assert_eq!(sidecar.tags_user.value().len(), 1);
+        assert_eq!(
+            sidecar.tags_ai.value().len(),
+            3,
+            "the AI entries stay intact"
+        );
     }
 }
