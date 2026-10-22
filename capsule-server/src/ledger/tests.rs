@@ -372,7 +372,8 @@ fn an_intact_frame_this_server_cannot_read_is_unrecognised_not_torn() {
         "garbage a newer server's entry follows is a hole, not a tail"
     );
 
-    // The same frame cut short, or with a byte of its body destroyed, was never acknowledged.
+    // The same frame cut short, with its structure destroyed, or with bytes after its one item,
+    // was never acknowledged.
     let short = &newer[..newer.len() - 1];
     assert_eq!(
         decode_frames(&[valid.as_slice(), short].concat()).damage,
@@ -386,6 +387,24 @@ fn an_intact_frame_this_server_cannot_read_is_unrecognised_not_torn() {
         decode_frames(&[valid.as_slice(), &trailing].concat()).damage,
         Some(ChainFault::TornTail { entries: 1 }),
         "a body with bytes after its one CBOR item is not an intact frame"
+    );
+    let mut unstructured = newer.clone();
+    unstructured[4] = 0xff;
+    assert_eq!(
+        decode_frames(&[valid.as_slice(), &unstructured].concat()).damage,
+        Some(ChainFault::TornTail { entries: 1 }),
+        "a body whose map header is destroyed is not CBOR, so not an intact frame"
+    );
+
+    // A byte flipped inside a value, by contrast, leaves the frame intact: it is refused, never
+    // cut, because nothing can tell it from an entry a newer server acknowledged.
+    let mut flipped = newer.clone();
+    let last = flipped.len() - 1;
+    flipped[last] ^= 0x01;
+    assert_eq!(
+        decode_frames(&[valid.as_slice(), &flipped].concat()).damage,
+        Some(ChainFault::Unrecognised { entries: 1 }),
+        "a flipped signature byte keeps the frame canonical and entry-shaped"
     );
 }
 
