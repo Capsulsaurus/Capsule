@@ -29,6 +29,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use capsule_core::crypto::hash;
 use capsule_core::crypto::provenance::ProvenanceRecord;
 use capsule_core::lifecycle::{
     QuarantineReason, RemoteEntry, RemoteOriginal, SyncApplyOutcome, Workspace,
@@ -109,8 +110,8 @@ pub enum AssetRestoreStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AssetRestoreFailure {
     /// A stable name for where the asset stopped: `no_original`, `awaiting_original`,
-    /// `metadata_missing`, `malformed_feed`, `fetch`, `keys_unavailable`, `quarantined`,
-    /// `undecryptable`, `digest_mismatch`, `workspace` or `write`.
+    /// `malformed_feed`, `fetch`, `keys_unavailable`, `quarantined`, `undecryptable`,
+    /// `digest_mismatch`, `workspace` or `write`.
     pub kind: &'static str,
     /// The server's stable `error.*` code, when it supplied one.
     pub code: Option<String>,
@@ -468,22 +469,19 @@ impl<B: BlobSource + Sync> AssetRestore<'_, B> {
             return Ok(Vec::new());
         }
         let hash = String::from_utf8_lossy(&entry.metadata_blob).into_owned();
-        let Some(size) = entry
+        // The feed names the metadata blob by address only: its blob list carries the original
+        // and the derivatives, so a size is there only when a server chose to list it.
+        let listed = entry
             .blobs
             .derivatives
             .iter()
             .find(|blob| blob.ciphertext_hash == hash)
-            .map(|blob| blob.size)
-        else {
-            return Err(AssetRestoreFailure::new(
-                "metadata_missing",
-                format!("the feed lists no size for metadata blob {hash}"),
-            ));
+            .map(|blob| blob.size);
+        let fetched = match listed {
+            Some(size) => self.fetcher.fetch(self.source, &hash, size).await,
+            None => fetch_unsized(self.source, &hash, METADATA_WINDOW).await,
         };
-        self.fetcher
-            .fetch(self.source, &hash, size)
-            .await
-            .map_err(|error| AssetRestoreFailure::fetch("metadata blob", &error))
+        fetched.map_err(|error| AssetRestoreFailure::fetch("metadata blob", &error))
     }
 
     /// The original's ciphertext, resumed from and persisted to its part file.
@@ -559,6 +557,78 @@ fn refusal(verdict: &SyncApplyOutcome) -> AssetRestoreFailure {
             AssetRestoreFailure::new("quarantined", "the asset applied but was not opened")
         }
     }
+}
+
+/// The window a metadata blob of unlisted size is read in. A sealed sidecar is a few KiB, so
+/// one window is the usual whole fetch.
+pub const METADATA_WINDOW: u64 = 64 * 1024;
+
+/// How many responses in a row may bring no bytes before an unsized fetch gives up.
+const UNSIZED_STALLS: u32 = 3;
+
+/// Fetch a whole blob whose size nobody listed, in bounded `window`-sized `Range` requests, and
+/// verify it against its content address.
+///
+/// The end of the blob is the first response shorter than the window, or a `416` for a range
+/// that starts exactly at the end. Nothing is trusted until the reassembled bytes hash to
+/// `hash`.
+pub async fn fetch_unsized<B: BlobSource + Sync>(
+    source: &B,
+    hash: &str,
+    window: u64,
+) -> Result<Vec<u8>, FetchError> {
+    let window = window.max(1);
+    let mut bytes: Vec<u8> = Vec::new();
+    let mut stalls = 0;
+    loop {
+        match source
+            .get_range(hash, bytes.len() as u64, Some(window))
+            .await
+        {
+            RangeOutcome::Complete { bytes: landed } => {
+                let short = (landed.len() as u64) < window;
+                bytes.extend_from_slice(&landed);
+                if short {
+                    break;
+                }
+            }
+            RangeOutcome::Partial { bytes: landed } if !landed.is_empty() => {
+                stalls = 0;
+                bytes.extend_from_slice(&landed);
+            }
+            RangeOutcome::Partial { .. } => {
+                stalls += 1;
+                if stalls >= UNSIZED_STALLS {
+                    return Err(FetchError::Exhausted(format!(
+                        "no progress fetching {hash} after {stalls} attempts"
+                    )));
+                }
+            }
+            RangeOutcome::Status { status: 416, .. } if !bytes.is_empty() => break,
+            RangeOutcome::Status { status, code } => {
+                return Err(match status {
+                    403 => FetchError::AuthorizationChanged { code },
+                    404 | 410 => FetchError::Gone,
+                    0 => FetchError::Transient("transport error".to_owned()),
+                    s if (500..600).contains(&s) => {
+                        FetchError::Transient(format!("server status {s}"))
+                    }
+                    s => FetchError::Rejected { status: s, code },
+                });
+            }
+        }
+    }
+    if hash::hash_bytes(&bytes).to_hex() != hash {
+        tracing::warn!(
+            hash,
+            "restore: metadata blob content-hash mismatch; discarded"
+        );
+        return Err(FetchError::IntegrityFailed {
+            expected: hash.to_owned(),
+        });
+    }
+    tracing::debug!(hash, bytes = bytes.len(), "restore: unsized blob fetched");
+    Ok(bytes)
 }
 
 /// A file extension for a media type, for naming a restored original. Cosmetic: the bytes are
