@@ -98,7 +98,10 @@ their report). `LOG_FORMAT` is `pretty` in debug builds and `json` in release; `
 ### The operator commands
 
 `gc`, `purge`, and `scrub` are the jobs in [Filesystem — Maintenance](/design/filesystem/maintenance/).
-They take a blob root and **no key material**. Without `--memory` they read Postgres (index, marks)
+They take a blob root and **no token-signing key**. `purge --apply` alone also needs
+`ATTESTATION_KEY_SEED`, because it signs each purge into the
+[owner ledger](/design/filesystem/server/#the-owner-ledger) first, and it refuses to apply without
+it. Without `--memory` they read Postgres (index, marks)
 and, for `scrub`, Valkey (live upload sessions). `gc` and `purge` dry-run unless `--apply`; `scrub`
 mutates nothing and exits non-zero on a non-empty report, including a `--deep` pass that ran out of
 budget.
