@@ -101,6 +101,7 @@ impl MockServer {
         F: Fn(&MockRequest) -> MockResponse + Send + Sync + 'static,
     {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        crate::net::negotiation::forget_addr(listener.local_addr().unwrap());
         let addr = listener.local_addr().unwrap();
         let handler = Arc::new(handler);
         let handle = tokio::spawn(async move {
@@ -272,6 +273,7 @@ fn signed_receipt() -> (HybridVerifyingKey, Vec<u8>) {
         uploaded_by_user: Uuid::from_u128(7).to_string(),
         uploaded_by_device: None,
         received_at: RECEIVED_AT.into(),
+        unknown: Default::default(),
     };
     let server_sig = key.sign(&core.signing_bytes());
     let receipt = CustodyReceipt { core, server_sig };
@@ -1149,6 +1151,7 @@ fn receipt_for(key: &HybridSigningKey, asset: Uuid, expected: &ReceiptExpectatio
         uploaded_by_user: Uuid::from_u128(7).to_string(),
         uploaded_by_device: None,
         received_at: RECEIVED_AT.into(),
+        unknown: Default::default(),
     };
     let server_sig = key.sign(&core.signing_bytes());
     CustodyReceipt { core, server_sig }.to_canonical_cbor()
@@ -1241,4 +1244,47 @@ async fn a_real_move_import_releases_its_source_through_the_resolved_verifier() 
     assert_eq!(decision, ReleaseDecision::Release);
     assert!(!src.exists(), "the source is released on custody");
     assert_eq!(ws.read_plaintext(&asset).unwrap(), bytes);
+}
+
+/// **The protocol window (issue #674).** The storage-verify `POST` is a write on the gate's
+/// method split, so once the origin latched a build floor above this build it is refused before
+/// it leaves, as the typed upgrade refusal with its code.
+#[tokio::test]
+async fn a_verify_under_a_latched_floor_never_leaves() {
+    let seen = Arc::new(AtomicUsize::new(0));
+    let count = seen.clone();
+    let server = crate::testmock::MockServer::start(move |_req| {
+        count.fetch_add(1, Ordering::SeqCst);
+        crate::testmock::MockResponse::new(404, "Not Found")
+            .header("X-Capsule-Protocol-Min", "2026-01-01")
+            .header("X-Capsule-Protocol-Max", "2099-12-31")
+            .header("X-Capsule-Min-Client-Build", "999.0.0")
+    })
+    .await;
+    let read = reqwest::Client::new()
+        .get(format!("{}/v1/anything", server.base_url()))
+        .send()
+        .await
+        .expect("the read is answered");
+    crate::net::negotiation::observe(read.url(), read.headers());
+
+    let client = StorageVerifyClient::new(VerifyTransport::with_static_token(
+        reqwest::Client::new(),
+        format!("{}/v1", server.base_url()),
+        StaticToken("test-token".into()),
+    ));
+    let error = client.verify(&[], false).await.expect_err("refused");
+    assert!(
+        matches!(error, VerifyError::UpgradeRequired(_)),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.error_code(),
+        Some(capsule_i18n::error_codes::PROTOCOL_VERSION_UNSUPPORTED)
+    );
+    assert_eq!(
+        seen.load(Ordering::SeqCst),
+        1,
+        "only the read reached the server"
+    );
 }

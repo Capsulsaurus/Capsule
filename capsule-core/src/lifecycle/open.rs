@@ -898,7 +898,9 @@ impl Workspace {
                 dek_public: Some(DekPublic(account.device.dek.public_bytes())),
                 added_at: DEVICE_ADDED_AT.into(),
                 revoked_at: None,
+                unknown: Default::default(),
             }],
+            unknown: Default::default(),
         }
         .sign(&account.user_ik)
     }
@@ -1443,6 +1445,7 @@ mod tests {
             dek_public: None,
             added_at: DEVICE_ADDED_AT.into(),
             revoked_at: None,
+            unknown: Default::default(),
         };
         a.cross_sign_device(other.clone()).unwrap();
         let master = MasterKey::from_bytes(*a.account.master.as_bytes());
@@ -1585,6 +1588,7 @@ mod tests {
             dek_public: None,
             added_at: DEVICE_ADDED_AT.into(),
             revoked_at: None,
+            unknown: Default::default(),
         };
         let published = a.cross_sign_device(impostor).unwrap();
         let before = b.device_directory().clone();
@@ -1678,6 +1682,7 @@ mod tests {
             dek_public: None,
             added_at: DEVICE_ADDED_AT.into(),
             revoked_at: None,
+            unknown: Default::default(),
         })
         .unwrap();
         assert_eq!(ws.device_directory().core.directory_version, 2);
@@ -1784,6 +1789,7 @@ mod tests {
             dek_public: None,
             added_at: DEVICE_ADDED_AT.into(),
             revoked_at: None,
+            unknown: Default::default(),
         })
         .unwrap();
         let genuine = ws.device_directory().clone();

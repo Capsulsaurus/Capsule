@@ -316,6 +316,53 @@ fn an_entry_without_derivative_manifests_decodes_to_none() {
     assert!(decoded.derivative_manifests.is_empty());
 }
 
+// ─── Sync epoch (#697) ───────────────────────────────────────────────────────
+
+/// A stale cursor is recognised by its code, and nothing else is.
+#[test]
+fn a_stale_cursor_is_recognised_by_its_code() {
+    let stale = SyncError::Rejected {
+        code: Some(error_codes::SYNC_CURSOR_STALE.to_owned()),
+        message: String::new(),
+    };
+    assert!(stale.is_stale_cursor());
+    let invalid = SyncError::Rejected {
+        code: Some(error_codes::SYNC_CURSOR_INVALID.to_owned()),
+        message: String::new(),
+    };
+    assert!(!invalid.is_stale_cursor());
+    assert!(!SyncError::Transport("down".to_owned()).is_stale_cursor());
+}
+
+/// After an epoch change the client starts from zero with no floor, so the rebuilt numbering —
+/// which may sit below the marks it held — applies rather than reading as a rewind.
+#[test]
+fn a_resync_after_an_epoch_change_drops_the_cursor_and_the_marks() {
+    let a = album(11);
+    let mut state = SyncState::new(MAX_KNOWN);
+    state
+        .apply_page(&page(vec![entry(&a, 9, "2026-05-31")], 0x40))
+        .unwrap();
+    assert_eq!(state.high_water(&a), Some(9));
+
+    state.reset_for_resync();
+    assert!(state.cursor().is_start());
+    assert_eq!(state.high_water(&a), None);
+
+    // The rebuilt library numbers the same asset lower; it applies and becomes the new floor.
+    state
+        .apply_page(&page(vec![entry(&a, 4, "2026-05-31")], 0x41))
+        .unwrap();
+    assert_eq!(state.high_water(&a), Some(4));
+    let err = state
+        .apply_page(&page(vec![entry(&a, 3, "2026-05-31")], 0x42))
+        .unwrap_err();
+    assert!(
+        matches!(err, SyncError::Rewind { high_water: 4, .. }),
+        "the anti-rewind layer is re-established from the new epoch's first page"
+    );
+}
+
 /// A manifest that is not base64 is a server that cannot be talked to, as for `manifest_cbor`.
 #[test]
 fn a_derivative_manifest_that_is_not_base64_is_malformed() {
@@ -323,4 +370,30 @@ fn a_derivative_manifest_that_is_not_base64_is_malformed() {
         "derivative_manifests": ["not base64!"],
     })));
     assert!(matches!(refused, Err(SyncError::MalformedManifest(_))));
+}
+
+/// **The protocol window (issue #674).** A feed pull is a read: it is served whatever window
+/// the server advertises, and the window it carried is latched, so the next write to that
+/// origin is judged against it.
+#[tokio::test]
+async fn a_feed_pull_is_served_and_latches_the_window() {
+    let server = crate::testmock::MockServer::start(|_req| {
+        crate::testmock::MockResponse::new(200, "OK")
+            .header("X-Capsule-Protocol-Min", "2026-01-01")
+            .header("X-Capsule-Protocol-Max", "2099-12-31")
+            .header("X-Capsule-Min-Client-Build", "999.0.0")
+            .json_body(r#"{"entries":[],"next_cursor":"c1","has_more":false}"#)
+    })
+    .await;
+    let consumer = SyncConsumer::with_static_token(&server.base_url(), "test-token").unwrap();
+    let page = consumer.pull(&SyncCursor::start(), 10).await.unwrap();
+    assert!(page.entries.is_empty(), "the read is served");
+
+    let origin = reqwest::Url::parse(&server.base_url()).unwrap();
+    let latched = crate::net::negotiation::advertised(&origin).expect("the window was latched");
+    assert_eq!(latched.min_client_build.as_deref(), Some("999.0.0"));
+    assert_eq!(
+        crate::net::negotiation::upgrade_required_for(&origin).map(|refusal| refusal.reason),
+        Some(crate::net::negotiation::UpgradeReason::BuildBelowFloor)
+    );
 }

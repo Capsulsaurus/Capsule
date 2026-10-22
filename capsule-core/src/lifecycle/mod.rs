@@ -62,7 +62,10 @@ pub use self::sync_apply::{
     QuarantineReason, RemoteAssetFacts, RemoteEntry, RemoteHead, RemoteOriginal, SyncApplyOutcome,
     hash_ciphertext_from,
 };
-pub use self::upload::{DerivativeBlob, OriginalCiphertext, UploadBundle};
+pub use self::upload::{
+    DerivativeBlob, OPAQUE_CONTENT_TYPE, OriginalCiphertext, UploadBundle,
+    WIRE_ORIGINAL_CONTENT_TYPES, wire_content_type,
+};
 use crate::backup::BackupError;
 use crate::crypto::CryptoError;
 use crate::crypto::authority::Authority;
@@ -374,7 +377,8 @@ pub enum DerivativeStatus {
     /// [`ImportExecutionSummary::deferred_derivative_count`](crate::import::ImportExecutionSummary::deferred_derivative_count).
     ///
     /// What reaches here today: HEIC, AVIF and the RAW families, each needing a system library
-    /// (libheif, libdav1d) or an assembler the cross and cargo-ndk builds do not carry.
+    /// (libheif, libdav1d) or an assembler the cross and cargo-ndk builds do not carry, and
+    /// every video, whose derivatives no build generates yet.
     DeferredNoCodec,
     /// **A real problem.** The format *is* one this build can decode, but these particular
     /// bytes did not decode — truncation, corruption, or a decoder bug. The original is still
@@ -382,10 +386,11 @@ pub enum DerivativeStatus {
     /// investigating rather than shrugging at.
     DecodeFailed,
     /// Nothing to decode: neither the bytes' header nor the extension names a still image
-    /// Capsule models — a video, an XMP sidecar, an SVG, or an unknown suffix. Distinct from
-    /// [`DeferredNoCodec`](Self::DeferredNoCodec), which is a still whose codec is merely
-    /// absent and whose derivatives are therefore backfillable. Video derivatives are generated
-    /// on their own path (slice `S-B5`).
+    /// Capsule models and there is no derivative to make — an XMP sidecar, an SVG, a document,
+    /// or an unknown suffix. Distinct from [`DeferredNoCodec`](Self::DeferredNoCodec), which is
+    /// a still whose codec is merely absent and whose derivatives are therefore backfillable.
+    /// A **video** is not this: its derivatives are committed to by the tier table and deferred
+    /// until their codec lands, so a video import reports `DeferredNoCodec`.
     NotAKnownStill,
 }
 

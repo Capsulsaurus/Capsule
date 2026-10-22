@@ -77,6 +77,7 @@ impl Fx {
             dek_public: None,
             added_at: "2026-05-01T00:00:00Z".into(),
             revoked_at: revoked.then(|| "2026-05-15T00:00:00Z".to_string()),
+            unknown: Default::default(),
         }
     }
 
@@ -96,6 +97,7 @@ impl Fx {
                 self.entry(self.id_a, &self.dev_a, false),
                 self.entry(self.id_b, &self.dev_b, revoke_b),
             ],
+            unknown: Default::default(),
         }
         .sign(signer)
     }
@@ -175,7 +177,7 @@ fn asset_from(chain: &[ProvenanceRecord], ct: &[u8], meta: &[u8]) -> BackupAsset
     BackupAsset {
         album_id: head.manifest.core.album_id,
         asset_id: head.asset_id,
-        ciphertext: ct.to_vec(),
+        ciphertext: std::sync::Arc::new(ct.to_vec()),
         metadata_blob: meta.to_vec(),
         provenance: chain.to_vec(),
         receipts: Vec::new(),

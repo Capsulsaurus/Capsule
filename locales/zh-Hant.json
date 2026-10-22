@@ -1064,6 +1064,10 @@
     "message": "同步工作階段已過期。Capsule 會從頭重新同步。",
     "context": "Machine-translated seed pending human review."
   },
+  "error.sync.cursor_stale": {
+    "message": "你的資料庫已在伺服器上重建。Capsule 會從頭重新同步，並保留此裝置上的所有內容。",
+    "context": "Machine-translated seed pending human review."
+  },
   "error.sync.unauthenticated": {
     "message": "請重新登入以繼續同步。",
     "context": "Machine-translated seed pending human review."

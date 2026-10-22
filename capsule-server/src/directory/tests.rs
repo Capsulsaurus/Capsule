@@ -32,6 +32,7 @@ fn signed_by(ik: &HybridSigningKey, user: Uuid, version: u64) -> Vec<u8> {
         directory_version: version,
         updated_at: "2026-01-01T00:00:00Z".to_owned(),
         devices: Vec::new(),
+        unknown: Default::default(),
     };
     let directory: DeviceDirectory = core.sign(ik);
     capsule_core::cbor::to_canonical_vec(&directory).expect("a directory serializes")

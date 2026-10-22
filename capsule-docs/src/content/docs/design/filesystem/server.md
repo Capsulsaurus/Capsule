@@ -102,36 +102,51 @@ accepted it. The **owner ledger** carries those facts:
 ### Rebuild
 
 `capsule-server rebuild` reconstructs the asset index from `ledger/` plus `blobs/`, into an empty
-schema or alongside a restored backup:
+schema or alongside a restored backup. It is a dry run unless given `--apply`, and exits non-zero
+when it finds a fault ([`capsule-server::ledger::rebuild`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-server/src/ledger/rebuild.rs)):
 
-1. Verify each owner's ledger chain. A break stops that owner's replay at the last good entry
-   and is reported; other owners continue.
-2. Replay entries in `sync_seq` order: decode the named manifest, check its signature against
-   the directory version the ledger recorded, and write the rows it implies. Replay is
+1. Verify each owner's ledger chain: signatures under the attestation key's published half when
+   the host holds `ATTESTATION_KEY_SEED`, links and positions otherwise, and the report says
+   which. A break stops that owner's replay at the last good entry and is reported; other
+   owners continue.
+2. Replay entries in ledger order: uploads and drop adoptions (custody entries the index did
+   not refuse) and lifecycle ops, including retention purges. Decode each named manifest and
+   write the rows they imply, the way the index's own writes would. An op with no recorded
+   position is replayed only if it still chains onto the head the replay has reached. Checking
+   each manifest's device signature against the directory version the ledger recorded is not
+   implemented yet ([#782](https://github.com/Capsulsaurus/Capsule/issues/782)). Replay is
    idempotent; a row the backup already holds is compared, never overwritten.
-3. Recompute quota usage and blob references from the rebuilt rows.
+3. Recompute quota attribution for the restored rows. Blob references are a query over rows,
+   so restoring the rows recomputes them.
 4. Report blobs no entry names (orphans, left to GC), entries naming a missing blob (dangling,
    except an [`awaiting-original`](/design/transfer/upload/#upload-tiering-staged-uploads)
-   asset) and envelopes failing structural validation (moved to `quarantine/` with a
-   `.reason.json`, never dropped).
+   asset), purged tombstones whose manifests GC has swept (only the database backup holds
+   those rows), and envelopes failing structural validation (moved to `quarantine/` with a
+   `.reason.json`, never dropped; a record from a newer client is reported and left in place).
 
 Decoding manifests is confined to **one module**, the server's only signed-CBOR parser, shared
 by rebuild and the [integrity scrub](/design/filesystem/maintenance/#server-side-integrity-scrub)
-and fuzzed. The write path never decodes manifests.
+and fuzzed ([`capsule-server::ledger::manifest`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-server/src/ledger/manifest.rs)).
+A provenance blob is the chain head's provenance record, and the parser checks that the record
+and the manifest inside it agree. The write path never decodes manifests.
 
 ### Sync Epoch and Client Re-Announce
 
 Rebuilt rows keep their ledger `sync_seq`, so clients' sync cursors stay valid. When a rebuild
-cannot prove the sequence complete (a ledger chain break or lost tail), the server increments
-the owner's **sync epoch**. A cursor from an older epoch is refused with a typed error; the
-client drops its high-water mark, resyncs from zero and discards nothing (invariant 5 in
+cannot prove the sequence complete (a ledger chain break or lost tail), it numbers the rows it
+cannot place above every number the owner has used and increments the owner's **sync epoch**.
+The cursor carries the epoch it was minted in. A cursor from an older epoch is refused with
+`409 error.sync.cursor_stale`; the client drops its cursor and its high-water marks, resyncs
+from zero and discards nothing (invariant 5 in
 [Versioning](/design/versioning/#system-invariants)).
 
 After an epoch change, each client **re-announces** the signed manifests it holds whose blobs
 the server reports missing from the index: manifests only, no bytes. The server verifies each
 like an upload's manifest and restores the row if every named blob is present; otherwise the
 client re-uploads through the normal [transfer protocol](/design/transfer/upload/). A
-re-announced manifest can only restore what its owner's devices signed.
+re-announced manifest can only restore what its owner's devices signed. Re-announce is not
+implemented yet ([#781](https://github.com/Capsulsaurus/Capsule/issues/781)): until it is, a
+client resyncs and keeps what it holds, and a row the ledger could not replay stays missing.
 
 ### What a Rebuild Cannot Recover
 

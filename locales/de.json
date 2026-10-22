@@ -1064,6 +1064,10 @@
     "message": "Die Synchronisierungssitzung ist veraltet. Capsule synchronisiert von vorne.",
     "context": "Machine-translated seed pending human review."
   },
+  "error.sync.cursor_stale": {
+    "message": "Deine Mediathek wurde auf dem Server neu aufgebaut. Capsule synchronisiert von vorne und behält alles auf diesem Gerät.",
+    "context": "Machine-translated seed pending human review."
+  },
   "error.sync.unauthenticated": {
     "message": "Bitte melden Sie sich erneut an, um die Synchronisierung fortzusetzen.",
     "context": "Machine-translated seed pending human review."

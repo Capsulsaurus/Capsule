@@ -486,6 +486,7 @@ fn receipt_for(
         uploaded_by_user: bundle.created_by_user.to_string(),
         uploaded_by_device: None,
         received_at: RECEIVED_AT.into(),
+        unknown: Default::default(),
     };
     let server_sig = key.sign(&core.signing_bytes());
     CustodyReceipt { core, server_sig }
@@ -903,5 +904,22 @@ fn a_derivative_manifest_receipt_is_checked_against_its_wire_role() {
     assert_eq!(
         check_receipt(&unpinned, &pinned, blob, parsed, now()),
         Err(ReceiptRejection::Signature)
+    );
+}
+
+/// **Upgrade required.** An upload the protocol window refused surfaces the protocol code, so
+/// the CLI's `--json` output carries `error.protocol.version_unsupported` rather than nothing.
+#[test]
+fn an_upgrade_refusal_carries_the_protocol_code() {
+    let error = PushError::Upload(UploadError::UpgradeRequired {
+        reason: crate::net::negotiation::UpgradeReason::BuildBelowFloor,
+        min: None,
+        max: None,
+        min_client_build: Some("999.0.0".to_owned()),
+        message: "update".to_owned(),
+    });
+    assert_eq!(
+        error.error_code(),
+        Some(error_codes::PROTOCOL_VERSION_UNSUPPORTED)
     );
 }

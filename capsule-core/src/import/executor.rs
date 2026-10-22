@@ -142,9 +142,6 @@ pub fn execute_with_source_metadata(
                     },
                 )]
             }
-            ImportDecision::SkipUnsupported => {
-                vec![(primary_path, ImportOutcome::Unsupported)]
-            }
             ImportDecision::SkipError(msg) => {
                 vec![(primary_path, ImportOutcome::CorruptUnreadable(msg.clone()))]
             }
@@ -455,7 +452,7 @@ mod tests {
 
         // Admission is untouched by codec coverage.
         assert_eq!(plan_result.counts.to_import, 2);
-        assert_eq!(plan_result.counts.unsupported, 0);
+        assert_eq!(plan_result.counts.errors, 0);
 
         let token = CancellationToken::new();
         let summary = execute(&plan_result, &mut ws, &config, noop_event, &token).unwrap();
@@ -523,7 +520,7 @@ mod tests {
         let config = ImportConfig::default();
         let plan_result = plan(&scan_result, ws.db(), &config).unwrap();
         assert_eq!(plan_result.counts.to_import, 1);
-        assert_eq!(plan_result.counts.unsupported, 0);
+        assert_eq!(plan_result.counts.errors, 0);
 
         let token = CancellationToken::new();
         let summary = execute(&plan_result, &mut ws, &config, noop_event, &token).unwrap();

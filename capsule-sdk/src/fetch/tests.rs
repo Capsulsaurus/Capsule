@@ -1195,7 +1195,9 @@ mod admission {
                 dek_public: None,
                 added_at: "2026-10-01T00:00:00Z".into(),
                 revoked_at: None,
+                unknown: Default::default(),
             }],
+            unknown: Default::default(),
         }
         .sign(&HybridSigningKey::from_seed_bytes(&[10; 32], &[11; 32]))
     }
@@ -1552,4 +1554,164 @@ async fn fetch_into_surfaces_a_refusing_sink() {
         panic!("expected a sink error, got {err:?}");
     };
     assert_eq!(io.kind(), std::io::ErrorKind::InvalidData);
+}
+
+// ─── Unsized fetch (a blob the feed names without a size) ────────────────────
+
+/// A server that honours each bounded window and answers a range past the end with `end`:
+/// `416` as the real blob route does, or an empty `200` (`None`). Records every request.
+struct Windowed {
+    data: Vec<u8>,
+    end: Option<u16>,
+    requests: Mutex<Vec<(u64, Option<u64>)>>,
+}
+
+impl Windowed {
+    fn new(data: Vec<u8>, end: Option<u16>) -> Self {
+        Self {
+            data,
+            end,
+            requests: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl BlobSource for Windowed {
+    async fn get_range(&self, _hash: &str, start: u64, max_len: Option<u64>) -> RangeOutcome {
+        self.requests.lock().unwrap().push((start, max_len));
+        let len = self.data.len() as u64;
+        if start >= len {
+            return match self.end {
+                Some(status) => RangeOutcome::Status { status, code: None },
+                None => RangeOutcome::Complete { bytes: Vec::new() },
+            };
+        }
+        let end = max_len.map_or(len, |w| (start + w).min(len));
+        RangeOutcome::Complete {
+            bytes: self.data[start as usize..end as usize].to_vec(),
+        }
+    }
+}
+
+/// A server that answers every window full, forever.
+struct Endless;
+
+impl BlobSource for Endless {
+    async fn get_range(&self, _hash: &str, _start: u64, max_len: Option<u64>) -> RangeOutcome {
+        RangeOutcome::Complete {
+            bytes: vec![7; max_len.unwrap_or(UNSIZED_WINDOW) as usize],
+        }
+    }
+}
+
+/// A server that never sends a byte.
+struct Silent;
+
+impl BlobSource for Silent {
+    async fn get_range(&self, _hash: &str, _start: u64, _max_len: Option<u64>) -> RangeOutcome {
+        RangeOutcome::Complete { bytes: Vec::new() }
+    }
+}
+
+const NO_LIMIT: u64 = u64::MAX;
+
+/// Bounded windows to the end, whichever way the server marks it: a blob that fills its
+/// windows exactly ends at the `416` or the empty window after them; a shorter one ends at its
+/// short window, one request in all.
+#[tokio::test]
+async fn an_unsized_blob_is_read_in_bounded_windows_to_its_end() {
+    let fetcher = RangedFetcher::new(ConnectionClass::Unmetered);
+    let exact = bytes(2 * UNSIZED_WINDOW as usize);
+    for end in [Some(416), None] {
+        let source = Windowed::new(exact.clone(), end);
+        let fetched = fetcher
+            .fetch_unsized(&source, &sha(&exact), NO_LIMIT)
+            .await
+            .expect("fetched");
+        assert_eq!(fetched, exact, "end marked by {end:?}");
+        assert_eq!(
+            *source.requests.lock().unwrap(),
+            [
+                (0, Some(UNSIZED_WINDOW)),
+                (UNSIZED_WINDOW, Some(UNSIZED_WINDOW)),
+                (2 * UNSIZED_WINDOW, Some(UNSIZED_WINDOW)),
+            ]
+        );
+    }
+
+    let short = bytes(1000);
+    let source = Windowed::new(short.clone(), Some(416));
+    let fetched = fetcher
+        .fetch_unsized(&source, &sha(&short), NO_LIMIT)
+        .await
+        .expect("fetched");
+    assert_eq!(fetched, short);
+    assert_eq!(
+        source.requests.lock().unwrap().len(),
+        1,
+        "a short window ends it"
+    );
+}
+
+/// The limit bounds memory: a server that keeps answering full windows is refused once the
+/// blob passes it, rather than growing the buffer until the process runs out.
+#[tokio::test]
+async fn an_unsized_blob_past_its_limit_is_refused() {
+    let fetcher = RangedFetcher::new(ConnectionClass::Unmetered);
+    let err = fetcher
+        .fetch_unsized(&Endless, &sha(b"anything"), 3 * UNSIZED_WINDOW)
+        .await
+        .expect_err("refused");
+    assert!(matches!(err, FetchError::TooLarge { limit } if limit == 3 * UNSIZED_WINDOW));
+}
+
+/// The same verification and status classification as a sized fetch.
+#[tokio::test]
+async fn an_unsized_blob_is_verified_and_classified_like_a_sized_one() {
+    let fetcher = RangedFetcher::new(ConnectionClass::Unmetered);
+    let source = Windowed::new(bytes(10), Some(416));
+    assert!(matches!(
+        fetcher
+            .fetch_unsized(&source, &sha(b"other"), NO_LIMIT)
+            .await,
+        Err(FetchError::IntegrityFailed { .. })
+    ));
+    let gone = AlwaysStatus {
+        status: 404,
+        code: None,
+    };
+    assert!(matches!(
+        fetcher.fetch_unsized(&gone, "abc", NO_LIMIT).await,
+        Err(FetchError::Gone)
+    ));
+    let pending = AlwaysStatus {
+        status: 409,
+        code: Some(error_codes::BLOB_PENDING_UPLOAD.to_owned()),
+    };
+    assert!(matches!(
+        fetcher.fetch_unsized(&pending, "abc", NO_LIMIT).await,
+        Err(FetchError::PendingUpload)
+    ));
+}
+
+/// No-progress reads back off through the shared retry engine and give up, never hot-loop.
+#[tokio::test]
+async fn an_unsized_fetch_that_never_progresses_backs_off_then_gives_up() {
+    let slept = Arc::new(Mutex::new(Vec::new()));
+    let fetcher = RangedFetcher::from_parts(
+        ConnectionClass::Unmetered,
+        StallConfig::default(),
+        None,
+        NoopSleeper(slept.clone()),
+        SharedClock(Arc::new(Mutex::new(0))),
+    );
+    let err = fetcher
+        .fetch_unsized(&Silent, "abc", NO_LIMIT)
+        .await
+        .expect_err("gives up");
+    assert!(matches!(err, FetchError::Exhausted(_)), "{err:?}");
+    assert!(
+        !slept.lock().unwrap().is_empty(),
+        "it backed off between attempts"
+    );
 }

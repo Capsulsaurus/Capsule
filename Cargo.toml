@@ -30,7 +30,7 @@ default-members = [
 resolver = "3"
 # The cargo-fuzz harness is its own workspace: it links libFuzzer and is built only by
 # `cargo fuzz` (or `mise run fuzz-check`), never by a workspace build or test run.
-exclude = ["capsule-core/fuzz"]
+exclude = ["capsule-core/fuzz", "capsule-server/fuzz"]
 
 [workspace.package]
 version = "0.1.0"

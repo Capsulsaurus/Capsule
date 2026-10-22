@@ -230,6 +230,9 @@ impl From<UploadError> for FfiError {
         }
         let code = match &err {
             UploadError::Rejected { code, .. } => code.clone(),
+            UploadError::UpgradeRequired { .. } => {
+                Some(capsule_i18n::error_codes::PROTOCOL_VERSION_UNSUPPORTED.to_owned())
+            }
             _ => None,
         };
         Self::Upload {

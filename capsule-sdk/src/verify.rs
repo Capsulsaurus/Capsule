@@ -75,11 +75,45 @@ pub enum VerifyError {
     /// answer a different question.
     #[error("storage attestation rejected: {0}")]
     Attestation(AttestationRejection),
+    /// The server will not take this client's writes: its `426`, or a window it advertised
+    /// that already refuses this build (issue #674). Update the app.
+    #[error(transparent)]
+    UpgradeRequired(Box<crate::net::negotiation::UpgradeRequired>),
+}
+
+impl VerifyError {
+    /// The stable `error.*` code, when one applies.
+    #[must_use]
+    pub fn error_code(&self) -> Option<&str> {
+        match self {
+            Self::Status { code, .. } => code.as_deref(),
+            Self::UpgradeRequired(refusal) => Some(refusal.error_code()),
+            _ => None,
+        }
+    }
 }
 
 impl From<crate::auth::AuthError> for VerifyError {
     fn from(err: crate::auth::AuthError) -> Self {
-        VerifyError::Transport(err.to_string())
+        match err {
+            crate::auth::AuthError::UpgradeRequired(refusal) => {
+                VerifyError::UpgradeRequired(refusal)
+            }
+            other => VerifyError::Transport(other.to_string()),
+        }
+    }
+}
+
+impl From<crate::net::negotiation::SendError> for VerifyError {
+    fn from(err: crate::net::negotiation::SendError) -> Self {
+        match err {
+            crate::net::negotiation::SendError::Upgrade(refusal) => {
+                VerifyError::UpgradeRequired(Box::new(refusal))
+            }
+            crate::net::negotiation::SendError::Transport(error) => {
+                VerifyError::Transport(error.to_string())
+            }
+        }
     }
 }
 
@@ -146,11 +180,10 @@ impl VerifyTransport {
     {
         match &self.auth {
             VerifyAuth::Session(session) => Ok(session.execute(build).await?),
-            VerifyAuth::Static { http, token } => build(http)
-                .bearer_auth(token)
-                .send()
-                .await
-                .map_err(|e| VerifyError::Transport(e.to_string())),
+            VerifyAuth::Static { http, token } => Ok(crate::net::negotiation::send_negotiated(
+                build(http).bearer_auth(token),
+            )
+            .await?),
         }
     }
 }

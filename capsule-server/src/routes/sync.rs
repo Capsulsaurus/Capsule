@@ -13,6 +13,18 @@
 //! | `UNAUTHENTICATED` (`error.sync.unauthenticated`) | **the framework's `401` now.** `Auth<AccessToken>` declares it and fills the `WWW-Authenticate` challenge. The catalog key survives, unused, because giving a framework rejection an `error.*` code is `S-C36` and is the same fix for every surface |
 //! | `INTERNAL` | `500`, and now *coded* — `error.sync.unavailable`, a key this slice added because the retired feed had none and a client could not tell a broken server from a broken cursor |
 //! | page size out of range | **not a rejection.** Clamped; see [`crate::sync::clamp_page_size`] |
+//! | *(new, #697)* a cursor from before the owner's sync epoch moved | `409` (`error.sync.cursor_stale`) |
+//!
+//! # A stale cursor is not an invalid one (#697)
+//!
+//! An index rebuild that cannot prove an owner's sequence complete moves the owner to a new sync
+//! epoch ([`crate::index::AssetIndex::bump_sync_epoch`]). A cursor minted before that is
+//! authentic, and resuming it would be wrong: the numbers after it may have been issued again.
+//! It is refused with its own code, `409 error.sync.cursor_stale`, because the client's recovery
+//! differs from a forged cursor's in one way that matters: it drops its anti-rewind high-water
+//! marks too, since the rebuilt numbering may sit below them, and it keeps everything it holds.
+//! The refusal names no epoch; the client starts from an empty cursor, which is valid in every
+//! epoch.
 //!
 //! # A peer reads the same page (`S-E5`)
 //!
@@ -203,6 +215,18 @@ pub enum SyncRejection {
         code: &'static str,
     },
 
+    /// The cursor is authentic but was minted before the owner's sync epoch moved (#697).
+    ///
+    /// The client drops its cursor and its high-water marks, resyncs from an empty cursor, and
+    /// discards nothing it holds.
+    #[error("the sync cursor predates a rebuild of this library")]
+    #[problem(status = 409, title = "Stale sync cursor")]
+    CursorStale {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
     /// The album is not the caller's and the caller is not on its roster (`S-C51`).
     ///
     /// One answer for unprovisioned, never-a-member and removed alike, as the write routes give.
@@ -272,6 +296,13 @@ impl SyncRejection {
     fn cursor_invalid() -> Self {
         Self::CursorInvalid {
             code: error_codes::SYNC_CURSOR_INVALID,
+        }
+    }
+
+    /// The cursor predates the owner's current sync epoch.
+    fn cursor_stale() -> Self {
+        Self::CursorStale {
+            code: error_codes::SYNC_CURSOR_STALE,
         }
     }
 
@@ -394,7 +425,17 @@ pub async fn sync_feed(
         (Reader::Peer(_), None) => return Err(SyncRejection::audience_mismatch()),
     };
 
-    let after = sync
+    // The epoch of the owner whose rows are paged: the caller's own, or the album owner's.
+    let pager = match &album {
+        Some((_, filed_by)) => filed_by,
+        None => &owner,
+    };
+    let epoch = sync.index().sync_epoch(pager).await.map_err(|error| {
+        tracing::error!(%error, %owner, "the asset index could not report a sync epoch");
+        SyncRejection::unavailable()
+    })?;
+
+    let resumed = sync
         .cursors()
         .decode(&scope, query.cursor.as_deref())
         .map_err(|error| {
@@ -408,6 +449,30 @@ pub async fn sync_feed(
             tracing::info!(%owner, reason, "a sync cursor was refused; the client will resync");
             SyncRejection::cursor_invalid()
         })?;
+    let after = match resumed {
+        None => 0,
+        Some(resumed) if resumed.epoch == epoch => resumed.position,
+        Some(resumed) if resumed.epoch < epoch => {
+            tracing::info!(
+                %owner,
+                cursor_epoch = resumed.epoch,
+                epoch,
+                "a sync cursor from before a rebuild was refused; the client will resync from zero"
+            );
+            return Err(SyncRejection::cursor_stale());
+        }
+        // An epoch this owner has not reached. The server never minted it, so it is a cursor
+        // from another deployment's database under the same key: invalid, not stale.
+        Some(resumed) => {
+            tracing::warn!(
+                %owner,
+                cursor_epoch = resumed.epoch,
+                epoch,
+                "a sync cursor named an epoch this owner has not reached"
+            );
+            return Err(SyncRejection::cursor_invalid());
+        }
+    };
 
     let limit = clamp_page_size(
         query
@@ -457,7 +522,7 @@ pub async fn sync_feed(
 
     Ok(Json(SyncPageResponse {
         entries,
-        next_cursor: sync.cursors().encode(&scope, position),
+        next_cursor: sync.cursors().encode(&scope, epoch, position),
         // Strictly greater: `position == head` is a caught-up client, and telling it otherwise
         // would make every idle client poll one extra time forever.
         has_more: head > position,

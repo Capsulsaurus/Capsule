@@ -28,6 +28,9 @@
 //! Verification is pure offline crypto: [`HybridSignature`] and [`HybridVerifyingKey`] are
 //! `capsule-core`'s own types.
 
+use std::collections::BTreeMap;
+
+use ciborium::value::Value;
 use serde::{Deserialize, Serialize};
 
 use crate::cbor::{self, CanonicalError};
@@ -58,7 +61,14 @@ pub enum BlobRole {
 /// exactly this type rather than a mirror of it (`S-C46`), because canonical CBOR sorts map keys
 /// and two definitions of a signed structure disagree the moment either gains a field. Canonical
 /// CBOR with the manifest wire-presence discipline (absent optionals encode as absent keys).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// **Unknown keys survive under the signature** ([Versioning — invariant 2]): a receipt from a
+/// newer server that only adds a field decodes here, re-emits that field canonically, and so
+/// still verifies — an older client does not mistake it for a withheld receipt. Stripping the
+/// field fails verification.
+///
+/// [Versioning — invariant 2]: https://docs/design/versioning/#system-invariants
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CustodyReceiptCore {
     /// Schema version (`custody-receipt/v1`).
     pub version: String,
@@ -111,6 +121,42 @@ pub struct CustodyReceiptCore {
     pub uploaded_by_device: Option<String>,
     /// The server's trusted clock at the finalization commit (RFC 3339).
     pub received_at: String,
+    /// Keys a newer server added that this build does not know, preserved verbatim and signed
+    /// over. Empty (and so wire-absent) on everything this build issues.
+    ///
+    /// A key here must never collide with a known field name: the decoder only ever places the
+    /// keys it did not recognise here, and an issuer building a core by hand must do the same.
+    #[serde(flatten)]
+    pub unknown: BTreeMap<String, Value>,
+}
+
+// `Value` holds floats, so it is only `PartialEq`. Equality is never how a receipt is trusted
+// (the signature over the canonical bytes is), so `Eq` stays, as on `ManifestCore`.
+impl Eq for CustodyReceiptCore {}
+
+impl<'de> Deserialize<'de> for CustodyReceiptCore {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let mut m = cbor::OpenMap::deserialize("custody receipt core", d)?;
+        Ok(Self {
+            version: m.take("version")?,
+            crypto_suite_id: m.take("crypto_suite_id")?,
+            protocol_version: m.take("protocol_version")?,
+            server_id: m.take("server_id")?,
+            server_key_id: m.take("server_key_id")?,
+            receipt_seq: m.take("receipt_seq")?,
+            prior_receipt_hash: m.take_opt("prior_receipt_hash")?,
+            upload_id: m.take("upload_id")?,
+            asset_id: m.take("asset_id")?,
+            blob_role: m.take("blob_role")?,
+            ciphertext_hash: m.take("ciphertext_hash")?,
+            size: m.take("size")?,
+            envelope_hash: m.take_opt("envelope_hash")?,
+            uploaded_by_user: m.take("uploaded_by_user")?,
+            uploaded_by_device: m.take_opt("uploaded_by_device")?,
+            received_at: m.take("received_at")?,
+            unknown: m.into_unknown(),
+        })
+    }
 }
 
 impl CustodyReceiptCore {

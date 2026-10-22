@@ -83,7 +83,7 @@ fn fixture_sized(name: &str, count: u8, len: usize) -> Fixture {
         entries.push(FeedEntry {
             album_id: album.to_string().into_bytes(),
             sync_seq: u64::from(i) + 1,
-            protocol_version: "2026-12-31".to_owned(),
+            protocol_version: capsule_core::crypto::primitives::PROTOCOL_VERSION.to_owned(),
             kind: ChangeKind::Created,
             asset_id: asset.to_string().into_bytes(),
             manifest_cbor: bundle.provenance_blob.clone(),
@@ -94,11 +94,9 @@ fn fixture_sized(name: &str, count: u8, len: usize) -> Fixture {
                     role: "original".to_owned(),
                     size: bundle.ciphertext_size(),
                 }),
-                derivatives: vec![BlobRef {
-                    ciphertext_hash: metadata_hash.clone(),
-                    role: "metadata".to_owned(),
-                    size: bundle.metadata_blob.len() as u64,
-                }],
+                // As the server's feed lists them: the original and the derivatives. The
+                // metadata blob is named by `metadata_blob` alone, with no size.
+                derivatives: Vec::new(),
             },
             derivative_manifests: bundle.derivative_manifests.clone(),
             original_held: true,

@@ -32,8 +32,9 @@ use capsule_core::crypto::receipts::CustodyReceipt;
 use jiff::Timestamp;
 
 use super::{
-    AssetIndex, AssetState, BlobOutcome, BlobRecord, ChangeKind, Custody, HoldOutcome, LifecycleOp,
-    OpAction, OpOutcome, PendingAsset, PurgeOutcome, Receipted, Reservation, ServingHold,
+    AssetIndex, AssetRow, AssetState, BlobOutcome, BlobRecord, ChangeKind, Custody, HoldOutcome,
+    LifecycleOp, OpAction, OpOutcome, PendingAsset, PurgeOutcome, Receipted, Reservation,
+    RestoreOutcome, ServingHold,
 };
 use crate::attestation::{ReceiptDraft, ReceiptLog, ReceiptSigner};
 use crate::blob::ContentAddress;
@@ -2440,6 +2441,133 @@ pub fn suite_signer() -> crate::attestation::LocalAttestationKey {
     )
 }
 
+// ---------------------------------------------------------------------------------------
+// Sync epoch and restore (#697)
+// ---------------------------------------------------------------------------------------
+
+/// An owner starts at epoch 0, and each bump moves only that owner forward.
+pub async fn a_sync_epoch_starts_at_zero_and_only_rises(index: &dyn AssetIndex) {
+    let owner = OwnerId::new("epoch-owner");
+    let other = OwnerId::new("epoch-other-owner");
+    assert_eq!(ok(index.sync_epoch(&owner).await, "read an epoch"), 0);
+    assert_eq!(ok(index.bump_sync_epoch(&owner).await, "bump an epoch"), 1);
+    assert_eq!(ok(index.bump_sync_epoch(&owner).await, "bump an epoch"), 2);
+    assert_eq!(ok(index.sync_epoch(&owner).await, "read an epoch"), 2);
+    assert_eq!(
+        ok(index.sync_epoch(&other).await, "read an epoch"),
+        0,
+        "one owner's bump moved another's epoch"
+    );
+}
+
+/// The row a rebuild reconstructs for `case`'s asset `n`, published at `sync_seq`.
+fn rebuilt(case: &str, n: u32, sync_seq: u64) -> AssetRow {
+    let pending = pending(case, n);
+    let provenance = blob(BlobRole::Provenance, &format!("{case}p{n}"));
+    let metadata = blob(BlobRole::Metadata, &format!("{case}m{n}"));
+    let mut blobs = vec![
+        super::BlobRef {
+            role: provenance.role,
+            address: provenance.address,
+            size: provenance.size,
+        },
+        super::BlobRef {
+            role: metadata.role,
+            address: metadata.address,
+            size: metadata.size,
+        },
+    ];
+    blobs.sort();
+    AssetRow {
+        asset_id: pending.asset_id,
+        owner_id: pending.owner_id,
+        album_id: pending.album_id,
+        protocol_version: pending.protocol_version,
+        crypto_suite_id: pending.crypto_suite_id,
+        state: AssetState::Visible,
+        blobs,
+        first_seq: Some(sync_seq),
+        sync_seq: Some(sync_seq),
+        chain_head: provenance.manifest_sha256,
+        amk_version: 0,
+        superseded: Vec::new(),
+        hold: None,
+        retention_until: None,
+        created_at: Timestamp::UNIX_EPOCH,
+        updated_at: Timestamp::UNIX_EPOCH,
+    }
+}
+
+/// A restored row keeps its number, reaches the feed, and the allocator moves past it.
+pub async fn a_restored_row_keeps_its_number_and_the_allocator_moves_past_it(
+    index: &dyn AssetIndex,
+) {
+    let row = rebuilt("restore", 1, 7);
+    let owner = row.owner_id.clone();
+    assert_eq!(
+        ok(index.restore(row.clone()).await, "restore a row"),
+        RestoreOutcome::Restored
+    );
+    assert_eq!(
+        ok(index.read(&row.asset_id).await, "read").as_ref(),
+        Some(&row),
+        "a restored row is not the row the rebuild handed over"
+    );
+    assert_eq!(ok(index.head_seq(&owner).await, "read the head"), 7);
+    let page = ok(index.feed_page(&owner, 0, 10).await, "read the feed");
+    assert_eq!(
+        page.iter().map(|entry| entry.sync_seq).collect::<Vec<_>>(),
+        vec![7],
+        "a restored row is missing from its owner's feed"
+    );
+
+    // The next publication cannot re-issue a restored number.
+    let (_, minted) = publish(index, "restore", 2).await;
+    assert_eq!(minted, 8);
+}
+
+/// A restored row with no number is numbered by the owner's allocator, as a publication is.
+pub async fn a_restored_row_without_a_number_takes_the_allocators_next(index: &dyn AssetIndex) {
+    let (_, published) = publish(index, "restore-mint", 1).await;
+    let mut row = rebuilt("restore-mint", 2, 0);
+    row.sync_seq = None;
+    row.first_seq = None;
+    assert_eq!(
+        ok(
+            index.restore(row.clone()).await,
+            "restore an unnumbered row"
+        ),
+        RestoreOutcome::Restored
+    );
+    let restored = ok(index.read(&row.asset_id).await, "read").expect("the row exists");
+    assert_eq!(restored.sync_seq, Some(published + 1));
+    assert_eq!(restored.first_seq, Some(published + 1));
+    // And the allocator has moved past it.
+    let (_, next) = publish(index, "restore-mint", 3).await;
+    assert_eq!(next, published + 2);
+}
+
+/// A row the index already holds is returned unchanged, never overwritten.
+pub async fn restoring_over_an_existing_row_overwrites_nothing(index: &dyn AssetIndex) {
+    let (asset, seq) = publish(index, "restore-over", 1).await;
+    let before = ok(index.read(&asset).await, "read").expect("the row exists");
+
+    let mut rival = rebuilt("restore-over", 1, seq + 40);
+    rival.album_id = AlbumId::new("restore-over-another-album");
+    let outcome = ok(index.restore(rival).await, "restore over a row");
+    assert_eq!(outcome, RestoreOutcome::Present(Box::new(before.clone())));
+    assert_eq!(
+        ok(index.read(&asset).await, "read").as_ref(),
+        Some(&before),
+        "a restore overwrote a row the index already held"
+    );
+    assert_eq!(
+        ok(index.head_seq(&before.owner_id).await, "read the head"),
+        seq,
+        "a refused restore still moved the allocator"
+    );
+}
+
 pub async fn run_all(index: &dyn AssetIndex) {
     reserving_twice_joins_the_same_row(index).await;
     a_disagreeing_reservation_is_refused_without_disclosure(index).await;
@@ -2481,6 +2609,10 @@ pub async fn run_all(index: &dyn AssetIndex) {
     holding_an_unknown_asset_is_not_found(index).await;
     the_row_walk_covers_every_state_and_resumes(index).await;
     the_row_walk_orders_by_the_identifiers_own_bytes(index).await;
+    a_sync_epoch_starts_at_zero_and_only_rises(index).await;
+    a_restored_row_keeps_its_number_and_the_allocator_moves_past_it(index).await;
+    a_restored_row_without_a_number_takes_the_allocators_next(index).await;
+    restoring_over_an_existing_row_overwrites_nothing(index).await;
 }
 
 #[cfg(test)]

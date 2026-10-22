@@ -1,10 +1,10 @@
 name: Scheduled tests
 
 # The testing plan's slow tiers, too long for a pull request: coverage-guided fuzzing of every
-# capsule-core decoder, mutation testing of the CRDT, transfer and provenance code, and the
-# property suites at soak depth. Nightly on master, or on demand. A separate workflow rather
-# than a `schedule:` on ci.yml, whose `ci-<ref>` concurrency group would let a nightly run and a
-# push to master cancel each other.
+# capsule-core decoder and the server's manifest parser, mutation testing of the CRDT, transfer
+# and provenance code, and the property suites at soak depth. Nightly on master, or on demand.
+# A separate workflow rather than a `schedule:` on ci.yml, whose `ci-<ref>` concurrency group
+# would let a nightly run and a push to master cancel each other.
 on:
   schedule:
     - cron: "17 3 * * *"
@@ -24,17 +24,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - cbor_canonicalize
-          - signed_documents
-          - custody_receipt
-          - storage_attestation
-          - provenance_record
-          - lqip
-          - media_decode
-          - enrollment_payload
-          - hybrid_verifying_key
-          - metadata_blob
+        include:
+          - { crate: capsule-core, target: cbor_canonicalize }
+          - { crate: capsule-core, target: signed_documents }
+          - { crate: capsule-core, target: custody_receipt }
+          - { crate: capsule-core, target: storage_attestation }
+          - { crate: capsule-core, target: provenance_record }
+          - { crate: capsule-core, target: lqip }
+          - { crate: capsule-core, target: media_decode }
+          - { crate: capsule-core, target: enrollment_payload }
+          - { crate: capsule-core, target: hybrid_verifying_key }
+          - { crate: capsule-core, target: metadata_blob }
+          - { crate: capsule-server, target: manifest_parser }
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust toolchain
@@ -42,7 +43,7 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: capsule-core/fuzz
+          workspaces: ${{ matrix.crate }}/fuzz
       - name: Install cargo-fuzz
         uses: taiki-e/install-action@v2
         with:
@@ -50,7 +51,7 @@ jobs:
       # The explicit host triple: a cargo-fuzz built for musl would otherwise target musl, where
       # the sanitizer cannot link (see the `fuzz` task in mise.toml).
       - name: Fuzz for ten minutes
-        working-directory: capsule-core/fuzz
+        working-directory: ${{ matrix.crate }}/fuzz
         run: >-
           cargo fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }}
           -- -max_total_time=600 -max_len=65536
@@ -59,7 +60,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: fuzz-artifacts-${{ matrix.target }}
-          path: capsule-core/fuzz/artifacts/${{ matrix.target }}/
+          path: ${{ matrix.crate }}/fuzz/artifacts/${{ matrix.target }}/
 
   mutants:
     name: Mutants (shard ${{ matrix.shard }}/8)

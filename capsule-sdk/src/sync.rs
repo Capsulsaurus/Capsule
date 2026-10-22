@@ -287,6 +287,17 @@ impl SyncError {
             _ => None,
         }
     }
+
+    /// Whether the server refused the cursor because the library's sync epoch moved: the server
+    /// rebuilt its index and could not prove the numbering the cursor resumes (#697).
+    ///
+    /// The recovery is [`SyncState::reset_for_resync`] and a pull from the start. Nothing the
+    /// client holds is discarded: the resync re-delivers what the server holds, and what it no
+    /// longer does is for the client to re-announce, never to delete.
+    #[must_use]
+    pub fn is_stale_cursor(&self) -> bool {
+        self.error_code() == Some(error_codes::SYNC_CURSOR_STALE)
+    }
 }
 
 // ─── Reconciliation state (pure) ─────────────────────────────────────────────
@@ -341,6 +352,23 @@ impl SyncState {
         self.high_water
             .iter()
             .map(|(album, seq)| (album.as_slice(), *seq))
+    }
+
+    /// Start over after the server moved the library to a new sync epoch
+    /// ([`SyncError::is_stale_cursor`]): the cursor goes back to the start and every
+    /// high-water mark is dropped.
+    ///
+    /// The marks go too, unlike a `--force` re-drain, because the rebuilt numbering may sit
+    /// below them, and a floor the server can no longer honour would refuse every entry as a
+    /// rewind. The anti-rewind layer is re-established from the first page of the new epoch.
+    /// Only the reconciliation state is reset: nothing the client holds is discarded.
+    pub fn reset_for_resync(&mut self) {
+        tracing::info!(
+            albums = self.high_water.len(),
+            "the server moved this library to a new sync epoch; resyncing from the start"
+        );
+        self.high_water.clear();
+        self.cursor = SyncCursor::start();
     }
 
     /// The cursor to hand to the next pull (round-tripped verbatim).
@@ -596,8 +624,8 @@ fn build_client(base_url: &str, credential: rest::Credential) -> Result<rest::Cl
     // The SDK's one HTTP client, so the feed pull carries the protocol handshake.
     let http =
         crate::net::http_client().map_err(|error| SyncError::Transport(error.to_string()))?;
-    let client = rest::Client::with_client(http, base_url)
-        .map_err(|error| SyncError::Transport(error.to_string()))?
+    let client = crate::client::negotiated_client(http, base_url)
+        .map_err(SyncError::Transport)?
         .with_credential(BEARER_SCHEME, credential);
     Ok(client)
 }
@@ -653,9 +681,12 @@ fn map_error(error: rest::Error<rest::SyncFeedError>) -> SyncError {
                 // The 429 is a federated peer's events budget (`S-E5`): a capability puller
                 // over its hour. Rejected rather than retried, because the window is an hour
                 // and the interactive retry class would give up long before it turned.
+                // The 409 is a cursor from before the library's sync epoch moved (#697); the
+                // caller recognises it by its code (`SyncError::is_stale_cursor`).
                 rest::SyncFeedError::Status400(problem)
                 | rest::SyncFeedError::Status401(problem)
                 | rest::SyncFeedError::Status403(problem)
+                | rest::SyncFeedError::Status409(problem)
                 | rest::SyncFeedError::Status429(problem)
                 | rest::SyncFeedError::Status500(problem) => (
                     Some(problem.code.clone()),

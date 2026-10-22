@@ -25,7 +25,6 @@ pub enum ImportOutcome {
     DuplicateSkipped {
         existing_uuid: String,
     },
-    Unsupported,
     CorruptUnreadable(String),
     CorruptTransfer,
     PermissionDenied(String),
