@@ -513,6 +513,7 @@ impl Workspace {
             uuid: restored.asset_id,
             hash: hash::hash_bytes(&restored.plaintext),
             capture_timestamp: head.core.timestamp.clone(),
+            capture_timestamp_user: Lww::new(),
             import_timestamp: now_rfc3339(),
             content_type: "application/octet-stream".into(),
             dimensions: None,
@@ -529,6 +530,7 @@ impl Workspace {
             device_id: head.core.created_by_device,
             session_id: Uuid::now_v7(),
             gps: None,
+            gps_user: Lww::new(),
             // Mirror the head manifest's prior (the sealing invariant for its action); the true
             // sidecar plaintext lives in the preserved `metadata_blob`, decodable by an album
             // member that holds the AMK.
