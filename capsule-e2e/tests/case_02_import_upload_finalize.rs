@@ -9,6 +9,10 @@
 //! The still is 512×512 — past the thumbnail tier's 256-pixel cap — so the media stack decodes
 //! it and encodes a real thumbnail, and T1 is a real upload rather than the byte-free sentinel
 //! an 8×8 still gets.
+//!
+//! This is the in-process, uninterrupted half. The crash half — the `capsule` and
+//! `capsule-server` processes `SIGKILL`ed mid-import and mid-push, then rerun until every asset is
+//! durable exactly once — is `tests/kill_anywhere.rs`.
 
 use capsule_core::crypto::hash::{Hash32, hash_bytes};
 use capsule_core::import::UploadTier;

@@ -23,10 +23,16 @@
 //! ([`Workspace::bind_account_id`]), so the directory and every manifest it signs name the
 //! account the server knows.
 //!
+//! The kill-anywhere suite (`tests/kill_anywhere.rs`) needs what an in-process server cannot
+//! give: processes that die. [`processes`] drives the real `capsule` and `capsule-server`
+//! binaries, and [`killpoints`] draws the seeded schedule of where they are `SIGKILL`ed.
+//!
 //! Every test that uses this crate names its case — `E2E case N` — so `rg "E2E case N"` finds
 //! it, per the module map's contract.
 
 pub mod fixtures;
+pub mod killpoints;
+pub mod processes;
 pub mod push;
 
 use std::collections::BTreeMap;
@@ -157,13 +163,13 @@ impl Server {
     /// `{root}/v1`: what the verify transport and the blob source take.
     #[must_use]
     pub fn v1(&self) -> String {
-        format!("{}/v1", self.base_url)
+        v1_of(&self.base_url)
     }
 
     /// `{root}/v1/auth`: what `AuthClient` and the directory publish take.
     #[must_use]
     pub fn auth_base(&self) -> String {
-        format!("{}/v1/auth", self.base_url)
+        auth_base_of(&self.base_url)
     }
 
     /// `{root}/v1/upload`: the upload transport's root.
@@ -175,7 +181,7 @@ impl Server {
     /// `{root}/v1/albums`: the album transport's root.
     #[must_use]
     pub fn albums_base(&self) -> String {
-        format!("{}/v1/albums", self.base_url)
+        albums_base_of(&self.base_url)
     }
 
     /// Where the filesystem blob store files the blob at content address `hex`.
@@ -225,14 +231,21 @@ impl Device {
     /// Register a fresh account, create its library, publish its directory and provision its
     /// default album on the server — everything a first upload needs.
     pub async fn register(server: &Server, label: &str) -> Self {
+        Self::register_at(server.base_url(), label).await
+    }
+
+    /// [`Device::register`] against the server answering at `api_root`
+    /// (`http://127.0.0.1:PORT`) — a `capsule-server` process as well as an in-process
+    /// [`Server`].
+    pub async fn register_at(api_root: &str, label: &str) -> Self {
         let email = format!("{label}-{}@e2e.capsule.test", Uuid::now_v7().simple());
-        let auth = AuthClient::new(&server.auth_base()).expect("the auth base parses");
+        let auth = AuthClient::new(&auth_base_of(api_root)).expect("the auth base parses");
         let session = auth
             .register(&email, PASSWORD)
             .await
             .expect("a fresh account registers");
-        let generated = AuthenticatedClient::new(server.base_url(), session.clone())
-            .expect("the API root parses");
+        let generated =
+            AuthenticatedClient::new(api_root, session.clone()).expect("the API root parses");
         let profile = generated
             .get_profile(PROTOCOL_VERSION, None)
             .await
@@ -280,10 +293,10 @@ impl Device {
             proposer,
             proposer_id,
         };
-        device.publish_directory(server).await;
+        device.publish_directory_at(api_root).await;
         let albums = AlbumClient::new(AlbumTransport::with_session(
             device.session.clone(),
-            server.albums_base(),
+            albums_base_of(api_root),
         ));
         push::ensure_album(&albums, default_album)
             .await
@@ -347,9 +360,13 @@ impl Device {
     /// Publish [`Device::directory`] through the SDK's [`DirectoryClient`], under the library's
     /// user identity key, returning the version stored.
     pub async fn publish_directory(&self, server: &Server) -> u64 {
+        self.publish_directory_at(server.base_url()).await
+    }
+
+    /// [`Device::publish_directory`] to the server answering at `api_root`.
+    pub async fn publish_directory_at(&self, api_root: &str) -> u64 {
         let directory = self.directory();
-        let version = self
-            .directory_client(server)
+        let version = DirectoryClient::new(self.session.clone(), &auth_base_of(api_root))
             .publish(&directory, &self.workspace.user_ik_public())
             .await
             .expect("the directory publish is accepted");
@@ -395,8 +412,12 @@ impl Device {
 
 /// Pull the whole feed for `session` from cursor zero through the SDK consumer.
 pub async fn feed_from_start(server: &Server, session: Session) -> Vec<FeedEntry> {
-    let consumer =
-        SyncConsumer::with_session(server.base_url(), session).expect("the API root parses");
+    feed_at(server.base_url(), session).await
+}
+
+/// [`feed_from_start`] from the server answering at `api_root`.
+pub async fn feed_at(api_root: &str, session: Session) -> Vec<FeedEntry> {
+    let consumer = SyncConsumer::with_session(api_root, session).expect("the API root parses");
     let mut state = SyncState::new(PROTOCOL_VERSION);
     let mut entries = Vec::new();
     loop {
@@ -410,6 +431,24 @@ pub async fn feed_from_start(server: &Server, session: Session) -> Vec<FeedEntry
             return entries;
         }
     }
+}
+
+/// `{root}/v1`: what the verify transport and the blob source take.
+#[must_use]
+pub fn v1_of(api_root: &str) -> String {
+    format!("{api_root}/v1")
+}
+
+/// `{root}/v1/auth`: what `AuthClient` and the directory publish take.
+#[must_use]
+pub fn auth_base_of(api_root: &str) -> String {
+    format!("{api_root}/v1/auth")
+}
+
+/// `{root}/v1/albums`: the album transport's root.
+#[must_use]
+pub fn albums_base_of(api_root: &str) -> String {
+    format!("{api_root}/v1/albums")
 }
 
 /// The feed entry for `asset_id`, if the server publishes it.
