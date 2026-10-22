@@ -544,10 +544,11 @@ pub struct FfiAssetMetadata {
 
 impl From<SidecarV1> for FfiAssetMetadata {
     fn from(sidecar: SidecarV1) -> Self {
+        let capture_timestamp = sidecar.effective_capture_timestamp().to_owned();
         Self {
             sidecar_schema: sidecar.sidecar_schema,
             content_type: sidecar.content_type,
-            capture_timestamp: sidecar.effective_capture_timestamp().to_owned(),
+            capture_timestamp,
             width: sidecar.dimensions.as_ref().map(|d| d.width),
             height: sidecar.dimensions.as_ref().map(|d| d.height),
             lqip_chromahash: sidecar.lqip.as_ref().map(|l| l.chromahash.clone()),

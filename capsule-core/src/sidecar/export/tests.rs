@@ -146,7 +146,7 @@ fn both_the_imported_and_the_user_location_are_rounded_by_default() {
     assert_eq!(fixes.len(), 3, "the as-imported fix and both user edits");
     for (lat, lon) in [(40.71, -74.01), (51.5, -0.12), (48.86, 2.29)] {
         assert!(
-            fixes.iter().any(|f| f.lat == lat && f.lon == lon),
+            fixes.iter().any(|f| (f.lat, f.lon) == (lat, lon)),
             "({lat}, {lon}) is the rounded form of one fix: {fixes:?}"
         );
     }
@@ -161,8 +161,14 @@ fn both_the_imported_and_the_user_location_are_rounded_by_default() {
     );
 
     // The library's own sidecar keeps full precision and its signature.
-    assert_eq!(library.gps.as_ref().unwrap().lat, 40.712_776);
-    assert_eq!(library.effective_gps().unwrap().lat, 51.500_729);
+    assert_eq!(
+        library.gps.as_ref().map(|g| (g.lat, g.lon)),
+        Some((40.712_776, -74.005_974))
+    );
+    assert_eq!(
+        library.effective_gps().map(|g| (g.lat, g.lon)),
+        Some((51.500_729, -0.124_625))
+    );
     assert!(library.signature.is_some());
 }
 
