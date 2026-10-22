@@ -40,7 +40,7 @@ Enforced inside the critical section that mints the sequence number, for [lifecy
 
 - **16.** `action` ∈ closed enum → else `400`.
 - **17.** `prior_provenance_hash` = last accepted manifest hash for the `asset_id` → else `409` (stale revival).
-- **18.** `amk_version` never regresses per album **and** is within what the admin-signed MLS commit chain attests ([Write Authorization](/design/cryptography/keys/#write-authorization)) → else `400`.
+- **18.** `amk_version` never regresses per album **and** is within what the admin-signed MLS commit chain attests ([Write Authorization](/design/cryptography/keys/#write-authorization)) → else `400`. A `create` refused here was never published; its client re-seals it at the album's current epoch and retries once ([Stale-Epoch Create](/design/transfer/upload/#stale-epoch-create)). A device that does not yet hold that epoch's key cannot, and keeps the asset local until the key arrives.
 
 ### On federation pull (server-to-server)
 
