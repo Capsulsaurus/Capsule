@@ -78,7 +78,7 @@ async fn fetch_through<C: ConnectionTrait>(
     user: &UserId,
 ) -> Result<Option<PublishedDirectory>, StoreError> {
     let Some(row) = connection
-        .query_one(Statement::from_sql_and_values(
+        .query_one_raw(Statement::from_sql_and_values(
             DbBackend::Postgres,
             "SELECT directory_version, document, identity_key, published_at \
              FROM device_directories WHERE user_id = $1",
@@ -114,7 +114,7 @@ impl DeviceDirectoryStore for PostgresDeviceDirectory {
 
             // The critical section starts here and ends with the transaction.
             transaction
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "SELECT pg_advisory_xact_lock(hashtext('device_directories:' || $1))",
                     [Value::from(record.user_id.as_str().to_owned())],
@@ -163,7 +163,7 @@ impl DeviceDirectoryStore for PostgresDeviceDirectory {
             // The anchor column is written on the first publish and rewritten on later ones
             // with the value it already holds — the comparison above is what makes that true.
             transaction
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "INSERT INTO device_directories \
                        (user_id, directory_version, document, identity_key, published_at) \

@@ -80,7 +80,7 @@ impl CohortStore for PostgresCohorts {
         Box::pin(async move {
             let observed = self
                 .connection
-                .query_one(Statement::from_sql_and_values(
+                .query_one_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "INSERT INTO device_cohorts (user_id, cohort_hash, first_seen, last_seen) \
                      VALUES ($1, $2, $3, $3) \
@@ -126,7 +126,7 @@ impl CohortStore for PostgresCohorts {
             // hash is client-asserted text, and a locale collation orders it differently.
             let found = self
                 .connection
-                .query_all(Statement::from_sql_and_values(
+                .query_all_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "SELECT user_id, cohort_hash, first_seen, last_seen FROM device_cohorts \
                      WHERE user_id = $1 \

@@ -108,10 +108,11 @@ ignore = [
     { id = "RUSTSEC-2026-0195", reason = "quick-xml via little_exif 0.6.23 (latest): no reachable fix; client-side DoS only" },
 
     # Unmaintained, no vulnerability. paste is a proc macro of little_exif and rav1e;
-    # proc-macro-error2 is a proc macro of sea-orm 1.x's derive (sea-bae). Both run only at
-    # compile time. Remove when those upstreams drop them.
+    # proc-macro-error2 is a proc macro of sea-bae 0.2.1 (sea-orm-macros 2.x) and of
+    # hax-lib-macros 0.3.7 (hax-lib, via openmls's libcrux crates). Both run only at compile
+    # time. Remove when those upstreams drop them.
     { id = "RUSTSEC-2024-0436", reason = "paste (unmaintained proc macro) via little_exif and rav1e; compile-time only" },
-    { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 (unmaintained proc macro) via sea-orm 1.x; compile-time only" },
+    { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 (unmaintained proc macro) via sea-bae 0.2.1 (sea-orm-macros 2.x) and hax-lib-macros 0.3.7 (libcrux); compile-time only" },
 
     # Unmaintained, no vulnerability. basic-toml is the config parser inside askama_derive, a
     # proc macro reached through uniffi_bindgen (uniffi 0.31.1). askama_derive 0.16.1, the

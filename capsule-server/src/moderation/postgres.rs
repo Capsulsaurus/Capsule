@@ -107,7 +107,7 @@ impl ModerationStore for PostgresModeration {
                     Standing::Suspended { since } => Some(to_micros(*since)),
                 };
                 transaction
-                    .execute(Statement::from_sql_and_values(
+                    .execute_raw(Statement::from_sql_and_values(
                         DbBackend::Postgres,
                         "INSERT INTO moderation_standing (user_id, suspended_since) \
                          VALUES ($1, $2) \
@@ -122,7 +122,7 @@ impl ModerationStore for PostgresModeration {
                     .map_err(PORT.failing("moving an account's standing"))?;
             }
             transaction
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "INSERT INTO moderation_events (user_id, action, asset_id, at, reason) \
                      VALUES ($1, $2, $3, $4, $5)",
@@ -152,7 +152,7 @@ impl ModerationStore for PostgresModeration {
         Box::pin(async move {
             let Some(row) = self
                 .connection
-                .query_one(Statement::from_sql_and_values(
+                .query_one_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "SELECT suspended_since FROM moderation_standing WHERE user_id = $1",
                     [Value::from(user.as_str().to_owned())],
@@ -178,7 +178,7 @@ impl ModerationStore for PostgresModeration {
         Box::pin(async move {
             let rows = self
                 .connection
-                .query_all(Statement::from_sql_and_values(
+                .query_all_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "SELECT action, asset_id, at, reason FROM moderation_events \
                      WHERE user_id = $1 ORDER BY seq ASC",
@@ -213,7 +213,7 @@ impl ModerationStore for PostgresModeration {
             // concurrent intakes of one id cannot both succeed.
             let inserted = self
                 .connection
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "INSERT INTO federated_reports \
                        (report_id, reporting_server, reported_user, asset_hash, album_id, reason, \
@@ -257,7 +257,7 @@ impl ModerationStore for PostgresModeration {
         Box::pin(async move {
             let rows = self
                 .connection
-                .query_all(Statement::from_string(
+                .query_all_raw(Statement::from_string(
                     DbBackend::Postgres,
                     "SELECT report_id, reporting_server, reported_user, asset_hash, album_id, \
                        reason, reported_at, received_at, signature, signed \
