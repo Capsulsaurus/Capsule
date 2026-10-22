@@ -13828,6 +13828,7 @@
     "/v1/drops/links": {
       "post": {
         "summary": "Provision an upload link.",
+        "description": "A link is metadata growth: an owner past their quota grace window is refused\n`403 error.quota.grace_locked`, and one whose quota the operator suspended\n`403 error.quota.suspended`.",
         "operationId": "provision_link",
         "parameters": [
           {
@@ -14210,7 +14211,7 @@
     "/v1/drops/links/{opaque_id}": {
       "delete": {
         "summary": "Revoke one of the caller's links.",
-        "description": "Indistinguishable and idempotent, for the same reason a share revocation is: saying \"there\nwas nothing to revoke\" would be a lookup.",
+        "description": "Never consults the quota: a revocation frees nothing but is admitted in every state,\nsuspended and past the grace window included.\n\nIndistinguishable and idempotent, for the same reason a share revocation is: saying \"there\nwas nothing to revoke\" would be a lookup.",
         "operationId": "revoke_link",
         "parameters": [
           {
