@@ -64,7 +64,7 @@ impl Disk {
                     .to_string_lossy()
                     .into_owned()
             })
-            .filter(|name| name.ends_with(".log"))
+            .filter(|name| std::path::Path::new(name).extension() == Some("log".as_ref()))
             .collect();
         names.sort();
         names
