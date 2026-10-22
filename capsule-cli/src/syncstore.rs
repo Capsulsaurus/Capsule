@@ -94,6 +94,33 @@ pub async fn load_sync_state<C: ConnectionTrait>(
     Ok(SyncState::restore(max_known_protocol, cursor, high_water))
 }
 
+/// Start the durable sync state over after the server moved the library to a new sync epoch
+/// (#697): the stored cursor is dropped and every synced asset's `sync_seq` is zeroed, in one
+/// transaction.
+///
+/// The rows stay — nothing the client holds is discarded — but the anti-rewind floor
+/// [`load_sync_state`] derives from them goes, for the reason [`SyncState::reset_for_resync`]
+/// drops its in-memory marks: the rebuilt numbering may sit below them. The resync that follows
+/// re-delivers every asset the server holds and writes its new number back.
+pub async fn reset_for_resync<C: ConnectionTrait + TransactionTrait>(
+    db: &C,
+) -> Result<(), SyncStoreError> {
+    let txn = db.begin().await?;
+    sync_cursor::Entity::delete_by_id(CURSOR_ROW_ID)
+        .exec(&txn)
+        .await?;
+    synced_asset::Entity::update_many()
+        .col_expr(
+            synced_asset::Column::SyncSeq,
+            sea_orm::sea_query::Expr::value(0_i64),
+        )
+        .exec(&txn)
+        .await?;
+    txn.commit().await?;
+    tracing::info!("the sync cursor and high-water marks were reset for a new sync epoch");
+    Ok(())
+}
+
 /// Land a validated page: upsert every asset and advance the stored cursor, all in
 /// one transaction. Returns the number of entries written.
 pub async fn persist_page<C: ConnectionTrait + TransactionTrait>(
@@ -267,6 +294,37 @@ mod tests {
         let listed = list_assets(&db, false).await.unwrap();
         assert_eq!(listed.len(), 3);
         assert!(listed.iter().all(|row| !row.tombstoned));
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// A reset for a new sync epoch drops the cursor and the floor and keeps every row (#697).
+    #[tokio::test]
+    async fn a_reset_for_a_new_epoch_drops_the_floor_and_keeps_the_rows() {
+        let (db, path) = temp_db().await;
+        let album = b"album-e".to_vec();
+        let held = page(
+            vec![
+                entry(&album, b"e1", 8, ChangeKind::Created),
+                entry(&album, b"e2", 9, ChangeKind::Created),
+            ],
+            0x31,
+        );
+        persist_page(&db, &held).await.unwrap();
+
+        reset_for_resync(&db).await.unwrap();
+
+        let mut reloaded = load_sync_state(&db, "2026-12-31").await.unwrap();
+        assert!(reloaded.cursor().is_start());
+        assert_eq!(reloaded.high_water(&album), Some(0));
+        assert_eq!(list_assets(&db, true).await.unwrap().len(), 2);
+
+        // The rebuilt numbering, lower than what was held, applies.
+        let rebuilt = page(vec![entry(&album, b"e1", 3, ChangeKind::Created)], 0x32);
+        reloaded.apply_page(&rebuilt).unwrap();
+        persist_page(&db, &rebuilt).await.unwrap();
+        let reloaded = load_sync_state(&db, "2026-12-31").await.unwrap();
+        assert_eq!(reloaded.high_water(&album), Some(3));
 
         let _ = std::fs::remove_file(path);
     }

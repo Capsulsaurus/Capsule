@@ -210,6 +210,42 @@ async fn a_forged_cursor_is_refused_with_the_code_the_client_localizes() {
 }
 
 #[tokio::test]
+async fn after_an_epoch_bump_the_sdk_sees_a_stale_cursor_and_resyncs_from_zero() {
+    // The client half of #697 over a socket: the 409 crosses as the code the SDK recognises,
+    // and the reset it prescribes yields the whole library again under the new epoch.
+    let fixture = Fixture::working();
+    let held = publish(&fixture, "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e09").await;
+    let base_url = serve(&fixture).await;
+    let consumer =
+        SyncConsumer::with_session(&base_url, session(&base_url).await).expect("a consumer builds");
+    let mut state = SyncState::new(CLIENT_MAX_PROTOCOL);
+    consumer
+        .pull_into(&mut state, 10)
+        .await
+        .expect("the first drain");
+
+    fixture
+        .index
+        .bump_sync_epoch(&owner())
+        .await
+        .expect("the index bumps");
+
+    let error = consumer
+        .pull_into(&mut state, 10)
+        .await
+        .expect_err("a cursor from the old epoch is refused");
+    assert!(error.is_stale_cursor(), "got {error:?}");
+
+    state.reset_for_resync();
+    let page = consumer
+        .pull_into(&mut state, 10)
+        .await
+        .expect("a resync from zero");
+    assert_eq!(page.entries.len(), 1);
+    assert_eq!(page.entries[0].manifest_cbor, held);
+}
+
+#[tokio::test]
 async fn a_refresh_rotates_the_pair_and_closes_the_one_it_replaced() {
     // The server behaviour the CLI's session-persistence bug tripped over. A refresh mints a new
     // pair and **closes the old session**, so a client that refreshed and then threw the rotated

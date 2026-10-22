@@ -853,11 +853,31 @@ async fn sync_with<C: ConnectionTrait + TransactionTrait>(
         ..Default::default()
     };
     let mut albums = std::collections::HashSet::new();
+    let mut resynced = false;
 
     loop {
         // `pull_into` validates the page against the in-memory `SyncState`
         // (forward-version + anti-rewind) and advances its cursor before returning.
-        let page = consumer.pull_into(&mut state, page_size).await?;
+        let page = match consumer.pull_into(&mut state, page_size).await {
+            Ok(page) => page,
+            // The server rebuilt this library's index and moved it to a new sync epoch (#697):
+            // the cursor and the anti-rewind floor go, nothing held goes, and the drain starts
+            // over. Once: a second stale answer to an empty cursor is a server fault, not a
+            // reason to loop.
+            Err(error) if error.is_stale_cursor() && !resynced => {
+                tracing::info!(
+                    dry_run,
+                    "the server moved this library to a new sync epoch; resyncing from the start"
+                );
+                if !dry_run {
+                    syncstore::reset_for_resync(db).await?;
+                }
+                state.reset_for_resync();
+                resynced = true;
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
         if page.entries.is_empty() {
             break;
         }
