@@ -719,7 +719,7 @@ mod tests {
             let harness = PostgresHarness {
                 accounts: PostgresAccounts::new(
                     database.connection().clone(),
-                    Credentials::new().expect("the platform hashes"),
+                    Credentials::with_reduced_cost().expect("the platform hashes"),
                     clock.clone(),
                     MAX_FAILED_ATTEMPTS,
                     WINDOW,
