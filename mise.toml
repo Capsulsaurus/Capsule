@@ -203,8 +203,8 @@ run = [
 
 # The container tiers `test-rust` skips (#514): every Postgres adapter conformance suite, the
 # migration up/down round trip and the durable boot arm (all under a `postgres_conformance`
-# test module), the durable process cases in `tests/binary.rs`, and the Valkey suite in
-# `tests/valkey.rs`. The filterset is the one `.config/nextest.toml` puts in the one-thread
+# test module), the durable process cases in `tests/binary.rs`, the Valkey suite in
+# `tests/valkey.rs`, and `capsule-e2e`'s backup and restore drill (#676). The filterset is the one `.config/nextest.toml` puts in the one-thread
 # `containers` group, so a new suite joins both by being named like the others.
 #
 # The task admits both tiers itself, so it means the same thing locally and in CI: each case
@@ -225,7 +225,7 @@ run = '''
 set -euo pipefail
 log="${CARGO_TARGET_DIR:-target}/nextest/containers.log"
 mkdir -p "$(dirname "$log")"
-cargo nextest run -p capsule-server \
+cargo nextest run -p capsule-server -p capsule-e2e \
   -E 'test(postgres_conformance) or binary(valkey)' \
   --no-tests=fail --success-output final 2>&1 | tee "$log"
 if grep -nE 'skipping [^:]+: |skipped: ' "$log" >&2; then
