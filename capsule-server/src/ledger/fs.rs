@@ -63,7 +63,7 @@ pub const LEDGER_DIR: &str = "ledger";
 const SEGMENT_SUFFIX: &str = ".log";
 
 /// The empty file in each owner's directory that the cross-process lock is taken on. See the
-/// module docs. Its name has no [`SEGMENT_SUFFIX`], so it is never read as a segment.
+/// module docs. Its name has no segment suffix (`.log`), so it is never read as a segment.
 pub const LOCK_FILE: &str = ".lock";
 
 /// The size past which an append opens a new segment: 64 MiB, some tens of thousands of entries.
