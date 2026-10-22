@@ -692,6 +692,90 @@ async fn the_sdk_stores_and_fetches_a_sealed_identity_over_a_socket() {
     ));
 }
 
+/// The album key escrows (#741), over a socket and pinned to the contract's routes: what the SDK
+/// stores lands under `/v1/auth/escrow/albums/{album_id}`, what was seeded there is what the SDK
+/// lists, byte for byte, and the server's refusals arrive typed with their codes.
+#[tokio::test]
+async fn the_sdk_stores_and_lists_album_key_escrows_over_a_socket() {
+    use capsule_sdk::recovery::{RecoveryClient, RecoveryError};
+    use uuid::Uuid;
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let base_url = serve(&fixture).await;
+    let client =
+        RecoveryClient::new(session(&base_url).await, &base_url).expect("an API root parses");
+
+    assert!(
+        client
+            .list_album_keys()
+            .await
+            .expect("an account with no album escrowed lists none")
+            .is_empty()
+    );
+
+    let first = Uuid::from_u128(0x0198_f3c2_0000_7000_8000_0000_0000_00b2);
+    let second = Uuid::from_u128(0x0198_f3c2_0000_7000_8000_0000_0000_00a1);
+    let sealed = b"\x00 album keys \xff".to_vec();
+    let stored = client
+        .store_album_keys(first, &sealed)
+        .await
+        .expect("an album's keys store");
+    assert!(!stored.replaced, "the album's first");
+    assert!(
+        client
+            .store_album_keys(first, &sealed)
+            .await
+            .expect("and store again")
+            .replaced
+    );
+
+    // Seeded at the contract's route, under the second album: the SDK lists both in album order.
+    let seeded = b"seeded at the route".to_vec();
+    fixture
+        .client
+        .put(&format!("/v1/auth/escrow/albums/{second}"))
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .body("application/octet-stream", seeded.clone())
+        .send()
+        .await
+        .assert_status(kynos::http::StatusCode::OK);
+    let listed = client.list_album_keys().await.expect("the listing reads");
+    let listed: Vec<(Uuid, Vec<u8>)> = listed
+        .into_iter()
+        .map(|entry| (entry.album_id, entry.blob))
+        .collect();
+    assert_eq!(listed, vec![(second, seeded), (first, sealed)]);
+
+    let refused = client
+        .store_album_keys(first, &[])
+        .await
+        .expect_err("an empty body cannot be an album's keys");
+    assert!(
+        matches!(&refused, RecoveryError::Malformed { .. }),
+        "got {refused:?}"
+    );
+    assert_eq!(
+        refused.error_code(),
+        Some(capsule_i18n::error_codes::ESCROW_MALFORMED)
+    );
+
+    fixture.escrows.set_unavailable(true);
+    let down = client
+        .list_album_keys()
+        .await
+        .expect_err("a store that cannot answer");
+    assert!(
+        matches!(&down, RecoveryError::Unavailable { .. }),
+        "got {down:?}"
+    );
+    assert_eq!(
+        down.error_code(),
+        Some(capsule_i18n::error_codes::ESCROW_UNAVAILABLE)
+    );
+}
+
 /// **`S-D17`'s Done-when, against the server that decides.** A token the client still believes
 /// in and the server has stopped honouring is refreshed once and the call replayed once.
 ///

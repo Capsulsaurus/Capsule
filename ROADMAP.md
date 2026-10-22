@@ -24,6 +24,7 @@ Closing every path by which an original could be lost.
 - [#670](https://github.com/Capsulsaurus/Capsule/issues/670) `push` verifies custody, persists receipts, continues past failures
 - [#671](https://github.com/Capsulsaurus/Capsule/issues/671) `import --move` releases a source only on server custody
 - [#673](https://github.com/Capsulsaurus/Capsule/issues/673) `capsule restore` with byte-for-byte verification
+- [#741](https://github.com/Capsulsaurus/Capsule/issues/741) Album keys escrowed under the master key, so a recovered device restores its albums
 - [#674](https://github.com/Capsulsaurus/Capsule/issues/674) One protocol-version source; honour the window and minimum build everywhere
 - [#675](https://github.com/Capsulsaurus/Capsule/issues/675) SDK transfer event stream
 - [#676](https://github.com/Capsulsaurus/Capsule/issues/676) Backup and restore drill for a durable deployment

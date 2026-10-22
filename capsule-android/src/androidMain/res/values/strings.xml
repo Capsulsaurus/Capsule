@@ -1836,6 +1836,7 @@
     <string name="error_enrollment_local_auth_required">Confirm it\'s you on this device to add another device.</string>
     <string name="error_enrollment_rate_limited">Too many device-add attempts. Please wait and try again.</string>
     <string name="error_enrollment_relay_malformed">The device-add request could not be read.</string>
+    <string name="error_escrow_album_keys_full">This account\'s recovery backup has no room for another album\'s keys.</string>
     <string name="error_escrow_identity_not_stored">This account\'s recovery backup does not include its identity key, so this device cannot be recovered as the same account. Set recovery up again from a device where this account\'s library still opens, then recover with the new recovery secret.</string>
     <string name="error_escrow_malformed">The recovery backup could not be saved.</string>
     <string name="error_escrow_not_stored">No recovery backup is saved for this account.</string>

@@ -6,9 +6,9 @@ status: draft
 
 One hierarchy, one backed-up root; implemented in `capsule-core/src/crypto/keys/`. Every signer sits behind one seam, so software and hardware keys are interchangeable.
 
-- The **account master key** is the only escrowed key. It never encrypts assets; it wraps device private keys and anchors the encrypted backup that escrows AMKs.
+- The **account master key** is the only escrowed root. It never encrypts assets. It wraps device private keys, and it seals the escrows of every album's keys and the portable backup's AMK ledger.
 - **Device keys** are hardware-bound and disposable: a lost device is removed and a new one bootstrapped from the master key.
-- **AMKs** are random per-epoch album keys, ledgered in MLS and escrowed in the master-key backup and the [OGK](#owner-group-keys-ogks).
+- **AMKs** are random per-epoch album keys, ledgered in MLS. They are escrowed server-side under the master key ([Album Key Escrow](/design/backup-recovery/#album-key-escrow)), in the backup artifact, and in the [OGK](#owner-group-keys-ogks).
 
 **Invariant:** the backup path is independent of the MLS ratchet — losing every device but holding the recovery passphrase restores every photo ([Failure Modes](/design/cryptography/failure-modes/)).
 
@@ -18,7 +18,7 @@ One hierarchy, one backed-up root; implemented in `capsule-core/src/crypto/keys/
 account_master_key (escrowed)
   ├─ wraps device private keys (IK / DSK / DEK)
   ├─ derives default album_id (an identifier, not a key)
-  └─ anchors the encrypted backup escrowing:
+  └─ seals each album's key escrow (server-side, one per album) and the backup's AMK ledger:
         AMK_v{n}  (random 32 B, per album, per MLS epoch)
           └─ per-encryption file key (Encryption — Asset Key Derivation)
                 └─ AES-256-GCM-STREAM
@@ -133,7 +133,8 @@ How the master key and identity are held depends on the [account type](/design/a
 - Master key generated client-side; the server never holds it in the clear. Each device stores it wrapped under its DEK.
 - A new device obtains it by [cross-device recovery](/design/backup-recovery/#recovery-mechanisms) or by unwrapping the [server-side escrow](/design/backup-recovery/#master-key-escrow) with the recovery passphrase.
 - The IK is stored **sealed under the master key** (domain-separated) beside the escrow, at `/v1/auth/escrow/identity`: one per account, replaced atomically, independent of the escrow (recovery-secret rotation leaves it untouched). It adds no second root.
-- Recovery = unwrap escrow → open sealed identity → create the device library from both. Escrow without a sealed identity cannot recover as itself: `error.escrow.identity_not_stored` (remedy: finish backup from a device holding the IK).
+- Each album's keys are escrowed beside it at `/v1/auth/escrow/albums/{album_id}`, also sealed under the master key (domain-separated): every epoch's AMK, the album's signing seeds, and its authority. There is one slot per album, re-stored before any asset of a new album or epoch is pushed ([Album Key Escrow](/design/backup-recovery/#album-key-escrow)). Like the sealed identity, these escrows add no second root.
+- Recovery = unwrap escrow → open sealed identity → create the device library from both → adopt every escrowed album, before anything resolves the default album. Escrow without a sealed identity cannot recover as itself: `error.escrow.identity_not_stored` (remedy: finish backup from a device holding the IK).
 
 ### Delegated/Sponsored accounts
 
