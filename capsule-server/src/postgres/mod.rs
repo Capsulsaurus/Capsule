@@ -122,7 +122,7 @@ pub const EXPECTED_MIGRATIONS: &[ExpectedMigration] = &[
     },
     ExpectedMigration {
         name: "m20260902_000017_migration_checksums",
-        checksum: "ec6f63e917e61ced06acf221c5d419f70341f6e8c68086fa2b328eea37ba5fe8",
+        checksum: "17b223eb1808b4225b0ba34ff4050479a9bb4831ae30e1720420cc2518561b4a",
     },
     ExpectedMigration {
         name: "m20260902_000018_sealed_identities",
@@ -285,7 +285,7 @@ async fn read_ledger(
     use sea_orm::ConnectionTrait as _;
 
     let rows = connection
-        .query_all(Statement::from_string(
+        .query_all_raw(Statement::from_string(
             DbBackend::Postgres,
             query.to_owned(),
         ))
@@ -535,7 +535,7 @@ mod tests {
             let connection = database.connection();
 
             let rows = connection
-                .query_all(sea_orm::Statement::from_string(
+                .query_all_raw(sea_orm::Statement::from_string(
                     sea_orm::DbBackend::Postgres,
                     format!("SELECT version, checksum FROM {CHECKSUM_LEDGER} ORDER BY version"),
                 ))
@@ -646,7 +646,7 @@ mod tests {
             );
             // Each rollback removed its own checksum with it.
             let left = connection
-                .query_all(sea_orm::Statement::from_string(
+                .query_all_raw(sea_orm::Statement::from_string(
                     sea_orm::DbBackend::Postgres,
                     format!("SELECT version FROM {CHECKSUM_LEDGER}"),
                 ))
@@ -668,7 +668,7 @@ mod tests {
             // And the ledger holds exactly the ordinals the server was built against — not an
             // extra one a partially-applied `down` left behind.
             let rows = connection
-                .query_all(sea_orm::Statement::from_string(
+                .query_all_raw(sea_orm::Statement::from_string(
                     sea_orm::DbBackend::Postgres,
                     "SELECT version FROM seaql_migrations ORDER BY version".to_owned(),
                 ))
@@ -689,7 +689,7 @@ mod tests {
         /// key is `address`.
         async fn has_address_index(connection: &sea_orm::DatabaseConnection) -> bool {
             let rows = connection
-                .query_all(sea_orm::Statement::from_string(
+                .query_all_raw(sea_orm::Statement::from_string(
                     sea_orm::DbBackend::Postgres,
                     "SELECT indexdef FROM pg_indexes \
                      WHERE tablename = 'share_serves' AND indexname = 'idx_share_serves_address'"

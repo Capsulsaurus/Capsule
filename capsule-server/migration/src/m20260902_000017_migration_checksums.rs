@@ -26,7 +26,7 @@ impl MigrationTrait for Migration {
             // Only an applied migration gets a row, and an existing row is the one written when
             // it was applied — never overwritten here.
             connection
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     connection.get_database_backend(),
                     format!(
                         "INSERT INTO {ledger} (version, checksum) \

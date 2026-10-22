@@ -142,6 +142,7 @@ fn browser_sealed_drop_adopts_and_verifies() {
         action: Action::Create,
         prior_provenance_hash: None,
         upgraded_from: None,
+        unknown: Default::default(),
         retention_until: None,
     };
     let manifest = core

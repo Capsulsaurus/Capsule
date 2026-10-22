@@ -169,9 +169,7 @@ number of devices converge deterministically, and every change is a signed `meta
   so a restored device recovers album names and labels rather than showing `Recovered album`.
 
 Not yet implemented: smart-album search across label levels
-([#722](https://github.com/Capsulsaurus/Capsule/issues/722)), and the label rule (NFC, trim,
-1–256 bytes) on asset labels in `tags_user`, which still accept any string
-([#721](https://github.com/Capsulsaurus/Capsule/issues/721)).
+([#722](https://github.com/Capsulsaurus/Capsule/issues/722)).
 
 ## Culling
 

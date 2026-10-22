@@ -213,11 +213,7 @@ impl Workspace {
                 .expect("asset_id was validated above");
             asset
                 .chain
-                .append(ProvenanceRecord {
-                    asset_id: *asset_id,
-                    manifest: manifest.clone(),
-                    prior_provenance_hash: prior,
-                })
+                .append(ProvenanceRecord::new(*asset_id, manifest.clone(), prior))
                 .map_err(|e| LifecycleError::Cbor(format!("chain: {e}")))?;
         }
 
