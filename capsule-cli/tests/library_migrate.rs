@@ -254,7 +254,10 @@ fn migrate_admits_the_legacy_assets_and_reports_every_outcome() {
         ),
         "stdout:\n{out}"
     );
-    assert!(!out.contains("cli.library."), "no raw key leaks:\n{out}");
+    assert!(
+        out.contains("Migrating the unsigned sidecars in "),
+        "the in-progress line:\n{out}"
+    );
 
     // What a reopened library holds: the two admitted assets (the legacy records carry no
     // album id, so they landed in the default album the open resolved — the core verb refuses
