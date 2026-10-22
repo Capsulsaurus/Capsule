@@ -175,7 +175,7 @@ fn asset_from(chain: &[ProvenanceRecord], ct: &[u8], meta: &[u8]) -> BackupAsset
     BackupAsset {
         album_id: head.manifest.core.album_id,
         asset_id: head.asset_id,
-        ciphertext: ct.to_vec(),
+        ciphertext: std::sync::Arc::new(ct.to_vec()),
         metadata_blob: meta.to_vec(),
         provenance: chain.to_vec(),
         receipts: Vec::new(),

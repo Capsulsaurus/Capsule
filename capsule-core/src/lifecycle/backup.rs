@@ -4,6 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 
 use jiff::Timestamp;
 use uuid::Uuid;
@@ -97,8 +98,9 @@ impl Workspace {
     #[tracing::instrument(skip_all, fields(out = %out.display()))]
     pub fn export_backup(&self, out: &Path, passphrase: &[u8]) -> Result<()> {
         let input = self.backup_input()?;
-        let bytes = backup::export(&input, passphrase, self.device_signer.as_ref())?;
-        self.write_artifact(out, &bytes)
+        write_artifact(out, |w| {
+            backup::export_to(&input, passphrase, self.device_signer.as_ref(), w)
+        })
     }
 
     /// As [`export_backup`](Self::export_backup) but with an explicit Argon2id cost for the
@@ -122,9 +124,15 @@ impl Workspace {
         params: Argon2Params,
     ) -> Result<()> {
         let input = self.backup_input()?;
-        let bytes =
-            backup::export_with_params(&input, passphrase, params, self.device_signer.as_ref())?;
-        self.write_artifact(out, &bytes)
+        write_artifact(out, |w| {
+            backup::export_with_params_to(
+                &input,
+                passphrase,
+                params,
+                self.device_signer.as_ref(),
+                w,
+            )
+        })
     }
 
     /// Everything the artifact needs about this library, collected once so both export entry
@@ -165,12 +173,11 @@ impl Workspace {
                 // Export the exact sealed blob the manifest committed to (re-sealing would draw
                 // a fresh nonce and break the `metadata_blob_hash` content address).
                 metadata_blob: bundle.metadata_blob,
-                // The artifact format holds each ciphertext whole, so the original is
-                // materialised here; a push streams it instead.
-                ciphertext: bundle
-                    .original
-                    .to_vec()
-                    .map_err(|e| LifecycleError::Io(e.to_string()))?,
+                // The original as a source, not its bytes: the export streams it into the
+                // artifact one STREAM chunk at a time, as a push does, so exporting never holds
+                // the library's ciphertext. `upload_bundle` has just verified it re-derives to
+                // the manifest's address; the export checks the bytes it writes again.
+                ciphertext: Arc::new(bundle.original),
                 provenance: asset.chain.records().to_vec(),
                 receipts,
                 attestations,
@@ -340,13 +347,6 @@ impl Workspace {
             carried = artifact.docs().len(),
             "backup: label records restored"
         );
-        Ok(())
-    }
-
-    /// Write an assembled artifact to `out`.
-    fn write_artifact(&self, out: &Path, bytes: &[u8]) -> Result<()> {
-        fs::write(out, bytes).map_err(|e| LifecycleError::Io(e.to_string()))?;
-        tracing::info!(bytes = bytes.len(), "backup: export complete");
         Ok(())
     }
 
@@ -592,6 +592,44 @@ fn read_evidence_log(path: &Path) -> Result<Vec<u8>> {
 ///
 /// The log is staged in a temporary sibling, flushed, and renamed into place, so a crash leaves
 /// either no log or the whole one — never a torn log a retried restore would then keep.
+/// Stream an artifact into `out` through `export`, atomically.
+///
+/// The artifact is written to a sibling temporary file and renamed over `out` only once it is
+/// complete and synced. A streamed export can fail part-way — an original that changed on disk
+/// since its manifest was signed, a full disk — and must then leave neither a truncated artifact
+/// nor a clobbered earlier backup at `out`: the temporary file is removed and `out` is untouched.
+fn write_artifact(
+    out: &Path,
+    export: impl FnOnce(&mut dyn std::io::Write) -> std::result::Result<u64, backup::BackupError>,
+) -> Result<()> {
+    let tmp = crate::library::tmp_path(out);
+    let written = stream_then_rename(&tmp, out, export).inspect_err(|e| {
+        tracing::error!(
+            out = %out.display(),
+            error = %e,
+            "backup: export failed; discarding the partial artifact"
+        );
+        let _ = fs::remove_file(&tmp);
+    })?;
+    tracing::info!(out = %out.display(), bytes = written, "backup: export complete");
+    Ok(())
+}
+
+/// The fallible body of [`write_artifact`]: export into `tmp`, sync it, rename it over `out`.
+fn stream_then_rename(
+    tmp: &Path,
+    out: &Path,
+    export: impl FnOnce(&mut dyn std::io::Write) -> std::result::Result<u64, backup::BackupError>,
+) -> Result<u64> {
+    let io = |e: std::io::Error| LifecycleError::Io(format!("backup {}: {e}", out.display()));
+    let mut writer = std::io::BufWriter::new(fs::File::create(tmp).map_err(io)?);
+    let written = export(&mut writer)?;
+    let file = writer.into_inner().map_err(|e| io(e.into_error()))?;
+    file.sync_all().map_err(io)?;
+    fs::rename(tmp, out).map_err(io)?;
+    Ok(written)
+}
+
 fn restore_evidence_log(path: &Path, bytes: &[u8]) -> Result<()> {
     if bytes.is_empty() {
         return Ok(());
@@ -1156,5 +1194,91 @@ mod tests {
             ws.verify_escrow(&blob, b"the wrong secret"),
             RecoveryVerdict::NotVerified
         );
+    }
+
+    /// `count` distinct originals of `len` bytes each, imported into one album of `a`.
+    fn import_originals(a: &mut Workspace, src: &Path, count: u8, len: usize) -> Vec<Uuid> {
+        let album = a.create_album("Large").unwrap();
+        (0..count)
+            .map(|n| {
+                let mut bytes = b"\xFF\xD8\xFF a large original ".to_vec();
+                bytes.extend((0..len).map(|i| (i as u8).wrapping_mul(31).wrapping_add(n)));
+                let photo = src.join(format!("large-{n}.jpg"));
+                fs::write(&photo, &bytes).unwrap();
+                a.import_asset(album, &photo).unwrap()
+            })
+            .collect()
+    }
+
+    /// #759: exporting holds one STREAM chunk of an original at a time, not the library. The
+    /// originals here sum to several times the ceiling and each alone exceeds it, so an export
+    /// that buffered even one of them whole would fail — and the artifact still restores every
+    /// original byte for byte.
+    #[test]
+    fn exporting_a_backup_holds_a_chunk_not_the_library() {
+        const CEILING: usize = 2 << 20;
+        const ORIGINAL: usize = 3 << 20;
+        let (lib_a, lib_b, src) = (
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+            TempDir::new().unwrap(),
+        );
+        let mut a = fast_workspace(lib_a.path());
+        let assets = import_originals(&mut a, src.path(), 4, ORIGINAL);
+        let archive = src.path().join("backup.tar");
+
+        let (exported, peak) = crate::test_heap::peak_during(|| {
+            a.export_backup_with_params(&archive, b"pw", FAST_PARAMS)
+        });
+        exported.unwrap();
+        assert!(
+            peak < CEILING,
+            "peak heap {peak} B exceeds the {CEILING} B ceiling over {} B of originals",
+            assets.len() * ORIGINAL
+        );
+
+        let mut b = same_account_device(&a, lib_b.path());
+        assert_eq!(
+            b.import_backup(&archive, b"pw", &a.exporter_verifying_key())
+                .unwrap(),
+            assets.len()
+        );
+        for id in &assets {
+            assert_eq!(
+                fs::read(b.media_path(&b.assets[id])).unwrap(),
+                fs::read(a.media_path(&a.assets[id])).unwrap(),
+                "asset {id} restores byte for byte"
+            );
+        }
+    }
+
+    /// A streamed export that fails part-way — here an original rewritten on disk after its
+    /// manifest was signed, so its bytes no longer hash to the address the MANIFEST already
+    /// committed to — leaves no partial artifact and does not clobber the backup already at
+    /// the destination.
+    #[test]
+    fn a_failed_export_leaves_the_previous_backup_untouched() {
+        let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let mut a = fast_workspace(lib.path());
+        let id = import_originals(&mut a, src.path(), 1, 4096)[0];
+        let archive = src.path().join("backup.tar");
+        fs::write(&archive, b"the previous backup").unwrap();
+
+        let input = a.backup_input().unwrap();
+        let media = a.media_path(&a.assets[&id]);
+        let mut changed = fs::read(&media).unwrap();
+        *changed.last_mut().unwrap() ^= 0xFF;
+        fs::write(&media, &changed).unwrap();
+
+        let err = write_artifact(&archive, |w| {
+            backup::export_with_params_to(&input, b"pw", FAST_PARAMS, a.device_signer.as_ref(), w)
+        })
+        .unwrap_err();
+        assert!(
+            matches!(err, LifecycleError::Backup(backup::BackupError::Corrupt(_))),
+            "{err:?}"
+        );
+        assert_eq!(fs::read(&archive).unwrap(), b"the previous backup");
+        assert!(!crate::library::tmp_path(&archive).exists());
     }
 }
