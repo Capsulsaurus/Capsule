@@ -281,7 +281,16 @@ pub async fn a_shared_blob_survives_purging_one_holder(
         Arc::new(crate::share::InMemoryShares::new()),
         clock.clone(),
         super::DEFAULT_GRACE_WINDOW,
-    );
+    )
+    // An applied purge ledgers each purge first (#767); the in-memory ledger is enough here.
+    .with_attestation(crate::attestation::AttestationContext::new(
+        Arc::new(crate::attestation::InMemoryReceipts::new()),
+        Arc::new(crate::attestation::LocalAttestationKey::new(
+            "gc.conformance",
+            capsule_core::crypto::keys::HybridSigningKey::from_seed64(&[7; 64]),
+        )),
+        jiff::Timestamp::UNIX_EPOCH,
+    ));
     let owner = OwnerId::new("gc-shared-owner");
     let album = AlbumId::new("gc-shared-album");
     let store = |bytes: Vec<u8>| {

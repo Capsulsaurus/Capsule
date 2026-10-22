@@ -73,13 +73,32 @@
 //! pass is the server's periodic housekeeping already, so an **applied** pass ends by running
 //! that sweep over the whole view — see [`ProgressSweep`]. A dry run skips it, because it
 //! removes entries, and a dry run removes nothing.
+//!
+//! # A purge is ledgered before it is applied (#767)
+//!
+//! The owner ledger is never rewritten, so a retention purge appends a purge entry to the
+//! asset owner's ledger **before** the index drops the references: a `lifecycle` entry with
+//! action [`PURGE_ACTION`], the asset id, and no manifest hash, because the purge is
+//! server-initiated under the `retention_until` the user signed into the delete. An asset whose
+//! entry cannot be appended is not purged on this pass and is reported as
+//! [`PurgeReport::unrecorded`]: a purge the ledger does not hold is a deletion a rebuild from
+//! the blob root would never learn of. So an applied purge needs the attestation key that signs
+//! the ledger ([`CollectionContext::with_attestation`]); a collector given none refuses to apply
+//! one, and a dry run, which writes nothing, needs none.
+//!
+//! An entry whose index call then answers that the row is no longer purgeable (restored,
+//! re-deleted under a later floor, or gone) gets no resolving entry: rebuild re-checks the
+//! replayed state and empties only a tombstone, as #753 decided for refused lifecycle ops.
 
 use std::sync::Arc;
 
 use jiff::{SignedDuration, Timestamp};
 
+use crate::attestation::AttestationContext;
 use crate::blob::{BlobStore, ContentAddress};
-use crate::index::{AssetIndex, PurgeOutcome, purge_refusal};
+use crate::index::{AssetIndex, AssetRow, PurgeOutcome, purge_refusal};
+use crate::ledger::LedgerEvent;
+pub use crate::ledger::rebuild::PURGE as PURGE_ACTION;
 use crate::share::ShareStore;
 use crate::store::{AssetId, StoreError, StoreFuture, UploadSessionStore};
 
@@ -151,6 +170,12 @@ pub struct PurgeReport {
     /// Reported rather than only logged, so the report accounts for every row the pass listed:
     /// a listed asset that is in none of the three would be one the pass lost track of.
     pub skipped: Vec<AssetId>,
+    /// Purgeable assets whose purge entry the owner ledger could not take. Nothing was dropped
+    /// for them; the next pass tries again.
+    ///
+    /// Reported rather than only logged, because a pass that purged nothing for this reason is
+    /// a ledger fault an operator has to act on, not a quiet one.
+    pub unrecorded: Vec<AssetId>,
 }
 
 /// Where the collectable marks live.
@@ -215,6 +240,8 @@ pub struct CollectionContext {
     grace_window: SignedDuration,
     /// Set by [`Self::with_progress_sweep`]; `None` runs no sweep.
     progress: Option<Arc<dyn ProgressSweep>>,
+    /// Set by [`Self::with_attestation`]; `None` refuses an applied purge.
+    attestation: Option<AttestationContext>,
 }
 
 impl CollectionContext {
@@ -237,7 +264,19 @@ impl CollectionContext {
             clock,
             grace_window,
             progress: None,
+            attestation: None,
         }
+    }
+
+    /// The same collector, ledgering every purge it applies through `attestation` (#767).
+    ///
+    /// A builder rather than a constructor argument, because only an applied purge signs
+    /// anything: `gc` and a dry-run purge run on a host that holds no attestation key, and
+    /// requiring one for them would be a reason to keep the key on a maintenance host.
+    #[must_use]
+    pub fn with_attestation(mut self, attestation: AttestationContext) -> Self {
+        self.attestation = Some(attestation);
+        self
     }
 
     /// The same collector, ending every applied pass with `sweep` over the upload-progress view.
@@ -453,15 +492,36 @@ pub async fn dangling(
 /// passed. The tombstone itself stays: a client that has not synced since the delete still has
 /// to learn about it, and removing the row would make the deletion invisible rather than final.
 ///
+/// Each purge is appended to the owner's ledger before the index applies it; see the module
+/// docs.
+///
 /// # Errors
 ///
-/// Propagates the first store failure.
+/// Propagates the first store failure, and refuses an applied pass on a collector given no
+/// [attestation context](CollectionContext::with_attestation) before it lists anything. A
+/// ledger append that fails is not an error: that asset is skipped and reported as
+/// [`PurgeReport::unrecorded`].
 #[tracing::instrument(skip(context), fields(mode = ?mode))]
 pub async fn purge_expired(
     context: &CollectionContext,
     mode: Mode,
     limit: usize,
 ) -> Result<PurgeReport, StoreError> {
+    let attestation = match (&context.attestation, mode.applies()) {
+        (Some(attestation), _) => Some(attestation),
+        (None, false) => None,
+        (None, true) => {
+            tracing::error!(
+                "an applied retention purge has no attestation key to ledger its purges with"
+            );
+            return Err(StoreError::Unavailable {
+                store: "ledger",
+                detail: "an applied retention purge is signed into the owner ledger, and this \
+                         host holds no attestation key (ATTESTATION_KEY_SEED)"
+                    .to_owned(),
+            });
+        }
+    };
     let now = context.clock.now();
     let mut report = PurgeReport::default();
 
@@ -502,6 +562,16 @@ pub async fn purge_expired(
             report.purged.push(row.asset_id);
             continue;
         }
+        // `None` is refused above for an applied pass; were it reached, it reads as an append
+        // that failed, which keeps the bytes.
+        let recorded = match attestation {
+            Some(attestation) => ledger_purge(attestation, &row, now).await,
+            None => false,
+        };
+        if !recorded {
+            report.unrecorded.push(row.asset_id);
+            continue;
+        }
         // The listing is a snapshot; the index re-checks state and retention under the row
         // lock, because a restore that committed since the listing must keep its bytes. So the
         // purge is logged once the re-check has answered, not before: a line saying "purging"
@@ -535,9 +605,50 @@ pub async fn purge_expired(
         purged = report.purged.len(),
         retained = report.retained.len(),
         skipped = report.skipped.len(),
+        unrecorded = report.unrecorded.len(),
         "a retention purge pass finished"
     );
     Ok(report)
+}
+
+/// Append `row`'s purge entry to its owner's ledger, before the index is touched. `false` when
+/// the ledger could not take it, which leaves the asset unpurged for this pass.
+///
+/// The entry carries no manifest hash and no `sync_seq`: the purge is authorised by the
+/// retention floor the delete manifest already signed, and it mints no sequence number. If the
+/// index then answers that the row is no longer purgeable, no resolving entry follows; rebuild
+/// re-checks the replayed state and empties only a tombstone.
+async fn ledger_purge(attestation: &AttestationContext, row: &AssetRow, now: Timestamp) -> bool {
+    let event = LedgerEvent::Lifecycle {
+        asset_id: row.asset_id.as_str().to_owned(),
+        action: PURGE_ACTION.to_owned(),
+        manifest_hash: None,
+        sync_seq: None,
+    };
+    match attestation
+        .append_to_ledger(&row.owner_id, event, now)
+        .await
+    {
+        Ok(entry) => {
+            tracing::debug!(
+                asset = %row.asset_id,
+                owner = %row.owner_id,
+                ledger_seq = entry.core.seq,
+                "ledgered a retention purge before applying it"
+            );
+            true
+        }
+        Err(error) => {
+            tracing::error!(
+                %error,
+                asset = %row.asset_id,
+                owner = %row.owner_id,
+                "the owner ledger could not record a retention purge; the asset keeps its \
+                 references until a later pass"
+            );
+            false
+        }
+    }
 }
 
 pub mod conformance;
