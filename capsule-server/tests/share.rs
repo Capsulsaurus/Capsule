@@ -1309,6 +1309,7 @@ async fn a_trusted_proxy_networks_forwarded_for_is_honoured() {
     assert_forwarded_for_is_honoured_behind(&ProxyTrust {
         hops: 0,
         networks: ProxyTrust::parse_networks("10.0.0.0/8").expect("it parses"),
+        ..ProxyTrust::default()
     })
     .await;
 }
@@ -1319,6 +1320,7 @@ async fn a_trusted_proxy_hops_forwarded_for_is_honoured() {
     assert_forwarded_for_is_honoured_behind(&ProxyTrust {
         hops: 1,
         networks: Vec::new(),
+        ..ProxyTrust::default()
     })
     .await;
 }

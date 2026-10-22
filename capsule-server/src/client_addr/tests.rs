@@ -48,6 +48,7 @@ fn a_peer_outside_the_trusted_networks_is_not_believed() {
     let trust = ProxyTrust {
         hops: 0,
         networks: ProxyTrust::parse_networks("10.0.0.0/8").expect("it parses"),
+        ..ProxyTrust::default()
     };
     let headers = forwarded_for("198.51.100.7");
     let client = resolve(&headers, peer("203.0.113.9"), &trust);
@@ -59,6 +60,7 @@ fn a_trusted_network_hop_is_honoured() {
     let trust = ProxyTrust {
         hops: 0,
         networks: ProxyTrust::parse_networks("10.0.0.0/8").expect("it parses"),
+        ..ProxyTrust::default()
     };
     let headers = forwarded_for("198.51.100.7");
     let client = resolve(&headers, peer("10.1.2.3"), &trust);
@@ -70,6 +72,7 @@ fn a_trusted_hop_count_stops_at_the_first_untrusted_element() {
     let trust = ProxyTrust {
         hops: 1,
         networks: Vec::new(),
+        ..ProxyTrust::default()
     };
     // The client prepended a spoofed element; only the one the proxy appended is believed.
     let headers = forwarded_for("192.0.2.66, 198.51.100.7");
@@ -96,6 +99,7 @@ fn a_client_sent_forwarded_header_is_ignored_even_through_a_trusted_hop() {
     let trust = ProxyTrust {
         hops: 1,
         networks: Vec::new(),
+        ..ProxyTrust::default()
     };
     let mut headers = forwarded_for("198.51.100.7");
     headers.insert("forwarded", HeaderValue::from_static("for=192.0.2.66"));
@@ -121,6 +125,7 @@ fn a_network_kynos_refuses_is_left_out_of_the_policy_rather_than_widened() {
     let trust = ProxyTrust {
         hops: 0,
         networks: vec![(ip("0.0.0.0"), 0)],
+        ..ProxyTrust::default()
     };
     assert!(trust.policy().trusts_nobody());
 }
@@ -172,6 +177,73 @@ fn the_policy_is_displayed_for_the_startup_log() {
     let trust = ProxyTrust {
         hops: 1,
         networks: vec![(ip("10.0.0.0"), 8)],
+        ..ProxyTrust::default()
     };
-    assert_eq!(trust.to_string(), "1 hop(s), 10.0.0.0/8");
+    assert_eq!(
+        trust.to_string(),
+        "1 hop(s), 10.0.0.0/8 through X-Forwarded-For"
+    );
+    let forwarded = ProxyTrust {
+        header: ProxyHeader::Forwarded,
+        ..trust
+    };
+    assert_eq!(
+        forwarded.to_string(),
+        "1 hop(s), 10.0.0.0/8 through Forwarded"
+    );
+}
+
+#[test]
+fn the_trusted_proxy_header_parses_either_field_in_any_case() {
+    for (text, header) in [
+        ("x-forwarded-for", ProxyHeader::XForwarded),
+        (" X-Forwarded-For ", ProxyHeader::XForwarded),
+        ("forwarded", ProxyHeader::Forwarded),
+        ("FORWARDED", ProxyHeader::Forwarded),
+    ] {
+        assert_eq!(ProxyTrust::parse_header(text), Ok(header), "{text}");
+    }
+    assert_eq!(ProxyTrust::default().header, DEFAULT_TRUSTED_PROXY_HEADER);
+    assert_eq!(DEFAULT_TRUSTED_PROXY_HEADER, ProxyHeader::XForwarded);
+}
+
+#[test]
+fn a_malformed_trusted_proxy_header_is_refused() {
+    for text in ["x-real-ip", "x-forwarded", "forwarded,x-forwarded-for", ""] {
+        let error = ProxyTrust::parse_header(text).expect_err(text);
+        assert!(error.contains("x-forwarded-for"), "{text}: {error}");
+        assert!(error.contains(text.trim()), "{text}: {error}");
+    }
+}
+
+#[test]
+fn a_configured_forwarded_field_is_believed_through_a_trusted_hop() {
+    let trust = ProxyTrust {
+        hops: 1,
+        networks: Vec::new(),
+        header: ProxyHeader::Forwarded,
+    };
+    let mut headers = HeaderMap::new();
+    headers.insert("forwarded", HeaderValue::from_static("for=198.51.100.7"));
+    let client = resolve(&headers, peer("10.1.2.3"), &trust);
+    assert_eq!(client.address(), Some(ip("198.51.100.7")));
+}
+
+#[test]
+fn a_client_sent_forwarded_for_is_ignored_when_forwarded_is_configured() {
+    // The mirror of the default: a proxy that appends to `Forwarded` passes `X-Forwarded-For`
+    // through from the client, so that one is never read.
+    let trust = ProxyTrust {
+        hops: 1,
+        networks: Vec::new(),
+        header: ProxyHeader::Forwarded,
+    };
+    let mut headers = forwarded_for("192.0.2.66");
+    headers.insert("forwarded", HeaderValue::from_static("for=198.51.100.7"));
+    let client = resolve(&headers, peer("10.1.2.3"), &trust);
+    assert_eq!(client.address(), Some(ip("198.51.100.7")));
+
+    let only_forwarded_for = forwarded_for("192.0.2.66");
+    let client = resolve(&only_forwarded_for, peer("10.1.2.3"), &trust);
+    assert_eq!(client.address(), Some(ip("10.1.2.3")));
 }

@@ -20,12 +20,15 @@
 //!
 //! # Which field is read
 //!
-//! Only `X-Forwarded-For` ([`TRUSTED_PROXY_HEADER`]). A proxy appends to one forwarding field
-//! and passes the other through from the client untouched, so believing both lets the client
-//! write the one the proxy does not and choose its own key. `X-Forwarded-For` is the field the
-//! proxies a deployment puts in front of this server write (nginx, an AWS ALB, Caddy, Traefik),
-//! and the one the [self-hosting guide](../../capsule-docs/src/content/docs/guides/self-hosting.md)
-//! configures. A client-sent `Forwarded` is ignored whoever passes it on.
+//! Exactly one, the one the deployment names (`TRUSTED_PROXY_HEADER`, [`ProxyTrust::header`]). A
+//! proxy appends to one forwarding field and passes the other through from the client untouched,
+//! so believing both lets the client write the one the proxy does not and choose its own key.
+//!
+//! The default is `X-Forwarded-For` ([`DEFAULT_TRUSTED_PROXY_HEADER`]): the field the proxies a
+//! deployment usually puts in front of this server write (nginx, an AWS ALB, Caddy, Traefik), and
+//! the one the [self-hosting guide](../../capsule-docs/src/content/docs/guides/self-hosting.md)
+//! configures. A deployment whose proxy writes only the RFC 7239 `Forwarded` field names that
+//! instead. Whichever is named, the other is ignored whoever passes it on.
 //!
 //! # What a per-source key is
 //!
@@ -54,13 +57,15 @@ use kynos::router::operation::OperationCx;
 /// The source key a request with no resolvable address counts against.
 pub const UNKNOWN_SOURCE: &str = "unknown";
 
-/// The one forwarding field a trusted hop is believed through. See the module docs.
-pub const TRUSTED_PROXY_HEADER: ProxyHeader = ProxyHeader::XForwarded;
+/// The forwarding field a trusted hop is believed through when `TRUSTED_PROXY_HEADER` is unset.
+/// See the module docs.
+pub const DEFAULT_TRUSTED_PROXY_HEADER: ProxyHeader = ProxyHeader::XForwarded;
 
 /// The IPv6 prefix length one source key covers.
 const IPV6_SOURCE_PREFIX: u32 = 64;
 
-/// Which forwarding hops a deployment believes (`TRUSTED_PROXY_HOPS`, `TRUSTED_PROXIES`).
+/// Which forwarding hops a deployment believes, and through which field (`TRUSTED_PROXY_HOPS`,
+/// `TRUSTED_PROXIES`, `TRUSTED_PROXY_HEADER`).
 ///
 /// Two independent ways of naming a proxy, which compose exactly as Kynos's own policy does:
 ///
@@ -69,13 +74,26 @@ const IPV6_SOURCE_PREFIX: u32 = 64;
 /// - **`networks`** trusts any element written by a sender inside these networks. Right when the
 ///   proxies' addresses are known.
 ///
-/// The default trusts nobody.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Both read the one field **`header`** names. The default trusts nobody, through
+/// [`DEFAULT_TRUSTED_PROXY_HEADER`].
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProxyTrust {
     /// How many rightmost forwarding elements are believed regardless of their sender.
     pub hops: usize,
     /// Networks (address and prefix length) whose hops are believed.
     pub networks: Vec<(IpAddr, u8)>,
+    /// The one forwarding field the trusted hops write, and so the only one read.
+    pub header: ProxyHeader,
+}
+
+impl Default for ProxyTrust {
+    fn default() -> Self {
+        Self {
+            hops: 0,
+            networks: Vec::new(),
+            header: DEFAULT_TRUSTED_PROXY_HEADER,
+        }
+    }
 }
 
 impl ProxyTrust {
@@ -100,7 +118,35 @@ impl ProxyTrust {
                 }
             })
             .collect::<Vec<_>>();
-        TrustedProxies::hops(TRUSTED_PROXY_HEADER, self.hops).and_networks(networks)
+        TrustedProxies::hops(self.header, self.hops).and_networks(networks)
+    }
+
+    /// The configured field's name as an operator spells it in a proxy's configuration.
+    pub fn header_name(&self) -> &'static str {
+        match self.header {
+            ProxyHeader::XForwarded => "X-Forwarded-For",
+            ProxyHeader::Forwarded => "Forwarded",
+        }
+    }
+
+    /// Parse `TRUSTED_PROXY_HEADER`: `x-forwarded-for` or `forwarded`, in any case.
+    ///
+    /// Surrounding whitespace is ignored.
+    ///
+    /// # Errors
+    ///
+    /// Any other value, as a sentence naming the two that are accepted.
+    pub fn parse_header(text: &str) -> Result<ProxyHeader, String> {
+        let name = text.trim();
+        if name.eq_ignore_ascii_case("x-forwarded-for") {
+            Ok(ProxyHeader::XForwarded)
+        } else if name.eq_ignore_ascii_case("forwarded") {
+            Ok(ProxyHeader::Forwarded)
+        } else {
+            Err(format!(
+                "`{name}` is not a forwarding field this server reads (use `x-forwarded-for` or `forwarded`)"
+            ))
+        }
     }
 
     /// Parse `TRUSTED_PROXIES`: a comma-separated list of addresses and CIDR networks.
@@ -130,7 +176,7 @@ impl fmt::Display for ProxyTrust {
         for (address, prefix) in &self.networks {
             write!(f, ", {address}/{prefix}")?;
         }
-        Ok(())
+        write!(f, " through {}", self.header_name())
     }
 }
 
