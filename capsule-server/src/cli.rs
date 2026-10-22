@@ -875,6 +875,26 @@ impl std::fmt::Display for Rendered<'_, RebuildReport> {
                     writeln!(f, "      {asset} {address} ({fault})")?;
                 }
             }
+            if !owner.unverified_manifests.is_empty() {
+                writeln!(
+                    f,
+                    "    device signature not vouched for, not restored ({})",
+                    owner.unverified_manifests.len()
+                )?;
+                for (asset, address, refusal) in &owner.unverified_manifests {
+                    writeln!(f, "      {asset} {address} ({refusal})")?;
+                }
+            }
+            if !owner.unusable_directories.is_empty() {
+                writeln!(
+                    f,
+                    "    device directory with no usable copy ({})",
+                    owner.unusable_directories.len()
+                )?;
+                for (seq, fault) in &owner.unusable_directories {
+                    writeln!(f, "      ledger entry {seq} ({fault})")?;
+                }
+            }
             match (owner.epoch, owner.epoch_bump_needed) {
                 (Some(epoch), _) => writeln!(f, "    moved to sync epoch {epoch}")?,
                 (None, true) => writeln!(f, "    needs a new sync epoch")?,
@@ -1250,6 +1270,7 @@ mod tests {
     #[test]
     fn a_rebuild_report_names_what_it_restored_and_what_it_found() {
         use crate::ledger::ChainFault;
+        use crate::ledger::directory::{DirectoryFault, Refusal};
         use crate::ledger::rebuild::{OwnerReport, RowDifference};
         use crate::store::{AssetId, OwnerId};
 
@@ -1269,6 +1290,12 @@ mod tests {
             dangling: vec![(AssetId::new("asset-dangling"), address(0xCC))],
             unusable_manifests: Vec::new(),
             foreign_manifests: Vec::new(),
+            unverified_manifests: vec![(
+                AssetId::new("asset-unverified"),
+                address(0xEE),
+                Refusal::NoDirectory,
+            )],
+            unusable_directories: vec![(3, DirectoryFault::Missing)],
             epoch_bump_needed: true,
             epoch: None,
             reanchored: None,
@@ -1290,6 +1317,11 @@ mod tests {
             "asset-differs: album_id",
             "unprovable sequence (1)",
             "dangling (1)",
+            "device signature not vouched for, not restored (1)",
+            "asset-unverified",
+            "no device directory in force",
+            "device directory with no usable copy (1)",
+            "ledger entry 3 (the directory copy is missing)",
             "needs a new sync epoch",
             "orphans, left to gc (1)",
         ] {
@@ -1324,6 +1356,8 @@ mod tests {
             dangling: Vec::new(),
             unusable_manifests: Vec::new(),
             foreign_manifests: Vec::new(),
+            unverified_manifests: Vec::new(),
+            unusable_directories: Vec::new(),
             epoch_bump_needed: true,
             epoch: Some(1),
             reanchored,

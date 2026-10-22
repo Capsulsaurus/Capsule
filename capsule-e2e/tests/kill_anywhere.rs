@@ -3,11 +3,10 @@
 //! and the phase rerun until it converges.
 //!
 //! The harness covers the whole pipeline — import, push and restore, the CLI or the server as
-//! the victim. Every seed runs all three [`PHASES`], and each must converge. A phase is cut at
-//! its seeded point first when that point is [`armed`]: import and restore points are, for
-//! either victim. Push points are armed once a finalization whose finalizer dies no longer
-//! strands its upload session (#801, tracked by #794), which this suite found: armed, seed 678
-//! (the CLI) and seed 679 (the server) each leave an asset no rerun can make durable.
+//! the victim. Every seed runs all three [`PHASES`], and each must converge. Every phase is cut
+//! at its seeded point first, whichever process that point kills: a push cut between a
+//! finalization's claim and its index write leaves a stranded session the rerun's finalize
+//! recovers, and a restore cut mid-fetch is resumed by the rerun.
 //!
 //! This is **E2E case 11's process-restart variant** — a server killed outright mid-transfer
 //! loses nothing it committed and leaves nothing referencing bytes it never stored — and the
@@ -17,7 +16,7 @@
 //! # What converges
 //!
 //! For each seed, a fresh account and library, then for each phase in order: a killed phase
-//! runs once with its kill point armed, then every phase runs unkilled and must exit zero.
+//! runs once with its kill point armed, then reruns unkilled and must exit zero.
 //! After each phase:
 //!
 //! - **every asset durable exactly once** — the library holds one asset per corpus file, the
@@ -28,8 +27,7 @@
 //!   Valkey and blob root, finds no row without its blob, no chain or ledger fault, and no
 //!   mirrored fact out of step. What a crash may legitimately leave — bytes nothing references,
 //!   debris under the blob root, a stage with no session — is the collector's to reclaim, and is
-//!   counted in the log rather than failed. One more is filtered by its exact shape until #790
-//!   lands ([`is_issue_790`]);
+//!   counted in the log rather than failed, and nothing else is filtered;
 //! - **a byte-equal restore** — the rerun of `capsule restore` reports no failed asset and one
 //!   outcome per library asset, and the files in its output directory are the corpus, byte for
 //!   byte.
@@ -78,19 +76,6 @@ use uuid::Uuid;
 
 /// The phases every run drives, in pipeline order, each asserted to converge.
 const PHASES: [Phase; 3] = [Phase::Import, Phase::Push, Phase::Restore];
-
-/// Whether a seed's kill point for its phase is armed before the converging rerun; an unarmed
-/// phase runs unkilled.
-///
-/// Import and restore points are armed, whichever process they kill. Push points are not: a
-/// finalization whose finalizer dies — the CLI's request dropped mid-flight, or the server
-/// killed between its claim and its index write — strands the upload session, and the asset
-/// never becomes durable whatever the rerun does (#801, found by this suite; tracked by #794).
-/// Every seed's plan draws its points whether or not they are armed, so arming one later
-/// changes no other point of any seed's schedule.
-fn armed(point: KillPoint) -> bool {
-    !matches!(point.phase, Phase::Push)
-}
 
 /// The variable that admits the suite.
 const GATE: &str = "CAPSULE_TEST_KILL_ANYWHERE";
@@ -502,29 +487,13 @@ fn restored_files(out: &Path) -> Vec<Vec<u8>> {
         .collect()
 }
 
-/// Whether `finding` is #790's: a create leaves its row's `amk_version` at 0 whatever epoch the
-/// manifest was sealed under, so check 5 flags every pushed asset, killed or not. Filtered by
-/// its exact shape — the fact, and the 0 the write path stores — so any other mirrored-fact
-/// mismatch still fails, and removed when #790 lands.
-fn is_issue_790(finding: &Finding) -> bool {
-    matches!(
-        finding,
-        Finding::MirroredFactMismatch { fact: "amk_version", index, .. } if index == "0"
-    )
-}
-
 /// The scrub finds nothing but what a crash may leave for the collector.
 async fn assert_store_clean(world: &World, label: &str) {
     let findings = world.scrub().await;
     let mut reclaimable: BTreeMap<&str, usize> = BTreeMap::new();
-    let mut known = 0_usize;
     let faults: Vec<&Finding> = findings
         .iter()
         .filter(|finding| {
-            if is_issue_790(finding) {
-                known += 1;
-                return false;
-            }
             let class = finding.class();
             let tolerated = RECLAIMABLE.contains(&class);
             if tolerated {
@@ -533,7 +502,7 @@ async fn assert_store_clean(world: &World, label: &str) {
             !tolerated
         })
         .collect();
-    eprintln!("  scrub after {label}: reclaimable {reclaimable:?}, #790 amk_version rows {known}");
+    eprintln!("  scrub after {label}: reclaimable {reclaimable:?}");
     assert!(
         faults.is_empty(),
         "{label}: the scrub found index faults: {faults:#?}"
@@ -576,16 +545,7 @@ async fn every_seeded_kill_converges_to_durable_once_and_indexed_once() {
         );
         let mut run = Run::provision(&world, &format!("seed-{seed}")).await;
         for phase in PHASES {
-            let point = plan.point(phase);
-            if armed(point) {
-                run.run_killed(&mut world, point, reference[&phase]);
-            } else {
-                eprintln!(
-                    "  {}: {:?} kill point not armed (see `armed`)",
-                    phase.name(),
-                    point.victim
-                );
-            }
+            run.run_killed(&mut world, plan.point(phase), reference[&phase]);
             let output = run.run(phase).success();
             assert_converged(&world, &run, phase, &output).await;
         }

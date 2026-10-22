@@ -52,7 +52,8 @@ impl Disk {
         }
     }
 
-    /// `owner`'s segment files, sorted by name; the lock file beside them is not one.
+    /// `owner`'s segment files, sorted by name; the lock file and the attachment directory
+    /// beside them are not segments.
     fn segment_names(&self, owner: &OwnerId) -> Vec<String> {
         let mut names: Vec<String> = std::fs::read_dir(self.ledger.owner_dir(owner))
             .expect("the owner has a directory")
@@ -63,7 +64,7 @@ impl Disk {
                     .to_string_lossy()
                     .into_owned()
             })
-            .filter(|name| name != fs::LOCK_FILE)
+            .filter(|name| name.ends_with(".log"))
             .collect();
         names.sort();
         names
@@ -374,11 +375,30 @@ async fn the_lock_file_is_never_read_as_a_segment_or_an_owner() {
         .append(&owner, event(1), Timestamp::UNIX_EPOCH, &signer)
         .await
         .expect("append");
+    disk.ledger
+        .attach(&owner, Hash32::from_bytes([7; 32]), b"kept".to_vec())
+        .await
+        .expect("attach");
+    let owner_dir = disk.ledger.owner_dir(&owner);
     assert!(
-        disk.ledger.owner_dir(&owner).join(fs::LOCK_FILE).is_file(),
+        owner_dir.join(fs::LOCK_FILE).is_file(),
         "the append took its lock on a file in the owner's directory"
     );
+    assert!(
+        owner_dir.join(fs::ATTACHMENT_DIR).is_dir(),
+        "the lock file sits beside the attachment directory, not in it"
+    );
     assert_one_chain(&disk.ledger, &owner, &signer, 1).await;
+    assert_eq!(
+        disk.ledger
+            .append(&owner, event(2), Timestamp::UNIX_EPOCH, &signer)
+            .await
+            .expect("append after an attachment")
+            .core
+            .seq,
+        2
+    );
+    assert_one_chain(&disk.ledger, &owner, &signer, 2).await;
     assert_eq!(
         disk.ledger.owners().await.expect("owners"),
         std::slice::from_ref(&owner)
