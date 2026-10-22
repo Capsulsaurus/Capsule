@@ -78,6 +78,10 @@
 //! verifier. Recording is best-effort, as the `indexed` entry is: a lost record leaves the
 //! anchor behind the ledger, which weakens the check and never fakes a fault.
 //!
+//! The first append per owner in a process checks the ledger against its anchor and refuses the
+//! write while the ledger is behind it or disagrees with it, so an adapter that reloads a cut
+//! ledger after a restart cannot bury the loss under new entries ([`AnchoredLedger`]).
+//!
 //! The anchor survives exactly when the index does. A rebuild into an empty schema has none and
 //! checks the chain alone; one alongside a restored backup checks against the head as it stood
 //! at the backup. The one write that lowers it is a rebuild under `--apply` that has reported a

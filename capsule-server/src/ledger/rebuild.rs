@@ -414,9 +414,9 @@ async fn rebuild_owner(
 /// Bring `owner`'s recorded ledger head in line with what this pass verified.
 ///
 /// A cut the pass reported (the ledger ends below its anchor) has been acknowledged by the
-/// epoch bump just made, so the anchor is moved **down** to the head that is left: otherwise the
-/// next append would land at a position the stale anchor names, and every later pass would
-/// report a rewrite there and stop replaying. Every other outcome only **raises** it, so a
+/// epoch bump just made, so the anchor is moved **down** to the head that is left: until then
+/// the server refuses to extend that owner's ledger ([`super::AnchoredLedger`]), and every pass
+/// would report the same cut. Every other outcome only **raises** it, so a
 /// rebuild into an empty schema anchors the chain it verified, and a rewrite the anchor caught
 /// ([`ChainFault::AnchorMismatch`]) keeps its evidence.
 async fn reanchor(
