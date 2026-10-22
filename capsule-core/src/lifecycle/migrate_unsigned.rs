@@ -200,8 +200,8 @@ pub struct UnmigratedSidecar {
 }
 
 /// Every `{uuid}.cbor` under `root/media` — the sidecars, never the sibling
-/// `.provenance.cbor` / `.receipts.cbor` / `.attestations.cbor` logs. The same filter
-/// `rebuild_index` and the add-id sweep apply.
+/// `.provenance.cbor` / `.receipts.cbor` / `.attestations.cbor` logs or the
+/// `.derivatives.cbor` bundle. The same filter `rebuild_index` and the add-id sweep apply.
 fn sidecar_files(root: &Path) -> Vec<PathBuf> {
     let media = root.join("media");
     if !media.exists() {
@@ -1586,6 +1586,38 @@ mod tests {
         }
 
         assert!(unmigrated_sidecars(lib.path()).is_empty());
+    }
+
+    /// The derivative bundle the lifecycle writes as `derivatives/{uuid}.derivatives.cbor`
+    /// shares the sidecar's `.cbor` suffix too. A library holding one reports no unmigrated
+    /// sidecar on open, keyless or unlocked, and `rebuild_index` does not read it as one.
+    #[test]
+    fn a_derivative_bundle_is_not_an_unmigrated_sidecar() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let img = src.path().join("signed.jpg");
+        fs::write(&img, b"\xFF\xD8\xFF a bundle beside it").unwrap();
+        let (id, capture) = {
+            let mut ws = fast_workspace(lib.path());
+            let album = ws.create_album("Imports").unwrap();
+            let id = ws.import_asset(album, &img).unwrap();
+            (id, ws.asset(&id).unwrap().capture_utc)
+        };
+        let dir = super::super::media_dir(lib.path(), capture).join("derivatives");
+        fs::create_dir_all(&dir).unwrap();
+        // An empty `Vec<DerivativeManifest>`, the bundle's own encoding.
+        fs::write(
+            dir.join(format!("{}.derivatives.cbor", id.simple())),
+            [0x80],
+        )
+        .unwrap();
+
+        assert!(unmigrated_sidecars(lib.path()).is_empty());
+        let ws = Workspace::open(lib.path(), b"passphrase", fast_params()).unwrap();
+        assert!(ws.unmigrated_sidecars().is_empty());
+        assert_eq!(ws.asset_ids(), vec![id]);
+        rebuild_index(&ws.library).unwrap();
+        assert_eq!(ws.db().query_timeline(0, 100).unwrap().len(), 1);
     }
 
     // ── T5: the open outcome, before and after ──────────────────────────────

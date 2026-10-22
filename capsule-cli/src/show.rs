@@ -26,12 +26,16 @@
 //! Every absent field is printed as *unset* rather than omitted: an absent caption is a fact
 //! the user came to verify, not a row to hide. A fix is printed with its datum, because a
 //! GCJ-02 coordinate is stored verbatim and would otherwise read as WGS-84.
+//!
+//! The capture time and fix printed are the **effective** ones — a user's correction when one
+//! is recorded. A corrected asset also prints the as-imported value on the row after it, so
+//! what the original said stays visible beside what the user chose.
 
 use std::fmt::Write as _;
 
 use capsule_core::domain::GpsDatum;
 use capsule_core::lifecycle::{AssetState, Workspace};
-use capsule_core::sidecar::{CullFlag, GpsSource, StackRole};
+use capsule_core::sidecar::{CullFlag, Gps, GpsSource, StackRole};
 use colored::Colorize as _;
 use thiserror::Error;
 use uuid::Uuid;
@@ -78,6 +82,17 @@ pub struct Fix {
     pub datum: GpsDatum,
 }
 
+impl From<&Gps> for Fix {
+    fn from(gps: &Gps) -> Self {
+        Self {
+            lat: gps.lat,
+            lon: gps.lon,
+            source: gps.source,
+            datum: gps.datum,
+        }
+    }
+}
+
 /// The sidecar projection `capsule show` prints — a plain value so the rendering can be
 /// tested against a hand-built one and the collection against a real [`AssetState`].
 #[derive(Debug, Clone, PartialEq)]
@@ -93,8 +108,11 @@ pub struct AssetView {
     pub hash: String,
     /// Pixel dimensions, when EXIF carried them.
     pub dimensions: Option<(u32, u32)>,
-    /// The signed capture instant, RFC 3339.
+    /// The capture instant the asset is dated by, RFC 3339: the user's correction when one is
+    /// recorded, else the as-imported value.
     pub capture_timestamp: String,
+    /// The as-imported capture instant, present only when a user correction overrides it.
+    pub capture_timestamp_imported: Option<String>,
     /// The signed import instant, RFC 3339.
     pub import_timestamp: String,
     /// The caption register's current value.
@@ -105,8 +123,14 @@ pub struct AssetView {
     pub tags_user: Vec<String>,
     /// AI tag texts, sorted and deduplicated across model versions.
     pub tags_ai: Vec<String>,
-    /// The fix, when any.
+    /// The effective fix, when any: the user's location edit when one is recorded (which may
+    /// be "no location"), else the as-imported fix.
     pub gps: Option<Fix>,
+    /// Whether a user location edit is recorded, so [`gps_imported`](Self::gps_imported) is
+    /// shown beside it.
+    pub location_edited: bool,
+    /// The as-imported fix, when any.
+    pub gps_imported: Option<Fix>,
     /// The culling flag (a never-written register reads as `Neutral`).
     pub cull: CullFlag,
     /// Whether the asset is hidden from default views.
@@ -206,18 +230,19 @@ pub fn collect(ws: &Workspace, asset_id: &Uuid) -> Option<AssetView> {
         content_type: sidecar.content_type.clone(),
         hash: sidecar.hash.to_hex(),
         dimensions: sidecar.dimensions.as_ref().map(|d| (d.width, d.height)),
-        capture_timestamp: sidecar.capture_timestamp.clone(),
+        capture_timestamp: sidecar.effective_capture_timestamp().to_owned(),
+        capture_timestamp_imported: sidecar
+            .capture_timestamp_user
+            .get()
+            .map(|_| sidecar.capture_timestamp.clone()),
         import_timestamp: sidecar.import_timestamp.clone(),
         caption: sidecar.caption.get().cloned(),
         rating: sidecar.rating.get().copied(),
         tags_user,
         tags_ai,
-        gps: sidecar.gps.as_ref().map(|g| Fix {
-            lat: g.lat,
-            lon: g.lon,
-            source: g.source,
-            datum: g.datum,
-        }),
+        gps: sidecar.effective_gps().map(Fix::from),
+        location_edited: sidecar.gps_user.get().is_some(),
+        gps_imported: sidecar.gps.as_ref().map(Fix::from),
         cull: sidecar.cull.get().copied().unwrap_or_default(),
         hidden: sidecar.hidden.get().copied().unwrap_or(false),
         in_trash: ws.is_trashed(asset_id),
@@ -300,33 +325,51 @@ pub fn render(view: &AssetView) -> String {
             .map(|(width, height)| format!("{width}×{height}")),
     );
     let rating = or_unset(view.rating.map(|stars| format!("{stars}/5")));
-    let gps = or_unset(view.gps.map(|fix| {
-        format!(
-            "{:.6}, {:.6} ({}, {})",
-            fix.lat,
-            fix.lon,
-            gps_datum_name(fix.datum),
-            gps_source_name(fix.source)
-        )
-    }));
+    let fix = |fix: Option<Fix>| {
+        or_unset(fix.map(|fix| {
+            format!(
+                "{:.6}, {:.6} ({}, {})",
+                fix.lat,
+                fix.lon,
+                gps_datum_name(fix.datum),
+                gps_source_name(fix.source)
+            )
+        }))
+    };
+    let gps = fix(view.gps);
     let stack = or_unset(
         view.stack
             .map(|(stack_id, role)| format!("{stack_id} ({})", stack_role_name(role))),
     );
     let lqip = if view.lqip { "present" } else { UNSET }.to_owned();
 
-    let rows: [(&str, String); 17] = [
-        ("Album:", view.album_id.to_string()),
-        ("Content type:", view.content_type.clone()),
-        ("SHA-256:", view.hash.clone()),
-        ("Dimensions:", dimensions),
-        ("Captured:", view.capture_timestamp.clone()),
-        ("Imported:", view.import_timestamp.clone()),
-        ("Caption:", or_unset(view.caption.clone())),
-        ("Rating:", rating),
-        ("User tags:", list(&view.tags_user)),
-        ("AI tags:", list(&view.tags_ai)),
-        ("GPS:", gps),
+    // The as-imported rows appear only beside a user edit, so an unedited asset prints exactly
+    // the rows it always did.
+    let original_capture = view
+        .capture_timestamp_imported
+        .clone()
+        .map(|imported| ("Orig. capture:", imported));
+    let original_gps = view
+        .location_edited
+        .then(|| ("Orig. GPS:", fix(view.gps_imported)));
+    let rows: Vec<(&str, String)> = [
+        Some(("Album:", view.album_id.to_string())),
+        Some(("Content type:", view.content_type.clone())),
+        Some(("SHA-256:", view.hash.clone())),
+        Some(("Dimensions:", dimensions)),
+        Some(("Captured:", view.capture_timestamp.clone())),
+        original_capture,
+        Some(("Imported:", view.import_timestamp.clone())),
+        Some(("Caption:", or_unset(view.caption.clone()))),
+        Some(("Rating:", rating)),
+        Some(("User tags:", list(&view.tags_user))),
+        Some(("AI tags:", list(&view.tags_ai))),
+        Some(("GPS:", gps)),
+        original_gps,
+    ]
+    .into_iter()
+    .flatten()
+    .chain([
         ("Cull flag:", cull_name(view.cull).to_owned()),
         ("Hidden:", yes_no(view.hidden)),
         ("In trash:", yes_no(view.in_trash)),
@@ -336,7 +379,8 @@ pub fn render(view: &AssetView) -> String {
             "Provenance:",
             format!("{} signed record(s)", view.provenance_records),
         ),
-    ];
+    ])
+    .collect();
 
     let header = format!("Asset {}", view.asset_id).green();
     let mut out = format!("{header}\n");
@@ -503,6 +547,8 @@ mod tests {
         assert_eq!(view.content_type, asset.sidecar.content_type);
         assert_eq!(view.hash, asset.sidecar.hash.to_hex());
         assert_eq!(view.capture_timestamp, asset.sidecar.capture_timestamp);
+        assert_eq!(view.capture_timestamp_imported, None, "nothing corrected");
+        assert!(!view.location_edited);
         assert_eq!(view.caption, None);
         assert_eq!(view.rating, None);
         assert!(view.tags_user.is_empty());
@@ -538,6 +584,43 @@ mod tests {
         );
     }
 
+    /// A capture correction and a location edit show as the effective values, with the
+    /// as-imported ones carried beside them.
+    #[test]
+    fn collect_shows_the_correction_beside_the_imported_value() {
+        let mut fx = Fixture::with_assets(1);
+        let id = fx.ids[0];
+        let imported = fx
+            .ws
+            .asset(&id)
+            .expect("asset")
+            .sidecar
+            .capture_timestamp
+            .clone();
+        let corrected = jiff::Timestamp::from_second(1_000_000_000).expect("in range");
+        fx.ws
+            .set_capture_timestamp(&id, corrected)
+            .expect("correct");
+        fx.ws
+            .set_location(&id, 51.5, -0.12, GpsDatum::Wgs84)
+            .expect("locate");
+        let view = collect(&fx.ws, &id).expect("managed");
+        assert_eq!(view.capture_timestamp, corrected.to_string());
+        assert_eq!(view.capture_timestamp_imported, Some(imported));
+        assert!(view.location_edited);
+        assert_eq!(view.gps_imported, None, "the bytes carried no fix");
+        let fix = view.gps.expect("the edit is effective");
+        assert_eq!(
+            (fix.source, fix.datum),
+            (GpsSource::Manual, GpsDatum::Wgs84)
+        );
+
+        fx.ws.clear_location(&id).expect("clear");
+        let view = collect(&fx.ws, &id).expect("managed");
+        assert!(view.location_edited);
+        assert_eq!(view.gps, None);
+    }
+
     fn sample_view() -> AssetView {
         AssetView {
             asset_id: Uuid::nil(),
@@ -546,12 +629,20 @@ mod tests {
             hash: "ab".repeat(32),
             dimensions: Some((8, 8)),
             capture_timestamp: "2019-03-04T05:06:07Z".into(),
+            capture_timestamp_imported: None,
             import_timestamp: "2026-09-02T00:00:00Z".into(),
             caption: Some("On the beach".into()),
             rating: Some(5),
             tags_user: vec!["Vacation 2021".into(), "beach".into()],
             tags_ai: vec![],
             gps: Some(Fix {
+                lat: 10.0,
+                lon: 20.0,
+                source: GpsSource::Exif,
+                datum: GpsDatum::Wgs84,
+            }),
+            location_edited: false,
+            gps_imported: Some(Fix {
                 lat: 10.0,
                 lon: 20.0,
                 source: GpsSource::Exif,
@@ -632,6 +723,33 @@ mod tests {
             "hidden and in trash:\n{page}"
         );
         assert!(page.contains("  Placeholder:     present\n"), "{page}");
+    }
+
+    /// An edited asset prints the as-imported capture time and fix on their own rows, right
+    /// after the effective ones; an imported fix the user cleared reads as unset above it.
+    #[test]
+    fn render_prints_the_imported_values_beside_an_edit() {
+        let view = AssetView {
+            capture_timestamp: "2001-09-09T01:46:40Z".into(),
+            capture_timestamp_imported: Some("2019-03-04T05:06:07Z".into()),
+            gps: None,
+            location_edited: true,
+            ..sample_view()
+        };
+        let page = render(&view);
+        assert!(
+            page.contains(
+                "  Captured:        2001-09-09T01:46:40Z\n  Orig. capture:   2019-03-04T05:06:07Z\n"
+            ),
+            "{page}"
+        );
+        assert!(
+            page.contains(
+                "  GPS:             (unset)\n  Orig. GPS:       10.000000, 20.000000 (WGS-84, EXIF)\n"
+            ),
+            "{page}"
+        );
+        assert_eq!(page.lines().count(), 20, "two more rows:\n{page}");
     }
 
     #[test]

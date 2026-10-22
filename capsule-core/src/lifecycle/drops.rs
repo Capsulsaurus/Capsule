@@ -370,6 +370,7 @@ impl crate::drop::DropAdopter for Workspace {
             uuid: file_id,
             hash: hash::hash_bytes(&plaintext),
             capture_timestamp,
+            capture_timestamp_user: Lww::new(),
             import_timestamp: now_rfc3339(),
             // Header-derived wherever the bytes name a still Capsule models; the guest's
             // self-asserted type is the fallback for everything else (a video, say).
@@ -389,6 +390,7 @@ impl crate::drop::DropAdopter for Workspace {
             device_id: self.account.device.device_id,
             session_id: Uuid::now_v7(),
             gps: None,
+            gps_user: Lww::new(),
             provenance_chain_hash: None,
             unknown: BTreeMap::new(),
             signature: None,

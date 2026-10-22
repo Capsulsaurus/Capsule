@@ -164,12 +164,12 @@ async fn keys_check_signatures_and_no_keys_check_links_only() {
 
     let with = LedgerKeys::new(vec![published(&key)]);
     assert!(with.checks_signatures());
-    let report = with.verify(&owner, &scan);
+    let report = with.verify(&owner, &scan, None);
     assert_eq!((report.verified, report.fault), (2, None));
 
     // A key this server never published: the signatures cannot be trusted.
     let wrong = LedgerKeys::new(vec![published(&signer(2))]);
-    let report = wrong.verify(&owner, &scan);
+    let report = wrong.verify(&owner, &scan, None);
     assert_eq!(report.verified, 0);
     assert!(matches!(
         report.fault,
@@ -179,7 +179,7 @@ async fn keys_check_signatures_and_no_keys_check_links_only() {
     // No key at all: the links hold, so the chain verifies as far as links can say.
     let none = LedgerKeys::default();
     assert!(!none.checks_signatures());
-    let report = none.verify(&owner, &scan);
+    let report = none.verify(&owner, &scan, None);
     assert_eq!((report.verified, report.fault), (2, None));
 }
 
@@ -197,7 +197,7 @@ async fn links_alone_still_catch_a_removed_entry() {
     )
     .await;
     scan.entries.remove(1);
-    let report = LedgerKeys::default().verify(&owner, &scan);
+    let report = LedgerKeys::default().verify(&owner, &scan, None);
     assert_eq!(report.verified, 1);
     assert_eq!(
         report.fault,
@@ -206,4 +206,79 @@ async fn links_alone_still_catch_a_removed_entry() {
             found: 3
         })
     );
+}
+
+/// A tail cut at an entry boundary leaves a valid shorter chain; the anchor exposes it, with
+/// the published keys and without them alike.
+#[tokio::test]
+async fn an_anchor_exposes_a_boundary_cut_with_or_without_keys() {
+    let key = signer(1);
+    let owner = OwnerId::new("owner-1");
+    let mut scan = ledger_of(
+        vec![
+            custody_event("a"),
+            indexed("a", Some(1)),
+            custody_event("b"),
+        ],
+        &key,
+    )
+    .await;
+    let anchor = LedgerHead {
+        seq: 3,
+        hash: scan.entries[2].chain_hash(),
+    };
+    scan.entries.truncate(2);
+    let cut = Some(ChainFault::BehindAnchor {
+        found: 2,
+        anchored: 3,
+    });
+
+    for keys in [
+        LedgerKeys::new(vec![published(&key)]),
+        LedgerKeys::default(),
+    ] {
+        let blind = keys.verify(&owner, &scan, None);
+        assert_eq!(
+            (blind.verified, blind.fault),
+            (2, None),
+            "without an anchor a boundary cut reads as a shorter ledger"
+        );
+        let anchored = keys.verify(&owner, &scan, Some(anchor));
+        assert_eq!(anchored.verified, 2);
+        assert_eq!(
+            anchored.fault,
+            cut,
+            "signatures checked: {}",
+            keys.checks_signatures()
+        );
+    }
+}
+
+/// An entry at the anchored position that is not the anchored one is a rewrite, and the walk
+/// stops before it, with the published keys and without them alike.
+#[tokio::test]
+async fn an_anchor_exposes_a_rewritten_position_with_or_without_keys() {
+    let key = signer(1);
+    let owner = OwnerId::new("owner-1");
+    let scan = ledger_of(
+        vec![
+            custody_event("a"),
+            indexed("a", Some(1)),
+            custody_event("b"),
+        ],
+        &key,
+    )
+    .await;
+    let anchor = LedgerHead {
+        seq: 2,
+        hash: hash_bytes(b"some other entry"),
+    };
+    for keys in [
+        LedgerKeys::new(vec![published(&key)]),
+        LedgerKeys::default(),
+    ] {
+        let report = keys.verify(&owner, &scan, Some(anchor));
+        assert_eq!(report.verified, 1);
+        assert_eq!(report.fault, Some(ChainFault::AnchorMismatch { seq: 2 }));
+    }
 }

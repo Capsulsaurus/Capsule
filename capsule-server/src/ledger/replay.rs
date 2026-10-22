@@ -10,7 +10,9 @@ use std::collections::BTreeMap;
 
 use capsule_core::crypto::hash::Hash32;
 
-use super::{ChainReport, LedgerEntry, LedgerEvent, LedgerScan, verify_chain, verify_links};
+use super::{
+    ChainReport, LedgerEntry, LedgerEvent, LedgerHead, LedgerScan, verify_chain, verify_links,
+};
 use crate::attestation::PublishedKey;
 use crate::store::OwnerId;
 
@@ -206,13 +208,19 @@ impl LedgerKeys {
         !self.0.is_empty()
     }
 
-    /// Verify `owner`'s scanned ledger as far as these keys allow.
+    /// Verify `owner`'s scanned ledger as far as these keys allow, against `anchor`.
     ///
-    /// No anchor: no store records a ledger head outside the ledger yet (#757), so a tail cut
-    /// exactly at an entry boundary is not detected here.
-    pub fn verify(&self, owner: &OwnerId, scan: &LedgerScan) -> ChainReport {
+    /// `anchor` is the head the index recorded ([`crate::index::AssetIndex::ledger_head`]); with
+    /// it, a tail cut exactly at an entry boundary is [`super::ChainFault::BehindAnchor`] on a
+    /// key-less host as on a keyed one. `None` checks the chain alone.
+    pub fn verify(
+        &self,
+        owner: &OwnerId,
+        scan: &LedgerScan,
+        anchor: Option<LedgerHead>,
+    ) -> ChainReport {
         if self.0.is_empty() {
-            return verify_links(owner, scan);
+            return verify_links(owner, scan, anchor);
         }
         verify_chain(
             owner,
@@ -223,7 +231,7 @@ impl LedgerKeys {
                     .find(|key| &key.key_id == key_id)
                     .map(|key| key.public.clone())
             },
-            None,
+            anchor,
         )
     }
 }

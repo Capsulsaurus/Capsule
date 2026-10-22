@@ -279,11 +279,14 @@ fn chain_facts(dir: &Path, asset_id: &Uuid) -> ChainFacts {
 /// columns (`chromahash`, `dominant_color`, `duration_ms`) stay NULL for the same reason they
 /// do there.
 fn signed_asset_row(s: &SidecarV1, facts: &ChainFacts, prior: Option<&AssetRow>) -> AssetRow {
-    let capture_utc = rfc3339_to_secs(&s.capture_timestamp);
+    // The timeline is dated by the user's correction when there is one, else the as-imported
+    // instant — the same rule the write path applies.
+    let capture = s.effective_capture_timestamp();
+    let capture_utc = rfc3339_to_secs(capture);
     if capture_utc.is_none() {
         tracing::warn!(
             asset_id = %s.uuid,
-            capture_timestamp = %s.capture_timestamp,
+            capture_timestamp = %capture,
             "rebuild_index: unparseable capture timestamp; indexing it as the epoch"
         );
     }
@@ -520,6 +523,7 @@ mod tests {
             uuid,
             hash: Hash32([hash_byte; 32]),
             capture_timestamp: "1970-01-05T00:00:00Z".into(),
+            capture_timestamp_user: Lww::new(),
             import_timestamp: "1970-01-06T00:00:00Z".into(),
             content_type: "image/jpeg".into(),
             dimensions: Some(Dimensions {
@@ -539,6 +543,7 @@ mod tests {
             device_id: Uuid::from_u128(0xD1),
             session_id: Uuid::from_u128(0x5E),
             gps: None,
+            gps_user: Lww::new(),
             provenance_chain_hash: None,
             unknown: BTreeMap::new(),
             signature: None,

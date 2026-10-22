@@ -644,6 +644,85 @@ mod archive_tests {
         assert_eq!(ws.asset_ids().len(), first, "and adds no assets");
     }
 
+    /// A user's capture-time and location corrections sit beside the values the import read
+    /// from the file: re-importing the same archive neither re-records nor discards either
+    /// side, and both survive a reopen from disk and an index rebuild.
+    #[test]
+    fn an_edit_then_a_re_import_keeps_both_the_imported_and_the_user_values() {
+        let src = TempDir::new().expect("src");
+        let lib = TempDir::new().expect("lib");
+        let (contested, _) = build_archive(src.path());
+        let mut ws = signed_workspace(lib.path());
+        import_archive(src.path(), &mut ws);
+        let id = asset_for(&ws, &contested);
+
+        let corrected = Timestamp::from_second(1_000_000_000).expect("in range");
+        ws.set_capture_timestamp(&id, corrected).expect("correct");
+        ws.set_location(&id, 48.85837, 2.294_481, GpsDatum::Wgs84)
+            .expect("locate");
+
+        let check = |ws: &Workspace| {
+            let sidecar = &ws.asset(&id).expect("asset").sidecar;
+            // As imported: the file's own EXIF, exactly as the first import recorded it.
+            assert_eq!(capture_secs(ws, &id), 1_622_505_600 + 12 * 3600);
+            let imported = sidecar.gps.as_ref().expect("the EXIF fix is kept");
+            assert_eq!((imported.lat, imported.lon), (10.0, 20.0));
+            assert_eq!(imported.source, GpsSource::Exif);
+            // The user's values are the effective ones.
+            assert_eq!(sidecar.effective_capture_timestamp(), corrected.to_string());
+            let manual = sidecar.effective_gps().expect("the user's fix");
+            assert_eq!((manual.lat, manual.lon), (48.85837, 2.294_481));
+            assert_eq!(manual.source, GpsSource::Manual);
+            let row = ws
+                .db()
+                .find_by_uuid(&id.to_string())
+                .expect("index")
+                .expect("indexed");
+            assert_eq!(
+                row.capture_timestamp, 1_000_000_000,
+                "dated by the correction"
+            );
+        };
+        check(&ws);
+        let records = ws.asset(&id).expect("asset").chain.records().len();
+
+        assert_eq!(
+            import_archive(src.path(), &mut ws),
+            0,
+            "a duplicate is skipped"
+        );
+        check(&ws);
+        assert_eq!(
+            ws.asset(&id).expect("asset").chain.records().len(),
+            records,
+            "the re-import wrote nothing to the edited asset"
+        );
+
+        drop(ws);
+        let reopened = Workspace::open(
+            lib.path(),
+            b"passphrase",
+            Argon2Params {
+                mem_kib: 64,
+                t_cost: 1,
+                p_cost: 1,
+            },
+        )
+        .expect("reopen");
+        check(&reopened);
+        drop(reopened);
+
+        std::fs::remove_file(lib.path().join("index/library.sqlite")).expect("drop index");
+        let library = crate::library::open_library(lib.path()).expect("library");
+        crate::library::rebuild_index(&library).expect("rebuild");
+        let rebuilt = library
+            .db
+            .find_by_uuid(&id.to_string())
+            .expect("index")
+            .expect("back in the rebuilt index");
+        assert_eq!(rebuilt.capture_timestamp, 1_000_000_000);
+    }
+
     // ── Byte stability ──────────────────────────────────────────────────────
 
     /// An import that carries no exporter metadata must encode exactly as it did before this

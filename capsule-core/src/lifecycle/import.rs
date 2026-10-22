@@ -395,21 +395,20 @@ fn asset_row_from_state(asset: &AssetState) -> AssetRow {
     // sidecar and leaves the `media/{YYYY}/{YYYY-MM}` shard — and therefore `capture_utc`,
     // which names it — where the files already are. Reading the shard here would keep the
     // timeline on the wrong date until the next rebuild while the rebuild read the right one.
-    let capture_utc = asset
-        .sidecar
-        .capture_timestamp
-        .parse::<Timestamp>()
-        .map_or_else(
-            |_| {
-                tracing::warn!(
-                    asset_id = %asset.asset_id,
-                    capture_timestamp = %asset.sidecar.capture_timestamp,
-                    "index: unparseable capture timestamp; indexing it as the epoch"
-                );
-                0
-            },
-            Timestamp::as_second,
-        );
+    // The instant projected is the *effective* one: the user's correction when one was written,
+    // else the as-imported value.
+    let capture = asset.sidecar.effective_capture_timestamp();
+    let capture_utc = capture.parse::<Timestamp>().map_or_else(
+        |_| {
+            tracing::warn!(
+                asset_id = %asset.asset_id,
+                capture_timestamp = %capture,
+                "index: unparseable capture timestamp; indexing it as the epoch"
+            );
+            0
+        },
+        Timestamp::as_second,
+    );
     AssetRow {
         uuid: asset.asset_id.to_string(),
         asset_type: asset_type_for(&asset.sidecar.content_type),
@@ -921,6 +920,8 @@ impl Workspace {
             uuid: asset_id,
             hash: plaintext_hash,
             capture_timestamp: capture_rfc3339(capture_utc),
+            // An import records what the file says; a user correction is a later write.
+            capture_timestamp_user: Lww::new(),
             import_timestamp: req.import_timestamp.clone().unwrap_or_else(now_rfc3339),
             content_type,
             dimensions,
@@ -945,6 +946,7 @@ impl Workspace {
             device_id: self.account.device.device_id,
             session_id: Uuid::now_v7(),
             gps,
+            gps_user: Lww::new(),
             provenance_chain_hash: None,
             unknown: req.extra_unknown.clone(),
             signature: None,
