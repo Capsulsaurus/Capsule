@@ -42,6 +42,7 @@ A signed manifest, not a Merkle tree: [STREAM](/design/cryptography/encryption/#
 
 - `prior_provenance_hash` and `retention_until` encode as **present `null`** when unset.
 - `metadata_blob_hash`, `key_mode`, `wrapped_file_key`, `upgraded_from`, and the `DerivativeManifest`'s `amk_version` and `protocol_version` encode as **absent keys** when unset. Absent `key_mode` means `derived`; writing it explicitly breaks verification.
+- A key the reader does not know is kept verbatim, re-emitted canonically beside the known keys, and covered by both signatures ([invariant 2](/design/versioning/#system-invariants)). A newer writer's manifest that only adds a field verifies on an older reader; stripping the field fails verification.
 
 ## Client Build Identification
 
@@ -61,7 +62,7 @@ Every data or metadata change appends a record anchored by its [manifest](#asset
 
 ### Chained, Append-Only Structure
 
-`ProvenanceRecord { asset_id, manifest, prior_provenance_hash }`. The record's hash mirrors the manifest's (so the link is signed) and is a checked invariant: a record whose copies differ is **rejected**. Rewriting any past record breaks the forward walk from `create`.
+`ProvenanceRecord { version, asset_id, manifest, prior_provenance_hash }`. `version` is an integer (currently `1`) that sorts first in canonical CBOR and is decoded before anything else. A record of a version the reader does not implement is quarantined and kept, never applied or dropped ([invariants 3 and 5](/design/versioning/#system-invariants)). The record's hash mirrors the manifest's (so the link is signed) and is a checked invariant: a record whose copies differ is **rejected**. Rewriting any past record breaks the forward walk from `create`.
 
 Clients cache the verified head (O(1) steady state); full walks run on first fetch, restore, or suspected tamper. A signed checkpoint record is the designated v2 extension.
 

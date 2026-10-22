@@ -426,6 +426,7 @@ impl crate::drop::DropAdopter for Workspace {
             action: Action::Create,
             prior_provenance_hash: None,
             upgraded_from: None,
+            unknown: Default::default(),
             retention_until: None,
         };
         let manifest = core
@@ -466,11 +467,7 @@ impl crate::drop::DropAdopter for Workspace {
         // beside it (it cannot be regenerated), the plaintext at the asset's media path (the
         // library holds plaintext; the wrapped key regenerates the guest's ciphertext from it),
         // and the queryable index row.
-        let record = ProvenanceRecord {
-            asset_id: file_id,
-            manifest: manifest.clone(),
-            prior_provenance_hash: None,
-        };
+        let record = ProvenanceRecord::new(file_id, manifest.clone(), None);
         let mut chain = ProvenanceChain::new();
         chain
             .append(record.clone())

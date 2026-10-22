@@ -1025,14 +1025,11 @@ mod tests {
                 action: Action::Create,
                 prior_provenance_hash: None,
                 upgraded_from: None,
+                unknown: Default::default(),
                 retention_until: None,
             };
             let manifest = core.sign(&self.device, &self.write).unwrap();
-            let record = ProvenanceRecord {
-                asset_id: file_id,
-                manifest,
-                prior_provenance_hash: None,
-            };
+            let record = ProvenanceRecord::new(file_id, manifest, None);
             BackupAsset {
                 album_id: Uuid::from_u128(ALBUM),
                 asset_id: file_id,
