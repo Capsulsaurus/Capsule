@@ -576,7 +576,7 @@ impl Workspace {
     /// on disk (the private `prepare_still`, slices `S-B1`/`S-B14`).
     ///
     /// Returns a [`SignedImport`]: the asset id, the
-    /// [`DerivativeStatus`](super::DerivativeStatus) saying whether derivatives were generated
+    /// [`DerivativeStatus`] saying whether derivatives were generated
     /// and, if not, why, and the per-format deferral count. A format this build has no
     /// codec for **still imports** — the original is the backup, the thumbnail is a bonus — so
     /// the status is a report, never a rejection (slice `S-B13`).
@@ -925,7 +925,7 @@ impl Workspace {
     ///    equal the hash the signed sidecar commits to. A library copy that is torn or missing,
     ///    or a source edited since it was imported, is [`RetainReason::ReadBackMismatch`] —
     ///    whatever the server says, deleting `src` could lose bytes nothing else holds.
-    /// 2. **The gate.** [`release_move_source`](crate::library::release_move_source) over
+    /// 2. **The gate.** [`release_move_source`] over
     ///    `verifier` for the asset's required blobs (original ciphertext and sealed metadata
     ///    blob), with a fresh `verify_asset` as the crypto half: a `durable` verdict and a
     ///    verified custody receipt, or the source stays.

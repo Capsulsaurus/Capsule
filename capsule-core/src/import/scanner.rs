@@ -16,7 +16,7 @@ use crate::metadata::AssetType;
 /// Rawshift's — "every file is kept"). Codec coverage and extension recognition decide grouping
 /// and derivatives, never admission: a video, a HEIC, a zero-byte file or a file with an
 /// unrecognised or missing extension is backed up byte for byte like a JPEG. The only files
-/// left out are the operating system's own folder metadata ([`is_os_folder_metadata`]) and the
+/// left out are the operating system's own folder metadata (`is_os_folder_metadata`) and the
 /// contents of special directories (`.git`, DaVinci Resolve), none of which is a user original.
 ///
 /// An entry the walk cannot read (a permission-denied directory, a vanished file, a missing
