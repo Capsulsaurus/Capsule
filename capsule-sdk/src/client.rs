@@ -402,9 +402,62 @@ impl rest::HttpBackend for Negotiate {
             }
             let response = inner.execute(request).await?;
             negotiation::observe(response.url(), response.headers());
+            if response.status() == reqwest::StatusCode::PAYLOAD_TOO_LARGE {
+                return coded_too_large(response).await;
+            }
             Ok(response)
         })
     }
+}
+
+/// A `413` as the generated operations can read it, whoever answered it.
+///
+/// The contract declares every `413` a coded problem, and this server sends one. A server from
+/// before that (its body-size backstop answered with no body), or a reverse proxy refusing the
+/// body before it reached the server (nginx's `client_max_body_size` answers `413 text/html`),
+/// does not. The generated client then fails to decode the documented body and reports a
+/// wire failure instead of the typed refusal, which tells the caller to retry the same bytes.
+/// Native clients stay lenient towards older and intermediary peers, so a `413` whose body is
+/// not a coded problem is answered here with one coded `error.request.too_large`, keeping the
+/// status and headers. A `413` that already carries a code passes through unchanged.
+async fn coded_too_large(
+    response: reqwest::Response,
+) -> Result<reqwest::Response, rest::TransportError> {
+    let status = response.status();
+    let version = response.version();
+    let mut headers = response.headers().clone();
+    let body = response.bytes().await.map_err(rest::TransportError::new)?;
+    let coded = serde_json::from_slice::<ProblemCode>(&body)
+        .ok()
+        .and_then(|problem| problem.code)
+        .is_some();
+    let body = if coded {
+        body
+    } else {
+        tracing::debug!(
+            bytes = body.len(),
+            "a 413 without a coded problem body was coded error.request.too_large"
+        );
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            HeaderValue::from_static("application/problem+json"),
+        );
+        headers.remove(reqwest::header::CONTENT_LENGTH);
+        serde_json::json!({
+            "type": "about:blank",
+            "title": "Payload Too Large",
+            "status": 413,
+            "detail": "the request body is larger than the server or a proxy in front of it accepts",
+            "code": capsule_i18n::error_codes::REQUEST_TOO_LARGE,
+        })
+        .to_string()
+        .into()
+    };
+    let mut rebuilt = http::Response::new(body);
+    *rebuilt.status_mut() = status;
+    *rebuilt.version_mut() = version;
+    *rebuilt.headers_mut() = headers;
+    Ok(reqwest::Response::from(rebuilt))
 }
 
 /// A generated client for `base_url` that executes on `http` under the window screen — the
@@ -1084,6 +1137,59 @@ mod tests {
             assert_eq!(hits(&server, "/v1/quota"), 1, "{body:?}: no replay");
             assert_eq!(hits(&server, "/refresh"), 0, "{body:?}: no refresh");
         }
+    }
+
+    /// Serve `/v1/quota` a `413` with `body` and return what the typed call reports.
+    async fn quota_answering_413(body: String) -> rest::Error<rest::GetQuotaError> {
+        let handler: Handler = Arc::new(move |_| {
+            let body = body.clone();
+            Box::pin(async move { MockResponse { status: 413, body } })
+        });
+        let server = start_mock(handler).await;
+        let session = session_with(&server.base_url, "access-1", "refresh-1", far_future());
+        let client = AuthenticatedClient::new(&server.base_url, session).unwrap();
+        client
+            .get_quota(capsule_core::crypto::primitives::PROTOCOL_VERSION, None)
+            .await
+            .expect_err("the mock refuses the operation")
+    }
+
+    /// A `413` without a coded problem body — a server from before the contract coded it, or a
+    /// proxy's own `text/html` refusal — still reaches the caller as the operation's typed
+    /// `413`, coded `error.request.too_large`, rather than as a decode failure.
+    #[tokio::test]
+    async fn an_uncoded_413_is_still_the_typed_refusal() {
+        for body in [
+            String::new(),
+            "<html><body>413 Request Entity Too Large</body></html>".to_string(),
+            r#"{"type":"about:blank","status":413}"#.to_string(),
+        ] {
+            let error = quota_answering_413(body.clone()).await;
+            let rest::Error::Api(response) = &error else {
+                panic!("{body:?}: expected the typed API error, got {error:?}");
+            };
+            let rest::GetQuotaError::Status413(problem) = response.inner() else {
+                panic!("{body:?}: expected a typed 413, got {:?}", response.inner());
+            };
+            assert_eq!(
+                problem.code,
+                capsule_i18n::error_codes::REQUEST_TOO_LARGE,
+                "{body:?}"
+            );
+        }
+    }
+
+    /// A `413` that already carries a coded problem passes through with its own code.
+    #[tokio::test]
+    async fn a_coded_413_keeps_its_own_code() {
+        let error = quota_answering_413(problem(413, "error.upload.chunk_too_large")).await;
+        let rest::Error::Api(response) = &error else {
+            panic!("expected the typed API error, got {error:?}");
+        };
+        let rest::GetQuotaError::Status413(problem) = response.inner() else {
+            panic!("expected a typed 413, got {:?}", response.inner());
+        };
+        assert_eq!(problem.code, "error.upload.chunk_too_large");
     }
 
     /// An unauthenticated operation's `401` is the server's answer about the request, not

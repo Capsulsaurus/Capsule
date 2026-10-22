@@ -325,6 +325,30 @@ async fn every_declared_issue_refusal_maps_to_its_class() {
     }
 }
 
+/// A bodyless `413` — a server from before the contract coded it, or a proxy refusing the body —
+/// still lands in the refusal map's `413` class with the transport's code, not as a wire failure.
+#[tokio::test]
+async fn a_bodyless_413_still_maps_to_its_class() {
+    let (link, publication) = published(None);
+    let (_server, client, _) =
+        recording(|_| refusal_response(413, "Payload Too Large", None)).await;
+    let error = client.issue(&link, &publication).await.unwrap_err();
+    assert!(
+        matches!(error, ShareError::Unexpected { status: 413, .. }),
+        "{error:?}"
+    );
+    assert_eq!(error.error_code(), Some(error_codes::REQUEST_TOO_LARGE));
+
+    let (_server, client, _) =
+        recording(|_| refusal_response(413, "Payload Too Large", None)).await;
+    let error = client.revoke(&"a".repeat(32)).await.unwrap_err();
+    assert!(
+        matches!(error, ShareError::Unexpected { status: 413, .. }),
+        "{error:?}"
+    );
+    assert_eq!(error.error_code(), Some(error_codes::REQUEST_TOO_LARGE));
+}
+
 #[tokio::test]
 async fn every_declared_revoke_refusal_maps_to_its_class() {
     let cases: [RefusalCase; 5] = [
