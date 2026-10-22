@@ -525,6 +525,124 @@ async fn a_malformed_manifest_is_quarantined_with_its_reason_and_its_entry_is_no
     assert_eq!(held[0].reason.code, error_codes::UPLOAD_ENVELOPE_REJECTED);
 }
 
+/// Reserve `name` under `owner` and finalize `provenance` as its provenance blob.
+async fn reserve_with_provenance(
+    server: &Server,
+    owner: &OwnerId,
+    name: &str,
+    provenance: &[u8],
+) -> (AssetId, ContentAddress) {
+    let id = asset(name);
+    server
+        .index
+        .reserve(PendingAsset {
+            asset_id: id.clone(),
+            owner_id: owner.clone(),
+            album_id: AlbumId::new(ALBUM),
+            protocol_version: "2026-01-01".to_owned(),
+            crypto_suite_id: 1,
+            created_at: at(),
+        })
+        .await
+        .expect("the index reserves");
+    let address = server
+        .finalize(owner, &id, BlobRole::Provenance, provenance, false)
+        .await;
+    (id, address)
+}
+
+#[tokio::test]
+async fn a_record_from_a_newer_client_is_reported_and_never_quarantined() {
+    let server = Server::new();
+    let alice = owner("alice");
+    let id = asset("from-the-future");
+    let metadata = ContentAddress::parse(&hash_bytes(b"m").to_hex()).expect("an address");
+    let mut record: capsule_core::crypto::provenance::ProvenanceRecord =
+        capsule_core::cbor::from_slice(&manifest(&id, &metadata)).expect("a record decodes");
+    record.version = capsule_core::crypto::provenance::PROVENANCE_RECORD_VERSION + 1;
+    let newer = capsule_core::cbor::to_canonical_vec(&record).expect("a record encodes");
+    let (_, address) = reserve_with_provenance(&server, &alice, "from-the-future", &newer).await;
+
+    let report = rebuild(
+        &server.rebuild_into(Arc::new(InMemoryAssetIndex::new())),
+        Mode::Apply,
+    )
+    .await
+    .expect("a pass");
+    assert!(matches!(
+        report.owners[0].unusable_manifests.as_slice(),
+        [(_, held, ManifestFault::NewerVersion { .. })] if *held == address
+    ));
+    assert!(
+        server
+            .blobs
+            .quarantined()
+            .await
+            .expect("the hold lists")
+            .is_empty(),
+        "a newer client's record was moved to quarantine"
+    );
+    assert!(
+        server.blobs.stat(&address).await.expect("stat").is_some(),
+        "a newer client's record left the store"
+    );
+}
+
+#[tokio::test]
+async fn a_malformed_manifest_a_row_still_references_is_left_in_place() {
+    let server = Server::new();
+    let alice = owner("alice");
+    let (id, garbage) =
+        reserve_with_provenance(&server, &alice, "still-referenced", b"not a manifest").await;
+
+    // A restored backup whose row still points at the bytes.
+    let backup = Arc::new(InMemoryAssetIndex::new());
+    let mut row = server.index.read(&id).await.expect("read").expect("a row");
+    row.state = AssetState::Visible;
+    row.sync_seq = Some(1);
+    row.first_seq = Some(1);
+    backup.restore(row).await.expect("seeded");
+    assert_eq!(backup.reference_count(&garbage).await.expect("count"), 1);
+
+    let report = rebuild(&server.rebuild_into(backup), Mode::Apply)
+        .await
+        .expect("a pass");
+    assert_eq!(
+        report.owners[0].unusable_manifests,
+        vec![(id, garbage.clone(), ManifestFault::Undecodable)]
+    );
+    assert!(
+        server
+            .blobs
+            .quarantined()
+            .await
+            .expect("the hold lists")
+            .is_empty(),
+        "a referenced blob was moved to quarantine"
+    );
+    assert!(server.blobs.stat(&garbage).await.expect("stat").is_some());
+}
+
+#[tokio::test]
+async fn an_unnumbered_row_is_numbered_above_every_proven_one_whatever_its_ledger_position() {
+    // The unprovable asset comes first in the ledger and the proven one after it: the restore
+    // still numbers the unprovable row above the proven number, through the allocator.
+    let server = Server::new();
+    let alice = owner("alice");
+    let first = server.publish(&alice, "first-but-unproven", true).await;
+    let second = server.publish(&alice, "second-and-proven", false).await;
+
+    let empty = Arc::new(InMemoryAssetIndex::new());
+    rebuild(&server.rebuild_into(empty.clone()), Mode::Apply)
+        .await
+        .expect("a pass");
+    let proven = empty.read(&second).await.expect("read").expect("a row");
+    let unproven = empty.read(&first).await.expect("read").expect("a row");
+    assert_eq!(proven.sync_seq, Some(2));
+    assert_eq!(unproven.sync_seq, Some(3));
+    assert_eq!(empty.head_seq(&alice).await.expect("head"), 3);
+}
+
 #[tokio::test]
 async fn an_entry_naming_a_missing_blob_is_dangling_and_an_unnamed_blob_is_an_orphan() {
     let server = Server::new();
