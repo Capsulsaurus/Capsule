@@ -27,6 +27,8 @@
 //! the user came to verify, not a row to hide. A fix is printed with its datum, because a
 //! GCJ-02 coordinate is stored verbatim and would otherwise read as WGS-84.
 
+use std::fmt::Write as _;
+
 use capsule_core::domain::GpsDatum;
 use capsule_core::lifecycle::{AssetState, Workspace};
 use capsule_core::sidecar::{CullFlag, GpsSource, StackRole};
@@ -336,9 +338,10 @@ pub fn render(view: &AssetView) -> String {
         ),
     ];
 
-    let mut out = format!("{}\n", format!("Asset {}", view.asset_id).green());
+    let header = format!("Asset {}", view.asset_id).green();
+    let mut out = format!("{header}\n");
     for (label, value) in rows {
-        out.push_str(&format!("  {label:<17}{value}\n"));
+        let _ = writeln!(out, "  {label:<17}{value}");
     }
     out
 }
