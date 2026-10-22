@@ -558,6 +558,28 @@ impl UploadSessionStore for InMemoryUploadSessions {
         })
     }
 
+    fn claimed(&self) -> StoreFuture<'_, Vec<UploadSessionRecord>> {
+        Box::pin(async move {
+            let now = self.clock.now();
+            let mut state = lock(&self.state);
+            state.purge(now);
+            let mut found: Vec<UploadSessionRecord> = state
+                .sessions
+                .values()
+                .map(|entry| &entry.record)
+                .filter(|record| record.status == UploadSessionStatus::WaitingForProcessing)
+                .cloned()
+                .collect();
+            found.sort_by(|a, b| {
+                a.created_at
+                    .cmp(&b.created_at)
+                    .then_with(|| a.upload_id.cmp(&b.upload_id))
+            });
+            tracing::debug!(count = found.len(), "listed claimed upload sessions");
+            Ok(found)
+        })
+    }
+
     fn discard<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, Option<UploadSessionRecord>> {
         Box::pin(async move {
             let now = self.clock.now();

@@ -2199,6 +2199,13 @@ impl UploadSessionStore for SwitchableUploads {
         self.inner.claim_finalize(upload)
     }
 
+    fn claimed(&self) -> StoreFuture<'_, Vec<UploadSessionRecord>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.claimed()
+    }
+
     fn discard<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, Option<UploadSessionRecord>> {
         if self.is_down() {
             return Box::pin(async { Self::refuse() });
