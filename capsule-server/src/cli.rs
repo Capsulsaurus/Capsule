@@ -37,6 +37,7 @@ use crate::boot::{self, Assembled, Maintenance};
 use crate::config::{Config, Demands, Environment, LogFormat, Overrides, ProcessEnvironment};
 use crate::gc::{CollectionReport, Mode, PurgeReport};
 use crate::scrub::{Depth, ScrubReport};
+use crate::store::UserId;
 
 /// The exit code a configuration refusal produces.
 ///
@@ -177,6 +178,17 @@ pub enum Command {
         backend: BackendArgs,
     },
 
+    /// Suspend an account's storage quota, or lift the suspension.
+    ///
+    /// An administrative or billing act (design/quota.md): while suspended, the account's growth
+    /// writes are refused with `error.quota.suspended`, and its reads, deletes and restores are
+    /// not. Distinct from a moderation suspension, which removes the ability to write at all.
+    Quota {
+        /// Which act.
+        #[command(subcommand)]
+        action: QuotaAction,
+    },
+
     /// Emit the OpenAPI 3.2 document the SDK's client is generated from.
     ///
     /// Needs no database, no Valkey, no key material, no disk and no network: the router is
@@ -192,6 +204,41 @@ pub enum Command {
     },
 }
 
+/// The two quota acts an operator performs.
+#[derive(Debug, Subcommand)]
+pub enum QuotaAction {
+    /// Suspend an account's quota. Suspending a suspended account keeps the first instant.
+    Suspend {
+        /// The account, by its user id.
+        #[arg(value_name = "USER_ID")]
+        user: String,
+
+        /// Where state lives.
+        #[command(flatten)]
+        backend: BackendArgs,
+    },
+
+    /// Lift an account's quota suspension.
+    Unsuspend {
+        /// The account, by its user id.
+        #[arg(value_name = "USER_ID")]
+        user: String,
+
+        /// Where state lives.
+        #[command(flatten)]
+        backend: BackendArgs,
+    },
+}
+
+impl QuotaAction {
+    /// Where state lives, whichever act.
+    fn backend(&self) -> &BackendArgs {
+        match self {
+            Self::Suspend { backend, .. } | Self::Unsuspend { backend, .. } => backend,
+        }
+    }
+}
+
 impl Command {
     /// What this subcommand needs from the configuration.
     fn demands(&self) -> Demands {
@@ -199,7 +246,9 @@ impl Command {
             Self::Serve { .. } => Demands::Serve,
             // No key material. A maintenance host that had to hold the production
             // token-signing key to sweep a directory would be a reason to put the key there.
-            Self::Gc { .. } | Self::Purge { .. } | Self::Scrub { .. } => Demands::Maintenance,
+            Self::Gc { .. } | Self::Purge { .. } | Self::Scrub { .. } | Self::Quota { .. } => {
+                Demands::Maintenance
+            }
             Self::GenOpenapi { .. } => Demands::Nothing,
         }
     }
@@ -226,6 +275,11 @@ impl Command {
                 overrides.memory = backend.memory;
             }
             Self::Purge { backend, .. } | Self::Scrub { backend, .. } => {
+                overrides.blob_root.clone_from(&backend.blob_root);
+                overrides.memory = backend.memory;
+            }
+            Self::Quota { action } => {
+                let backend = action.backend();
                 overrides.blob_root.clone_from(&backend.blob_root);
                 overrides.memory = backend.memory;
             }
@@ -273,6 +327,7 @@ pub async fn run() -> Result<ExitCode> {
             };
             scrub(&config, depth).await
         }
+        Command::Quota { action } => quota(&config, &action).await,
         // The document is a property of the router's types, so the configuration is loaded only
         // to refuse `--config` and is deliberately not logged: `mise run openapi-check-kynos` is
         // a check gate, and a settings dump on its stderr is noise in every CI log that runs it.
@@ -456,6 +511,55 @@ async fn scrub(config: &Config, depth: Depth) -> Result<ExitCode> {
     } else {
         ExitCode::from(EXIT_FINDINGS)
     })
+}
+
+/// Suspend an account's quota, or lift the suspension (#705).
+///
+/// Exits zero whether or not the act changed anything, and says which on stdout: suspending a
+/// suspended account and lifting a suspension that is not there are both the state the operator
+/// asked for, so neither is a failure a wrapper script should retry.
+async fn quota(config: &Config, action: &QuotaAction) -> Result<ExitCode> {
+    let maintenance = maintenance(config).await?;
+    let ledger = maintenance.quota.quotas();
+    let report = match action {
+        QuotaAction::Suspend { user, .. } => {
+            let user = UserId::new(user.as_str());
+            let at = maintenance.quota.clock().now();
+            let changed = ledger
+                .suspend(&user, at)
+                .await
+                .map_err(|error| eyre!("the quota ledger could not suspend {user}: {error}"))?;
+            if changed {
+                tracing::info!(%user, %at, "an operator suspended an account's quota");
+                format!("quota suspended: {user}")
+            } else {
+                tracing::info!(%user, "an operator suspended an already-suspended account's quota");
+                let since = ledger
+                    .usage(&user)
+                    .await
+                    .map_err(|error| eyre!("the quota ledger could not read {user}: {error}"))?
+                    .suspended_since
+                    .map_or_else(String::new, |since| format!(" (since {since})"));
+                format!("quota already suspended: {user}{since}")
+            }
+        }
+        QuotaAction::Unsuspend { user, .. } => {
+            let user = UserId::new(user.as_str());
+            let changed = ledger
+                .unsuspend(&user)
+                .await
+                .map_err(|error| eyre!("the quota ledger could not unsuspend {user}: {error}"))?;
+            if changed {
+                tracing::info!(%user, "an operator lifted an account's quota suspension");
+                format!("quota suspension lifted: {user}")
+            } else {
+                tracing::info!(%user, "an operator unsuspended an account whose quota was not suspended");
+                format!("quota was not suspended: {user}")
+            }
+        }
+    };
+    println!("{report}");
+    Ok(ExitCode::SUCCESS)
 }
 
 /// One pass's report, rendered for a person.
@@ -647,8 +751,8 @@ mod tests {
     use clap::{CommandFactory as _, Parser as _};
 
     use super::{
-        Cli, CollectionReport, Command, Mode, PurgeReport, ScrubReport, mode, render_collection,
-        render_purge, render_scrub,
+        Cli, CollectionReport, Command, Mode, PurgeReport, QuotaAction, ScrubReport, mode,
+        render_collection, render_purge, render_scrub,
     };
 
     #[test]
@@ -708,6 +812,38 @@ mod tests {
                 .demands(),
             crate::config::Demands::Nothing
         );
+    }
+
+    #[test]
+    fn the_quota_acts_are_maintenance_commands_that_carry_their_backend() {
+        for act in ["suspend", "unsuspend"] {
+            let cli = Cli::parse_from([
+                "capsule-server",
+                "quota",
+                act,
+                "user-1",
+                "--memory",
+                "--blob-root",
+                "/var/lib/capsule/blobs",
+            ]);
+            assert_eq!(
+                cli.command.demands(),
+                crate::config::Demands::Maintenance,
+                "{act}: an operator's quota act needs no key material"
+            );
+            let overrides = cli.command.overrides(None);
+            assert!(overrides.memory, "{act}");
+            assert_eq!(
+                overrides.blob_root.as_deref(),
+                Some(std::path::Path::new("/var/lib/capsule/blobs")),
+                "{act}"
+            );
+            let Command::Quota { action } = cli.command else {
+                panic!("{act}: that is the subcommand that was parsed")
+            };
+            let (QuotaAction::Suspend { user, .. } | QuotaAction::Unsuspend { user, .. }) = action;
+            assert_eq!(user, "user-1", "{act}");
+        }
     }
 
     #[test]
