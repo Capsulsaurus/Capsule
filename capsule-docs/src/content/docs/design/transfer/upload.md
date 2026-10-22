@@ -199,7 +199,7 @@ Duplicates already in a library are collapsed by [intra-library deduplication](/
 
 A per-device **upload policy** orders sessions; the server has no mode branch.
 
-- **`full`** (default) — every session of a bundle opens eagerly.
+- **`full`** (default) — every session of a bundle opens eagerly, on a connection that permits bulk transfers; on any other a push runs `staged` (the [cache plan](/design/filesystem/client/#automatic-cache-management) defers bulk work).
 - **`staged`** — sessions open in tier order per asset:
 
 | Tier | Roles | Opens when |
