@@ -15,7 +15,10 @@ never decodes media; clients do all processing and encryption.
   can make "revoke all sessions" revoke nothing) and persistence on.
 - **A blob directory** (`BLOB_ROOT`) on **one filesystem**. Finalization is an atomic rename, so
   the tree cannot span volumes or Kubernetes PersistentVolumes. It holds the blobs and, under
-  `ledger/`, each owner's signed ledger, which is what lets the index be rebuilt from it.
+  `ledger/`, each owner's signed ledger, which is what lets the index be rebuilt from it. A
+  network mount such as NFS works when it supports file locks: `serve` and `purge --apply` take
+  a lock on each owner's `ledger/<owner>/.lock` before appending, so a mount with locking
+  disabled (`nolock`) lets them interleave unless both run on the same host.
 - **A TLS-terminating reverse proxy** in front of the server.
 
 `capsule-server/compose.yaml` runs Postgres and Valkey with the right settings for local use

@@ -190,6 +190,16 @@ impl UploadSessionRecord {
     pub fn is_guest_drop(&self) -> bool {
         self.manifest_envelope.is_empty()
     }
+
+    /// Whether this session holds every declared byte and nobody has claimed its finish.
+    ///
+    /// The state a process leaves when it dies between recording the completing chunk and
+    /// claiming the finalization or deposit that chunk triggers. Nothing is driving such a
+    /// session, so whoever meets it — a replayed chunk, a duplicate create, a `HEAD`, boot
+    /// recovery — finishes it through the claim, which makes two of them racing harmless.
+    pub fn is_full_and_unclaimed(&self) -> bool {
+        self.status.is_evictable() && self.received_bytes == self.total_size
+    }
 }
 
 /// One chunk the server durably appended.

@@ -463,8 +463,12 @@ async fn serve(config: &Config) -> Result<ExitCode> {
 /// does not wait on a hash of every stranded blob before it serves, and a claimed session
 /// refuses chunks and cancellation meanwhile, so nothing can race the driver for it.
 ///
-/// A store that cannot list them is logged and not fatal: the claims stay in the store, and the
-/// next boot lists them again.
+/// The same pass finishes every session a previous process left full and unclaimed — it died
+/// between recording the completing chunk and claiming — through the finisher a replayed chunk
+/// runs, which claims before it drives, so a client that reaches the session first is not raced.
+///
+/// A store that cannot list either set is logged and not fatal: the sessions stay in the store,
+/// and the next boot lists them again.
 async fn recover_stranded_claims(app: &crate::App) {
     use kynos::di::Provides as _;
 
@@ -478,22 +482,36 @@ async fn recover_stranded_claims(app: &crate::App) {
                 %error,
                 "could not list stranded finalization claims; they wait for the next boot"
             );
-            return;
+            Vec::new()
         }
     };
-    if stranded.is_empty() {
-        tracing::debug!("no stranded finalization claims to recover");
-        return;
-    }
     tracing::info!(
         stranded = stranded.len(),
-        "recovering finalization claims a previous process left"
+        "recovering the finishes a previous process left"
     );
-    // One listing, two finishers: an album claim is a finalization, a guest drop's is a deposit,
-    // and each recovery drives only its own.
+    // Two listings, two finishers each: an album session is a finalization, a guest drop's is a
+    // deposit, and each drives only its own. The claims first: they are already exclusive. The
+    // full, unclaimed sessions are listed afterwards, in the task, because they need no snapshot
+    // taken before the listener binds — each is claimed before it is driven, so a client that
+    // reaches one first finishes it and the sweep stands down — and a boot does not wait on a
+    // read of every live session before it serves.
     tokio::spawn(async move {
         crate::upload::finalize::recover(&upload, &attestation, stranded.clone()).await;
         crate::drop::deposit::recover(&drops, stranded).await;
+        // The sessions the previous process left one step earlier: every byte recorded, the
+        // claim never taken. Nothing else finishes one whose client does not replay a chunk.
+        let full = match crate::upload::finalize::full_unclaimed(upload.sessions()).await {
+            Ok(full) => full,
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    "could not list full, unclaimed sessions; they wait for their client or the next boot"
+                );
+                return;
+            }
+        };
+        crate::upload::finalize::finish_unclaimed(&upload, &attestation, full.clone()).await;
+        crate::drop::deposit::finish_unclaimed(&drops, full).await;
     });
 }
 

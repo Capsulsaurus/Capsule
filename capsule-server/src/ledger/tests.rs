@@ -52,7 +52,8 @@ impl Disk {
         }
     }
 
-    /// `owner`'s segment files, sorted by name.
+    /// `owner`'s segment files, sorted by name; the lock file and the attachment directory
+    /// beside them are not segments.
     fn segment_names(&self, owner: &OwnerId) -> Vec<String> {
         let mut names: Vec<String> = std::fs::read_dir(self.ledger.owner_dir(owner))
             .expect("the owner has a directory")
@@ -63,6 +64,7 @@ impl Disk {
                     .to_string_lossy()
                     .into_owned()
             })
+            .filter(|name| std::path::Path::new(name).extension() == Some("log".as_ref()))
             .collect();
         names.sort();
         names
@@ -302,6 +304,224 @@ async fn two_adapters_on_one_root_appending_concurrently_keep_one_chain() {
         task.await.expect("the task ran");
     }
     assert_one_chain(&server, &owner, &signer, 40).await;
+}
+
+/// Hold `owner`'s cross-process lock from outside the adapter, as another process would.
+fn hold_lock_file(ledger: &FilesystemLedger, owner: &OwnerId) -> std::fs::File {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(ledger.owner_dir(owner).join(fs::LOCK_FILE))
+        .expect("the owner's lock file exists once it has appended");
+    file.lock().expect("the lock is free");
+    file
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_append_and_a_scan_wait_for_a_lock_held_on_the_lock_file() {
+    let (_root, server, purge) = two_writers(fs::DEFAULT_SEGMENT_BYTES).await;
+    let server = Arc::new(server);
+    let signer = Arc::new(key());
+    let owner = OwnerId::new("held");
+    server
+        .append(&owner, event(1), Timestamp::UNIX_EPOCH, signer.as_ref())
+        .await
+        .expect("append");
+
+    let held = hold_lock_file(&purge, &owner);
+    let appending = tokio::spawn({
+        let (server, signer, owner) = (server.clone(), signer.clone(), owner.clone());
+        async move {
+            server
+                .append(&owner, event(2), Timestamp::UNIX_EPOCH, signer.as_ref())
+                .await
+        }
+    });
+    let scanning = tokio::spawn({
+        let owner = owner.clone();
+        async move { purge.scan(&owner).await }
+    });
+    let window = std::time::Duration::from_millis(200);
+    tokio::time::sleep(window).await;
+    assert!(
+        !appending.is_finished(),
+        "an append waits while another process holds the lock file"
+    );
+    assert!(
+        !scanning.is_finished(),
+        "a scan waits while another process holds the lock file"
+    );
+
+    drop(held);
+    let entry = appending
+        .await
+        .expect("the task ran")
+        .expect("the append proceeds once the lock is released");
+    assert_eq!(entry.core.seq, 2);
+    let scan = scanning
+        .await
+        .expect("the task ran")
+        .expect("the scan proceeds once the lock is released");
+    assert_eq!(scan.damage, None);
+    assert_one_chain(&server, &owner, &signer, 2).await;
+}
+
+#[tokio::test]
+async fn the_lock_file_is_never_read_as_a_segment_or_an_owner() {
+    let disk = Disk::open().await;
+    let signer = key();
+    let owner = OwnerId::new("locked");
+    disk.ledger
+        .append(&owner, event(1), Timestamp::UNIX_EPOCH, &signer)
+        .await
+        .expect("append");
+    disk.ledger
+        .attach(&owner, Hash32::from_bytes([7; 32]), b"kept".to_vec())
+        .await
+        .expect("attach");
+    let owner_dir = disk.ledger.owner_dir(&owner);
+    assert!(
+        owner_dir.join(fs::LOCK_FILE).is_file(),
+        "the append took its lock on a file in the owner's directory"
+    );
+    assert!(
+        owner_dir.join(fs::ATTACHMENT_DIR).is_dir(),
+        "the lock file sits beside the attachment directory, not in it"
+    );
+    assert_one_chain(&disk.ledger, &owner, &signer, 1).await;
+    assert_eq!(
+        disk.ledger
+            .append(&owner, event(2), Timestamp::UNIX_EPOCH, &signer)
+            .await
+            .expect("append after an attachment")
+            .core
+            .seq,
+        2
+    );
+    assert_one_chain(&disk.ledger, &owner, &signer, 2).await;
+    assert_eq!(
+        disk.ledger.owners().await.expect("owners"),
+        std::slice::from_ref(&owner)
+    );
+
+    // An owner whose first append failed after taking the lock holds the lock file alone: no
+    // ledger, so neither a listed owner nor a damaged one.
+    let empty = OwnerId::new("lock-only");
+    let dir = disk.ledger.owner_dir(&empty);
+    std::fs::create_dir(&dir).expect("create");
+    std::fs::write(dir.join(fs::LOCK_FILE), b"").expect("write");
+    assert_eq!(disk.ledger.owners().await.expect("owners"), [owner]);
+    let scan = disk.ledger.scan(&empty).await.expect("scan");
+    assert!(scan.entries.is_empty());
+    assert_eq!(scan.damage, None);
+    let first = disk
+        .ledger
+        .append(&empty, event(1), Timestamp::UNIX_EPOCH, &signer)
+        .await
+        .expect("append beside an existing lock file");
+    assert_eq!(first.core.seq, 1);
+}
+
+/// Make `path` read-only (`true`) or writable again, returning whether this process is now
+/// refused a write there; a privileged process is not, and a test then has nothing to prove.
+#[cfg(unix)]
+fn read_only(path: &std::path::Path, read_only: bool, probe: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = match (path.is_dir(), read_only) {
+        (true, true) => 0o555,
+        (true, false) => 0o755,
+        (false, true) => 0o444,
+        (false, false) => 0o644,
+    };
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect("chmod");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(probe)
+        .is_err()
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_reader_without_write_access_still_scans() {
+    let disk = Disk::open().await;
+    let signer = key();
+
+    // A ledger whose lock file exists but is not writable to the reader: shared, read-only.
+    let locked = OwnerId::new("read-only-lock");
+    disk.ledger
+        .append(&locked, event(1), Timestamp::UNIX_EPOCH, &signer)
+        .await
+        .expect("append");
+    let lock_file = disk.ledger.owner_dir(&locked).join(fs::LOCK_FILE);
+    if read_only(&lock_file, true, &lock_file) {
+        assert_one_chain(&disk.ledger, &locked, &signer, 1).await;
+    }
+    read_only(&lock_file, false, &lock_file);
+
+    // A ledger from before the lock file, in a directory the reader cannot create it in.
+    let legacy = OwnerId::new("read-only-dir");
+    disk.ledger
+        .append(&legacy, event(1), Timestamp::UNIX_EPOCH, &signer)
+        .await
+        .expect("append");
+    let dir = disk.ledger.owner_dir(&legacy);
+    std::fs::remove_file(dir.join(fs::LOCK_FILE)).expect("remove");
+    if read_only(&dir, true, &dir.join(fs::LOCK_FILE)) {
+        assert_one_chain(&disk.ledger, &legacy, &signer, 1).await;
+        assert!(
+            matches!(
+                disk.ledger
+                    .append(&legacy, event(2), Timestamp::UNIX_EPOCH, &signer)
+                    .await,
+                Err(LedgerError::Backend { .. })
+            ),
+            "a writer that cannot take the lock refuses to append"
+        );
+    }
+    read_only(&dir, false, &dir.join(fs::LOCK_FILE));
+}
+
+/// A scrub or rebuild may run as another user than the server; a lock file it created would be
+/// one the server could not open for writing, refusing that owner's appends.
+#[tokio::test]
+async fn a_scan_never_creates_the_lock_file() {
+    let disk = Disk::open().await;
+    let signer = key();
+    let owner = OwnerId::new("no-lock-yet");
+    disk.ledger
+        .append(&owner, event(1), Timestamp::UNIX_EPOCH, &signer)
+        .await
+        .expect("append");
+    let lock_file = disk.ledger.owner_dir(&owner).join(fs::LOCK_FILE);
+    // A ledger written before the lock file existed.
+    std::fs::remove_file(&lock_file).expect("remove");
+
+    assert_one_chain(&disk.ledger, &owner, &signer, 1).await;
+    assert!(
+        !lock_file.exists(),
+        "a scan reads unlocked rather than create the lock file"
+    );
+
+    disk.ledger
+        .append(&owner, event(2), Timestamp::UNIX_EPOCH, &signer)
+        .await
+        .expect("append");
+    assert!(lock_file.is_file(), "the next append creates it");
+    assert_one_chain(&disk.ledger, &owner, &signer, 2).await;
+}
+
+#[tokio::test]
+async fn a_scan_of_an_owner_with_no_directory_creates_nothing() {
+    let disk = Disk::open().await;
+    let owner = OwnerId::new("absent");
+    let scan = disk.ledger.scan(&owner).await.expect("scan");
+    assert!(scan.entries.is_empty());
+    assert!(
+        !disk.ledger.owner_dir(&owner).exists(),
+        "a read leaves no directory or lock file behind"
+    );
 }
 
 #[tokio::test]
