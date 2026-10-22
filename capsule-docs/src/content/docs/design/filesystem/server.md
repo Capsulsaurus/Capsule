@@ -75,6 +75,17 @@ accepted it. The **owner ledger** carries those facts:
 - An entry is appended and fsynced **after** the blobs it names are committed and **before** the
   index row commits. A crash between the two leaves an entry without a row, which the next
   rebuild or scrub replays; never a row without an entry.
+- The `sync_seq` and the custody receipt are minted inside the index transaction, so a
+  finalization writes two entries: a **custody** entry before the transaction (content hash,
+  size, role, uploader, `received_at`) whose failure fails the finalization, and an **indexed**
+  entry after it carrying the `sync_seq` and the receipt. A missing indexed entry is a sequence
+  the rebuild cannot prove, handled like a lost tail.
+- Each entry carries its owner, its position (`seq`, from 1, contiguous) and the hash of its
+  predecessor inside the signed core. Edits, removals, a dropped head and a torn tail are
+  detected from the chain alone; a tail cut exactly at an entry boundary is detected only
+  against a head known from elsewhere (an index row or a receipt). A segment is a sequence of
+  length-prefixed canonical-CBOR frames; the only bytes ever cut are an incomplete final frame,
+  which was never acknowledged. A ledger damaged anywhere else refuses further appends.
 - The ledger is never rewritten. Purge appends a purge entry; the purged blobs go through
   [GC](#deletion-and-garbage-collection) as before.
 - Device-directory versions are in the ledger, so a rebuild verifies signatures against the
