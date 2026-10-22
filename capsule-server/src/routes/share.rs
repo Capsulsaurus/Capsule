@@ -773,3 +773,6 @@ impl ShareRejection {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

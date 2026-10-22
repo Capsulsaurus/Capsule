@@ -1501,3 +1501,6 @@ impl AdoptRejection {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
