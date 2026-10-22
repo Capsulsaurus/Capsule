@@ -23,6 +23,13 @@
 //! a new sync epoch ([`AssetIndex::bump_sync_epoch`]), so a client's cursor from before the
 //! rebuild is refused rather than resumed against a numbering it never saw.
 //!
+//! Those numbers come from the owner's allocator inside the restore
+//! ([`AssetIndex::restore`]), after every row the ledger did number has raised it, so a server
+//! still accepting writes cannot mint the same number for another asset. A row the ledger did
+//! number keeps that number; restoring it into an index a running server has kept writing to
+//! since the backup was taken can meet a number the server has already re-issued, which is why
+//! the self-hosting guide restores with the server stopped.
+//!
 //! # Dry run by default
 //!
 //! [`Mode::DryRun`] reads everything and writes nothing: no row, no quota charge, no epoch, no
@@ -350,12 +357,11 @@ async fn rebuild_owner(
         }
     }
 
-    // The owner's numbering as it stands: what the ledger proved and what the index has used.
-    let mut ceiling = context.index.head_seq(owner).await?;
-    for facts in assets.values() {
-        ceiling = ceiling.max(facts.proven.iter().copied().max().unwrap_or(0));
-    }
-
+    // Rows the ledger numbered are restored first, each raising the owner's allocator past its
+    // number; rows it could not number go last and are numbered by that allocator inside the
+    // restore, so they land above every proven number and above anything a live server mints
+    // meanwhile.
+    let mut unnumbered: Vec<(AssetRow, Accumulated)> = Vec::new();
     for asset in order {
         let Some(facts) = assets.remove(&asset) else {
             continue;
@@ -366,7 +372,7 @@ async fn rebuild_owner(
                 .iter()
                 .map(|address| (asset.clone(), address.clone())),
         );
-        let Some(mut row) = assemble(owner, &asset, &facts) else {
+        let Some(row) = assemble(owner, &asset, &facts) else {
             if facts.purged {
                 report.purged.push(asset);
             } else {
@@ -375,17 +381,18 @@ async fn rebuild_owner(
             continue;
         };
         if facts.unresolved || row.sync_seq.is_none() {
-            // The ledger cannot prove where this write sits in the owner's sequence. Numbered
-            // above everything the owner has used, so it is new to every reader, and the owner
-            // moves epoch so no reader resumes against the old numbering.
-            if row.sync_seq.is_none() {
-                ceiling += 1;
-                row.sync_seq = Some(ceiling);
-                row.first_seq = Some(ceiling);
-            }
+            // The ledger cannot prove where this write sits in the owner's sequence, so the
+            // owner moves epoch and no reader resumes against the old numbering.
             report.unprovable.push(asset.clone());
             report.epoch_bump_needed = true;
         }
+        if row.sync_seq.is_none() {
+            unnumbered.push((row, facts));
+            continue;
+        }
+        compare_or_restore(context, mode, row, &facts, &mut report).await?;
+    }
+    for (row, facts) in unnumbered {
         compare_or_restore(context, mode, row, &facts, &mut report).await?;
     }
 
@@ -757,7 +764,9 @@ pub fn differences(held: &AssetRow, rebuilt: &AssetRow) -> Vec<&'static str> {
     if held.crypto_suite_id != rebuilt.crypto_suite_id {
         facts.push("crypto_suite_id");
     }
-    if held.sync_seq.is_some() != rebuilt.sync_seq.is_some() {
+    // A rebuilt row with no number is one the ledger could not number, which says nothing about
+    // the held row's; a numbered rebuilt row says the asset was published.
+    if held.sync_seq.is_none() && rebuilt.sync_seq.is_some() {
         facts.push("sync_seq");
     }
     let addresses = |row: &AssetRow| -> BTreeSet<(BlobRole, String)> {

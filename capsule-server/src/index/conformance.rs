@@ -2526,6 +2526,27 @@ pub async fn a_restored_row_keeps_its_number_and_the_allocator_moves_past_it(
     assert_eq!(minted, 8);
 }
 
+/// A restored row with no number is numbered by the owner's allocator, as a publication is.
+pub async fn a_restored_row_without_a_number_takes_the_allocators_next(index: &dyn AssetIndex) {
+    let (_, published) = publish(index, "restore-mint", 1).await;
+    let mut row = rebuilt("restore-mint", 2, 0);
+    row.sync_seq = None;
+    row.first_seq = None;
+    assert_eq!(
+        ok(
+            index.restore(row.clone()).await,
+            "restore an unnumbered row"
+        ),
+        RestoreOutcome::Restored
+    );
+    let restored = ok(index.read(&row.asset_id).await, "read").expect("the row exists");
+    assert_eq!(restored.sync_seq, Some(published + 1));
+    assert_eq!(restored.first_seq, Some(published + 1));
+    // And the allocator has moved past it.
+    let (_, next) = publish(index, "restore-mint", 3).await;
+    assert_eq!(next, published + 2);
+}
+
 /// A row the index already holds is returned unchanged, never overwritten.
 pub async fn restoring_over_an_existing_row_overwrites_nothing(index: &dyn AssetIndex) {
     let (asset, seq) = publish(index, "restore-over", 1).await;
@@ -2590,6 +2611,7 @@ pub async fn run_all(index: &dyn AssetIndex) {
     the_row_walk_orders_by_the_identifiers_own_bytes(index).await;
     a_sync_epoch_starts_at_zero_and_only_rises(index).await;
     a_restored_row_keeps_its_number_and_the_allocator_moves_past_it(index).await;
+    a_restored_row_without_a_number_takes_the_allocators_next(index).await;
     restoring_over_an_existing_row_overwrites_nothing(index).await;
 }
 

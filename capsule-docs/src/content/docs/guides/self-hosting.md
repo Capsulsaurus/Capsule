@@ -88,8 +88,9 @@ Schedule these one-shot commands (cron or a timer). They need `DATABASE_URL`, `V
   [Maintenance](/design/filesystem/maintenance/#server-side-integrity-scrub).
 
 After restoring a backup, or losing the database, run `capsule-server rebuild` to compare the
-index with the owner ledgers under `BLOB_ROOT`, then `capsule-server rebuild --apply` to restore
-the rows the index lacks. It never overwrites a row the index holds. Set `ATTESTATION_KEY_SEED`
+index with the owner ledgers under `BLOB_ROOT`, then, with `serve` stopped,
+`capsule-server rebuild --apply` to restore the rows the index lacks. It never overwrites a row
+the index holds. Set `ATTESTATION_KEY_SEED`
 on the host so it verifies the ledgers' signatures. See
 [Rebuild](/design/filesystem/server/#rebuild).
 

@@ -629,9 +629,16 @@ impl AssetIndex for InMemoryAssetIndex {
             if let Some(existing) = inner.rows.get(&row.asset_id) {
                 return Ok(RestoreOutcome::Present(Box::new(existing.clone())));
             }
+            let mut row = row;
             if let Some(seq) = row.sync_seq {
                 let minted = inner.minted.entry(row.owner_id.clone()).or_insert(0);
                 *minted = (*minted).max(seq);
+            } else if row.state != AssetState::Pending {
+                // Unprovable: numbered by the allocator, under the same lock every publication
+                // mints under, so no concurrent write can be handed the same number.
+                let seq = inner.mint(&row.owner_id);
+                row.sync_seq = Some(seq);
+                row.first_seq = Some(seq);
             }
             tracing::debug!(asset = %row.asset_id, sync_seq = ?row.sync_seq, "restored a rebuilt row");
             inner.rows.insert(row.asset_id.clone(), row);

@@ -1469,10 +1469,22 @@ impl AssetIndex for PostgresAssetIndex {
                             .to_owned(),
                     });
             }
+            // An unprovable row is numbered by the owner's allocator inside this transaction, the
+            // same counter row every publication mints from, so a live server cannot hand the
+            // same number to another write.
+            let mut row = row;
+            let minted = if row.sync_seq.is_none() && row.state != AssetState::Pending {
+                let seq = mint(&transaction, &row.owner_id).await?;
+                row.sync_seq = Some(seq);
+                row.first_seq = Some(seq);
+                true
+            } else {
+                false
+            };
             // The remaining columns and the collections, through the one writer every mutation
             // here uses.
             persist(&transaction, &row).await?;
-            if let Some(seq) = row.sync_seq {
+            if let Some(seq) = row.sync_seq.filter(|_| !minted) {
                 transaction
                     .execute_raw(Statement::from_sql_and_values(
                         DbBackend::Postgres,

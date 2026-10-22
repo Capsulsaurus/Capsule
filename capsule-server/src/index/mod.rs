@@ -908,6 +908,12 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
     /// The row keeps the `sync_seq` it carries, so clients' cursors stay valid, and the owner's
     /// allocator is raised to at least that number in the same operation, so the next
     /// publication cannot re-issue it.
+    ///
+    /// A row that is not pending and carries **no** `sync_seq` — one whose number the ledger
+    /// could not prove — is numbered by the owner's allocator in the same critical section, as
+    /// a publication is, and its `first_seq` with it. A number read from the head beforehand
+    /// and written later could be minted again by a server still accepting writes between the
+    /// two; the allocator cannot.
     fn restore(&self, row: AssetRow) -> IndexFuture<'_, RestoreOutcome>;
 }
 
