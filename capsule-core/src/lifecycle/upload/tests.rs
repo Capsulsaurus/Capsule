@@ -83,10 +83,6 @@ fn upload_bundle_ciphertext_matches_the_manifest_hash() {
     assert_eq!(Some(blob_hash), bundle.metadata_blob_hash);
 }
 
-/// **The `S-A10` interaction.** A bundle built after closing and reopening the library is
-/// byte-identical to one built before the close: album keys, authorities, the asset's chain and
-/// its exact sealed metadata blob all survive, so a push is re-runnable across processes. Before
-/// `S-A10` the reopened workspace held no AMK at all and this could not even be attempted.
 /// An original is never refused for its type (issue #695): one the protocol's closed
 /// `content_type` enum names declares itself, any other declares the opaque type, and the
 /// sidecar keeps the true one either way.
@@ -130,6 +126,10 @@ fn wire_content_type_passes_the_closed_enum_and_masks_the_rest() {
     }
 }
 
+/// **The `S-A10` interaction.** A bundle built after closing and reopening the library is
+/// byte-identical to one built before the close: album keys, authorities, the asset's chain and
+/// its exact sealed metadata blob all survive, so a push is re-runnable across processes. Before
+/// `S-A10` the reopened workspace held no AMK at all and this could not even be attempted.
 #[test]
 fn upload_bundle_survives_a_reopen() {
     let lib = TempDir::new().unwrap();
