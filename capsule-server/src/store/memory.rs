@@ -1505,6 +1505,7 @@ mod tests {
         a_terminal_session_is_not_an_eviction_candidate,
         discarding_removes_the_record_its_chunks_and_its_listing,
         eviction_candidates_are_ordered_by_progress_and_bounded,
+        the_claimed_listing_is_exactly_the_sessions_awaiting_their_finalizer,
         an_expired_upload_session_leaves_no_listing_entry_behind,
         a_challenge_is_single_use,
         a_challenge_expires_with_its_store,

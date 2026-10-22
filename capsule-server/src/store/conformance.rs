@@ -1006,6 +1006,99 @@ pub async fn eviction_candidates_are_ordered_by_progress_and_bounded(h: &dyn Har
     }
 }
 
+/// The claimed listing is exactly the sessions awaiting their finalizer, oldest first.
+///
+/// Boot recovery re-drives every session this lists, so a session listed that is not claimed
+/// would be finalized behind its uploader's back, and a claimed one missing would stay stranded.
+/// The listing is store-wide, so the case reads only its own ids out of it: a shared harness
+/// may hold another case's claim.
+pub async fn the_claimed_listing_is_exactly_the_sessions_awaiting_their_finalizer(h: &dyn Harness) {
+    const CASE: &str = "claimed-listing";
+    let store = h.uploads();
+    let mine = |listed: Vec<UploadSessionRecord>| -> Vec<UploadId> {
+        listed
+            .into_iter()
+            .inspect(|record| {
+                assert_eq!(
+                    record.status,
+                    UploadSessionStatus::WaitingForProcessing,
+                    "only a claimed session is listed"
+                );
+            })
+            .map(|record| record.upload_id)
+            .filter(|id| id.as_str().starts_with(CASE))
+            .collect()
+    };
+
+    let newer = upload(CASE, "newer", "uploader", 400);
+    let older = upload(CASE, "older", "uploader", 300);
+    let idle = upload(CASE, "idle", "uploader", 350);
+    let done = upload(CASE, "done", "uploader", 360);
+    let dropped = upload(CASE, "dropped", "uploader", 370);
+    for record in [&newer, &older, &idle, &done, &dropped] {
+        ok(store.open(record.clone()).await, "open");
+    }
+    assert!(
+        mine(ok(store.claimed().await, "claimed")).is_empty(),
+        "an unclaimed session is not listed"
+    );
+
+    for record in [&newer, &older, &done, &dropped] {
+        match ok(
+            store.claim_finalize(&record.upload_id).await,
+            "claim_finalize",
+        ) {
+            FinalizeClaim::Won(_) => {}
+            other => panic!("the first claim must win, got {other:?}"),
+        }
+    }
+    ok(
+        store
+            .set_status(&done.upload_id, UploadSessionStatus::Completed)
+            .await,
+        "set_status",
+    );
+    ok(store.discard(&dropped.upload_id).await, "discard");
+    assert_eq!(
+        mine(ok(store.claimed().await, "claimed")),
+        vec![older.upload_id.clone(), newer.upload_id.clone()],
+        "the claimed sessions, oldest first; a completed or discarded one has left"
+    );
+
+    ok(
+        store
+            .set_status(&newer.upload_id, UploadSessionStatus::FailedProcessing)
+            .await,
+        "set_status",
+    );
+    assert_eq!(
+        mine(ok(store.claimed().await, "claimed")),
+        vec![older.upload_id.clone()],
+        "a failed session has left the listing"
+    );
+
+    // A session opened as claimed is listed, and re-opened as pending is not: the listing
+    // follows the status written, whichever operation wrote it.
+    let mut reclaimed = idle.clone();
+    reclaimed.status = UploadSessionStatus::WaitingForProcessing;
+    ok(store.open(reclaimed).await, "open");
+    let mut released = older.clone();
+    released.status = UploadSessionStatus::Uploading;
+    ok(store.open(released).await, "open");
+    assert_eq!(
+        mine(ok(store.claimed().await, "claimed")),
+        vec![idle.upload_id.clone()],
+        "the listing follows the status a re-open wrote"
+    );
+
+    // And a claim that outlives its session's lifetime is not recovered: the record is gone.
+    ok(h.advance(store.ttl()).await, "advance to the lifetime cap");
+    assert!(
+        mine(ok(store.claimed().await, "claimed")).is_empty(),
+        "an expired claim leaves the listing"
+    );
+}
+
 /// An expired upload session leaves nothing behind in either view.
 pub async fn an_expired_upload_session_leaves_no_listing_entry_behind(h: &dyn Harness) {
     let store = h.uploads();
@@ -1770,6 +1863,7 @@ pub async fn run_all(h: &dyn Harness) {
     a_terminal_session_is_not_an_eviction_candidate(h).await;
     discarding_removes_the_record_its_chunks_and_its_listing(h).await;
     eviction_candidates_are_ordered_by_progress_and_bounded(h).await;
+    the_claimed_listing_is_exactly_the_sessions_awaiting_their_finalizer(h).await;
     an_expired_upload_session_leaves_no_listing_entry_behind(h).await;
 
     a_challenge_is_single_use(h).await;
