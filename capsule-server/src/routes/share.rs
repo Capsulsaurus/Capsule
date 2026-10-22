@@ -635,13 +635,35 @@ fn metadata_record(
     Ok(record)
 }
 
+/// The state that refuses a metadata-growth write from `owner`, or `None` when it is admitted.
+///
+/// The one question every metadata-growth endpoint asks — a share link here, an upload link in
+/// [`crate::routes::drop`] — so the two cannot drift on which states refuse. `Some` is
+/// [`crate::quota::QuotaState::GraceExpired`] or [`crate::quota::QuotaState::Suspended`]; each
+/// caller renders it as its own surface's `403`.
+///
+/// # Errors
+///
+/// Propagates the ledger's failure.
+pub(crate) async fn metadata_growth_refusal(
+    quota: &QuotaContext,
+    owner: &UserId,
+) -> Result<Option<crate::quota::QuotaState>, crate::store::StoreError> {
+    let state = crate::quota::current_state(quota, owner).await?;
+    if crate::quota::admits(state, WriteClass::MetadataGrowth, 0, 0, quota.limits()) {
+        Ok(None)
+    } else {
+        Ok(Some(state))
+    }
+}
+
 /// Refuse a share link from an account past its quota grace window (`S-C6`), or whose quota the
 /// operator suspended (#705).
 async fn admit_metadata_growth(
     quota: &QuotaContext,
     owner: &UserId,
 ) -> Result<(), IssueShareRejection> {
-    let state = crate::quota::current_state(quota, owner)
+    let refusal = metadata_growth_refusal(quota, owner)
         .await
         .map_err(|error| {
             tracing::error!(%error, %owner, "the quota ledger could not answer");
@@ -649,9 +671,9 @@ async fn admit_metadata_growth(
                 code: error_codes::SHARE_UNAVAILABLE,
             }
         })?;
-    if crate::quota::admits(state, WriteClass::MetadataGrowth, 0, 0, quota.limits()) {
+    let Some(state) = refusal else {
         return Ok(());
-    }
+    };
     if state == crate::quota::QuotaState::Suspended {
         tracing::info!(%owner, "a share link was refused: the account's quota is suspended");
         return Err(IssueShareRejection::QuotaSuspended {
