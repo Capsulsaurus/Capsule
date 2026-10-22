@@ -1218,6 +1218,29 @@ async fn adopt_claimed(
     .map_err(|reject| AdoptRejection::refused(&format!("the manifest is refused: {reject:?}")))?;
 
     let asset_id = crate::store::AssetId::new(&request.asset_id);
+
+    // The receipt is keyed by the drop id, which names no asset, so the binding is checked
+    // here: a drop whose adoption already committed (its answer lost) has its receipt under
+    // that asset, and a retry naming another asset would index the blob a second time while
+    // the log's per-upload idempotency handed back the first asset's receipt — leaving the new
+    // asset indexed with none (invariant 33). Refused before anything is reserved, naming the
+    // asset the drop was adopted as so the retry can name it. The claim held above makes this
+    // read race-free: no other adoption of this drop can commit until it is released.
+    if let Some(committed) = adopted_as(attestation, entry).await?
+        && committed != request.asset_id
+    {
+        tracing::info!(
+            %owner,
+            drop_id = %entry.drop_id,
+            %asset_id,
+            committed_asset_id = %committed,
+            "an adoption was refused: the drop was already adopted as another asset"
+        );
+        return Err(AdoptRejection::refused(&format!(
+            "this drop was already adopted as asset {committed}"
+        )));
+    }
+
     let now = drops.clock().now();
     match upload
         .index()
@@ -1275,7 +1298,8 @@ async fn adopt_claimed(
                 %error,
                 drop_id = %entry.drop_id,
                 %asset_id,
-                "an adoption could not record its blob and receipt; neither committed"
+                "an adoption could not confirm its blob and receipt; the outcome is unknown \
+                 (both committed together or neither did) and a retry of the same asset resolves it"
             );
             AdoptRejection::unavailable()
         })?;
@@ -1307,6 +1331,27 @@ async fn adopt_claimed(
     }
 
     Ok(asset_id)
+}
+
+/// The asset `entry` was already adopted as, read from the custody receipt filed under its
+/// drop id, or `None` when no adoption of it has committed.
+async fn adopted_as(
+    attestation: &crate::attestation::AttestationContext,
+    entry: &InboxEntry,
+) -> Result<Option<String>, AdoptRejection> {
+    let receipt = attestation
+        .receipts()
+        .for_upload(&UploadId::new(&entry.drop_id))
+        .await
+        .map_err(|error| {
+            tracing::error!(
+                %error,
+                drop_id = %entry.drop_id,
+                "the receipt log could not answer for an adopted drop"
+            );
+            AdoptRejection::unavailable()
+        })?;
+    Ok(receipt.map(|receipt| receipt.core.asset_id))
 }
 
 /// The custody receipt an adoption commits with its index rows.

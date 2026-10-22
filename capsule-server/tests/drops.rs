@@ -817,6 +817,19 @@ async fn adopt(
     envelope: &Value,
     expect: StatusCode,
 ) -> Value {
+    adopt_as(fixture, bearer, drop_id, ADOPTED, bytes, envelope, expect).await
+}
+
+/// Adopt `drop_id` as `asset_id` with `envelope`, expecting `expect`.
+async fn adopt_as(
+    fixture: &Fixture,
+    bearer: &str,
+    drop_id: &str,
+    asset_id: &str,
+    bytes: &[u8],
+    envelope: &Value,
+    expect: StatusCode,
+) -> Value {
     fixture
         .client
         .post(&format!("/v1/drops/{drop_id}/adopt"))
@@ -824,7 +837,7 @@ async fn adopt(
         .header("accept", "application/json")
         .json(&json!({
             "album_id": album().as_str(),
-            "asset_id": ADOPTED,
+            "asset_id": asset_id,
             "size": bytes.len(),
             "hash": checksum(bytes),
             "content_type": "image/jpeg",
@@ -1065,6 +1078,91 @@ async fn a_retried_adoption_returns_the_same_receipt() {
         adopted_receipts(&fixture).await,
         committed,
         "the retry returned the receipt that committed rather than minting another"
+    );
+}
+
+#[tokio::test]
+async fn a_retried_adoption_naming_another_asset_is_refused_and_indexes_nothing() {
+    // The receipt is filed under the drop id, which names no asset. A retry after a lost
+    // answer that signs a fresh manifest (another `file_id`) must not index the blob under a
+    // second asset while the log hands back the first asset's receipt: that second asset would
+    // be indexed with no receipt (invariant 33). It is refused, names the asset the drop was
+    // adopted as, and a retry naming that asset then settles the drop.
+    const RETRIED: &str = "018f3f1e-4b7a-7c9d-8e2f-00000000cafe";
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (drop_id, bytes, manifest) = pending_drop(&fixture, &bearer).await;
+
+    fixture.index_fault.arm_after_commit();
+    adopt(
+        &fixture,
+        &bearer,
+        &drop_id,
+        &bytes,
+        &manifest["manifest_envelope"],
+        StatusCode::INTERNAL_SERVER_ERROR,
+    )
+    .await;
+    assert_eq!(fixture.index_fault.fired(), 1, "the fault fired");
+    let committed = adopted_receipts(&fixture).await;
+    assert_eq!(committed.len(), 1, "the first adoption committed");
+
+    let mut retried = manifest["manifest_envelope"].clone();
+    retried["file_id"] = RETRIED.into();
+    let problem = adopt_as(
+        &fixture,
+        &bearer,
+        &drop_id,
+        RETRIED,
+        &bytes,
+        &retried,
+        StatusCode::BAD_REQUEST,
+    )
+    .await;
+
+    assert_eq!(problem["code"], "error.drop.adoption_refused");
+    assert!(
+        problem["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains(ADOPTED)),
+        "the refusal names the asset the drop was adopted as: {problem}"
+    );
+    assert_drop_kept(&fixture, &bearer).await;
+    assert!(
+        fixture
+            .index
+            .read(&AssetId::new(RETRIED))
+            .await
+            .expect("the index answers")
+            .is_none(),
+        "no second asset was reserved or indexed for the drop's blob"
+    );
+    {
+        use capsule_server::attestation::ReceiptLog as _;
+        assert!(
+            fixture
+                .receipts
+                .for_asset(&AssetId::new(RETRIED))
+                .await
+                .expect("the log answers")
+                .is_empty(),
+            "and no receipt names it"
+        );
+    }
+
+    adopt(
+        &fixture,
+        &bearer,
+        &drop_id,
+        &bytes,
+        &manifest["manifest_envelope"],
+        StatusCode::OK,
+    )
+    .await;
+    assert_eq!(
+        adopted_receipts(&fixture).await,
+        committed,
+        "the retry naming the committed asset settles on the receipt that committed"
     );
 }
 
