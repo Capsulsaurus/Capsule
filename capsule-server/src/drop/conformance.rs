@@ -20,6 +20,8 @@
 //!   revoked — and the held link, its totals included, reads back unchanged (#553).
 //! - **Other writes under a held key replace.** Re-declaring an upload session and
 //!   re-depositing a drop id each replace the earlier row whole, as the in-memory map inserts do.
+//! - **Filing is a move.** [`DropStore::file`] takes a held declaration into the inbox in one
+//!   step, exactly once, and never replaces a row already filed under its drop id.
 //! - **Instants are not moved.** They may lose sub-microsecond precision and nothing more.
 //!
 //! # Reusing a harness
@@ -529,6 +531,110 @@ pub async fn a_second_declaration_for_a_session_replaces_the_first(h: &dyn Harne
     );
 }
 
+/// Filing moves a held declaration into its owner's inbox in one step, exactly once: the entry
+/// carries every declared field, the declaration is gone, and a second filing writes nothing.
+pub async fn a_declaration_is_filed_into_the_inbox_exactly_once(h: &dyn Harness) {
+    let case = "file";
+    let alice = user(case, "alice");
+    let upload = UploadId::new(format!("{case}-upload"));
+    let pending = PendingDeposit {
+        drop_id: format!("{case}-drop"),
+        opaque_id: opaque(case, 1),
+        owner_id: alice.clone(),
+        kem_ct: vec![0xff, 0, 1],
+        content_type: "video/mp4".to_owned(),
+        suggested_filename: Some("from-a-guest.mp4".to_owned()),
+        size: 5_000,
+    };
+    ok(h.drops().reserve(pending.clone(), &upload).await, "reserve");
+    let landed = address(&format!("{case}/bytes"));
+
+    let filed = ok(h.drops().file(&upload, &landed, at(3)).await, "file")
+        .expect("a held declaration is filed");
+    let expected = InboxEntry {
+        drop_id: pending.drop_id,
+        owner_id: alice.clone(),
+        opaque_id: pending.opaque_id,
+        address: landed.clone(),
+        size: pending.size,
+        content_type: pending.content_type,
+        kem_ct: pending.kem_ct,
+        suggested_filename: pending.suggested_filename,
+        received_at: at(3),
+        adopting: false,
+    };
+    assert_eq!(filed, expected);
+    assert_eq!(ok(h.drops().inbox(&alice).await, "list"), vec![expected]);
+    assert_eq!(
+        ok(h.drops().take_reservation(&upload).await, "take"),
+        None,
+        "the declaration left with the filing"
+    );
+
+    assert_eq!(
+        ok(h.drops().file(&upload, &landed, at(9)).await, "file again"),
+        None,
+        "a second filing finds nothing to file"
+    );
+    assert_eq!(inbox_ids(h, &alice).await, vec![format!("{case}-drop")]);
+    assert_eq!(
+        ok(
+            h.drops()
+                .file(&UploadId::new(format!("{case}-other")), &landed, at(9))
+                .await,
+            "file an unknown session's"
+        ),
+        None
+    );
+}
+
+/// A declaration whose drop id is already in the inbox is the drop, filed: filing it keeps the
+/// row as it is — an adoption's hold included — and lets the declaration go.
+pub async fn filing_a_drop_already_in_the_inbox_keeps_the_row(h: &dyn Harness) {
+    let case = "refile";
+    let alice = user(case, "alice");
+    let upload = UploadId::new(format!("{case}-upload"));
+    let held = entry(case, "drop", &alice, at(0));
+    ok(h.drops().deposit(held.clone()).await, "deposit");
+    ok(h.drops().claim(&alice, &held.drop_id).await, "claim").expect("claimed");
+    ok(
+        h.drops()
+            .reserve(
+                PendingDeposit {
+                    drop_id: held.drop_id.clone(),
+                    opaque_id: opaque(case, 2),
+                    owner_id: alice.clone(),
+                    kem_ct: vec![9],
+                    content_type: "image/png".to_owned(),
+                    suggested_filename: None,
+                    size: 1,
+                },
+                &upload,
+            )
+            .await,
+        "reserve",
+    );
+
+    assert_eq!(
+        ok(
+            h.drops()
+                .file(&upload, &address(&format!("{case}/again")), at(5))
+                .await,
+            "file"
+        ),
+        None
+    );
+    assert_eq!(
+        ok(h.drops().inbox(&alice).await, "list"),
+        vec![InboxEntry {
+            adopting: true,
+            ..held
+        }],
+        "the filed row is untouched"
+    );
+    assert_eq!(ok(h.drops().take_reservation(&upload).await, "take"), None);
+}
+
 // ===========================================================================================
 // The inbox and adoption
 // ===========================================================================================
@@ -746,6 +852,8 @@ pub async fn run_all(h: &dyn Harness) {
 
     a_declaration_is_taken_back_exactly_once(h).await;
     a_second_declaration_for_a_session_replaces_the_first(h).await;
+    a_declaration_is_filed_into_the_inbox_exactly_once(h).await;
+    filing_a_drop_already_in_the_inbox_keeps_the_row(h).await;
 
     the_inbox_is_the_owners_oldest_first(h).await;
     a_claim_holds_the_row_once(h).await;
@@ -800,6 +908,8 @@ mod tests {
         a_refund_gives_back_a_reservation_and_floors_at_zero,
         a_declaration_is_taken_back_exactly_once,
         a_second_declaration_for_a_session_replaces_the_first,
+        a_declaration_is_filed_into_the_inbox_exactly_once,
+        filing_a_drop_already_in_the_inbox_keeps_the_row,
         the_inbox_is_the_owners_oldest_first,
         a_claim_holds_the_row_once,
         a_released_row_can_be_claimed_again,

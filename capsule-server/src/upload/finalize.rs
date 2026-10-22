@@ -77,9 +77,13 @@
 //! - **The request goes away.** A client that disconnects drops the request's future, and a
 //!   finalization running *inside* that future stops at whatever `await` it had reached — after
 //!   the commit and before the index write, typically, which strands the bytes as an orphan and
-//!   the session claimed. So the route never runs finalization inline: [`spawn`] runs it as its
-//!   own task, which the route awaits for its answer but which outlives the route if the route
-//!   is dropped.
+//!   the session claimed. So the route never runs finalization inline: the chunk's append and
+//!   the finalization it triggers run as one task, which the route awaits for its answer but
+//!   which outlives the route if the route is dropped. One task rather than two, because a
+//!   request dropped between an append that completed the session and the claim would leave a
+//!   full session nobody finishes. A full, unclaimed session — the process died in that window
+//!   — is finished by the client's replay of any of its chunks, which finalizes it as the
+//!   completing chunk would have.
 //! - **The process goes away.** The claim lives in the session store and outlives the process
 //!   that took it. [`recover`] drives every claim listed by
 //!   [`claimed`](crate::store::UploadSessionStore::claimed) before the listener accepts a
@@ -106,7 +110,6 @@
 
 use capsule_core::crypto::hash::{Hash32, Sha256Hasher};
 use capsule_core::crypto::receipts::CustodyReceipt;
-use tracing::Instrument as _;
 
 use super::envelope::{GateContext, GateReject, ManifestEnvelope, check_finalize};
 use super::{AlbumWriteAccess, UploadContext};
@@ -238,26 +241,6 @@ pub async fn finalize(
     Ok(Outcome::Committed { placement, record })
 }
 
-/// Run [`finalize`] as its own task, so it reaches a terminal state even if the caller does not.
-///
-/// The request that completes a session awaits the returned handle for its answer. Dropping
-/// the handle — a disconnected client dropping the request — detaches the task rather than
-/// aborting it, which is the whole point: the claim [`finalize`] takes is a promise that the
-/// session will be driven to a terminal state, and a promise kept only while a client stays
-/// connected is not one (see the module docs).
-///
-/// The task carries the caller's span, so its log lines still read as the request's.
-pub fn spawn(
-    context: UploadContext,
-    attestation: AttestationContext,
-    upload: UploadId,
-) -> tokio::task::JoinHandle<Result<Outcome, FinalizeFailure>> {
-    tokio::spawn(
-        async move { finalize(&context, &attestation, &upload).await }
-            .instrument(tracing::Span::current()),
-    )
-}
-
 /// What [`recover`] did with the claims a dead process left behind.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Recovery {
@@ -275,6 +258,9 @@ pub struct Recovery {
 /// steps a live claim runs, so one whose blob that process had already committed resumes at the
 /// custody ledger rather than being failed for a missing stage (see the module docs).
 ///
+/// A guest drop's claim in `stranded` is skipped: it is a deposit's, and
+/// [`crate::drop::deposit::recover`] drives it.
+///
 /// Sequential, one claim at a time: recovery runs beside a listener that is already serving,
 /// and a boot after a crash is exactly when the stores are least able to absorb a burst.
 #[tracing::instrument(skip_all, fields(stranded = stranded.len()))]
@@ -286,6 +272,12 @@ pub async fn recover(
     let mut recovery = Recovery::default();
     for record in stranded {
         let upload = record.upload_id.clone();
+        if record.is_guest_drop() {
+            // A drop's claim is the deposit's, and the drop surface recovers it: finalizing it
+            // here would fail it on its absent envelope and drop the guest's bytes.
+            tracing::debug!(%upload, "a stranded drop deposit is not an album finalization");
+            continue;
+        }
         tracing::info!(
             %upload,
             asset_id = %record.asset_id,
