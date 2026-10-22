@@ -32,7 +32,7 @@ use crate::sidecar::normalize_label;
 use crate::sidecar::sidecar_v1::{
     Gps, GpsSource, SIDECAR_SCHEMA_V1, SidecarV1, StackMembership, StackRole,
 };
-use crate::utils::paths::tmp_path;
+use crate::utils::paths::{sync_dir, tmp_path};
 
 /// A rename in [`Workspace::write_signed_artifacts`] a test can make fail after its `.tmp`
 /// write — the crash the temp-then-rename writes exist to survive (maintenance doc, Atomic
@@ -114,15 +114,43 @@ impl Staged {
     }
 }
 
-/// Write `bytes` to `{target}.tmp` without touching `target`.
+/// Write `bytes` to `{target}.tmp` and fsync it, without touching `target`. The data is on disk
+/// before the rename can publish it, so a crash after the rename never exposes an empty file.
 fn stage(target: &Path, bytes: &[u8]) -> Result<Staged> {
     let tmp = tmp_path(target);
-    fs::write(&tmp, bytes)
+    write_synced(&tmp, bytes)
         .map_err(|e| LifecycleError::Io(format!("stage {}: {e}", tmp.display())))?;
     Ok(Staged {
         tmp,
         target: target.to_path_buf(),
     })
+}
+
+/// Write `bytes` to `path` and fsync the file before returning.
+fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let mut file = fs::File::create(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
+}
+
+/// Create `dir` and every missing ancestor, fsyncing each new directory's entry in its parent,
+/// so a crash after an import cannot lose the shard directory its files were written into.
+fn create_dir_durable(dir: &Path) -> Result<()> {
+    let missing: Vec<&Path> = dir.ancestors().take_while(|p| !p.is_dir()).collect();
+    fs::create_dir_all(dir)
+        .map_err(|e| LifecycleError::Io(format!("create {}: {e}", dir.display())))?;
+    for created in missing {
+        if let Some(parent) = created.parent() {
+            sync_dir_entries(parent)?;
+        }
+    }
+    Ok(())
+}
+
+/// Fsync `dir`, making the entries just written or renamed into it durable.
+fn sync_dir_entries(dir: &Path) -> Result<()> {
+    sync_dir(dir).map_err(|e| LifecycleError::Io(format!("fsync {}: {e}", dir.display())))
 }
 
 /// Render a Unix-second capture time as the sidecar's RFC 3339 `capture_timestamp`.
@@ -354,7 +382,7 @@ impl Workspace {
     /// media path does not exist, so it never meets that case.
     pub(super) fn write_asset_files(&self, asset: &AssetState, plaintext: &[u8]) -> Result<()> {
         let dir = media_dir(&self.root, asset.capture_utc);
-        fs::create_dir_all(&dir).map_err(|e| LifecycleError::Io(e.to_string()))?;
+        create_dir_durable(&dir)?;
         let media_path = self.media_path(asset);
         let already_correct = fs::metadata(&media_path)
             .is_ok_and(|m| m.is_file() && m.len() == plaintext.len() as u64)
@@ -365,7 +393,11 @@ impl Workspace {
                 "original already on disk with the signed hash; not rewriting it"
             );
         } else {
-            fs::write(&media_path, plaintext).map_err(|e| LifecycleError::Io(e.to_string()))?;
+            // Fsynced here, and its directory entry with the signed artifacts' below: the
+            // library copy is what a Move source is checked against before it is deleted, so
+            // it must be on disk rather than in the page cache.
+            write_synced(&media_path, plaintext)
+                .map_err(|e| LifecycleError::Io(format!("write {}: {e}", media_path.display())))?;
         }
         self.write_signed_artifacts(asset)
     }
@@ -387,7 +419,7 @@ impl Workspace {
     /// remains its own slice.
     pub(super) fn write_signed_artifacts(&self, asset: &AssetState) -> Result<()> {
         let dir = media_dir(&self.root, asset.capture_utc);
-        fs::create_dir_all(&dir).map_err(|e| LifecycleError::Io(e.to_string()))?;
+        create_dir_durable(&dir)?;
         let prov = cbor::to_canonical_vec(&asset.chain.records().to_vec())
             .map_err(|e| LifecycleError::Cbor(e.to_string()))?;
         let sidecar = stage(&self.sidecar_path(asset), &asset.sidecar.to_canonical_vec())?;
@@ -414,9 +446,12 @@ impl Workspace {
         #[cfg(test)]
         inject_write_fault(WriteFault::ChainRename)?;
         chain.commit()?;
+        // One directory fsync makes every rename above durable, and with them an original
+        // `write_asset_files` wrote into the same directory.
+        sync_dir_entries(&dir)?;
         tracing::trace!(
             asset_id = %asset.asset_id,
-            "signed artifacts renamed into place: sidecar, blob, chain"
+            "signed artifacts renamed into place and fsynced: sidecar, blob, chain"
         );
         Ok(())
     }
