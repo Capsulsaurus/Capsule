@@ -62,7 +62,7 @@ A transport failure on any check retains the bytes. A non-durable verdict never 
 The gate applies to:
 
 - releasing or evicting a **device-owned original** ([Space Recovery](/design/filesystem/client/#space-recovery));
-- **Move-mode** source deletion after import. Not yet enforced; tracked by #671: `import --move` outside streaming mode does not wait on the gate;
+- **Move-mode** source deletion after import. The local commit never deletes a source; the source is deleted only after both it and the library copy read back as the signed original, and the gate passes. With no server to ask, every source is kept;
 - **streaming import** release ([Pipeline](/design/import/pipeline/#import-upload-streaming-mode));
 - discarding local working state tied to a write (staged temporaries, the pre-edit copy across a `replace`).
 - releasing an original handed to a [delegate](/design/peering/#delegation): the receipt is fetched from the server by the origin and checked against the hash the origin computed, never relayed by the delegate.

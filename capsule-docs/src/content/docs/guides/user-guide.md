@@ -36,8 +36,9 @@ you import.
 - `capsule import --push` does both in one step.
 - **Keep your originals until custody is verified.** An asset is safely stored only once the
   server reports it durable and has issued a signed custody receipt — what `push` reports as
-  verified. Do not use `import --move` or delete source files before then. *(planned:
-  `import --move` will only release a source after it.)*
+  verified. Do not delete source files before then. `import --move --push` deletes each
+  source only after its asset is verified; without `--push`, `--move` keeps every source and
+  says so, and a later `import --move --push` over the same files releases them.
 - `capsule restore` *(planned)* downloads originals and checks them byte for byte against what
   was signed at import.
 
