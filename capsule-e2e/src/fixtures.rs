@@ -281,6 +281,18 @@ pub mod golden {
         /// device the directory lists. The record a reader must keep verbatim, re-emit byte for
         /// byte and still verify (invariant 2).
         pub provenance_record_with_unknown_fields: String,
+        /// The account's device directory as a newer writer would emit it: its core and every
+        /// device entry carry keys this version has never defined, and the whole is signed over
+        /// them under [`newer_writer_public`](Self::newer_writer_public) (invariant 2).
+        pub device_directory_with_unknown_fields: String,
+        /// The first custody receipt the session was served, as a newer server would issue it:
+        /// its core carries keys this version has never defined, and it is signed over them
+        /// under [`newer_writer_public`](Self::newer_writer_public) (invariant 2).
+        pub custody_receipt_with_unknown_fields: String,
+        /// The key the two records above are signed under (`classical ‖ ML-DSA-65`). The
+        /// harness holds neither the user identity key nor the server's attestation key, so the
+        /// newer writer signs under one of its own; what the records test is the reader.
+        pub newer_writer_public: String,
     }
 
     /// `capsule-e2e/tests/fixtures/golden`.
