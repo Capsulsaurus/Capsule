@@ -18,6 +18,7 @@
 
 use std::sync::Mutex;
 
+use capsule_core::import::UploadPolicy;
 use capsule_core::library::EvictionReport;
 use tracing::{debug, info, instrument};
 
@@ -136,6 +137,21 @@ impl CachePlan {
     #[must_use]
     pub fn sweep_budget(&self) -> i64 {
         i64::try_from(self.budget_bytes).unwrap_or(i64::MAX)
+    }
+
+    /// The upload policy a push runs under on this plan, given the one the user `requested`.
+    ///
+    /// A plan that defers bulk transfers demotes [`UploadPolicy::Full`] to
+    /// [`UploadPolicy::Staged`], so the bulk tiers (preview and original) wait for an unmetered
+    /// link through the staged scheduler's tier gate while the index tier still publishes the
+    /// asset. A plan that permits bulk work keeps whatever was requested.
+    #[must_use]
+    pub fn upload_policy(&self, requested: UploadPolicy) -> UploadPolicy {
+        if self.defer_bulk {
+            UploadPolicy::Staged
+        } else {
+            requested
+        }
     }
 }
 
