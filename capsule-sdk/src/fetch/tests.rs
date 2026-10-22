@@ -245,6 +245,110 @@ async fn ciphertext_hash_mismatch_is_discarded() {
     assert!(matches!(err, FetchError::IntegrityFailed { .. }));
 }
 
+/// A source whose session cannot authorize anything, counting the requests it was asked for.
+struct Unauthenticated(std::sync::atomic::AtomicUsize);
+
+impl BlobSource for Unauthenticated {
+    async fn get_range(&self, _hash: &str, _start: u64, _max_len: Option<u64>) -> RangeOutcome {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        RangeOutcome::Unauthenticated {
+            code: None,
+            message: "session expired".into(),
+        }
+    }
+}
+
+/// A session that cannot authorize the fetch fails it at once as `Unauthenticated` — never a
+/// transient drop the resume loop retries until its budget runs out — and a `401` that
+/// outlived the session's refresh-and-retry classifies the same way.
+#[tokio::test]
+async fn an_unauthenticated_session_fails_the_fetch_without_retrying() {
+    let source = Unauthenticated(std::sync::atomic::AtomicUsize::new(0));
+    let err = fetch_blob_into(&source, &sha(&bytes(512)), 512, &mut Vec::new())
+        .await
+        .expect_err("unauthenticated");
+    assert!(
+        matches!(err, FetchError::Unauthenticated { .. }),
+        "got {err:?}"
+    );
+    assert_eq!(source.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    let source = AlwaysStatus {
+        status: 401,
+        code: None,
+    };
+    let err = fetch_blob(&source, &sha(&bytes(512)), 512)
+        .await
+        .expect_err("unauthenticated");
+    assert!(
+        matches!(err, FetchError::Unauthenticated { .. }),
+        "got {err:?}"
+    );
+}
+
+/// The fetch error a session failure ends a fetch with, through the same classification the
+/// fetch loop applies to a range outcome.
+fn fetch_error_for(error: &crate::auth::AuthError) -> FetchError {
+    match session_failure(error) {
+        RangeOutcome::Unauthenticated { code, message } => {
+            FetchError::Unauthenticated { code, message }
+        }
+        RangeOutcome::Status { status, code } => classify_status(status, code),
+        other => panic!("a session failure carries no bytes, got {other:?}"),
+    }
+}
+
+/// Only a session that is over tells the app to sign in again: an expired or revoked session,
+/// no tokens, or a `401` from the refresh.
+#[test]
+fn a_session_that_is_over_is_unauthenticated() {
+    use crate::auth::AuthError;
+    for error in [
+        AuthError::SessionExpired,
+        AuthError::NotAuthenticated,
+        AuthError::Unexpected {
+            status: 401,
+            endpoint: "refresh",
+            detail: "refresh token revoked".into(),
+            code: Some("error.auth.session_expired".into()),
+        },
+    ] {
+        let fetch = fetch_error_for(&error);
+        assert!(
+            matches!(fetch, FetchError::Unauthenticated { .. }),
+            "{error:?} became {fetch:?}"
+        );
+    }
+}
+
+/// A refresh that failed for a temporary reason — unreachable, rate limited, a server error —
+/// is transient, never a sign-in prompt.
+#[test]
+fn a_temporary_refresh_failure_is_transient() {
+    use crate::auth::AuthError;
+    for error in [
+        AuthError::Network {
+            endpoint: "refresh",
+            detail: "connection refused".into(),
+        },
+        AuthError::RateLimited {
+            retry_after_secs: 30,
+        },
+        AuthError::Unexpected {
+            status: 503,
+            endpoint: "refresh",
+            detail: "maintenance".into(),
+            code: None,
+        },
+    ] {
+        let fetch = fetch_error_for(&error);
+        assert!(
+            matches!(fetch, FetchError::Transient(_)),
+            "{error:?} became {fetch:?}"
+        );
+    }
+}
+
 // ─── Degrade ladder ──────────────────────────────────────────────────────────
 
 /// The degrade target steps down preview → thumbnail → LQIP.
