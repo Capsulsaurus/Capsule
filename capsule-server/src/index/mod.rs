@@ -322,6 +322,15 @@ pub struct BlobRecord {
     /// computes it over the bytes it just committed, which is what keeps the chain head a fact
     /// the server established rather than one it inferred from a coincidence between two digests.
     pub manifest_sha256: Option<Hash32>,
+    /// The album-key epoch the manifest was written under, for a `provenance` blob — invariant
+    /// 18's subject, mirrored onto the row as [`AssetRow::amk_version`].
+    ///
+    /// `None` for every other role, exactly as [`Self::manifest_sha256`] is. A create's manifest
+    /// is the asset's first accepted manifest, so its epoch lands on the row with its chain head;
+    /// a row left at `0` would disagree with the manifest it publishes — the integrity scrub's
+    /// mirrored-fact check reports exactly that — and would understate the album's high-water
+    /// mark, which is the maximum over its rows.
+    pub amk_version: Option<u64>,
     /// When finalization committed it.
     pub finalized_at: Timestamp,
 }
@@ -350,6 +359,18 @@ pub enum BlobOutcome {
     /// signed manifest, so letting a later session re-point them would let an authorized device
     /// swap the bytes under a signature that still verifies against the old ones.
     Conflict,
+    /// The blob is a create's manifest, and the album-key epoch it was written under is below
+    /// the album's high-water mark — invariant 18, refused for a create exactly as
+    /// [`OpOutcome::AmkRegressed`] refuses it for a lifecycle write. Nothing was written.
+    ///
+    /// Decided at the moment the manifest lands, in the same per-album critical section
+    /// [`AssetIndex::apply_op`] reads the mark in, because that is the write that would publish
+    /// the epoch: a create at a retired epoch — from a removed writer still holding an old
+    /// write-tier key — would otherwise publish an asset the album had already moved past.
+    AmkRegressed {
+        /// The album's high-water mark the manifest fell below.
+        stored: u64,
+    },
     /// There is no row for this asset — it was never reserved, or it was purged.
     NotFound,
 }
@@ -982,6 +1003,21 @@ pub(crate) fn is_singular(role: BlobRole) -> bool {
         role,
         BlobRole::Original | BlobRole::Metadata | BlobRole::Provenance
     )
+}
+
+/// The album-key epoch recording `blob` against `row` would publish, if it is a create's
+/// manifest landing — the one case [`AssetIndex::record_blob`] decides invariant 18 for.
+///
+/// A create's manifest is a provenance blob carrying its chain position, recorded on a row that
+/// has no chain head yet: exactly the condition under which both adapters set the head and the
+/// epoch. Shared so the two cannot disagree about which recordings are checked against the
+/// album's high-water mark, which would be a disagreement about whether a retired epoch can
+/// still publish.
+pub(crate) fn create_epoch(row: &AssetRow, blob: &BlobRecord) -> Option<u64> {
+    let lands_a_create_manifest = blob.role == BlobRole::Provenance
+        && row.chain_head.is_none()
+        && blob.manifest_sha256.is_some();
+    blob.amk_version.filter(|_| lands_a_create_manifest)
 }
 
 /// Point `role` at `address`, replacing whatever it held.

@@ -243,6 +243,8 @@ impl Harness {
                 BlobRecord {
                     manifest_sha256: (role == BlobRole::Provenance)
                         .then(|| Hash32::from_hex(address.as_str()).expect("a digest")),
+                    // The epoch `manifest_bytes` signs, as finalization mirrors it from the envelope.
+                    amk_version: (role == BlobRole::Provenance).then_some(0),
                     role,
                     address: address.clone(),
                     size: 32,

@@ -57,6 +57,7 @@ use capsule_i18n::error_codes;
 use sha2::{Digest, Sha256};
 use tracing::instrument;
 
+use crate::events::{TransferEvent, TransferEvents, millis};
 use crate::net::{
     ConnectionClass, MonotonicClock, RetryClass, RetryDecision, RetryEngine, Sleeper, StallConfig,
     StallDetector, SystemClock, TokioSleeper, TransferSignal,
@@ -609,6 +610,7 @@ pub struct RangedFetcher<S = TokioSleeper, C = SystemClock> {
     window_override: Option<u64>,
     sleeper: S,
     clock: C,
+    events: TransferEvents,
 }
 
 impl RangedFetcher {
@@ -623,6 +625,7 @@ impl RangedFetcher {
             window_override: None,
             sleeper: TokioSleeper,
             clock: SystemClock::new(),
+            events: TransferEvents::disabled(),
         }
     }
 }
@@ -644,7 +647,16 @@ impl<S: Sleeper, C: MonotonicClock> RangedFetcher<S, C> {
             window_override,
             sleeper,
             clock,
+            events: TransferEvents::disabled(),
         }
+    }
+
+    /// Publish every fetch this fetcher drives to `events` (range requested and received,
+    /// retry, verified, integrity-rejected). Without a subscriber it costs nothing.
+    #[must_use]
+    pub fn with_events(mut self, events: TransferEvents) -> Self {
+        self.events = events;
+        self
     }
 
     /// The bounded `Range` window this fetch uses, or `None` for the open-ended
@@ -724,10 +736,14 @@ impl<S: Sleeper, C: MonotonicClock> RangedFetcher<S, C> {
         let mut stall = StallDetector::new(self.stall, self.clock.now_millis());
         loop {
             let start = bytes.len() as u64;
+            self.emit_requested(hash, start, Some(window));
             let outcome = source.get_range(hash, start, Some(window)).await;
             let now = self.clock.now_millis();
             match outcome {
                 RangeOutcome::Complete { bytes: landed } if !landed.is_empty() || start > 0 => {
+                    if !landed.is_empty() {
+                        self.emit_received(hash, start, landed.len() as u64);
+                    }
                     let short = (landed.len() as u64) < window;
                     bytes.extend_from_slice(&landed);
                     if bytes.len() as u64 > limit {
@@ -740,6 +756,7 @@ impl<S: Sleeper, C: MonotonicClock> RangedFetcher<S, C> {
                     engine.reset();
                 }
                 RangeOutcome::Partial { bytes: landed } if !landed.is_empty() => {
+                    self.emit_received(hash, start, landed.len() as u64);
                     bytes.extend_from_slice(&landed);
                     if bytes.len() as u64 > limit {
                         return Err(FetchError::TooLarge { limit });
@@ -748,7 +765,8 @@ impl<S: Sleeper, C: MonotonicClock> RangedFetcher<S, C> {
                     engine.reset();
                 }
                 RangeOutcome::Complete { .. } | RangeOutcome::Partial { .. } => {
-                    if stall.is_stalled(now) {
+                    let stalled = stall.is_stalled(now);
+                    if stalled {
                         tracing::debug!(offset = start, "unsized fetch stalled; resuming");
                     }
                     match engine.next_backoff(None) {
@@ -758,7 +776,10 @@ impl<S: Sleeper, C: MonotonicClock> RangedFetcher<S, C> {
                                 engine.policy().max_retries
                             )));
                         }
-                        RetryDecision::Retry { after } => self.sleeper.sleep(after).await,
+                        RetryDecision::Retry { after } => {
+                            self.emit_retried(hash, start, stalled, after);
+                            self.sleeper.sleep(after).await;
+                        }
                     }
                 }
                 RangeOutcome::Status { status: 416, .. } if start > 0 => break,
@@ -773,10 +794,12 @@ impl<S: Sleeper, C: MonotonicClock> RangedFetcher<S, C> {
         }
         if hash_hex(&bytes) != hash {
             tracing::warn!(hash, "unsized blob content-hash mismatch; discarding");
+            self.emit_verdict(hash, bytes.len() as u64, false);
             return Err(FetchError::IntegrityFailed {
                 expected: hash.to_string(),
             });
         }
+        self.emit_verdict(hash, bytes.len() as u64, true);
         tracing::debug!(hash, bytes = bytes.len(), "unsized blob fetched");
         Ok(bytes)
     }
@@ -815,6 +838,7 @@ impl<S: Sleeper, C: MonotonicClock> RangedFetcher<S, C> {
             let start = received;
             let remaining = expected_len - start;
             let max_len = window.map(|w| w.min(remaining));
+            self.emit_requested(hash, start, max_len);
             let outcome = source.get_range(hash, start, max_len).await;
             let now = self.clock.now_millis();
 
@@ -828,6 +852,7 @@ impl<S: Sleeper, C: MonotonicClock> RangedFetcher<S, C> {
                 {
                     stall.on_progress(now);
                     engine.reset();
+                    self.emit_received(hash, start, bytes.len() as u64);
                     signals.push(TransferSignal::Clean);
                     tracing::trace!(
                         resumed_from = start,
@@ -843,7 +868,8 @@ impl<S: Sleeper, C: MonotonicClock> RangedFetcher<S, C> {
                 // the shared engine, and resume from the SAME offset — the sink is
                 // untouched, so the resume re-fetches zero duplicate bytes.
                 RangeOutcome::Complete { .. } | RangeOutcome::Partial { .. } => {
-                    if stall.is_stalled(now) {
+                    let stalled = stall.is_stalled(now);
+                    if stalled {
                         tracing::debug!(
                             offset = start,
                             stall_after = ?stall.stall_after(),
@@ -858,7 +884,10 @@ impl<S: Sleeper, C: MonotonicClock> RangedFetcher<S, C> {
                                 engine.policy().max_retries
                             )));
                         }
-                        RetryDecision::Retry { after } => self.sleeper.sleep(after).await,
+                        RetryDecision::Retry { after } => {
+                            self.emit_retried(hash, start, stalled, after);
+                            self.sleeper.sleep(after).await;
+                        }
                     }
                 }
                 RangeOutcome::Status { status, code } => {
@@ -875,12 +904,51 @@ impl<S: Sleeper, C: MonotonicClock> RangedFetcher<S, C> {
         // address itself before trusting the bytes.
         if hex::encode(hasher.finalize()) != hash {
             tracing::warn!(hash, "ciphertext content-hash mismatch; discarding blob");
+            self.emit_verdict(hash, received, false);
             return Err(FetchError::IntegrityFailed {
                 expected: hash.to_string(),
             });
         }
         sink.flush().map_err(FetchError::Sink)?;
+        self.emit_verdict(hash, received, true);
         Ok(signals)
+    }
+
+    fn emit_requested(&self, hash: &str, offset: u64, max_len: Option<u64>) {
+        self.events.emit(|| TransferEvent::RangeRequested {
+            blob: hash.to_string(),
+            offset,
+            max_len,
+        });
+    }
+
+    fn emit_received(&self, hash: &str, offset: u64, len: u64) {
+        self.events.emit(|| TransferEvent::RangeReceived {
+            blob: hash.to_string(),
+            offset,
+            len,
+        });
+    }
+
+    fn emit_retried(&self, hash: &str, offset: u64, stalled: bool, wait: std::time::Duration) {
+        self.events.emit(|| TransferEvent::FetchRetried {
+            blob: hash.to_string(),
+            offset,
+            stalled,
+            wait_ms: millis(wait),
+        });
+    }
+
+    /// The content-address check's outcome over `size` fetched bytes.
+    fn emit_verdict(&self, hash: &str, size: u64, verified: bool) {
+        self.events.emit(|| {
+            let blob = hash.to_string();
+            if verified {
+                TransferEvent::FetchVerified { blob, size }
+            } else {
+                TransferEvent::IntegrityRejected { blob, size }
+            }
+        });
     }
 }
 

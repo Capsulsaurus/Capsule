@@ -16,7 +16,7 @@
 //!    - the session issued by host A is refused: its session record lived in Valkey;
 //!    - `capsule-server rebuild` (dry run) names exactly the third asset as the row to restore,
 //!      and `--apply` restores it;
-//!    - a deep scrub finds nothing but the `amk_version` mismatch #790 tracks;
+//!    - a deep scrub finds nothing;
 //!    - the account signs in again, the feed lists all three assets at the sequence numbers host
 //!      A gave them, every blob the library uploaded is served byte for byte as host A stored
 //!      it, and `capsule restore` writes every original back byte for byte.
@@ -55,7 +55,7 @@ mod postgres_conformance {
     use capsule_server::index::postgres::PostgresAssetIndex;
     use capsule_server::index::{AssetIndex as _, AssetRow};
     use capsule_server::ledger::rebuild::{RebuildReport, rebuild};
-    use capsule_server::scrub::{Depth, Finding, scrub};
+    use capsule_server::scrub::{Depth, scrub};
     use server_migration::MigratorTrait as _;
     use testcontainers::core::{CmdWaitFor, ExecCommand};
     use testcontainers::runners::AsyncRunner as _;
@@ -483,21 +483,9 @@ mod postgres_conformance {
             .await
             .expect("the scrub finishes");
         assert!(!scrubbed.budget_exhausted, "every blob was re-hashed");
-        // #790: a create leaves its row at album-key epoch 0 whatever its manifest says, so the
-        // rows that came from the dump disagree with their manifests on `amk_version` alone.
-        // That is the write path's defect, not the restore's; anything else is a finding.
-        let findings: Vec<&Finding> = scrubbed
-            .findings
-            .iter()
-            .filter(|finding| {
-                !matches!(
-                    finding,
-                    Finding::MirroredFactMismatch { fact, index, .. }
-                        if *fact == "amk_version" && index == "0"
-                )
-            })
-            .collect();
-        assert!(findings.is_empty(), "{scrubbed:#?}");
+        // The rows from the dump were written by the upload path and the third by the rebuild:
+        // both must agree with the manifests they publish, so any finding is a defect.
+        assert!(scrubbed.findings.is_empty(), "{scrubbed:#?}");
 
         // Host A's session lived in Valkey, which was not restored: it is refused.
         let refused = device

@@ -648,6 +648,7 @@ async fn publish_asset(fixture: &Fixture) -> String {
                     role,
                     address,
                     size: bytes.len() as u64,
+                    amk_version: None,
                     finalized_at: Timestamp::UNIX_EPOCH,
                 },
             )

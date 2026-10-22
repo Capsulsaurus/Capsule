@@ -1,0 +1,27 @@
+---
+source: capsule-sdk/src/events/tests.rs
+expression: render(&first)
+---
+{"blob":"b10b","event":"session_created","resume_offset":0,"session_id":"sess-1","size":786432}
+{"blob":"b10b","event":"chunk_sent","len":262144,"offset":0,"session_id":"sess-1"}
+{"blob":"b10b","event":"checksum_rejected","len":262144,"offset":0,"session_id":"sess-1"}
+{"blob":"b10b","event":"chunk_sent","len":262144,"offset":0,"session_id":"sess-1"}
+{"acked_offset":262144,"blob":"b10b","event":"chunk_acked","len":262144,"offset":0,"session_id":"sess-1"}
+{"blob":"b10b","event":"chunk_sent","len":262144,"offset":262144,"session_id":"sess-1"}
+{"blob":"b10b","event":"chunk_retried","len":262144,"offset":262144,"reason":"server_wait","session_id":"sess-1","wait_ms":0}
+{"blob":"b10b","event":"chunk_sent","len":262144,"offset":262144,"session_id":"sess-1"}
+{"acked_offset":393216,"blob":"b10b","event":"chunk_acked","len":262144,"offset":262144,"session_id":"sess-1"}
+{"blob":"b10b","event":"chunk_sent","len":262144,"offset":393216,"session_id":"sess-1"}
+{"blob":"b10b","event":"chunk_retried","len":262144,"offset":393216,"reason":"offset_realign","session_id":"sess-1","to":262144}
+{"blob":"b10b","event":"chunk_sent","len":262144,"offset":262144,"session_id":"sess-1"}
+{"acked_offset":524288,"blob":"b10b","event":"chunk_acked","len":262144,"offset":262144,"session_id":"sess-1"}
+{"blob":"b10b","event":"chunk_sent","len":262144,"offset":524288,"session_id":"sess-1"}
+{"blob":"b10b","event":"chunk_retried","len":262144,"offset":524288,"reason":"session_lost","session_id":"sess-1"}
+{"blob":"b10b","event":"session_created","resume_offset":0,"session_id":"sess-2","size":786432}
+{"blob":"b10b","event":"chunk_sent","len":262144,"offset":0,"session_id":"sess-2"}
+{"acked_offset":262144,"blob":"b10b","event":"chunk_acked","len":262144,"offset":0,"session_id":"sess-2"}
+{"blob":"b10b","event":"chunk_sent","len":262144,"offset":262144,"session_id":"sess-2"}
+{"acked_offset":524288,"blob":"b10b","event":"chunk_acked","len":262144,"offset":262144,"session_id":"sess-2"}
+{"blob":"b10b","event":"chunk_sent","len":262144,"offset":524288,"session_id":"sess-2"}
+{"acked_offset":786432,"blob":"b10b","event":"chunk_acked","len":262144,"offset":524288,"session_id":"sess-2"}
+{"blob":"b10b","event":"finalize","session_id":"sess-2","size":786432}

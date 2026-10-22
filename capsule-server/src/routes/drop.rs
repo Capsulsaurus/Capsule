@@ -1447,6 +1447,7 @@ async fn adopt_claimed(
                 address: entry.address.clone(),
                 size: entry.size,
                 manifest_sha256: None,
+                amk_version: None,
                 finalized_at: now,
             },
             crate::index::Custody {
@@ -1511,9 +1512,11 @@ async fn adopt_claimed(
             ledger_resolution(attestation, &owner_id, entry, &asset_id, refused, now).await;
             return Err(AdoptRejection::refused(reason));
         }
-        // The row reserved a moment ago is gone: the server's own inconsistency.
-        crate::index::BlobOutcome::NotFound => {
-            tracing::error!(%owner, %asset_id, "an adoption found no asset row for the reservation it made");
+        // The row reserved a moment ago is gone: the server's own inconsistency. An epoch
+        // refusal is unreachable — an adoption records an original, which carries no epoch — so
+        // it is the same inconsistency rather than a refusal to put to the caller.
+        crate::index::BlobOutcome::NotFound | crate::index::BlobOutcome::AmkRegressed { .. } => {
+            tracing::error!(%owner, %asset_id, "an adoption found no asset row for the reservation it made, or an epoch on a blob that carries none");
             return Err(AdoptRejection::unavailable());
         }
     }

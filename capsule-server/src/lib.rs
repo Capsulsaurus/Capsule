@@ -209,6 +209,7 @@ pub fn router() -> ServerRouter {
                     routes::roster::publish_album_roster,
                     routes::upload::cancel_upload,
                     routes::storage::verify_storage,
+                    routes::reannounce::reannounce_manifests,
                 ])
                 // Share links and guest drops: the owner's bounded writes on both.
                 .mount(kynos::routes![
@@ -219,11 +220,12 @@ pub fn router() -> ServerRouter {
                     routes::drop::discard_drop,
                 ]),
         )
-        // The gated writes that keep the backstop. The two chunk routes, so the upload route
-        // answers a breach of the protocol's chunk bound itself with
-        // `413 error.upload.chunk_too_large`; `apply_op`, whose `metadata-update` carries the
-        // encrypted sidecar inline and nothing bounds a sidecar's size; and `issue_share`, whose
-        // `serves` enumerates every blob a whole-album link may serve. See [`limits::body_size`].
+        // The gated writes that keep the backstop, apart from the chunk route (the group after
+        // this one). `create_upload`, so the upload route answers a breach of the protocol's
+        // chunk bound itself with `413 error.upload.chunk_too_large`; `apply_op`, whose
+        // `metadata-update` carries the encrypted sidecar inline and nothing bounds a sidecar's
+        // size; and `issue_share`, whose `serves` enumerates every blob a whole-album link may
+        // serve. See [`limits::body_size`].
         .group(
             Group::<App>::new("/")
                 .intercept(limits::body_size())
@@ -305,10 +307,12 @@ pub fn router() -> ServerRouter {
         // its holder asked to close (#527). Opening one (`login`, `register`) stays gated. All
         // twelve still carry the response headers, because `Negotiation` is the router's.
         //
-        // Two groups holding the body-size cap and nothing else: the cap is per-group, and these
-        // twelve are still covered by one each. The ten that are not drop routes take the
-        // bounded cap — reads, and two session-upkeep writes carrying a token; the two drop
-        // routes keep the backstop, because a guest's drop chunk is as large as an upload chunk.
+        // Body-size cap only, with no negotiation gate: the cap is per-group, and these twelve
+        // are still covered by one each. The ten that are not drop routes take the bounded cap
+        // — reads, and two session-upkeep writes carrying a token. The two drop routes keep the
+        // backstop, because a guest's drop chunk is as large as an upload chunk, and sit in two
+        // groups: `create_drop` alone, and `append_drop_chunk` alone with the length-less chunk
+        // deadline (#717), as the album chunk route is above.
         .group(
             Group::<App>::new("/")
                 .intercept(limits::bounded_body_size())
