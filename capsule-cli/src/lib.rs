@@ -368,7 +368,9 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 .cyan()
             );
 
-            if plan_result.counts.to_import == 0 {
+            // A Move run goes on to execute even with nothing new to import: its duplicates are
+            // sources the library already holds, which the release below may now delete.
+            if plan_result.counts.to_import == 0 && !r#move {
                 println!("{}", "Nothing to import.".yellow());
                 // `--push` is still honored: an unchanged library is exactly the
                 // re-runnable case push exists to make cheap.
@@ -429,11 +431,33 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 .green()
             );
 
+            // The executor never deletes a Move source: the local copy is not custody
+            // (invariant 7). Each one waits for the server, below.
+            let moved: Vec<remote::MovedSource> = if r#move {
+                summary
+                    .held_sources()
+                    .into_iter()
+                    .map(|(source, asset_id)| remote::MovedSource { source, asset_id })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
             // `--push` is sugar only: import itself never touches the network (its
             // determinism suite depends on that), and the push is a separate pass over
             // the committed library — byte-for-byte the same one `capsule push` runs.
             if push {
-                push_workspace(&ws, push_options(false, false, staged), false).await?;
+                let pushed = push_workspace(&ws, push_options(false, false, staged), false).await;
+                // Released whether or not every asset pushed: the gate re-asks the server
+                // about each source's own asset, so one failed asset keeps only its source.
+                let released = release_moved(&ws, &moved).await;
+                pushed?;
+                released?;
+            } else if !moved.is_empty() {
+                println!(
+                    "{}",
+                    remote::sources_kept_offline_line(moved.len()).yellow()
+                );
             }
         }
 
@@ -1397,6 +1421,41 @@ fn push_failures(summary: &remote::PushSummary) -> Result<()> {
     match remote::failed_run_reason(summary) {
         Some(reason) => Err(eyre!("Push failed: {reason}")),
         None => Ok(()),
+    }
+}
+
+/// The Move half of `capsule import --move --push`: delete each of `moved` the server holds,
+/// and report every source kept.
+///
+/// A failure of the whole release (no session, no attestation keys) keeps every source, says
+/// so, and fails the command; a source kept because its asset is not confirmed yet is reported
+/// and does not, since a re-run releases it.
+async fn release_moved(workspace: &Workspace, moved: &[remote::MovedSource]) -> Result<()> {
+    if moved.is_empty() {
+        return Ok(());
+    }
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    match remote::release_moved_sources(&remote, &store, workspace, moved).await {
+        Ok(summary) => {
+            println!("{}", remote::move_release_line(&summary).green());
+            for outcome in summary.outcomes.iter().filter(|o| !o.released) {
+                println!("{}", remote::kept_source_line(outcome).yellow());
+            }
+            Ok(())
+        }
+        Err(error) => {
+            let line = format!(
+                "Kept {} source files: the server's custody could not be checked: {error}",
+                moved.len()
+            );
+            // Printed here as well as returned: a failed push is reported first and would
+            // otherwise hide that every source was kept.
+            println!("{}", line.yellow());
+            Err(eyre!(
+                "the --move release did not run; every source was kept"
+            ))
+        }
     }
 }
 

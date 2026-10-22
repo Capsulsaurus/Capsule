@@ -58,7 +58,8 @@ pub(crate) enum Commands {
         /// Path to the Capsule library
         #[arg(long, value_name = "PATH")]
         library: PathBuf,
-        /// Move files instead of copying them
+        /// Move files: delete each source once the server holds it, which needs `--push`.
+        /// Without it every source is kept.
         #[arg(long)]
         r#move: bool,
         /// Re-import files even if they already exist (duplicate override)

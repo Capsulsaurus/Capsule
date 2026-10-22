@@ -498,24 +498,35 @@ where
 }
 
 /// Run the release gate for a just-uploaded asset and act on it: on `Release`, delete the local
-/// original + drop its owned-original representation row (it becomes a server-only asset) and
-/// delete the Move-mode source; on `Retain`, leave every local byte in place.
+/// original + drop its owned-original representation row (it becomes a server-only asset); on
+/// `Retain`, leave every local byte in place. A Move-mode source is released through
+/// [`Workspace::release_move_source`], which reads it and the local original back against the
+/// signed hash before the gate, so its decision is the one acted on here.
 fn release_after_verify<V: StorageVerifier>(
     workspace: &mut Workspace,
     verifier: &V,
     imported: &StreamedImport,
     on_event: &impl Fn(StreamingEvent),
 ) -> Result<StreamedState, StreamingError> {
-    // The crypto half of the gate: the asset self-verified on import, but re-check freshly.
-    let verify_asset_accepted = workspace
-        .verify(&imported.asset_id)
-        .is_ok_and(|o| o == VerifyOutcome::Accept);
-
-    let decision = ReleaseGate::new(verifier).may_release(
-        imported.asset_id,
-        &imported.blob_hashes,
-        verify_asset_accepted,
-    );
+    // A Move source goes through the one Move-release path, before the local original is
+    // touched: both copies are read back against the signed hash, then the gate decides, and
+    // the source is deleted only on `Release`. A source that fails the read-back keeps the
+    // local original too — it is then the one copy known to be intact.
+    let decision = if let Some(src) = &imported.move_source {
+        workspace
+            .release_move_source(verifier, imported.asset_id, src)
+            .map_err(|e| StreamingError::Import(e.to_string()))?
+    } else {
+        // The crypto half of the gate: the asset self-verified on import, but re-check freshly.
+        let verify_asset_accepted = workspace
+            .verify(&imported.asset_id)
+            .is_ok_and(|o| o == VerifyOutcome::Accept);
+        ReleaseGate::new(verifier).may_release(
+            imported.asset_id,
+            &imported.blob_hashes,
+            verify_asset_accepted,
+        )
+    };
 
     match decision {
         ReleaseDecision::Release => {
@@ -526,9 +537,6 @@ fn release_after_verify<V: StorageVerifier>(
                 .db()
                 .remove_representation(&imported.asset_id.to_string(), "original")
                 .map_err(|e| StreamingError::Db(e.to_string()))?;
-            if let Some(src) = &imported.move_source {
-                let _ = std::fs::remove_file(src);
-            }
             on_event(StreamingEvent::Released {
                 asset_id: imported.asset_id,
             });
@@ -858,6 +866,69 @@ mod tests {
         assert!(
             sources2[0].exists(),
             "Move source retained when not durable"
+        );
+    }
+
+    /// Accepts every upload, and overwrites the Move source while it is in flight — a source
+    /// edited between its import and its release.
+    struct EditsSourceDuringUpload;
+    impl AssetUploader for EditsSourceDuringUpload {
+        fn upload(&self, imported: &StreamedImport) -> Result<(), UploadHalt> {
+            if let Some(src) = &imported.move_source {
+                fs::write(src, b"edited while uploading").unwrap();
+            }
+            Ok(())
+        }
+    }
+
+    /// The read-back half of invariant 7 holds in streaming mode too: a source that no longer
+    /// hashes to the signed original is kept on full custody, and so is the local original —
+    /// the one copy of what was imported known to be intact.
+    #[test]
+    fn streaming_keeps_a_move_source_that_fails_the_read_back() {
+        let src = TempDir::new().unwrap();
+        let lib = TempDir::new().unwrap();
+        let sources = write_sources(src.path(), 1);
+        let mut ws = signed_workspace(lib.path());
+        let config = ImportConfig {
+            import_mode: ImportMode::Move,
+            ..Default::default()
+        };
+        let plan_result = plan(
+            &scan(&[src.path().to_path_buf()]).unwrap(),
+            ws.db(),
+            &config,
+        )
+        .unwrap();
+
+        let report = execute_streaming(
+            &plan_result,
+            &mut ws,
+            StreamingOptions {
+                config: &config,
+                source: &SourceMetadataIndex::empty(),
+                uploader: &EditsSourceDuringUpload,
+                verifier: &MockVerifier {
+                    durable: true,
+                    receipt: true,
+                },
+                headroom_margin: 0,
+                cancel: &CancellationToken::new(),
+            },
+            noop_event,
+        )
+        .unwrap();
+
+        assert_eq!(report.released_count(), 0);
+        assert_eq!(
+            report.outcomes[0].state,
+            StreamedState::Retained(RetainReason::ReadBackMismatch)
+        );
+        assert_eq!(fs::read(&sources[0]).unwrap(), b"edited while uploading");
+        let asset = report.outcomes[0].asset_id.unwrap();
+        assert!(
+            ws.read_plaintext(&asset).is_ok(),
+            "the local original is kept too"
         );
     }
 

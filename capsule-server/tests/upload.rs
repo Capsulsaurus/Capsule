@@ -1982,3 +1982,193 @@ async fn an_upload_attributed_to_another_account_is_refused() {
         .await
         .assert_status(StatusCode::CREATED);
 }
+
+// ===========================================================================================
+// The owner ledger (#696)
+// ===========================================================================================
+
+/// Transfer `whole` as its two chunks, arming nothing, and return the session id.
+async fn transfer(fixture: &Fixture, bearer: &str) -> (String, Vec<u8>) {
+    let (first, second, whole) = blob();
+    let id = fixture.open_session(&whole, "original", bearer).await;
+    fixture
+        .chunk(&id, 0, &first, bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let last = fixture.chunk(&id, 4096, &second, bearer).send().await;
+    drop(last);
+    (id, whole)
+}
+
+/// Verify the owner's ledger under the fixture's attestation key.
+async fn verified_ledger(fixture: &Fixture) -> Vec<capsule_server::ledger::LedgerEntry> {
+    use capsule_server::attestation::ReceiptSigner as _;
+    use capsule_server::ledger::{OwnerLedger as _, verify_chain};
+
+    let scan = fixture
+        .ledger
+        .scan(&owner())
+        .await
+        .expect("the ledger reads");
+    let key = fixture.attestation_key.clone();
+    let report = verify_chain(
+        &owner(),
+        &scan,
+        &|id| (*id == key.key_id()).then(|| key.verifying_key()),
+        None,
+    );
+    assert_eq!(report.fault, None, "the owner's ledger verifies to its end");
+    assert_eq!(report.verified, scan.entries.len());
+    scan.entries
+}
+
+/// A finalization ledgers its custody before the index write, and the write's sequence number
+/// and receipt after it.
+#[tokio::test]
+async fn finalization_ledgers_custody_then_the_index_write() {
+    use capsule_server::attestation::ReceiptLog as _;
+    use capsule_server::ledger::LedgerEvent;
+    use capsule_server::store::UploadId;
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (id, whole) = transfer(&fixture, &bearer).await;
+    assert_eq!(
+        fixture
+            .uploads
+            .read_for_test(&id)
+            .await
+            .expect("the session survives")
+            .status
+            .as_str(),
+        "completed"
+    );
+
+    let entries = verified_ledger(&fixture).await;
+    let [custody, indexed] = entries.as_slice() else {
+        panic!("one custody and one indexed entry, got {entries:?}");
+    };
+    let LedgerEvent::Custody {
+        upload_id,
+        content_hash,
+        size,
+        blob_role,
+        ..
+    } = &custody.core.event
+    else {
+        panic!("the first entry is the custody: {custody:?}");
+    };
+    assert_eq!(upload_id, &id);
+    assert_eq!(content_hash.to_hex(), checksum(&whole));
+    assert_eq!(*size, whole.len() as u64);
+    assert_eq!(blob_role, "original");
+
+    let receipt = fixture
+        .receipts
+        .for_upload(&UploadId::new(&id))
+        .await
+        .expect("the log answers")
+        .expect("the write was receipted");
+    let LedgerEvent::Indexed {
+        upload_id,
+        receipt: ledgered,
+        ..
+    } = &indexed.core.event
+    else {
+        panic!("the second entry is the index write: {indexed:?}");
+    };
+    assert_eq!(upload_id, &id);
+    assert_eq!(
+        ledgered.as_deref(),
+        Some(&receipt),
+        "the ledger holds the receipt the index issued"
+    );
+    assert_eq!(indexed.core.prior_entry_hash, Some(custody.chain_hash()));
+}
+
+/// A crash between the ledger append and the index commit leaves a replayable entry and no row:
+/// the entry names the blob and the asset, and nothing was indexed.
+#[tokio::test]
+async fn a_crash_after_the_ledger_append_leaves_an_entry_and_never_a_row() {
+    use capsule_server::index::{AssetIndex as _, AssetState};
+    use capsule_server::ledger::LedgerEvent;
+    use capsule_server::store::AssetId;
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    fixture.index_fault.arm();
+    let (id, whole) = transfer(&fixture, &bearer).await;
+    assert_eq!(fixture.index_fault.fired(), 1, "the crash fired");
+
+    let row = fixture
+        .index
+        .read(&AssetId::new("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e61"))
+        .await
+        .expect("the index answers")
+        .expect("the session reserved a row");
+    assert_eq!(row.state, AssetState::Pending);
+    assert!(row.blobs.is_empty(), "nothing was indexed");
+
+    let entries = verified_ledger(&fixture).await;
+    let [custody] = entries.as_slice() else {
+        panic!("only the custody entry, got {entries:?}");
+    };
+    let LedgerEvent::Custody {
+        upload_id,
+        asset_id,
+        content_hash,
+        ..
+    } = &custody.core.event
+    else {
+        panic!("a custody entry: {custody:?}");
+    };
+    assert_eq!(upload_id, &id);
+    assert_eq!(asset_id, "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e61");
+    assert_eq!(
+        content_hash.to_hex(),
+        checksum(&whole),
+        "the entry names the committed blob, so a rebuild can replay it"
+    );
+}
+
+/// A ledger that cannot append fails the finalization before the index is touched.
+#[tokio::test]
+async fn a_ledger_that_cannot_append_fails_finalization_before_the_index() {
+    use capsule_server::index::{AssetIndex as _, AssetState};
+    use capsule_server::ledger::OwnerLedger as _;
+    use capsule_server::store::AssetId;
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    fixture.ledger.set_unavailable(true);
+    let (id, _) = transfer(&fixture, &bearer).await;
+
+    assert_eq!(
+        fixture
+            .uploads
+            .read_for_test(&id)
+            .await
+            .expect("the session survives")
+            .status
+            .as_str(),
+        "failed_processing"
+    );
+    let row = fixture
+        .index
+        .read(&AssetId::new("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e61"))
+        .await
+        .expect("the index answers")
+        .expect("the session reserved a row");
+    assert_eq!(row.state, AssetState::Pending);
+    assert!(row.blobs.is_empty(), "no row without a ledger entry");
+    assert!(
+        fixture
+            .ledger
+            .scan(&owner())
+            .await
+            .expect("the ledger reads")
+            .entries
+            .is_empty()
+    );
+}
