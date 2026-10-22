@@ -402,6 +402,67 @@ async fn the_lock_file_is_never_read_as_a_segment_or_an_owner() {
     assert_eq!(first.core.seq, 1);
 }
 
+/// Make `path` read-only (`true`) or writable again, returning whether this process is now
+/// refused a write there; a privileged process is not, and a test then has nothing to prove.
+#[cfg(unix)]
+fn read_only(path: &std::path::Path, read_only: bool, probe: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = match (path.is_dir(), read_only) {
+        (true, true) => 0o555,
+        (true, false) => 0o755,
+        (false, true) => 0o444,
+        (false, false) => 0o644,
+    };
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect("chmod");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(probe)
+        .is_err()
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_reader_without_write_access_still_scans() {
+    let disk = Disk::open().await;
+    let signer = key();
+
+    // A ledger whose lock file exists but is not writable to the reader: shared, read-only.
+    let locked = OwnerId::new("read-only-lock");
+    disk.ledger
+        .append(&locked, event(1), Timestamp::UNIX_EPOCH, &signer)
+        .await
+        .expect("append");
+    let lock_file = disk.ledger.owner_dir(&locked).join(fs::LOCK_FILE);
+    if read_only(&lock_file, true, &lock_file) {
+        assert_one_chain(&disk.ledger, &locked, &signer, 1).await;
+    }
+    read_only(&lock_file, false, &lock_file);
+
+    // A ledger from before the lock file, in a directory the reader cannot create it in.
+    let legacy = OwnerId::new("read-only-dir");
+    disk.ledger
+        .append(&legacy, event(1), Timestamp::UNIX_EPOCH, &signer)
+        .await
+        .expect("append");
+    let dir = disk.ledger.owner_dir(&legacy);
+    std::fs::remove_file(dir.join(fs::LOCK_FILE)).expect("remove");
+    if read_only(&dir, true, &dir.join(fs::LOCK_FILE)) {
+        assert_one_chain(&disk.ledger, &legacy, &signer, 1).await;
+        assert!(
+            matches!(
+                disk.ledger
+                    .append(&legacy, event(2), Timestamp::UNIX_EPOCH, &signer)
+                    .await,
+                Err(LedgerError::Backend { .. })
+            ),
+            "a writer that cannot take the lock refuses to append"
+        );
+    }
+    read_only(&dir, false, &dir.join(fs::LOCK_FILE));
+}
+
 #[tokio::test]
 async fn a_scan_of_an_owner_with_no_directory_creates_nothing() {
     let disk = Disk::open().await;

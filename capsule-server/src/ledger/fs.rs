@@ -298,24 +298,61 @@ fn across_segments(damage: &ChainFault, entries: usize) -> ChainFault {
     }
 }
 
+/// Open the [`LOCK_FILE`] in the owner directory at `dir` for the lock wanted, or `None` when
+/// there is nothing to lock.
+///
+/// An exclusive lock opens it read-write, creating it, because an exclusive lock emulated with
+/// `fcntl` (Linux on NFS) is refused on a read-only descriptor. A shared lock needs only a
+/// readable one, so it opens an existing file read-only, and a reader without write access to the
+/// blob root (a scrub on a read-only mount) still takes it. `None` when the directory is absent,
+/// or for a shared lock when the file is absent and this process cannot create it: a ledger
+/// written before the lock file existed, read by such a reader, is read unlocked, and an append it
+/// races shows as a torn tail in the scan rather than as an error.
+fn open_lock_file(dir: &Path, exclusive: bool) -> std::io::Result<Option<std::fs::File>> {
+    let path = dir.join(LOCK_FILE);
+    if !exclusive {
+        match std::fs::File::open(&path) {
+            Ok(file) => return Ok(Some(file)),
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+    {
+        Ok(file) => Ok(Some(file)),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error)
+            if !exclusive
+                && matches!(
+                    error.kind(),
+                    ErrorKind::PermissionDenied | ErrorKind::ReadOnlyFilesystem
+                ) =>
+        {
+            tracing::warn!(
+                lock_file = %path.display(),
+                %error,
+                "cannot create an owner ledger's lock file; reading it unlocked"
+            );
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 /// Take the cross-process lock on the owner directory at `dir`, exclusive or shared, through its
-/// [`LOCK_FILE`], creating that file if it is absent; the lock is released when the returned
-/// handle is dropped. `None` when the directory itself is absent. See the module docs.
+/// [`LOCK_FILE`]; the lock is released when the returned handle is dropped. `None` as
+/// [`open_lock_file`] says. See the module docs.
 ///
 /// Blocking, so it waits on the blocking pool rather than on a runtime worker.
 async fn lock_owner(dir: PathBuf, exclusive: bool) -> Result<Option<std::fs::File>, LedgerError> {
     let locked = tokio::task::spawn_blocking(move || {
-        // Writable, because an exclusive lock emulated with `fcntl` (Linux on NFS) needs it.
-        let file = match std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(dir.join(LOCK_FILE))
-        {
-            Ok(file) => file,
-            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error),
+        let Some(file) = open_lock_file(&dir, exclusive)? else {
+            return Ok(None);
         };
         if exclusive {
             file.lock()?;
@@ -459,7 +496,8 @@ impl OwnerLedger for FilesystemLedger {
             let _held = lock.lock().await;
             let mut scan = LedgerScan::default();
             let dir = self.owner_dir(owner);
-            // `None` when there is no directory: no ledger, nothing to read or wait for.
+            // `None` when there is no directory (no ledger, nothing to wait for), or no lock file
+            // a read-only reader could take.
             let _across_processes = lock_owner(dir.clone(), false).await?;
             let segments = segments(&dir).await?;
             let count = segments.len();
