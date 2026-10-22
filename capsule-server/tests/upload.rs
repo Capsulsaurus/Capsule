@@ -493,6 +493,136 @@ async fn a_provenance_blob_is_stored_exactly_as_it_arrived() {
 }
 
 #[tokio::test]
+async fn a_created_manifest_lands_its_album_key_epoch_on_the_row() {
+    // #790: the row mirrors the epoch its manifest was sealed under, as a rebuild from the same
+    // manifest would, so the integrity scrub finds nothing to disagree about and the album's
+    // high-water mark counts the create.
+    use capsule_server::index::AssetIndex as _;
+    use capsule_server::store::AssetId;
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, second, whole) = blob();
+    let mut request = create_request(&fixture.clock, &whole, "provenance");
+    request["manifest_envelope"]["amk_version"] = serde_json::json!(4);
+    let id = fixture.open_session_with(&request, &bearer).await;
+
+    let asset = AssetId::new("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e61");
+    let reserved = fixture
+        .index
+        .read(&asset)
+        .await
+        .expect("the index answers")
+        .expect("the session reserved a row when it opened");
+    assert_eq!(
+        reserved.amk_version, 0,
+        "nothing is published before the manifest lands"
+    );
+
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    fixture
+        .chunk(&id, 4096, &second, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    let row = fixture
+        .index
+        .read(&asset)
+        .await
+        .expect("the index answers")
+        .expect("the row survives finalization");
+    assert!(row.chain_head.is_some(), "the manifest landed");
+    assert_eq!(
+        row.amk_version, 4,
+        "the row carries the epoch the manifest was sealed under"
+    );
+}
+
+#[tokio::test]
+async fn a_create_below_the_albums_epoch_is_refused_at_finalization() {
+    // Invariant 18 for a create: a manifest written under an epoch the album has moved past — a
+    // removed writer still holding a retired write-tier key — must not publish. The album's
+    // mark is set here by a sibling asset already published at epoch 5.
+    use capsule_core::crypto::hash::Hash32;
+    use capsule_server::blob::ContentAddress;
+    use capsule_server::index::{AssetIndex as _, BlobRecord, PendingAsset};
+    use capsule_server::store::{AssetId, BlobRole};
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+
+    let sibling = AssetId::new("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e99");
+    fixture
+        .index
+        .reserve(PendingAsset {
+            asset_id: sibling.clone(),
+            owner_id: owner(),
+            album_id: album(),
+            protocol_version: PROTOCOL_VERSION.to_owned(),
+            crypto_suite_id: capsule_core::crypto::primitives::CRYPTO_SUITE_ID,
+            created_at: jiff::Timestamp::UNIX_EPOCH,
+        })
+        .await
+        .expect("the index reserves");
+    for (role, seed) in [
+        (BlobRole::Provenance, "epoch-5-manifest"),
+        (BlobRole::Metadata, "epoch-5-metadata"),
+    ] {
+        let address = ContentAddress::parse(&checksum(seed.as_bytes())).expect("an address");
+        fixture
+            .index
+            .record_blob(
+                &sibling,
+                BlobRecord {
+                    manifest_sha256: (role == BlobRole::Provenance)
+                        .then(|| Hash32::from_hex(address.as_str()).expect("a digest")),
+                    amk_version: (role == BlobRole::Provenance).then_some(5),
+                    role,
+                    address,
+                    size: 32,
+                    finalized_at: jiff::Timestamp::UNIX_EPOCH,
+                },
+            )
+            .await
+            .expect("the index records");
+    }
+
+    let (first, second, whole) = blob();
+    let mut request = create_request(&fixture.clock, &whole, "provenance");
+    request["manifest_envelope"]["amk_version"] = serde_json::json!(4);
+    let id = fixture.open_session_with(&request, &bearer).await;
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let refused = fixture.chunk(&id, 4096, &second, &bearer).send().await;
+    refused.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(
+        code(&refused.json::<serde_json::Value>()),
+        "error.upload.envelope_rejected"
+    );
+
+    let row = fixture
+        .index
+        .read(&AssetId::new("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e61"))
+        .await
+        .expect("the index answers")
+        .expect("the session reserved a row when it opened");
+    assert!(
+        row.blobs.is_empty(),
+        "the refused manifest was not recorded"
+    );
+    assert_eq!(row.chain_head, None);
+    assert_eq!(row.amk_version, 0, "a refused epoch is not published");
+}
+
+#[tokio::test]
 async fn identical_bytes_become_one_object() {
     // The same ciphertext legitimately belongs to assets in two albums — one thumbnail shared
     // between a copy in each. Neither is the other's duplicate (a `409` is the client's *merge*
@@ -2331,6 +2461,82 @@ async fn finalization_ledgers_custody_then_the_index_write() {
         "the ledger holds the receipt the index issued"
     );
     assert_eq!(indexed.core.prior_entry_hash, Some(custody.chain_hash()));
+}
+
+/// Every append records the ledger's head in the index, so a later tail cut at an entry
+/// boundary is caught against it (#757).
+#[tokio::test]
+async fn finalization_anchors_the_ledger_head_in_the_index() {
+    use capsule_server::index::AssetIndex as _;
+    use capsule_server::ledger::LedgerHead;
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    transfer(&fixture, &bearer).await;
+
+    let entries = verified_ledger(&fixture).await;
+    let last = entries.last().expect("the finalization ledgered");
+    assert_eq!(
+        fixture
+            .index
+            .ledger_head(&owner())
+            .await
+            .expect("the index answers"),
+        Some(LedgerHead {
+            seq: last.core.seq,
+            hash: last.chain_hash(),
+        }),
+        "the anchor is the ledger's last entry"
+    );
+}
+
+/// An index that cannot record the head does not fail an append that is already durable: the
+/// anchor stays behind, which weakens the check and never fakes a fault.
+#[tokio::test]
+async fn an_index_that_cannot_anchor_does_not_fail_the_append() {
+    use std::sync::Arc;
+
+    use capsule_server::index::AssetIndex as _;
+    use capsule_server::ledger::{AnchoredLedger, InMemoryLedger, LedgerEvent, OwnerLedger as _};
+
+    let fixture = Fixture::working();
+    let inner = Arc::new(InMemoryLedger::new());
+    let index = Arc::new(support::SwitchableIndex::new());
+    let ledger = AnchoredLedger::new(inner.clone(), index.clone());
+    index.set_unavailable(true);
+
+    let entry = ledger
+        .append(
+            &owner(),
+            LedgerEvent::Directory {
+                user_id: "user-1".to_owned(),
+                directory_version: 1,
+                document_hash: capsule_core::crypto::hash::hash_bytes(b"directory"),
+            },
+            jiff::Timestamp::UNIX_EPOCH,
+            fixture.attestation_key.as_ref(),
+        )
+        .await
+        .expect("the append is not failed by the anchor");
+    assert_eq!(entry.core.seq, 1);
+    assert_eq!(
+        inner
+            .scan(&owner())
+            .await
+            .expect("the ledger reads")
+            .entries,
+        vec![entry]
+    );
+
+    index.set_unavailable(false);
+    assert_eq!(
+        index
+            .ledger_head(&owner())
+            .await
+            .expect("the index answers"),
+        None,
+        "nothing was anchored while the index was down"
+    );
 }
 
 /// A crash between the ledger append and the index commit leaves a replayable entry and no row:

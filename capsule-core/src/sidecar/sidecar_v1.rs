@@ -149,8 +149,18 @@ pub struct SidecarV1 {
     pub uuid: Uuid,
     /// Canonical plaintext digest.
     pub hash: Hash32,
-    /// RFC3339 capture time.
+    /// RFC3339 capture time **as imported**: what the original's own metadata (or the
+    /// exporter's record it was folded with) said when the asset entered the library. A
+    /// user's correction never overwrites it; it lands in
+    /// [`capture_timestamp_user`](Self::capture_timestamp_user), and
+    /// [`effective_capture_timestamp`](Self::effective_capture_timestamp) is the instant the
+    /// asset is dated by.
     pub capture_timestamp: String,
+    /// The user's capture-time correction: an LWW register over an RFC3339 instant, written by
+    /// `Workspace::set_capture_timestamp`. Wire-absent when never written, so every sidecar
+    /// without a correction encodes byte-identically to before the field existed; an older
+    /// reader keeps it verbatim as an unknown key.
+    pub capture_timestamp_user: Lww<String>,
     /// RFC3339 import time.
     pub import_timestamp: String,
     /// Closed content-type string per protocol version.
@@ -193,8 +203,15 @@ pub struct SidecarV1 {
     pub device_id: Uuid,
     /// Importing session id (UUIDv7; export-stripped).
     pub session_id: Uuid,
-    /// Geolocation (export-rounded).
+    /// Geolocation **as imported** (export-rounded). A user's location edit never overwrites
+    /// it; it lands in [`gps_user`](Self::gps_user), and
+    /// [`effective_gps`](Self::effective_gps) is the location the asset is placed at.
     pub gps: Option<Gps>,
+    /// The user's location edit: an LWW register over `Option<Gps>`, written by
+    /// `Workspace::set_location` with [`GpsSource::Manual`]. A stamped `None` is an explicit
+    /// "no location", which hides an as-imported fix without erasing it. Wire-absent when never
+    /// written (export-rounded like `gps`).
+    pub gps_user: Lww<Option<Gps>>,
     /// The **prior** provenance head — the record *preceding* the write that seals this sidecar,
     /// always equal to that write's manifest `prior_provenance_hash` (SSoT:
     /// [Metadata — Provenance Binding and Sealing Order]). Referencing the prior head (not the
@@ -250,6 +267,9 @@ impl SidecarV1 {
         put!("uuid", self.uuid);
         put!("hash", self.hash);
         put!("capture_timestamp", self.capture_timestamp);
+        if self.capture_timestamp_user != Lww::default() {
+            put!("capture_timestamp_user", self.capture_timestamp_user);
+        }
         put!("import_timestamp", self.import_timestamp);
         put!("content_type", self.content_type);
         put_opt!("dimensions", self.dimensions);
@@ -276,6 +296,9 @@ impl SidecarV1 {
         put!("device_id", self.device_id);
         put!("session_id", self.session_id);
         put_opt!("gps", self.gps);
+        if self.gps_user != Lww::default() {
+            put!("gps_user", self.gps_user);
+        }
         // Wire-absent on the initial create (no prior head); present on every later write.
         put_opt!("provenance_chain_hash", self.provenance_chain_hash);
 
@@ -287,6 +310,23 @@ impl SidecarV1 {
             m.push((Value::Text("signature".to_string()), to_value(sig)));
         }
         m
+    }
+
+    /// The capture instant the asset is dated by: the user's correction when one was ever
+    /// written, else the as-imported [`capture_timestamp`](Self::capture_timestamp).
+    pub fn effective_capture_timestamp(&self) -> &str {
+        self.capture_timestamp_user
+            .get()
+            .map_or(self.capture_timestamp.as_str(), String::as_str)
+    }
+
+    /// The location the asset is placed at: the user's edit when one was ever written (a
+    /// stamped `None` meaning "no location"), else the as-imported [`gps`](Self::gps).
+    pub fn effective_gps(&self) -> Option<&Gps> {
+        match self.gps_user.get() {
+            Some(user) => user.as_ref(),
+            None => self.gps.as_ref(),
+        }
     }
 
     /// The canonical bytes the signature covers (everything except `signature`).
@@ -383,6 +423,10 @@ impl SidecarV1 {
         let uuid = req!("uuid", Uuid);
         let hash = req!("hash", Hash32);
         let capture_timestamp = req!("capture_timestamp", String);
+        let capture_timestamp_user = match text.remove("capture_timestamp_user") {
+            None | Some(Value::Null) => Lww::new(),
+            Some(v) => from_value::<Lww<String>>(v)?,
+        };
         let import_timestamp = req!("import_timestamp", String);
         let content_type = req!("content_type", String);
         let dimensions = opt!("dimensions", Dimensions);
@@ -411,6 +455,10 @@ impl SidecarV1 {
         let device_id = req!("device_id", Uuid);
         let session_id = req!("session_id", Uuid);
         let gps = opt!("gps", Gps);
+        let gps_user = match text.remove("gps_user") {
+            None | Some(Value::Null) => Lww::new(),
+            Some(v) => from_value::<Lww<Option<Gps>>>(v)?,
+        };
         let provenance_chain_hash = opt!("provenance_chain_hash", Hash32);
         let signature = opt!("signature", HybridSignature);
 
@@ -420,6 +468,7 @@ impl SidecarV1 {
             uuid,
             hash,
             capture_timestamp,
+            capture_timestamp_user,
             import_timestamp,
             content_type,
             dimensions,
@@ -436,6 +485,7 @@ impl SidecarV1 {
             device_id,
             session_id,
             gps,
+            gps_user,
             provenance_chain_hash,
             unknown: text, // whatever remains is unknown — preserved verbatim
             signature,
@@ -455,6 +505,7 @@ mod tests {
             uuid: Uuid::from_u128(0x7777),
             hash: Hash32([0xAB; 32]),
             capture_timestamp: "2026-05-31T10:00:00Z".into(),
+            capture_timestamp_user: Lww::new(),
             import_timestamp: "2026-05-31T11:00:00Z".into(),
             content_type: "image/jpeg".into(),
             dimensions: Some(Dimensions {
@@ -482,6 +533,7 @@ mod tests {
                 source: GpsSource::Exif,
                 datum: GpsDatum::Wgs84,
             }),
+            gps_user: Lww::new(),
             provenance_chain_hash: Some(Hash32([0xCC; 32])),
             unknown: BTreeMap::new(),
             signature: None,
@@ -840,6 +892,132 @@ mod tests {
         ba.merge(&a);
         assert_eq!(ab.get(), ba.get());
         assert_eq!(ab.get(), Some(&CullFlag::Reject));
+    }
+
+    /// A sidecar with no user correction carries neither register on the wire, so every sidecar
+    /// written before the registers existed encodes byte-identically, and the effective values
+    /// are the as-imported ones.
+    #[test]
+    fn absent_user_capture_and_location_are_wire_absent_and_byte_stable() {
+        let s = minimal();
+        let bytes = s.to_canonical_vec();
+        for needle in [b"capture_timestamp_user".as_slice(), b"gps_user".as_slice()] {
+            assert!(
+                !bytes.windows(needle.len()).any(|w| w == needle),
+                "unexpected wire presence"
+            );
+        }
+        let back = SidecarV1::from_canonical_slice(&bytes, SIDECAR_SCHEMA_V1).unwrap();
+        assert_eq!(back.capture_timestamp_user, Lww::new());
+        assert_eq!(back.gps_user, Lww::new());
+        assert_eq!(back.effective_capture_timestamp(), "2026-05-31T10:00:00Z");
+        assert_eq!(back.effective_gps(), s.gps.as_ref());
+    }
+
+    /// Both registers round-trip under signature beside the as-imported values they override,
+    /// and a stamped `None` location hides the import's fix without erasing it.
+    #[test]
+    fn user_capture_and_location_round_trip_beside_the_imported_values() {
+        let ik = HybridSigningKey::from_seed_bytes(&[1; 32], &[2; 32]);
+        let mut s = minimal();
+        s.capture_timestamp_user.set(
+            "2019-03-04T05:06:07Z".to_string(),
+            "2026-06-01T00:00:00Z",
+            Uuid::from_u128(0xD1),
+        );
+        let manual = Gps {
+            lat: 51.5,
+            lon: -0.12,
+            source: GpsSource::Manual,
+            datum: GpsDatum::Wgs84,
+        };
+        s.gps_user.set(
+            Some(manual.clone()),
+            "2026-06-01T00:00:00Z",
+            Uuid::from_u128(0xD1),
+        );
+        s.sign(&ik);
+
+        let back =
+            SidecarV1::from_canonical_slice(&s.to_canonical_vec(), SIDECAR_SCHEMA_V1).unwrap();
+        assert_eq!(back, s);
+        assert!(back.verify(&ik.verifying_key()));
+        assert_eq!(back.capture_timestamp, "2026-05-31T10:00:00Z");
+        assert_eq!(back.effective_capture_timestamp(), "2019-03-04T05:06:07Z");
+        assert_eq!(back.gps.as_ref().map(|g| g.source), Some(GpsSource::Exif));
+        assert_eq!(back.effective_gps(), Some(&manual));
+
+        // Dropping a correction after signing invalidates the signature (it was covered).
+        let mut stripped = back.clone();
+        stripped.gps_user = Lww::new();
+        assert!(!stripped.verify(&ik.verifying_key()));
+
+        // A stamped `None` is "no location" — distinct from never having edited it.
+        let mut cleared = back;
+        cleared
+            .gps_user
+            .set(None, "2026-06-02T00:00:00Z", Uuid::from_u128(0xD1));
+        assert_eq!(cleared.effective_gps(), None);
+        assert!(cleared.gps.is_some(), "the import's fix is kept");
+    }
+
+    /// Two devices correct the same asset's capture time and location concurrently: merging the
+    /// registers in either order — or replaying either side — converges on the later write, and
+    /// the as-imported values are untouched by any of it.
+    #[test]
+    fn concurrent_capture_and_location_edits_converge_by_lww() {
+        let base = minimal();
+        let manual = |lat: f64| {
+            Some(Gps {
+                lat,
+                lon: 0.0,
+                source: GpsSource::Manual,
+                datum: GpsDatum::Wgs84,
+            })
+        };
+        let mut a = base.clone();
+        a.capture_timestamp_user.set(
+            "2019-01-01T00:00:00Z".to_string(),
+            "2026-06-01T10:00:00Z",
+            Uuid::from_u128(0xA),
+        );
+        a.gps_user
+            .set(manual(1.0), "2026-06-01T12:00:00Z", Uuid::from_u128(0xA));
+        let mut b = base.clone();
+        b.capture_timestamp_user.set(
+            "2020-01-01T00:00:00Z".to_string(),
+            "2026-06-01T11:00:00Z",
+            Uuid::from_u128(0xB),
+        );
+        // Same instant as A's location write: the larger device id breaks the tie.
+        b.gps_user
+            .set(manual(2.0), "2026-06-01T12:00:00Z", Uuid::from_u128(0xB));
+
+        let merge = |into: &mut SidecarV1, from: &SidecarV1| {
+            into.capture_timestamp_user
+                .merge(&from.capture_timestamp_user);
+            into.gps_user.merge(&from.gps_user);
+        };
+        let mut ab = a.clone();
+        merge(&mut ab, &b);
+        let mut ba = b.clone();
+        merge(&mut ba, &a);
+        for merged in [&ab, &ba] {
+            assert_eq!(merged.effective_capture_timestamp(), "2020-01-01T00:00:00Z");
+            assert_eq!(merged.effective_gps(), manual(2.0).as_ref());
+            assert_eq!(merged.capture_timestamp, base.capture_timestamp);
+            assert_eq!(merged.gps, base.gps);
+        }
+        assert_eq!(ab.to_canonical_vec(), ba.to_canonical_vec());
+
+        // Replaying the losing side does not change the outcome.
+        let mut replay = ab.clone();
+        merge(&mut replay, &a);
+        assert_eq!(
+            replay.effective_capture_timestamp(),
+            ab.effective_capture_timestamp()
+        );
+        assert_eq!(replay.effective_gps(), ab.effective_gps());
     }
 
     /// S-A7 datum-verbatim-storage (WGS-84 arm): a `Wgs84` fix omits the `datum` key, so

@@ -23,6 +23,7 @@ use super::{
 };
 use crate::attestation::InMemoryReceipts;
 use crate::blob::ContentAddress;
+use crate::ledger::LedgerHead;
 use crate::store::{AlbumId, AssetId, BlobRole, OwnerId};
 
 /// Take a lock, recovering rather than propagating a poisoned one — see
@@ -47,6 +48,8 @@ struct Inner {
     minted: BTreeMap<OwnerId, u64>,
     /// Each owner's sync epoch. Absent means 0.
     epochs: BTreeMap<OwnerId, u64>,
+    /// Each owner's recorded ledger head. Absent means none was recorded.
+    ledger_heads: BTreeMap<OwnerId, LedgerHead>,
 }
 
 impl Inner {
@@ -93,6 +96,21 @@ impl Inner {
         if is_singular(blob.role) && row.blobs.iter().any(|held| held.role == blob.role) {
             return BlobOutcome::Conflict;
         }
+        // Invariant 18 for a create: the manifest landing here publishes its epoch, so it is
+        // checked against the album's high-water mark under the same lock `apply_op` reads it
+        // under.
+        if let Some(submitted) = super::create_epoch(&row, &blob) {
+            let stored = self.album_epoch(&row.album_id);
+            if submitted < stored {
+                tracing::info!(
+                    %asset,
+                    stored,
+                    submitted,
+                    "a create was refused: its manifest's album epoch regresses"
+                );
+                return BlobOutcome::AmkRegressed { stored };
+            }
+        }
 
         let mut row = row;
         row.blobs.push(BlobRef {
@@ -114,11 +132,18 @@ impl Inner {
         // (`S-C31`): the two are equal today and are not the same identifier, so deriving one
         // from the other would be correct by coincidence and would break silently the day a
         // suite picks a different content-address digest.
+        //
+        // The manifest's album-key epoch lands with it, for the same reason: it is a fact of the
+        // manifest the row now publishes, and the row is where invariant 18 reads the album's
+        // high-water mark.
         if blob.role == BlobRole::Provenance
             && row.chain_head.is_none()
             && let Some(manifest_sha256) = blob.manifest_sha256
         {
             row.chain_head = Some(manifest_sha256);
+            if let Some(amk_version) = blob.amk_version {
+                row.amk_version = amk_version;
+            }
         }
 
         // The publishable check runs over the *bundle*, so a blob completing the index tier and
@@ -620,6 +645,45 @@ impl AssetIndex for InMemoryAssetIndex {
             *epoch = epoch.saturating_add(1);
             tracing::info!(%owner, epoch = *epoch, "an owner moved to a new sync epoch");
             Ok(*epoch)
+        })
+    }
+
+    fn ledger_head<'a>(&'a self, owner: &'a OwnerId) -> IndexFuture<'a, Option<LedgerHead>> {
+        Box::pin(async move { Ok(lock(&self.inner).ledger_heads.get(owner).copied()) })
+    }
+
+    fn anchored_owners(&self) -> IndexFuture<'_, Vec<OwnerId>> {
+        Box::pin(async move { Ok(lock(&self.inner).ledger_heads.keys().cloned().collect()) })
+    }
+
+    fn record_ledger_head<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        head: LedgerHead,
+    ) -> IndexFuture<'a, ()> {
+        Box::pin(async move {
+            let mut inner = lock(&self.inner);
+            let recorded = inner.ledger_heads.get(owner).map(|recorded| recorded.seq);
+            if recorded.is_none_or(|seq| seq < head.seq) {
+                inner.ledger_heads.insert(owner.clone(), head);
+            }
+            Ok(())
+        })
+    }
+
+    fn reset_ledger_head<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        head: Option<LedgerHead>,
+    ) -> IndexFuture<'a, ()> {
+        Box::pin(async move {
+            let mut inner = lock(&self.inner);
+            match head {
+                Some(head) => inner.ledger_heads.insert(owner.clone(), head),
+                None => inner.ledger_heads.remove(owner),
+            };
+            tracing::info!(%owner, ledger_seq = ?head.map(|head| head.seq), "re-anchored an owner ledger");
+            Ok(())
         })
     }
 

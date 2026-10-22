@@ -60,6 +60,7 @@ async fn record(fixture: &Fixture, asset: &AssetId, role: BlobRole, address: &Co
                 address: address.clone(),
                 size: 32,
                 manifest_sha256: None,
+                amk_version: None,
                 finalized_at: Timestamp::UNIX_EPOCH,
             },
         )
@@ -94,6 +95,7 @@ async fn publish_into(fixture: &Fixture, asset: &str, into: &AlbumId) -> u64 {
                 address: metadata,
                 size: 32,
                 manifest_sha256: None,
+                amk_version: None,
                 finalized_at: Timestamp::UNIX_EPOCH,
             },
         )

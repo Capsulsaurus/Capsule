@@ -24,6 +24,7 @@ use capsule_server::index::{
     IndexFuture, LifecycleOp, OpOutcome, PendingAsset, PurgeOutcome, Receipted, Reservation,
     ServingHold,
 };
+use capsule_server::ledger::LedgerHead;
 use capsule_server::store::{AlbumId, AssetId, OwnerId, StoreError};
 use jiff::Timestamp;
 
@@ -241,6 +242,30 @@ impl AssetIndex for CrashBeforeCommit {
 
     fn bump_sync_epoch<'a>(&'a self, owner: &'a OwnerId) -> IndexFuture<'a, u64> {
         self.inner.bump_sync_epoch(owner)
+    }
+
+    fn ledger_head<'a>(&'a self, owner: &'a OwnerId) -> IndexFuture<'a, Option<LedgerHead>> {
+        self.inner.ledger_head(owner)
+    }
+
+    fn anchored_owners(&self) -> IndexFuture<'_, Vec<OwnerId>> {
+        self.inner.anchored_owners()
+    }
+
+    fn record_ledger_head<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        head: LedgerHead,
+    ) -> IndexFuture<'a, ()> {
+        self.inner.record_ledger_head(owner, head)
+    }
+
+    fn reset_ledger_head<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        head: Option<LedgerHead>,
+    ) -> IndexFuture<'a, ()> {
+        self.inner.reset_ledger_head(owner, head)
     }
 
     fn restore(

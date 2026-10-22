@@ -349,6 +349,7 @@ pub async fn a_shared_blob_survives_purging_one_holder(
                             address,
                             size: 16,
                             manifest_sha256: None,
+                            amk_version: None,
                             finalized_at: at(0),
                         },
                     )

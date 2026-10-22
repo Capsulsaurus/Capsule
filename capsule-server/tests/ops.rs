@@ -75,6 +75,7 @@ async fn publish(fixture: &Fixture) -> AssetId {
                     role,
                     address,
                     size: seed.len() as u64,
+                    amk_version: None,
                     finalized_at: Timestamp::UNIX_EPOCH,
                 },
             )

@@ -1351,6 +1351,7 @@ dependencies = [
  "ed25519-dalek",
  "hex",
  "http",
+ "insta",
  "jiff",
  "p256",
  "proptest",

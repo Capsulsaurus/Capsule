@@ -93,9 +93,9 @@ use crate::gc::{CollectionContext, CollectionStore};
 use crate::index::AssetIndex;
 use crate::index::memory::InMemoryAssetIndex;
 use crate::index::postgres::PostgresAssetIndex;
-use crate::ledger::FilesystemLedger;
 use crate::ledger::rebuild::RebuildContext;
 use crate::ledger::replay::LedgerKeys;
+use crate::ledger::{AnchoredLedger, FilesystemLedger};
 use crate::membership::{
     InMemoryMembership, MembershipContext, MembershipStore, PostgresMembership,
 };
@@ -555,7 +555,13 @@ fn purge_attestation(config: &Config, stores: &Stores) -> Option<AttestationCont
             Arc::new(key),
             Timestamp::UNIX_EPOCH,
         )
-        .with_ledger(stores.ledger.clone()),
+        // Through the anchor, as the server's own producers append (#757): a purge entry moves
+        // the owner's recorded head like any other, and a ledger cut below its anchor refuses
+        // the purge rather than extending the cut chain.
+        .with_ledger(Arc::new(AnchoredLedger::new(
+            stores.ledger.clone(),
+            stores.index.clone(),
+        ))),
     )
 }
 
@@ -975,7 +981,9 @@ fn compose(
         // Publishing a rotation history is `ATTESTATION_KEY_HISTORY`'s job and nobody's yet.
         Timestamp::UNIX_EPOCH,
     )
-    .with_ledger(ledger);
+    // Every producer appends through the anchor, so each owner's head is recorded in the
+    // index the rebuild and the scrub verify the ledger against (#757).
+    .with_ledger(Arc::new(AnchoredLedger::new(ledger, index.clone())));
 
     let app = App::new(Modules {
         auth: AuthContext::new(AuthCollaborators {

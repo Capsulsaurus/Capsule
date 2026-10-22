@@ -108,6 +108,10 @@ tokio = { version = "1", features = ["full", "test-util"] }
 # Generated fault schedules for the upload state machine, per the testing plan's `capsule-sdk`
 # row. The pin lives in the root `[workspace.dependencies]`.
 proptest = { workspace = true }
+# Snapshots of the transfer event sequence a scripted fault schedule produces (`events` tests),
+# so a change to what a progress UI sees is a reviewed diff. The pin lives in the root
+# `[workspace.dependencies]`.
+insta = { workspace = true }
 uuid = { version = "1.23.3", features = ["v7"] }
 serde_json = { workspace = true }
 # The S-D18 envelope mapping is asserted against a manifest a real `capsule_core::Workspace`

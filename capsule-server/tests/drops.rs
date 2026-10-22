@@ -1039,6 +1039,7 @@ async fn an_adoption_onto_an_asset_holding_another_original_is_refused_and_keeps
                 address,
                 size: elsewhere.len() as u64,
                 manifest_sha256: None,
+                amk_version: None,
                 finalized_at: Timestamp::UNIX_EPOCH,
             },
         )
@@ -1797,6 +1798,7 @@ async fn a_refused_adoption_resolves_its_custody_entry() {
                 address: ContentAddress::parse(&checksum(&elsewhere)).expect("a content address"),
                 size: elsewhere.len() as u64,
                 manifest_sha256: None,
+                amk_version: None,
                 finalized_at: Timestamp::UNIX_EPOCH,
             },
         )

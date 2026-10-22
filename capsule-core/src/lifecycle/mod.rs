@@ -162,6 +162,15 @@ pub enum LifecycleError {
     /// A region shape broke the normalized-coordinate contract.
     #[error(transparent)]
     InvalidRegion(#[from] RegionError),
+    /// A location edit named a coordinate outside latitude `[-90, 90]` / longitude
+    /// `[-180, 180]`, or one that is not finite. Nothing is appended.
+    #[error("invalid location: lat {lat}, lon {lon}")]
+    InvalidLocation {
+        /// The refused latitude.
+        lat: f64,
+        /// The refused longitude.
+        lon: f64,
+    },
     /// A stack or album label document could not be decoded, sealed or opened.
     #[error(transparent)]
     Document(#[from] DocError),

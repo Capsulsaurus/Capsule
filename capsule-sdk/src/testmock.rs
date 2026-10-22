@@ -58,6 +58,11 @@ impl MockResponse {
         self.body = body.into().into_bytes();
         self
     }
+    /// No answer at all: the server reads the request, then closes the connection, which the
+    /// client sees as a transport failure (a mid-transfer reset).
+    pub(crate) fn drop_connection() -> Self {
+        MockResponse::new(0, "")
+    }
     /// An `ApiError` rejection carrying the stable `error.*` code — the exact wire
     /// the S-C1 `UploadError::write` produces.
     pub(crate) fn api_error(status: u16, reason: &str, code: &str, message: &str) -> Self {
@@ -191,6 +196,10 @@ where
         body,
     };
     let resp = handler(&req);
+    if resp.status == 0 {
+        // [`MockResponse::drop_connection`]: close without a byte of response.
+        return;
+    }
 
     let mut out = format!("HTTP/1.1 {} {}\r\n", resp.status, resp.reason).into_bytes();
     for (k, v) in &resp.headers {
