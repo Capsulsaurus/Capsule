@@ -521,7 +521,8 @@ pub struct FfiAssetMetadata {
     pub sidecar_schema: u16,
     /// The original's MIME type.
     pub content_type: String,
-    /// RFC3339 capture time.
+    /// RFC3339 capture time the asset is dated by: the user's correction when one is recorded,
+    /// else the as-imported value.
     pub capture_timestamp: String,
     /// Pixel width, when the sidecar records dimensions.
     pub width: Option<u32>,
@@ -546,7 +547,7 @@ impl From<SidecarV1> for FfiAssetMetadata {
         Self {
             sidecar_schema: sidecar.sidecar_schema,
             content_type: sidecar.content_type,
-            capture_timestamp: sidecar.capture_timestamp,
+            capture_timestamp: sidecar.effective_capture_timestamp().to_owned(),
             width: sidecar.dimensions.as_ref().map(|d| d.width),
             height: sidecar.dimensions.as_ref().map(|d| d.height),
             lqip_chromahash: sidecar.lqip.as_ref().map(|l| l.chromahash.clone()),

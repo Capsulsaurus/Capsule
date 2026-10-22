@@ -20,8 +20,9 @@
 //!   not: that would be a guess signed as a fact.)
 //! - **An instant equal to the recorded one** is skipped: the asset is correct.
 //! - **An instant that differs** is *affected*. The comparison is against the sidecar's
-//!   capture timestamp only — never against import time — so an asset genuinely imported the
-//!   second it was taken is not reported as broken.
+//!   **as-imported** capture timestamp only — never against import time, and never against a
+//!   user's correction — so an asset genuinely imported the second it was taken is not
+//!   reported as broken, and a deliberate correction is not mistaken for a parser fault.
 //! - **An original that cannot be read** is reported as unreadable, never as "no EXIF".
 //! - **An asset in trash** is skipped and counted as its own category before its original is
 //!   read: appending an irreversible signed record to an asset the user has decided to
@@ -35,19 +36,18 @@
 //! ## The write
 //!
 //! Dry run is the default; `--apply` issues one signed `metadata-update` per affected asset
-//! through [`Workspace::set_capture_timestamp`], each an independent write — an interrupted
-//! run leaves every completed asset correct and a re-run skips them, because their EXIF now
-//! agrees. The media bundle is **not** relocated: the sidecar is authoritative for the date
-//! and the month directory is only the shard fixed at import, which the design treats as
-//! expected drift after a capture correction rather than as a fault.
+//! through [`Workspace::correct_imported_capture_timestamp`], each an independent write — an
+//! interrupted run leaves every completed asset correct and a re-run skips them, because their
+//! EXIF now agrees. The media bundle is **not** relocated: the month directory is only the
+//! shard fixed at import, which the design treats as expected drift after a capture
+//! correction rather than as a fault.
 //!
-//! ## Not covered
+//! ## A user's correction
 //!
-//! An asset whose capture time a user deliberately set to something other than its EXIF.
-//! No such edit surface exists today — `set_capture_timestamp` is the first — so the
-//! question does not arise; once one exists, the pass must skip assets whose chain carries a
-//! capture correction that was not itself this repair. Recorded in `SLICES.md` under
-//! `S-B17` rather than implemented against a surface that is not there.
+//! The repair re-records the **as-imported** value — what the import should have read from
+//! the file — and nothing else. A capture time the user set through
+//! [`Workspace::set_capture_timestamp`] lives in its own register beside that value and stays
+//! the effective instant, so the repair neither reports it as broken nor overwrites it.
 
 use std::path::Path;
 
@@ -249,7 +249,7 @@ pub fn apply(
     let budget = limit.unwrap_or(affected.len());
     let mut corrected = Vec::new();
     for item in affected.iter().take(budget) {
-        ws.set_capture_timestamp(&item.asset_id, item.recovered)
+        ws.correct_imported_capture_timestamp(&item.asset_id, item.recovered)
             .map_err(|error| RepairError::Lifecycle {
                 asset_id: item.asset_id,
                 detail: error.to_string(),
@@ -586,9 +586,10 @@ mod tests {
         assert!(clean.affected.is_empty(), "{clean:?}");
         assert_eq!((clean.agrees, clean.no_instant), (2, 1));
 
-        // Reproduce the pre-S-B16 state on one asset: its sidecar says "now".
+        // Reproduce the pre-S-B16 state on one asset: its as-imported value says "now".
         let wrong = Timestamp::now();
-        ws.set_capture_timestamp(&broken, wrong).expect("stamp");
+        ws.correct_imported_capture_timestamp(&broken, wrong)
+            .expect("stamp");
 
         let detection = detect(&ws);
         assert_eq!(detection.affected.len(), 1);
@@ -632,6 +633,41 @@ mod tests {
         assert_eq!((again.agrees, again.no_instant), (2, 1));
     }
 
+    /// A capture time the user set is not a parser fault: the pass compares the as-imported
+    /// value only, so a deliberate correction is neither reported nor overwritten — and when
+    /// the as-imported value *is* broken, repairing it leaves the user's correction effective.
+    #[test]
+    fn a_user_correction_is_neither_reported_nor_displaced() {
+        let scratch = Scratch::new();
+        let mut ws = scratch.workspace();
+        let album = ws.default_album_id();
+        let id = ws
+            .import_asset(album, &scratch.file("u.jpg", &exif_jpeg(true, b"user")))
+            .expect("import");
+        let chosen = ts(1_234_567_890);
+        ws.set_capture_timestamp(&id, chosen).expect("user edit");
+
+        let detection = detect(&ws);
+        assert!(detection.affected.is_empty(), "{detection:?}");
+        assert_eq!(detection.agrees, 1);
+
+        // The as-imported value goes wrong underneath the correction; the repair fixes only it.
+        ws.correct_imported_capture_timestamp(&id, Timestamp::now())
+            .expect("stamp");
+        let summary = run(
+            &mut ws,
+            RepairRequest {
+                apply: true,
+                limit: None,
+            },
+        )
+        .expect("apply");
+        assert_eq!(summary.corrected, vec![id]);
+        let sidecar = &ws.asset(&id).expect("asset").sidecar;
+        assert_eq!(sidecar.capture_timestamp, ts(EXIF_SECS).to_string());
+        assert_eq!(sidecar.effective_capture_timestamp(), chosen.to_string());
+    }
+
     #[test]
     fn a_limit_stops_after_that_many_corrections_and_says_so() {
         let scratch = Scratch::new();
@@ -647,7 +683,7 @@ mod tests {
             })
             .collect();
         for id in &ids {
-            ws.set_capture_timestamp(id, Timestamp::now())
+            ws.correct_imported_capture_timestamp(id, Timestamp::now())
                 .expect("stamp");
         }
 
@@ -690,7 +726,7 @@ mod tests {
         let trashed = ws
             .import_asset(album, &scratch.file("t.jpg", &exif_jpeg(true, b"trashed")))
             .expect("import");
-        ws.set_capture_timestamp(&trashed, Timestamp::now())
+        ws.correct_imported_capture_timestamp(&trashed, Timestamp::now())
             .expect("stamp");
         ws.soft_delete(&trashed, 30).expect("trash");
         let records = ws.asset(&trashed).expect("asset").chain.records().len();
