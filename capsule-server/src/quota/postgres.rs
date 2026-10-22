@@ -81,7 +81,7 @@ async fn usage_of<C: ConnectionTrait>(
     user: &UserId,
 ) -> Result<StoredUsage, StoreError> {
     let read = connection
-        .query_one(Statement::from_sql_and_values(
+        .query_one_raw(Statement::from_sql_and_values(
             DbBackend::Postgres,
             "SELECT \
                (SELECT COALESCE(SUM(size), 0)::bigint FROM quota_attributions WHERE user_id = $1) \
@@ -122,7 +122,7 @@ async fn stop_the_clock(
     user: &UserId,
 ) -> Result<(), StoreError> {
     transaction
-        .execute(Statement::from_sql_and_values(
+        .execute_raw(Statement::from_sql_and_values(
             DbBackend::Postgres,
             "UPDATE quota_usage SET over_since = NULL WHERE user_id = $1",
             [Value::from(user.as_str().to_owned())],
@@ -169,7 +169,7 @@ impl QuotaStore for PostgresQuota {
             // for one address cannot both read "unattributed" and both debit, because neither
             // reads: they both insert, and one of them affects no row.
             let debited = transaction
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "INSERT INTO quota_attributions (address, user_id, size, charged_at) \
                      VALUES ($1, $2, $3, $4) ON CONFLICT (address) DO NOTHING",
@@ -191,7 +191,7 @@ impl QuotaStore for PostgresQuota {
             // The account's row in `quota_usage` exists from its first charge onwards, and holds
             // nothing but the clock.
             transaction
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "INSERT INTO quota_usage (user_id, over_since) VALUES ($1, NULL) \
                      ON CONFLICT (user_id) DO NOTHING",
@@ -212,7 +212,7 @@ impl QuotaStore for PostgresQuota {
             // deadlock: the insert can wait on another transaction's uncommitted attribution, but
             // a transaction holding this lock waits on nothing further, so no cycle can form.
             transaction
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "SELECT 1 FROM quota_usage WHERE user_id = $1 FOR UPDATE",
                     [Value::from(user.as_str().to_owned())],
@@ -227,7 +227,7 @@ impl QuotaStore for PostgresQuota {
                 // while still over must not restamp it, or the grace window would never expire
                 // for an account that keeps trying to upload.
                 let stamped = transaction
-                    .execute(Statement::from_sql_and_values(
+                    .execute_raw(Statement::from_sql_and_values(
                         DbBackend::Postgres,
                         "UPDATE quota_usage SET over_since = $2 \
                          WHERE user_id = $1 AND over_since IS NULL",
@@ -260,7 +260,7 @@ impl QuotaStore for PostgresQuota {
             // read-then-check would answer whether the address was attributed at all, which is
             // the disclosure the port refuses.
             let released = transaction
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "DELETE FROM quota_attributions WHERE address = $1 AND user_id = $2",
                     [
@@ -289,7 +289,7 @@ impl QuotaStore for PostgresQuota {
             // the ledger names the account rather than the caller guessing one. `RETURNING` is
             // what makes the delete and the answer one operation.
             let released = transaction
-                .query_one(Statement::from_sql_and_values(
+                .query_one_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "DELETE FROM quota_attributions WHERE address = $1 RETURNING user_id, size",
                     [Value::from(address.as_str().to_owned())],

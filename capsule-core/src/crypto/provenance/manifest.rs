@@ -9,6 +9,9 @@
 //! [`verify_asset`]: crate::crypto::verify_asset::verify_asset
 //! [Cryptography — Provenance]: https://docs/design/cryptography/provenance/
 
+use std::collections::BTreeMap;
+
+use ciborium::value::Value;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -92,7 +95,18 @@ impl<'de> Deserialize<'de> for WrappedFileKey {
 }
 
 /// The signed core of an asset manifest — every field the two signatures cover.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// **Unknown keys survive under the signature** ([Versioning — invariant 2]). A key this build
+/// does not know is kept verbatim in [`Self::unknown`], re-emitted by the canonical encoder
+/// beside the known fields, and therefore covered by both signatures: a newer writer's manifest
+/// that only adds a field verifies here, and stripping that field fails verification. The
+/// decoder is hand-written for that reason (see the `Deserialize` impl below): `serde(flatten)`
+/// buffers unknown values through serde's private content type, which cannot hold a CBOR tag
+/// or an integer wider than 64 bits, so a future field carrying either would make the whole
+/// manifest undecodable instead of preserved.
+///
+/// [Versioning — invariant 2]: https://docs/design/versioning/#system-invariants
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ManifestCore {
     /// Schema version string (`asset-manifest/v1`).
     pub version: String,
@@ -171,6 +185,98 @@ pub struct ManifestCore {
     /// `an_absent_lineage_is_wire_absent_and_does_not_move_the_signature` exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upgraded_from: Option<crate::crypto::upgrade::UpgradeLineage>,
+    /// Keys a newer writer added that this build does not know, preserved verbatim and signed
+    /// over. Empty (and so wire-absent) on everything this build writes.
+    ///
+    /// A key here must never collide with a known field name: the decoder only ever places the
+    /// keys it did not recognise here, and a caller building a core by hand must do the same.
+    #[serde(flatten)]
+    pub unknown: BTreeMap<String, Value>,
+}
+
+// `Value` holds floats, so it is only `PartialEq`. Every known field is `Eq`; the one exception
+// is a core whose unknown map holds a NaN, which compares unequal to itself. Equality is never
+// how a manifest is trusted (signatures over the canonical bytes are), so `Eq` stays.
+impl Eq for ManifestCore {}
+
+impl<'de> Deserialize<'de> for ManifestCore {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+
+        fn take<T: serde::de::DeserializeOwned, E: Error>(
+            fields: &mut BTreeMap<String, Value>,
+            key: &'static str,
+        ) -> Result<T, E> {
+            let value = fields.remove(key).ok_or_else(|| E::missing_field(key))?;
+            value
+                .deserialized()
+                .map_err(|e| E::custom(format!("manifest field {key}: {e}")))
+        }
+        fn take_opt<T: serde::de::DeserializeOwned, E: Error>(
+            fields: &mut BTreeMap<String, Value>,
+            key: &'static str,
+        ) -> Result<Option<T>, E> {
+            match fields.remove(key) {
+                None | Some(Value::Null) => Ok(None),
+                Some(value) => value
+                    .deserialized()
+                    .map(Some)
+                    .map_err(|e| E::custom(format!("manifest field {key}: {e}"))),
+            }
+        }
+
+        let Value::Map(entries) = Value::deserialize(d)? else {
+            return Err(D::Error::custom("an asset manifest core must be a map"));
+        };
+        let mut fields = BTreeMap::new();
+        for (key, value) in entries {
+            let Value::Text(key) = key else {
+                return Err(D::Error::custom(
+                    "an asset manifest core has only text keys",
+                ));
+            };
+            if fields.contains_key(&key) {
+                return Err(D::Error::custom(format!("duplicate manifest field {key}")));
+            }
+            fields.insert(key, value);
+        }
+
+        // Struct-literal fields evaluate in order, so `version` is decoded first.
+        let core = Self {
+            version: take(&mut fields, "version")?,
+            crypto_suite_id: take(&mut fields, "crypto_suite_id")?,
+            protocol_version: take(&mut fields, "protocol_version")?,
+            file_id: take(&mut fields, "file_id")?,
+            album_id: take(&mut fields, "album_id")?,
+            amk_version: take(&mut fields, "amk_version")?,
+            ciphertext_hash: take(&mut fields, "ciphertext_hash")?,
+            plaintext_size: take(&mut fields, "plaintext_size")?,
+            chunk_size: take(&mut fields, "chunk_size")?,
+            nonce_prefix: take(&mut fields, "nonce_prefix")?,
+            key_mode: take_opt(&mut fields, "key_mode")?.unwrap_or_default(),
+            wrapped_file_key: take_opt(&mut fields, "wrapped_file_key")?,
+            metadata_blob_hash: take_opt(&mut fields, "metadata_blob_hash")?,
+            created_by_user: take(&mut fields, "created_by_user")?,
+            created_by_device: take(&mut fields, "created_by_device")?,
+            client_version: take(&mut fields, "client_version")?,
+            timestamp: take(&mut fields, "timestamp")?,
+            action: take(&mut fields, "action")?,
+            prior_provenance_hash: take_opt(&mut fields, "prior_provenance_hash")?,
+            retention_until: take_opt(&mut fields, "retention_until")?,
+            upgraded_from: take_opt(&mut fields, "upgraded_from")?,
+            unknown: BTreeMap::new(),
+        };
+        if !fields.is_empty() {
+            tracing::debug!(
+                unknown_keys = ?fields.keys().collect::<Vec<_>>(),
+                "manifest core: preserving keys this build does not know"
+            );
+        }
+        Ok(Self {
+            unknown: fields,
+            ..core
+        })
+    }
 }
 
 /// A signed asset manifest: a [`ManifestCore`] plus its two hybrid signatures.
@@ -397,6 +503,7 @@ mod tests {
             prior_provenance_hash: prior,
             retention_until: None,
             upgraded_from: None,
+            unknown: BTreeMap::new(),
         }
     }
 

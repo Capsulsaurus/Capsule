@@ -111,7 +111,7 @@ impl ShareStore for PostgresShares {
             let (scope_kind, scope_id) = scope_columns(&record.scope);
             let transaction = begin(&self.connection).await?;
             let inserted = transaction
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "INSERT INTO shares \
                        (opaque_id, owner_id, scope_kind, scope_id, metadata, wrapped_secret, \
@@ -124,7 +124,7 @@ impl ShareStore for PostgresShares {
                         Value::from(scope_kind.to_owned()),
                         Value::from(scope_id),
                         Value::from(record.metadata.as_str().to_owned()),
-                        Value::Bytes(record.wrapped_secret.clone().map(Box::new)),
+                        Value::Bytes(record.wrapped_secret.clone()),
                         optional_micros(record.expires_at),
                         optional_micros(record.revoked_at),
                     ],
@@ -147,7 +147,7 @@ impl ShareStore for PostgresShares {
                 .map(|address| address.as_str().to_owned())
                 .collect();
             transaction
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "INSERT INTO share_serves (opaque_id, address) \
                      SELECT $1, address FROM unnest($2::text[]) AS address",
@@ -176,7 +176,7 @@ impl ShareStore for PostgresShares {
             // that serves nothing, and no row for an unknown id.
             let rows = self
                 .connection
-                .query_all(Statement::from_sql_and_values(
+                .query_all_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "SELECT s.owner_id, s.scope_kind, s.scope_id, s.metadata, s.wrapped_secret, \
                             s.expires_at, s.revoked_at, v.address \
@@ -231,7 +231,7 @@ impl ShareStore for PostgresShares {
         Box::pin(async move {
             let result = self
                 .connection
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "UPDATE shares SET revoked_at = $3 \
                      WHERE opaque_id = $1 AND owner_id = $2 AND revoked_at IS NULL",
@@ -261,7 +261,7 @@ impl ShareStore for PostgresShares {
             // either no expiry or one strictly after `now`.
             let row = self
                 .connection
-                .query_one(Statement::from_sql_and_values(
+                .query_one_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "SELECT EXISTS ( \
                        SELECT 1 FROM share_serves v \

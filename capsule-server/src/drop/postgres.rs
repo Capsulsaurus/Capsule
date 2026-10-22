@@ -205,7 +205,7 @@ impl DropStore for PostgresDrops {
             let used_bytes = count_to_column(record.used_bytes)?;
             let inserted = self
                 .connection
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     format!(
                         "INSERT INTO drop_links ({LINK_COLUMNS}) \
@@ -223,7 +223,7 @@ impl DropStore for PostgresDrops {
                         Value::BigInt(record.caps.max_file_count.map(i64::from)),
                         cap_to_column(record.caps.max_file_size),
                         Value::from(record.caps.single_use),
-                        Value::Bytes(record.passphrase_verifier.map(Box::new)),
+                        Value::Bytes(record.passphrase_verifier),
                         Value::from(used_bytes),
                         Value::from(i64::from(record.used_files)),
                         optional_micros(record.revoked_at),
@@ -247,7 +247,7 @@ impl DropStore for PostgresDrops {
         Box::pin(async move {
             let row = self
                 .connection
-                .query_one(Statement::from_sql_and_values(
+                .query_one_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     format!("SELECT {LINK_COLUMNS} FROM drop_links WHERE opaque_id = $1"),
                     [Value::from(opaque_id.to_owned())],
@@ -268,7 +268,7 @@ impl DropStore for PostgresDrops {
         Box::pin(async move {
             let result = self
                 .connection
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "UPDATE drop_links SET revoked_at = $3 \
                      WHERE opaque_id = $1 AND owner_id = $2 AND revoked_at IS NULL",
@@ -297,7 +297,7 @@ impl DropStore for PostgresDrops {
         Box::pin(async move {
             let transaction = begin(&self.connection).await?;
             let Some(row) = transaction
-                .query_one(Statement::from_sql_and_values(
+                .query_one_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     format!(
                         "SELECT {LINK_COLUMNS} FROM drop_links WHERE opaque_id = $1 FOR UPDATE"
@@ -314,7 +314,7 @@ impl DropStore for PostgresDrops {
             let admission = admit(&mut link, size, at);
             if matches!(admission, Admission::Admitted { .. }) {
                 transaction
-                    .execute(Statement::from_sql_and_values(
+                    .execute_raw(Statement::from_sql_and_values(
                         DbBackend::Postgres,
                         "UPDATE drop_links SET used_bytes = $2, used_files = $3 \
                          WHERE opaque_id = $1",
@@ -340,7 +340,7 @@ impl DropStore for PostgresDrops {
         Box::pin(async move {
             let size = count_to_column(pending.size)?;
             self.connection
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "INSERT INTO drop_pending \
                        (upload_id, drop_id, opaque_id, owner_id, kem_ct, content_type, \
@@ -361,7 +361,7 @@ impl DropStore for PostgresDrops {
                         Value::from(pending.owner_id.as_str().to_owned()),
                         Value::from(pending.kem_ct),
                         Value::from(pending.content_type),
-                        Value::String(pending.suggested_filename.map(Box::new)),
+                        Value::String(pending.suggested_filename),
                         Value::from(size),
                     ],
                 ))
@@ -379,7 +379,7 @@ impl DropStore for PostgresDrops {
         Box::pin(async move {
             let Some(row) = self
                 .connection
-                .query_one(Statement::from_sql_and_values(
+                .query_one_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "DELETE FROM drop_pending WHERE upload_id = $1 \
                      RETURNING drop_id, opaque_id, owner_id, kem_ct, content_type, \
@@ -419,7 +419,7 @@ impl DropStore for PostgresDrops {
             let size = i64::try_from(size).unwrap_or(i64::MAX);
             let result = self
                 .connection
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "UPDATE drop_links SET \
                        used_bytes = GREATEST(used_bytes - $2, 0), \
@@ -440,7 +440,7 @@ impl DropStore for PostgresDrops {
         Box::pin(async move {
             let size = count_to_column(entry.size)?;
             self.connection
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     format!(
                         "INSERT INTO drop_inbox ({INBOX_COLUMNS}) \
@@ -464,7 +464,7 @@ impl DropStore for PostgresDrops {
                         Value::from(size),
                         Value::from(entry.content_type),
                         Value::from(entry.kem_ct),
-                        Value::String(entry.suggested_filename.map(Box::new)),
+                        Value::String(entry.suggested_filename),
                         Value::from(to_micros(entry.received_at)),
                         Value::from(entry.adopting),
                     ],
@@ -486,7 +486,7 @@ impl DropStore for PostgresDrops {
             // in-memory adapter's.
             let rows = self
                 .connection
-                .query_all(Statement::from_sql_and_values(
+                .query_all_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     format!(
                         "SELECT {INBOX_COLUMNS} FROM drop_inbox WHERE owner_id = $1 \
@@ -512,7 +512,7 @@ impl DropStore for PostgresDrops {
             // check is inside the write: two concurrent adoptions cannot both be handed it.
             let row = self
                 .connection
-                .query_one(Statement::from_sql_and_values(
+                .query_one_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     format!(
                         "UPDATE drop_inbox SET adopting = TRUE \
@@ -534,7 +534,7 @@ impl DropStore for PostgresDrops {
     fn settle<'a>(&'a self, drop_id: &'a str) -> StoreFuture<'a, ()> {
         Box::pin(async move {
             self.connection
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "DELETE FROM drop_inbox WHERE drop_id = $1",
                     [Value::from(drop_id.to_owned())],
@@ -550,7 +550,7 @@ impl DropStore for PostgresDrops {
         Box::pin(async move {
             let result = self
                 .connection
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "UPDATE drop_inbox SET adopting = FALSE WHERE drop_id = $1",
                     [Value::from(drop_id.to_owned())],
@@ -568,7 +568,7 @@ impl DropStore for PostgresDrops {
         Box::pin(async move {
             let result = self
                 .connection
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "DELETE FROM drop_inbox WHERE drop_id = $1 AND owner_id = $2",
                     [

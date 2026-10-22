@@ -147,7 +147,7 @@ impl PostgresAccounts {
         let now = self.clock.now();
         let reserved = self
             .connection
-            .query_one(Statement::from_sql_and_values(
+            .query_one_raw(Statement::from_sql_and_values(
                 DbBackend::Postgres,
                 format!(
                     "UPDATE accounts SET \
@@ -193,7 +193,7 @@ impl PostgresAccounts {
 
         let exists = self
             .connection
-            .query_one(Statement::from_sql_and_values(
+            .query_one_raw(Statement::from_sql_and_values(
                 DbBackend::Postgres,
                 format!(
                     "SELECT user_id FROM accounts WHERE {column} = $1 AND credential IS NOT NULL"
@@ -217,7 +217,7 @@ impl PostgresAccounts {
     /// Settle a reservation whose password matched: the run of failures is over.
     async fn settle_success(&self, user: &UserId) -> Result<(), StoreError> {
         self.connection
-            .execute(Statement::from_sql_and_values(
+            .execute_raw(Statement::from_sql_and_values(
                 DbBackend::Postgres,
                 "UPDATE accounts SET failures = 0, last_failure_at = NULL WHERE user_id = $1",
                 [Value::from(user.as_str().to_owned())],
@@ -277,7 +277,7 @@ impl PostgresAccounts {
     async fn profile(&self, user: &UserId) -> Result<Option<ProfileRecord>, StoreError> {
         let found = self
             .connection
-            .query_one(Statement::from_sql_and_values(
+            .query_one_raw(Statement::from_sql_and_values(
                 DbBackend::Postgres,
                 "SELECT user_id, email, display_name, created_at FROM accounts \
                  WHERE user_id = $1",
@@ -292,7 +292,7 @@ impl PostgresAccounts {
     async fn linked(&self, issuer: &str, subject: &str) -> Result<Option<UserId>, StoreError> {
         let found = self
             .connection
-            .query_one(Statement::from_sql_and_values(
+            .query_one_raw(Statement::from_sql_and_values(
                 DbBackend::Postgres,
                 "SELECT user_id FROM accounts WHERE oidc_issuer = $1 AND oidc_subject = $2",
                 [
@@ -315,7 +315,7 @@ impl PostgresAccounts {
     async fn address_held(&self, email: &str) -> Result<bool, StoreError> {
         let found = self
             .connection
-            .query_one(Statement::from_sql_and_values(
+            .query_one_raw(Statement::from_sql_and_values(
                 DbBackend::Postgres,
                 "SELECT 1 AS held FROM accounts WHERE email = $1",
                 [Value::from(email.to_owned())],
@@ -414,7 +414,7 @@ impl AccountRegistry for PostgresAccounts {
             // address must not both believe they own it.
             let inserted = self
                 .connection
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "INSERT INTO accounts \
                        (user_id, email, display_name, credential, failures, created_at, updated_at) \
@@ -455,7 +455,7 @@ impl FederatedAccounts for PostgresAccounts {
             // same person got here first" can be decided by a read followed by a write.
             let row = self
                 .connection
-                .query_one(Statement::from_sql_and_values(
+                .query_one_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "WITH existing AS ( \
                        SELECT user_id FROM accounts \
@@ -476,7 +476,7 @@ impl FederatedAccounts for PostgresAccounts {
                         Value::from(identity.issuer.clone()),
                         Value::from(identity.subject.clone()),
                         Value::from(user.as_str().to_owned()),
-                        Value::String(address.clone().map(Box::new)),
+                        Value::String(address.clone()),
                         Value::from(to_micros(at)),
                     ],
                 ))
@@ -551,7 +551,7 @@ impl AccountProfiles for PostgresAccounts {
             // the whole record back would clobber a concurrent edit from another device.
             let updated = self
                 .connection
-                .query_one(Statement::from_sql_and_values(
+                .query_one_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "UPDATE accounts SET display_name = $2, updated_at = $3 \
                      WHERE user_id = $1 \
@@ -591,7 +591,7 @@ impl PasswordChange for PostgresAccounts {
             // gaining one here would be a password nobody chose at the provider (#460).
             let changed = self
                 .connection
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "UPDATE accounts \
                      SET credential = $2, failures = 0, last_failure_at = NULL, updated_at = $3 \
@@ -690,7 +690,7 @@ mod tests {
                     let row = self
                         .accounts
                         .connection
-                        .query_one(Statement::from_sql_and_values(
+                        .query_one_raw(Statement::from_sql_and_values(
                             DbBackend::Postgres,
                             "SELECT failures FROM accounts WHERE email = $1",
                             [Value::from(address.to_owned())],

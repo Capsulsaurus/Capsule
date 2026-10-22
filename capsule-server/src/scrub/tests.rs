@@ -113,6 +113,7 @@ fn manifest_bytes(name: &str, metadata: &ContentAddress) -> Vec<u8> {
         action: Action::Create,
         prior_provenance_hash: None,
         upgraded_from: None,
+        unknown: Default::default(),
         retention_until: None,
     };
     let device = HybridSigningKey::from_seed64(&[1; 64]);
