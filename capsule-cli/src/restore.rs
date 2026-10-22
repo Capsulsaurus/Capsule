@@ -3,35 +3,41 @@
 //! The network legs are the SDK's: the feed comes from [`crate::remote::restore`]'s fresh drain,
 //! and every blob rides [`RangedFetcher`] over whatever [`BlobSource`] the caller hands in
 //! ([`capsule_sdk::fetch::HttpBlobSource`] in production, a mock in tests). Verification is the
-//! library's: [`Workspace::open_remote_original`] runs each entry through the `verify_asset`
-//! chokepoint, decrypts the original under this library's album keys and checks the plaintext
-//! against the signed sidecar's digest. What this module owns is the orchestration between
-//! them, and the two properties a restore needs on top:
+//! library's: [`Workspace::open_remote_original_from`] runs each entry through the
+//! `verify_asset` chokepoint, decrypts the original under this library's album keys and checks
+//! the plaintext against the signed sidecar's digest. What this module owns is the orchestration
+//! between them, and the three properties a restore needs on top:
 //!
-//! - **Resume without re-fetching.** Every ciphertext byte that lands is appended to a part file
-//!   under `OUT/.capsule-restore/` before it is handed to the fetcher. A later run serves that
-//!   prefix from disk and asks the server only for the bytes after it; the fetcher still hashes
-//!   the whole reassembled ciphertext against its content address, so a prefix is trusted only
-//!   once the blob it belongs to verifies. A part file whose blob fails that check is removed,
-//!   so a bad prefix is fetched again rather than kept. The production source reads each `Range`
-//!   whole and hands over nothing from a response whose body drops, so a restore always asks for
-//!   bounded windows ([`RESTORE_RANGE_WINDOW`], or the connection class's smaller one): a run
-//!   that is cut off loses at most the window in flight, whatever the connection class.
-//! - **Atomic writes.** An original is written to a temporary file in the staging directory,
-//!   flushed to disk, and renamed into `OUT`. A file named for the asset in `OUT` is therefore
-//!   always a complete, verified original, and a run that finds one skips the asset without
-//!   fetching anything.
+//! - **Bounded memory.** An original never sits in memory whole, whatever its size: the fetch
+//!   streams it one `Range` window at a time into its part file on disk
+//!   ([`RangedFetcher::fetch_into`]), and the library decrypts that file into the staging file
+//!   one STREAM chunk at a time. A restore holds a window and a few chunks.
+//! - **Resume without re-fetching.** The part file under `OUT/.capsule-restore/` is where the
+//!   ciphertext lands, each window appended as it arrives. A later run serves that prefix from
+//!   disk and asks the server only for the bytes after it; the fetcher still hashes the whole
+//!   ciphertext against its content address, so a prefix is trusted only once the blob it
+//!   belongs to verifies. A part file whose blob fails that check is removed, so a bad prefix is
+//!   fetched again rather than kept. The production source reads each `Range` whole and hands
+//!   over nothing from a response whose body drops, so a restore always asks for bounded
+//!   windows ([`RESTORE_RANGE_WINDOW`], or the connection class's smaller one): a run that is
+//!   cut off loses at most the window in flight, whatever the connection class.
+//! - **Atomic writes.** An original is decrypted into a temporary file in the staging
+//!   directory, and only once the library has verified it end to end is that file flushed to
+//!   disk and renamed into `OUT`. A file named for the asset in `OUT` is therefore always a
+//!   complete, verified original, and a run that finds one skips the asset without fetching
+//!   anything.
 //!
 //! One asset's failure is that asset's: it is recorded with its reason and the run moves on.
 
-use std::io::Write as _;
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use capsule_core::crypto::hash::Hash32;
 use capsule_core::crypto::provenance::ProvenanceRecord;
 use capsule_core::lifecycle::{
-    QuarantineReason, RemoteEntry, RemoteOriginal, SyncApplyOutcome, Workspace,
+    LifecycleError, QuarantineReason, RemoteHead, RemoteOriginal, SyncApplyOutcome, Workspace,
 };
 use capsule_sdk::fetch::{BlobSource, FetchError, RangeOutcome, RangedFetcher};
 use capsule_sdk::net::{ConnectionClass, StallConfig, SystemClock, TokioSleeper};
@@ -416,7 +422,7 @@ impl<B: BlobSource + Sync> AssetRestore<'_, B> {
         }
 
         let metadata = self.fetch_metadata(entry).await?;
-        let ciphertext = self
+        let (part, ciphertext_hash) = self
             .fetch_original(&original.ciphertext_hash, original.size, outcome)
             .await?;
 
@@ -426,39 +432,64 @@ impl<B: BlobSource + Sync> AssetRestore<'_, B> {
         let local_chain_head = ProvenanceRecord::decode(&entry.manifest_cbor)
             .ok()
             .and_then(|record| record.prior_provenance_hash);
-        let opened = self
+        let remote = RemoteHead {
+            album_id: head.album,
+            manifest_cbor: &entry.manifest_cbor,
+            metadata_blob: &metadata,
+            original_ciphertext_hash: ciphertext_hash,
+            local_chain_head,
+        };
+        let written = self.open_into_out(head.asset, remote, &part);
+        // The part file has served its purpose whatever the verdict: its bytes hashed to their
+        // address, so a later run would only be told the same thing again.
+        remove_part(&part);
+        written
+    }
+
+    /// Decrypt the verified part file through the library into a staging file, and move it into
+    /// `OUT` only once the library vouches for it. Returns the path written.
+    fn open_into_out(
+        &self,
+        asset: Uuid,
+        remote: RemoteHead<'_>,
+        part: &Path,
+    ) -> Result<PathBuf, AssetRestoreFailure> {
+        let write_failure =
+            |error: std::io::Error| AssetRestoreFailure::new("write", error.to_string());
+        let ciphertext = std::fs::File::open(part).map_err(write_failure)?;
+        let staged = self.staging.join(format!("{asset}.tmp"));
+        let sink = BufWriter::new(std::fs::File::create(&staged).map_err(write_failure)?);
+        let opened = match self
             .workspace
-            .open_remote_original(RemoteEntry {
-                album_id: head.album,
-                manifest_cbor: &entry.manifest_cbor,
-                metadata_blob: &metadata,
-                original_ciphertext: &ciphertext,
-                local_chain_head,
-            })
-            .map_err(|error| AssetRestoreFailure::new("workspace", error.to_string()))?;
-        let (facts, plaintext) = match opened {
-            RemoteOriginal::Opened { facts, plaintext } => (facts, plaintext),
-            RemoteOriginal::Refused(verdict) => return Err(refusal(&verdict)),
-            RemoteOriginal::Undecryptable { .. } => {
-                return Err(AssetRestoreFailure::new(
-                    "undecryptable",
-                    "the original did not open under this library's album keys",
-                ));
+            .open_remote_original_from(remote, ciphertext, sink)
+        {
+            Ok(opened) => opened,
+            Err(error) => {
+                discard_staged(&staged);
+                let kind = if matches!(error, LifecycleError::Io(_)) {
+                    "write"
+                } else {
+                    "workspace"
+                };
+                return Err(AssetRestoreFailure::new(kind, error.to_string()));
             }
-            RemoteOriginal::DigestMismatch { .. } => {
-                return Err(AssetRestoreFailure::new(
-                    "digest_mismatch",
-                    "the decrypted original does not match the digest its signed metadata records",
-                ));
+        };
+        let (facts, sink) = match opened {
+            RemoteOriginal::Opened { facts, plaintext } => (facts, plaintext),
+            other => {
+                discard_staged(&staged);
+                return Err(not_opened(other));
             }
         };
         let ext = facts
             .sidecar
             .as_ref()
             .map_or("bin", |sidecar| extension_for(&sidecar.content_type));
-        let target = self.out.join(format!("{}.{ext}", head.asset));
-        write_atomically(self.staging, &target, &plaintext)
-            .map_err(|error| AssetRestoreFailure::new("write", error.to_string()))?;
+        let target = self.out.join(format!("{asset}.{ext}"));
+        commit_staged(sink, &staged, &target).map_err(|error| {
+            discard_staged(&staged);
+            write_failure(error)
+        })?;
         Ok(target)
     }
 
@@ -486,24 +517,33 @@ impl<B: BlobSource + Sync> AssetRestore<'_, B> {
             .map_err(|error| AssetRestoreFailure::fetch("metadata blob", &error))
     }
 
-    /// The original's ciphertext, resumed from and persisted to its part file.
+    /// Fetch the original's ciphertext into its part file, resuming from whatever an earlier
+    /// run left there, and return the part file's path with the content address every byte in
+    /// it was verified against. Holds one `Range` window of the original at a time.
     async fn fetch_original(
         &self,
         hash: &str,
         size: u64,
         outcome: &mut AssetRestoreOutcome,
-    ) -> Result<Vec<u8>, AssetRestoreFailure> {
+    ) -> Result<(PathBuf, Hash32), AssetRestoreFailure> {
         // The address names a file on this machine, so it must be one: a feed that hands over
         // anything but a SHA-256 in lowercase hex never reaches a path.
-        if !is_content_address(hash) {
-            return Err(AssetRestoreFailure::new(
-                "malformed_feed",
-                format!("the feed names the original by {hash:?}, which is not a content address"),
-            ));
-        }
+        let address = is_content_address(hash)
+            .then(|| Hash32::from_hex(hash).ok())
+            .flatten()
+            .ok_or_else(|| {
+                AssetRestoreFailure::new(
+                    "malformed_feed",
+                    format!(
+                        "the feed names the original by {hash:?}, which is not a content address"
+                    ),
+                )
+            })?;
         let part = self.staging.join(format!("{hash}.part"));
-        let source = PersistingSource::open(self.source, &part, size)
-            .map_err(|error| AssetRestoreFailure::new("write", error.to_string()))?;
+        let write_failure =
+            |error: std::io::Error| AssetRestoreFailure::new("write", error.to_string());
+        let source = ResumingSource::open(self.source, &part, size).map_err(write_failure)?;
+        let mut sink = PartSink::open(&part, source.held_len()).map_err(write_failure)?;
         if source.held_len() > 0 {
             tracing::info!(
                 hash,
@@ -511,21 +551,52 @@ impl<B: BlobSource + Sync> AssetRestore<'_, B> {
                 "restore: resuming the original from its part file"
             );
         }
-        let fetched = self.fetcher.fetch(&source, hash, size).await;
+        let fetched = self
+            .fetcher
+            .fetch_into(&source, hash, size, &mut sink)
+            .await;
         outcome.resumed_bytes = source.held_len();
         outcome.fetched_bytes = source.fetched();
         match fetched {
-            Ok(ciphertext) => {
-                remove_part(&part);
-                Ok(ciphertext)
+            Ok(_signals) => {
+                tracing::debug!(
+                    hash,
+                    size,
+                    "restore: the original's part file is complete and verified"
+                );
+                Ok((part, address))
             }
             Err(error) => {
                 // Bytes that do not hash to their address are no prefix to resume from.
                 if matches!(error, FetchError::IntegrityFailed { .. }) {
                     remove_part(&part);
                 }
+                if let FetchError::Sink(io) = &error {
+                    return Err(AssetRestoreFailure::new(
+                        "write",
+                        format!("extending the original's part file failed: {io}"),
+                    ));
+                }
                 Err(AssetRestoreFailure::fetch("original", &error))
             }
+        }
+    }
+}
+
+/// The failure for an original the library did not open.
+fn not_opened<W>(verdict: RemoteOriginal<W>) -> AssetRestoreFailure {
+    match verdict {
+        RemoteOriginal::Refused(verdict) => refusal(&verdict),
+        RemoteOriginal::Undecryptable { .. } => AssetRestoreFailure::new(
+            "undecryptable",
+            "the original did not open under this library's album keys",
+        ),
+        RemoteOriginal::DigestMismatch { .. } => AssetRestoreFailure::new(
+            "digest_mismatch",
+            "the decrypted original does not match the digest its signed metadata records",
+        ),
+        RemoteOriginal::Opened { .. } => {
+            AssetRestoreFailure::new("workspace", "the original opened but was not kept")
         }
     }
 }
@@ -593,20 +664,20 @@ pub fn extension_for(content_type: &str) -> &'static str {
     }
 }
 
-/// Write `bytes` to `target` so that `target` is either absent or complete: a temporary file in
-/// `staging` (on the same filesystem, so the rename is atomic), flushed, then renamed.
-pub fn write_atomically(staging: &Path, target: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let name = target.file_name().map_or_else(
-        || "original".into(),
-        |name| name.to_string_lossy().into_owned(),
-    );
-    let tmp = staging.join(format!("{name}.tmp"));
-    {
-        let mut file = std::fs::File::create(&tmp)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-    }
-    std::fs::rename(&tmp, target)?;
+/// Move a fully written staging file into place as `target`, so that `target` is either absent
+/// or complete: flushed and synced to disk, then renamed (`staging` is under `OUT`, on the same
+/// filesystem, so the rename is atomic).
+fn commit_staged(
+    sink: BufWriter<std::fs::File>,
+    staged: &Path,
+    target: &Path,
+) -> std::io::Result<()> {
+    let file = sink
+        .into_inner()
+        .map_err(std::io::IntoInnerError::into_error)?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(staged, target)?;
     // Persist the rename itself. Best effort: not every platform opens a directory for sync.
     if let Some(parent) = target.parent()
         && let Ok(dir) = std::fs::File::open(parent)
@@ -626,24 +697,24 @@ fn remove_part(part: &Path) {
     }
 }
 
-/// A [`BlobSource`] that serves a part file's bytes from disk and appends every byte the inner
-/// source delivers to it, so an interrupted fetch resumes where it stopped.
+/// A [`BlobSource`] that serves a part file's bytes from disk and the rest from the inner
+/// source, so an interrupted fetch resumes where it stopped. [`PartSink`] is its other half:
+/// the writer that appends the inner source's bytes to the same file.
 ///
 /// [`RangedFetcher`] asks for consecutive ranges from offset zero and appends what each returns,
 /// so the bytes below the part file's length are answered from the file without a request, and
 /// the first request that reaches the inner source starts exactly at its end. The fetcher still
-/// hashes the whole reassembled blob, so nothing read from the file is trusted on its own. The
-/// held prefix is read from the file one window at a time rather than kept in memory.
-pub struct PersistingSource<'a, B> {
+/// hashes the whole blob, so nothing read from the file is trusted on its own. The held prefix
+/// is read from the file one window at a time rather than kept in memory.
+pub struct ResumingSource<'a, B> {
     inner: &'a B,
     held: u64,
     /// A read handle on the part file, for serving the held prefix.
     reader: Mutex<std::fs::File>,
-    part: Mutex<std::fs::File>,
     fetched: AtomicU64,
 }
 
-impl<'a, B> PersistingSource<'a, B> {
+impl<'a, B> ResumingSource<'a, B> {
     /// Open (or create) the part file at `path` for a blob of `size` bytes. A part file longer
     /// than the blob cannot be a prefix of it and is started over.
     pub fn open(inner: &'a B, path: &Path, size: u64) -> std::io::Result<Self> {
@@ -662,7 +733,6 @@ impl<'a, B> PersistingSource<'a, B> {
             inner,
             held,
             reader: Mutex::new(reader),
-            part: Mutex::new(part),
             fetched: AtomicU64::new(0),
         })
     }
@@ -690,21 +760,9 @@ impl<'a, B> PersistingSource<'a, B> {
     pub fn fetched(&self) -> u64 {
         self.fetched.load(Ordering::Relaxed)
     }
-
-    /// Append freshly delivered bytes to the part file. A failed write costs only resumability:
-    /// the bytes still reach the fetcher, and whatever did land is still a prefix of the blob.
-    fn persist(&self, bytes: &[u8]) {
-        let mut part = self
-            .part
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Err(error) = part.write_all(bytes).and_then(|()| part.sync_data()) {
-            tracing::warn!(%error, "restore: the part file could not be extended; this fetch will not resume");
-        }
-    }
 }
 
-impl<B: BlobSource + Sync> BlobSource for PersistingSource<'_, B> {
+impl<B: BlobSource + Sync> BlobSource for ResumingSource<'_, B> {
     async fn get_range(&self, hash: &str, start: u64, max_len: Option<u64>) -> RangeOutcome {
         let held = self.held_len();
         if start < held {
@@ -728,9 +786,59 @@ impl<B: BlobSource + Sync> BlobSource for PersistingSource<'_, B> {
         {
             self.fetched
                 .fetch_add(bytes.len() as u64, Ordering::Relaxed);
-            self.persist(bytes);
         }
         outcome
+    }
+}
+
+/// The streamed fetch's destination: the part file, extended by every byte the fetch receives
+/// beyond the prefix it already held. Each write is synced before the next window is asked
+/// for, so a run that is cut off keeps every window that landed.
+///
+/// The fetch hands over the whole blob from offset zero, the held prefix included (read back
+/// from this same file by [`ResumingSource`]), so the first `skip` bytes are already on disk
+/// and are passed over. A write that fails fails the fetch, rather than leaving a part file
+/// that is not the blob it is named for.
+pub struct PartSink {
+    file: std::fs::File,
+    skip: u64,
+}
+
+impl PartSink {
+    /// Append to the part file at `path`, which already holds the blob's first `held` bytes.
+    pub fn open(path: &Path, held: u64) -> std::io::Result<Self> {
+        let file = std::fs::OpenOptions::new().append(true).open(path)?;
+        Ok(Self { file, skip: held })
+    }
+}
+
+impl Write for PartSink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let skipped = usize::try_from(self.skip).map_or(buf.len(), |skip| skip.min(buf.len()));
+        self.skip -= skipped as u64;
+        let fresh = &buf[skipped..];
+        if !fresh.is_empty() {
+            self.file.write_all(fresh)?;
+            self.file.sync_data()?;
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
+    }
+}
+
+/// Remove a staging file that will not be renamed into place.
+fn discard_staged(staged: &Path) {
+    match std::fs::remove_file(staged) {
+        Ok(()) => {
+            tracing::debug!(staged = %staged.display(), "restore: unverified staging file removed");
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            tracing::warn!(staged = %staged.display(), %error, "restore: staging file could not be removed");
+        }
     }
 }
 

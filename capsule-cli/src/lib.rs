@@ -49,6 +49,7 @@ pub mod show;
 pub mod status;
 pub mod syncstore;
 pub mod utils;
+pub mod verify;
 
 /// The stable product id this CLI reports on every manifest it authors (S-D15). Combined with
 /// this crate's own semver and capsule-core's build-embedded commit, it composes the
@@ -498,6 +499,24 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 range_window: restore::RESTORE_RANGE_WINDOW,
             };
             restore_workspace(&ws, &options, json).await?;
+        }
+
+        // ── Verify ────────────────────────────────────────────────────────
+        Commands::Verify {
+            library,
+            asset,
+            signed,
+            deep,
+            passphrase_stdin,
+            json,
+        } => {
+            let ws = open_workspace(&library, passphrase_stdin)?;
+            let options = verify::VerifyOptions {
+                assets: asset,
+                signed,
+                deep,
+            };
+            verify_workspace(&ws, &options, json).await?;
         }
 
         // ── Cull ──────────────────────────────────────────────────────────
@@ -1499,6 +1518,56 @@ async fn restore_workspace(
     }
     match restore::failed_run_reason(&summary) {
         Some(reason) => Err(eyre!("restore failed: {reason}")),
+        None => Ok(()),
+    }
+}
+
+/// `capsule verify`: ask the server about the assets in `options` and report the run.
+///
+/// With `json`, the whole run is one JSON document on stdout. Either way every asset that is not
+/// durably held, or got no answer, is reported, and the command exits non-zero when any did.
+/// A run-level failure (no session, no attestation keys) prints nothing on stdout.
+async fn verify_workspace(
+    workspace: &Workspace,
+    options: &verify::VerifyOptions,
+    json: bool,
+) -> Result<()> {
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    if !json {
+        println!(
+            "{}",
+            format!(
+                "Asking {} about {} assets{}...",
+                remote.sync_endpoint,
+                if options.assets.is_empty() {
+                    workspace.asset_ids().len()
+                } else {
+                    options.assets.len()
+                },
+                if options.signed { " (signed)" } else { "" }
+            )
+            .green()
+        );
+    }
+    let summary = remote::verify_storage(&remote, &store, workspace, options)
+        .await
+        .map_err(|error| {
+            if matches!(error, remote::RemoteError::NotAuthenticated) {
+                return eyre!(NOT_AUTHENTICATED);
+            }
+            eyre!("verify failed: {}", describe_remote_error(&error))
+        })?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+    } else {
+        println!("{}", verify::summary_line(&summary).cyan());
+        for problem in summary.problems() {
+            eprintln!("{}", verify::problem_line(problem).red());
+        }
+    }
+    match verify::failed_run_reason(&summary) {
+        Some(reason) => Err(eyre!("verify failed: {reason}")),
         None => Ok(()),
     }
 }

@@ -107,14 +107,12 @@ pub fn rebuild_index(library: &Library) -> Result<(), LibraryError> {
         if !path.is_file() {
             continue;
         }
-        // The sidecar is exactly `{uuid}.cbor`. The sibling `{uuid}.provenance.cbor` and
-        // `{uuid}.receipts.cbor` logs are read through their own readers (or not at all) and
-        // must never be parsed as sidecars — the same filter `Workspace::open` applies.
+        // The sidecar is exactly `{uuid}.cbor`. The sibling `{uuid}.provenance.cbor`,
+        // `{uuid}.receipts.cbor` and `{uuid}.attestations.cbor` logs are read through their own
+        // readers (or not at all) and must never be parsed as sidecars — the same filter
+        // `Workspace::open` applies.
         let name = path.file_name().unwrap_or_default().to_string_lossy();
-        if !name.ends_with(".cbor")
-            || name.ends_with(".provenance.cbor")
-            || name.ends_with(".receipts.cbor")
-        {
+        if !crate::library::paths::is_sidecar_file_name(&name) {
             continue;
         }
 
@@ -475,7 +473,8 @@ fn now_secs() -> i64 {
 //   4. the trash state and the owning album come back from the provenance chain
 //   5. a missing chain degrades to "album unknown, not trashed" rather than failing
 //   6. rebuilding twice changes nothing
-//   7. the `{uuid}.provenance.cbor` / `{uuid}.receipts.cbor` siblings are not sidecars
+//   7. the `{uuid}.provenance.cbor` / `{uuid}.receipts.cbor` / `{uuid}.attestations.cbor`
+//      siblings are not sidecars, and a real attestation log survives the rebuild untouched
 //   8. `cull` needs no rebuild support — it is not an index projection (audit finding)
 //
 // the retired unsigned shape (`S-D24`)
@@ -903,9 +902,10 @@ mod tests {
     }
 
     /// The sibling logs share the `.cbor` suffix and must never be parsed as sidecars — one
-    /// asset on disk is one row, not three.
+    /// asset on disk is one row, not four — and the evidence logs come out of a rebuild
+    /// byte-identical: a rebuild re-derives the index, never the evidence.
     #[test]
-    fn signed_rebuild_ignores_provenance_and_receipt_siblings() {
+    fn signed_rebuild_ignores_provenance_receipt_and_attestation_siblings() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path().join("lib");
         let lib = init_library(&root, "T").unwrap();
@@ -925,10 +925,17 @@ mod tests {
             b"not a sidecar either",
         )
         .unwrap();
+        let attestations = dir.join(format!("{}.attestations.cbor", id.simple()));
+        fs::write(&attestations, b"nor is the attestation log").unwrap();
 
         rebuild_index(&lib).unwrap();
 
         assert_eq!(lib.db.query_timeline(0, 100).unwrap().len(), 1);
+        assert_eq!(
+            fs::read(&attestations).unwrap(),
+            b"nor is the attestation log",
+            "the attestation log survives the rebuild untouched"
+        );
     }
 
     /// An asset whose chain is missing is still worth indexing — but it is indexed as

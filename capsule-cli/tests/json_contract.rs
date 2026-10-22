@@ -8,7 +8,7 @@
 //! redacted, and stderr stops at color-eyre's `Location:` section, whose line numbers are not
 //! part of the contract.
 //!
-//! The `--json` subcommands today are `push` and `restore`; each has its offline cases here, and
+//! The `--json` subcommands today are `push`, `restore` and `verify`; each has its offline cases here, and
 //! every `--json` subcommand that lands joins this file the same way. What needs a live server
 //! (a push or restore that reaches its assets) is the end-to-end suites' to cover.
 //!
@@ -21,6 +21,9 @@
 //! - `restore_json_without_a_session_prints_nothing_on_stdout` — a run-level failure, as for
 //!   push: non-zero exit, empty stdout, the reason on stderr, and nothing written to `--out`.
 //! - `restore_json_without_an_out_directory_is_a_usage_error` — the parser's exit status 2.
+//! - `verify_json_without_a_session_prints_nothing_on_stdout` — a run-level failure, as for
+//!   push: non-zero exit, empty stdout, the reason on stderr, and no attestation stored.
+//! - `verify_json_without_a_library_is_a_usage_error` — the parser's exit status 2.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -236,4 +239,48 @@ fn restore_json_without_an_out_directory_is_a_usage_error() {
         &scratch,
         &["restore", "--library", path(&scratch.library()), "--json"],
     ));
+}
+
+/// Every file under `dir` whose name ends with `suffix`.
+fn files_ending_with(dir: &Path, suffix: &str) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(files_ending_with(&path, suffix));
+        } else if path.to_string_lossy().ends_with(suffix) {
+            found.push(path);
+        }
+    }
+    found
+}
+
+#[test]
+fn verify_json_without_a_session_prints_nothing_on_stdout() {
+    let scratch = Scratch::new();
+    library(&scratch, 1);
+    insta::assert_snapshot!(run(
+        &scratch,
+        &[
+            "verify",
+            "--library",
+            path(&scratch.library()),
+            "--signed",
+            "--passphrase-stdin",
+            "--json",
+        ],
+    ));
+    assert!(
+        files_ending_with(&scratch.library(), ".attestations.cbor").is_empty(),
+        "a verify that never ran stored an attestation"
+    );
+}
+
+#[test]
+fn verify_json_without_a_library_is_a_usage_error() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(&scratch, &["verify", "--signed", "--json"]));
 }
