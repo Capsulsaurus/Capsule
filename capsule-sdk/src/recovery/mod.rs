@@ -148,7 +148,7 @@ pub enum RecoveryError {
     #[error("re-wrapping the master key failed: {0}")]
     Wrap(String),
     /// The server returned a status this client does not model as an escrow outcome — an
-    /// unmodeled status, or the body-size backstop's body-less `413` on a read.
+    /// unmodeled status, or the body-size backstop's `413` on a read.
     #[error("unexpected {status} response from the escrow endpoint")]
     Unexpected {
         /// The HTTP status code the server returned.
