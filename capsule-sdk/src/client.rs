@@ -428,8 +428,8 @@ fn local_upgrade_required(refusal: &negotiation::UpgradeRequired) -> reqwest::Re
 }
 
 /// The one typed [`UpgradeRequired`](negotiation::UpgradeRequired) a generated-client failure
-/// carries, if it is one: a `426` — the server's, or [`Negotiate`]'s local refusal — documented
-/// or not. `None` for every other failure.
+/// carries, if it is one: a `426` — the server's, or the typed transport's local refusal of a
+/// write the latched window refuses — documented or not. `None` for every other failure.
 pub fn upgrade_required_of<E>(error: &rest::Error<E>) -> Option<negotiation::UpgradeRequired>
 where
     E: std::error::Error + 'static,

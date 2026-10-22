@@ -483,6 +483,9 @@ impl PushError {
         match self {
             Self::Upload(UploadError::Rejected { code, .. })
             | Self::Verify(VerifyError::Status { code, .. }) => code.as_deref(),
+            Self::Upload(UploadError::UpgradeRequired { .. }) => {
+                Some(capsule_i18n::error_codes::PROTOCOL_VERSION_UNSUPPORTED)
+            }
             Self::Album(error) => error.error_code(),
             _ => None,
         }
