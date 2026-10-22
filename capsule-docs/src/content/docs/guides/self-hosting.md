@@ -90,7 +90,10 @@ Schedule these one-shot commands (cron or a timer). They need `DATABASE_URL`, `V
 After restoring a backup, or losing the database, run `capsule-server rebuild` to compare the
 index with the owner ledgers under `BLOB_ROOT`, then, with `serve` stopped,
 `capsule-server rebuild --apply` to restore the rows the index lacks. It never overwrites a row
-the index holds. Set `ATTESTATION_KEY_SEED`
+the index holds. A ledger that lost its tail is re-anchored by `--apply`, after which the server
+writes to that owner again. If the report says a ledger was rewritten, the server refuses that
+owner's writes until you have investigated and run `capsule-server rebuild --apply
+--accept-rewrites`. Set `ATTESTATION_KEY_SEED`
 on the host so it verifies the ledgers' signatures. See
 [Rebuild](/design/filesystem/server/#rebuild).
 
