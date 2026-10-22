@@ -31,6 +31,7 @@
 //!
 //! [Storage Verification — Verify Before Destroy]: https://docs/design/transfer/durability/#verify-before-destroy
 
+use std::collections::HashMap;
 use std::sync::Mutex;
 
 use base64::Engine as _;
@@ -42,8 +43,9 @@ use capsule_core::crypto::storage_attestation::{
 };
 use capsule_core::library::{
     BlobRole, BlobVerdict, CustodyReceipt, ReceiptExpectations, ReleaseDecision, RetainReason,
-    StorageVerdict, release_is_safe, verify_receipt,
+    StorageVerdict, StorageVerifier, VerifierError, release_is_safe, verify_receipt,
 };
+use capsule_core::lifecycle::UploadBundle;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, instrument, warn};
 use uuid::Uuid;
@@ -633,12 +635,16 @@ impl<C: ReleaseClock> ReleaseCoordinator<C> {
     /// durable verdicts are cached — a non-durable verdict must always be re-queried so a caller
     /// retrying after a `Retain` sees new server state, never a stale "not yet durable". The
     /// verdict is a point-in-time fact, so a stale one is never trusted for a release.
-    async fn fresh_verdict(&self, request: &ReleaseRequest) -> Result<StorageVerdict, VerifyError> {
+    async fn fresh_verdict(
+        &self,
+        asset_id: Uuid,
+        blob_hashes: &[Hash32],
+    ) -> Result<StorageVerdict, VerifyError> {
         let now = self.clock.now_unix();
         {
             let cached = self.cached.lock().expect("release cache mutex");
             if let Some((verdict, fetched_at)) = cached.as_ref()
-                && verdict.asset_id == request.asset_id
+                && verdict.asset_id == asset_id
                 && now.saturating_sub(*fetched_at) < self.window_secs
             {
                 debug!("reusing durable verdict within the re-verify window");
@@ -646,13 +652,13 @@ impl<C: ReleaseClock> ReleaseCoordinator<C> {
             }
         }
         let query = AssetQuery {
-            asset_id: request.asset_id,
-            blob_hashes: request.blob_hashes.clone(),
+            asset_id,
+            blob_hashes: blob_hashes.to_vec(),
         };
         let mut verdicts = self.client.verify(&[query], false).await?;
         let verdict = verdicts
             .drain(..)
-            .find(|v| v.asset_id == request.asset_id)
+            .find(|v| v.asset_id == asset_id)
             .ok_or_else(|| VerifyError::Malformed("verdict missing the requested asset".into()))?;
         let mut cached = self.cached.lock().expect("release cache mutex");
         *cached = if verdict.durable {
@@ -671,7 +677,10 @@ impl<C: ReleaseClock> ReleaseCoordinator<C> {
     #[instrument(skip_all, fields(asset = %request.asset_id))]
     pub async fn evaluate(&self, request: &ReleaseRequest) -> ReleaseDecision {
         // 1. Durability, fresh within the window.
-        let verdict = match self.fresh_verdict(request).await {
+        let verdict = match self
+            .fresh_verdict(request.asset_id, &request.blob_hashes)
+            .await
+        {
             Ok(v) => v,
             Err(e) => {
                 warn!(error = %e, "verdict fetch failed; retaining local copy");
@@ -746,6 +755,196 @@ impl<C: ReleaseClock> ReleaseCoordinator<C> {
         self.client
             .verify_signed(assets, deep, &nonce, &self.attestation_keys)
             .await
+    }
+
+    /// Fetch the server-side facts the release gate needs for each of `releases`, and hand
+    /// them back as a [`CustodyVerifier`] — the production
+    /// [`StorageVerifier`] the offline data plane's gate
+    /// ([`Workspace::release_move_source`](capsule_core::lifecycle::Workspace::release_move_source))
+    /// consults synchronously.
+    ///
+    /// Per asset: a verdict fresh within the re-verify window over its declared blobs, then —
+    /// only when that verdict is `durable` — the asset's durable receipt log
+    /// (`GET /assets/{id}/receipts`), with every declared blob required to have a receipt that
+    /// verifies under the pinned attestation keys with fields matching what the client sent.
+    /// The log rather than the per-session fetch [`evaluate`](Self::evaluate) uses, because a
+    /// blob a push found already held has no upload session to ask about.
+    ///
+    /// Never fails: a fetch that fails is recorded as that asset's fact, and the gate turns it
+    /// into a `Retain`. Resolve immediately before releasing; the facts are point-in-time.
+    #[instrument(skip_all, fields(assets = releases.len()))]
+    pub async fn resolve_custody(&self, releases: &[HeldRelease]) -> CustodyVerifier {
+        let mut facts = HashMap::with_capacity(releases.len());
+        for release in releases {
+            let blob_hashes = release.blob_hashes();
+            let verdict = self
+                .fresh_verdict(release.asset_id, &blob_hashes)
+                .await
+                .map_err(|error| {
+                    warn!(asset = %release.asset_id, %error, "custody: verdict fetch failed");
+                    error.to_string()
+                });
+            let receipt = match &verdict {
+                Ok(verdict) if verdict.durable => self.receipt_log_covers(release).await,
+                Ok(_) => Err("not consulted: the verdict is not durable".to_owned()),
+                Err(_) => Err("not consulted: no verdict".to_owned()),
+            };
+            debug!(
+                asset = %release.asset_id,
+                durable = verdict.as_ref().is_ok_and(|v| v.durable),
+                receipts_verified = ?receipt,
+                "custody: facts resolved"
+            );
+            facts.insert(
+                release.asset_id,
+                CustodyFacts {
+                    blob_hashes,
+                    verdict,
+                    receipt,
+                },
+            );
+        }
+        CustodyVerifier { facts }
+    }
+
+    /// Whether the asset's receipt log holds, for every blob `release` declares, a receipt
+    /// that verifies under the pinned keys with matching fields. `Err` when the log fetch fails.
+    async fn receipt_log_covers(&self, release: &HeldRelease) -> Result<bool, String> {
+        let log = self
+            .client
+            .fetch_asset_receipts(release.asset_id)
+            .await
+            .map_err(|error| {
+                warn!(asset = %release.asset_id, %error, "custody: receipt log fetch failed");
+                error.to_string()
+            })?;
+        let now = self.clock.now_unix();
+        let missing: Vec<String> = release
+            .blobs
+            .iter()
+            .filter(|expected| {
+                !log.iter().any(|receipt| {
+                    verify_receipt(receipt, &self.attestation_keys, expected, now).is_ok()
+                })
+            })
+            .map(|expected| expected.ciphertext_hash.to_hex())
+            .collect();
+        if !missing.is_empty() {
+            warn!(
+                asset = %release.asset_id,
+                ?missing,
+                log = log.len(),
+                "custody: no verified receipt for every declared blob"
+            );
+        }
+        Ok(missing.is_empty())
+    }
+}
+
+// ─── The production release-gate verifier ─────────────────────────────────────
+
+/// One asset whose local bytes wait on server custody before they may be released, asked
+/// about through [`ReleaseCoordinator::resolve_custody`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeldRelease {
+    /// The asset.
+    pub asset_id: Uuid,
+    /// One entry per required blob: what the client sent, matched against the receipt log.
+    /// Their `ciphertext_hash`es, in order, are the blobs declared to `/storage/verify`.
+    pub blobs: Vec<ReceiptExpectations>,
+}
+
+impl HeldRelease {
+    /// The blobs a release of `bundle`'s original waits on: the original ciphertext and, when
+    /// the head binds one, the sealed metadata blob — in the order
+    /// [`Workspace::release_move_source`](capsule_core::lifecycle::Workspace::release_move_source)
+    /// declares them.
+    #[must_use]
+    pub fn for_original(bundle: &UploadBundle) -> Self {
+        let mut blobs = vec![ReceiptExpectations {
+            ciphertext_hash: bundle.ciphertext_hash,
+            size: bundle.ciphertext.len() as u64,
+            role: BlobRole::Original,
+            envelope_hash: None,
+        }];
+        if let Some(hash) = bundle.metadata_blob_hash {
+            blobs.push(ReceiptExpectations {
+                ciphertext_hash: hash,
+                size: bundle.metadata_blob.len() as u64,
+                role: BlobRole::Metadata,
+                envelope_hash: None,
+            });
+        }
+        Self {
+            asset_id: bundle.asset_id,
+            blobs,
+        }
+    }
+
+    fn blob_hashes(&self) -> Vec<Hash32> {
+        self.blobs.iter().map(|b| b.ciphertext_hash).collect()
+    }
+}
+
+/// What [`ReleaseCoordinator::resolve_custody`] fetched for one asset. A fetch that failed is
+/// kept as its English detail.
+#[derive(Debug, Clone)]
+struct CustodyFacts {
+    blob_hashes: Vec<Hash32>,
+    verdict: Result<StorageVerdict, String>,
+    receipt: Result<bool, String>,
+}
+
+/// The production [`StorageVerifier`]: server facts resolved over [`StorageVerifyClient`] by
+/// [`ReleaseCoordinator::resolve_custody`], answered synchronously to the offline gate.
+///
+/// It answers only what was resolved. An asset it was not asked about, or the right asset with
+/// a different blob set, is a [`VerifierError`] — which the gate turns into a `Retain` — so
+/// nothing is ever released on a verdict that answered another question.
+#[derive(Debug, Clone, Default)]
+pub struct CustodyVerifier {
+    facts: HashMap<Uuid, CustodyFacts>,
+}
+
+impl CustodyVerifier {
+    fn facts(
+        &self,
+        asset_id: Uuid,
+        blob_hashes: &[Hash32],
+    ) -> Result<&CustodyFacts, VerifierError> {
+        match self.facts.get(&asset_id) {
+            Some(facts) if facts.blob_hashes == blob_hashes => Ok(facts),
+            Some(_) => Err(VerifierError::Transport(format!(
+                "custody for {asset_id} was resolved over a different blob set"
+            ))),
+            None => Err(VerifierError::Transport(format!(
+                "custody for {asset_id} was not resolved"
+            ))),
+        }
+    }
+}
+
+impl StorageVerifier for CustodyVerifier {
+    fn verify(
+        &self,
+        asset_id: Uuid,
+        blob_hashes: &[Hash32],
+    ) -> Result<StorageVerdict, VerifierError> {
+        self.facts(asset_id, blob_hashes)?
+            .verdict
+            .clone()
+            .map_err(VerifierError::Transport)
+    }
+
+    fn receipt_verified(
+        &self,
+        asset_id: Uuid,
+        blob_hashes: &[Hash32],
+    ) -> Result<bool, VerifierError> {
+        self.facts(asset_id, blob_hashes)?
+            .receipt
+            .clone()
+            .map_err(VerifierError::Transport)
     }
 }
 
