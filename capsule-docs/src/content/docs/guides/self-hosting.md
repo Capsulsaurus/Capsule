@@ -54,13 +54,18 @@ Name your reverse proxy so the per-source rate limits see the client rather than
 A network of `/0` is refused, because it would believe every sender. Unset, no forwarding header
 is believed. That is safe, but every client behind the proxy then shares the proxy's budget.
 
-The server reads `X-Forwarded-For` and nothing else. A `Forwarded` header is ignored whoever sends
-it, so a client cannot choose its own rate-limit key by sending one that your proxy passes on.
-Have your proxy append the address it saw to `X-Forwarded-For`, as nginx does with:
+The server reads exactly one forwarding field, the one `TRUSTED_PROXY_HEADER` names:
+`x-forwarded-for` (the default) or `forwarded` (RFC 7239). Any other value refuses to start. The
+other field is ignored whoever sends it, so a client cannot choose its own rate-limit key by
+sending one that your proxy passes on. Name the field your proxy appends to. With the default,
+have your proxy append the address it saw to `X-Forwarded-For`, as nginx does with:
 
 ```nginx
 proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 ```
+
+Set `TRUSTED_PROXY_HEADER=forwarded` only if your proxy appends its own element to `Forwarded`
+and does not write `X-Forwarded-For`.
 
 ## Migrate, then start
 

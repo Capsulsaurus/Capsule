@@ -95,6 +95,7 @@ fn server(args: &[&str]) -> Command {
         "LOG_FORMAT",
         "TRUSTED_PROXY_HOPS",
         "TRUSTED_PROXIES",
+        "TRUSTED_PROXY_HEADER",
     ] {
         command.env_remove(key);
     }

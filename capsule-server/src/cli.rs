@@ -423,7 +423,11 @@ async fn serve(config: &Config) -> Result<ExitCode> {
     recover_stranded_claims(&assembled.app).await;
     // The router is built here rather than through `Assembled::service` because the trusted-proxy
     // policy is a property of the listener's deployment, not of the assembled stores (#704).
-    tracing::info!(trusted_proxies = %config.trusted_proxies, "resolving client addresses");
+    tracing::info!(
+        trusted_proxies = %config.trusted_proxies,
+        trusted_proxy_header = config.trusted_proxies.header_name(),
+        "resolving client addresses"
+    );
     let service = crate::service_behind(assembled.app.clone(), &config.trusted_proxies)
         .map_err(|error| eyre!("building the router: {error}"))?;
     let bound = Server::new(service)
