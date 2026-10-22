@@ -50,8 +50,8 @@
 use std::fmt;
 use std::time::Instant;
 
+use argon2::Argon2;
 use argon2::password_hash::{PasswordHash, PasswordHasher as _, PasswordVerifier as _, SaltString};
-use argon2::{Algorithm, Argon2, Params, Version};
 
 /// How many bytes of salt every hash carries.
 ///
@@ -121,6 +121,8 @@ impl Credentials {
     /// minutes of CPU that proves nothing about the store.
     #[cfg(test)]
     pub(crate) fn with_reduced_cost() -> Result<Self, CredentialError> {
+        use argon2::{Algorithm, Params, Version};
+
         let params = Params::new(8, 1, 1, None).map_err(|error| CredentialError {
             detail: error.to_string(),
         })?;
