@@ -139,7 +139,7 @@ async fn commit(transaction: DatabaseTransaction, port: Port) -> Result<(), Stor
 /// Take the transaction-scoped lock that serialises everything keyed on `key`.
 async fn lock(transaction: &DatabaseTransaction, key: &str, port: Port) -> Result<(), StoreError> {
     transaction
-        .execute(Statement::from_sql_and_values(
+        .execute_raw(Statement::from_sql_and_values(
             DbBackend::Postgres,
             "SELECT pg_advisory_xact_lock(hashtext($1))",
             [Value::from(key.to_owned())],
@@ -155,7 +155,7 @@ async fn record_of<C: ConnectionTrait>(
     jti: &str,
 ) -> Result<Option<CapabilityRecord>, StoreError> {
     let row = connection
-        .query_one(Statement::from_sql_and_values(
+        .query_one_raw(Statement::from_sql_and_values(
             DbBackend::Postgres,
             format!("SELECT {CAPABILITY_COLUMNS} FROM federation_capabilities WHERE jti = $1"),
             [Value::from(jti.to_owned())],
@@ -171,7 +171,7 @@ async fn insert<C: ConnectionTrait>(
     record: &CapabilityRecord,
 ) -> Result<(), StoreError> {
     let inserted = connection
-        .execute(Statement::from_sql_and_values(
+        .execute_raw(Statement::from_sql_and_values(
             DbBackend::Postgres,
             "INSERT INTO federation_capabilities \
              (jti, album_id, peer_id, member_id, scope, granted_epoch, min_protocol_version, \
@@ -210,7 +210,7 @@ async fn publish<C: ConnectionTrait>(
     at: Timestamp,
 ) -> Result<(), StoreError> {
     connection
-        .execute(Statement::from_sql_and_values(
+        .execute_raw(Statement::from_sql_and_values(
             DbBackend::Postgres,
             "INSERT INTO federation_revoked_jti (jti, expires_at, revoked_at) \
              VALUES ($1, $2, $3) \
@@ -238,7 +238,7 @@ async fn revoke_and_publish<C: ConnectionTrait>(
     at: Timestamp,
 ) -> Result<(), StoreError> {
     connection
-        .execute(Statement::from_sql_and_values(
+        .execute_raw(Statement::from_sql_and_values(
             DbBackend::Postgres,
             "UPDATE federation_capabilities SET revoked_at = $2 \
              WHERE jti = $1 AND revoked_at IS NULL",
@@ -276,7 +276,7 @@ async fn chain_of<C: ConnectionTrait>(
     jti: &str,
 ) -> Result<Vec<CapabilityRecord>, StoreError> {
     let rows = connection
-        .query_all(Statement::from_sql_and_values(
+        .query_all_raw(Statement::from_sql_and_values(
             DbBackend::Postgres,
             format!(
                 "WITH RECURSIVE chain(link, next, depth) AS ( \
@@ -377,7 +377,7 @@ impl RevocationList for PostgresCapabilities {
             let now = self.clock.now();
             let transaction = begin(&self.connection, CAPABILITIES).await?;
             transaction
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "DELETE FROM federation_revoked_jti WHERE expires_at <= $1",
                     [Value::from(to_micros(now))],
@@ -385,7 +385,7 @@ impl RevocationList for PostgresCapabilities {
                 .await
                 .map_err(CAPABILITIES.failing("pruning the revocation list"))?;
             let rows = transaction
-                .query_all(Statement::from_string(
+                .query_all_raw(Statement::from_string(
                     DbBackend::Postgres,
                     "SELECT jti, expires_at FROM federation_revoked_jti \
                      ORDER BY expires_at ASC, jti ASC",
@@ -447,7 +447,7 @@ impl CapabilityStore for PostgresCapabilities {
             };
             let rows = self
                 .connection
-                .query_all(Statement::from_sql_and_values(
+                .query_all_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     format!(
                         "SELECT {CAPABILITY_COLUMNS} FROM federation_capabilities \
@@ -548,7 +548,7 @@ impl CapabilityStore for PostgresCapabilities {
             insert(&transaction, &successor).await?;
             revoke_and_publish(&transaction, predecessor, old.expires_at, at).await?;
             transaction
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "UPDATE federation_capabilities SET refreshed_to = $2 WHERE jti = $1",
                     [
@@ -588,7 +588,7 @@ impl PostgresPeers {
         peer: &PeerId,
     ) -> Result<Option<PeerRecord>, StoreError> {
         let Some(row) = connection
-            .query_one(Statement::from_sql_and_values(
+            .query_one_raw(Statement::from_sql_and_values(
                 DbBackend::Postgres,
                 "SELECT server_id, signing_key, first_seen_at, blocked_at, note \
                  FROM federation_peers WHERE server_id = $1",
@@ -638,7 +638,7 @@ impl PeerStore for PostgresPeers {
             // A block already on the row is kept: pinning a key is not an opinion about whether
             // to talk to its owner.
             self.connection
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "INSERT INTO federation_peers (server_id, signing_key, first_seen_at) \
                      VALUES ($1, $2, $3) \
@@ -671,7 +671,7 @@ impl PeerStore for PostgresPeers {
             // hear from is legitimate, and it must not need a key first.
             let updated = self
                 .connection
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "INSERT INTO federation_peers (server_id, first_seen_at, blocked_at, note) \
                      VALUES ($1, $2, $2, $3) \
@@ -697,7 +697,7 @@ impl PeerStore for PostgresPeers {
         Box::pin(async move {
             let updated = self
                 .connection
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "UPDATE federation_peers SET blocked_at = NULL, note = NULL \
                      WHERE server_id = $1 AND blocked_at IS NOT NULL",

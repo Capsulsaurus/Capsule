@@ -22,7 +22,8 @@ use entity::{sync_cursor, synced_asset};
 use sea_orm::ActiveValue::Set;
 use sea_orm::sea_query::OnConflict;
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, DbErr, EntityTrait, QueryFilter, QueryOrder, TransactionTrait,
+    ColumnTrait, ConnectionTrait, DbErr, EntityTrait, QueryFilter, QueryOrder, TransactionSession,
+    TransactionTrait,
 };
 use thiserror::Error;
 

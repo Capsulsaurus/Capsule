@@ -99,7 +99,7 @@ async fn roster_of<C: ConnectionTrait>(
     album: &AlbumId,
 ) -> Result<Option<RosterRecord>, StoreError> {
     let Some(row) = connection
-        .query_one(Statement::from_sql_and_values(
+        .query_one_raw(Statement::from_sql_and_values(
             DbBackend::Postgres,
             "SELECT roster_version, amk_epoch, attested_by_device, received_at, document \
              FROM album_rosters WHERE album_id = $1",
@@ -147,7 +147,7 @@ impl MembershipStore for PostgresMembership {
             // — because equal album ids always hash equal, which is the only guarantee this lock
             // is asked for. See the module docs for the two-argument repair if it ever matters.
             transaction
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "SELECT pg_advisory_xact_lock(hashtext($1))",
                     [Value::from(roster.album_id.as_str().to_owned())],
@@ -176,7 +176,7 @@ impl MembershipStore for PostgresMembership {
                 ..roster
             };
             transaction
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "INSERT INTO album_rosters \
                        (album_id, roster_version, amk_epoch, attested_by_device, received_at, \
@@ -207,7 +207,7 @@ impl MembershipStore for PostgresMembership {
                 .map(|(user, _)| user.as_str().to_owned())
                 .collect();
             transaction
-                .execute(Statement::from_sql_and_values(
+                .execute_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "UPDATE album_members \
                      SET revoked_at_version = $2, revoked_epoch = $3 \
@@ -228,7 +228,7 @@ impl MembershipStore for PostgresMembership {
             // their grant and takes the new role; a new or re-admitted one gets a fresh grant.
             for (user, role) in members {
                 transaction
-                    .execute(Statement::from_sql_and_values(
+                    .execute_raw(Statement::from_sql_and_values(
                         DbBackend::Postgres,
                         "INSERT INTO album_members \
                            (album_id, user_id, role, since_version, granted_epoch, \
@@ -275,7 +275,7 @@ impl MembershipStore for PostgresMembership {
         Box::pin(async move {
             let Some(row) = self
                 .connection
-                .query_one(Statement::from_sql_and_values(
+                .query_one_raw(Statement::from_sql_and_values(
                     DbBackend::Postgres,
                     "SELECT role, granted_epoch, revoked_at_version, revoked_epoch \
                      FROM album_members WHERE album_id = $1 AND user_id = $2",

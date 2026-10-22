@@ -127,7 +127,7 @@ impl PostgresTotp {
         let last_step = record.last_step.map(step_to_column).transpose()?;
         let result = self
             .connection
-            .execute(Statement::from_sql_and_values(
+            .execute_raw(Statement::from_sql_and_values(
                 DbBackend::Postgres,
                 "INSERT INTO totp_enrollments \
                    (user_id, secret, state, last_step, enrolled_at, activated_at) \
@@ -163,7 +163,7 @@ impl PostgresTotp {
 
     async fn read_inner(&self, user: &UserId) -> Result<Option<TotpEnrollment>, StoreError> {
         self.connection
-            .query_one(Statement::from_sql_and_values(
+            .query_one_raw(Statement::from_sql_and_values(
                 DbBackend::Postgres,
                 "SELECT secret, state, last_step, enrolled_at, activated_at \
                  FROM totp_enrollments WHERE user_id = $1",
@@ -184,7 +184,7 @@ impl PostgresTotp {
         let step_column = step_to_column(step)?;
         let result = self
             .connection
-            .execute(Statement::from_sql_and_values(
+            .execute_raw(Statement::from_sql_and_values(
                 DbBackend::Postgres,
                 "UPDATE totp_enrollments \
                  SET state = 'active', activated_at = $3, last_step = $2 \
@@ -210,7 +210,7 @@ impl PostgresTotp {
         let doing = "consuming a TOTP step";
         let row = self
             .connection
-            .query_one(Statement::from_sql_and_values(
+            .query_one_raw(Statement::from_sql_and_values(
                 DbBackend::Postgres,
                 "WITH consumed AS ( \
                    UPDATE totp_enrollments SET last_step = $2 \
@@ -244,7 +244,7 @@ impl PostgresTotp {
     async fn disable_inner(&self, user: &UserId) -> Result<bool, StoreError> {
         let result = self
             .connection
-            .execute(Statement::from_sql_and_values(
+            .execute_raw(Statement::from_sql_and_values(
                 DbBackend::Postgres,
                 "DELETE FROM totp_enrollments WHERE user_id = $1",
                 [Value::from(user.as_str().to_owned())],
