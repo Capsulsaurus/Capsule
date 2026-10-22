@@ -109,6 +109,9 @@ pub fn build_delta_artifact(
         authorities: BTreeMap::new(),
         // Label records travel the sealed-document path between members, not the asset delta.
         docs: Vec::new(),
+        // The pinned attestation-key history is the library's, not an asset's: it rides a
+        // backup of the whole library, never a peer's asset delta.
+        attestation_key_pins: Vec::new(),
         exporter_device: export_input.exporter_device,
         source_library_version: export_input.source_library_version.clone(),
         export_timestamp: export_input.export_timestamp.clone(),

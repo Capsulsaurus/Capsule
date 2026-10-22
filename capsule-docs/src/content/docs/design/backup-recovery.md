@@ -26,6 +26,7 @@ backup.tar
 ├── VERSION                    # plaintext: format version, crypto_suite_id, min_protocol_version
 ├── MANIFEST.cbor              # entry list, hashes, sizes, exporter identity; HMAC + hybrid signature
 ├── keys/amk-ledger.cbor       # every needed AMK version, wrapped under the backup wrap key
+├── library/attestation-keys.cbor # pinned server attestation-key history, verbatim (optional)
 └── <sorted by (album_id, asset_id, blob_role)>
     ├── blobs/{hash}           # ciphertext blobs
     ├── meta/{blob_id}         # encrypted metadata blobs
@@ -37,6 +38,7 @@ backup.tar
 - **Self-sufficient.** The [AMK](/design/cryptography/keys/#album-master-keys-amks) ledger is wrapped under the passphrase-derived backup wrap key, not a device key: the passphrase alone decrypts every included blob, with no server or MLS state.
 - **Authority is public, not a capability.** `authority/` makes restored assets *verifiable*; it carries no write-tier or admin seed, so an album new to the library restores read-only. Restore re-verifies the ledger's admin signature chain, adopts it only for an album with no authority of its own, and never replaces existing authority. Format-1 artifacts restore readable but unverifiable.
 - **Label records ride sealed.** `docs/` carries each exported album's [`AlbumDocV1`](/design/organization/#labels) (its name and labels) and each labelled stack's `StackDocV1`, still sealed under the album's AMK, whose epoch the ledger escrows. Restore merges them, so a recovered album keeps its name. The entries are additive within format 2: an older reader verifies and skips them.
+- **Key pins ride verbatim.** `library/attestation-keys.cbor` carries the library's pinned attestation-key history of each server ([Custody Receipts](/design/transfer/durability/#custody-receipts)), so a restored library keeps checking receipts under the pinned keys instead of trusting the server's next publication on first use. Restore keeps the union per server only where one history extends the other; histories that each hold a key the other lacks refuse the restore before anything is written. Additive within format 2: an older reader verifies and skips it.
 - **Uncompressed** (ciphertext is incompressible) and **streamable** (no central directory; terabyte exports without seeking — why not ZIP).
 - **Deterministic.** Sorted entries and normalized ustar headers (`mtime`/`uid`/`gid` = 0, empty names, fixed modes, no PAX) — re-exports of the same content are byte-identical.
 - **Manifest first.** `MANIFEST.cbor` follows `VERSION` and precedes every blob, so a streaming reader has the integrity list up front. Both checks MUST pass before restore:
