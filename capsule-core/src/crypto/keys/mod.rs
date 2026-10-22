@@ -35,7 +35,9 @@ pub(crate) mod tpm;
 
 pub use album::{Amk, AmkVersion};
 #[cfg(feature = "native")]
-pub use albumstore::{AlbumStore, AlbumStoreError, AmkRow, PersistedAlbum, PersistedAuthority};
+pub use albumstore::{
+    AlbumStore, AlbumStoreError, AmkRow, EscrowCoverage, PersistedAlbum, PersistedAuthority,
+};
 pub use directory::{DekPublic, DeviceDirectory, DeviceEntry, DirectoryCore, DirectoryError};
 pub use hardware::{
     HardwareBackedSigner, HardwareKeyAgreement, HardwareSigner, HardwareSignerError,

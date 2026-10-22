@@ -12,12 +12,24 @@ use uuid::Uuid;
 use super::{AlbumKeys, LifecycleError, Result, Workspace, now_rfc3339};
 use crate::crypto::authority::{Authority, ReferenceAuthority};
 use crate::crypto::keys::albumstore::{
-    AlbumStore, AlbumStoreError, PersistedAlbum, PersistedAuthority,
+    AlbumStore, AlbumStoreError, EscrowCoverage, PersistedAlbum, PersistedAuthority,
 };
 use crate::crypto::keys::{Amk, AmkVersion, HybridSigningKey};
 use crate::metadata::crdt::{AddId, OrSet};
 use crate::sidecar::{ALBUM_DOC_SCHEMA_V1, AlbumDocV1, normalize_label};
 use crate::utils::paths::tmp_path;
+
+/// What [`Workspace::plan_album_key_escrows`] decided, per album, in album id order.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AlbumKeyEscrowPlan {
+    /// Albums whose escrow the server lacks or that this device strictly extends: store each.
+    pub to_store: Vec<Uuid>,
+    /// Albums whose server escrow already covers every epoch this device holds.
+    pub current: usize,
+    /// Albums whose server escrow disagrees with this device or does not open under its master
+    /// key: left alone, and this device's epochs of them are not covered by the server.
+    pub uncovered: Vec<Uuid>,
+}
 
 /// What [`Workspace::adopt_album_key_escrows`] did.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -154,37 +166,69 @@ impl Workspace {
         Ok(blob)
     }
 
-    /// The albums whose key escrow `escrowed` (album id → the escrow the server holds) is
-    /// missing or stale: not held at all, held for an older state (an epoch since rotated in),
-    /// or not openable as this album under this account's master key. Sorted by album id.
+    /// What to do about each album's key escrow, given `escrowed` (album id → the escrow the
+    /// server holds): which albums to store, and which this device's epochs the server's escrow
+    /// does not cover and cannot safely be made to.
+    ///
+    /// **An escrow is never shrunk.** An album is stored only when the server holds none for it,
+    /// or holds one this album strictly extends ([`EscrowCoverage::Superseded`]). An escrow that
+    /// holds epochs this device lacks ([`EscrowCoverage::Behind`], another device rotated
+    /// further) is left alone and counts as covering this device's epochs. One that disagrees
+    /// with this device ([`EscrowCoverage::Divergent`]) or does not open under this master key
+    /// ([`EscrowCoverage::Unreadable`]) is left alone too, and the album is reported
+    /// [`uncovered`](AlbumKeyEscrowPlan::uncovered): replacing it could lose epochs a recovery
+    /// needs, so the caller holds the album's assets back instead.
     ///
     /// Network-free. A client fetches what the server holds, asks this, and stores
-    /// [`album_key_escrow`](Self::album_key_escrow) for each album it names — before any asset of
-    /// that album or epoch leaves the device, so the server never holds ciphertext whose key it
-    /// does not also hold sealed under the master key.
+    /// [`album_key_escrow`](Self::album_key_escrow) for each album in
+    /// [`to_store`](AlbumKeyEscrowPlan::to_store) — before any asset of that album or epoch
+    /// leaves the device, so the server never holds ciphertext whose key it does not also hold
+    /// sealed under the master key.
     ///
     /// # Errors
     ///
     /// [`LifecycleError::AlbumStore`] when the live album state cannot be captured.
-    pub fn stale_album_key_escrows(&self, escrowed: &BTreeMap<Uuid, Vec<u8>>) -> Result<Vec<Uuid>> {
+    pub fn plan_album_key_escrows(
+        &self,
+        escrowed: &BTreeMap<Uuid, Vec<u8>>,
+    ) -> Result<AlbumKeyEscrowPlan> {
         let store = self.album_store_snapshot()?;
-        let stale: Vec<Uuid> = store
-            .albums()
-            .iter()
-            .filter(|album| {
-                escrowed
-                    .get(&album.album_id)
-                    .is_none_or(|blob| !album.escrow_matches(blob, &self.account.master))
-            })
-            .map(|album| album.album_id)
-            .collect();
+        let mut plan = AlbumKeyEscrowPlan::default();
+        for album in store.albums() {
+            let Some(blob) = escrowed.get(&album.album_id) else {
+                plan.to_store.push(album.album_id);
+                continue;
+            };
+            match album.escrow_coverage(blob, &self.account.master) {
+                EscrowCoverage::Current => plan.current += 1,
+                EscrowCoverage::Behind => {
+                    tracing::info!(
+                        album_id = %album.album_id,
+                        "album key escrow holds epochs this device lacks; left as it is"
+                    );
+                    plan.current += 1;
+                }
+                EscrowCoverage::Superseded => plan.to_store.push(album.album_id),
+                coverage @ (EscrowCoverage::Divergent | EscrowCoverage::Unreadable) => {
+                    tracing::warn!(
+                        album_id = %album.album_id,
+                        ?coverage,
+                        "album key escrow cannot be replaced without losing epochs; the album \
+                         is held back"
+                    );
+                    plan.uncovered.push(album.album_id);
+                }
+            }
+        }
         tracing::debug!(
             albums = store.albums().len(),
             escrowed = escrowed.len(),
-            stale = stale.len(),
+            to_store = plan.to_store.len(),
+            current = plan.current,
+            uncovered = plan.uncovered.len(),
             "album key escrows compared against what the server holds"
         );
-        Ok(stale)
+        Ok(plan)
     }
 
     /// Adopt the account's escrowed albums into this library — the step `capsule auth recover`
@@ -964,10 +1008,11 @@ mod tests {
             .collect()
     }
 
-    /// #741: an album is stale until its escrow is held, current once it is, and stale again
-    /// once an epoch is rotated in; bytes that do not open as the album are stale too.
+    /// #741: an album is stored while the server lacks its escrow, current once it holds it, and
+    /// stored again once an epoch is rotated in — the escrow only ever grows. Bytes that do not
+    /// open as the album are left alone and the album reported uncovered, never overwritten.
     #[test]
-    fn an_album_key_escrow_is_stale_until_it_holds_the_current_state() {
+    fn an_album_key_escrow_is_stored_until_it_holds_the_current_state() {
         let lib = TempDir::new().unwrap();
         let mut ws = fast_workspace(lib.path());
         let default = ws.default_album_id();
@@ -976,23 +1021,75 @@ mod tests {
         let mut both = vec![default, trip];
         both.sort();
 
-        assert_eq!(ws.stale_album_key_escrows(&BTreeMap::new()).unwrap(), both);
+        let plan = ws.plan_album_key_escrows(&BTreeMap::new()).unwrap();
+        assert_eq!(plan.to_store, both);
         let mut escrowed = escrows_of(&ws);
-        assert!(ws.stale_album_key_escrows(&escrowed).unwrap().is_empty());
+        let plan = ws.plan_album_key_escrows(&escrowed).unwrap();
+        assert!(plan.to_store.is_empty());
+        assert_eq!(plan.current, 2);
 
         ws.rotate_epoch(trip).unwrap();
-        assert_eq!(ws.stale_album_key_escrows(&escrowed).unwrap(), vec![trip]);
+        assert_eq!(
+            ws.plan_album_key_escrows(&escrowed).unwrap().to_store,
+            vec![trip],
+            "a rotated-in epoch strictly extends the escrow"
+        );
 
         escrowed.insert(trip, ws.album_key_escrow(&trip).unwrap());
         escrowed.insert(default, b"not an escrow".to_vec());
-        assert_eq!(
-            ws.stale_album_key_escrows(&escrowed).unwrap(),
-            vec![default]
+        let plan = ws.plan_album_key_escrows(&escrowed).unwrap();
+        assert!(
+            plan.to_store.is_empty(),
+            "an unreadable escrow is never overwritten"
         );
+        assert_eq!(plan.uncovered, vec![default]);
         assert!(matches!(
             ws.album_key_escrow(&Uuid::now_v7()),
             Err(LifecycleError::NotFound(_))
         ));
+    }
+
+    /// #741 D1: a device **behind** the escrow — it holds fewer epochs of an album than another
+    /// device escrowed — never replaces it, so a later recovery keeps every epoch; and two
+    /// devices that each rotated independently leave the escrow alone and report the album
+    /// uncovered rather than one dropping the other's epoch.
+    #[test]
+    fn a_device_behind_or_diverged_from_the_escrow_never_shrinks_it() {
+        let src = TempDir::new().unwrap();
+        let mut a = fast_workspace(src.path());
+        let trip = a.create_album("Trip").unwrap();
+        let at_epoch_1: Vec<(Uuid, Vec<u8>)> = escrows_of(&a).into_iter().collect();
+
+        // B is recovered while the album is at epoch 1; A then rotates and escrows epoch 2.
+        let dst = TempDir::new().unwrap();
+        let mut b = recovered_from(&a, dst.path());
+        b.adopt_album_key_escrows(&at_epoch_1).unwrap();
+        a.rotate_epoch(trip).unwrap();
+        let ahead = escrows_of(&a);
+
+        let plan = b.plan_album_key_escrows(&ahead).unwrap();
+        assert!(
+            plan.to_store.is_empty(),
+            "B's epoch-1 state would shrink A's"
+        );
+        assert!(
+            plan.uncovered.is_empty(),
+            "every epoch B holds is in A's escrow"
+        );
+        assert_eq!(plan.current, 1);
+
+        // B rotates on its own: epoch 2 under another key. Neither may replace the other.
+        b.rotate_epoch(trip).unwrap();
+        let plan = b.plan_album_key_escrows(&ahead).unwrap();
+        assert!(plan.to_store.is_empty());
+        assert_eq!(plan.uncovered, vec![trip]);
+
+        // A recovery from what the server holds still opens both of A's epochs.
+        let again = TempDir::new().unwrap();
+        let mut c = recovered_from(&a, again.path());
+        c.adopt_album_key_escrows(&ahead.into_iter().collect::<Vec<_>>())
+            .unwrap();
+        assert_eq!(c.albums[&trip].amks, a.albums[&trip].amks);
     }
 
     /// #741: a library created from the master key alone adopts every escrowed album whole —
@@ -1039,10 +1136,9 @@ mod tests {
             b.albums[&default].amks, a.albums[&default].amks,
             "ensure_album resolved the escrowed default album and minted nothing"
         );
+        let plan = b.plan_album_key_escrows(&escrows_of(&a)).unwrap();
         assert!(
-            b.stale_album_key_escrows(&escrows_of(&a))
-                .unwrap()
-                .is_empty(),
+            plan.to_store.is_empty() && plan.uncovered.is_empty(),
             "the recovered library escrows exactly what it adopted"
         );
 

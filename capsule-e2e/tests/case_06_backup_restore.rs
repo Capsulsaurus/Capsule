@@ -909,10 +909,9 @@ async fn e2e_case_6_a_recovered_device_restores_every_album_byte_for_byte() {
         .into_iter()
         .map(|e| (e.album_id, e.blob))
         .collect();
+    let plan = b.plan_album_key_escrows(&held).expect("B's albums compare");
     assert!(
-        b.stale_album_key_escrows(&held)
-            .expect("B's albums compare")
-            .is_empty(),
+        plan.to_store.is_empty() && plan.uncovered.is_empty(),
         "B holds exactly the keys A escrowed, every epoch of every album"
     );
 
@@ -967,6 +966,67 @@ async fn e2e_case_6_a_recovered_device_restores_every_album_byte_for_byte() {
             );
         }
     }
+
+    // B falls behind: A rotates `Trip` once more and pushes. B's next push must not replace
+    // A's escrow with its shorter one — that would cost a later recovery the newest epoch.
+    a.workspace.rotate_epoch(trip).expect("the album rotates");
+    remote::push(&remote, &store_a, &a.workspace, PushOptions::default())
+        .await
+        .expect("A pushes the new epoch's escrow");
+    let behind = remote::push(&remote, &store_b, &b, PushOptions::default())
+        .await
+        .expect("B's push runs");
+    assert_eq!(
+        behind.album_keys_escrowed, 0,
+        "a device behind stores nothing"
+    );
+
+    // B then rotates on its own: its epoch 5 is not A's. The escrow is left as A wrote it, and
+    // B's asset in that album is held back rather than sent under a key no recovery could find.
+    b.rotate_epoch(trip).expect("B rotates on its own");
+    let staged = home_b.path().join("diverged.jpg");
+    std::fs::write(&staged, synthetic_jpeg()).expect("the fixture writes");
+    let held_back = b.import_asset(trip, &staged).expect("B imports");
+    let diverged = remote::push(&remote, &store_b, &b, PushOptions::default())
+        .await
+        .expect("B's push runs");
+    assert_eq!(diverged.album_keys_escrowed, 0);
+    let outcome = diverged
+        .outcomes
+        .iter()
+        .find(|o| o.asset_id == held_back.to_string())
+        .expect("B's asset is reported");
+    assert_eq!(outcome.status, AssetPushStatus::Failed, "{outcome:#?}");
+    assert_eq!(
+        outcome.error.as_ref().map(|e| e.kind),
+        Some("album_keys_not_escrowed")
+    );
+
+    // A recovery from what the server holds still has every one of A's epochs.
+    let home_c = tempfile::tempdir().expect("C's CLI home");
+    let c = remote::auth_recover(
+        &remote,
+        &store_b,
+        &home_c.path().join("library"),
+        &shown,
+        PASSPHRASE,
+        FAST_KDF,
+    )
+    .await
+    .expect("a second recovery opens the account");
+    let a_escrows: BTreeMap<Uuid, Vec<u8>> = a
+        .workspace
+        .albums()
+        .into_iter()
+        .map(|(id, _)| (id, a.workspace.album_key_escrow(&id).expect("A seals")))
+        .collect();
+    let plan = c
+        .plan_album_key_escrows(&a_escrows)
+        .expect("C's albums compare");
+    assert!(
+        plan.to_store.is_empty() && plan.uncovered.is_empty(),
+        "C holds exactly A's albums, its newest epoch included"
+    );
 }
 
 /// Import a distinct original seeded by `seed` into `album` on `device`, recording its bytes in

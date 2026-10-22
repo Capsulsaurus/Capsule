@@ -620,10 +620,23 @@ fn discard_new_library(root: &std::path::Path, existed: bool) {
     }
 }
 
+/// What [`escrow_album_keys`] left on the server.
+#[derive(Debug, Default)]
+struct AlbumKeyEscrows {
+    /// Albums whose escrow was stored this run.
+    stored: usize,
+    /// Albums whose epochs the server's escrow does not cover: it disagrees with this device,
+    /// does not open under its master key, or the account's escrows are full. Their assets must
+    /// not be sent.
+    uncovered: HashSet<Uuid>,
+}
+
 /// Bring the server's album key escrows (#741) level with `workspace`: list what the account
-/// holds (`GET /v1/auth/escrow/albums`), ask the workspace which of its albums that leaves
-/// missing or stale, and store each one's escrow (`PUT /v1/auth/escrow/albums/{album_id}`).
-/// Returns how many albums were stored; an account whose escrows are all current stores none.
+/// holds (`GET /v1/auth/escrow/albums`), ask the workspace for its plan
+/// (`Workspace::plan_album_key_escrows`), and store each album the plan names
+/// (`PUT /v1/auth/escrow/albums/{album_id}`). An escrow is never shrunk: one that holds epochs
+/// this device lacks is left alone, and one that disagrees with it is left alone and the album
+/// reported uncovered.
 ///
 /// Run before any asset leaves the device, so the server never holds an asset whose album key
 /// it does not also hold sealed under the master key — the property that lets
@@ -631,34 +644,50 @@ fn discard_new_library(root: &std::path::Path, existed: bool) {
 ///
 /// # Errors
 ///
-/// [`RemoteError::Recovery`] when the listing or a store is refused, and
-/// [`RemoteError::Lifecycle`] when an album cannot be sealed.
+/// [`RemoteError::Recovery`] when the listing or a store is refused (except a full account,
+/// which leaves that album uncovered), and [`RemoteError::Lifecycle`] when an album cannot be
+/// sealed.
 async fn escrow_album_keys(
     recovery: &RecoveryClient,
     workspace: &Workspace,
-) -> Result<usize, RemoteError> {
+) -> Result<AlbumKeyEscrows, RemoteError> {
     let held: BTreeMap<Uuid, Vec<u8>> = recovery
         .list_album_keys()
         .await?
         .into_iter()
         .map(|escrowed| (escrowed.album_id, escrowed.blob))
         .collect();
-    let stale = workspace.stale_album_key_escrows(&held)?;
-    for album_id in &stale {
+    let plan = workspace.plan_album_key_escrows(&held)?;
+    let mut outcome = AlbumKeyEscrows {
+        stored: 0,
+        uncovered: plan.uncovered.iter().copied().collect(),
+    };
+    for album_id in &plan.to_store {
         let sealed = workspace.album_key_escrow(album_id)?;
-        let stored = recovery.store_album_keys(*album_id, &sealed).await?;
-        tracing::info!(
-            %album_id,
-            replaced = stored.replaced,
-            "album keys: the album's key escrow is current on the server"
-        );
+        match recovery.store_album_keys(*album_id, &sealed).await {
+            Ok(stored) => {
+                outcome.stored += 1;
+                tracing::info!(
+                    %album_id,
+                    replaced = stored.replaced,
+                    "album keys: the album's key escrow is current on the server"
+                );
+            }
+            Err(error @ RecoveryError::AlbumKeysFull { .. }) => {
+                tracing::warn!(%album_id, %error, "album keys: the account's escrows are full");
+                outcome.uncovered.insert(*album_id);
+            }
+            Err(error) => return Err(error.into()),
+        }
     }
     tracing::info!(
         escrowed = held.len(),
-        stored = stale.len(),
-        "album keys: every album's key escrow is current"
+        stored = outcome.stored,
+        current = plan.current,
+        uncovered = outcome.uncovered.len(),
+        "album keys: the server's album key escrows are brought level"
     );
-    Ok(stale.len())
+    Ok(outcome)
 }
 
 /// The signed-in account's id, as the server assigned it.
@@ -822,7 +851,8 @@ async fn escrow_with(
         %user_id,
         escrow_replaced = stored.replaced,
         identity_replaced = identity.replaced,
-        albums,
+        albums = albums.stored,
+        uncovered = albums.uncovered.len(),
         "escrow: the escrow, the sealed identity and the album keys are stored"
     );
     Ok(EscrowSetup {
@@ -1054,8 +1084,8 @@ pub enum AssetPushStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AssetPushFailure {
     /// A stable name for where the asset stopped: `bundle`, `album`, `upload`, `unknown_blob`,
-    /// `verify_unavailable`, `not_durable`, `receipt_missing`, `receipt_rejected` or
-    /// `receipt_store`.
+    /// `verify_unavailable`, `not_durable`, `receipt_missing`, `receipt_rejected`,
+    /// `receipt_store` or `album_keys_not_escrowed`.
     pub kind: &'static str,
     /// The server's stable `error.*` code, when it supplied one.
     pub code: Option<String>,
@@ -1114,6 +1144,13 @@ enum AssetError {
     /// A verified receipt could not be written to the library.
     #[error("the custody receipt could not be stored in the library: {0}")]
     ReceiptStore(#[from] capsule_core::library::ReceiptStoreError),
+    /// The asset's album keys are not covered by the server's escrow, so the asset is held back:
+    /// sent, it would be one a recovered device could never open.
+    #[error(
+        "album {0}'s keys are not escrowed on the server (its escrow disagrees with this \
+         library's, or the account's escrows are full); the asset was not sent"
+    )]
+    KeysNotEscrowed(Uuid),
 }
 
 impl AssetError {
@@ -1122,6 +1159,7 @@ impl AssetError {
             Self::Bundle(_) => ("bundle", None),
             Self::Push(error) => (error.kind(), error.error_code().map(str::to_owned)),
             Self::ReceiptStore(_) => ("receipt_store", None),
+            Self::KeysNotEscrowed(_) => ("album_keys_not_escrowed", None),
         };
         AssetPushFailure {
             kind,
@@ -1412,9 +1450,15 @@ async fn push_with(
     // refused escrow fails the run before any byte of any asset is sent — and it runs even with
     // no asset to push, so an album created here is escrowed before another device of the
     // account can be recovered without it.
+    // An album whose escrow could not be made to cover this device's epochs (it disagrees with
+    // the server's, or the account's escrows are full) holds its assets back: each fails with
+    // `album_keys_not_escrowed` rather than landing where no recovery could open it.
+    let mut uncovered = HashSet::new();
     if !options.dry_run {
         let recovery = RecoveryClient::new(session.clone(), &remote.sync_endpoint)?;
-        summary.album_keys_escrowed = escrow_album_keys(&recovery, workspace).await?;
+        let escrows = escrow_album_keys(&recovery, workspace).await?;
+        summary.album_keys_escrowed = escrows.stored;
+        uncovered = escrows.uncovered;
     }
     if asset_ids.is_empty() {
         tracing::info!("push: the library holds no assets");
@@ -1469,6 +1513,7 @@ async fn push_with(
         held,
         force: options.force,
         provisioned: HashSet::new(),
+        uncovered,
     };
     for asset_id in asset_ids {
         let mut outcome = AssetPushOutcome::new(asset_id, AssetPushStatus::Verified);
@@ -1570,6 +1615,8 @@ struct AssetPusher<'a> {
     /// making the same request once per asset; an album whose registration failed is not in
     /// it, so the next asset in that album tries again.
     provisioned: HashSet<Uuid>,
+    /// Albums whose keys the server's escrow does not cover (#741); their assets are not sent.
+    uncovered: HashSet<Uuid>,
 }
 
 impl AssetPusher<'_> {
@@ -1585,6 +1632,9 @@ impl AssetPusher<'_> {
         summary: &mut PushSummary,
     ) -> Result<(), AssetError> {
         let bundle = self.workspace.upload_bundle(&asset_id)?;
+        if self.uncovered.contains(&bundle.album_id) {
+            return Err(AssetError::KeysNotEscrowed(bundle.album_id));
+        }
 
         // Invariant 6 needs the album to exist and be writable before the first session
         // opens; a dry run deliberately reaches nothing, so it never provisions either.

@@ -70,6 +70,30 @@ pub(crate) const ALBUM_STORE_FILE: &str = "albums.cbor";
 /// master key seals (the keystore file, the sealed identity), and names the format version.
 const ALBUM_KEY_ESCROW_DOMAIN: &[u8] = b"capsule-album-key-escrow/v1\0";
 
+/// How an album key escrow the server holds stands against the album a device holds
+/// ([`PersistedAlbum::escrow_coverage`]). Only [`Superseded`](Self::Superseded) is a state the
+/// device may overwrite: every other one either needs nothing or would lose an epoch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EscrowCoverage {
+    /// The escrow is this album's state exactly.
+    Current,
+    /// The escrow holds every epoch this album holds, with the same keys, and more: another
+    /// device rotated further. Every local epoch is covered; replacing it would drop the newer
+    /// epochs, so it is left alone.
+    Behind,
+    /// This album holds every epoch the escrow holds, with the same keys, and more (or the same
+    /// epochs with other details changed): replacing the escrow only adds to it.
+    Superseded,
+    /// The two disagree: a shared epoch under different keys, or each holds an epoch the other
+    /// lacks. Neither may replace the other without losing an epoch, so it is left alone and
+    /// this album's own epochs stay uncovered.
+    Divergent,
+    /// The escrow does not open under this master key as this album — sealed under another
+    /// master key, or not an escrow of it. Left alone: replacing what cannot be read could
+    /// destroy epochs this device cannot see.
+    Unreadable,
+}
+
 /// One escrowed album content key: `(album_id, epoch, amk)`.
 ///
 /// Identical to the row shape of the backup artifact's AMK ledger, so moving keys between the
@@ -308,14 +332,47 @@ impl PersistedAlbum {
 
     /// Whether `blob` is an escrow of exactly this album's current state: it opens under
     /// `master` as this album, and what it holds encodes to the same canonical bytes. Any
-    /// failure to open is `false` — an escrow this device cannot read is one it must replace.
+    /// failure to open is `false`.
     pub fn escrow_matches(&self, blob: &[u8], master: &MasterKey) -> bool {
+        self.escrow_coverage(blob, master) == EscrowCoverage::Current
+    }
+
+    /// How the escrow `blob` the server holds for this album stands against this album's
+    /// state — and so whether replacing it with this album's escrow can only add to it.
+    ///
+    /// The comparison is per epoch: an escrow is never replaced by one that lacks an epoch it
+    /// holds, or that holds a different key for an epoch they share, because a recovery from the
+    /// replacement would lose that epoch's assets. See [`EscrowCoverage`].
+    pub fn escrow_coverage(&self, blob: &[u8], master: &MasterKey) -> EscrowCoverage {
         let Ok(escrowed) = Self::open_escrow(blob, master, self.album_id) else {
-            return false;
+            return EscrowCoverage::Unreadable;
         };
-        match (escrowed.escrow_plaintext(), self.escrow_plaintext()) {
-            (Ok(held), Ok(local)) => held == local,
-            _ => false,
+        let local: std::collections::BTreeMap<u32, [u8; 32]> = self
+            .amks
+            .iter()
+            .map(|(_, epoch, amk)| (*epoch, *amk))
+            .collect();
+        let held: std::collections::BTreeMap<u32, [u8; 32]> = escrowed
+            .amks
+            .iter()
+            .map(|(_, epoch, amk)| (*epoch, *amk))
+            .collect();
+        if local
+            .iter()
+            .any(|(epoch, amk)| held.get(epoch).is_some_and(|other| other != amk))
+        {
+            return EscrowCoverage::Divergent;
+        }
+        let local_only = local.keys().any(|epoch| !held.contains_key(epoch));
+        let held_only = held.keys().any(|epoch| !local.contains_key(epoch));
+        match (local_only, held_only) {
+            (true, true) => EscrowCoverage::Divergent,
+            (false, true) => EscrowCoverage::Behind,
+            (true, false) => EscrowCoverage::Superseded,
+            (false, false) => match (escrowed.escrow_plaintext(), self.escrow_plaintext()) {
+                (Ok(escrowed), Ok(local)) if escrowed == local => EscrowCoverage::Current,
+                _ => EscrowCoverage::Superseded,
+            },
         }
     }
 
