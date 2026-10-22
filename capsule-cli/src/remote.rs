@@ -2618,4 +2618,252 @@ mod tests {
             );
         }
     }
+
+    // ── Album key escrow refusals (#741) ────────────────────────────────────
+
+    /// What the escrow mock saw, and which album it refuses.
+    #[derive(Clone)]
+    struct EscrowMock {
+        /// The album whose `PUT` answers `409 error.escrow.album_keys_full`.
+        full_for: Uuid,
+        /// Every `METHOD path` the mock answered, in order.
+        seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl EscrowMock {
+        /// The escrow `PUT`s the mock answered, as album ids.
+        fn stores(&self) -> Vec<String> {
+            self.seen
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|line| line.strip_prefix("PUT /v1/auth/escrow/albums/"))
+                .map(str::to_owned)
+                .collect()
+        }
+
+        /// The one response for `request_line` (`METHOD path`).
+        fn answer(&self, request_line: &str) -> (u16, &'static str, String) {
+            self.seen.lock().unwrap().push(request_line.to_owned());
+            if request_line == "GET /v1/auth/escrow/albums" {
+                return (200, "application/json", r#"{"albums":[]}"#.to_owned());
+            }
+            // The server truth every push reads before it sends a byte: an empty feed, and the
+            // attestation key the library pins on first contact.
+            if request_line.starts_with("GET /v1/sync") {
+                let page = serde_json::json!({
+                    "entries": [],
+                    "next_cursor": "",
+                    "has_more": false,
+                });
+                return (200, "application/json", page.to_string());
+            }
+            if request_line == "GET /.well-known/capsule/attestation-keys" {
+                use base64::Engine as _;
+                let public = base64::engine::general_purpose::STANDARD.encode(
+                    capsule_core::crypto::keys::HybridSigningKey::from_seed64(&[5u8; 64])
+                        .verifying_key()
+                        .to_bytes(),
+                );
+                let keys = serde_json::json!({
+                    "server_id": "capsule.example",
+                    "keys": [{
+                        "key_id": "11",
+                        "public": public,
+                        "algorithm": "hybrid-ed25519-mldsa65",
+                        "active_from": "2026-07-10T00:00:00Z",
+                        "active_to": null,
+                    }],
+                });
+                return (200, "application/json", keys.to_string());
+            }
+            if let Some(album_id) = request_line.strip_prefix("PUT /v1/auth/escrow/albums/") {
+                return if album_id == self.full_for.to_string() {
+                    let problem = serde_json::json!({
+                        "type": "about:blank",
+                        "title": "Conflict",
+                        "status": 409,
+                        "detail": "the account's album key escrows are full",
+                        "code": "error.escrow.album_keys_full",
+                    });
+                    (409, "application/problem+json", problem.to_string())
+                } else {
+                    let stored = serde_json::json!({
+                        "album_id": album_id,
+                        "stored_at": "2026-10-22T00:00:00Z",
+                        "replaced": false,
+                    });
+                    (200, "application/json", stored.to_string())
+                };
+            }
+            let problem = serde_json::json!({
+                "type": "about:blank",
+                "title": "Not Implemented",
+                "status": 501,
+                "detail": "the mock serves the escrow routes only",
+                "code": "error.unexpected",
+            });
+            (501, "application/problem+json", problem.to_string())
+        }
+    }
+
+    /// Serve `mock` on an ephemeral loopback port and return its origin. Each connection answers
+    /// one request and closes.
+    async fn serve_escrow_mock(mock: EscrowMock) -> String {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a loopback port");
+        let origin = format!("http://{}", listener.local_addr().expect("an address"));
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let mock = mock.clone();
+                tokio::spawn(async move {
+                    let mut buf = Vec::new();
+                    let mut chunk = [0u8; 4096];
+                    let (head_end, length) = loop {
+                        let read = socket.read(&mut chunk).await.unwrap_or(0);
+                        if read == 0 {
+                            return;
+                        }
+                        buf.extend_from_slice(&chunk[..read]);
+                        let Some(end) = buf.windows(4).position(|w| w == b"\r\n\r\n") else {
+                            continue;
+                        };
+                        let head = String::from_utf8_lossy(&buf[..end]).to_lowercase();
+                        let length = head
+                            .lines()
+                            .find_map(|line| line.strip_prefix("content-length:"))
+                            .and_then(|value| value.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        break (end + 4, length);
+                    };
+                    while buf.len() < head_end + length {
+                        let read = socket.read(&mut chunk).await.unwrap_or(0);
+                        if read == 0 {
+                            return;
+                        }
+                        buf.extend_from_slice(&chunk[..read]);
+                    }
+                    let head = String::from_utf8_lossy(&buf[..head_end]).into_owned();
+                    let mut parts = head.split_whitespace();
+                    let line = format!(
+                        "{} {}",
+                        parts.next().unwrap_or_default(),
+                        parts.next().unwrap_or_default()
+                    );
+                    let (status, content_type, body) = mock.answer(&line);
+                    let response = format!(
+                        "HTTP/1.1 {status} X\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                    let _ = socket.shutdown().await;
+                });
+            }
+        });
+        origin
+    }
+
+    /// A server answering `409 error.escrow.album_keys_full` for one album's key escrow does not
+    /// stop the run: that album's assets are held back with `album_keys_not_escrowed` (and never
+    /// reach the album or upload surfaces), while every other album's escrow is still stored and
+    /// its assets are not held back by it. This is the branch that differs from a refused store
+    /// (`RemoteError::Recovery`), which fails the whole run before any asset is sent.
+    #[tokio::test]
+    async fn a_full_escrow_holds_back_only_that_albums_assets() {
+        let scratch = Scratch::new();
+        let lib = scratch.0.join("library");
+        std::fs::create_dir_all(&lib).unwrap();
+        let mut ws = Workspace::create_with_params(
+            &lib,
+            b"passphrase",
+            capsule_core::crypto::primitives::Argon2Params {
+                mem_kib: 64,
+                t_cost: 1,
+                p_cost: 1,
+            },
+        )
+        .unwrap();
+        let full_album = ws.default_album_id();
+        let other_album = Uuid::now_v7();
+        ws.ensure_album(full_album, "Full").unwrap();
+        ws.ensure_album(other_album, "Other").unwrap();
+        let opts = capsule_core::lifecycle::SignedImportOptions {
+            move_source: false,
+            defer_source_release: false,
+            stack: None,
+            enrichment: None,
+        };
+        let mut import = |album: Uuid, name: &str, bytes: &[u8]| {
+            let source = scratch.0.join(name);
+            std::fs::write(&source, bytes).unwrap();
+            ws.import_asset_with(album, &source, &opts)
+                .unwrap()
+                .asset_id
+        };
+        let held_back = import(full_album, "full.jpg", b"full album photo");
+        let other = import(other_album, "other.jpg", b"other album photo");
+
+        let mock = EscrowMock {
+            full_for: full_album,
+            seen: std::sync::Arc::default(),
+        };
+        let origin = serve_escrow_mock(mock.clone()).await;
+        let remote = RemoteConfig {
+            auth_endpoint: format!("{origin}/v1/auth"),
+            sync_endpoint: origin.clone(),
+            upload_endpoint: format!("{origin}/v1/upload"),
+            albums_endpoint: format!("{origin}/v1/albums"),
+            protocol_version: capsule_core::crypto::primitives::PROTOCOL_VERSION.to_owned(),
+        };
+        let session = AuthClient::new(&remote.auth_endpoint)
+            .expect("a base url")
+            .resume(capsule_sdk::auth::PersistedSession {
+                access_token: "access".to_owned().into(),
+                refresh_token: "refresh".to_owned().into(),
+                access_expires_at_unix: jiff::Timestamp::now().as_second() + 3600,
+            })
+            .expect("a resumed session");
+
+        let summary = push_with(&remote, &ws, session, PushOptions::default())
+            .await
+            .expect("a full escrow holds assets back; it does not fail the run");
+
+        let stores = mock.stores();
+        assert_eq!(stores.len(), 2, "both albums were attempted: {stores:?}");
+        assert!(stores.contains(&full_album.to_string()));
+        assert!(stores.contains(&other_album.to_string()));
+        assert_eq!(
+            summary.album_keys_escrowed, 1,
+            "only the album the server accepted counts as escrowed"
+        );
+
+        let failure_of = |asset_id: Uuid| {
+            summary
+                .outcomes
+                .iter()
+                .find(|outcome| outcome.asset_id == asset_id.to_string())
+                .and_then(|outcome| outcome.error.as_ref())
+                .map(|error| error.kind)
+        };
+        assert_eq!(failure_of(held_back), Some("album_keys_not_escrowed"));
+        assert_ne!(
+            failure_of(other),
+            Some("album_keys_not_escrowed"),
+            "an album whose escrow was stored is not held back by another's"
+        );
+        assert!(
+            !mock
+                .seen
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|line| line.contains(&full_album.to_string()) && !line.contains("/escrow/")),
+            "nothing was sent for the held-back album"
+        );
+    }
 }
