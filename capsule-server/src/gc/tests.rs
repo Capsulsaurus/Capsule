@@ -156,6 +156,7 @@ impl Harness {
                     address: address.clone(),
                     size: 16,
                     manifest_sha256: None,
+                    amk_version: None,
                     finalized_at: Timestamp::UNIX_EPOCH,
                 },
             )

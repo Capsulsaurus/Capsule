@@ -1,0 +1,13 @@
+---
+source: capsule-sdk/src/events/tests.rs
+expression: render(&first)
+---
+{"blob":"bce0aff19cf5aa6a7469a30d61d04e4376e4bbf6381052ee9e7f33925c954d52","event":"range_requested","max_len":64,"offset":0}
+{"blob":"bce0aff19cf5aa6a7469a30d61d04e4376e4bbf6381052ee9e7f33925c954d52","event":"range_received","len":64,"offset":0}
+{"blob":"bce0aff19cf5aa6a7469a30d61d04e4376e4bbf6381052ee9e7f33925c954d52","event":"range_requested","max_len":64,"offset":64}
+{"blob":"bce0aff19cf5aa6a7469a30d61d04e4376e4bbf6381052ee9e7f33925c954d52","event":"fetch_retried","offset":64,"stalled":false,"wait_ms":"[jitter]"}
+{"blob":"bce0aff19cf5aa6a7469a30d61d04e4376e4bbf6381052ee9e7f33925c954d52","event":"range_requested","max_len":64,"offset":64}
+{"blob":"bce0aff19cf5aa6a7469a30d61d04e4376e4bbf6381052ee9e7f33925c954d52","event":"fetch_retried","offset":64,"stalled":true,"wait_ms":"[jitter]"}
+{"blob":"bce0aff19cf5aa6a7469a30d61d04e4376e4bbf6381052ee9e7f33925c954d52","event":"range_requested","max_len":64,"offset":64}
+{"blob":"bce0aff19cf5aa6a7469a30d61d04e4376e4bbf6381052ee9e7f33925c954d52","event":"range_received","len":36,"offset":64}
+{"blob":"bce0aff19cf5aa6a7469a30d61d04e4376e4bbf6381052ee9e7f33925c954d52","event":"fetch_verified","size":100}

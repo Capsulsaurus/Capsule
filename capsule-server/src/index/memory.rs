@@ -96,6 +96,21 @@ impl Inner {
         if is_singular(blob.role) && row.blobs.iter().any(|held| held.role == blob.role) {
             return BlobOutcome::Conflict;
         }
+        // Invariant 18 for a create: the manifest landing here publishes its epoch, so it is
+        // checked against the album's high-water mark under the same lock `apply_op` reads it
+        // under.
+        if let Some(submitted) = super::create_epoch(&row, &blob) {
+            let stored = self.album_epoch(&row.album_id);
+            if submitted < stored {
+                tracing::info!(
+                    %asset,
+                    stored,
+                    submitted,
+                    "a create was refused: its manifest's album epoch regresses"
+                );
+                return BlobOutcome::AmkRegressed { stored };
+            }
+        }
 
         let mut row = row;
         row.blobs.push(BlobRef {
@@ -117,11 +132,18 @@ impl Inner {
         // (`S-C31`): the two are equal today and are not the same identifier, so deriving one
         // from the other would be correct by coincidence and would break silently the day a
         // suite picks a different content-address digest.
+        //
+        // The manifest's album-key epoch lands with it, for the same reason: it is a fact of the
+        // manifest the row now publishes, and the row is where invariant 18 reads the album's
+        // high-water mark.
         if blob.role == BlobRole::Provenance
             && row.chain_head.is_none()
             && let Some(manifest_sha256) = blob.manifest_sha256
         {
             row.chain_head = Some(manifest_sha256);
+            if let Some(amk_version) = blob.amk_version {
+                row.amk_version = amk_version;
+            }
         }
 
         // The publishable check runs over the *bundle*, so a blob completing the index tier and

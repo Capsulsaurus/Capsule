@@ -40013,6 +40013,46 @@
         }
       }
     },
+    "error.sync.reannounce_deleted": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A deleted photo isn't restored on the server. Nothing was changed."
+          }
+        }
+      }
+    },
+    "error.sync.reannounce_denied": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This photo can't be restored to your library on the server."
+          }
+        }
+      }
+    },
+    "error.sync.reannounce_invalid": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule sent a re-announce request the server couldn't read."
+          }
+        }
+      }
+    },
+    "error.sync.reannounce_malformed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A photo's signed record couldn't be read, so it wasn't restored on the server."
+          }
+        }
+      }
+    },
     "error.sync.unauthenticated": {
       "localizations": {
         "ar": {

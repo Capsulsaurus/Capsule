@@ -170,6 +170,7 @@ impl Server {
                     address: address.clone(),
                     size: bytes.len() as u64,
                     manifest_sha256,
+                    amk_version: (role == BlobRole::Provenance).then_some(0),
                     finalized_at: at(),
                 },
             )

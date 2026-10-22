@@ -83,6 +83,7 @@ async fn record(
                 address: address.clone(),
                 size,
                 manifest_sha256: None,
+                amk_version: None,
                 finalized_at: Timestamp::UNIX_EPOCH,
             },
         )

@@ -1,0 +1,8 @@
+---
+source: capsule-sdk/src/events/tests.rs
+expression: render(&drain(&mut subscriber))
+---
+{"blob":"b10b","event":"session_resumed","offset":524288,"session_id":"sess-0"}
+{"blob":"b10b","event":"chunk_sent","len":262144,"offset":524288,"session_id":"sess-0"}
+{"acked_offset":786432,"blob":"b10b","event":"chunk_acked","len":262144,"offset":524288,"session_id":"sess-0"}
+{"blob":"b10b","event":"finalize","session_id":"sess-0","size":786432}

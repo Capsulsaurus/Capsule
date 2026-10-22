@@ -28,6 +28,7 @@ pub mod cache_budget;
 pub mod client;
 pub mod cohort;
 pub mod directory;
+pub mod events;
 pub mod federation;
 pub mod fetch;
 pub mod net;
