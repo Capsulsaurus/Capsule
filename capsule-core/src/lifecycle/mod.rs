@@ -36,6 +36,7 @@ mod migrate_unsigned;
 mod open;
 mod organize;
 mod provenance;
+mod reseal;
 mod sharing;
 mod sync_apply;
 mod upload;
@@ -58,6 +59,7 @@ pub use self::migrate_unsigned::{
     UnsignedMigrationReport, unmigrated_sidecars,
 };
 pub use self::open::HardwareDekBinding;
+pub use self::reseal::{ResealOutcome, ResealRefusal};
 pub use self::sync_apply::{
     QuarantineReason, RemoteAssetFacts, RemoteEntry, RemoteHead, RemoteOriginal, SyncApplyOutcome,
     hash_ciphertext_from,
@@ -188,6 +190,15 @@ pub enum LifecycleError {
         stack_album: Uuid,
         /// The album of the asset that tried to join.
         asset_album: Uuid,
+    },
+    /// [`reseal_create`](Workspace::reseal_create) was refused: the asset is not a create this
+    /// device can safely re-seal at the album's current epoch. Nothing was written.
+    #[error("asset {asset_id} cannot be re-sealed: {reason}")]
+    ResealRefused {
+        /// The asset the re-seal was asked for.
+        asset_id: Uuid,
+        /// Why it was refused.
+        reason: ResealRefusal,
     },
 }
 

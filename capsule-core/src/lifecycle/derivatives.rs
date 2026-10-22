@@ -398,6 +398,30 @@ impl Workspace {
         amk: &Amk,
         original: &AssetEncryption,
     ) -> Result<PreparedStill> {
+        let existing = existing_derivatives(
+            &media_dir(&self.root, capture_utc).join("derivatives"),
+            asset_id,
+        );
+        self.prepare_still_with(source, asset_id, album_id, amk, original, existing)
+    }
+
+    /// [`prepare_still`](Self::prepare_still) over a caller-supplied [`ExistingDerivatives`]
+    /// rather than the bundle on disk.
+    ///
+    /// The one caller that needs it is the stale-epoch re-seal
+    /// ([`reseal_create`](Self::reseal_create)): its derivatives start **fresh chains** at the
+    /// album's current epoch, because the ones on disk were sealed under a key the album has
+    /// moved past and were never published, so nothing may link to them. It still hands in every
+    /// prefix the asset has spent, so the reuse refusal covers them.
+    pub(super) fn prepare_still_with(
+        &self,
+        source: &StillSource<'_>,
+        asset_id: Uuid,
+        album_id: Uuid,
+        amk: &Amk,
+        original: &AssetEncryption,
+        existing: ExistingDerivatives,
+    ) -> Result<PreparedStill> {
         let StillSource {
             plaintext,
             size,
@@ -466,10 +490,7 @@ impl Workspace {
         let ExistingDerivatives {
             heads,
             mut used_prefixes,
-        } = existing_derivatives(
-            &media_dir(&self.root, capture_utc).join("derivatives"),
-            asset_id,
-        );
+        } = existing;
         // The original's prefix is spoken for too: it is a prefix used for this `file_id`.
         used_prefixes.insert(original.nonce_prefix);
 

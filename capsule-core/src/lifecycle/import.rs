@@ -168,7 +168,7 @@ const SNIFF_LEN: u64 = 64;
 /// pixel budget, four 16-bit channels per pixel. No still the decoder would accept is larger
 /// (its pixels would exceed [`MAX_DECODE_PIXELS`]), so a file over this that names itself a
 /// still by its header is streamed like any other original and gets no derivatives.
-const MAX_HELD_STILL_BYTES: u64 = MAX_DECODE_PIXELS * 8;
+pub(super) const MAX_HELD_STILL_BYTES: u64 = MAX_DECODE_PIXELS * 8;
 
 /// The EXIF of the `size`-byte file at `src`, or nothing for a file over
 /// [`MAX_HELD_STILL_BYTES`].
@@ -192,7 +192,7 @@ fn scan_exif(src: &Path, size: u64) -> ExifExtract {
 }
 
 /// Read the first [`SNIFF_LEN`] bytes of `file` (fewer for a shorter file) and rewind it.
-fn read_head(file: &mut fs::File) -> io::Result<Vec<u8>> {
+pub(super) fn read_head(file: &mut fs::File) -> io::Result<Vec<u8>> {
     let mut head = Vec::with_capacity(SNIFF_LEN as usize);
     Read::by_ref(file).take(SNIFF_LEN).read_to_end(&mut head)?;
     file.seek(SeekFrom::Start(0))?;
@@ -203,10 +203,10 @@ fn read_head(file: &mut fs::File) -> io::Result<Vec<u8>> {
 /// already lies at its media path, copied into the staged library file — so one read of the
 /// source yields the signed `hash`, the ciphertext address and the library copy, and holds one
 /// STREAM chunk at a time.
-struct Tee<R> {
-    inner: R,
-    hasher: Sha256Hasher,
-    copy: Option<fs::File>,
+pub(super) struct Tee<R> {
+    pub(super) inner: R,
+    pub(super) hasher: Sha256Hasher,
+    pub(super) copy: Option<fs::File>,
 }
 
 impl<R: Read> Read for Tee<R> {
