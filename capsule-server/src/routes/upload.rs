@@ -1132,11 +1132,11 @@ pub async fn create_upload(
         };
         match crate::upload::adopt::adopt(&upload, &attestation, adoption).await {
             Ok(
-                crate::upload::adopt::Adopted::Recorded { .. }
+                outcome @ (crate::upload::adopt::Adopted::Recorded { .. }
                 | crate::upload::adopt::Adopted::AlreadyHeld
-                | crate::upload::adopt::Adopted::Declined,
+                | crate::upload::adopt::Adopted::Declined),
             ) => {
-                tracing::info!(%owner, existing_asset = %existing, %asset_id, "an upload was refused: already held, and adopted");
+                tracing::info!(%owner, existing_asset = %existing, %asset_id, adoption = ?outcome, "an upload was refused: already held by another asset");
                 return Err(CreateRejection::duplicate_blob(&existing));
             }
             // Nothing to adopt: the bytes are gone from the store. An ordinary session puts
