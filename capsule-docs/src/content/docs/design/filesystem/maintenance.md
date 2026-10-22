@@ -40,7 +40,7 @@ An operator-invoked (schedulable) command that verifies a Postgres + blob-store 
 6. **Ledger ⇄ index.** Every [owner ledger](/design/filesystem/server/#the-owner-ledger) chain verifies, and every entry has its row.
 7. **Debris and quarantine inventory.** Unattached `incoming/` files and everything in `quarantine/` are listed.
 
-Checks 4 and 5 decode manifests through the server's single manifest parser, shared with [rebuild](/design/filesystem/server/#rebuild); the write path never decodes them. Check 6 verifies signatures when the host holds `ATTESTATION_KEY_SEED` and links and positions otherwise, and the report says which; it reports a ledgered upload the index has no row for. A tail cut exactly at an entry boundary is not detected until a ledger head is recorded outside the ledger ([#757](https://github.com/Capsulsaurus/Capsule/issues/757)).
+Checks 4 and 5 decode manifests through the server's single manifest parser, shared with [rebuild](/design/filesystem/server/#rebuild); the write path never decodes them. Check 6 verifies signatures when the host holds `ATTESTATION_KEY_SEED` and links and positions otherwise, and the report says which; it reports a ledgered upload the index has no row for. Each ledger is verified against the head the index recorded for its owner (the [anchor](/design/filesystem/server/#the-owner-ledger)), so a tail cut exactly at an entry boundary is reported whenever the index survived; the scrub reads the anchor and never moves it.
 
 The server retains an asset's whole manifest chain until purge, which is what makes check 4 and the [proof-of-loss rebuttal](/design/transfer/durability/#proof-of-loss) possible.
 
