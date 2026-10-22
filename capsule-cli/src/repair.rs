@@ -51,8 +51,8 @@
 
 use std::path::Path;
 
-use capsule_core::exif::{extract_exif, resolve_timezone};
-use capsule_core::lifecycle::Workspace;
+use capsule_library::exif::{extract_exif, resolve_timezone};
+use capsule_library::lifecycle::Workspace;
 use colored::Colorize as _;
 use jiff::Timestamp;
 use thiserror::Error;

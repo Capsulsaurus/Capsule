@@ -9,8 +9,8 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use capsule_core::db::DatabaseDriver;
-use capsule_core::library::{GateError, GateKeeper};
+use capsule_library::db::DatabaseDriver;
+use capsule_library::library::{GateError, GateKeeper};
 
 use crate::error::CatalogError;
 use crate::gate::{ForeignAuthGate, GatedView, LocalAuthError, LocalAuthGate};
@@ -350,7 +350,7 @@ pub struct LqipPlaceholder {
 /// **A free function rather than a [`Catalog`] method, deliberately.** The `assets` table has
 /// `chromahash` and `dominant_color` columns, and they are NULL: the signed sidecar is the
 /// placeholder's home, and projecting it onto the index would have to be done identically by
-/// `capsule_core::library::rebuild` or a rebuilt index would disagree with a freshly written
+/// `capsule_library::library::rebuild` or a rebuilt index would disagree with a freshly written
 /// one. Until both sides move together, an accessor keyed on an asset id could only ever
 /// return nothing — so this takes the record the caller already holds from the decrypted
 /// sidecar instead of pretending the index has it.

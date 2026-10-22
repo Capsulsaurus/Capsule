@@ -11,8 +11,8 @@ use std::path::PathBuf;
 use capsule_core::backup::{recover_seed, split_seed_2of3};
 use capsule_core::crypto::primitives::Argon2Params;
 use capsule_core::crypto::verify_asset::VerifyOutcome;
-use capsule_core::lifecycle::Workspace;
 use capsule_core::sidecar::CullFlag;
+use capsule_library::lifecycle::Workspace;
 use colored::*;
 use eyre::{Result, eyre};
 

@@ -1,9 +1,9 @@
 //! The SR1 fresh-local-auth gate, projected across the UniFFI boundary.
 //!
 //! Policy — which views are gated, the per-view grace clock, the refuse-without-grant
-//! query surface — is owned by [`capsule_core::library::GateKeeper`] and is *not*
+//! query surface — is owned by [`capsule_library::library::GateKeeper`] and is *not*
 //! reimplemented here. This module is the boundary projection only: a uniffi mirror of
-//! [`capsule_core::library::GatedView`] / [`capsule_core::library::LocalAuthError`], and a
+//! [`capsule_library::library::GatedView`] / [`capsule_library::library::LocalAuthError`], and a
 //! foreign-trait seam ([`LocalAuthGate`]) the Swift/Kotlin side implements with
 //! `LAContext` / `BiometricPrompt`.
 //!
@@ -19,12 +19,12 @@
 
 use std::sync::Arc;
 
-use capsule_core::library as core_gate;
+use capsule_library::library as core_gate;
 
 /// A view that requires fresh local authentication before it opens (SR1). Grants are
 /// **per-view**: authenticating for one never opens the other.
 ///
-/// The uniffi mirror of [`capsule_core::library::GatedView`].
+/// The uniffi mirror of [`capsule_library::library::GatedView`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum GatedView {
     /// The trash / "Recently Deleted" listing of soft-deleted assets.
@@ -52,7 +52,7 @@ impl From<core_gate::GatedView> for GatedView {
 }
 
 /// Failure surfaced by a [`LocalAuthGate`] implementation — the uniffi mirror of
-/// [`capsule_core::library::LocalAuthError`].
+/// [`capsule_library::library::LocalAuthError`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, uniffi::Error)]
 pub enum LocalAuthError {
     /// The user dismissed or cancelled the authentication prompt.

@@ -1,0 +1,311 @@
+use std::path::{Path, PathBuf};
+
+use uuid::Uuid;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThumbnailSize {
+    Xs,
+    S,
+    M,
+    L,
+    Xl,
+    O,
+}
+
+impl ThumbnailSize {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ThumbnailSize::Xs => "xs",
+            ThumbnailSize::S => "s",
+            ThumbnailSize::M => "m",
+            ThumbnailSize::L => "l",
+            ThumbnailSize::Xl => "xl",
+            ThumbnailSize::O => "o",
+        }
+    }
+}
+
+/// Returns the first two hex chars and next two hex chars of a UUID string (without hyphens).
+pub fn uuid_shard(uuid: &Uuid) -> (String, String) {
+    let hex = uuid.simple().to_string(); // 32 hex chars, no hyphens
+    (hex[0..2].to_string(), hex[2..4].to_string())
+}
+
+fn shard_dirs(uuid: &Uuid) -> (String, String) {
+    uuid_shard(uuid)
+}
+
+fn date_parts(capture_utc: Option<i64>) -> (u32, u8) {
+    match capture_utc {
+        Some(ts) => {
+            let date = jiff::Timestamp::from_second(ts)
+                .unwrap_or(jiff::Timestamp::UNIX_EPOCH)
+                .to_zoned(jiff::tz::TimeZone::UTC)
+                .date();
+            (
+                u32::try_from(date.year()).unwrap_or(1970),
+                u8::try_from(date.month()).unwrap_or(1),
+            )
+        }
+        None => (1970, 1),
+    }
+}
+
+/// `media/{YYYY}/{YYYY-MM}/`
+pub fn media_dir(root: &Path, year: u32, month: u8) -> PathBuf {
+    root.join("media")
+        .join(format!("{year:04}"))
+        .join(format!("{year:04}-{month:02}"))
+}
+
+/// `media/{YYYY}/{YYYY-MM}/{uuid}.{ext}` where date comes from capture_utc
+pub fn media_path(root: &Path, uuid: &Uuid, ext: &str, capture_utc: Option<i64>) -> PathBuf {
+    let (year, month) = date_parts(capture_utc);
+    media_dir(root, year, month).join(format!("{}.{}", uuid.simple(), ext))
+}
+
+/// `media/{YYYY}/{YYYY-MM}/{uuid}.cbor`
+pub fn sidecar_path(root: &Path, uuid: &Uuid, _ext: &str, capture_utc: Option<i64>) -> PathBuf {
+    let (year, month) = date_parts(capture_utc);
+    media_dir(root, year, month).join(format!("{}.cbor", uuid.simple()))
+}
+
+/// `media/{YYYY}/{YYYY-MM}/{uuid}.receipts.cbor` — the client's custody-receipt log for the
+/// asset, appended beside the provenance chain (SSoT: Storage Verification — Custody Receipts).
+/// Evidentiary, not a cache: it is included verbatim in the backup artifact.
+pub fn receipts_path(root: &Path, uuid: &Uuid, capture_utc: Option<i64>) -> PathBuf {
+    let (year, month) = date_parts(capture_utc);
+    media_dir(root, year, month).join(format!("{}.receipts.cbor", uuid.simple()))
+}
+
+/// `media/{YYYY}/{YYYY-MM}/{uuid}.attestations.cbor` — the client's signed storage-attestation
+/// log for the asset, kept beside its custody receipts (SSoT: Transfer — Durability: Signed
+/// Storage Attestation). Evidence, not a cache: it is included verbatim in the backup artifact.
+pub fn attestations_path(root: &Path, uuid: &Uuid, capture_utc: Option<i64>) -> PathBuf {
+    let (year, month) = date_parts(capture_utc);
+    media_dir(root, year, month).join(format!("{}.attestations.cbor", uuid.simple()))
+}
+
+/// The `.cbor` files the library keeps under `media/` that are not an asset's sidecar: the
+/// provenance, receipt and attestation logs beside it, and the derivative bundle the lifecycle
+/// writes as `derivatives/{uuid}.derivatives.cbor`. They share the sidecar's suffix, so every
+/// walk that reads `{uuid}.cbor` sidecars must skip them by name.
+pub(crate) const SIBLING_LOG_SUFFIXES: [&str; 4] = [
+    ".provenance.cbor",
+    ".receipts.cbor",
+    ".attestations.cbor",
+    ".derivatives.cbor",
+];
+
+/// Whether a file name under `media/` names an asset's sidecar: exactly `{uuid}.cbor`, never one
+/// of the [sibling logs](SIBLING_LOG_SUFFIXES). The one filter `rebuild_index`, `Workspace::open`
+/// and the unsigned-sidecar migration share, so a new sibling cannot be added to one walk and
+/// parsed as a sidecar by another.
+pub(crate) fn is_sidecar_file_name(name: &str) -> bool {
+    // Exact-case on purpose: the library writes every one of these names itself, lowercase.
+    Path::new(name).extension().is_some_and(|ext| ext == "cbor")
+        && !SIBLING_LOG_SUFFIXES
+            .iter()
+            .any(|suffix| name.ends_with(suffix))
+}
+
+/// `index/thumbnails/{size}/{s1}/{s2}/{uuid}.{format}` where format is "jxl" or "webp"
+pub fn thumbnail_path(root: &Path, uuid: &Uuid, size: ThumbnailSize) -> PathBuf {
+    let (s1, s2) = shard_dirs(uuid);
+    root.join("index")
+        .join("thumbnails")
+        .join(size.as_str())
+        .join(&s1)
+        .join(&s2)
+        .join(format!("{}", uuid.simple()))
+    // Note: caller appends .jxl or .webp as needed
+}
+
+/// `index/meta/{s1}/{s2}/{uuid}.meta.cbor`
+pub fn meta_cache_path(root: &Path, uuid: &Uuid) -> PathBuf {
+    let (s1, s2) = shard_dirs(uuid);
+    root.join("index")
+        .join("meta")
+        .join(&s1)
+        .join(&s2)
+        .join(format!("{}.meta.cbor", uuid.simple()))
+}
+
+/// `index/transcodes/h264/{s1}/{s2}/{uuid}.mp4`
+pub fn transcode_h264_path(root: &Path, uuid: &Uuid) -> PathBuf {
+    let (s1, s2) = shard_dirs(uuid);
+    root.join("index")
+        .join("transcodes")
+        .join("h264")
+        .join(&s1)
+        .join(&s2)
+        .join(format!("{}.mp4", uuid.simple()))
+}
+
+/// `index/transcodes/live/{s1}/{s2}/{uuid}.mov`
+pub fn transcode_live_path(root: &Path, uuid: &Uuid) -> PathBuf {
+    let (s1, s2) = shard_dirs(uuid);
+    root.join("index")
+        .join("transcodes")
+        .join("live")
+        .join(&s1)
+        .join(&s2)
+        .join(format!("{}.mov", uuid.simple()))
+}
+
+/// `.library/trash/{uuid}.{ext}`
+pub fn trash_path(root: &Path, uuid: &Uuid, ext: &str) -> PathBuf {
+    root.join(".library")
+        .join("trash")
+        .join(format!("{}.{}", uuid.simple(), ext))
+}
+
+// `tmp_path` encodes no library layout, so it lives in `crate::utils::paths` where
+// `capsule_core::sidecar` can reach it without depending on `library`. Re-exported here so
+// `library::paths::tmp_path` and `library::tmp_path` keep resolving for existing callers.
+pub use crate::utils::paths::tmp_path;
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsStr;
+
+    use uuid::Uuid;
+
+    use super::*;
+
+    fn test_uuid() -> Uuid {
+        // Use a fixed UUID for deterministic tests
+        Uuid::parse_str("01956ef3-1234-7abc-9def-123456789abc").unwrap()
+    }
+
+    #[test]
+    fn test_uuid_shard() {
+        let uuid = test_uuid();
+        let (s1, s2) = uuid_shard(&uuid);
+        // simple() gives 32 hex chars; first 2 and next 2
+        let hex = uuid.simple().to_string();
+        assert_eq!(s1, &hex[0..2]);
+        assert_eq!(s2, &hex[2..4]);
+        assert_eq!(s1.len(), 2);
+        assert_eq!(s2.len(), 2);
+    }
+
+    #[test]
+    fn test_media_dir() {
+        let root = Path::new("/lib");
+        let path = media_dir(root, 2024, 7);
+        assert_eq!(path, PathBuf::from("/lib/media/2024/2024-07"));
+    }
+
+    #[test]
+    fn test_media_path_with_capture_utc() {
+        let root = Path::new("/lib");
+        let uuid = test_uuid();
+        // 2024-07-15 -> ts = 1721001600 (approx)
+        let ts = 1_721_001_600_i64;
+        let path = media_path(root, &uuid, "jpg", Some(ts));
+        let uuid_str = uuid.simple().to_string();
+        assert!(path.to_str().unwrap().contains("media/2024/2024-07"));
+        assert!(path.to_str().unwrap().contains(&format!("{uuid_str}.jpg")));
+    }
+
+    #[test]
+    fn test_media_path_no_utc() {
+        let root = Path::new("/lib");
+        let uuid = test_uuid();
+        let path = media_path(root, &uuid, "arw", None);
+        assert!(path.to_str().unwrap().contains("media/1970/1970-01"));
+    }
+
+    #[test]
+    fn test_sidecar_path() {
+        let root = Path::new("/lib");
+        let uuid = test_uuid();
+        let path = sidecar_path(root, &uuid, "jpg", Some(1_721_001_600));
+        assert_eq!(path.extension(), Some(OsStr::new("cbor")));
+        assert!(path.to_str().unwrap().contains("media/2024/2024-07"));
+    }
+
+    #[test]
+    fn test_attestations_path_sits_beside_the_receipts() {
+        let root = Path::new("/lib");
+        let uuid = test_uuid();
+        let ts = Some(1_721_001_600);
+        let attestations = attestations_path(root, &uuid, ts);
+        assert_eq!(
+            attestations.parent(),
+            receipts_path(root, &uuid, ts).parent()
+        );
+        assert!(
+            attestations
+                .to_str()
+                .unwrap()
+                .ends_with(&format!("{}.attestations.cbor", uuid.simple()))
+        );
+    }
+
+    #[test]
+    fn only_the_bare_cbor_file_is_a_sidecar() {
+        let id = test_uuid().simple().to_string();
+        assert!(is_sidecar_file_name(&format!("{id}.cbor")));
+        for sibling in ["provenance", "receipts", "attestations", "derivatives"] {
+            assert!(
+                !is_sidecar_file_name(&format!("{id}.{sibling}.cbor")),
+                "{sibling} is a sibling file, not a sidecar"
+            );
+        }
+        assert!(!is_sidecar_file_name(&format!(
+            "{id}.attestations.cbor.tmp"
+        )));
+        assert!(!is_sidecar_file_name(&format!("{id}.jpg")));
+    }
+
+    #[test]
+    fn test_meta_cache_path() {
+        let root = Path::new("/lib");
+        let uuid = test_uuid();
+        let path = meta_cache_path(root, &uuid);
+        assert!(path.to_str().unwrap().contains("index/meta"));
+        assert!(path.to_str().unwrap().ends_with(".meta.cbor"));
+    }
+
+    #[test]
+    fn test_transcode_h264_path() {
+        let root = Path::new("/lib");
+        let uuid = test_uuid();
+        let path = transcode_h264_path(root, &uuid);
+        assert!(path.to_str().unwrap().contains("transcodes/h264"));
+        assert_eq!(path.extension(), Some(OsStr::new("mp4")));
+    }
+
+    #[test]
+    fn test_transcode_live_path() {
+        let root = Path::new("/lib");
+        let uuid = test_uuid();
+        let path = transcode_live_path(root, &uuid);
+        assert!(path.to_str().unwrap().contains("transcodes/live"));
+        assert_eq!(path.extension(), Some(OsStr::new("mov")));
+    }
+
+    #[test]
+    fn test_trash_path() {
+        let root = Path::new("/lib");
+        let uuid = test_uuid();
+        let path = trash_path(root, &uuid, "jpg");
+        assert!(path.to_str().unwrap().contains(".library/trash"));
+        assert_eq!(path.extension(), Some(OsStr::new("jpg")));
+    }
+
+    #[test]
+    fn test_tmp_path() {
+        let p = PathBuf::from("/lib/media/2024/2024-07/abc.jpg");
+        let tmp = tmp_path(&p);
+        assert_eq!(tmp, PathBuf::from("/lib/media/2024/2024-07/abc.jpg.tmp"));
+    }
+
+    #[test]
+    fn test_thumbnail_size_str() {
+        assert_eq!(ThumbnailSize::Xs.as_str(), "xs");
+        assert_eq!(ThumbnailSize::O.as_str(), "o");
+    }
+}

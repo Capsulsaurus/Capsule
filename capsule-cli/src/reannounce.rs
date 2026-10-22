@@ -12,7 +12,7 @@
 //! would only cost a request and a refusal.
 
 use capsule_core::crypto::provenance::Action;
-use capsule_core::lifecycle::{LifecycleError, Workspace};
+use capsule_library::lifecycle::{LifecycleError, Workspace};
 use capsule_sdk::sync::reannounce::{HeldManifest, ReannounceOutcome, ReannounceResult};
 use serde::Serialize;
 

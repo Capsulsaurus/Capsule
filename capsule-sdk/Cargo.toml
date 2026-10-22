@@ -35,9 +35,10 @@ ffi-bindgen = ["ffi", "uniffi/cli"]
 capsule-i18n = { path = "../capsule-i18n" }
 # The verify-before-destroy gate (S-D4) reuses the offline data plane's pure predicate
 # (`library::release_is_safe`), the `StorageVerdict` type, and custody-receipt verification
-# (`library::verify_receipt` under the pinned hybrid attestation key) — all `capsule-core`
-# crypto/library surface, so the SDK does not re-implement signature verification.
+# (`library::verify_receipt` under the pinned hybrid attestation key) — `capsule-library` surface
+# over `capsule-core` crypto, so the SDK does not re-implement signature verification.
 capsule-core = { path = "../capsule-core" }
+capsule-library = { path = "../capsule-library" }
 # base64 decodes the server's `receipt_cbor` (STANDARD) and the well-known attestation public
 # keys before handing them to capsule-core for verification.
 base64 = { workspace = true }

@@ -1,8 +1,20 @@
+//! Capsule's stateless core: pure functions over values — cryptography and the MLS authority,
+//! canonical CBOR, sidecar and CRDT logic, validation, media, LQIP, sharing and drop crypto, and
+//! ML orchestration.
+//!
+//! It holds no connection, file handle or database, and reads no environment or filesystem:
+//! storage reaches it through ports such as `ml::VectorIndex`, which callers implement. Local
+//! state — the SQLite index, the on-disk library, the `Workspace`, import execution, backup I/O
+//! and the hardware signers — lives in `capsule-library`. The exceptions are the OS CSPRNG
+//! behind `crypto::rng` and `catch_unwind` in `media::decode`; `cargo xtask architecture-check`
+//! enforces the rest. See
+//! [Module Map — Stateless Core](https://docs/design/module-map/#stateless-core).
+
 // ── WASM sealing surface (always compiled) ──────────────────────────────────
 // `cbor`, `crypto`, and `drop` are the only modules the guest web client (WASM) needs:
 // the [`drop::seal_drop`] path plus its cryptographic dependencies. They are free of any
-// dependency that cannot target `wasm32-unknown-unknown` (notably the bundled SQLite in
-// `db`/`library`), so a `--no-default-features` build compiles exactly this surface. See
+// dependency that cannot target `wasm32-unknown-unknown`, so a `--no-default-features` build
+// compiles exactly this surface. See
 // [Web Upload — the web client class](https://docs/design/web-upload/).
 pub mod cbor;
 pub mod crypto;
@@ -11,8 +23,8 @@ pub mod drop;
 /// Share-link generation, encapsulation crypto, and the recipient-side [`sharing::open_scope`]
 /// path. Always compiled (slice S-E1): it depends only on `cbor` + `crypto`, both of which
 /// target `wasm32-unknown-unknown`, so the browser share viewer (via `capsule-wasm`) can unwrap
-/// a link client-side. The native issuer (`ShareLinkIssuer` on [`lifecycle::Workspace`]) still
-/// rides the `native` feature; only the pure crypto + recipient-open path is needed in the browser.
+/// a link client-side. The native issuer (`ShareLinkIssuer` on `capsule-library`'s `Workspace`)
+/// is not needed in the browser; only the pure crypto + recipient-open path is.
 pub mod sharing;
 
 /// Client build identification — the `client_version` / `generated_by_client` grammar and the
@@ -36,10 +48,9 @@ pub mod derivative_format;
 pub mod lqip;
 
 // ── Native surface (`native`, default) ──────────────────────────────────────
-// Everything below drives the on-device library, import, and lifecycle — it links SQLite,
-// the filesystem, and the media stack, none of which the browser sealing path needs. Gated
-// behind the default `native` feature so a `--no-default-features` build drops it (and the
-// bundled-SQLite dependency) for the WASM sealing build.
+// Everything below serves the on-device library `capsule-library` builds — it links OpenMLS and
+// the media stack, neither of which the browser sealing path needs. Gated behind the default
+// `native` feature so a `--no-default-features` build drops it for the WASM sealing build.
 #[cfg(feature = "native")]
 pub mod backup;
 #[cfg(feature = "native")]
@@ -49,19 +60,18 @@ pub mod constants;
 #[cfg(feature = "native")]
 pub mod culling;
 #[cfg(feature = "native")]
-pub mod db;
-#[cfg(feature = "native")]
 pub mod domain;
+/// The cross-device add ceremony's wire form: the advertised key bundles, the relayed payloads
+/// and the safety code. The Workspace verbs that draw and cross-sign them are
+/// `capsule-library`'s.
+#[cfg(feature = "native")]
+pub mod enrollment;
 #[cfg(feature = "native")]
 pub mod exif;
 #[cfg(feature = "native")]
 pub mod federation;
 #[cfg(feature = "native")]
 pub mod import;
-#[cfg(feature = "native")]
-pub mod library;
-#[cfg(feature = "native")]
-pub mod lifecycle;
 /// Still decode, orientation, metadata normalisation and derivative generation over
 /// `rawshift-image` (`media` feature, implied by `native`; slices `S-B1`/`S-B13`). Feature-gated
 /// rather than `native`-gated so the codec stack is one manifest edit away from being dropped
@@ -84,14 +94,9 @@ pub mod ml;
 pub mod notify;
 #[cfg(feature = "native")]
 pub mod sidecar;
-#[cfg(feature = "native")]
-pub mod utils;
 // Deliberately **not** `native`-gated: these are pure, key-less structural checks over
 // `crypto::{encryption, hash, primitives, provenance}` and nothing else. Gating them behind
 // `native` forced `capsule-server` — a key-free server that touches no SQLite and no MLS — to link
 // `rusqlite`, `sqlite-vec`, OpenMLS and libcrux in order to call the refuse-by-default invariants
 // it exists to enforce.
 pub mod validation;
-
-#[cfg(test)]
-mod test_heap;

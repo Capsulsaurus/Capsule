@@ -199,7 +199,7 @@ testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true, features = ["valkey"] }
 
 # Throwaway directories on disk. `tests/binary.rs` gives the spawned server a blob root of its
-# own and deletes it afterwards; `tests/sdk_client.rs` puts a **real** `capsule_core::Workspace`
+# own and deletes it afterwards; `tests/sdk_client.rs` puts a **real** `capsule_library::Workspace`
 # there, because the only way to prove the upload ladder puts an asset on this server's feed is
 # to push the ladder's own input — a hand-built bundle would agree with a wrong ladder.
 # Already the workspace's scratch-directory crate (`capsule-core`, `capsule-sdk`,
@@ -224,6 +224,10 @@ kynos = { workspace = true, features = ["test-util", "server"] }
 # generated from `openapi.json`, a file — so this is acyclic, and it is what makes the
 # generated client's round trip against the real router a test rather than a hope (`S-D28`).
 capsule-sdk = { path = "../capsule-sdk" }
+# The client's local library, for the tests that push a **real** `Workspace`'s upload ladder at
+# the router (`tests/sdk_client.rs`). Already in the graph through `capsule-sdk`; dev-only, so the
+# key-free server never links a client library.
+capsule-library = { path = "../capsule-library" }
 # The SDK's persisted tokens are `SecretBox<str>`; a test that asserts a rotation happened has
 # to look at them. Test-only, and the only place this crate touches the type.
 secrecy = { workspace = true }

@@ -12,14 +12,14 @@ use std::path::{Path, PathBuf};
 use capitalize::Capitalize;
 use capsule_core::crypto::primitives::DeviceTier;
 use capsule_core::domain::ImportMode;
-use capsule_core::import::{
+use capsule_library::file_metadata::FileMetadata;
+use capsule_library::import::{
     CancellationToken, DefaultAlbumContext, ImportConfig, ImportOutcome, ImportProgressEvent,
     ScanResult, SourceAdapter, SourceMetadataIndex, TakeoutAdapter, execute_with_source_metadata,
     plan, scan_paths as scan_files,
 };
-use capsule_core::library::{Library, LibraryError, init_library, open_library, rebuild_index};
-use capsule_core::lifecycle::{DerivativeStatus, Workspace, unmigrated_sidecars};
-use capsule_core::metadata::FileMetadata;
+use capsule_library::library::{Library, LibraryError, init_library, open_library, rebuild_index};
+use capsule_library::lifecycle::{DerivativeStatus, Workspace, unmigrated_sidecars};
 use capsule_sdk::cache_budget::DesktopConnectionClass;
 use cli::{
     AuthCommands, CacheCommands, Cli, Commands, ImportProviderArg, LibraryCommands, RepairCommands,
@@ -138,7 +138,7 @@ fn display_paths(paths: &[PathBuf]) -> String {
 /// record under the pipeline's precedence rule before the planner sees anything. The planner and
 /// executor are unchanged by the choice; only what they are fed differs.
 ///
-/// [source adapter]: capsule_core::import::TakeoutAdapter
+/// [source adapter]: capsule_library::import::TakeoutAdapter
 fn read_import_source(
     provider: Option<ImportProviderArg>,
     paths: &[PathBuf],
@@ -1182,9 +1182,9 @@ fn describe_escrow_error(error: &remote::RemoteError) -> String {
              command again for a new secret."
                 .to_owned()
         }
-        remote::RemoteError::Lifecycle(capsule_core::lifecycle::LifecycleError::AccountRebind(
-            _,
-        )) => "This library already holds assets created under its own account id, so it \
+        remote::RemoteError::Lifecycle(
+            capsule_library::lifecycle::LifecycleError::AccountRebind(_),
+        ) => "This library already holds assets created under its own account id, so it \
                cannot be bound to your server account. Run 'capsule auth escrow' on a fresh \
                library instead."
             .to_owned(),
@@ -1458,7 +1458,7 @@ fn cache_sweep_library(library: &Path, json: bool) -> Result<()> {
     let base = base_cache_budget()?;
     let lib = open_library_or_err(library)?;
     let report = cache::sweep(DesktopConnectionClass::new(), base, |budget| {
-        capsule_core::library::cache_sweep(&lib.db, budget)
+        capsule_library::library::cache_sweep(&lib.db, budget)
     })
     .map_err(|e| eyre!("Cache sweep failed: {e}"))?;
     lib.close()
@@ -1993,7 +1993,7 @@ mod library_info_tests {
 
 #[cfg(test)]
 mod escrow_tests {
-    use capsule_core::lifecycle::LifecycleError;
+    use capsule_library::lifecycle::LifecycleError;
     use capsule_sdk::recovery::{MintedSecret, RecoveryError};
 
     use super::{describe_escrow_error, typed_back_matches};
@@ -2256,7 +2256,7 @@ mod stdin_secret_tests {
 mod client_build_wiring_tests {
     use capsule_core::client_build::ClientVersion;
     use capsule_core::crypto::primitives::Argon2Params;
-    use capsule_core::lifecycle::Workspace;
+    use capsule_library::lifecycle::Workspace;
 
     use super::as_capsule_cli;
 

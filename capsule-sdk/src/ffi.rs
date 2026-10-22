@@ -41,8 +41,8 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use capsule_core::import::UploadPolicy;
-use capsule_core::lifecycle::{LifecycleError, UploadBundle};
+use capsule_library::import::UploadPolicy;
+use capsule_library::lifecycle::{LifecycleError, UploadBundle};
 use secrecy::{ExposeSecret as _, SecretString};
 
 use crate::auth::{AuthClient, AuthError, LoginOutcome, Session};

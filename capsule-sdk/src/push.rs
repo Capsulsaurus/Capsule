@@ -52,7 +52,7 @@
 //! stored, indexed and retrievable, then fetches the asset's custody-receipt log and requires a
 //! receipt per blob that verifies under the server's attestation-key history and names the
 //! exact bytes, size and role the client sent. That history is the one the caller pinned for the
-//! server (`capsule_core::library::pin_attestation_keys`), never a fetch trusted on its own. Only then is the asset reported as pushed, and
+//! server (`capsule_library::library::pin_attestation_keys`), never a fetch trusted on its own. Only then is the asset reported as pushed, and
 //! the verified receipts are what the caller persists beside the provenance chain.
 
 use std::borrow::Cow;
@@ -61,11 +61,11 @@ use std::collections::HashSet;
 use capsule_core::crypto::hash::{Hash32, hash_bytes};
 use capsule_core::crypto::keys::HybridVerifyingKey;
 use capsule_core::crypto::provenance::DerivativeRole;
-use capsule_core::import::UploadTier;
-use capsule_core::library::{
+use capsule_library::import::UploadTier;
+use capsule_library::library::{
     BlobRole as CoreBlobRole, CustodyReceipt, ReceiptExpectations, ReceiptRejection, verify_receipt,
 };
-use capsule_core::lifecycle::{OriginalCiphertext, UploadBundle};
+use capsule_library::lifecycle::{OriginalCiphertext, UploadBundle};
 use serde::Serialize;
 use tracing::instrument;
 
@@ -688,7 +688,7 @@ pub struct VerifiedCustody {
     pub checked_at: String,
     /// One verified receipt per blob the asset relies on, in ladder order — the evidence the
     /// caller persists beside the provenance chain
-    /// ([`append_receipt`](capsule_core::library::append_receipt)).
+    /// ([`append_receipt`](capsule_library::library::append_receipt)).
     pub receipts: Vec<CustodyReceipt>,
 }
 
@@ -757,7 +757,7 @@ fn check_receipt(
 /// 1. **Durability.** `POST /storage/verify` over exactly `report.custody_hashes`. The verdict's
 ///    aggregate is not trusted on its own: every declared hash must appear in the per-blob
 ///    detail as stored ∧ indexed ∧ retrievable, the re-check
-///    [`release_is_safe`](capsule_core::library::release_is_safe) makes before a release.
+///    [`release_is_safe`](capsule_library::library::release_is_safe) makes before a release.
 /// 2. **Accountability.** The asset's receipt log (`GET /assets/{id}/receipts`), and for every
 ///    declared blob a receipt that verifies under one of `attestation_keys` (the pinned
 ///    history, not a fetch the caller has not checked against its pin) and names the

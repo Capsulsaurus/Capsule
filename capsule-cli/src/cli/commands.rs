@@ -16,7 +16,7 @@ pub(crate) enum CullFlagArg {
 }
 
 /// The exporting service an import reads (`--provider takeout`). Only the providers with a
-/// committed source adapter are spellable: `capsule_core::import::ImportProvider` also names
+/// committed source adapter are spellable: `capsule_library::import::ImportProvider` also names
 /// iCloud, Immich, and tethered-camera imports, but their adapters are post-v1 and offering the
 /// flag before the adapter exists would be a promise the CLI cannot keep.
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]

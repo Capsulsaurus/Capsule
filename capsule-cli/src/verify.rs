@@ -5,7 +5,7 @@
 //! The network legs are the SDK's: [`crate::remote::verify_storage`] builds a `VerdictSource`
 //! over `capsule_sdk::verify`, which sends `POST /v1/storage/verify` and, for a signed request,
 //! verifies the attestation under the server's attestation-key history before handing it back.
-//! Persistence is the library's: `capsule_core::library::append_attestation` appends the verified
+//! Persistence is the library's: `capsule_library::library::append_attestation` appends the verified
 //! bytes to each asset's `{uuid}.attestations.cbor` log beside its custody receipts. What this
 //! module owns is the orchestration between them:
 //!
@@ -25,8 +25,8 @@ use std::collections::HashMap;
 use std::future::Future;
 
 use capsule_core::crypto::hash::Hash32;
-use capsule_core::library::{BlobRole, StorageVerdict, release_is_safe};
-use capsule_core::lifecycle::Workspace;
+use capsule_library::library::{BlobRole, StorageVerdict, release_is_safe};
+use capsule_library::lifecycle::Workspace;
 use capsule_sdk::verify::{AssetQuery, VerifiedAttestation, VerifyError};
 use serde::Serialize;
 use tracing::instrument;
@@ -421,7 +421,7 @@ fn keep_attestation(
     cbor: &[u8],
 ) -> Result<bool, AssetVerifyFailure> {
     let capture_utc = workspace.asset(&asset_id).map(|asset| asset.capture_utc);
-    capsule_core::library::append_attestation(workspace.root(), &asset_id, capture_utc, cbor)
+    capsule_library::library::append_attestation(workspace.root(), &asset_id, capture_utc, cbor)
         .map_err(|error| {
             tracing::warn!(%asset_id, %error, "verify: the attestation could not be kept");
             AssetVerifyFailure::new(

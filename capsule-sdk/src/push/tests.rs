@@ -13,9 +13,9 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use capsule_core::crypto::keys::HybridSigningKey;
 use capsule_core::crypto::primitives::Argon2Params;
-use capsule_core::library::CustodyReceiptCore;
-use capsule_core::lifecycle::{UploadBundle, Workspace};
 use capsule_i18n::error_codes;
+use capsule_library::library::CustodyReceiptCore;
+use capsule_library::lifecycle::{UploadBundle, Workspace};
 
 use super::*;
 use crate::net::ConnectionClass;
@@ -112,7 +112,7 @@ fn manifest_envelope_mirrors_the_signed_manifest() {
 fn only_a_derivative_declares_its_role_and_format() {
     use capsule_core::crypto::hash::Hash32;
     use capsule_core::crypto::provenance::DerivativeRole;
-    use capsule_core::lifecycle::DerivativeBlob;
+    use capsule_library::lifecycle::DerivativeBlob;
 
     let (_dir, mut bundle) = real_bundle();
     bundle.derivatives.push(DerivativeBlob {
@@ -159,7 +159,7 @@ fn only_a_derivative_declares_its_role_and_format() {
 fn derivative_manifests_ship_in_the_preview_tier_ahead_of_their_derivatives() {
     use capsule_core::crypto::hash::Hash32;
     use capsule_core::crypto::provenance::DerivativeRole;
-    use capsule_core::lifecycle::DerivativeBlob;
+    use capsule_library::lifecycle::DerivativeBlob;
 
     let (_dir, mut bundle) = real_bundle();
     bundle.derivatives.push(DerivativeBlob {
@@ -345,7 +345,7 @@ async fn duplicate_blob_resolves_as_merge_not_error() {
 
     let client = server.client(&bundle.protocol_version);
     let scheduler = StagedScheduler::new(
-        capsule_core::import::UploadPolicy::Full,
+        capsule_library::import::UploadPolicy::Full,
         ConnectionClass::Unmetered,
     );
     let report = push_bundle(&client, &scheduler, &bundle, &HashSet::new(), false)
@@ -391,7 +391,7 @@ async fn a_fully_held_bundle_pushes_nothing() {
         .collect();
     let client = server.client(&bundle.protocol_version);
     let scheduler = StagedScheduler::new(
-        capsule_core::import::UploadPolicy::Full,
+        capsule_library::import::UploadPolicy::Full,
         ConnectionClass::Unmetered,
     );
 
@@ -415,7 +415,7 @@ fn a_staged_policy_defers_the_original_on_a_metered_link() {
     let (_dir, bundle) = real_bundle();
     let asset = staged_asset(&bundle);
     let metered = StagedScheduler::new(
-        capsule_core::import::UploadPolicy::Staged,
+        capsule_library::import::UploadPolicy::Staged,
         ConnectionClass::Metered,
     );
     assert_eq!(
@@ -430,7 +430,7 @@ fn a_staged_policy_defers_the_original_on_a_metered_link() {
     );
 
     let unmetered = StagedScheduler::new(
-        capsule_core::import::UploadPolicy::Staged,
+        capsule_library::import::UploadPolicy::Staged,
         ConnectionClass::Unmetered,
     );
     assert_eq!(
@@ -674,7 +674,7 @@ async fn custody_run(faults: Faults) -> (tempfile::TempDir, UploadBundle, Custod
         VerifyToken("test-token".into()),
     ));
     let scheduler = StagedScheduler::new(
-        capsule_core::import::UploadPolicy::Full,
+        capsule_library::import::UploadPolicy::Full,
         ConnectionClass::Unmetered,
     );
     let pushed = push_bundle(&uploads, &scheduler, &bundle, &HashSet::new(), false).await;
@@ -972,7 +972,7 @@ async fn a_receipt_for_a_different_size_fails_custody() {
 fn custody_excludes_the_tiers_a_staged_policy_deferred() {
     let (_dir, bundle) = real_bundle();
     let metered = StagedScheduler::new(
-        capsule_core::import::UploadPolicy::Staged,
+        capsule_library::import::UploadPolicy::Staged,
         ConnectionClass::Metered,
     );
     let planned = plan(&metered, &bundle, &HashSet::<String>::new(), false);
@@ -1084,7 +1084,7 @@ async fn push_refusing(
     })
     .await;
     let scheduler = StagedScheduler::new(
-        capsule_core::import::UploadPolicy::Full,
+        capsule_library::import::UploadPolicy::Full,
         ConnectionClass::Unmetered,
     );
     push_bundle(

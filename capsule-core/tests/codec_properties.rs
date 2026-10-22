@@ -29,7 +29,7 @@ use capsule_core::crypto::primitives::CRYPTO_SUITE_ID;
 use capsule_core::crypto::provenance::ProvenanceRecord;
 use capsule_core::crypto::receipts::CustodyReceipt;
 use capsule_core::crypto::storage_attestation::StorageAttestation;
-use capsule_core::lifecycle::EnrollmentPayload;
+use capsule_core::enrollment::EnrollmentPayload;
 use capsule_core::lqip::Lqip;
 use capsule_core::media::{Decoder, RawshiftDecoder, StillFormat};
 use capsule_core::metadata::crdt::{AddId, Lww, OrSet};

@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 
 use capsule_core::crypto::hash::Hash32;
 use capsule_core::crypto::keys::{HybridSigningKey, HybridVerifyingKey};
-use capsule_core::library::{
+use capsule_library::library::{
     BlobRole, CustodyReceipt, CustodyReceiptCore, ReceiptExpectations, ReleaseDecision,
     RetainReason,
 };
@@ -480,7 +480,7 @@ async fn verify_response_maps_into_core_verdict() {
     assert_eq!(v.blobs.len(), 1);
     assert_eq!(v.blobs[0].hash, ct_hash());
     assert_eq!(v.blobs[0].role, BlobRole::Original);
-    assert!(capsule_core::library::release_is_safe(v, true));
+    assert!(capsule_library::library::release_is_safe(v, true));
 }
 
 /// `fetch_receipt` decodes the raw `application/cbor` body: the receipt it returns re-encodes to
@@ -1005,7 +1005,7 @@ fn coordinator(server: &MockServer, key: HybridVerifyingKey) -> ReleaseCoordinat
 
 /// The gate decision the resolved verifier yields for the fixture asset's declared blobs.
 fn gate(verifier: &CustodyVerifier) -> ReleaseDecision {
-    capsule_core::library::ReleaseGate::new(verifier).may_release(asset_id(), &[ct_hash()], true)
+    capsule_library::library::ReleaseGate::new(verifier).may_release(asset_id(), &[ct_hash()], true)
 }
 
 /// A durable verdict and a verifying receipt in the asset log release.
@@ -1117,7 +1117,7 @@ async fn resolved_custody_answers_only_what_it_resolved() {
         .resolve_custody(&[held_release()])
         .await;
 
-    let gate = capsule_core::library::ReleaseGate::new(&verifier);
+    let gate = capsule_library::library::ReleaseGate::new(&verifier);
     assert_eq!(
         gate.may_release(Uuid::now_v7(), &[ct_hash()], true),
         ReleaseDecision::Retain(RetainReason::VerifyUnavailable)
@@ -1164,7 +1164,7 @@ fn receipt_for(key: &HybridSigningKey, asset: Uuid, expected: &ReceiptExpectatio
 #[tokio::test]
 async fn a_real_move_import_releases_its_source_through_the_resolved_verifier() {
     use capsule_core::crypto::primitives::Argon2Params;
-    use capsule_core::lifecycle::{SignedImportOptions, Workspace};
+    use capsule_library::lifecycle::{SignedImportOptions, Workspace};
 
     let dir = tempfile::TempDir::new().unwrap();
     let lib = dir.path().join("library");

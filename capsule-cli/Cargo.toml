@@ -29,6 +29,10 @@ capsule-cli-migration = { path = "./migration" }
 # only for desktop hosts, so it takes the native-code encoders the mobile FFI deliberately does
 # not. Building it needs cmake, a C++17 compiler, libclang and — on x86_64 — nasm.
 capsule-core = { path = "../capsule-core", features = ["media-linked-codecs"] }
+# The local library: the SQLite index, the on-disk library, the `Workspace` and import execution
+# (Module Map — Stateless Core). The codec features above reach it through the shared
+# `capsule-core`.
+capsule-library = { path = "../capsule-library" }
 # The CLI is a client: every network flow (auth login/refresh/logout, the sync
 # feed) rides `capsule-sdk`, the sanctioned network path — the CLI never
 # hand-rolls a request (S-D5). The CLI is English-only; `capsule-i18n` only renders

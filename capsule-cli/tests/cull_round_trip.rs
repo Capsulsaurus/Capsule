@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use capsule_core::crypto::primitives::Argon2Params;
-use capsule_core::lifecycle::Workspace;
+use capsule_library::lifecycle::Workspace;
 use uuid::Uuid;
 
 const PASSPHRASE: &str = "cull-round-trip-passphrase";

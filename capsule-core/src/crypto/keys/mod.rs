@@ -8,13 +8,12 @@
 //! [Cryptography — Keys]: https://docs/design/cryptography/keys/
 
 pub(crate) mod album;
-// The sealed, durable album-key store (slice `S-A10`) is filesystem-backed — it writes through
-// `utils::paths::tmp_path` for atomic replace — so it is gated with the rest of the native
-// surface. Leaving it ungated broke the `wasm32-unknown-unknown` sealing build (`S-A6`), which
-// no gate builds: `check-rust` compiles the host triple only.
+// The sealed album-key store (slice `S-A10`): its format, sealing and escrow. Persisting it to
+// `{root}/.library/albums.cbor` is `capsule-library`'s. Gated with the rest of the native surface,
+// which no browser sealing path needs.
 #[cfg(feature = "native")]
-pub(crate) mod albumstore;
-pub(crate) mod directory;
+pub mod albumstore;
+pub mod directory;
 pub(crate) mod hardware;
 pub(crate) mod hybrid_sig;
 pub(crate) mod kem;
@@ -25,28 +24,30 @@ pub(crate) mod p256;
 pub(crate) mod safety_code;
 pub(crate) mod signer;
 pub(crate) mod software;
-// The Windows TPM 2.0 `HardwareSigner` over TBS (slice `S-F4`). The pure wire codec compiles on
-// any host under `cfg(test)` (host-runnable mock tests); the TBS transport + signer are Windows
-// only. Unlike `tpm` (the tss-esapi Linux reference), TBS needs no external crate — it links
-// `tbs.dll` via `windows-sys`.
-pub(crate) mod tbs;
-#[cfg(feature = "tpm")]
-pub(crate) mod tpm;
 
 pub use album::{Amk, AmkVersion};
 #[cfg(feature = "native")]
 pub use albumstore::{
-    AlbumStore, AlbumStoreError, AmkRow, EscrowCoverage, PersistedAlbum, PersistedAuthority,
+    ALBUM_STORE_FILE, AlbumStore, AlbumStoreError, AmkRow, EscrowCoverage, PersistedAlbum,
+    PersistedAuthority,
 };
 pub use directory::{DekPublic, DeviceDirectory, DeviceEntry, DirectoryCore, DirectoryError};
+// The in-memory secure-element doubles, for `capsule-library`'s and the FFI's tests. Never in a
+// shipping build: `test-support` rides dev-dependencies only.
+#[cfg(any(test, feature = "test-support"))]
+pub use hardware::MockHardwareSigner;
 pub use hardware::{
     HardwareBackedSigner, HardwareKeyAgreement, HardwareSigner, HardwareSignerError,
 };
 pub use hybrid_sig::{ClassicalAlgorithm, HybridSignature, HybridSigningKey, HybridVerifyingKey};
+// Derandomized encapsulation: crate-internal, for the deterministic drop-seal known-answer path
+// (`drop::seal_drop_derand`). Never on the public API. Its eseed length is public, because
+// `seal_drop_derand` (already public, for the KAT generator) takes a seed of that length.
+pub use kem::ESEED_LEN;
+pub(crate) use kem::encapsulate_to_public_derand;
 pub use kem::{DEK_CIPHERTEXT_LEN, DEK_PUBLIC_LEN, DekKeypair, encapsulate_to_public};
-// Derandomized encapsulation + its eseed length: crate-internal, for the deterministic
-// drop-seal known-answer path (`drop::seal_drop_derand`). Never on the public API.
-pub(crate) use kem::{ESEED_LEN, encapsulate_to_public_derand};
+#[cfg(any(test, feature = "test-support"))]
+pub use kem_p256::MockP256KeyAgreement;
 pub use kem_p256::{
     DEK_P256_CIPHERTEXT_LEN, DEK_P256_PUBLIC_LEN, P256HybridDek, encapsulate_to_p256_public,
 };
@@ -59,7 +60,3 @@ pub use safety_code::{
 };
 pub use signer::Signer;
 pub use software::SoftwareSigner;
-#[cfg(windows)]
-pub use tbs::TbsTpmSigner;
-#[cfg(feature = "tpm")]
-pub use tpm::TpmSigner;

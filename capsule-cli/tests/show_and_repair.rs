@@ -43,7 +43,7 @@ use std::process::{Command, Output, Stdio};
 
 use capsule_core::crypto::hash;
 use capsule_core::crypto::primitives::Argon2Params;
-use capsule_core::lifecycle::Workspace;
+use capsule_library::lifecycle::Workspace;
 use uuid::Uuid;
 
 const PASSPHRASE: &str = "show-and-repair-passphrase";
@@ -518,7 +518,7 @@ fn repair_reports_by_default_and_corrects_under_apply() {
     let rebuilt = capsule(&fx.home, &["library", "rebuild", path(&fx.library)], false);
     assert!(rebuilt.contains("Index rebuilt successfully."), "{rebuilt}");
     {
-        let library = capsule_core::library::open_library(&fx.library).expect("open");
+        let library = capsule_library::library::open_library(&fx.library).expect("open");
         let row = library
             .db
             .find_by_uuid(&broken.to_string())

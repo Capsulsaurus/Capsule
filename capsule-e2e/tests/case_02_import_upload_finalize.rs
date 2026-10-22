@@ -17,10 +17,10 @@
 //! session (#801, #794).
 
 use capsule_core::crypto::hash::{Hash32, hash_bytes};
-use capsule_core::import::UploadTier;
 use capsule_e2e::fixtures::large_synthetic_jpeg;
 use capsule_e2e::push::push_asset;
 use capsule_e2e::{Device, Server, entry_for};
+use capsule_library::import::UploadTier;
 use capsule_sdk::verify::{AssetQuery, StorageVerifyClient, VerifyTransport};
 
 #[tokio::test]

@@ -7,7 +7,7 @@ use capsule_core::crypto::storage_attestation::{
     ATTESTATION_NONCE_LEN, AttestedAsset, AttestedBlob, DeclaredAsset, STORAGE_ATTESTATION_VERSION,
     StorageAttestation, StorageAttestationCore, verify_storage_attestation,
 };
-use capsule_core::library::{BlobVerdict, attestations_path, load_attestation_log};
+use capsule_library::library::{BlobVerdict, attestations_path, load_attestation_log};
 
 use super::*;
 

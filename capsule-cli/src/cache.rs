@@ -18,8 +18,8 @@
 
 use std::path::{Path, PathBuf};
 
-use capsule_core::import::UploadPolicy;
-use capsule_core::library::EvictionReport;
+use capsule_library::import::UploadPolicy;
+use capsule_library::library::EvictionReport;
 use capsule_sdk::cache_budget::{
     CacheBudget, CachePlan, ConnectionClassSource, DEFAULT_BASE_CACHE_BUDGET, plan_for,
 };
@@ -266,7 +266,7 @@ pub fn current_plan<S: ConnectionClassSource>(source: S, base: BaseBudget) -> Pl
 
 /// Run one eviction sweep under the budget `source`'s class allows from `base`.
 /// `run_sweep` is the sweep itself, normally
-/// `|budget| capsule_core::library::cache_sweep(&library.db, budget)`.
+/// `|budget| capsule_library::library::cache_sweep(&library.db, budget)`.
 ///
 /// # Errors
 ///

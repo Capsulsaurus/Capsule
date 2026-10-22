@@ -49,8 +49,8 @@ use std::process::{Command, Output, Stdio};
 
 use capsule_core::crypto::primitives::Argon2Params;
 use capsule_core::crypto::verify_asset::VerifyOutcome;
-use capsule_core::lifecycle::Workspace;
 use capsule_core::sidecar::GpsSource;
+use capsule_library::lifecycle::Workspace;
 use jiff::Timestamp;
 use uuid::Uuid;
 

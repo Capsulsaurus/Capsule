@@ -21,11 +21,11 @@ use capsule_cli::restore::{
     AssetRestoreStatus, RESTORE_RANGE_WINDOW, RestoreOptions, RestoreScope,
 };
 use capsule_cli::session::SessionStore;
-use capsule_core::import::{
+use capsule_e2e::{Device, PROTOCOL_VERSION, Server};
+use capsule_library::import::{
     CancellationToken, ImportConfig, ImportOutcome, execute, plan, scan_paths,
 };
-use capsule_core::lifecycle::DerivativeStatus;
-use capsule_e2e::{Device, PROTOCOL_VERSION, Server};
+use capsule_library::lifecycle::DerivativeStatus;
 use capsule_sdk::net::ConnectionClass;
 
 /// Bytes that start with `head` and continue with `len` bytes of a pattern seeded by `seed`, so
@@ -232,7 +232,7 @@ async fn e2e_case_17_every_original_round_trips_whatever_the_codecs_support() {
 /// enum, or an original the client thinks is declarable would be refused at upload.
 #[test]
 fn e2e_case_17_every_declared_original_type_is_in_the_servers_enum() {
-    use capsule_core::lifecycle::{OPAQUE_CONTENT_TYPE, WIRE_ORIGINAL_CONTENT_TYPES};
+    use capsule_library::lifecycle::{OPAQUE_CONTENT_TYPE, WIRE_ORIGINAL_CONTENT_TYPES};
     use capsule_server::upload::policy::DEFAULT_CONTENT_TYPES;
 
     for kind in WIRE_ORIGINAL_CONTENT_TYPES

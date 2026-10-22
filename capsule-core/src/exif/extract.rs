@@ -1,6 +1,4 @@
-use std::fs::File;
-use std::io::BufReader;
-use std::path::Path;
+use std::io::Cursor;
 
 use exif::{DateTime as ExifDateTime, In, Reader, Tag, Value};
 use jiff::civil;
@@ -19,13 +17,17 @@ pub struct ExifExtract {
     pub content_identifier: Option<String>, // Apple Live Photo UUID
 }
 
-pub fn extract_exif(path: &Path) -> Result<ExifExtract, Box<dyn std::error::Error + Send + Sync>> {
-    let file = File::open(path)?;
-    let mut reader = BufReader::new(file);
+/// Extract the EXIF fields Capsule indexes from a file's bytes.
+///
+/// Pure over the bytes: reading them is the caller's business (`capsule-library` reads a file
+/// path once and hands the buffer here). Bytes that are not an EXIF container yield an all-`None`
+/// extract rather than an error — a file without EXIF is ordinary, not a failure.
+pub fn extract_exif_from_bytes(bytes: &[u8]) -> ExifExtract {
+    let mut reader = Cursor::new(bytes);
 
     let Ok(exif) = Reader::new().read_from_container(&mut reader) else {
         // Not a valid EXIF container — return all-None result
-        return Ok(ExifExtract {
+        return ExifExtract {
             date_time_original: None,
             offset_time_original: None,
             gps_lat: None,
@@ -36,7 +38,7 @@ pub fn extract_exif(path: &Path) -> Result<ExifExtract, Box<dyn std::error::Erro
             height: None,
             duration_ms: None,
             content_identifier: None,
-        });
+        };
     };
 
     // DateTimeOriginal.
@@ -176,9 +178,9 @@ pub fn extract_exif(path: &Path) -> Result<ExifExtract, Box<dyn std::error::Erro
         });
 
     // content_identifier — Apple Live Photo UUID (byte search)
-    let content_identifier = extract_content_identifier(path);
+    let content_identifier = extract_content_identifier(bytes);
 
-    Ok(ExifExtract {
+    ExifExtract {
         date_time_original,
         offset_time_original,
         gps_lat,
@@ -189,7 +191,7 @@ pub fn extract_exif(path: &Path) -> Result<ExifExtract, Box<dyn std::error::Erro
         height,
         duration_ms: None,
         content_identifier,
-    })
+    }
 }
 
 fn strip_quotes(s: &str) -> String {
@@ -201,8 +203,7 @@ fn strip_quotes(s: &str) -> String {
     }
 }
 
-fn extract_content_identifier(path: &Path) -> Option<String> {
-    let bytes = std::fs::read(path).ok()?;
+fn extract_content_identifier(bytes: &[u8]) -> Option<String> {
     let marker = b"com.apple.quicktime.content.identifier";
     let pos = bytes.windows(marker.len()).position(|w| w == marker)?;
     // After the marker, find a UUID-like string (36 chars: 8-4-4-4-12 hex with hyphens)
@@ -282,7 +283,7 @@ mod tests {
     /// A JPEG carrying nothing but a valid EXIF APP1 segment with `DateTimeOriginal`.
     ///
     /// Hand-built rather than committed, and deliberately routed through the real
-    /// [`extract_exif`] rather than constructing an [`ExifExtract`] by hand. That distinction is
+    /// [`extract_exif_from_bytes`] rather than constructing an [`ExifExtract`] by hand. That distinction is
     /// the whole point of this test: the parsing bug it guards survived because
     /// `extract.rs`'s tests never fed real EXIF through the extractor, and `timezone.rs`'s tests
     /// built `ExifExtract` values directly using the same wire format the extractor expected —
@@ -343,15 +344,8 @@ mod tests {
     /// was taken.
     #[test]
     fn date_time_original_is_parsed_from_a_real_exif_segment() {
-        let dir = tempfile::TempDir::new().expect("temp dir");
-        let path = dir.path().join("fixture.jpg");
-        std::fs::write(
-            &path,
-            jpeg_with_date_time_original(b"2019:03:04 05:06:07\0"),
-        )
-        .expect("write fixture");
-
-        let extracted = extract_exif(&path).expect("the fixture is a readable EXIF container");
+        let extracted =
+            extract_exif_from_bytes(&jpeg_with_date_time_original(b"2019:03:04 05:06:07\0"));
 
         assert_eq!(
             extracted.date_time_original,
@@ -366,21 +360,16 @@ mod tests {
     /// `strptime` over the raw bytes would not.
     #[test]
     fn a_blank_date_time_original_is_absent_not_a_bogus_date() {
-        let dir = tempfile::TempDir::new().expect("temp dir");
-        let path = dir.path().join("blank.jpg");
-        std::fs::write(
-            &path,
-            jpeg_with_date_time_original(b"    :  :     :  :  \0"),
-        )
-        .expect("write fixture");
-
-        let extracted = extract_exif(&path).expect("the fixture is a readable EXIF container");
+        let extracted =
+            extract_exif_from_bytes(&jpeg_with_date_time_original(b"    :  :     :  :  \0"));
         assert_eq!(extracted.date_time_original, None);
     }
 
     #[test]
-    fn test_extract_exif_nonexistent_file_returns_io_error() {
-        let result = extract_exif(Path::new("/nonexistent/path/to/file.jpg"));
-        assert!(result.is_err());
+    fn bytes_that_are_not_an_exif_container_extract_to_nothing() {
+        assert_eq!(
+            extract_exif_from_bytes(b"not an image"),
+            ExifExtract::default()
+        );
     }
 }

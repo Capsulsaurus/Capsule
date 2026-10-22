@@ -34,8 +34,8 @@
 use std::fmt::Write as _;
 
 use capsule_core::domain::GpsDatum;
-use capsule_core::lifecycle::{AssetState, Workspace};
 use capsule_core::sidecar::{CullFlag, Gps, GpsSource, StackRole};
+use capsule_library::lifecycle::{AssetState, Workspace};
 use colored::Colorize as _;
 use thiserror::Error;
 use uuid::Uuid;
