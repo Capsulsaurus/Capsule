@@ -2017,6 +2017,7 @@ pub(crate) struct SwitchableUploads {
     inner: InMemoryUploadSessions,
     unavailable: AtomicBool,
     claim_after_progress: AtomicBool,
+    status_writes_refused: AtomicBool,
 }
 
 impl SwitchableUploads {
@@ -2026,7 +2027,17 @@ impl SwitchableUploads {
             inner: InMemoryUploadSessions::with_default_ttl(clock),
             unavailable: AtomicBool::new(false),
             claim_after_progress: AtomicBool::new(false),
+            status_writes_refused: AtomicBool::new(false),
         }
+    }
+
+    /// Refuse every subsequent [`UploadSessionStore::set_status`], or stop.
+    ///
+    /// Only the status write: a finalizer that loses it after its claim can neither complete nor
+    /// fail its session, which is the session a process that died mid-finalize leaves behind —
+    /// claimed, with every step before the terminal write done.
+    pub(crate) fn refuse_status_writes(&self, refused: bool) {
+        self.status_writes_refused.store(refused, Ordering::SeqCst);
     }
 
     /// Make every subsequent operation fail, or stop.
@@ -2187,7 +2198,7 @@ impl UploadSessionStore for SwitchableUploads {
         upload: &'a UploadId,
         status: UploadSessionStatus,
     ) -> StoreFuture<'a, Option<UploadSessionRecord>> {
-        if self.is_down() {
+        if self.is_down() || self.status_writes_refused.load(Ordering::SeqCst) {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.set_status(upload, status)

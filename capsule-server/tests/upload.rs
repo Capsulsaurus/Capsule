@@ -2398,6 +2398,174 @@ async fn a_recovered_claim_with_neither_stage_nor_blob_fails_rather_than_complet
     assert_eq!(terminal_status(&fixture, &id).await, "failed_processing");
 }
 
+/// Where in finalization the process dies, for the cases past the commit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiedAfter {
+    /// Step 5: custody ledgered, the index write never committed.
+    Custody,
+    /// Step 6: the index rows and the receipt committed, and the answer was lost — so no
+    /// `indexed` entry follows the custody entry.
+    IndexWrite,
+}
+
+/// Finalize `whole` through the route and kill the process at `died`, leaving the claim.
+///
+/// The index fault loses one finalization write at the chosen point; the refused status write is
+/// the process being gone, so neither `Completed` nor the `FailedProcessing` the finalizer falls
+/// back to ever lands. What is left is the session a dead finalizer leaves: claimed, its blob
+/// committed, its custody ledgered — and, at [`DiedAfter::IndexWrite`], its row written.
+async fn die_mid_finalize(fixture: &Fixture, bearer: &str, died: DiedAfter) -> (String, Vec<u8>) {
+    let (first, second, whole) = blob();
+    let id = fixture.open_session(&whole, "original", bearer).await;
+    fixture
+        .chunk(&id, 0, &first, bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    match died {
+        DiedAfter::Custody => fixture.index_fault.arm(),
+        DiedAfter::IndexWrite => fixture.index_fault.arm_after_commit(),
+    }
+    fixture.uploads.refuse_status_writes(true);
+    fixture
+        .chunk(&id, 4096, &second, bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    fixture.uploads.refuse_status_writes(false);
+    assert_eq!(
+        fixture.index_fault.fired(),
+        1,
+        "the fault never fired, so the case would describe an ordinary upload"
+    );
+    assert_eq!(
+        fixture
+            .uploads
+            .read_for_test(&id)
+            .await
+            .expect("the session is live")
+            .status
+            .as_str(),
+        "waiting_for_processing",
+        "the claim outlived its finalizer"
+    );
+    (id, whole)
+}
+
+/// The custody entries `id` produced, as a rebuild pairs them.
+async fn custody_of(fixture: &Fixture, id: &str) -> Vec<capsule_server::ledger::replay::Custody> {
+    capsule_server::ledger::replay::custody(&verified_ledger(fixture).await)
+        .into_iter()
+        .filter(|custody| custody.upload_id == id)
+        .collect()
+}
+
+/// Recover a claim whose finalizer died at `died`, and assert it converges on success.
+async fn recover_past_the_commit(died: DiedAfter) {
+    use capsule_server::blob::ContentAddress;
+    use capsule_server::index::AssetIndex as _;
+    use capsule_server::ledger::replay::Resolution;
+    use capsule_server::store::AssetId;
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (id, whole) = die_mid_finalize(&fixture, &bearer, died).await;
+    let address = ContentAddress::parse(&checksum(&whole)).expect("the digest is an address");
+    let asset = AssetId::new(DEFAULT_ASSET);
+
+    let before = custody_of(&fixture, &id).await;
+    assert_eq!(
+        before.len(),
+        1,
+        "one custody entry, ledgered before the index"
+    );
+    assert_eq!(
+        before[0].resolution,
+        Resolution::Unresolved,
+        "and nothing resolved it before the process died"
+    );
+    let row_before = fixture
+        .index
+        .read(&asset)
+        .await
+        .expect("the index answers")
+        .expect("the session reserved a row");
+    assert_eq!(
+        row_before
+            .address_for(capsule_server::store::BlobRole::Original)
+            .is_some(),
+        died == DiedAfter::IndexWrite,
+        "the row holds the blob exactly when the index write committed"
+    );
+
+    let recovery = recover_at_boot(&fixture).await;
+    assert_eq!(
+        recovery
+            .completed
+            .iter()
+            .map(capsule_server::store::UploadId::as_str)
+            .collect::<Vec<_>>(),
+        vec![id.as_str()],
+        "the claim completes rather than failing: {recovery:?}"
+    );
+    assert!(recovery.failed.is_empty(), "{recovery:?}");
+    assert_eq!(terminal_status(&fixture, &id).await, "completed");
+    assert_indexed_and_durable(&fixture, &bearer, &whole).await;
+
+    // The index wrote the blob once. Where the dead finalizer's write had committed, the retry
+    // was answered as already held — the position it minted is the one the asset keeps.
+    assert_eq!(
+        fixture
+            .index
+            .reference_count(&address)
+            .await
+            .expect("the index answers"),
+        1,
+        "one reference, however many times the write was attempted"
+    );
+    let row_after = fixture
+        .index
+        .read(&asset)
+        .await
+        .expect("the index answers")
+        .expect("the row is still there");
+    if died == DiedAfter::IndexWrite {
+        assert_eq!(
+            row_after.sync_seq, row_before.sync_seq,
+            "an already-held blob mints no second sequence number"
+        );
+    }
+
+    // The retry ledgered a second custody entry, and the index write that resolved it resolves
+    // the dead finalizer's entry too: a rebuild replays neither as an unproven write.
+    let after = custody_of(&fixture, &id).await;
+    assert_eq!(
+        after.len(),
+        2,
+        "the recovery's custody entry follows the first"
+    );
+    for custody in &after {
+        assert_eq!(
+            custody.resolution,
+            Resolution::Indexed {
+                sync_seq: row_after.sync_seq
+            },
+            "every custody entry for the upload pairs with the index write: {after:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_claim_whose_process_died_after_ledgering_custody_completes_at_boot() {
+    recover_past_the_commit(DiedAfter::Custody).await;
+}
+
+#[tokio::test]
+async fn a_claim_whose_process_died_after_its_index_write_completes_at_boot() {
+    recover_past_the_commit(DiedAfter::IndexWrite).await;
+}
+
 // ===========================================================================================
 // Member writes (`S-C51`)
 // ===========================================================================================
