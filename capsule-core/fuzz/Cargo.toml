@@ -47,6 +47,20 @@ doc = false
 bench = false
 
 [[bin]]
+name = "storage_attestation"
+path = "fuzz_targets/storage_attestation.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "provenance_record"
+path = "fuzz_targets/provenance_record.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "lqip"
 path = "fuzz_targets/lqip.rs"
 test = false
