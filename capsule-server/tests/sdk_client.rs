@@ -778,13 +778,10 @@ async fn an_escrow_write_outside_the_servers_window_is_a_426_the_sdk_reports_wit
         .store_escrow(&blob)
         .await
         .expect_err("a write from outside the window is refused");
-    match &refused {
-        RecoveryError::Unexpected { status, code } => {
-            assert_eq!(*status, 426);
-            assert_eq!(code.as_deref(), Some(VERSION_UNSUPPORTED));
-        }
-        other => panic!("expected the gate's 426, got {other:?}"),
-    }
+    assert!(
+        matches!(refused, RecoveryError::UpgradeRequired(_)),
+        "expected the gate's 426 as the typed upgrade refusal, got {refused:?}"
+    );
     assert_eq!(
         refused.error_code(),
         Some(VERSION_UNSUPPORTED),
