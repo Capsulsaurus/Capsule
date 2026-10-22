@@ -26,6 +26,7 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, PoisonError};
 
+use capsule_core::crypto::hash::Hash32;
 use jiff::Timestamp;
 
 use super::{
@@ -149,6 +150,24 @@ impl OwnerLedger for AnchoredLedger {
 
     fn owners(&self) -> LedgerFuture<'_, Vec<OwnerId>> {
         self.inner.owners()
+    }
+
+    /// Attach through the wrapped ledger. No head moves: an attachment is not an entry.
+    fn attach<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        key: Hash32,
+        bytes: Vec<u8>,
+    ) -> LedgerFuture<'a, ()> {
+        self.inner.attach(owner, key, bytes)
+    }
+
+    fn attachment<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        key: &'a Hash32,
+    ) -> LedgerFuture<'a, Option<Vec<u8>>> {
+        self.inner.attachment(owner, key)
     }
 }
 

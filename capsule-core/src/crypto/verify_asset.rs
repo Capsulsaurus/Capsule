@@ -129,8 +129,7 @@ pub fn verify_asset_hashed(
     local_chain_head: Option<Hash32>,
 ) -> VerifyOutcome {
     use RejectReason::{
-        BadDeviceSig, BadTimestamp, CiphertextHashMismatch, DeviceAddedAfter, Structural,
-        SuiteDowngrade, UnknownDevice, UntrustedAuthority, WrongAlbum,
+        CiphertextHashMismatch, Structural, SuiteDowngrade, UntrustedAuthority, WrongAlbum,
     };
     use VerifyOutcome::TerminalReject as Reject;
     let core = &manifest.core;
@@ -155,34 +154,12 @@ pub fn verify_asset_hashed(
     if *ciphertext_hash != core.ciphertext_hash {
         return Reject(CiphertextHashMismatch);
     }
-    // 6. The signing device must be in this user's published directory.
-    if directory.core.user_id != core.created_by_user {
-        return Reject(UnknownDevice);
+    // 6–8. The signing device is in this user's directory, was added before it signed, and its
+    //      key produced `device_sig`.
+    if let Err(reason) = verify_device_signature(manifest, directory) {
+        return Reject(reason);
     }
-    let Some(entry) = directory.device(&core.created_by_device) else {
-        return Reject(UnknownDevice);
-    };
-    // 7. The device cannot have been added after it claims to have signed.
-    match rfc3339_le(&entry.added_at, &core.timestamp) {
-        None => return Reject(BadTimestamp),
-        Some(false) => return Reject(DeviceAddedAfter),
-        Some(true) => {}
-    }
-    // 8. The device signature must verify under the entry's **declared classical algorithm**.
-    //    The directory entry's `dsk_public` is algorithm-tagged — Ed25519 (software) or
-    //    ECDSA-P256 (hardware secure elements) — so verification dispatches on that tag. A
-    //    signature whose classical half is a *different* algorithm than the entry declares is a
-    //    cross-algorithm forgery and is rejected before the (algorithm-specific) verify.
     let signing_bytes = manifest.signing_bytes();
-    if manifest.device_sig.classical_algorithm() != entry.dsk_public.classical_algorithm() {
-        return Reject(BadDeviceSig);
-    }
-    if !entry
-        .dsk_public
-        .verify(&signing_bytes, &manifest.device_sig)
-    {
-        return Reject(BadDeviceSig);
-    }
     // 9–11. Epoch ceiling, write-tier signature, chain placement.
     if let Some(reason) = authorize_and_place(manifest, &signing_bytes, authority, local_chain_head)
     {
@@ -194,6 +171,55 @@ pub fn verify_asset_hashed(
     } else {
         VerifyOutcome::Pending(PendingReason::AmkNotYetLocal)
     }
+}
+
+/// Steps 6–8 of [`verify_asset`]: the manifest's signer is a device of `directory`, added no
+/// later than the manifest's timestamp, and its signing key produced `device_sig`.
+///
+/// Public because the server's index rebuild checks exactly this against the directory version
+/// its owner ledger recorded, and a second implementation of the device check would be a second
+/// answer to a question the threat model allows one answer to. Revocation is not judged here: a
+/// device a later directory revoked still verifies the manifests it signed before, and whether a
+/// revoked entry may sign at all is the caller's rule.
+///
+/// # Errors
+///
+/// [`RejectReason::UnknownDevice`] when `directory` is another user's or does not list the
+/// device, [`RejectReason::BadTimestamp`] or [`RejectReason::DeviceAddedAfter`] for step 7, and
+/// [`RejectReason::BadDeviceSig`] when the signature does not verify under the entry's key.
+pub fn verify_device_signature(
+    manifest: &AssetManifest,
+    directory: &DeviceDirectory,
+) -> Result<(), RejectReason> {
+    let core = &manifest.core;
+    // 6. The signing device must be in this user's published directory.
+    if directory.core.user_id != core.created_by_user {
+        return Err(RejectReason::UnknownDevice);
+    }
+    let Some(entry) = directory.device(&core.created_by_device) else {
+        return Err(RejectReason::UnknownDevice);
+    };
+    // 7. The device cannot have been added after it claims to have signed.
+    match rfc3339_le(&entry.added_at, &core.timestamp) {
+        None => return Err(RejectReason::BadTimestamp),
+        Some(false) => return Err(RejectReason::DeviceAddedAfter),
+        Some(true) => {}
+    }
+    // 8. The device signature must verify under the entry's **declared classical algorithm**.
+    //    The directory entry's `dsk_public` is algorithm-tagged — Ed25519 (software) or
+    //    ECDSA-P256 (hardware secure elements) — so verification dispatches on that tag. A
+    //    signature whose classical half is a *different* algorithm than the entry declares is a
+    //    cross-algorithm forgery and is rejected before the (algorithm-specific) verify.
+    if manifest.device_sig.classical_algorithm() != entry.dsk_public.classical_algorithm() {
+        return Err(RejectReason::BadDeviceSig);
+    }
+    if !entry
+        .dsk_public
+        .verify(&manifest.signing_bytes(), &manifest.device_sig)
+    {
+        return Err(RejectReason::BadDeviceSig);
+    }
+    Ok(())
 }
 
 /// Steps 9–11 of [`verify_asset`]: epoch ceiling, write-tier signature, chain placement.

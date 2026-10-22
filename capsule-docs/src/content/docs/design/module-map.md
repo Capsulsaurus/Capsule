@@ -106,8 +106,8 @@ the case it covers (`rg "E2E case N"`).
     session `FailedProcessing`, the asset `Pending`, and **nothing referencing the blob**; an
     orphaned blob is permitted and collected. The process-restart variant `SIGKILL`s the CLI or
     the server at seeded points and reruns the phase until every asset is durable exactly once
-    and no index row lacks its blob, and the restore is byte-equal. It runs armed during import
-    and restore; its push leg is still owed.
+    and no index row lacks its blob, and the restore is byte-equal. It runs armed during import,
+    push and restore.
 12. **Cross-device enrollment.** A authorizes B over a verified channel, cross-signs it, B joins
     each album's MLS group and the libraries match; includes one MITM-on-relay abort.
 13. **Web drop → adopt.** A WASM client seals a drop; the owner's native client rewraps and adopts

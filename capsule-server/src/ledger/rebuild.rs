@@ -53,25 +53,30 @@
 //! # What a rebuild trusts
 //!
 //! The ledger's own signatures when the host holds the attestation key's public half, its links
-//! otherwise (the report says which). It does not re-verify a manifest's device signature
-//! against the directory version the ledger recorded (`LedgerEvent::Directory`): the server
-//! verified the write when it accepted it, the entry that says so is signed, and checking it
-//! again needs the published directory documents, which live in the database the rebuild may
-//! not have.
+//! otherwise (the report says which). Each replayed manifest's device signature is checked
+//! against the device-directory version in force at its position in the ledger
+//! ([`super::directory`]), read from the copies each publish attached beside the ledger, so the
+//! blob root alone suffices. A manifest that fails the check, or that falls under a version
+//! with no usable copy, is reported and its asset is not restored; when the index lacks that
+//! row, the owner moves to a new sync epoch, so the clients that hold the manifest re-announce
+//! it and the server verifies it against the live directory
+//! ([Server Filesystem § Sync Epoch and Client Re-Announce]).
 //!
 //! An op with no recorded position is re-checked against invariant 17 only (it must chain onto
 //! the head the replay has reached). Invariant 18 is album-wide and is not re-run.
 //!
 //! [Server Filesystem § Rebuild]: https://github.com/Capsulsaurus/Capsule/blob/master/capsule-docs/src/content/docs/design/filesystem/server.md#rebuild
+//! [Server Filesystem § Sync Epoch and Client Re-Announce]: https://github.com/Capsulsaurus/Capsule/blob/master/capsule-docs/src/content/docs/design/filesystem/server.md#sync-epoch-and-client-re-announce
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use capsule_core::crypto::hash::Hash32;
-use capsule_core::crypto::provenance::ManifestCore;
+use capsule_core::crypto::provenance::{AssetManifest, ManifestCore};
 use capsule_i18n::error_codes;
 use jiff::Timestamp;
 
+use super::directory::{DirectoryFault, DirectoryHistory, Position, Refusal};
 use super::manifest::{self, ManifestFault};
 use super::replay::{self, Custody, LedgerKeys, Resolution};
 use super::{ChainFault, LedgerError, OwnerLedger};
@@ -188,6 +193,12 @@ pub struct OwnerReport {
     pub unusable_manifests: Vec<(AssetId, ContentAddress, ManifestFault)>,
     /// Provenance blobs whose manifest names another asset than the entry does.
     pub foreign_manifests: Vec<(AssetId, ContentAddress)>,
+    /// Manifests whose device signature the directory in force at their position does not
+    /// vouch for, and why. Their assets are not restored.
+    pub unverified_manifests: Vec<(AssetId, ContentAddress, Refusal)>,
+    /// Device-directory versions in this owner's ledger with no usable copy, by ledger position.
+    /// A manifest under one is refused as [`Refusal::DirectoryUnavailable`].
+    pub unusable_directories: Vec<(u64, DirectoryFault)>,
     /// Whether the owner must move to a new sync epoch: the sequence is not provable.
     pub epoch_bump_needed: bool,
     /// The epoch the owner moved to, under `--apply`.
@@ -206,6 +217,8 @@ impl OwnerReport {
             || !self.dangling.is_empty()
             || !self.unusable_manifests.is_empty()
             || !self.foreign_manifests.is_empty()
+            || !self.unverified_manifests.is_empty()
+            || !self.unusable_directories.is_empty()
     }
 }
 
@@ -254,8 +267,9 @@ pub async fn rebuild(context: &RebuildContext, mode: Mode) -> Result<RebuildRepo
         context.ledger.owners().await?,
         context.index.anchored_owners().await?,
     );
+    let directories = directory_history(context, &owners).await?;
     for owner in owners {
-        let owner_report = rebuild_owner(context, mode, &owner, &mut named).await?;
+        let owner_report = rebuild_owner(context, mode, &owner, &directories, &mut named).await?;
         tracing::info!(
             %owner,
             verified = owner_report.verified,
@@ -265,6 +279,7 @@ pub async fn rebuild(context: &RebuildContext, mode: Mode) -> Result<RebuildRepo
             unprovable = owner_report.unprovable.len(),
             dangling = owner_report.dangling.len(),
             unusable_manifests = owner_report.unusable_manifests.len(),
+            unverified_manifests = owner_report.unverified_manifests.len(),
             epoch = ?owner_report.epoch,
             "rebuilt an owner's rows from its ledger"
         );
@@ -280,6 +295,32 @@ pub async fn rebuild(context: &RebuildContext, mode: Mode) -> Result<RebuildRepo
         "an index rebuild finished"
     );
     Ok(report)
+}
+
+/// Every account's accepted device-directory versions, from each owner's verified ledger prefix.
+///
+/// A pass of its own before any replay, because a manifest a shared album's member signed sits
+/// in the album owner's ledger and is verified against the member's. Each ledger is read and
+/// verified again by its replay: holding every ledger between the two would hold the whole set
+/// in memory, and a rebuild is rare enough to read twice.
+async fn directory_history(
+    context: &RebuildContext,
+    owners: &[OwnerId],
+) -> Result<DirectoryHistory, RebuildError> {
+    let mut history = DirectoryHistory::new();
+    for owner in owners {
+        let scan = context.ledger.scan(owner).await?;
+        let anchor = context.index.ledger_head(owner).await?;
+        let chain = context.keys.verify(owner, &scan, anchor);
+        history
+            .record(
+                context.ledger.as_ref(),
+                owner,
+                &scan.entries[..chain.verified],
+            )
+            .await?;
+    }
+    Ok(history)
 }
 
 /// One asset's facts, accumulated over its ledger entries in ledger order.
@@ -303,6 +344,8 @@ struct Accumulated {
     dangling: Vec<ContentAddress>,
     /// Whether a retention purge ended the asset's references.
     purged: bool,
+    /// Whether a replayed manifest failed its device check: the asset is not restored.
+    unverified: bool,
     proven: Vec<u64>,
     unresolved: bool,
     created_at: Option<Timestamp>,
@@ -336,6 +379,7 @@ async fn rebuild_owner(
     context: &RebuildContext,
     mode: Mode,
     owner: &OwnerId,
+    directories: &DirectoryHistory,
     named: &mut BTreeSet<ContentAddress>,
 ) -> Result<OwnerReport, RebuildError> {
     let scan = context.ledger.scan(owner).await?;
@@ -363,6 +407,8 @@ async fn rebuild_owner(
         dangling: Vec::new(),
         unusable_manifests: Vec::new(),
         foreign_manifests: Vec::new(),
+        unverified_manifests: Vec::new(),
+        unusable_directories: directories.faults(owner).to_vec(),
         epoch: None,
         reanchored: None,
     };
@@ -385,6 +431,12 @@ async fn rebuild_owner(
 
     let mut order: Vec<AssetId> = Vec::new();
     let mut assets: BTreeMap<AssetId, Accumulated> = BTreeMap::new();
+    let replay = Replay {
+        context,
+        mode,
+        owner,
+        directories,
+    };
     for entry in replayed {
         let asset = entry.asset();
         if !assets.contains_key(&asset) {
@@ -393,10 +445,10 @@ async fn rebuild_owner(
         let facts = assets.entry(asset.clone()).or_default();
         match entry {
             Replayed::Custody(record) => {
-                accumulate(context, mode, &asset, &record, facts, &mut report, named).await?;
+                accumulate(&replay, &asset, &record, facts, &mut report, named).await?;
             }
             Replayed::Lifecycle(op) => {
-                apply_lifecycle(context, mode, &asset, &op, facts, &mut report, named).await?;
+                apply_lifecycle(&replay, &asset, &op, facts, &mut report, named).await?;
             }
         }
     }
@@ -416,6 +468,15 @@ async fn rebuild_owner(
                 .iter()
                 .map(|address| (asset.clone(), address.clone())),
         );
+        if facts.unverified {
+            // Not restored, and never compared: the ledger cannot vouch for the row. Where the
+            // index lacks it, the owner moves epoch so the clients holding the manifest
+            // re-announce it, and the server verifies it against the live directory.
+            if context.index.read(&asset).await?.is_none() {
+                report.epoch_bump_needed = true;
+            }
+            continue;
+        }
         let Some(row) = assemble(owner, &asset, &facts) else {
             if facts.purged {
                 report.purged.push(asset);
@@ -475,16 +536,70 @@ async fn reanchor(
     Ok(())
 }
 
+/// What every replayed entry of one owner is folded with.
+struct Replay<'a> {
+    context: &'a RebuildContext,
+    mode: Mode,
+    owner: &'a OwnerId,
+    directories: &'a DirectoryHistory,
+}
+
+/// A manifest a replayed entry names, where it sits, and what it is stored under.
+struct Signed<'a> {
+    address: &'a ContentAddress,
+    manifest: &'a AssetManifest,
+    ledger_seq: u64,
+    recorded_at: &'a str,
+}
+
+impl Replay<'_> {
+    /// Check `signed`'s device signature against the directory in force at its position,
+    /// recording a refusal against `asset`.
+    ///
+    /// `true` when it verified. A refusal marks the asset, which is then not restored.
+    fn device_check(
+        &self,
+        asset: &AssetId,
+        signed: &Signed<'_>,
+        facts: &mut Accumulated,
+        report: &mut OwnerReport,
+    ) -> bool {
+        let at = Position {
+            owner: self.owner,
+            seq: signed.ledger_seq,
+            recorded_at: signed.recorded_at.parse::<Timestamp>().ok(),
+        };
+        match self.directories.verify(signed.manifest, at) {
+            Ok(()) => true,
+            Err(refusal) => {
+                tracing::warn!(
+                    owner = %self.owner,
+                    %asset,
+                    address = %signed.address,
+                    ledger_seq = signed.ledger_seq,
+                    %refusal,
+                    "a replayed manifest's device signature is not vouched for; its asset is not restored"
+                );
+                report
+                    .unverified_manifests
+                    .push((asset.clone(), signed.address.clone(), refusal));
+                facts.unverified = true;
+                false
+            }
+        }
+    }
+}
+
 /// Fold one custody entry into its asset's facts.
 async fn accumulate(
-    context: &RebuildContext,
-    mode: Mode,
+    replay: &Replay<'_>,
     asset: &AssetId,
     record: &Custody,
     facts: &mut Accumulated,
     report: &mut OwnerReport,
     named: &mut BTreeSet<ContentAddress>,
 ) -> Result<(), RebuildError> {
+    let (context, mode) = (replay.context, replay.mode);
     match record.resolution {
         Resolution::Indexed {
             sync_seq: Some(seq),
@@ -529,6 +644,15 @@ async fn accumulate(
                 }
                 if parsed.core.file_id.to_string() != asset.as_str() {
                     report.foreign_manifests.push((asset.clone(), address));
+                    return Ok(());
+                }
+                let signed = Signed {
+                    address: &address,
+                    manifest: &parsed,
+                    ledger_seq: record.ledger_seq,
+                    recorded_at: &record.received_at,
+                };
+                if !replay.device_check(asset, &signed, facts, report) {
                     return Ok(());
                 }
                 supersede(facts, &address);
@@ -589,14 +713,14 @@ fn repoint(facts: &mut Accumulated, role: BlobRole, address: &ContentAddress) {
 /// applies it when it passes, and cannot prove its number. Invariant 18 is album-wide and is not
 /// re-run; an op it refused and that still chains is replayed, and the epoch moves for it.
 async fn apply_lifecycle(
-    context: &RebuildContext,
-    mode: Mode,
+    replay: &Replay<'_>,
     asset: &AssetId,
     op: &replay::Lifecycle,
     facts: &mut Accumulated,
     report: &mut OwnerReport,
     named: &mut BTreeSet<ContentAddress>,
 ) -> Result<(), RebuildError> {
+    let (context, mode) = (replay.context, replay.mode);
     // A retention purge (#767) carries no manifest: the server initiates it under the signed
     // `retention_until`. It drops the tombstone's references and keeps the row, as the index's
     // purge does, and only for a tombstone — the index refuses any other.
@@ -656,6 +780,17 @@ async fn apply_lifecycle(
             return Ok(());
         }
         facts.unresolved = true;
+    }
+    // After the chain check: an unrecorded op that does not chain was refused by the index,
+    // and says nothing about the asset.
+    let signed = Signed {
+        address: &address,
+        manifest: &parsed,
+        ledger_seq: op.ledger_seq,
+        recorded_at: &op.recorded_at,
+    };
+    if !replay.device_check(asset, &signed, facts, report) {
+        return Ok(());
     }
 
     supersede(facts, &address);
