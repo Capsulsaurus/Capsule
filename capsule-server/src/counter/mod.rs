@@ -104,7 +104,7 @@
 //! Every partition lives behind the same [`Mutex`]. Admission is genuinely independent — one
 //! partition's occupancy is invisible to another's ceiling — but *latency* is not: a sustained
 //! flood against one key serialises `hit`, `peek` and `reset` for every other. The critical
-//! section holds no `.await` and does `O(log n)` work over at most twenty thousand entries, so at
+//! section holds no `.await` and does `O(log n)` work over at most [`ceilings::UPLOAD_CHUNKS_SOURCE`] entries a partition, so at
 //! these sizes it is contention rather than denial. Stated because the claim above ("the windows
 //! one surface holds are not the windows another is denied") is about admission and should not be
 //! read as a latency guarantee. Per-partition locking is deferred to issue #477, not overlooked.
@@ -349,8 +349,8 @@ impl CounterKey {
             Self::ShareSource(_)
             | Self::DropSource(_)
             | Self::UploadSessionsSource(_)
-            | Self::UploadChunksSource(_)
             | Self::RegistrationSource(_) => ceilings::SOURCE_ADDRESS,
+            Self::UploadChunksSource(_) => ceilings::UPLOAD_CHUNKS_SOURCE,
             Self::DeepVerify(_) => ceilings::DEEP_VERIFY,
             Self::UploadSessions(_) | Self::UploadChunks(_) => ceilings::UPLOADING_ACCOUNT,
             Self::SecondFactor(_) => ceilings::SECOND_FACTOR,
@@ -546,16 +546,48 @@ pub mod ceilings {
     /// is its own partition at this size.
     pub const UPLOADING_ACCOUNT: usize = 10_000;
 
-    /// The five source-address keys — 1-minute and 1-hour windows, keyed on a client address.
+    /// Four of the five source-address keys — 1-minute and 1-hour windows, keyed on a client
+    /// address. [`UPLOAD_CHUNKS_SOURCE`] is the fifth.
     ///
-    /// Charged by the share and drop paths (#704) and the two upload writes (#718);
+    /// Charged by the share and drop paths (#704) and upload session creation (#718);
     /// registration's is not yet charged. Sized for distinct addresses in the window, which for a
     /// self-hosted deployment is thousands, not millions — an IPv6 client counts once per `/64`,
-    /// so walking a prefix does not grow it. Each variant is its own partition at this size. The
-    /// upload keys are reached only by an authenticated request, and only once its account's own
-    /// budget admitted it, so no caller mints one without an account and an account mints at
-    /// most its own budget's worth a minute.
+    /// so walking a prefix within one `/64` does not grow it. Each variant is its own partition
+    /// at this size.
+    ///
+    /// The upload session key is reached only by an authenticated request, and only once its
+    /// account's own budget admitted it, so an account mints at most
+    /// [`budgets::UPLOAD_SESSIONS`](super::budgets::UPLOAD_SESSIONS) — 300 — keys a minute, even
+    /// walking a fresh `/64` on every request. Ten thousand holds [`HOSTILE_UPLOADERS`] such
+    /// accounts with room to spare (300 × 16 = 4 800; the partition fills at 34).
     pub const SOURCE_ADDRESS: usize = 10_000;
+
+    /// How many accounts the two upload source partitions absorb at once, each walking a fresh
+    /// source address on every request at its full per-account budget, before a legitimate
+    /// uploader's first request from an address with no live window meets the ceiling.
+    ///
+    /// The upload source keys are the one source partition an authenticated caller can grow
+    /// faster than addresses arrive: the account budget is charged first, so an account mints at
+    /// most its own budget's worth of source keys a minute, but with a routed IPv6 prefix every
+    /// one of them can be a distinct `/64`. No ceiling sized against the directory survives every
+    /// account doing that, so this number is the stated assumption instead: sixteen accounts
+    /// turned hostile at once. Accounts on a self-hosted server are operator-issued, and every
+    /// one of those requests is logged under its account before it reaches the source key, so
+    /// past this the exposure is accepted: legitimate uploaders whose address holds no live
+    /// window are answered `429` with a `Retry-After` of at most one window (one minute) until
+    /// the flood stops or the operator disables the accounts. The refusal fails closed and loses
+    /// nothing; a client waits out the `Retry-After` and resumes.
+    pub const HOSTILE_UPLOADERS: usize = 16;
+
+    /// [`CounterKey::UploadChunksSource`](super::CounterKey::UploadChunksSource) — 1-minute
+    /// window, keyed on a client address.
+    ///
+    /// [`budgets::UPLOAD_CHUNKS`](super::budgets::UPLOAD_CHUNKS) × [`HOSTILE_UPLOADERS`] =
+    /// 3 000 × 16 = 48 000, derived rather than written so that raising the per-account chunk
+    /// budget raises this with it. [`SOURCE_ADDRESS`] would fill at four such accounts.
+    // A `u32` widened into `usize`, which is at least 32 bits on every target this server builds.
+    pub const UPLOAD_CHUNKS_SOURCE: usize =
+        super::budgets::UPLOAD_CHUNKS.limit as usize * HOSTILE_UPLOADERS;
 
     /// [`CounterKey::OidcAuthorize`](super::CounterKey::OidcAuthorize) — 1-minute window, keyed
     /// on an **admitted** redirect host.

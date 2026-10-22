@@ -430,6 +430,57 @@ fn every_budget_is_declared_in_one_place() {
     assert_eq!(budgets::DEEP_VERIFY.window.as_hours(), 1);
 }
 
+/// An account may spend its whole upload budget on distinct source keys, one fresh `/64` a
+/// request, so each upload source partition must hold [`ceilings::HOSTILE_UPLOADERS`] accounts
+/// doing that at once. Sized against the shared source number, the chunk partition filled at four.
+#[test]
+fn the_upload_source_ceilings_hold_their_stated_hostile_accounts() {
+    let accounts = ceilings::HOSTILE_UPLOADERS;
+    let sessions = budgets::UPLOAD_SESSIONS.limit as usize;
+    let chunks = budgets::UPLOAD_CHUNKS.limit as usize;
+    assert!(CounterKey::UploadSessionsSource(String::new()).ceiling() >= sessions * accounts);
+    assert!(CounterKey::UploadChunksSource(String::new()).ceiling() >= chunks * accounts);
+    assert!(
+        CounterKey::UploadChunksSource(String::new()).ceiling() > ceilings::SOURCE_ADDRESS,
+        "the chunk partition is the one an account fills fastest"
+    );
+}
+
+/// The same property against the shipped chunk partition: every hostile account spends its full
+/// minute's chunk budget, each chunk from a fresh address, and an uploader arriving from an
+/// address with no live window is still admitted.
+#[tokio::test]
+async fn hostile_accounts_walking_addresses_leave_room_for_a_first_time_uploader() {
+    let counters = InMemoryCounters::new();
+    let minted = ceilings::HOSTILE_UPLOADERS * budgets::UPLOAD_CHUNKS.limit as usize;
+
+    for index in 0..minted {
+        counters
+            .hit(
+                &CounterKey::UploadChunksSource(format!("2001:db8:{index:x}::/64")),
+                budgets::UPLOAD_CHUNKS_SOURCE,
+                at(0),
+            )
+            .await
+            .expect("the partition holds every hostile account's budget");
+    }
+    assert_eq!(
+        counters.len_of(&CounterKey::UploadChunksSource(String::new())),
+        minted
+    );
+    assert!(
+        counters
+            .hit(
+                &CounterKey::UploadChunksSource("198.51.100.7".to_owned()),
+                budgets::UPLOAD_CHUNKS_SOURCE,
+                at(0),
+            )
+            .await
+            .expect("a first-time address is not refused at the ceiling")
+            .admits()
+    );
+}
+
 /// The classifier must say "capacity" for the ceiling and **only** for the ceiling.
 ///
 /// [`is_at_capacity`] decides capacity-versus-outage by matching
