@@ -114,3 +114,8 @@ the case it covers (`rg "E2E case N"`).
 15. **Upload delegation.** A hands a sealed bundle to B, B uploads it, A releases the original
     only after verifying the receipt against its own hash; B's death mid-upload makes A
     re-queue it.
+16. **Every original round-trips.** One file per kind no codec in the build handles or Capsule
+    does not recognise (video, HEIC, RAW, a document, an unknown or missing extension, zero
+    bytes, a file spanning several restore windows) is imported, pushed to the real server and
+    restored byte for byte. Irreducible because the server's content-type enum and feed shape
+    are what decide whether such a file survives, and no single module holds both.
