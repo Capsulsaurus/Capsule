@@ -1120,6 +1120,10 @@
     "message": "Этот источник достиг лимита кэширования в вашей учётной записи.",
     "context": "Machine-translated seed pending human review."
   },
+  "error.quota.suspended": {
+    "message": "Ваше хранилище приостановлено, поэтому добавить ничего нового нельзя. Вы по-прежнему можете просматривать и удалять то, что у вас есть.",
+    "context": "Machine-translated seed pending human review."
+  },
   "error.quota.unavailable": {
     "message": "Capsule не удалось проверить использование хранилища. Повторите попытку.",
     "context": "Machine-translated seed pending human review."

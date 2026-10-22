@@ -24,7 +24,7 @@ use kynos::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::auth::AccessToken;
-use crate::quota::{QuotaContext, QuotaLimits, state_of};
+use crate::quota::{QuotaContext, QuotaLimits, classify};
 use crate::store::UserId;
 
 /// The quota surface: what a user is using, and what happens next.
@@ -44,7 +44,8 @@ pub struct QuotaResponse {
     pub soft_limit: Option<u64>,
     /// Where uploads stop, or absent on an unlimited deployment.
     pub hard_limit: Option<u64>,
-    /// The classified state: `ok`, `soft_warning`, `hard_exceeded`, `grace_expired`.
+    /// The classified state: `ok`, `soft_warning`, `hard_exceeded`, `grace_expired`,
+    /// `suspended`.
     pub state: String,
 }
 
@@ -79,7 +80,7 @@ pub async fn get_quota(
     })?;
 
     let limits = quota.limits();
-    let state = state_of(usage.used, usage.over_since, quota.clock().now(), limits);
+    let state = classify(usage, quota.clock().now(), limits);
     Ok(Json(QuotaResponse {
         used: usage.used,
         soft_limit: limit(limits.soft_limit),

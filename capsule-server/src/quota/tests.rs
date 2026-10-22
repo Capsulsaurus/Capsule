@@ -63,6 +63,7 @@ fn a_lifecycle_write_is_admitted_in_every_state() {
         QuotaState::SoftWarning,
         QuotaState::HardExceeded,
         QuotaState::GraceExpired,
+        QuotaState::Suspended,
     ] {
         assert!(
             admits(state, WriteClass::Lifecycle, 10_000, 0, limits()),
@@ -72,12 +73,13 @@ fn a_lifecycle_write_is_admitted_in_every_state() {
 }
 
 #[test]
-fn metadata_growth_stops_only_when_the_grace_expires() {
+fn metadata_growth_stops_only_when_the_grace_expires_or_the_account_is_suspended() {
     for (state, expected) in [
         (QuotaState::Ok, true),
         (QuotaState::SoftWarning, true),
         (QuotaState::HardExceeded, true),
         (QuotaState::GraceExpired, false),
+        (QuotaState::Suspended, false),
     ] {
         assert_eq!(
             admits(state, WriteClass::MetadataGrowth, 250, 1, limits()),
@@ -97,6 +99,74 @@ fn an_upload_is_checked_against_its_projected_total() {
         !admits(QuotaState::Ok, WriteClass::Upload, 150, 50, limits()),
         "the declared size is what becomes the cap, so it is what the check has to include"
     );
+}
+
+#[test]
+fn a_suspended_account_may_not_upload_whatever_it_would_cost() {
+    assert!(!admits(
+        QuotaState::Suspended,
+        WriteClass::Upload,
+        0,
+        0,
+        limits()
+    ));
+    assert!(
+        !admits(
+            QuotaState::Suspended,
+            WriteClass::Upload,
+            0,
+            1,
+            QuotaLimits::unlimited()
+        ),
+        "a suspension refuses on an unlimited deployment too: it is not reached by bytes"
+    );
+}
+
+#[test]
+fn a_suspension_outranks_the_thresholds() {
+    let suspended = |used, over_since| StoredUsage {
+        used,
+        over_since,
+        suspended_since: Some(day(1)),
+    };
+    for usage in [
+        suspended(0, None),
+        suspended(150, None),
+        suspended(250, Some(day(0))),
+    ] {
+        assert_eq!(
+            classify(usage, day(30), limits()),
+            QuotaState::Suspended,
+            "{usage:?}"
+        );
+    }
+    assert_eq!(
+        classify(suspended(0, None), day(30), QuotaLimits::unlimited()),
+        QuotaState::Suspended
+    );
+}
+
+#[test]
+fn an_account_that_is_not_suspended_is_classified_by_its_usage() {
+    let usage = |used, over_since| StoredUsage {
+        used,
+        over_since,
+        suspended_since: None,
+    };
+    assert_eq!(classify(usage(0, None), day(0), limits()), QuotaState::Ok);
+    assert_eq!(
+        classify(usage(150, None), day(0), limits()),
+        QuotaState::SoftWarning
+    );
+    assert_eq!(
+        classify(usage(250, Some(day(0))), day(15), limits()),
+        QuotaState::GraceExpired
+    );
+}
+
+#[test]
+fn the_suspended_state_has_a_stable_wire_token() {
+    assert_eq!(QuotaState::Suspended.as_str(), "suspended");
 }
 
 #[test]

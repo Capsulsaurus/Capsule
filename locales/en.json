@@ -8623,6 +8623,10 @@
     "message": "This source has reached its caching limit on your account.",
     "context": "HTTP 403 when a federated blob cached on a user's behalf would cross the per-(receiving_user, source_peer) caching budget (default 25% of the receiver's hard quota per source peer). Bounds how much one user can pull from any single peer."
   },
+  "error.quota.suspended": {
+    "message": "Your storage is suspended, so nothing new can be added. You can still view and delete what you have.",
+    "context": "HTTP 403 in the Suspended quota state: whoever runs the server has suspended the account's storage (an admin or billing action), so growth writes (new uploads, caption/tag edits, new share links, guest drops to the account's links) are refused. Reads, deletes, and restore-from-trash still work; only the operator lifts it. Distinct from error.moderation.account_suspended."
+  },
   "error.quota.unavailable": {
     "message": "Capsule couldn't check your storage use. Please try again.",
     "context": "HTTP 500 on GET /v1/quota (slice S-C6): the quota ledger could not answer, so no snapshot was produced. Read-only and retryable; it says nothing about how full the account is."

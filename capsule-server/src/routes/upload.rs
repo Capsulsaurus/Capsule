@@ -442,6 +442,19 @@ pub enum CreateRejection {
         code: &'static str,
     },
 
+    /// The account's quota is suspended by the server's operator (#705).
+    ///
+    /// Distinct from [`Self::QuotaExceeded`], which freeing space lifts, and from
+    /// [`Self::AccountSuspended`], a moderation act: only the operator lifts this one, and the
+    /// account may still read, delete and restore.
+    #[error("this account's storage is suspended")]
+    #[problem(status = 403, title = "Quota suspended")]
+    QuotaSuspended {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
     /// A collaborator could not answer, so the session neither opened nor was refused.
     #[error("the upload session could not be opened")]
     #[problem(status = 500, title = "Internal server error")]
@@ -721,6 +734,10 @@ impl SessionRejection {
 /// consistency family — **before** anything is written, then stages the session's file and
 /// records the session. A request whose `(owner, hash, album)` tuple already has an active
 /// session gets that session back rather than a second one.
+///
+/// The quota is checked here and nowhere later: a declared size that would cross the hard limit
+/// is `403 error.quota.exceeded`, and an account whose quota the operator suspended is
+/// `403 error.quota.suspended`, both before anything is charged or staged.
 #[kynos::post("/v1/upload", operation_id = "create_upload", tag = UploadTag)]
 pub async fn create_upload(
     Inject(upload): Inject<UploadContext>,
@@ -972,6 +989,11 @@ pub async fn create_upload(
             crate::quota::UploadCharge::Admitted | crate::quota::UploadCharge::AlreadyAttributed,
         ) => {}
         Ok(crate::quota::UploadCharge::Refused) => return Err(CreateRejection::quota_exceeded()),
+        Ok(crate::quota::UploadCharge::Suspended) => {
+            return Err(CreateRejection::QuotaSuspended {
+                code: error_codes::QUOTA_SUSPENDED,
+            });
+        }
         Err(error) => {
             store_unavailable(&error, "charge an upload against its quota");
             return Err(CreateRejection::unavailable());

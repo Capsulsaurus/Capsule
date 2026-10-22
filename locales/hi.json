@@ -1120,6 +1120,10 @@
     "message": "इस स्रोत ने आपके खाते पर अपनी कैशिंग सीमा पूरी कर ली है।",
     "context": "Machine-translated seed pending human review."
   },
+  "error.quota.suspended": {
+    "message": "आपका संग्रहण निलंबित है, इसलिए कुछ भी नया नहीं जोड़ा जा सकता। आप अब भी अपनी सामग्री देख और हटा सकते हैं।",
+    "context": "Machine-translated seed pending human review."
+  },
   "error.quota.unavailable": {
     "message": "Capsule आपके संग्रहण उपयोग की जाँच नहीं कर सका। कृपया फिर से प्रयास करें।",
     "context": "Machine-translated seed pending human review."

@@ -2669,6 +2669,20 @@ impl QuotaStore for SwitchableQuota {
         }
         self.inner.release_attribution(address)
     }
+
+    fn suspend<'a>(&'a self, user: &'a UserId, at: Timestamp) -> StoreFuture<'a, bool> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.suspend(user, at)
+    }
+
+    fn unsuspend<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, bool> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.unsuspend(user)
+    }
 }
 
 /// A membership store that can be made to fail on demand.

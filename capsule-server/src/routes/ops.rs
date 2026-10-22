@@ -245,6 +245,19 @@ pub enum OpRejection {
         code: &'static str,
     },
 
+    /// The account's quota is suspended by the server's operator, and this write would grow
+    /// stored metadata (#705).
+    ///
+    /// Never returned for a `delete` or a `trash-restore`, for the reason
+    /// [`Self::QuotaGraceExpired`] never is.
+    #[error("this account's storage is suspended")]
+    #[problem(status = 403, title = "Quota suspended")]
+    QuotaSuspended {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
     /// A collaborator could not answer.
     #[error("the lifecycle write could not be applied")]
     #[problem(status = 500, title = "Internal server error")]
@@ -260,6 +273,10 @@ pub enum OpRejection {
 /// The whole battery runs before anything is written, and a rejection writes nothing —
 /// including the blobs the bundle carries, which are stored only after the manifest has passed
 /// every check the server can make without a key.
+///
+/// An op carrying a metadata blob is metadata growth: past the quota grace window it is
+/// `403 error.quota.grace_locked`, and while the operator has suspended the account's quota
+/// `403 error.quota.suspended`. A `delete` or `trash-restore` is never refused by quota.
 #[kynos::post(
     "/v1/albums/{album_id}/ops",
     operation_id = "album_lifecycle_op",
@@ -420,6 +437,12 @@ pub async fn apply_op(
             OpRejection::unavailable()
         })?;
     if !crate::quota::admits(state, class, 0, 0, quota.limits()) {
+        if state == crate::quota::QuotaState::Suspended {
+            tracing::info!(%caller, "a lifecycle write was refused: the account's quota is suspended");
+            return Err(OpRejection::QuotaSuspended {
+                code: error_codes::QUOTA_SUSPENDED,
+            });
+        }
         tracing::info!(%caller, ?state, "a lifecycle write was refused: past the grace window");
         return Err(OpRejection::QuotaGraceExpired {
             code: error_codes::QUOTA_GRACE_LOCKED,

@@ -15080,7 +15080,7 @@
     "/v1/upload": {
       "post": {
         "summary": "Open an upload session for one blob of an asset bundle.",
-        "description": "Runs the refuse-by-default envelope battery — invariants 1–8 and the top-level↔envelope\nconsistency family — **before** anything is written, then stages the session's file and\nrecords the session. A request whose `(owner, hash, album)` tuple already has an active\nsession gets that session back rather than a second one.",
+        "description": "Runs the refuse-by-default envelope battery — invariants 1–8 and the top-level↔envelope\nconsistency family — **before** anything is written, then stages the session's file and\nrecords the session. A request whose `(owner, hash, album)` tuple already has an active\nsession gets that session back rather than a second one.\n\nThe quota is checked here and nowhere later: a declared size that would cross the hard limit\nis `403 error.quota.exceeded`, and an account whose quota the operator suspended is\n`403 error.quota.suspended`, both before anything is charged or staged.",
         "operationId": "create_upload",
         "parameters": [
           {
@@ -15610,7 +15610,7 @@
     "/v1/albums/{album_id}/ops": {
       "post": {
         "summary": "Apply one signed lifecycle manifest to an album's asset.",
-        "description": "The whole battery runs before anything is written, and a rejection writes nothing —\nincluding the blobs the bundle carries, which are stored only after the manifest has passed\nevery check the server can make without a key.",
+        "description": "The whole battery runs before anything is written, and a rejection writes nothing —\nincluding the blobs the bundle carries, which are stored only after the manifest has passed\nevery check the server can make without a key.\n\nAn op carrying a metadata blob is metadata growth: past the quota grace window it is\n`403 error.quota.grace_locked`, and while the operator has suspended the account's quota\n`403 error.quota.suspended`. A `delete` or `trash-restore` is never refused by quota.",
         "operationId": "album_lifecycle_op",
         "parameters": [
           {
@@ -16038,6 +16038,7 @@
     "/v1/shares": {
       "post": {
         "summary": "Register a share link the caller's client has issued.",
+        "description": "A link is metadata growth: an account past its quota grace window is refused\n`403 error.quota.grace_locked`, and one whose quota the operator suspended\n`403 error.quota.suspended`.",
         "operationId": "issue_share",
         "parameters": [
           {
@@ -23002,7 +23003,7 @@
     "/d/{opaque_id}": {
       "post": {
         "summary": "Open a drop session through a link.",
-        "description": "Invariants 26–30 in order: the link admits the file and reserves its caps in one store\noperation, then the owner's quota is charged, then the declaration is checked.",
+        "description": "Invariants 26–30 in order: the link admits the file and reserves its caps in one store\noperation, then the owner's quota is charged, then the declaration is checked. A drop the\nowner's quota will not admit is `403 error.quota.exceeded`, or `403 error.quota.suspended`\nwhile the operator has suspended the owner's quota.",
         "operationId": "create_drop",
         "parameters": [
           {
@@ -25448,7 +25449,7 @@
           },
           "state": {
             "type": "string",
-            "description": "The classified state: `ok`, `soft_warning`, `hard_exceeded`, `grace_expired`."
+            "description": "The classified state: `ok`, `soft_warning`, `hard_exceeded`, `grace_expired`,\n`suspended`."
           }
         },
         "type": "object",

@@ -287,6 +287,7 @@
   "error.quota.exceeded": "Lo spazio di archiviazione è pieno.",
   "error.quota.grace_locked": "Lo spazio di archiviazione è rimasto pieno oltre il periodo di tolleranza, quindi le modifiche sono sospese finché non liberi spazio.",
   "error.quota.peer_budget_exceeded": "Questa fonte ha raggiunto il limite di memorizzazione nella cache sul tuo account.",
+  "error.quota.suspended": "Il tuo spazio di archiviazione è sospeso, quindi non è possibile aggiungere nulla di nuovo. Puoi comunque visualizzare ed eliminare ciò che hai.",
   "error.quota.unavailable": "Capsule non è riuscito a verificare l'utilizzo dello spazio. Riprova.",
   "error.share.rate_limited": "Troppi tentativi. Attendi e riprova.",
   "error.storage.asset_not_found": "That item was not found.",
