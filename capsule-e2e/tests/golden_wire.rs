@@ -33,7 +33,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use capsule_core::cbor;
 use capsule_core::crypto::hash::hash_bytes;
-use capsule_core::crypto::keys::{DeviceDirectory, HybridVerifyingKey};
+use capsule_core::crypto::keys::{DeviceDirectory, HybridSigningKey, HybridVerifyingKey};
 use capsule_core::crypto::provenance::{
     PROVENANCE_RECORD_VERSION, ProvenanceRecord, RecordDecodeError,
 };
@@ -674,6 +674,66 @@ fn golden_receipts_verify_under_the_published_attestation_keys() {
     }
 }
 
+/// Records, invariant 2 for the directory and the receipt: a newer writer's directory and
+/// receipt, carrying keys this build has never defined, decode with those keys kept, re-emit
+/// byte for byte and verify; dropping the keys fails verification.
+#[test]
+fn golden_directory_and_receipt_from_a_newer_writer_keep_their_unknown_fields() {
+    for (version, dir) in golden::versions() {
+        let records = golden::load_records(&dir);
+        let writer = HybridVerifyingKey::from_bytes(&from_hex(&records.newer_writer_public))
+            .unwrap_or_else(|e| panic!("{version}: the newer writer's key decodes: {e}"));
+
+        let at = format!("{version} (directory with unknown fields)");
+        let bytes = from_hex(&records.device_directory_with_unknown_fields);
+        let directory: DeviceDirectory =
+            cbor::from_slice(&bytes).unwrap_or_else(|e| panic!("{at}: the directory decodes: {e}"));
+        assert!(
+            !directory.core.unknown.is_empty(),
+            "{at}: the core carries keys this build does not define"
+        );
+        assert!(
+            directory.core.devices.iter().all(|d| !d.unknown.is_empty()),
+            "{at}: every device entry carries keys this build does not define"
+        );
+        assert!(directory.verify(&writer), "{at}: the directory verifies");
+        assert_eq!(
+            cbor::to_canonical_vec(&directory).expect("re-encodes"),
+            bytes,
+            "{at}: the directory re-emits byte for byte"
+        );
+        let mut stripped = directory.clone();
+        stripped.core.unknown.clear();
+        assert!(
+            !stripped.verify(&writer),
+            "{at}: stripping the core's unknown keys fails verification"
+        );
+        let mut stripped = directory;
+        stripped.core.devices[0].unknown.clear();
+        assert!(
+            !stripped.verify(&writer),
+            "{at}: stripping an entry's unknown keys fails verification"
+        );
+
+        let at = format!("{version} (receipt with unknown fields)");
+        let bytes = from_hex(&records.custody_receipt_with_unknown_fields);
+        let receipt = CustodyReceipt::from_canonical_cbor(&bytes)
+            .unwrap_or_else(|e| panic!("{at}: the receipt decodes: {e}"));
+        assert!(
+            !receipt.core.unknown.is_empty(),
+            "{at}: the core carries keys this build does not define"
+        );
+        assert!(receipt.verify_under(&writer), "{at}: the receipt verifies");
+        assert_eq!(receipt.to_canonical_cbor(), bytes, "{at}: byte for byte");
+        let mut stripped = receipt;
+        stripped.core.unknown.clear();
+        assert!(
+            !stripped.verify_under(&writer),
+            "{at}: stripping the unknown keys fails verification"
+        );
+    }
+}
+
 // ── The recorder ─────────────────────────────────────────────────────────────────────────────
 
 /// Record this build's protocol version: the replayable script over raw HTTP, then an asset
@@ -756,6 +816,31 @@ async fn record_golden_fixtures() {
     let record = cbor::to_canonical_vec(&head).expect("encodes");
     let future = cbor::to_canonical_vec(&with_unknown_fields(&device, &head)).expect("encodes");
 
+    let newer_writer = HybridSigningKey::generate();
+    let served_directory: DeviceDirectory =
+        cbor::from_slice(&directory).expect("the served directory decodes");
+    let future_directory = cbor::to_canonical_vec(&directory_with_unknown_fields(
+        &served_directory,
+        &newer_writer,
+    ))
+    .expect("encodes");
+    let receipts: wire::AssetReceiptsResponse = serde_json::from_value(
+        exchanges
+            .iter()
+            .find(|e| e.name == "get_asset_receipts")
+            .expect("the recording fetched the receipts")
+            .response
+            .clone(),
+    )
+    .expect("the receipts decode");
+    let served_receipt = CustodyReceipt::from_canonical_cbor(
+        &BASE64
+            .decode(&receipts.receipts.first().expect("a receipt").receipt_cbor)
+            .expect("base64"),
+    )
+    .expect("the served receipt decodes");
+    let future_receipt = receipt_with_unknown_fields(&served_receipt, &newer_writer);
+
     write(
         &dir,
         &Transcript {
@@ -767,8 +852,51 @@ async fn record_golden_fixtures() {
             user_ik_public: hex::encode(device.workspace.user_ik_public().to_bytes()),
             provenance_record: hex::encode(&record),
             provenance_record_with_unknown_fields: hex::encode(&future),
+            device_directory_with_unknown_fields: hex::encode(&future_directory),
+            custody_receipt_with_unknown_fields: hex::encode(future_receipt.to_canonical_cbor()),
+            newer_writer_public: hex::encode(newer_writer.verifying_key().to_bytes()),
         },
     );
+}
+
+/// A value of whatever CBOR type `value` serializes to, as a signed core's unknown map holds it.
+fn cbor_value<T: serde::Serialize, V: DeserializeOwned>(value: &T) -> V {
+    cbor::from_slice(&cbor::to_canonical_vec(value).expect("encodes")).expect("decodes")
+}
+
+/// `served` as a newer writer would emit it: its core and every device entry gain keys no
+/// version has defined, and the core is re-signed over them by `writer`.
+fn directory_with_unknown_fields(
+    served: &DeviceDirectory,
+    writer: &HybridSigningKey,
+) -> DeviceDirectory {
+    let mut core = served.core.clone();
+    for entry in &mut core.devices {
+        entry
+            .unknown
+            .insert("x_attested_by".to_owned(), cbor_value(&("tpm", 2u8)));
+    }
+    let nested: BTreeMap<&str, (f64, u64)> = BTreeMap::from([("quorum", (0.5, u64::MAX))]);
+    core.unknown
+        .insert("x_recovery_policy".to_owned(), cbor_value(&nested));
+    core.sign(writer)
+}
+
+/// `served` as a newer server would issue it: its core gains keys no version has defined —
+/// a nested map holding a float and a full-width integer, and an array of a negative integer
+/// and text — and is re-signed over them by `writer`.
+fn receipt_with_unknown_fields(
+    served: &CustodyReceipt,
+    writer: &HybridSigningKey,
+) -> CustodyReceipt {
+    let mut core = served.core.clone();
+    let nested: BTreeMap<&str, (f64, u64)> = BTreeMap::from([("replicas", (0.5, u64::MAX))]);
+    core.unknown
+        .insert("x_placement".to_owned(), cbor_value(&nested));
+    core.unknown
+        .insert("z".to_owned(), cbor_value(&(-3i64, "newer")));
+    let server_sig = writer.sign(&core.signing_bytes());
+    CustodyReceipt { core, server_sig }
 }
 
 /// `head` as a newer writer would emit it: its manifest core gains keys no version has
@@ -779,12 +907,6 @@ async fn record_golden_fixtures() {
 /// The library keeps its own device key private, so the proposer signs both slots; the golden
 /// suite checks the device signature, the one the directory binds.
 fn with_unknown_fields(device: &Device, head: &ProvenanceRecord) -> ProvenanceRecord {
-    /// A value of whatever CBOR type `value` serializes to, as the manifest's unknown map holds
-    /// it.
-    fn cbor_value<T: serde::Serialize, V: DeserializeOwned>(value: &T) -> V {
-        cbor::from_slice(&cbor::to_canonical_vec(value).expect("encodes")).expect("decodes")
-    }
-
     let mut core = head.manifest.core.clone();
     core.created_by_device = device.proposer_id;
     let nested: BTreeMap<&str, (f64, Vec<i64>)> = BTreeMap::from([("weights", (0.5, vec![-3]))]);

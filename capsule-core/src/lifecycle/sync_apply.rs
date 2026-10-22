@@ -1033,6 +1033,7 @@ mod tests {
             dek_public: None,
             added_at: "2020-01-01T00:00:00Z".into(),
             revoked_at: None,
+            unknown: Default::default(),
         });
         ws.directory = core.sign(&ws.account.user_ik);
         ws.account.device.device_id = second;

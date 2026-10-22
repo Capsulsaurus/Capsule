@@ -272,6 +272,7 @@ fn signed_receipt() -> (HybridVerifyingKey, Vec<u8>) {
         uploaded_by_user: Uuid::from_u128(7).to_string(),
         uploaded_by_device: None,
         received_at: RECEIVED_AT.into(),
+        unknown: Default::default(),
     };
     let server_sig = key.sign(&core.signing_bytes());
     let receipt = CustodyReceipt { core, server_sig };
@@ -1149,6 +1150,7 @@ fn receipt_for(key: &HybridSigningKey, asset: Uuid, expected: &ReceiptExpectatio
         uploaded_by_user: Uuid::from_u128(7).to_string(),
         uploaded_by_device: None,
         received_at: RECEIVED_AT.into(),
+        unknown: Default::default(),
     };
     let server_sig = key.sign(&core.signing_bytes());
     CustodyReceipt { core, server_sig }.to_canonical_cbor()

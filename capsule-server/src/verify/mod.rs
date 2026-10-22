@@ -520,6 +520,7 @@ mod tests {
             uploaded_by_user: "01937b7c-0000-7000-8000-000000000001".to_owned(),
             uploaded_by_device: None,
             received_at: "2026-01-01T00:00:00Z".to_owned(),
+            unknown: Default::default(),
         };
         let receipt = CustodyReceipt {
             server_sig: key.sign(&core.signing_bytes()),

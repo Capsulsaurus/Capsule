@@ -1089,6 +1089,7 @@ async fn the_chain_verifies_after_finalizations_directory_publishes_and_ops() {
         directory_version: 1,
         updated_at: "2026-01-01T00:00:00Z".to_owned(),
         devices: Vec::new(),
+        unknown: Default::default(),
     }
     .sign(&ik);
     fixture

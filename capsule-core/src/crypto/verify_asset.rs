@@ -457,7 +457,9 @@ mod tests {
                     dek_public: None,
                     added_at: "2026-05-30T00:00:00Z".into(),
                     revoked_at: None,
+                    unknown: Default::default(),
                 }],
+                unknown: Default::default(),
             }
             .sign(&ik);
 
@@ -699,7 +701,9 @@ mod tests {
                 dek_public: None,
                 added_at: "2026-05-30T00:00:00Z".into(),
                 revoked_at: None,
+                unknown: Default::default(),
             }],
+            unknown: Default::default(),
         }
         .sign(&ik);
 
@@ -813,7 +817,9 @@ mod tests {
                 dek_public: None,
                 added_at: "2026-05-30T00:00:00Z".into(),
                 revoked_at: None,
+                unknown: Default::default(),
             }],
+            unknown: Default::default(),
         }
         .sign(&ik);
         let mut authority = ReferenceAuthority::new(Uuid::from_u128(ALBUM), admin.verifying_key())
@@ -1062,6 +1068,7 @@ mod tests {
             dek_public: None,
             added_at: added_at.into(),
             revoked_at: None,
+            unknown: Default::default(),
         });
         f.directory = core.sign(&HybridSigningKey::from_seed_bytes(&[10; 32], &[11; 32]));
         second
