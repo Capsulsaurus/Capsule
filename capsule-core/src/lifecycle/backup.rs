@@ -584,14 +584,6 @@ fn read_evidence_log(path: &Path) -> Result<Vec<u8>> {
     }
 }
 
-/// Write an evidence log a restore carried back to `path`, verbatim.
-///
-/// Nothing is written when the artifact carried none. A log already on disk is kept, not
-/// overwritten: a restore only adds assets absent locally, so one there is a stray, but it is
-/// still evidence, and the artifact's copy stays in the artifact.
-///
-/// The log is staged in a temporary sibling, flushed, and renamed into place, so a crash leaves
-/// either no log or the whole one — never a torn log a retried restore would then keep.
 /// Stream an artifact into `out` through `export`, atomically.
 ///
 /// The artifact is written to a sibling temporary file and renamed over `out` only once it is
@@ -630,6 +622,14 @@ fn stream_then_rename(
     Ok(written)
 }
 
+/// Write an evidence log a restore carried back to `path`, verbatim.
+///
+/// Nothing is written when the artifact carried none. A log already on disk is kept, not
+/// overwritten: a restore only adds assets absent locally, so one there is a stray, but it is
+/// still evidence, and the artifact's copy stays in the artifact.
+///
+/// The log is staged in a temporary sibling, flushed, and renamed into place, so a crash leaves
+/// either no log or the whole one — never a torn log a retried restore would then keep.
 fn restore_evidence_log(path: &Path, bytes: &[u8]) -> Result<()> {
     if bytes.is_empty() {
         return Ok(());
