@@ -102,6 +102,30 @@ pub(crate) enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Download originals from the server and verify them byte for byte
+    Restore {
+        /// Path to the Capsule library whose album keys open the originals
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// Directory the originals are written to, one file per asset named by its id; an
+        /// interrupted run resumes from what it left there
+        #[arg(long, value_name = "DIR")]
+        out: PathBuf,
+        /// Restore only the assets of this album
+        #[arg(long, value_name = "ALBUM_ID", conflicts_with = "asset")]
+        album: Option<Uuid>,
+        /// Restore only this asset
+        #[arg(long, value_name = "ASSET_ID")]
+        asset: Option<Uuid>,
+        /// Read the library passphrase from stdin instead of prompting, so restores
+        /// work in scripts and CI where there is no terminal.
+        #[arg(long)]
+        passphrase_stdin: bool,
+        /// Print the run as one JSON document on stdout: the totals and each asset's outcome
+        /// (restored, already present, or failed with its error)
+        #[arg(long)]
+        json: bool,
+    },
     /// Review a local library: flag assets, filter by flag, sweep rejects to trash
     Cull {
         /// Path to the Capsule library

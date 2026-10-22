@@ -1,0 +1,23 @@
+---
+source: capsule-cli/tests/json_contract.rs
+expression: "run(&scratch,\n&[\"push\", \"--library\", path(&scratch.library()), \"--passphrase-stdin\",\n\"--json\",],)"
+---
+status: 0
+--- stdout ---
+{
+  "assets": 0,
+  "pushed_assets": 0,
+  "verified_assets": 0,
+  "failed_assets": 0,
+  "receipts": 0,
+  "uploaded_blobs": 0,
+  "merged_blobs": 0,
+  "already_held_blobs": 0,
+  "deferred_blobs": 0,
+  "bytes": 0,
+  "provisioned_albums": 0,
+  "created_albums": 0,
+  "dry_run": false,
+  "outcomes": []
+}
+--- stderr ---

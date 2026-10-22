@@ -871,7 +871,12 @@ impl UploadClient {
         }
         if !(200..300).contains(&status) {
             let after = retry_after(resp.headers());
-            let (code, message, _, _) = read_error(resp).await?;
+            let (code, message, min, max) = read_error(resp).await?;
+            // A HEAD answer carries no body, so the bare `426` is all there is to switch on;
+            // it is the same refusal a create or a chunk gets, and surfaces as the same error.
+            if is_upgrade_required(status, code.as_deref()) {
+                return Err(UploadError::UpgradeRequired { min, max, message });
+            }
             if answer_asks_to_wait(status, code.as_deref()) {
                 tracing::debug!(status, ?code, ?after, "HEAD: the server asked for a wait");
                 return Ok(Err(WaitAsked {
