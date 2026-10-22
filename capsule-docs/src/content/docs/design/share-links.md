@@ -19,7 +19,7 @@ Normative.
 - **URL format.** `https://server.tld/s/{opaque_id}#{secret}`. The secret is in the **fragment** and never reaches the server. `{opaque_id}` carries no scope; scope is resolved from the server's record.
 - **Opaque-id entropy.** `{opaque_id}` MUST be a **random 128-bit** CSPRNG value, never a UUIDv7 or other structured or sequential id. This defeats enumeration independently of rate limiting.
 - **One `404`.** Not-found, revoked, expired, malformed id, and a blob the link does not name all return the same `404` (never `410`). The public path discloses nothing about the link: no owner, album, scope or expiry.
-- **Rate limits.** The serve path is limited **per `{opaque_id}`** and **per source IP**, charged before the link is resolved, failing closed. The per-source limiter is not yet built: the server has no trusted client address behind a proxy, and keying on an untrusted header would let the attacker choose the key. Tracked by #704.
+- **Rate limits.** The serve path is limited **per `{opaque_id}`** and **per source IP**, charged before the link is resolved, failing closed. The per-source budget is charged first, so a source that has spent it cannot drain a link's budget. Both answer `429 error.share.rate_limited` with a retry instant. The source is the client address resolved through the deployment's trusted proxies (`TRUSTED_PROXIES`, `TRUSTED_PROXY_HOPS`): a forwarding header is believed only from a hop the deployment named, because an untrusted one would let the attacker choose the key. An IPv6 source is its `/64`.
 - **Passphrase unwrap is client-side.** The server stores only the **wrapped** secret and never receives the passphrase; the client unwraps with the [password-based KDF](/design/cryptography/primitives/#password-based-kdf). The wrapped-secret endpoint shares the serve-path limits; the Argon2id cost is the brute-force backstop.
 - **The privacy strip happens at issue.** The issuing client applies the [Privacy on Export](/design/metadata/#privacy-on-export) strip before sealing; there is **no per-share opt-out**. The server cannot strip, because share metadata is sealed under the fragment it never sees. The server's half is **containment**: a link serves **only the content addresses its own record enumerates**.
 - **Home-server-only serving.** Only the album's [home server](/design/federation/#album-ownership-v1-single-home-server) serves a share. A peer answers with a structured `{ home_server }` JSON pointer, never an HTTP redirect (open-redirect risk) and never content.
@@ -75,6 +75,7 @@ The record counts against the issuing account's quota; otherwise unexpiring link
 
 - **Opaque-id entropy (unit):** ids are 128-bit and non-sequential.
 - **Enumeration (smoke):** not-found, revoked and expired give an identical `404`; limits apply.
+- **Client address (integration):** a spoofed `X-Forwarded-For` from an untrusted peer is ignored, a trusted hop's is honoured, and the per-source budget trips independently of the per-link one.
 - **Passphrase locality (unit):** the passphrase never crosses the wire.
 - **Revocation (smoke):** honored within the cache window; fails closed when state is unreachable.
 - **Strip and containment (unit):** the issued record carries no boundary-crossing fields; a link serves nothing outside its record.

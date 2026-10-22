@@ -43,6 +43,12 @@ server refuses to start (exit 2), naming every missing variable at once, without
 invalidates outstanding sync cursors unless you set it explicitly. Federation is off unless
 `FEDERATION_ENABLED=true` and `FEDERATION_URL` are set; leave it off.
 
+Name your reverse proxy so the per-source rate limits see the client rather than the proxy:
+`TRUSTED_PROXIES` takes a comma-separated list of addresses and CIDR networks (`10.0.0.0/8`), and
+`TRUSTED_PROXY_HOPS` trusts that many forwarding hops nearest the server, whatever their address.
+Unset, no `Forwarded` or `X-Forwarded-For` header is believed. That is safe, but every client
+behind the proxy then shares the proxy's budget.
+
 ## Migrate, then start
 
 `serve` never migrates and refuses a database schema older than the binary. Run migrations first, on every upgrade:
