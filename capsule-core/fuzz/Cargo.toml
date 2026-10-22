@@ -1,0 +1,82 @@
+# cargo-fuzz targets, one per capsule-core decoder of untrusted bytes (testing plan,
+# `capsule-core` row: "every decoder rejects malformed input without panicking").
+#
+# Its own workspace, excluded from the root one: it links libFuzzer, which no shipped artefact
+# may, and it is built only by `cargo fuzz` (`mise run fuzz`) or type-checked by
+# `mise run fuzz-check`. `capsule-core/tests/codec_properties.rs` runs a bounded, seeded slice
+# of the same search on every test run; these targets are the open-ended, coverage-guided one
+# the scheduled workflow runs.
+[package]
+name = "capsule-core-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "AGPL-3.0-only"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+capsule-core = { path = ".." }
+libfuzzer-sys = "0.4.13"
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "cbor_canonicalize"
+path = "fuzz_targets/cbor_canonicalize.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "signed_documents"
+path = "fuzz_targets/signed_documents.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "custody_receipt"
+path = "fuzz_targets/custody_receipt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lqip"
+path = "fuzz_targets/lqip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "media_decode"
+path = "fuzz_targets/media_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "enrollment_payload"
+path = "fuzz_targets/enrollment_payload.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hybrid_verifying_key"
+path = "fuzz_targets/hybrid_verifying_key.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "metadata_blob"
+path = "fuzz_targets/metadata_blob.rs"
+test = false
+doc = false
+bench = false
