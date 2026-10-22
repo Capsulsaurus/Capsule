@@ -166,6 +166,106 @@ impl<C: Sync + 'static> Interceptor<C> for CodedProblems {
     }
 }
 
+// ===========================================================================================
+// Retry-After
+// ===========================================================================================
+
+/// The extension member a problem names its retry instant in, as Unix seconds.
+///
+/// Every throttled or temporarily refused answer on this surface already carries one —
+/// `counter::unix_seconds` is its one spelling — which is what lets [`RetryAfter`] read it rather
+/// than every rejection learning to set a header.
+pub const RETRY_AFTER_MEMBER: &str = "retry_after";
+
+/// The response header [`RetryAfter`] attaches.
+pub const RETRY_AFTER_HEADER: &str = "Retry-After";
+
+/// The `Retry-After` header, in delta-seconds (RFC 9110 §10.2.3).
+#[derive(kynos::prelude::HeaderParams)]
+pub struct RetryAfterHeader {
+    /// Seconds until the refused request may be retried. Present exactly when the problem
+    /// carries a `retry_after` member.
+    #[header(rename = "Retry-After")]
+    retry_after: Option<u64>,
+}
+
+/// Lifts a problem's `retry_after` member onto the `Retry-After` header.
+///
+/// # Why an interceptor
+///
+/// A Kynos `ApiError` has no seam for a response header — the reason the upload surface's offset
+/// once rode a `409` as an extension member — and an interceptor sees every response the chain
+/// beneath it produces. So the rejections keep saying *when* in the body, as they always have,
+/// and this says it again where HTTP clients look: a `429`, a `503` or a `507` that carries a
+/// retry instant leaves with `Retry-After` (transfer/upload.md, Hostile Clients).
+///
+/// # What it reads, and what it leaves alone
+///
+/// Only an `application/problem+json` body carrying an integer `retry_after`; everything else is
+/// passed through without its body being touched, so a ranged ciphertext delivery is never
+/// buffered. The header is the **delta** from the server's own clock to that instant, never
+/// negative: an instant already past is `0`, "retry now".
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RetryAfter;
+
+impl RetryAfter {
+    /// The interceptor.
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl<C> Interceptor<C> for RetryAfter
+where
+    C: kynos::di::Provides<crate::upload::UploadContext> + Sync + 'static,
+{
+    type Reads = ();
+    type Adds = RetryAfterHeader;
+    /// Never answers on its own.
+    type Short = Infallible;
+
+    async fn intercept(
+        &self,
+        request: Request,
+        (): (),
+        context: &C,
+        next: Next<'_, C>,
+    ) -> Result<Continued<RetryAfterHeader>, Infallible> {
+        let mut continued = next.run(request).await;
+        if !is_problem(continued.headers()) {
+            return Ok(continued.with_headers(RetryAfterHeader { retry_after: None }));
+        }
+
+        let status = continued.status().as_u16();
+        let bytes = match collect(continued.take_body()).await {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                tracing::error!(%error, status, "a problem body could not be read for its retry hint");
+                return Ok(continued.with_headers(RetryAfterHeader { retry_after: None }));
+            }
+        };
+        let instant = retry_instant(&bytes);
+        continued.set_body(kynos::http::body::Body::from_bytes(bytes));
+
+        let upload: crate::upload::UploadContext = context.provide();
+        let now = crate::counter::unix_seconds(upload.clock().now());
+        let retry_after = instant.map(|at| at.saturating_sub(now));
+        if let Some(seconds) = retry_after {
+            tracing::debug!(status, seconds, "a refusal carries Retry-After");
+        }
+        Ok(continued.with_headers(RetryAfterHeader { retry_after }))
+    }
+}
+
+/// The `retry_after` instant a problem body carries, if it carries one.
+fn retry_instant(bytes: &[u8]) -> Option<u64> {
+    serde_json::from_slice::<serde_json::Value>(bytes)
+        .ok()?
+        .get(RETRY_AFTER_MEMBER)?
+        .as_u64()
+}
+
 /// Whether the response is an RFC 9457 problem.
 fn is_problem(headers: &http::HeaderMap) -> bool {
     headers
@@ -289,6 +389,26 @@ mod tests {
         let body = Bytes::from_static(br#"{"status":418}"#);
         let coded: serde_json::Value = serde_json::from_slice(&coded(418, body)).expect("json");
         assert_eq!(coded["code"], UNMAPPED);
+    }
+
+    /// The retry instant is read from the member every throttled answer carries, and from
+    /// nothing else.
+    #[test]
+    fn the_retry_instant_is_the_problems_own_member() {
+        assert_eq!(
+            retry_instant(
+                br#"{"status":429,"code":"error.upload.rate_limited","retry_after":1700000060}"#
+            ),
+            Some(1_700_000_060)
+        );
+        for body in [
+            &br#"{"status":503,"code":"error.request.failed"}"#[..],
+            br#"{"retry_after":"soon"}"#,
+            br#"{"retry_after":-5}"#,
+            b"not json",
+        ] {
+            assert_eq!(retry_instant(body), None);
+        }
     }
 
     /// The media-type test is the guard that keeps ciphertext off this path.

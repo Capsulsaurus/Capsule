@@ -399,6 +399,8 @@ fn every_ceiling_is_sized_from_its_own_window() {
         CounterKey::DropLink(String::new()),
         CounterKey::DropSource(String::new()),
         CounterKey::DeepVerify(UserId::new("u")),
+        CounterKey::UploadSessions(UserId::new("u")),
+        CounterKey::UploadChunks(UserId::new("u")),
         CounterKey::SecondFactor(String::new()),
         CounterKey::RegistrationSource(String::new()),
         CounterKey::OidcAuthorize(String::new()),

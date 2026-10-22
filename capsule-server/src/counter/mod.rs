@@ -167,6 +167,18 @@ pub enum CounterKey {
     DropSource(String),
     /// Deep storage verifications for one account (`S-C41`).
     DeepVerify(UserId),
+    /// Upload sessions opened by one account (transfer/upload.md, Hostile Clients).
+    ///
+    /// Keyed on the authenticated uploader, never on the session or the hash: both are values
+    /// the caller mints per request, so a budget keyed on either is a budget each request
+    /// renews.
+    UploadSessions(UserId),
+    /// Chunks appended by one account, across every session it holds (transfer/upload.md,
+    /// Hostile Clients).
+    ///
+    /// Per account and not per session, for the reason [`Self::UploadSessions`] is: a session
+    /// is cheap to open, so a per-session budget is one a flood multiplies by opening more.
+    UploadChunks(UserId),
     /// Code attempts against one second-factor challenge (`S-C55`).
     ///
     /// Keyed on the **challenge** and not the account, deliberately. A per-account key would let
@@ -292,6 +304,8 @@ impl CounterKey {
             Self::DropLink(_) => "drop_link",
             Self::DropSource(_) => "drop_source",
             Self::DeepVerify(_) => "deep_verify",
+            Self::UploadSessions(_) => "upload_sessions",
+            Self::UploadChunks(_) => "upload_chunks",
             Self::SecondFactor(_) => "second_factor",
             Self::RegistrationSource(_) => "registration_source",
             Self::OidcAuthorize(_) => "oidc_authorize",
@@ -319,6 +333,7 @@ impl CounterKey {
                 ceilings::SOURCE_ADDRESS
             }
             Self::DeepVerify(_) => ceilings::DEEP_VERIFY,
+            Self::UploadSessions(_) | Self::UploadChunks(_) => ceilings::UPLOADING_ACCOUNT,
             Self::SecondFactor(_) => ceilings::SECOND_FACTOR,
             Self::OidcAuthorize(_) => ceilings::OIDC_AUTHORIZE,
             Self::OidcAuthorizeRefused => ceilings::OIDC_AUTHORIZE_REFUSED,
@@ -333,7 +348,10 @@ impl CounterKey {
     /// that carries it. Paired with [`Self::as_str`], which names the kind.
     pub fn scope(&self) -> &str {
         match self {
-            Self::LoginAttempts(user) | Self::DeepVerify(user) => user.as_str(),
+            Self::LoginAttempts(user)
+            | Self::DeepVerify(user)
+            | Self::UploadSessions(user)
+            | Self::UploadChunks(user) => user.as_str(),
             Self::EnrollmentRedemption(spelling) => spelling.as_str(),
             Self::ShareLink(scope)
             | Self::ShareSource(scope)
@@ -497,6 +515,15 @@ pub mod ceilings {
     /// Bounded by the directory, as `LOGIN_ATTEMPTS` is, and reached only by accounts that asked
     /// for a deep scan in the last hour.
     pub const DEEP_VERIFY: usize = 10_000;
+
+    /// [`CounterKey::UploadSessions`](super::CounterKey::UploadSessions) and
+    /// [`CounterKey::UploadChunks`](super::CounterKey::UploadChunks) — 1-minute windows, keyed on
+    /// an authenticated account.
+    ///
+    /// Bounded by the directory, as `LOGIN_ATTEMPTS` is: only an account that uploaded in the
+    /// last minute holds a window, and no caller can mint a key without an account. Each variant
+    /// is its own partition at this size.
+    pub const UPLOADING_ACCOUNT: usize = 10_000;
 
     /// The three source-address keys — 1-minute and 1-hour windows, keyed on a client address.
     ///

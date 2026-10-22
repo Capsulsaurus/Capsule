@@ -46569,6 +46569,16 @@
         }
       }
     },
+    "error.upload.rate_limited": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uploading is paused for a moment. It'll resume on its own."
+          }
+        }
+      }
+    },
     "error.upload.receipt_not_available": {
       "localizations": {
         "ar": {
@@ -46985,6 +46995,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "此變更基於該項目的過時版本。"
+          }
+        }
+      }
+    },
+    "error.upload.storage_full": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The server is out of storage space. Uploading will resume once space is freed."
           }
         }
       }
