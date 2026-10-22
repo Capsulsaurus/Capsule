@@ -235,6 +235,7 @@ impl MlsDeviceIdentity {
             dek_public: None,
             added_at: added_at.to_string(),
             revoked_at: None,
+            unknown: Default::default(),
         }
     }
 
@@ -251,6 +252,7 @@ impl MlsDeviceIdentity {
             directory_version,
             updated_at: updated_at.to_string(),
             devices: vec![self.directory_entry(updated_at)],
+            unknown: Default::default(),
         }
         .sign(ik)
     }

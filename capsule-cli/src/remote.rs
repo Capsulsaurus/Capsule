@@ -1661,7 +1661,7 @@ pub fn sources_kept_offline_line(count: usize) -> String {
 /// `capsule verify`: ask the server whether it durably holds each asset in `options`, and with
 /// `options.signed` keep its signed answer in each asset's attestation log.
 ///
-/// The orchestration is [`verify::verify_assets`]; this function supplies its network legs over
+/// The orchestration is `verify::verify_assets`; this function supplies its network legs over
 /// the SDK. A signed run first fetches the server's attestation-key history, as a push does,
 /// and every attestation is verified under it, bound to a nonce drawn fresh per request
 /// ([`ReleaseCoordinator::fetch_verified_attestation`]). An attestation that does not verify is

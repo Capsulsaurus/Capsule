@@ -8,7 +8,9 @@
 //! and the protocol pin). [`FfiCapsuleClient::login`]/[`register`](crate::ffi::FfiCapsuleClient::register)
 //! return an [`FfiSession`] **handle** — an opaque object that owns the token store
 //! internally. Every subsequent call ([`upload`](crate::ffi::FfiSession::upload),
+//! [`push_asset`](crate::ffi::FfiSession::push_asset),
 //! [`upload_status`](crate::ffi::FfiSession::upload_status),
+//! [`fetch_blob_to_path`](crate::ffi::FfiSession::fetch_blob_to_path),
 //! [`sync_pull`](crate::ffi::FfiSession::sync_pull),
 //! [`logout`](crate::ffi::FfiSession::logout)) rides that handle. **Tokens never cross the FFI
 //! boundary raw**: the S-D7 session store injects and auto-refreshes the bearer
@@ -35,14 +37,21 @@
 //! `code` (which clients localize) plus the English detail `message` (which stays
 //! English) — mirroring the server's `{ error, code }` contract.
 
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use capsule_core::import::UploadPolicy;
 use capsule_core::lifecycle::LifecycleError;
 use secrecy::{ExposeSecret as _, SecretString};
 
 use crate::auth::{AuthClient, AuthError, LoginOutcome, Session};
 use crate::directory::{DirectoryClient, DirectoryError};
+use crate::fetch::{FetchError, HttpBlobSource, RangedFetcher};
+use crate::net::ConnectionClass;
+use crate::push::{AssetPushReport, PushError, PushedBlob};
 use crate::recovery::{EscrowStored, RecoveryClient, RecoveryError};
+use crate::staged::{StagedScheduler, TierSessionOutcome};
 use crate::sync::{
     BlobManifest, BlobRef, ChangeKind, FeedEntry, SyncConsumer, SyncCursor, SyncError, SyncPage,
 };
@@ -131,6 +140,16 @@ pub enum FfiError {
         /// English detail (developer/log message).
         message: String,
     },
+    /// A blob fetch ([`FfiSession::fetch_blob_to_path`]) failed: the blob is gone, still
+    /// awaiting its original, refused, did not hash to its content address, or could not be
+    /// written locally. Nothing is left at the destination path.
+    #[error("blob fetch failed ({code:?}): {message}")]
+    Fetch {
+        /// Stable `error.*` catalog code, when one applies (e.g. `error.blob.pending_upload`).
+        code: Option<String>,
+        /// English detail (developer/log message).
+        message: String,
+    },
     /// A foreign argument was structurally invalid (e.g. an un-parseable URL) before
     /// any network call.
     #[error("invalid argument: {message}")]
@@ -214,6 +233,34 @@ impl From<UploadError> for FfiError {
         };
         Self::Upload {
             code,
+            message: err.to_string(),
+        }
+    }
+}
+
+impl From<PushError> for FfiError {
+    fn from(err: PushError) -> Self {
+        // A transfer failure keeps the upload mapping (and with it the auth identity of a
+        // refused credential); everything else a push can say is an upload-flow failure.
+        if let PushError::Upload(upload) = err {
+            return upload.into();
+        }
+        Self::Upload {
+            code: err.error_code().map(str::to_string),
+            message: err.to_string(),
+        }
+    }
+}
+
+impl From<FetchError> for FfiError {
+    fn from(err: FetchError) -> Self {
+        // A fetch the session could not authorize keeps its auth identity, as the upload and
+        // sync mappings do, so the app re-authenticates rather than retrying.
+        if let FetchError::Unauthenticated { code, message } = err {
+            return Self::Auth { code, message };
+        }
+        Self::Fetch {
+            code: err.error_code().map(str::to_string),
             message: err.to_string(),
         }
     }
@@ -480,6 +527,58 @@ impl From<HeadInfo> for FfiUploadStatus {
             offset: info.offset,
             total_size: info.total_size,
             status: info.status,
+        }
+    }
+}
+
+// ─── Push report mirrors ─────────────────────────────────────────────────────
+
+/// How one blob of a pushed asset resolved — FFI mirror of [`PushedBlob`].
+#[derive(uniffi::Record)]
+pub struct FfiPushedBlob {
+    /// The ladder tier the blob occupies (`index` / `preview` / `original`), the vocabulary
+    /// [`FfiUploadBlob::tier`] uses.
+    pub tier: String,
+    /// The blob's content address (lowercase hex).
+    pub hash: String,
+    /// Whether it transferred or merged onto a blob the server already held.
+    pub outcome: FfiUploadOutcome,
+}
+
+impl From<PushedBlob> for FfiPushedBlob {
+    fn from(blob: PushedBlob) -> Self {
+        Self {
+            tier: workspace::tier_name(blob.tier),
+            hash: blob.hash,
+            outcome: match blob.outcome {
+                TierSessionOutcome::Uploaded { session_id } => {
+                    FfiUploadOutcome::Completed { session_id }
+                }
+                TierSessionOutcome::AlreadyStored { asset_ref } => {
+                    FfiUploadOutcome::AlreadyStored { asset_ref }
+                }
+            },
+        }
+    }
+}
+
+/// What [`FfiSession::push_asset`] did — FFI mirror of [`AssetPushReport`].
+#[derive(uniffi::Record)]
+pub struct FfiPushReport {
+    /// The asset id (UUID string).
+    pub asset_id: String,
+    /// Every blob whose session was opened, in ladder order.
+    pub pushed: Vec<FfiPushedBlob>,
+    /// Total bytes handed to the upload client, the original included.
+    pub bytes: u64,
+}
+
+impl From<AssetPushReport> for FfiPushReport {
+    fn from(report: AssetPushReport) -> Self {
+        Self {
+            asset_id: report.asset_id,
+            pushed: report.pushed.into_iter().map(FfiPushedBlob::from).collect(),
+            bytes: report.bytes,
         }
     }
 }
@@ -783,6 +882,10 @@ impl FfiSession {
 
     /// Upload a full ciphertext blob (`data`) under `request`, driving the adaptive,
     /// resumable protocol with the code-driven recovery matrix.
+    ///
+    /// `data` crosses the boundary whole, so this is for blobs an app already holds in memory.
+    /// To push a sealed asset, original included, use [`push_asset`](Self::push_asset), which
+    /// never holds the original whole.
     pub async fn upload(
         &self,
         request: FfiUploadRequest,
@@ -801,6 +904,78 @@ impl FfiSession {
     ) -> Result<Option<FfiUploadStatus>, FfiError> {
         let info = self.upload_client().head(&session_id).await?;
         Ok(info.map(FfiUploadStatus::from))
+    }
+
+    /// **Push** one sealed asset of `workspace` — every blob of its bundle, in ladder order
+    /// (provenance and metadata, then derivative manifests and derivatives, then the
+    /// original) — driving `capsule_sdk::push::push_bundle` inside the SDK.
+    ///
+    /// The original never crosses the boundary: its ciphertext is re-derived from the
+    /// plaintext on disk one upload chunk window at a time, so memory is bounded by the
+    /// transfer window whatever the original's size. The workspace lock is held only while the
+    /// bundle is built, never across the network.
+    ///
+    /// Every blob is driven; one the server already holds answers `duplicate_blob` and comes
+    /// back [`FfiUploadOutcome::AlreadyStored`], so pushing twice is safe. The album must
+    /// already be provisioned on the server.
+    pub async fn push_asset(
+        &self,
+        workspace: Arc<FfiWorkspace>,
+        asset_id: String,
+    ) -> Result<FfiPushReport, FfiError> {
+        let bundle = workspace.bundle(&asset_id)?;
+        tracing::info!(
+            asset_id = %bundle.asset_id,
+            original_bytes = bundle.original.size(),
+            "ffi: pushing a sealed asset"
+        );
+        // Eager, unmetered ordering: the policy `upload` callers have always had. A
+        // connection class from the app would plug in here.
+        let scheduler = StagedScheduler::new(UploadPolicy::Full, ConnectionClass::Unmetered);
+        let report = crate::push::push_bundle(
+            &self.upload_client(),
+            &scheduler,
+            &bundle,
+            &HashSet::<String>::new(),
+            false,
+        )
+        .await?;
+        Ok(report.into())
+    }
+
+    /// **Fetch** the blob at content address `hash` (`size` bytes, as the sync feed's
+    /// [`FfiBlobRef`] declares) into the file at `path`, created or truncated.
+    ///
+    /// The blob streams to disk in bounded `Range` windows, so memory is bounded by one window
+    /// whatever the blob's size, and its content address is checked as it lands. On any error
+    /// the file is removed: a path this returns `Ok` for holds exactly the verified ciphertext.
+    /// A session that cannot authorize the fetch is [`FfiError::Auth`], so the app signs in
+    /// again; every other failure is [`FfiError::Fetch`].
+    ///
+    /// `blob_base_url` is the root the blob route hangs off (`{blob_base_url}/blob/{hash}`),
+    /// the server's `/v1` root.
+    pub async fn fetch_blob_to_path(
+        &self,
+        blob_base_url: String,
+        hash: String,
+        size: u64,
+        path: String,
+    ) -> Result<(), FfiError> {
+        if hash.len() != 64 || !hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+            return Err(FfiError::InvalidArgument {
+                message: format!("hash: {hash:?} is not a lowercase hex SHA-256"),
+            });
+        }
+        let path = PathBuf::from(path);
+        tracing::info!(%hash, size, path = %path.display(), "ffi: fetching a blob to disk");
+        let source = HttpBlobSource::new(self.session.clone(), blob_base_url);
+        let result = fetch_to_file(&source, &hash, size, &path).await;
+        if let Err(error) = &result {
+            tracing::warn!(%hash, %error, "ffi: blob fetch failed; removing the partial file");
+            // Best effort: the file may never have been created.
+            let _ = std::fs::remove_file(&path);
+        }
+        result
     }
 
     /// Pull one page of the key-free sync feed after `cursor` from `api_base_url`
@@ -943,6 +1118,29 @@ impl FfiSession {
         );
         UploadClient::new(transport)
     }
+}
+
+/// Stream the blob at `hash` from `source` into a fresh file at `path`, synced to disk once
+/// its content address has checked out. Leaves cleanup of a failed fetch to the caller.
+async fn fetch_to_file<B: crate::fetch::BlobSource>(
+    source: &B,
+    hash: &str,
+    size: u64,
+    path: &Path,
+) -> Result<(), FfiError> {
+    let local = |action: &str, e: std::io::Error| FfiError::Fetch {
+        code: None,
+        message: format!("{action} {}: {e}", path.display()),
+    };
+    let file = std::fs::File::create(path).map_err(|e| local("creating", e))?;
+    let mut sink = std::io::BufWriter::new(file);
+    RangedFetcher::new(ConnectionClass::Unmetered)
+        .fetch_into(source, hash, size, &mut sink)
+        .await?;
+    sink.into_inner()
+        .map_err(|e| local("flushing", e.into_error()))?
+        .sync_all()
+        .map_err(|e| local("syncing", e))
 }
 
 #[cfg(test)]
