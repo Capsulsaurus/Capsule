@@ -116,8 +116,8 @@ ignore = [
     # Unmaintained, no vulnerability. basic-toml is the config parser inside askama_derive, a
     # proc macro reached through uniffi_bindgen (uniffi 0.31.1). askama_derive 0.16.1, the
     # latest release, still depends on it, so no uniffi upgrade drops it. It parses only
-    # askama's build-time configuration. Remove when askama_derive replaces basic-toml.
-    { id = "RUSTSEC-2026-0374", reason = "basic-toml (unmaintained) via askama_derive (latest 0.16.1) via uniffi_bindgen; compile-time only" },
+    # askama's build-time configuration. Remove when askama_derive replaces basic-toml, in #720.
+    { id = "RUSTSEC-2026-0374", reason = "basic-toml (unmaintained) via askama_derive (latest 0.16.1) via uniffi_bindgen; compile-time only; tracked in #720" },
 ]
 
 [bans]
