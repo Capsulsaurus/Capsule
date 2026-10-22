@@ -53,7 +53,10 @@
 //! decided here: nothing in this module makes the document promise a check the server skips,
 //! which is the property that mattered.
 
+use std::time::Duration;
+
 use kynos::middleware::limits::BodySize;
+use kynos::server::protocol::Http1Config;
 
 /// The largest request body any operation will accept, in bytes.
 ///
@@ -142,9 +145,45 @@ pub fn federation_body_size() -> BodySize {
     BodySize::new(MAX_FEDERATION_BODY_BYTES)
 }
 
+/// The listener's HTTP/1 settings: the header-read and keep-alive idle bound (#717).
+///
+/// transfer/upload.md bounds every connection — "header, body-read and idle timeouts close a
+/// connection that sends too slowly". This is the header and idle half; the body-read half is
+/// the chunk extractor's ([`crate::upload::body`]), because only there can it end before
+/// finalization begins.
+///
+/// # One timeout, two bounds
+///
+/// hyper's HTTP/1 driver arms its header-read timer each time the connection waits for a
+/// request head — on the first request, and again after every kept-alive response. So the same
+/// `header_read_timeout` both closes a client that dribbles its head and closes a kept-alive
+/// connection that sits idle for that long, and a separate idle setting would have nothing to
+/// configure. `tests/limits.rs` pins both behaviours on a socket.
+///
+/// Keep-alive itself stays on: a client uploading many chunks reuses one connection, and the
+/// idle bound is what keeps that from being a way to hold one open.
+///
+/// # What this cannot bound
+///
+/// A connection that sends **no byte at all** is held by Kynos's protocol sniff (it reads the
+/// first bytes to tell HTTP/1 from HTTP/2) before hyper's driver, and so before this timer,
+/// exists. Kynos 0.1.0 exposes no deadline for that read; only `MAX_CONNECTIONS` bounds it.
+pub fn http1(header_read_timeout: Duration) -> Http1Config {
+    Http1Config::default()
+        .keep_alive(true)
+        .header_read_timeout(Some(header_read_timeout))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_listener_carries_the_configured_header_bound_and_keeps_connections_alive() {
+        let config = http1(Duration::from_secs(7));
+        assert_eq!(config.header_read_timeout, Some(Duration::from_secs(7)));
+        assert!(config.keep_alive);
+    }
 
     /// The upload protocol's own maximum chunk size.
     ///

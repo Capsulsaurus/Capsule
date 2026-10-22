@@ -1895,6 +1895,7 @@
     <string name="error_upload_checksum_mismatch">Upload data was corrupted in transit. Retrying…</string>
     <string name="error_upload_chunk_conflict">The upload sent conflicting data and was stopped.</string>
     <string name="error_upload_chunk_not_aligned">An upload chunk was incorrectly sized.</string>
+    <string name="error_upload_chunk_timeout">An upload chunk took too long to arrive.</string>
     <string name="error_upload_chunk_too_large">An upload chunk exceeded the maximum chunk size.</string>
     <string name="error_upload_content_hash_mismatch">The upload failed integrity verification and was discarded.</string>
     <string name="error_upload_device_not_authorized">This device isn\'t authorized to upload. Re-enroll it and try again.</string>
