@@ -152,9 +152,10 @@ re-announced manifest can only restore what its owner's devices signed.
 ([`capsule-server::sync::reannounce`](https://github.com/Capsulsaurus/Capsule/blob/master/capsule-server/src/sync/reannounce.rs)).
 A manifest passes the write authority an upload's envelope passes, except the clock-drift
 check: `created_by_user` is the caller, the caller may write to its album and it carries the
-album's pin, and its device is in the caller's directory from before its timestamp. A head that
-names no metadata blob is walked back through the store to the manifest that does, and the
-manifests walked past become the row's superseded chain. A deletion is not re-announced, and
+album's pin, and its device is in the caller's directory from before its timestamp. The head is
+walked back through the store to its `create`: every manifest before it becomes the row's
+superseded chain, as the live index retains it, and the newest one naming a metadata blob
+supplies the metadata. A manifest missing from that walk is answered as a missing blob. A deletion is not re-announced, and
 derivatives are not restored: an asset manifest does not name them, so the next push re-attaches
 them. A restore appends the ledger entries a finalization would, before the index is touched,
 so a later rebuild keeps the row. The client side is `capsule sync reannounce`, which

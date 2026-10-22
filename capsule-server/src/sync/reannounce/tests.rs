@@ -304,6 +304,13 @@ impl Asset {
         self.record(self.core(action, Some(hash_bytes(prior))))
     }
 
+    /// A `metadata-update` chaining onto `prior`'s record, committing to `metadata`.
+    fn update(&self, prior: &[u8], metadata: &[u8]) -> Vec<u8> {
+        let mut core = self.core(Action::MetadataUpdate, Some(hash_bytes(prior)));
+        core.metadata_blob_hash = Some(hash_bytes(metadata));
+        self.record(core)
+    }
+
     /// Put the original and metadata blobs in the store, as a rebuild leaves them.
     async fn hold(&self, server: &Server) {
         server.store(&self.original).await;
@@ -489,6 +496,136 @@ async fn a_derivative_head_walks_back_to_the_manifest_naming_the_metadata() {
     assert_eq!(roles(&again), roles(&row));
     assert_eq!(again.chain_head, row.chain_head);
     assert_eq!(again.superseded, row.superseded);
+}
+
+/// The scrub's findings over `server`'s index and store, by class.
+async fn scrub_classes(server: &Server) -> Vec<&'static str> {
+    use crate::scrub::{Depth, ScrubContext, scrub};
+    let context = ScrubContext::new(
+        server.index.clone(),
+        server.blobs.clone(),
+        Arc::new(InMemoryUploadSessions::new(
+            server.clock.clone(),
+            jiff::SignedDuration::from_hours(24),
+        )),
+        Arc::new(crate::share::InMemoryShares::default()),
+        server.clock.clone(),
+    );
+    scrub(&context, Depth::Structural)
+        .await
+        .expect("a scrub pass")
+        .findings
+        .iter()
+        .map(crate::scrub::Finding::class)
+        .collect()
+}
+
+/// Re-announce a head whose chain runs `create` → `metadata-update` → `extra`, and check the
+/// restored row keeps the whole chain: the scrub walks it back to the `create`, the collector
+/// counts every earlier manifest as referenced, and a rebuild reproduces it.
+async fn reannounce_after_an_update(extra: Option<Action>) {
+    let server = Server::new();
+    let asset = Asset::new(&format!("updated-{extra:?}"));
+    let edited = b"edited-metadata".to_vec();
+    server.store(&asset.original).await;
+    server.store(&edited).await;
+    let create = asset.create();
+    let update = asset.update(&create, &edited);
+    server.store(&create).await;
+    server.store(&update).await;
+    let head = match extra {
+        Some(action) => {
+            let head = asset.after(&update, action);
+            server.store(&head).await;
+            head
+        }
+        None => update.clone(),
+    };
+
+    let answer = server.reannounce(alice(), &head).await;
+    assert!(matches!(answer, Answer::Restored { .. }), "got {answer:?}");
+    let row = server
+        .index
+        .read(&asset.asset_id())
+        .await
+        .expect("read")
+        .expect("a row");
+    let mut chain = vec![address(&create)];
+    if extra.is_some() {
+        chain.push(address(&update));
+    }
+    assert_eq!(
+        row.superseded, chain,
+        "every manifest before the head, oldest first"
+    );
+    assert_eq!(row.address_for(BlobRole::Provenance), Some(&address(&head)));
+    assert_eq!(row.address_for(BlobRole::Metadata), Some(&address(&edited)));
+
+    let classes = scrub_classes(&server).await;
+    assert!(
+        !classes.contains(&"chain_broken"),
+        "the chain walks back to its create: {classes:?}"
+    );
+    assert!(
+        !classes.contains(&"orphan"),
+        "nothing restored is left for the collector: {classes:?}"
+    );
+    for manifest in [&create, &update, &head] {
+        assert!(
+            server
+                .index
+                .reference_count(&address(manifest))
+                .await
+                .expect("a count")
+                > 0,
+            "the collector counts every signed manifest of the chain as referenced"
+        );
+    }
+
+    let rebuilt = server.rebuilt().await;
+    let again = rebuilt
+        .read(&asset.asset_id())
+        .await
+        .expect("read")
+        .expect("a rebuilt row");
+    assert_eq!(again.superseded, row.superseded);
+    assert_eq!(roles(&again), roles(&row));
+    assert_eq!(again.chain_head, row.chain_head);
+}
+
+#[tokio::test]
+async fn a_metadata_update_head_restores_its_whole_chain() {
+    reannounce_after_an_update(None).await;
+}
+
+#[tokio::test]
+async fn a_derivative_after_an_update_restores_its_whole_chain() {
+    reannounce_after_an_update(Some(Action::DerivativeAdd)).await;
+}
+
+#[tokio::test]
+async fn a_manifest_before_the_metadata_that_the_store_lacks_is_named() {
+    let server = Server::new();
+    let asset = Asset::new("early-gap");
+    let edited = b"early-gap-edited".to_vec();
+    server.store(&asset.original).await;
+    server.store(&edited).await;
+    let create = asset.create();
+    let update = asset.update(&create, &edited);
+    server.store(&update).await;
+
+    let answer = server.reannounce(alice(), &update).await;
+    assert_eq!(
+        answer,
+        Answer::MissingBlobs {
+            asset: asset.asset_id(),
+            missing: vec![address(&create)],
+        }
+    );
+    assert!(
+        server.entries(alice()).await.is_empty(),
+        "nothing is ledgered"
+    );
 }
 
 #[tokio::test]

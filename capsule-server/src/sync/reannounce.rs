@@ -28,11 +28,13 @@
 //! # What is restored
 //!
 //! The row the chain head implies: the head as its provenance blob, the metadata blob of the
-//! most recent manifest that names one, and the original every manifest names. A head that names
-//! no metadata blob (a derivative or a trash-restore) is walked back through the store, one
-//! `prior_provenance_hash` at a time, to the manifest that does; the manifests walked past are
-//! the row's superseded chain. Every blob must be in the store, or the answer names what is
-//! missing and nothing is written: the client re-uploads through the transfer protocol. A
+//! most recent manifest that names one, and the original every manifest names. The head is
+//! walked back through the store, one `prior_provenance_hash` at a time, to the asset's `create`:
+//! every manifest before the head is the row's superseded chain (`S-C52`), which the scrub walks
+//! back to the `create` and the collector counts as referenced, so a partial chain would read as
+//! broken and lose its older manifests to collection. Every blob, the chain's manifests included,
+//! must be in the store, or the answer names what is missing and nothing is written: the client
+//! re-uploads through the transfer protocol. A
 //! deletion is not re-announced: a tombstone is not something a client loses, and restoring one
 //! would need the retention facts a purge may already have acted on.
 //!
@@ -42,8 +44,9 @@
 //! # Ledgered like a finalization
 //!
 //! A restored row that no ledger entry names would be lost again by the next rebuild. So the
-//! restore appends what a finalization appends, in the same order: custody entries for the
-//! provenance, metadata and original blobs, and one lifecycle entry per manifest after the one
+//! restore appends what a finalization appends, in the same order: custody entries for every
+//! provenance blob from the `create` through the manifest naming the metadata, oldest first, and
+//! for the metadata and original blobs, and one lifecycle entry per manifest after the one
 //! that named the metadata, all **before** the index is touched; then the entry resolving them
 //! with the sequence number the restore minted. A rebuild replays them into the same row.
 //!
@@ -69,11 +72,12 @@ use crate::upload::{AlbumWriteAccess, UploadContext};
 /// a batch well before this in practice; the count bounds the server work one request buys.
 pub const MAX_REANNOUNCE_BATCH: usize = 64;
 
-/// The furthest a head is walked back to find the manifest naming its metadata blob.
+/// The longest chain a head is walked back through to its `create`.
 ///
-/// Derivatives and trash moves are the only manifests that name none, and an asset accumulates a
-/// handful. A chain longer than this is answered as malformed rather than read without bound.
-pub const MAX_CHAIN_WALK: usize = 16;
+/// Each step is one manifest read from the store, a few kilobytes. An asset gathers one manifest
+/// per edit, derivative and trash move, so a real chain is far shorter; a longer one is answered
+/// as malformed rather than read without bound.
+pub const MAX_CHAIN_WALK: usize = 256;
 
 /// Why a re-announced manifest was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -327,10 +331,12 @@ enum Walk {
     Malformed(&'static str),
 }
 
-/// A walked chain: newest first, ending at the newest manifest that names a metadata blob.
+/// A walked chain: newest first, from the head the client sent back to the asset's `create`.
 struct Chain {
     walked: Vec<Walked>,
-    /// The metadata blob the last manifest of `walked` names.
+    /// The index in `walked` of the newest manifest that names a metadata blob.
+    base: usize,
+    /// The metadata blob that manifest names.
     metadata: Hash32,
 }
 
@@ -342,11 +348,28 @@ impl Chain {
 
     /// The newest manifest naming a metadata blob.
     fn base(&self) -> &Walked {
-        &self.walked[self.walked.len() - 1]
+        &self.walked[self.base]
+    }
+
+    /// The manifests from the `create` up to and including the base, oldest first: what the
+    /// restore ledgers as provenance custody, so a rebuild reproduces the superseded chain.
+    fn through_base(&self) -> impl Iterator<Item = &Walked> {
+        self.walked[self.base..].iter().rev()
+    }
+
+    /// The manifests after the base, oldest first: what the restore ledgers as lifecycle ops.
+    fn after_base(&self) -> impl Iterator<Item = &Walked> {
+        self.walked[..self.base].iter().rev()
     }
 }
 
-/// Walk back from the head to the newest manifest naming a metadata blob.
+/// Walk back from the head to the asset's `create`, noting the newest manifest that names a
+/// metadata blob on the way.
+///
+/// To the `create` and not only to the metadata: every manifest before the head is the row's
+/// superseded chain (`S-C52`), which the scrub walks back to a `create` and the collector
+/// counts as referenced. A row restored with only part of it would read as a broken chain, and
+/// the manifests left out would be collected as orphans.
 async fn walk(
     upload: &UploadContext,
     head: AssetManifest,
@@ -358,20 +381,32 @@ async fn walk(
         hash: head_hash,
         manifest: head,
     }];
+    let mut base: Option<(usize, Hash32)> = None;
     loop {
-        let current = &walked[walked.len() - 1].manifest;
-        if let Some(metadata) = current.core.metadata_blob_hash {
-            return Ok(Ok(Chain { walked, metadata }));
+        let at = walked.len() - 1;
+        let current = &walked[at].manifest;
+        if base.is_none()
+            && let Some(metadata) = current.core.metadata_blob_hash
+        {
+            base = Some((at, metadata));
+        }
+        if current.core.action.is_create() {
+            // `structural_ok` holds a create to naming its metadata, so the base is set.
+            let Some((base, metadata)) = base else {
+                return Ok(Err(Walk::Malformed("a create names no metadata")));
+            };
+            return Ok(Ok(Chain {
+                walked,
+                base,
+                metadata,
+            }));
         }
         if walked.len() > MAX_CHAIN_WALK {
             return Ok(Err(Walk::Malformed("the chain is longer than the walk")));
         }
-        // `structural_ok` holds every manifest here to "a predecessor iff not a create", and a
-        // create names its metadata, so a manifest without either is not one the parser passed.
+        // `structural_ok` holds every manifest here to "a predecessor iff not a create".
         let Some(prior) = current.core.prior_provenance_hash else {
-            return Ok(Err(Walk::Malformed(
-                "a manifest names no metadata and no predecessor",
-            )));
+            return Ok(Err(Walk::Malformed("a non-create names no predecessor")));
         };
         let address = address_of(prior)?;
         let parsed = manifest::read(upload.blobs(), &address)
@@ -401,8 +436,9 @@ async fn walk(
 /// The row a walked chain implies, and the blobs it names, or what the store lacks.
 struct Restore {
     row: AssetRow,
-    /// The metadata-bearing manifest's provenance blob, and the metadata and original blobs,
-    /// with the sizes the store reports: what the custody entries name.
+    /// The provenance blobs from the `create` through the metadata-bearing manifest, oldest
+    /// first, then the metadata and original blobs, with the sizes the store reports: what the
+    /// custody entries name.
     custody: Vec<BlobRef>,
 }
 
@@ -414,19 +450,18 @@ async fn assemble(
     asset: &AssetId,
     chain: &Chain,
 ) -> Result<Result<Restore, Vec<ContentAddress>>, Unavailable> {
-    let (head, base) = (chain.head(), chain.base());
-    let wanted = [
-        (BlobRole::Provenance, head.address.clone()),
-        (BlobRole::Provenance, base.address.clone()),
-        (BlobRole::Metadata, address_of(chain.metadata)?),
-        (
-            BlobRole::Original,
-            address_of(head.manifest.core.ciphertext_hash)?,
-        ),
-    ];
+    let head = chain.head();
+    let metadata = address_of(chain.metadata)?;
+    let original = address_of(head.manifest.core.ciphertext_hash)?;
+    let wanted: Vec<&ContentAddress> = chain
+        .walked
+        .iter()
+        .map(|walked| &walked.address)
+        .chain([&metadata, &original])
+        .collect();
     let mut missing = Vec::new();
     let mut sizes = std::collections::BTreeMap::new();
-    for (_, address) in &wanted {
+    for address in wanted {
         if sizes.contains_key(address) || missing.contains(address) {
             continue;
         }
@@ -451,11 +486,10 @@ async fn assemble(
         size: sizes.get(address).copied().unwrap_or_default(),
     };
 
-    let [head_provenance, base_provenance, metadata, original] = &wanted;
     let mut blobs = vec![
-        blob(head_provenance.0, &head_provenance.1),
-        blob(metadata.0, &metadata.1),
-        blob(original.0, &original.1),
+        blob(BlobRole::Provenance, &head.address),
+        blob(BlobRole::Metadata, &metadata),
+        blob(BlobRole::Original, &original),
     ];
     blobs.sort_by(|a, b| (a.role, a.address.as_str()).cmp(&(b.role, b.address.as_str())));
     let now = upload.clock().now();
@@ -485,11 +519,14 @@ async fn assemble(
     };
     Ok(Ok(Restore {
         row,
-        custody: vec![
-            blob(base_provenance.0, &base_provenance.1),
-            blob(metadata.0, &metadata.1),
-            blob(original.0, &original.1),
-        ],
+        custody: chain
+            .through_base()
+            .map(|walked| blob(BlobRole::Provenance, &walked.address))
+            .chain([
+                blob(BlobRole::Metadata, &metadata),
+                blob(BlobRole::Original, &original),
+            ])
+            .collect(),
     }))
 }
 
@@ -524,7 +561,9 @@ async fn commit(
     let received_at = clock.now().to_string();
     let base = chain.base();
 
-    // Before the index is touched: a row never exists without the entries a rebuild needs.
+    // Before the index is touched: a row never exists without the entries a rebuild needs. The
+    // provenance entries run from the `create` to the base, oldest first, so a replay supersedes
+    // each with the next as the live index did.
     for blob in &restore.custody {
         let content_hash = Hash32::from_hex(blob.address.as_str())
             .map_err(|_| Unavailable("a content address is not a digest".to_owned()))?;
@@ -534,7 +573,7 @@ async fn commit(
             blob_role: blob.role.as_str().to_owned(),
             content_hash,
             size: blob.size,
-            manifest_sha256: (blob.role == BlobRole::Provenance).then_some(base.hash),
+            manifest_sha256: (blob.role == BlobRole::Provenance).then_some(content_hash),
             upload_user_id: caller.as_str().to_owned(),
             uploader_device: Some(base.manifest.core.created_by_device.to_string()),
             received_at: received_at.clone(),
@@ -609,9 +648,8 @@ async fn commit(
 /// A manifest's hash is the next one's `prior_provenance_hash`, which is how the walk read it;
 /// the head's is the hash of the bytes the client sent.
 fn lifecycle_events(chain: &Chain, sync_seq: Option<u64>) -> Vec<LedgerEvent> {
-    chain.walked[..chain.walked.len() - 1]
-        .iter()
-        .rev()
+    chain
+        .after_base()
         .filter_map(|walked| {
             op_token(walked.manifest.core.action).map(|action| LedgerEvent::Lifecycle {
                 asset_id: walked.manifest.core.file_id.to_string(),
