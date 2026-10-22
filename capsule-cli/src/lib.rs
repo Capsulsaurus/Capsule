@@ -428,7 +428,8 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 // `--push` is still honored: an unchanged library is exactly the
                 // re-runnable case push exists to make cheap.
                 if push {
-                    return push_workspace(&ws, push_options(false, false, staged), false).await;
+                    return push_workspace(&mut ws, push_options(false, false, staged), false)
+                        .await;
                 }
                 return Ok(());
             }
@@ -483,7 +484,8 @@ async fn dispatch(cli: Cli) -> Result<()> {
             // determinism suite depends on that), and the push is a separate pass over
             // the committed library — byte-for-byte the same one `capsule push` runs.
             if push {
-                let pushed = push_workspace(&ws, push_options(false, false, staged), false).await;
+                let pushed =
+                    push_workspace(&mut ws, push_options(false, false, staged), false).await;
                 // Released whether or not every asset pushed: the gate re-asks the server
                 // about each source's own asset, so one failed asset keeps only its source.
                 let released = release_moved(&ws, &moved).await;
@@ -509,8 +511,8 @@ async fn dispatch(cli: Cli) -> Result<()> {
             staged,
             json,
         } => {
-            let ws = open_workspace(&library, passphrase_stdin)?;
-            push_workspace(&ws, push_options(dry_run, force, staged), json).await?;
+            let mut ws = open_workspace(&library, passphrase_stdin)?;
+            push_workspace(&mut ws, push_options(dry_run, force, staged), json).await?;
         }
 
         // ── Restore ───────────────────────────────────────────────────────
@@ -1586,7 +1588,7 @@ async fn reannounce_workspace(workspace: &Workspace, dry_run: bool, json: bool) 
 /// nothing else. A run-level failure (no session, no feed, no attestation keys) prints nothing
 /// on stdout; its error goes to stderr and the command exits non-zero.
 async fn push_workspace(
-    workspace: &Workspace,
+    workspace: &mut Workspace,
     options: remote::PushOptions,
     json: bool,
 ) -> Result<()> {

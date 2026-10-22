@@ -18,7 +18,7 @@ use capsule_core::library::{
     KeyPinError, ReleaseDecision, RetainReason, StorageVerdict, StorageVerifier,
     pin_attestation_keys,
 };
-use capsule_core::lifecycle::{LifecycleError, Workspace};
+use capsule_core::lifecycle::{LifecycleError, ResealRefusal, Workspace};
 use capsule_sdk::albums::{AlbumClient, AlbumTransport};
 use capsule_sdk::auth::{AuthClient, AuthError, LoginOutcome, Session};
 use capsule_sdk::client::AuthenticatedClient;
@@ -29,7 +29,7 @@ use capsule_sdk::push::{self, PushError};
 use capsule_sdk::recovery::{MintedSecret, RecoveryClient, RecoveryError};
 use capsule_sdk::staged::{StagedScheduler, TierSessionOutcome, held_from_feed};
 use capsule_sdk::sync::{FeedEntry, SyncConsumer, SyncCursor, SyncError, SyncState};
-use capsule_sdk::upload::{UploadClient, UploadTransport};
+use capsule_sdk::upload::{UploadClient, UploadError, UploadTransport};
 use capsule_sdk::verify::{
     AssetQuery, HeldRelease, ReleaseCoordinator, StorageVerifyClient, VerifiedAttestation,
     VerifyError, VerifyTransport,
@@ -977,9 +977,9 @@ pub enum AssetPushStatus {
 /// Why an asset failed, in the shape `--json` reports it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AssetPushFailure {
-    /// A stable name for where the asset stopped: `bundle`, `album`, `upload`, `unknown_blob`,
-    /// `verify_unavailable`, `not_durable`, `receipt_missing`, `receipt_rejected` or
-    /// `receipt_store`.
+    /// A stable name for where the asset stopped: `bundle`, `album`, `upload`, `create_refused`,
+    /// `epoch_key_missing`, `reseal`, `unknown_blob`, `verify_unavailable`, `not_durable`,
+    /// `receipt_missing`, `receipt_rejected` or `receipt_store`.
     pub kind: &'static str,
     /// The server's stable `error.*` code, when it supplied one.
     pub code: Option<String>,
@@ -1006,6 +1006,10 @@ pub struct AssetPushOutcome {
     pub bytes: u64,
     /// Verified custody receipts persisted for the asset this run.
     pub receipts: usize,
+    /// Whether the server refused the asset's create because the album's epoch had moved past
+    /// it, and the run re-sealed it at the album's current epoch before pushing it again
+    /// (issue #822).
+    pub resealed: bool,
     /// Why the asset failed, for a [`AssetPushStatus::Failed`] asset only.
     pub error: Option<AssetPushFailure>,
 }
@@ -1021,6 +1025,7 @@ impl AssetPushOutcome {
             deferred: 0,
             bytes: 0,
             receipts: 0,
+            resealed: false,
             error: None,
         }
     }
@@ -1038,6 +1043,16 @@ enum AssetError {
     /// A verified receipt could not be written to the library.
     #[error("the custody receipt could not be stored in the library: {0}")]
     ReceiptStore(#[from] capsule_core::library::ReceiptStoreError),
+    /// The server refused the asset's create and the library could not re-seal it at the
+    /// album's current epoch — most often because this device holds no newer album key than
+    /// the one the asset is sealed under (issue #822).
+    #[error("the server refused this create ({refused}); {error}")]
+    Reseal {
+        /// The server's refusal.
+        refused: UploadError,
+        /// Why the re-seal did not happen.
+        error: LifecycleError,
+    },
 }
 
 impl AssetError {
@@ -1046,6 +1061,20 @@ impl AssetError {
             Self::Bundle(_) => ("bundle", None),
             Self::Push(error) => (error.kind(), error.error_code().map(str::to_owned)),
             Self::ReceiptStore(_) => ("receipt_store", None),
+            Self::Reseal { refused, error } => {
+                let kind = match error {
+                    LifecycleError::ResealRefused {
+                        reason: ResealRefusal::NoNewerEpoch { .. },
+                        ..
+                    } => "epoch_key_missing",
+                    _ => "reseal",
+                };
+                let code = match refused {
+                    UploadError::Rejected { code, .. } => code.clone(),
+                    _ => None,
+                };
+                (kind, code)
+            }
         };
         AssetPushFailure {
             kind,
@@ -1306,7 +1335,7 @@ async fn restore_with(
 pub async fn push(
     remote: &RemoteConfig,
     store: &SessionStore,
-    workspace: &Workspace,
+    workspace: &mut Workspace,
     options: PushOptions,
 ) -> Result<PushSummary, RemoteError> {
     let session = resume_session(remote, store).await?;
@@ -1318,7 +1347,7 @@ pub async fn push(
 /// The push itself, over a session somebody else is responsible for persisting.
 async fn push_with(
     remote: &RemoteConfig,
-    workspace: &Workspace,
+    workspace: &mut Workspace,
     session: Session,
     options: PushOptions,
 ) -> Result<PushSummary, RemoteError> {
@@ -1470,7 +1499,7 @@ fn plan_asset<H: std::hash::BuildHasher>(
 
 /// Everything a run shares across its assets.
 struct AssetPusher<'a> {
-    workspace: &'a Workspace,
+    workspace: &'a mut Workspace,
     upload: UploadClient,
     albums: AlbumClient,
     verify: StorageVerifyClient,
@@ -1511,14 +1540,36 @@ impl AssetPusher<'_> {
             }
         }
 
-        let report = push::push_bundle(
-            &self.upload,
-            &self.scheduler,
-            &bundle,
-            &self.held,
-            self.force,
-        )
-        .await?;
+        let (bundle, report) = match self.push_bundle(&bundle).await {
+            Ok(report) => (bundle, report),
+            // Issue #822: the album's epoch moved past the one this create is sealed under, so
+            // the server refused it for good. Re-seal it at the album's current epoch and push
+            // it once more; a second refusal fails the asset like any other.
+            Err(PushError::CreateRefused { source, .. }) => {
+                tracing::warn!(
+                    amk_version = bundle.amk_version,
+                    "push: the server refused this create; re-sealing it at the album's \
+                     current epoch"
+                );
+                let resealed = self.workspace.reseal_create(&asset_id).map_err(|error| {
+                    AssetError::Reseal {
+                        refused: source,
+                        error,
+                    }
+                })?;
+                outcome.resealed = true;
+                tracing::info!(
+                    from_epoch = resealed.from_epoch,
+                    to_epoch = resealed.to_epoch,
+                    derivatives = resealed.derivatives,
+                    "push: create re-sealed; pushing it again"
+                );
+                let bundle = self.workspace.upload_bundle(&asset_id)?;
+                let report = self.push_bundle(&bundle).await?;
+                (bundle, report)
+            }
+            Err(error) => return Err(error.into()),
+        };
         outcome.already_held = report.already_held;
         outcome.deferred = report.deferred;
         outcome.bytes = report.bytes;
@@ -1553,6 +1604,21 @@ impl AssetPusher<'_> {
             "push: custody verified and receipts persisted"
         );
         Ok(())
+    }
+
+    /// Drive one bundle's ladder against server truth.
+    async fn push_bundle(
+        &self,
+        bundle: &capsule_core::lifecycle::UploadBundle,
+    ) -> Result<push::AssetPushReport, PushError> {
+        push::push_bundle(
+            &self.upload,
+            &self.scheduler,
+            bundle,
+            &self.held,
+            self.force,
+        )
+        .await
     }
 }
 
@@ -2250,6 +2316,74 @@ mod tests {
         .failure();
         assert_eq!(failure.kind, "upload");
         assert_eq!(failure.code.as_deref(), Some("error.upload.unavailable"));
+    }
+
+    /// The server's refusal of a create, as finalization answers it (issue #822).
+    fn refused_create() -> UploadError {
+        UploadError::Rejected {
+            status: 400,
+            code: Some("error.upload.envelope_rejected".into()),
+            message: "the manifest envelope did not survive re-validation at finalization".into(),
+        }
+    }
+
+    /// **The device without the new key.** A refused create this device cannot re-seal because
+    /// it holds no newer album epoch is its own `kind`, carries the server's code, and says
+    /// what is missing — distinct from a re-seal that failed for any other reason.
+    #[test]
+    fn a_create_this_device_cannot_reseal_names_the_missing_key() {
+        let asset_id = Uuid::from_u128(7);
+        let failure = AssetError::Reseal {
+            refused: refused_create(),
+            error: LifecycleError::ResealRefused {
+                asset_id,
+                reason: ResealRefusal::NoNewerEpoch {
+                    sealed: 1,
+                    current: 1,
+                },
+            },
+        }
+        .failure();
+        assert_eq!(failure.kind, "epoch_key_missing");
+        assert_eq!(
+            failure.code.as_deref(),
+            Some("error.upload.envelope_rejected")
+        );
+        assert!(
+            failure.message.contains("holds no newer album key"),
+            "{}",
+            failure.message
+        );
+
+        let other = AssetError::Reseal {
+            refused: refused_create(),
+            error: LifecycleError::ResealRefused {
+                asset_id,
+                reason: ResealRefusal::NotALoneCreate,
+            },
+        }
+        .failure();
+        assert_eq!(other.kind, "reseal");
+        assert_eq!(
+            other.code.as_deref(),
+            Some("error.upload.envelope_rejected")
+        );
+    }
+
+    /// A second refusal after the re-seal fails the asset as the refusal it is.
+    #[test]
+    fn a_refused_create_that_reaches_the_report_is_named() {
+        let failure = AssetError::from(PushError::CreateRefused {
+            asset_id: Uuid::from_u128(7).to_string(),
+            amk_version: 2,
+            source: refused_create(),
+        })
+        .failure();
+        assert_eq!(failure.kind, "create_refused");
+        assert_eq!(
+            failure.code.as_deref(),
+            Some("error.upload.envelope_rejected")
+        );
     }
 
     // ── Move release (#671) ─────────────────────────────────────────────────

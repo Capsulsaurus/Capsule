@@ -40,9 +40,14 @@ async fn e2e_case_16_signed_verify_keeps_a_verified_attestation_beside_the_recei
         protocol_version: PROTOCOL_VERSION.to_owned(),
     };
 
-    let pushed = remote::push(&remote, &store, &device.workspace, PushOptions::default())
-        .await
-        .expect("the push completes");
+    let pushed = remote::push(
+        &remote,
+        &store,
+        &mut device.workspace,
+        PushOptions::default(),
+    )
+    .await
+    .expect("the push completes");
     assert_eq!(pushed.verified_assets, 1, "{pushed:#?}");
 
     let options = VerifyOptions {

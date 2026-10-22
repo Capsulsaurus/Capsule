@@ -71,9 +71,14 @@ async fn e2e_case_15_push_verifies_custody_persists_receipts_and_carries_on_past
         protocol_version: PROTOCOL_VERSION.to_owned(),
     };
 
-    let summary = remote::push(&remote, &store, &device.workspace, PushOptions::default())
-        .await
-        .expect("the run completes, failures included");
+    let summary = remote::push(
+        &remote,
+        &store,
+        &mut device.workspace,
+        PushOptions::default(),
+    )
+    .await
+    .expect("the run completes, failures included");
     assert_eq!(summary.assets, 2);
     assert_eq!(summary.verified_assets, 1, "{summary:#?}");
     assert_eq!(summary.failed_assets, 1, "{summary:#?}");
@@ -114,9 +119,14 @@ async fn e2e_case_15_push_verifies_custody_persists_receipts_and_carries_on_past
     assert!(log.iter().all(|r| r.core.asset_id == good.to_string()));
 
     // A second run re-confirms custody and stores nothing twice.
-    let again = remote::push(&remote, &store, &device.workspace, PushOptions::default())
-        .await
-        .expect("a second run completes");
+    let again = remote::push(
+        &remote,
+        &store,
+        &mut device.workspace,
+        PushOptions::default(),
+    )
+    .await
+    .expect("a second run completes");
     assert_eq!(again.verified_assets, 1, "{again:#?}");
     assert_eq!(again.failed_assets, 1);
     assert_eq!(again.uploaded_blobs, 0, "nothing new crosses the wire");
@@ -144,7 +154,13 @@ async fn e2e_case_15_push_verifies_custody_persists_receipts_and_carries_on_past
     let foreign = HybridSigningKey::from_seed64(&[0x5A; 64]).verifying_key();
     pin_attestation_keys(device.root.path(), origin, std::slice::from_ref(&foreign))
         .expect("the foreign key pins");
-    let refused = remote::push(&remote, &store, &device.workspace, PushOptions::default()).await;
+    let refused = remote::push(
+        &remote,
+        &store,
+        &mut device.workspace,
+        PushOptions::default(),
+    )
+    .await;
     assert!(
         matches!(
             refused,
@@ -169,4 +185,124 @@ async fn e2e_case_15_push_verifies_custody_persists_receipts_and_carries_on_past
         [foreign.to_bytes()],
         "a refused run leaves the pin as it was"
     );
+}
+
+/// **A create sealed before a rotation is re-sealed, not stranded** (issue #822).
+///
+/// An asset imported at epoch 1, then a rotation, then a sibling imported and pushed at epoch 2:
+/// the server's album now stands at epoch 2, so it refuses the first asset's create for good
+/// (invariant 18). `capsule push` must re-seal that create at the album's current epoch, push it
+/// again, and reach verified custody of the re-sealed bytes — with a receipt for every blob of
+/// the new bundle and none of the refused one's on the server's books.
+#[tokio::test]
+async fn e2e_case_15_a_create_refused_for_a_stale_epoch_is_resealed_and_verified() {
+    let server = Server::boot().await;
+    let mut device = Device::register(&server, "push-reseal").await;
+    let album = device.workspace.default_album_id();
+    let stale = device.import_file("stale.jpg", &synthetic_jpeg());
+    let refused_bundle = device
+        .workspace
+        .upload_bundle(&stale)
+        .expect("the stale asset bundles");
+    let epoch = device
+        .workspace
+        .rotate_epoch(album)
+        .expect("the album rotates");
+    assert!(epoch > refused_bundle.amk_version);
+
+    // A sibling written under the new epoch lands first, moving the server's album to it.
+    let sibling = device.import_file("sibling.jpg", &large_synthetic_jpeg());
+    capsule_e2e::push::push_asset(&device, &server, &sibling).await;
+
+    let signed_in = device.login_again(&server).await;
+    let home = tempfile::tempdir().expect("a temp CLI home");
+    let store = SessionStore::new(home.path().join("session.json"));
+    let persisted = signed_in.export().await.expect("a live session exports");
+    store.save(&persisted).expect("the session persists");
+    let remote = RemoteConfig {
+        auth_endpoint: server.auth_base(),
+        sync_endpoint: server.base_url().to_owned(),
+        upload_endpoint: server.upload_base(),
+        albums_endpoint: server.albums_base(),
+        protocol_version: PROTOCOL_VERSION.to_owned(),
+    };
+
+    let summary = remote::push(
+        &remote,
+        &store,
+        &mut device.workspace,
+        PushOptions::default(),
+    )
+    .await
+    .expect("the run completes");
+    assert_eq!(summary.failed_assets, 0, "{summary:#?}");
+    assert_eq!(summary.verified_assets, 2, "{summary:#?}");
+    let outcome = |id: uuid::Uuid| {
+        summary
+            .outcomes
+            .iter()
+            .find(|o| o.asset_id == id.to_string())
+            .expect("every asset has an outcome")
+    };
+    assert!(outcome(stale).resealed, "{summary:#?}");
+    assert!(!outcome(sibling).resealed, "{summary:#?}");
+
+    // The library now holds a lone create at the new epoch, and it verifies.
+    let head = device.head_record(&stale).manifest.core;
+    assert_eq!(head.amk_version.0, epoch);
+    assert_eq!(
+        device
+            .workspace
+            .asset(&stale)
+            .unwrap()
+            .chain
+            .records()
+            .len(),
+        1
+    );
+    assert_eq!(
+        device.workspace.verify(&stale).expect("the asset verifies"),
+        capsule_core::crypto::verify_asset::VerifyOutcome::Accept
+    );
+
+    // Custody is of the re-sealed bytes: one receipt per blob of the new bundle, and none for
+    // a blob of the refused one.
+    let bundle = device
+        .workspace
+        .upload_bundle(&stale)
+        .expect("the re-sealed asset bundles");
+    assert_eq!(bundle.amk_version, epoch);
+    let hashes: Vec<String> = bundle_blobs(&bundle).into_iter().map(|(_, h)| h).collect();
+    let refused: Vec<String> = bundle_blobs(&refused_bundle)
+        .into_iter()
+        .map(|(_, h)| h)
+        .collect();
+    assert!(
+        hashes.iter().all(|h| !refused.contains(h)),
+        "no blob is shared"
+    );
+    assert_eq!(outcome(stale).receipts, hashes.len());
+    let capture_utc = device.workspace.asset(&stale).map(|a| a.capture_utc);
+    let log = load_receipts(device.root.path(), &stale, capture_utc).expect("the log decodes");
+    let mut logged: Vec<String> = log
+        .iter()
+        .map(|r| r.core.ciphertext_hash.to_hex())
+        .collect();
+    let mut expected = hashes;
+    logged.sort();
+    expected.sort();
+    assert_eq!(logged, expected, "one receipt per re-sealed blob");
+
+    // A second run is a no-op: nothing is refused, nothing is re-sealed again.
+    let again = remote::push(
+        &remote,
+        &store,
+        &mut device.workspace,
+        PushOptions::default(),
+    )
+    .await
+    .expect("a second run completes");
+    assert_eq!(again.verified_assets, 2, "{again:#?}");
+    assert_eq!(again.uploaded_blobs, 0);
+    assert!(again.outcomes.iter().all(|o| !o.resealed));
 }
