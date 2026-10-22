@@ -489,7 +489,9 @@ struct Faults {
     /// The last chunk is answered `204` but the finalize it raced never lands — the lost-claim
     /// answer the server gives, read naively as success.
     finalize_lost: bool,
-    /// Finalization fails after the bytes are committed (the asset index cannot answer).
+    /// Finalization fails terminally after the bytes are committed (the stage and the session's
+    /// byte count disagree). An outage is no fixture for this: `unavailable` asks the client to
+    /// wait and resume, so it does not fail the push.
     finalize_fails: bool,
     /// The verdict is honest per blob and says nothing is held.
     not_durable: bool,
@@ -605,8 +607,8 @@ impl CustodyServer {
                 return MockResponse::api_error(
                     500,
                     "Internal Server Error",
-                    error_codes::UPLOAD_UNAVAILABLE,
-                    "the asset index could not answer",
+                    error_codes::UPLOAD_STORAGE_INCONSISTENT,
+                    "the staged upload and the session's byte count disagree",
                 );
             }
             if !self.faults.finalize_lost {
@@ -731,8 +733,9 @@ async fn a_lost_finalize_is_not_custody() {
     }
 }
 
-/// **The index failure.** Finalization fails after the commit; the chunk that triggered it is
-/// refused with the server's code, so the push fails before custody is ever asked about.
+/// **The failed finalize.** Finalization fails terminally after the commit; the chunk that
+/// triggered it is refused with the server's code, so the push fails before custody is ever
+/// asked about.
 #[tokio::test]
 async fn a_failed_finalize_fails_the_push() {
     let (_dir, _bundle, run) = custody_run(Faults {
@@ -742,7 +745,10 @@ async fn a_failed_finalize_fails_the_push() {
     .await;
     let error = run.pushed.expect_err("a failed finalize is a failed push");
     assert_eq!(error.kind(), "upload");
-    assert_eq!(error.error_code(), Some(error_codes::UPLOAD_UNAVAILABLE));
+    assert_eq!(
+        error.error_code(),
+        Some(error_codes::UPLOAD_STORAGE_INCONSISTENT)
+    );
     assert!(run.custody.is_none());
 }
 
