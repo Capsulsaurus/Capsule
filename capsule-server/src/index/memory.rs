@@ -93,6 +93,21 @@ impl Inner {
         if is_singular(blob.role) && row.blobs.iter().any(|held| held.role == blob.role) {
             return BlobOutcome::Conflict;
         }
+        // Invariant 18 for a create: the manifest landing here publishes its epoch, so it is
+        // checked against the album's high-water mark under the same lock `apply_op` reads it
+        // under.
+        if let Some(submitted) = super::create_epoch(&row, &blob) {
+            let stored = self.album_epoch(&row.album_id);
+            if submitted < stored {
+                tracing::info!(
+                    %asset,
+                    stored,
+                    submitted,
+                    "a create was refused: its manifest's album epoch regresses"
+                );
+                return BlobOutcome::AmkRegressed { stored };
+            }
+        }
 
         let mut row = row;
         row.blobs.push(BlobRef {

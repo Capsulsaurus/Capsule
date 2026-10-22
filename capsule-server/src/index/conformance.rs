@@ -1255,6 +1255,8 @@ pub async fn an_epoch_that_regresses_the_album_is_refused(index: &dyn AssetIndex
 /// epoch the album's own creates had already moved past.
 pub async fn a_create_carries_its_manifests_epoch(index: &dyn AssetIndex) {
     let case = "create-epoch";
+    // Published first, at epoch 0, so the create below is what moves the album's mark.
+    let (sibling, _) = publish(index, case, 2).await;
     let row = pending(case, 1);
     let asset = row.asset_id.clone();
     ok(index.reserve(row).await, "reserve a row");
@@ -1289,7 +1291,6 @@ pub async fn a_create_carries_its_manifests_epoch(index: &dyn AssetIndex) {
     );
 
     // The create's epoch is the album's high-water mark: a sibling may not regress below it.
-    let (sibling, _) = publish(index, case, 2).await;
     let mut behind = op(
         case,
         2,
@@ -1306,6 +1307,73 @@ pub async fn a_create_carries_its_manifests_epoch(index: &dyn AssetIndex) {
         OpOutcome::AmkRegressed { stored: 3 },
         "an epoch a create established is part of the album's history",
     );
+}
+
+/// A create whose manifest was written under an epoch below the album's high-water mark is
+/// refused when the manifest lands, and leaves the row as it was (invariant 18).
+///
+/// The create-side half of [`an_epoch_that_regresses_the_album_is_refused`]: a removed writer
+/// still holding a retired write-tier key must not be able to publish a *new* asset at that
+/// epoch either. The same epoch as the mark is not a regression, and a member that is not the
+/// manifest carries no epoch to refuse.
+pub async fn a_create_below_the_albums_epoch_is_refused(index: &dyn AssetIndex) {
+    let case = "create-epoch-regress";
+    let (ahead, _) = publish(index, case, 1).await;
+    let mut forward = op(
+        case,
+        1,
+        OpAction::MetadataUpdate,
+        head_of(index, &ahead).await,
+        manifest(95),
+    );
+    forward.amk_version = 5;
+    let OpOutcome::Applied { .. } = ok(index.apply_op(forward).await, "advance the epoch") else {
+        panic!("an advancing epoch was refused")
+    };
+
+    let row = pending(case, 2);
+    let asset = row.asset_id.clone();
+    ok(index.reserve(row).await, "reserve a row");
+    record(
+        index,
+        &asset,
+        blob(BlobRole::Metadata, "create-epoch-regressm2"),
+    )
+    .await;
+
+    let mut stale = blob(BlobRole::Provenance, "create-epoch-regressp2");
+    stale.amk_version = Some(4);
+    assert_eq!(
+        ok(
+            index.record_blob(&asset, stale).await,
+            "record a stale manifest"
+        ),
+        BlobOutcome::AmkRegressed { stored: 5 },
+        "a create may not publish an epoch the album has moved past",
+    );
+    let unchanged = ok(index.read(&asset).await, "read the refused row").expect("the row exists");
+    assert_eq!(
+        unchanged.state,
+        AssetState::Pending,
+        "nothing was published"
+    );
+    assert_eq!(unchanged.chain_head, None);
+    assert_eq!(unchanged.amk_version, 0);
+    assert!(
+        unchanged.address_for(BlobRole::Provenance).is_none(),
+        "the refused manifest is not referenced"
+    );
+
+    let mut current = blob(BlobRole::Provenance, "create-epoch-regressp2b");
+    current.amk_version = Some(5);
+    let BlobOutcome::Recorded { row, minted } = ok(
+        index.record_blob(&asset, current).await,
+        "record a current manifest",
+    ) else {
+        panic!("a manifest at the album's own epoch was refused")
+    };
+    assert!(minted.is_some(), "the index tier is complete");
+    assert_eq!(row.amk_version, 5);
 }
 
 /// How many albums [`racing_epochs_in_one_album_are_decided_in_sequence_order`] races in.
@@ -2086,7 +2154,10 @@ pub async fn the_row_walk_orders_by_the_identifiers_own_bytes(index: &dyn AssetI
         ok(index.reserve(row).await, "reserve a row");
     }
 
-    let walked: Vec<String> = ok(index.rows(None, 100).await, "walk the asset rows")
+    // Started just below the three ids rather than at the beginning: the suite shares one index
+    // across its cases, so a fixed page from the start would stop reaching them as cases grow.
+    let floor = AssetId::new("walkord");
+    let walked: Vec<String> = ok(index.rows(Some(&floor), 100).await, "walk the asset rows")
         .into_iter()
         .filter(|row| row.asset_id.as_str().starts_with("walkord-"))
         .map(|row| row.asset_id.as_str().to_owned())
@@ -2668,6 +2739,7 @@ pub async fn run_all(index: &dyn AssetIndex) {
     delete_and_restore_are_both_publishable_changes(index).await;
     an_epoch_that_regresses_the_album_is_refused(index).await;
     a_create_carries_its_manifests_epoch(index).await;
+    a_create_below_the_albums_epoch_is_refused(index).await;
     racing_epochs_in_one_album_are_decided_in_sequence_order(index).await;
     an_op_on_an_asset_that_is_not_the_callers_is_not_found(index).await;
     a_lifecycle_write_repoints_the_provenance_blob(index).await;

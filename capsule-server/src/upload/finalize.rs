@@ -596,6 +596,21 @@ async fn record_against_asset(
                 GateReject::EnvelopeMismatch("blob_role"),
             ))
         }
+        // Invariant 18: the manifest was written under an album-key epoch the album has moved
+        // past — a removed writer's retired key, or a client that missed an epoch bump. Answered
+        // as the gate answers the same predicate (`map_reject`), since the envelope's
+        // `amk_version` is what fell short.
+        BlobOutcome::AmkRegressed { stored } => {
+            tracing::info!(
+                asset = %record.asset_id,
+                stored,
+                submitted = envelope.amk_version,
+                "a create was refused: its manifest's album epoch regresses"
+            );
+            Err(FinalizeFailure::EnvelopeRejected(
+                GateReject::EnvelopeMismatch("amk_version"),
+            ))
+        }
         // The row is gone, or was never reserved. The server's own inconsistency: creation
         // reserves before it opens a session.
         BlobOutcome::NotFound => {
