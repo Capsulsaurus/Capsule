@@ -165,7 +165,12 @@ impl Workspace {
                 // Export the exact sealed blob the manifest committed to (re-sealing would draw
                 // a fresh nonce and break the `metadata_blob_hash` content address).
                 metadata_blob: bundle.metadata_blob,
-                ciphertext: bundle.ciphertext,
+                // The artifact format holds each ciphertext whole, so the original is
+                // materialised here; a push streams it instead.
+                ciphertext: bundle
+                    .original
+                    .to_vec()
+                    .map_err(|e| LifecycleError::Io(e.to_string()))?,
                 provenance: asset.chain.records().to_vec(),
                 receipts,
                 attestations,

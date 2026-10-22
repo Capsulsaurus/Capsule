@@ -1094,3 +1094,103 @@ async fn delete_during_finalization_surfaces_the_conflict() {
         other => panic!("expected Rejected 409, got {other:?}"),
     }
 }
+
+// ─── Windowed sources ────────────────────────────────────────────────────────
+
+/// A source that holds nothing: it computes each requested window and records the request,
+/// so a test can see the client read exactly the chunks it sent — never the blob.
+struct ComputedSource {
+    reads: Mutex<Vec<(u64, usize)>>,
+    /// Bytes to withhold from the end of every window, to model a source that changed.
+    short_by: usize,
+}
+
+impl ComputedSource {
+    fn new(short_by: usize) -> Self {
+        Self {
+            reads: Mutex::new(Vec::new()),
+            short_by,
+        }
+    }
+
+    fn byte_at(offset: u64) -> u8 {
+        (offset % 251) as u8
+    }
+}
+
+impl UploadSource for ComputedSource {
+    fn read_at(&self, offset: u64, len: usize) -> std::io::Result<Cow<'_, [u8]>> {
+        self.reads.lock().unwrap().push((offset, len));
+        let len = len.saturating_sub(self.short_by);
+        Ok(Cow::Owned(
+            (offset..offset + len as u64).map(Self::byte_at).collect(),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn upload_reads_the_source_one_chunk_window_at_a_time() {
+    let received = Arc::new(Mutex::new(Vec::<(u64, Vec<u8>)>::new()));
+    let r = received.clone();
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-w", CHUNK_SIZE_256KB),
+        ("PATCH", "/sess-w") => {
+            let offset: u64 = req.header("X-Capsule-Offset").unwrap().parse().unwrap();
+            r.lock().unwrap().push((offset, req.body.clone()));
+            let new_offset = ack_offset(req);
+            MockResponse::new(204, "No Content").header("X-Capsule-Offset", new_offset.to_string())
+        }
+        other => panic!("unexpected {other:?}"),
+    })
+    .await;
+
+    let client = server.client(PROTOCOL);
+    let size = 600 * 1024;
+    let source = ComputedSource::new(0);
+    let outcome = client.upload(&request(size), &source).await.unwrap();
+    assert!(matches!(outcome, UploadOutcome::Completed { .. }));
+
+    let received = received.lock().unwrap().clone();
+    let reads = source.reads.lock().unwrap().clone();
+    assert_eq!(
+        reads,
+        received
+            .iter()
+            .map(|(offset, body)| (*offset, body.len()))
+            .collect::<Vec<_>>(),
+        "every read is exactly one chunk the client then sent"
+    );
+    assert!(
+        reads.iter().all(|(_, len)| *len as u64 <= CHUNK_SIZE_256KB),
+        "no read is larger than a chunk: {reads:?}"
+    );
+    for (offset, body) in &received {
+        let expected: Vec<u8> = (*offset..*offset + body.len() as u64)
+            .map(ComputedSource::byte_at)
+            .collect();
+        assert_eq!(body, &expected, "chunk at {offset}");
+    }
+}
+
+/// A source that returns fewer bytes than the window it was asked for has changed under the
+/// upload: the client stops with an I/O error rather than sending a chunk it cannot complete.
+#[tokio::test]
+async fn a_short_source_read_fails_the_upload() {
+    let server = MockServer::start(move |req| match (req.method.as_str(), req.path.as_str()) {
+        ("POST", "/") => created("sess-s", CHUNK_SIZE_256KB),
+        other => panic!("nothing is sent from a short read: {other:?}"),
+    })
+    .await;
+    let client = server.client(PROTOCOL);
+    let source = ComputedSource::new(1);
+    let err = client.upload(&request(4096), &source).await.unwrap_err();
+    assert!(matches!(err, UploadError::Io(_)), "{err:?}");
+}
+
+#[test]
+fn a_byte_slice_source_refuses_a_window_past_its_end() {
+    let bytes = [1u8, 2, 3, 4];
+    assert_eq!(&*bytes.read_at(1, 2).unwrap(), &[2, 3]);
+    assert!(bytes.read_at(3, 2).is_err());
+    assert!(bytes.read_at(u64::MAX, 1).is_err());
+}

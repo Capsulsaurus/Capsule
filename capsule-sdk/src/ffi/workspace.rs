@@ -824,15 +824,22 @@ impl FfiWorkspace {
         let asset_id = parse_uuid("asset_id", &asset_id)?;
         self.with(|ws| {
             let bundle = ws.upload_bundle(&asset_id)?;
-            Ok(crate::push::bundle_blobs(&bundle)
+            crate::push::bundle_blobs(&bundle)
                 .into_iter()
-                .map(|(blob, hash)| FfiUploadBlob {
-                    tier: tier_name(blob.tier),
-                    request: crate::push::create_request(&bundle, &blob, &hash).into(),
-                    bytes: blob.bytes.to_vec(),
-                    hash,
+                .map(|(blob, hash)| {
+                    // The FFI hands each blob across as one buffer, so the original is
+                    // materialised here; the SDK's own push streams it instead.
+                    let bytes = blob.bytes.to_vec().map_err(|e| FfiError::Workspace {
+                        message: format!("reading the original of {asset_id}: {e}"),
+                    })?;
+                    Ok(FfiUploadBlob {
+                        tier: tier_name(blob.tier),
+                        request: crate::push::create_request(&bundle, &blob, &hash).into(),
+                        bytes,
+                        hash,
+                    })
                 })
-                .collect())
+                .collect()
         })
     }
 

@@ -28,6 +28,7 @@
 //! rides the wire — it travels inside the encrypted metadata blob (transfer
 //! upload doc, §Chunk Rules).
 
+use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::time::Duration;
 
@@ -599,6 +600,51 @@ pub enum UploadError {
     Auth(#[from] crate::auth::AuthError),
 }
 
+/// The bytes of one blob, read a chunk at a time.
+///
+/// The client asks for exactly the window it is about to send — again after a re-align, a
+/// re-send or a resume — so a source never has to hold the blob. A byte slice is one; an
+/// original, whose ciphertext is re-derived from its plaintext per window, is the other that
+/// matters (`capsule_core::lifecycle::OriginalCiphertext`).
+pub trait UploadSource: Sync {
+    /// The bytes `[offset, offset + len)`. Fewer than `len` bytes is a source error: the
+    /// declared size is the blob's, and a short read means the source changed under the upload.
+    fn read_at(&self, offset: u64, len: usize) -> std::io::Result<Cow<'_, [u8]>>;
+}
+
+impl UploadSource for [u8] {
+    fn read_at(&self, offset: u64, len: usize) -> std::io::Result<Cow<'_, [u8]>> {
+        usize::try_from(offset)
+            .ok()
+            .and_then(|start| self.get(start..start.checked_add(len)?))
+            .map(Cow::Borrowed)
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "upload window past the end of the bytes",
+                )
+            })
+    }
+}
+
+impl UploadSource for Vec<u8> {
+    fn read_at(&self, offset: u64, len: usize) -> std::io::Result<Cow<'_, [u8]>> {
+        self.as_slice().read_at(offset, len)
+    }
+}
+
+impl<const N: usize> UploadSource for [u8; N] {
+    fn read_at(&self, offset: u64, len: usize) -> std::io::Result<Cow<'_, [u8]>> {
+        self.as_slice().read_at(offset, len)
+    }
+}
+
+impl<T: UploadSource + ?Sized> UploadSource for &T {
+    fn read_at(&self, offset: u64, len: usize) -> std::io::Result<Cow<'_, [u8]>> {
+        (**self).read_at(offset, len)
+    }
+}
+
 impl From<reqwest::Error> for UploadError {
     fn from(err: reqwest::Error) -> Self {
         UploadError::Transport(err.to_string())
@@ -1065,28 +1111,28 @@ impl UploadClient {
     /// Transfer a full ciphertext blob with the adaptive algorithm and the
     /// code-driven recovery matrix, starting from a fresh session.
     ///
-    /// `data` is the complete ciphertext (opaque bytes); the client chunks and
-    /// checksums it. The transfer completes exactly when the received-byte count
+    /// `data` is the ciphertext's source (opaque bytes); the client reads it one
+    /// chunk window at a time — never whole — and checksums each chunk. The transfer completes exactly when the received-byte count
     /// reaches the declared size, at which point the server finalizes.
     ///
     /// A `rate_limited`, `unavailable` or `storage_full` answer to any request it
     /// makes — the create, a chunk, or a `HEAD` — is waited out, each wait charging
     /// the one recovery budget the transfer shares.
     #[tracing::instrument(level = "debug", skip(self, data), fields(size = request.size, blob_role = ?request.blob_role))]
-    pub async fn upload(
+    pub async fn upload<S: UploadSource + ?Sized>(
         &self,
         request: &CreateUploadRequest,
-        data: &[u8],
+        data: &S,
     ) -> Result<UploadOutcome, UploadError> {
         self.upload_with(request, data, &mut Recovery::new()).await
     }
 
     /// [`UploadClient::upload`] over a recovery budget the caller may already have
     /// charged.
-    async fn upload_with(
+    async fn upload_with<S: UploadSource + ?Sized>(
         &self,
         request: &CreateUploadRequest,
-        data: &[u8],
+        data: &S,
         recovery: &mut Recovery,
     ) -> Result<UploadOutcome, UploadError> {
         let (session, suggested, start_offset) =
@@ -1119,11 +1165,11 @@ impl UploadClient {
     /// (transfer upload doc, §Idempotency and Resumption). If the session is gone
     /// (`404`), it is re-created and driven from zero.
     #[tracing::instrument(level = "debug", skip(self, data), fields(size = request.size))]
-    pub async fn upload_resuming(
+    pub async fn upload_resuming<S: UploadSource + ?Sized>(
         &self,
         session_id: &str,
         request: &CreateUploadRequest,
-        data: &[u8],
+        data: &S,
     ) -> Result<UploadOutcome, UploadError> {
         let mut recovery = Recovery::new();
         if let Some(info) = self.head_waiting(session_id, &mut recovery).await? {
@@ -1147,11 +1193,11 @@ impl UploadClient {
 
     /// The chunk loop with the recovery matrix. `offset` is the starting
     /// authoritative offset (0 for a fresh session, the HEAD offset on resume).
-    async fn drive(
+    async fn drive<S: UploadSource + ?Sized>(
         &self,
         mut session_id: String,
         request: &CreateUploadRequest,
-        data: &[u8],
+        data: &S,
         strategy: &mut AdaptiveChunkSizeStrategy,
         mut offset: u64,
         recovery: &mut Recovery,
@@ -1166,12 +1212,21 @@ impl UploadClient {
             // Non-final chunks are exactly the adaptive size (4 KiB-aligned by
             // construction); the final chunk is the remainder (alignment-exempt).
             let want = strategy.next_chunk_size().min(remaining);
-            let start = offset as usize;
-            let end = start + want as usize;
-            let chunk = &data[start..end];
+            // Read exactly this window — a re-send or a re-align reads it again — so the
+            // client holds one chunk of the blob, never the blob.
+            let chunk = data.read_at(offset, want as usize)?;
+            if chunk.len() as u64 != want {
+                return Err(UploadError::Io(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    format!(
+                        "upload source returned {} of {want} bytes at offset {offset}",
+                        chunk.len()
+                    ),
+                )));
+            }
 
             let attempt_start = std::time::Instant::now();
-            let ack = match self.send_patch(&session_id, chunk, offset).await {
+            let ack = match self.send_patch(&session_id, &chunk, offset).await {
                 Ok(ack) => ack,
                 // A mid-transfer connection reset / silent black-hole: back off
                 // through the shared engine and resume from the SAME offset (the
