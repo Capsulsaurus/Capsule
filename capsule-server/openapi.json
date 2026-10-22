@@ -13888,6 +13888,9 @@
     },
     "/v1/sync/reannounce": {
       "post": {
+        "tags": [
+          "sync"
+        ],
         "summary": "Restore index rows from the signed manifests a client holds, after a rebuild lost them.",
         "description": "Idempotent per manifest: a row restored once is `already_indexed` the second time, and\nnothing is written again.",
         "operationId": "reannounce_manifests",
@@ -13941,7 +13944,6 @@
             "headers": {
               "WWW-Authenticate": {
                 "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
-                "required": true,
                 "schema": {
                   "type": "string"
                 },
@@ -14017,7 +14019,43 @@
             }
           },
           "400": {
-            "description": "Bad Request",
+            "description": "Bad Request; Invalid request; Malformed handshake",
+            "headers": {
+              "X-Capsule-Protocol-Min": {
+                "description": "The oldest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Protocol-Max": {
+                "description": "The newest protocol version this server accepts.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                }
+              },
+              "X-Capsule-Min-Client-Build": {
+                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Payload Too Large; the request body exceeds the configured limit",
             "headers": {
               "X-Capsule-Protocol-Min": {
                 "description": "The oldest protocol version this server accepts.",
@@ -14192,35 +14230,6 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "the request body exceeds the configured limit",
-            "headers": {
-              "X-Capsule-Protocol-Min": {
-                "description": "The oldest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Protocol-Max": {
-                "description": "The newest protocol version this server accepts.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-                }
-              },
-              "X-Capsule-Min-Client-Build": {
-                "description": "The semver client build below which this server will stop answering. Advisory: `0.0.0` when no cutoff has been announced.",
-                "required": true,
-                "schema": {
-                  "type": "string",
-                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
                 }
               }
             }
@@ -29179,6 +29188,10 @@
       "description": "Confirming durability before a client destroys its local copy."
     },
     {
+      "name": "sync",
+      "description": "Discovering what changed in a library, as an opaque, resumable feed."
+    },
+    {
       "name": "shares",
       "description": "Public share links. The only surface served without an account."
     },
@@ -29201,10 +29214,6 @@
     {
       "name": "moderation",
       "description": "An account's own moderation record. No silent operations."
-    },
-    {
-      "name": "sync",
-      "description": "Discovering what changed in a library, as an opaque, resumable feed."
     },
     {
       "name": "media",

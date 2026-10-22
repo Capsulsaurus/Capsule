@@ -220,6 +220,7 @@ fn map_error(error: rest::Error<rest::ReannounceManifestsError>) -> SyncError {
                 Refusal::Status400(problem)
                 | Refusal::Status401(problem)
                 | Refusal::Status403(problem)
+                | Refusal::Status413(problem)
                 | Refusal::Status415(problem)
                 | Refusal::Status422(problem)
                 | Refusal::Status426(problem)
@@ -227,8 +228,6 @@ fn map_error(error: rest::Error<rest::ReannounceManifestsError>) -> SyncError {
                     Some(problem.code.clone()),
                     problem.detail.clone().unwrap_or_default(),
                 ),
-                // The body-size backstop, which carries no body at all.
-                Refusal::Status413 => (None, "the request was too large".into()),
             };
             SyncError::Rejected { code, message }
         }
