@@ -254,6 +254,11 @@ impl From<PushError> for FfiError {
 
 impl From<FetchError> for FfiError {
     fn from(err: FetchError) -> Self {
+        // A fetch the session could not authorize keeps its auth identity, as the upload and
+        // sync mappings do, so the app re-authenticates rather than retrying.
+        if let FetchError::Unauthenticated { code, message } = err {
+            return Self::Auth { code, message };
+        }
         Self::Fetch {
             code: err.error_code().map(str::to_string),
             message: err.to_string(),
@@ -944,6 +949,8 @@ impl FfiSession {
     /// The blob streams to disk in bounded `Range` windows, so memory is bounded by one window
     /// whatever the blob's size, and its content address is checked as it lands. On any error
     /// the file is removed: a path this returns `Ok` for holds exactly the verified ciphertext.
+    /// A session that cannot authorize the fetch is [`FfiError::Auth`], so the app signs in
+    /// again; every other failure is [`FfiError::Fetch`].
     ///
     /// `blob_base_url` is the root the blob route hangs off (`{blob_base_url}/blob/{hash}`),
     /// the server's `/v1` root.

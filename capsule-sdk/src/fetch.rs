@@ -432,6 +432,14 @@ pub enum RangeOutcome {
         /// The stable `error.*` code from the body, when present.
         code: Option<String>,
     },
+    /// The session could not authorize the request: its refresh was refused or it holds no
+    /// tokens. Retrying cannot help; the user has to sign in again.
+    Unauthenticated {
+        /// The stable `error.*` code, when the refusal carried one.
+        code: Option<String>,
+        /// English detail (developer/log message).
+        message: String,
+    },
 }
 
 /// The ranged blob transport. Abstracted so the resume loop and degrade ladder are
@@ -499,6 +507,16 @@ pub enum FetchError {
         /// The requested content address.
         expected: String,
     },
+    /// The session could not authorize the fetch — a refused refresh, no tokens, or a `401`
+    /// that survived the session's one refresh-and-retry. Not transient: the caller signs in
+    /// again rather than retrying.
+    #[error("blob fetch unauthenticated ({code:?}): {message}")]
+    Unauthenticated {
+        /// Stable `error.*` code, when the refusal carried one.
+        code: Option<String>,
+        /// English detail (developer/log message).
+        message: String,
+    },
     /// The bounded resume budget was spent without completing the transfer.
     #[error("fetch gave up after exhausting the resume budget: {0}")]
     Exhausted(String),
@@ -522,7 +540,9 @@ impl FetchError {
     pub fn error_code(&self) -> Option<&str> {
         match self {
             Self::PendingUpload => Some(error_codes::BLOB_PENDING_UPLOAD),
-            Self::AuthorizationChanged { code } | Self::Rejected { code, .. } => code.as_deref(),
+            Self::AuthorizationChanged { code }
+            | Self::Rejected { code, .. }
+            | Self::Unauthenticated { code, .. } => code.as_deref(),
             _ => None,
         }
     }
@@ -541,6 +561,11 @@ fn classify_status(status: u16, code: Option<String>) -> FetchError {
         return FetchError::PendingUpload;
     }
     match status {
+        // The session already refreshed once and retried; a second `401` is the credential.
+        401 => FetchError::Unauthenticated {
+            code,
+            message: "the server refused the refreshed credential".to_string(),
+        },
         403 => FetchError::AuthorizationChanged { code },
         404 | 410 => FetchError::Gone,
         0 => FetchError::Transient("transport error".to_string()),
@@ -749,6 +774,10 @@ impl<S: Sleeper, C: MonotonicClock> RangedFetcher<S, C> {
                 }
                 RangeOutcome::Status { status, code } => {
                     return Err(classify_status(status, code));
+                }
+                RangeOutcome::Unauthenticated { code, message } => {
+                    tracing::warn!(hash, ?code, %message, "blob fetch unauthenticated; not retrying");
+                    return Err(FetchError::Unauthenticated { code, message });
                 }
             }
         }
@@ -1144,11 +1173,20 @@ impl BlobSource for HttpBlobSource {
             .await
         {
             Ok(response) => response,
-            Err(error) => {
+            Err(crate::auth::AuthError::Transport(error)) => {
                 tracing::debug!(%error, "blob range request transport error");
                 return RangeOutcome::Status {
                     status: 0,
                     code: None,
+                };
+            }
+            // Anything else is the session failing to authorize the request (a refused
+            // refresh, no tokens): it keeps its auth identity rather than reading as a drop.
+            Err(error) => {
+                tracing::debug!(%error, "blob range request could not be authorized");
+                return RangeOutcome::Unauthenticated {
+                    code: error.error_code().map(str::to_string),
+                    message: error.to_string(),
                 };
             }
         };

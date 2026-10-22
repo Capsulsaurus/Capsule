@@ -928,6 +928,47 @@ async fn ffi_fetch_blob_to_path_leaves_nothing_on_failure() {
     );
 }
 
+/// A fetch whose session cannot refresh surfaces as `FfiError::Auth` carrying the refusal,
+/// as an upload or a sync pull does — the app signs in again rather than retrying — and
+/// leaves no file behind.
+#[tokio::test]
+async fn ffi_fetch_blob_to_path_keeps_a_refused_refresh_an_auth_error() {
+    let server =
+        MockServer::start(
+            |req: &MockRequest| match (req.method.as_str(), req.path.as_str()) {
+                ("POST", "/auth/login") => MockResponse::new(200, "OK").json_body(token_json()),
+                ("POST", "/auth/refresh") => MockResponse::api_error(
+                    401,
+                    "Unauthorized",
+                    "error.auth.session_expired",
+                    "refresh token revoked",
+                ),
+                ("GET", path) if path.starts_with("/v1/blob/") => {
+                    MockResponse::new(401, "Unauthorized")
+                }
+                _ => MockResponse::new(404, "Not Found").json_body(r#"{"error":"no route"}"#),
+            },
+        )
+        .await;
+    let session = login(&server).await;
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("original.bin");
+
+    match session
+        .fetch_blob_to_path(
+            format!("{}/v1", server.base_url()),
+            capsule_core::crypto::hash::hash_bytes(b"blob").to_hex(),
+            4,
+            path.to_string_lossy().into_owned(),
+        )
+        .await
+    {
+        Err(FfiError::Auth { .. }) => {}
+        other => panic!("expected an auth error, got {other:?}"),
+    }
+    assert!(!path.exists());
+}
+
 /// Escrow put/get and device-directory publish, through the session handle. The
 /// workspace mints both documents (the master key and the identity key never cross the
 /// boundary); the session only ever carries opaque bytes.
