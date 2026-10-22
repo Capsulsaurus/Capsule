@@ -191,7 +191,12 @@ pub fn load_pinned_attestation_keys(
 /// Check the history `origin` just `published` against the pin, pin or extend it, and return
 /// the pinned history every receipt from that server is verified under.
 ///
-/// See the [module documentation](self) for the four cases. A refusal writes nothing.
+/// Nothing pinned for `origin` pins `published` ([`KeyPinOutcome::FirstContact`]); a history
+/// holding exactly the pinned keys writes nothing ([`KeyPinOutcome::Unchanged`]); one holding
+/// every pinned key and more appends the new keys in published order
+/// ([`KeyPinOutcome::Extended`]). Keys are compared by value, not position. A history missing a
+/// pinned key is [`KeyPinError::HistoryRewritten`], and an empty one
+/// [`KeyPinError::EmptyHistory`]; a refusal writes nothing.
 #[tracing::instrument(skip(root, published), fields(published = published.len()))]
 pub fn pin_attestation_keys(
     root: &Path,
