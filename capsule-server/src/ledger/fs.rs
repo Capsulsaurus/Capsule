@@ -32,10 +32,13 @@
 //! That lock is two locks, because two **processes** append to one ledger: the server, and a
 //! `capsule-server purge --apply` run from cron while it serves (#767). Inside a process, a
 //! per-owner async mutex. Across processes, an exclusive OS file lock (`flock`) on the owner's
-//! directory, taken after the mutex and held to the fsync; a scan takes it shared. Under it the
-//! cached tail is **re-checked against the disk** — the last segment's name and length — and
-//! re-read when another process has appended since, so no append reuses a position another
-//! process took. A failed append's cut-back goes to the length observed under the same lock, so
+//! lock file, [`LOCK_FILE`], taken after the mutex and held to the fsync; a scan takes it shared.
+//! The lock is on a file opened for writing, not on the directory: Linux emulates `flock` on NFS
+//! with `fcntl` byte-range locks, and those refuse an exclusive lock on a read-only descriptor,
+//! which is all a directory can be opened as. The lock file holds no bytes and is not a segment,
+//! so listing, rebuild and the scrub never see it. Under the lock the cached tail is
+//! **re-checked against the disk** — the last segment's name and length — and re-read when
+//! another process has appended since, so no append reuses a position another process took. A failed append's cut-back goes to the length observed under the same lock, so
 //! it can only remove its own bytes. The lock is advisory, and every writer is this adapter.
 
 use std::collections::BTreeMap;
@@ -58,6 +61,10 @@ pub const LEDGER_DIR: &str = "ledger";
 
 /// A segment's file-name suffix.
 const SEGMENT_SUFFIX: &str = ".log";
+
+/// The empty file in each owner's directory that the cross-process lock is taken on. See the
+/// module docs. Its name has no [`SEGMENT_SUFFIX`], so it is never read as a segment.
+pub const LOCK_FILE: &str = ".lock";
 
 /// The size past which an append opens a new segment: 64 MiB, some tens of thousands of entries.
 pub const DEFAULT_SEGMENT_BYTES: u64 = 64 * 1024 * 1024;
@@ -262,6 +269,9 @@ async fn segments(dir: &Path) -> Result<Vec<(u64, PathBuf)>, LedgerError> {
         .map_err(|error| backend("list an owner's ledger", &error))?
     {
         let name = entry.file_name();
+        if name == LOCK_FILE {
+            continue;
+        }
         let Some(first) = name
             .to_str()
             .and_then(|name| name.strip_suffix(SEGMENT_SUFFIX))
@@ -288,19 +298,31 @@ fn across_segments(damage: &ChainFault, entries: usize) -> ChainFault {
     }
 }
 
-/// Take the cross-process lock on the directory at `path`, exclusive or shared; it is released
-/// when the returned handle is dropped. See the module docs.
+/// Take the cross-process lock on the owner directory at `dir`, exclusive or shared, through its
+/// [`LOCK_FILE`], creating that file if it is absent; the lock is released when the returned
+/// handle is dropped. `None` when the directory itself is absent. See the module docs.
 ///
 /// Blocking, so it waits on the blocking pool rather than on a runtime worker.
-async fn lock_dir(path: PathBuf, exclusive: bool) -> Result<std::fs::File, LedgerError> {
+async fn lock_owner(dir: PathBuf, exclusive: bool) -> Result<Option<std::fs::File>, LedgerError> {
     let locked = tokio::task::spawn_blocking(move || {
-        let dir = std::fs::File::open(&path)?;
+        // Writable, because an exclusive lock emulated with `fcntl` (Linux on NFS) needs it.
+        let file = match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(dir.join(LOCK_FILE))
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
         if exclusive {
-            dir.lock()?;
+            file.lock()?;
         } else {
-            dir.lock_shared()?;
+            file.lock_shared()?;
         }
-        Ok::<_, std::io::Error>(dir)
+        Ok::<_, std::io::Error>(Some(file))
     })
     .await
     .map_err(|error| LedgerError::Backend {
@@ -370,9 +392,15 @@ impl OwnerLedger for FilesystemLedger {
             check_owner_id(owner)?;
             let lock = self.lock_for(owner);
             let mut cached = lock.lock().await;
-            // The directory first, because it is what the cross-process lock is taken on.
+            // The directory first, because the cross-process lock file lives in it.
             let dir = self.ensure_owner_dir(owner).await?;
-            let _across_processes = lock_dir(dir.clone(), true).await?;
+            let _across_processes =
+                lock_owner(dir.clone(), true)
+                    .await?
+                    .ok_or_else(|| LedgerError::Backend {
+                        operation: "lock an owner's ledger",
+                        detail: format!("{} vanished while appending", dir.display()),
+                    })?;
             let tail = match cached.take() {
                 Some(tail) if self.still_current(owner, &tail).await? => tail,
                 Some(_) => {
@@ -431,12 +459,8 @@ impl OwnerLedger for FilesystemLedger {
             let _held = lock.lock().await;
             let mut scan = LedgerScan::default();
             let dir = self.owner_dir(owner);
-            let _across_processes = match lock_dir(dir.clone(), false).await {
-                Ok(locked) => Some(locked),
-                // No directory, no ledger: nothing to read, and nothing to wait for.
-                Err(_) if !tokio::fs::try_exists(&dir).await.unwrap_or(true) => None,
-                Err(error) => return Err(error),
-            };
+            // `None` when there is no directory: no ledger, nothing to read or wait for.
+            let _across_processes = lock_owner(dir.clone(), false).await?;
             let segments = segments(&dir).await?;
             let count = segments.len();
             for (index, (_, path)) in segments.into_iter().enumerate() {
