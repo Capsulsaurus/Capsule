@@ -232,6 +232,26 @@ async fn a_manifest_that_arrives_before_its_bundle_is_refused_and_retryable() {
         checksum(&payload(b'p', 2048)),
         "a refused replace changes nothing at all"
     );
+    // The custody entry the refused manifest wrote is resolved, so a rebuild does not replay it.
+    {
+        use capsule_server::ledger::{LedgerEvent, OwnerLedger as _};
+        let scan = fixture
+            .ledger
+            .scan(&support::owner())
+            .await
+            .expect("the ledger reads");
+        let [.., custody, refused] = scan.entries.as_slice() else {
+            panic!("the refusal was ledgered: {:?}", scan.entries);
+        };
+        assert!(
+            matches!(&custody.core.event, LedgerEvent::Custody { upload_id, .. } if *upload_id == early),
+            "{custody:?}"
+        );
+        assert!(
+            matches!(&refused.core.event, LedgerEvent::Refused { upload_id, .. } if *upload_id == early),
+            "{refused:?}"
+        );
+    }
 
     // The bytes, then the same manifest again.
     for (bytes, role) in [(&original, "original"), (&metadata, "metadata")] {
