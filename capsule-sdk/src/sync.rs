@@ -42,6 +42,8 @@ use crate::auth::{AuthError, Session};
 use crate::net::{RetryClass, RetryDecision, RetryEngine, Sleeper, TokioSleeper};
 use crate::rest;
 
+pub mod reannounce;
+
 /// The security-scheme key the Kynos document declares for the bearer JWT.
 const BEARER_SCHEME: &str = "bearer";
 

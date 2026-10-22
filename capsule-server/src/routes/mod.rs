@@ -21,6 +21,7 @@ pub mod oidc;
 pub mod ops;
 pub mod profile;
 pub mod quota;
+pub mod reannounce;
 pub mod receipts;
 pub mod roster;
 pub mod sessions;

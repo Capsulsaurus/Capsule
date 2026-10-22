@@ -814,6 +814,9 @@ pub struct SyncSummary {
     pub pages: usize,
     /// Whether this was a dry run (nothing persisted).
     pub dry_run: bool,
+    /// Whether the server had moved the library to a new sync epoch, so the drain started over
+    /// from zero (#697): what it no longer lists is for `capsule sync reannounce` to give back.
+    pub resynced: bool,
 }
 
 /// Drain the sync feed into the local store.
@@ -918,6 +921,7 @@ async fn sync_with<C: ConnectionTrait + TransactionTrait>(
     }
 
     summary.albums = albums.len();
+    summary.resynced = resynced;
     tracing::info!(
         applied = summary.applied,
         albums = summary.albums,
@@ -1144,6 +1148,75 @@ async fn drain_feed(
         entries.extend(page.entries);
     }
     Ok(entries)
+}
+
+// ─── Re-announce (#781) ──────────────────────────────────────────────────────
+
+/// `capsule sync reannounce`: give the server back the signed manifests `workspace` holds and
+/// the server's feed no longer lists.
+///
+/// The feed is drained fresh, as a push reads it, and every live asset it does not list is sent
+/// through the SDK's [`reannounce_unlisted`](capsule_sdk::sync::reannounce::reannounce_unlisted):
+/// manifests only, never bytes. The server restores what it still holds the blobs for and names
+/// what it does not, which `capsule push` uploads again. A dry run drains the feed and sends
+/// nothing.
+///
+/// # Errors
+///
+/// [`RemoteError::NotAuthenticated`] with no stored session; [`RemoteError::Sync`] when the feed
+/// cannot be read or a batch is refused whole; [`RemoteError::Lifecycle`] when a held record
+/// does not encode.
+#[instrument(skip(store, workspace))]
+pub async fn reannounce(
+    remote: &RemoteConfig,
+    store: &SessionStore,
+    workspace: &Workspace,
+    dry_run: bool,
+) -> Result<crate::reannounce::ReannounceSummary, RemoteError> {
+    let session = resume_session(remote, store).await?;
+    let outcome = reannounce_with(remote, workspace, session.clone(), dry_run).await;
+    checkpoint(store, &session).await;
+    outcome
+}
+
+/// The re-announce itself, over a session somebody else is responsible for persisting.
+async fn reannounce_with(
+    remote: &RemoteConfig,
+    workspace: &Workspace,
+    session: Session,
+    dry_run: bool,
+) -> Result<crate::reannounce::ReannounceSummary, RemoteError> {
+    use capsule_sdk::sync::reannounce::{reannounce_unlisted, unlisted};
+
+    use crate::reannounce::{ReannounceSummary, held_manifests};
+
+    let (held, skipped_deleted) = held_manifests(workspace)?;
+    let listed: HashSet<String> = drain_feed(remote, session.clone(), DEFAULT_SYNC_PAGE_SIZE)
+        .await?
+        .iter()
+        .map(|entry| String::from_utf8_lossy(&entry.asset_id).into_owned())
+        .collect();
+    tracing::info!(
+        held = held.len(),
+        skipped_deleted,
+        listed = listed.len(),
+        dry_run,
+        "re-announce: the library is compared with the feed"
+    );
+    let summary = if dry_run {
+        ReannounceSummary::planned(
+            held.len(),
+            skipped_deleted,
+            listed.len(),
+            &unlisted(&held, &listed),
+        )
+    } else {
+        let consumer = SyncConsumer::with_session(&remote.sync_endpoint, session)?;
+        let answers = reannounce_unlisted(&consumer, &held, &listed).await?;
+        ReannounceSummary::answered(held.len(), skipped_deleted, listed.len(), answers)
+    };
+    summary.log();
+    Ok(summary)
 }
 
 // ─── Restore (#673) ──────────────────────────────────────────────────────────

@@ -8,9 +8,9 @@
 //! redacted, and stderr stops at color-eyre's `Location:` section, whose line numbers are not
 //! part of the contract.
 //!
-//! The `--json` subcommands today are `import`, `push`, `restore`, `verify`, `cache budget` and
-//! `cache sweep`; each has its
-//! offline cases here, and every `--json` subcommand that lands joins this file the same way.
+//! The `--json` subcommands today are `import`, `push`, `restore`, `verify`, `cache budget`,
+//! `cache sweep` and `sync reannounce`; each has its offline cases here, and every `--json`
+//! subcommand that lands joins this file the same way.
 //! What needs a live server (a push or restore that reaches its assets) is the end-to-end
 //! suites' to cover.
 //!
@@ -26,6 +26,9 @@
 //! - `verify_json_without_a_session_prints_nothing_on_stdout` — a run-level failure, as for
 //!   push: non-zero exit, empty stdout, the reason on stderr, and no attestation stored.
 //! - `verify_json_without_a_library_is_a_usage_error` — the parser's exit status 2.
+//! - `sync_reannounce_json_without_a_session_prints_nothing_on_stdout` — a run-level failure, as
+//!   for push: non-zero exit, empty stdout, the reason on stderr.
+//! - `sync_reannounce_json_without_a_library_is_a_usage_error` — the parser's exit status 2.
 //! - `import_json_reports_every_file_and_its_deferred_derivatives` — exit 0, one JSON document:
 //!   a HEIC, a video, a document and a zero-byte file all imported, with each one's
 //!   derivative status and the run's deferred count.
@@ -225,6 +228,29 @@ fn push_json_without_a_session_prints_nothing_on_stdout() {
 fn push_json_without_a_library_is_a_usage_error() {
     let scratch = Scratch::new();
     insta::assert_snapshot!(run(&scratch, &["push", "--json"]));
+}
+
+#[test]
+fn sync_reannounce_json_without_a_session_prints_nothing_on_stdout() {
+    let scratch = Scratch::new();
+    library(&scratch, 1);
+    insta::assert_snapshot!(run(
+        &scratch,
+        &[
+            "sync",
+            "reannounce",
+            "--library",
+            path(&scratch.library()),
+            "--passphrase-stdin",
+            "--json",
+        ],
+    ));
+}
+
+#[test]
+fn sync_reannounce_json_without_a_library_is_a_usage_error() {
+    let scratch = Scratch::new();
+    insta::assert_snapshot!(run(&scratch, &["sync", "reannounce", "--json"]));
 }
 
 #[test]
